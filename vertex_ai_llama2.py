@@ -43,4 +43,4 @@ if __name__ == "__main__":
     endpoint_id = "9143839962771226624"
 
     llama = VertexLlama(project_id, endpoint_id, bearer_token)
-    print(llama.call_llama("Write a poem about Guillermo.", max_length=30, top_k=10))
+    print(llama.call_llama("Write a poem about Guillermo.", max_length=100, top_k=10))
