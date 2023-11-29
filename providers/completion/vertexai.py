@@ -10,9 +10,6 @@ class VertexAI(BaseCompletionProvider):
             "chat-bison@001"
         ]
 
-    def set_api_key(self):
-        pass
-
     def set_project(self, vertex_project):
         litellm.vertex_project = vertex_project
 

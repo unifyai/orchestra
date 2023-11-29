@@ -23,6 +23,7 @@ llama2_70b_chat = {
     "together_ai": "together_ai/togethercomputer/llama-2-70b-chat",
 }
 
+
 class Llama7BChat:
     def __init__(self, provider):
         if provider not in llama2_7b_chat:
@@ -46,3 +47,29 @@ class Llama7BChat:
 
     def get_completion(self, prompt, max_tokens=16, temperature=0.9):
         return self.provider_obj.complete(prompt, max_tokens, temperature)
+
+
+class Llama70BChat:
+    def __init__(self, provider):
+        if provider not in llama2_70b_chat:
+            raise Exception("Invalid model")
+
+        if provider == "anyscale":
+            self.provider_obj = Anyscale()
+        elif provider == "perplexity":
+            self.provider_obj = Perplexity()
+        elif provider == "replicate":
+            self.provider_obj = Replicate()
+        elif provider == "together_ai":
+            self.provider_obj = TogetherAI()
+        else:
+            raise Exception("Invalid provider")
+
+        self.provider_obj.model = llama2_70b_chat[provider]
+
+    def set_api_key(self, api_key):
+        self.provider_obj.set_api_key(api_key)
+
+    def get_completion(self, prompt, max_tokens=16, temperature=0.9):
+        messages = [{"content": prompt, "role": "user"}]
+        return self.provider_obj.complete(self.provider_obj.model, messages, max_tokens, temperature)
