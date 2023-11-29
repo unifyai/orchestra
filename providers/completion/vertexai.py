@@ -7,7 +7,7 @@ class VertexAI(BaseCompletionProvider):
         self.supported_models = [
             "chat-bison-32k",
             "chat-bison",
-            "chat-bison@001"
+            "chat-bison@001",
         ]
 
     def set_project(self, vertex_project):

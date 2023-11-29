@@ -11,5 +11,5 @@ class Perplexity(BaseCompletionProvider):
             "perplexity/openhermes-2-mistral-7b",
             "perplexity/openhermes-2.5-mistral-7b",
             "perplexity/pplx-7b-chat-alpha",
-            "perplexity/pplx-70b-chat-alpha"
+            "perplexity/pplx-70b-chat-alpha",
         ]

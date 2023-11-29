@@ -9,5 +9,5 @@ class Replicate(BaseCompletionProvider):
             "replicate/vicuna-13b",
             "replicate/daanelson/flan-t5-large",
             "replicate/custom-llm-version-id",
-            "replicate/deployments/ishaan-jaff/ishaan-mistral"
+            "replicate/deployments/ishaan-jaff/ishaan-mistral",
         ]

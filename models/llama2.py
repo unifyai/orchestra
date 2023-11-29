@@ -1,6 +1,6 @@
 from providers.completion.anyscale import Anyscale
-from providers.completion.replicate import Replicate
 from providers.completion.perplexity import Perplexity
+from providers.completion.replicate import Replicate
 from providers.completion.together_ai import TogetherAI
 
 
@@ -10,22 +10,23 @@ class Llama2Chat:
             "anyscale": {
                 "7b": "anyscale/meta-llama/Llama-2-7b-chat-hf",
                 "13b": "anyscale/meta-llama/Llama-2-13b-chat-hf",
-                "70b": "anyscale/meta-llama/Llama-2-70b-chat-hf"
+                "70b": "anyscale/meta-llama/Llama-2-70b-chat-hf",
             },
             "perplexity": {
                 "7b": "perplexity/pplx-7b-chat-alpha",
                 "13b": "perplexity/llama-2-13b-chat",
-                "70b": "perplexity/llama-2-70b-chat"
+                "70b": "perplexity/llama-2-70b-chat",
             },
             "replicate": {
                 "7b": "replicate/llama-2-7b-chat",
                 "13b": "replicate/a16z-infra/llama-2-13b-chat",
-                "70b": "replicate/llama-2-70b-chat"
+                "70b": "replicate/llama-2-70b-chat",
             },
             "together_ai": {
                 "7b": "together_ai/togethercomputer/llama-2-7b",
-                "70b": "together_ai/togethercomputer/llama-2-70b"
-            }
+                "70b": "together_ai/togethercomputer/llama-2-70b",
+                "70b-chat": "together_ai/togethercomputer/llama-2-70b-chat",
+            },
         }
 
         if provider not in supported_providers:
@@ -52,4 +53,9 @@ class Llama2Chat:
 
     def get_completion(self, prompt, max_tokens=16, temperature=0.9):
         messages = [{"content": prompt, "role": "user"}]
-        return self.provider_obj.complete(self.provider_obj.model, messages, max_tokens, temperature)
+        return self.provider_obj.complete(
+            self.provider_obj.model,
+            messages,
+            max_tokens,
+            temperature,
+        )
