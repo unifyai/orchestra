@@ -16,7 +16,7 @@ class OpenAI(BaseCompletionProvider):
             "gpt-4-0613",
             "gpt-4-32k",
             "gpt-4-32k-0314",
-            "gpt-4-32k-0613"
+            "gpt-4-32k-0613",
         ]
 
     def set_organization(self, organization):

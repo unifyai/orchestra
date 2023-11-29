@@ -23,5 +23,5 @@ class TogetherAI(BaseCompletionProvider):
             "together_ai/NousResearch/Nous-Hermes-Llama2-13b",
             "together_ai/Austism/chronos-hermes-13b",
             "together_ai/upstage/SOLAR-0-70b-16bit",
-            "together_ai/WizardLM/WizardLM-70B-V1.0"
+            "together_ai/WizardLM/WizardLM-70B-V1.0",
         ]

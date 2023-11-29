@@ -6,5 +6,5 @@ class Baseten(BaseCompletionProvider):
         self.supported_models = [
             "baseten/qvv0xeq",
             "baseten/q841o8w",
-            "baseten/31dxrj3"
+            "baseten/31dxrj3",
         ]

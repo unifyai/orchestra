@@ -8,5 +8,5 @@ class Anyscale(BaseCompletionProvider):
             "anyscale/meta-llama/Llama-2-13b-chat-hf",
             "anyscale/meta-llama/Llama-2-70b-chat-hf",
             "anyscale/mistralai/Mistral-7B-Instruct-v0.1",
-            "anyscale/codellama/CodeLlama-34b-Instruct-hf"
+            "anyscale/codellama/CodeLlama-34b-Instruct-hf",
         ]

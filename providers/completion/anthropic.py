@@ -7,5 +7,5 @@ class Anthropic(BaseCompletionProvider):
             "claude-2.1",
             "claude-2",
             "claude-instant-1",
-            "claude-instant-1.2"
+            "claude-instant-1.2",
         ]
