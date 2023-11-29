@@ -1,0 +1,58 @@
+version: '3.9'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: ./deploy/Dockerfile
+      target: prod
+    image: orchestra:${ORCHESTRA_VERSION:-latest}
+    restart: always
+    env_file:
+    - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ORCHESTRA_HOST: 0.0.0.0
+      ORCHESTRA_DB_HOST: orchestra-db
+      ORCHESTRA_DB_PORT: 5432
+      ORCHESTRA_DB_USER: orchestra
+      ORCHESTRA_DB_PASS: orchestra
+      ORCHESTRA_DB_BASE: orchestra
+
+  db:
+    image: postgres:13.8-bullseye
+    hostname: orchestra-db
+    environment:
+      POSTGRES_PASSWORD: "orchestra"
+      POSTGRES_USER: "orchestra"
+      POSTGRES_DB: "orchestra"
+    volumes:
+    - orchestra-db-data:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: pg_isready -U orchestra
+      interval: 2s
+      timeout: 3s
+      retries: 40
+
+  migrator:
+    image: orchestra:${ORCHESTRA_VERSION:-latest}
+    restart: "no"
+    command: alembic upgrade head
+    environment:
+      ORCHESTRA_DB_HOST: orchestra-db
+      ORCHESTRA_DB_PORT: 5432
+      ORCHESTRA_DB_USER: orchestra
+      ORCHESTRA_DB_PASS: orchestra
+      ORCHESTRA_DB_BASE: orchestra
+    depends_on:
+      db:
+        condition: service_healthy
+
+
+
+volumes:
+  orchestra-db-data:
+    name: orchestra-db-data

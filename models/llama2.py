@@ -5,6 +5,7 @@ from providers.completion.together_ai import TogetherAI
 
 
 class Llama2Chat:
+    # flake8: noqa: C901
     def __init__(self, provider, model):
         supported_providers = {
             "anyscale": {
