@@ -19,9 +19,6 @@ class OpenAI(BaseCompletionProvider):
             "gpt-4-32k-0613"
         ]
 
-    def set_api_key(self, api_key):
-        litellm.openai_key = api_key
-
     def set_organization(self, organization):
         litellm.organization = organization
 

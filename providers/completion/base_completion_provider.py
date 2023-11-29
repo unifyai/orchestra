@@ -8,7 +8,7 @@ class BaseCompletionProvider:
         self.model = None
 
     def set_api_key(self, api_key):
-        pass
+        litellm.api_key = api_key
 
     def complete(self, model, messages, max_tokens, temperature):
         if model not in self.supported_models:

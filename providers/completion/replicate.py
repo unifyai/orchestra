@@ -1,4 +1,3 @@
-import litellm
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
@@ -12,6 +11,3 @@ class Replicate(BaseCompletionProvider):
             "replicate/custom-llm-version-id",
             "replicate/deployments/ishaan-jaff/ishaan-mistral"
         ]
-
-    def set_api_key(self, api_key):
-        litellm.replicate_key = api_key

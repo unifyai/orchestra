@@ -1,4 +1,3 @@
-import litellm
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
@@ -26,6 +25,3 @@ class TogetherAI(BaseCompletionProvider):
             "together_ai/upstage/SOLAR-0-70b-16bit",
             "together_ai/WizardLM/WizardLM-70B-V1.0"
         ]
-
-    def set_api_key(self, api_key):
-        litellm.togetherai_key = api_key
