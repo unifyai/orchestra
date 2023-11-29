@@ -2,9 +2,7 @@
 
 ## Poetry
 
-This project uses poetry. It's a modern dependency management
-tool.
-
+This project uses poetry. It's a modern dependency management tool.
 To run the project use this set of commands:
 
 ```bash
@@ -15,8 +13,6 @@ poetry run python -m orchestra
 This will start the server on the configured host.
 
 You can find swagger documentation at `/api/docs`.
-
-You can read more about poetry here: https://python-poetry.org/
 
 ## Docker
 
@@ -111,17 +107,10 @@ To install pre-commit simply run inside the shell:
 pre-commit install
 ```
 
-pre-commit is very useful to check your code before publishing it.
-It's configured using .pre-commit-config.yaml file.
-
-By default it runs:
-* black (formats your code);
-* mypy (validates types);
-* isort (sorts imports in all files);
-* flake8 (spots possible bugs);
-
-
-You can read more about pre-commit here: https://pre-commit.com/
+Run tests before pushing them
+```bash
+pre-commit run -a
+```
 
 ## Migrations
 
