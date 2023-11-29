@@ -1,4 +1,3 @@
-import litellm
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
@@ -14,6 +13,3 @@ class Perplexity(BaseCompletionProvider):
             "perplexity/pplx-7b-chat-alpha",
             "perplexity/pplx-70b-chat-alpha"
         ]
-
-    def set_api_key(self, api_key):
-        litellm.perplexity_key = api_key
