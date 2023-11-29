@@ -14,7 +14,7 @@ class BaseCompletionProvider:
         if model not in self.supported_models:
             raise Exception("Model not supported")
 
-        if model == None:
+        if model is None:
             model = self.model
 
         try:
@@ -22,12 +22,10 @@ class BaseCompletionProvider:
                 model=model,
                 messages=messages,
                 max_tokens=max_tokens,
-                temperature=temperature
+                temperature=temperature,
             )
             return response
         except openai.APITimeoutError as e:
             print(f"Raised error type: {type(e)}, Error: {e}")
-            pass
         except Exception as e:
             print(f"Raised error type: {type(e)}, Error: {e}")
-            pass
