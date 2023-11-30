@@ -3,7 +3,7 @@ from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
 class OpenAI(BaseCompletionProvider):  # noqa: D101
-    def __init__(self):
+    def __init__(self) -> None:
         """
         Initializes with list of supported models.
 
@@ -42,8 +42,8 @@ class OpenAI(BaseCompletionProvider):  # noqa: D101
             "gpt-3.5-turbo-instruct",  # recommended replacement for above seven
         ]
 
-    def set_organization(self, organization):  # noqa: D102
+    def set_organization(self, organization) -> None:  # noqa: D102
         litellm.organization = organization
 
-    def set_api_version(self, api_version):  # noqa: D102
+    def set_api_version(self, api_version) -> None:  # noqa: D102
         litellm.api_version = api_version

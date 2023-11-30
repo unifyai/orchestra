@@ -1,1 +1,1 @@
-# noqa: D104
+"""providers.completion package."""

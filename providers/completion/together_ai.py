@@ -2,7 +2,7 @@ from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
 class TogetherAI(BaseCompletionProvider):  # noqa: D101
-    def __init__(self):
+    def __init__(self) -> None:
         # https://docs.together.ai/docs/inference-models
         self.supported_models = [
             "together_ai/togethercomputer/llama-2-70b-chat",

@@ -3,7 +3,7 @@ from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
 class VertexAI(BaseCompletionProvider):  # noqa: D101
-    def __init__(self):
+    def __init__(self) -> None:
         # https://cloud.google.com/vertex-ai/docs/generative-ai/learn/models
         self.supported_models = [
             "text-bison",
@@ -17,8 +17,8 @@ class VertexAI(BaseCompletionProvider):  # noqa: D101
             "codechat-bison-32k",
         ]
 
-    def set_project(self, vertex_project):  # noqa: D102
+    def set_project(self, vertex_project) -> None:  # noqa: D102
         litellm.vertex_project = vertex_project
 
-    def set_location(self, vertex_location):  # noqa: D102
+    def set_location(self, vertex_location) -> None:  # noqa: D102
         litellm.vertex_location = vertex_location

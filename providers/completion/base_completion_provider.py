@@ -7,14 +7,14 @@ logger = logging.getLogger(__name__)
 
 
 class BaseCompletionProvider:  # noqa: D101
-    def __init__(self):
+    def __init__(self) -> None:
         self.supported_models = []
         self.model = None
 
-    def set_api_key(self, api_key):  # noqa: D102
+    def set_api_key(self, api_key) -> None:  # noqa: D102
         litellm.api_key = api_key
 
-    def complete(self, model, messages, max_tokens, temperature):  # noqa: D102
+    def complete(self, model, messages, max_tokens, temperature) -> str:  # noqa: D102
         if model not in self.supported_models:
             raise ValueError("Model not supported")
 
