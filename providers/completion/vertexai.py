@@ -2,9 +2,14 @@ import litellm
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
-class VertexAI(BaseCompletionProvider):  # noqa: D101
+class VertexAI(BaseCompletionProvider):
+    """
+    A completion provider that uses the VertexAI service.
+
+    Supported models: https://cloud.google.com/vertex-ai/docs/generative-ai/learn/models
+    """
+
     def __init__(self) -> None:
-        # https://cloud.google.com/vertex-ai/docs/generative-ai/learn/models
         self.supported_models = [
             "text-bison",
             "chat-bison",

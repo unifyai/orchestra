@@ -7,7 +7,9 @@ import openai
 logger = logging.getLogger(__name__)
 
 
-class BaseCompletionProvider:  # noqa: D101
+class BaseCompletionProvider:
+    """Base class for completion providers."""
+
     def __init__(self) -> None:
         self.supported_models: List[str] = []
         self.model: str = ""

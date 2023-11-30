@@ -2,14 +2,15 @@ import litellm
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
-class OpenAI(BaseCompletionProvider):  # noqa: D101
-    def __init__(self) -> None:
-        """
-        Initializes with list of supported models.
+class OpenAI(BaseCompletionProvider):
+    """
+    A completion provider that uses the OpenAI service.
 
-        Source: https://openai.com/pricing
-        Deprecation: https://platform.openai.com/docs/deprecations/deprecation-history
-        """
+    Source: https://openai.com/pricing
+    Deprecation: https://platform.openai.com/docs/deprecations/deprecation-history
+    """
+
+    def __init__(self) -> None:
         self.supported_models = [
             "gpt-4-1106-preview",
             "gpt-3.5-turbo",

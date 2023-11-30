@@ -1,9 +1,14 @@
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
-class Perplexity(BaseCompletionProvider):  # noqa: D101
+class Perplexity(BaseCompletionProvider):
+    """
+    A completion provider that uses the Perplexity service.
+
+    Supported models: https://docs.perplexity.ai/docs/model-cards
+    """
+
     def __init__(self) -> None:
-        # https://docs.perplexity.ai/docs/model-cards
         self.supported_models = [
             "perplexity/codellama-34b-instruct",
             "perplexity/llama-2-70b-chat",

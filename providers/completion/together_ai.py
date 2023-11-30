@@ -1,9 +1,14 @@
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
-class TogetherAI(BaseCompletionProvider):  # noqa: D101
+class TogetherAI(BaseCompletionProvider):
+    """
+    A completion provider that uses the TogetherAI service.
+
+    Supported models: https://docs.together.ai/docs/inference-models
+    """
+
     def __init__(self) -> None:
-        # https://docs.together.ai/docs/inference-models
         self.supported_models = [
             "together_ai/togethercomputer/llama-2-70b-chat",
             "together_ai/togethercomputer/llama-2-70b",
