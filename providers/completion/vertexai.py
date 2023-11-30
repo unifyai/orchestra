@@ -3,15 +3,27 @@ from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
 class VertexAI(BaseCompletionProvider):
-    def __init__(self):
+    """
+    A completion provider that uses the VertexAI service.
+
+    Supported models: https://cloud.google.com/vertex-ai/docs/generative-ai/learn/models
+    """
+
+    def __init__(self) -> None:
         self.supported_models = [
-            "chat-bison-32k",
+            "text-bison",
             "chat-bison",
-            "chat-bison@001",
+            "code-bison",
+            "codechat-bison",
+            "code-gecko",
+            "text-bison-32k",
+            "chat-bison-32k",
+            "code-bison-32k",
+            "codechat-bison-32k",
         ]
 
-    def set_project(self, vertex_project):
+    def set_project(self, vertex_project: str) -> None:  # noqa: D102
         litellm.vertex_project = vertex_project
 
-    def set_location(self, vertex_location):
+    def set_location(self, vertex_location: str) -> None:  # noqa: D102
         litellm.vertex_location = vertex_location
