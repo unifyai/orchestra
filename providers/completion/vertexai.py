@@ -17,8 +17,8 @@ class VertexAI(BaseCompletionProvider):  # noqa: D101
             "codechat-bison-32k",
         ]
 
-    def set_project(self, vertex_project) -> None:  # noqa: D102
+    def set_project(self, vertex_project: str) -> None:  # noqa: D102
         litellm.vertex_project = vertex_project
 
-    def set_location(self, vertex_location) -> None:  # noqa: D102
+    def set_location(self, vertex_location: str) -> None:  # noqa: D102
         litellm.vertex_location = vertex_location

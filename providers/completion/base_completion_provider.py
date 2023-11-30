@@ -1,4 +1,5 @@
 import logging
+from typing import List, Optional
 
 import litellm
 import openai
@@ -8,13 +9,19 @@ logger = logging.getLogger(__name__)
 
 class BaseCompletionProvider:  # noqa: D101
     def __init__(self) -> None:
-        self.supported_models = []
-        self.model = None
+        self.supported_models: List[str] = []
+        self.model: str = ""
 
-    def set_api_key(self, api_key) -> None:  # noqa: D102
+    def set_api_key(self, api_key: str) -> None:  # noqa: D102
         litellm.api_key = api_key
 
-    def complete(self, model, messages, max_tokens, temperature) -> str:  # noqa: D102
+    def complete(  # noqa: D102
+        self,
+        model: str,
+        messages: List,  # type: ignore
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> str:
         if model not in self.supported_models:
             raise ValueError("Model not supported")
 
@@ -33,3 +40,4 @@ class BaseCompletionProvider:  # noqa: D101
         except Exception as error:
             error_type = type(error)
             logger.error(f"Raised error type: {error_type}, Error: {error}")
+        return ""

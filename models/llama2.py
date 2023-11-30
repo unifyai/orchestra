@@ -5,7 +5,7 @@ from providers.completion.together_ai import TogetherAI
 
 class Llama2Chat:
     # flake8: noqa: C901
-    def __init__(self, provider, model):
+    def __init__(self, provider: str, model: str) -> None:
         supported_providers = {
             "anyscale": {
                 "7b": "anyscale/meta-llama/Llama-2-7b-chat-hf",
@@ -33,18 +33,23 @@ class Llama2Chat:
         if provider == "anyscale":
             self.provider_obj = Anyscale()
         elif provider == "perplexity":
-            self.provider_obj = Perplexity()
+            self.provider_obj = Perplexity()  # type: ignore
         elif provider == "together_ai":
-            self.provider_obj = TogetherAI()
+            self.provider_obj = TogetherAI()  # type: ignore
         else:
             raise Exception("Invalid provider")
 
         self.provider_obj.model = supported_providers[provider][model]
 
-    def set_api_key(self, api_key):
+    def set_api_key(self, api_key: str) -> None:
         self.provider_obj.set_api_key(api_key)
 
-    def get_completion(self, prompt, max_tokens=16, temperature=0.9):
+    def get_completion(
+        self,
+        prompt: str,
+        max_tokens: int = 16,
+        temperature: float = 0.9,
+    ) -> str:
         messages = [{"content": prompt, "role": "user"}]
         return self.provider_obj.complete(
             self.provider_obj.model,

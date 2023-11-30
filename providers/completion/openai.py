@@ -42,8 +42,8 @@ class OpenAI(BaseCompletionProvider):  # noqa: D101
             "gpt-3.5-turbo-instruct",  # recommended replacement for above seven
         ]
 
-    def set_organization(self, organization) -> None:  # noqa: D102
+    def set_organization(self, organization: str) -> None:  # noqa: D102
         litellm.organization = organization
 
-    def set_api_version(self, api_version) -> None:  # noqa: D102
+    def set_api_version(self, api_version: str) -> None:  # noqa: D102
         litellm.api_version = api_version
