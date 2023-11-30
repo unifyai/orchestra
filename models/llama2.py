@@ -1,6 +1,5 @@
 from providers.completion.anyscale import Anyscale
 from providers.completion.perplexity import Perplexity
-from providers.completion.replicate import Replicate
 from providers.completion.together_ai import TogetherAI
 
 
@@ -17,11 +16,6 @@ class Llama2Chat:
                 "7b": "perplexity/pplx-7b-chat-alpha",
                 "13b": "perplexity/llama-2-13b-chat",
                 "70b": "perplexity/llama-2-70b-chat",
-            },
-            "replicate": {
-                "7b": "replicate/llama-2-7b-chat",
-                "13b": "replicate/a16z-infra/llama-2-13b-chat",
-                "70b": "replicate/llama-2-70b-chat",
             },
             "together_ai": {
                 "7b": "together_ai/togethercomputer/llama-2-7b",
@@ -40,8 +34,6 @@ class Llama2Chat:
             self.provider_obj = Anyscale()
         elif provider == "perplexity":
             self.provider_obj = Perplexity()
-        elif provider == "replicate":
-            self.provider_obj = Replicate()
         elif provider == "together_ai":
             self.provider_obj = TogetherAI()
         else:
