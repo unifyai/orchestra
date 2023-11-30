@@ -2,7 +2,13 @@ from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
 class Anyscale(BaseCompletionProvider):
-    def __init__(self):
+    """
+    A completion provider that uses the Anyscale service.
+
+    Source: https://docs.anyscale.com/endpoints/overview#supported-models
+    """
+
+    def __init__(self) -> None:
         self.supported_models = [
             "anyscale/meta-llama/Llama-2-7b-chat-hf",
             "anyscale/meta-llama/Llama-2-13b-chat-hf",
