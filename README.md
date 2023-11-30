@@ -116,6 +116,7 @@ pre-commit install
 Run tests before pushing them
 ```bash
 pre-commit run -a
+poetry run mypy .
 ```
 
 ## Migrations
