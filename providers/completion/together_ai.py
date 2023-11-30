@@ -1,7 +1,7 @@
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
-class TogetherAI(BaseCompletionProvider):
+class TogetherAI(BaseCompletionProvider):  # noqa: D101
     def __init__(self):
         # https://docs.together.ai/docs/inference-models
         self.supported_models = [

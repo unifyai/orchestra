@@ -1,7 +1,7 @@
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
-class Anthropic(BaseCompletionProvider):
+class Anthropic(BaseCompletionProvider):  # noqa: D101
     def __init__(self):
         # https://docs.anthropic.com/claude/reference/selecting-a-model
         self.supported_models = [

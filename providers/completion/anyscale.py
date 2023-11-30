@@ -1,7 +1,7 @@
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
-class Anyscale(BaseCompletionProvider):
+class Anyscale(BaseCompletionProvider):  # noqa: D101
     def __init__(self):
         # https://docs.anyscale.com/endpoints/overview#supported-models
         self.supported_models = [

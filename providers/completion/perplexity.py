@@ -1,7 +1,7 @@
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
-class Perplexity(BaseCompletionProvider):
+class Perplexity(BaseCompletionProvider):  # noqa: D101
     def __init__(self):
         # https://docs.perplexity.ai/docs/model-cards
         self.supported_models = [

@@ -2,7 +2,7 @@ import litellm
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
-class VertexAI(BaseCompletionProvider):
+class VertexAI(BaseCompletionProvider):  # noqa: D101
     def __init__(self):
         # https://cloud.google.com/vertex-ai/docs/generative-ai/learn/models
         self.supported_models = [
@@ -17,8 +17,8 @@ class VertexAI(BaseCompletionProvider):
             "codechat-bison-32k",
         ]
 
-    def set_project(self, vertex_project):
+    def set_project(self, vertex_project):  # noqa: D102
         litellm.vertex_project = vertex_project
 
-    def set_location(self, vertex_location):
+    def set_location(self, vertex_location):  # noqa: D102
         litellm.vertex_location = vertex_location

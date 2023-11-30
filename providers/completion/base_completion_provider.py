@@ -1,16 +1,20 @@
+import logging
+
 import litellm
 import openai
 
+logger = logging.getLogger(__name__)
 
-class BaseCompletionProvider:
+
+class BaseCompletionProvider:  # noqa: D101
     def __init__(self):
         self.supported_models = []
         self.model = None
 
-    def set_api_key(self, api_key):
+    def set_api_key(self, api_key):  # noqa: D102
         litellm.api_key = api_key
 
-    def complete(self, model, messages, max_tokens, temperature):
+    def complete(self, model, messages, max_tokens, temperature):  # noqa: D102
         if model not in self.supported_models:
             raise ValueError("Model not supported")
 
@@ -25,6 +29,7 @@ class BaseCompletionProvider:
                 temperature=temperature,
             )
         except openai.APITimeoutError as error:
-            print(f"Raised openai.APITimeoutError, Error: {error}")
+            logger.error(f"Raised openai.APITimeoutError, Error: {error}")
         except Exception as error:
-            print(f"Raised error type: {type(error)}, Error: {error}")
+            error_type = type(error)
+            logger.error(f"Raised error type: {error_type}, Error: {error}")
