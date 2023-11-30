@@ -3,6 +3,7 @@ from providers.completion.base_completion_provider import BaseCompletionProvider
 
 class TogetherAI(BaseCompletionProvider):
     def __init__(self):
+        # https://docs.together.ai/docs/inference-models
         self.supported_models = [
             "together_ai/togethercomputer/llama-2-70b-chat",
             "together_ai/togethercomputer/llama-2-70b",
@@ -24,4 +25,6 @@ class TogetherAI(BaseCompletionProvider):
             "together_ai/Austism/chronos-hermes-13b",
             "together_ai/upstage/SOLAR-0-70b-16bit",
             "together_ai/WizardLM/WizardLM-70B-V1.0",
+            "together_ai/mistralai/Mistral-7B-Instruct-v0.1"
+            "together_ai/mistralai/Mistral-7B-v0.1",
         ]

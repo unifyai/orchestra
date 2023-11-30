@@ -3,6 +3,7 @@ from providers.completion.base_completion_provider import BaseCompletionProvider
 
 class Anthropic(BaseCompletionProvider):
     def __init__(self):
+        # https://docs.anthropic.com/claude/reference/selecting-a-model
         self.supported_models = [
             "claude-2.1",
             "claude-2",
