@@ -12,20 +12,19 @@ class BaseCompletionProvider:
 
     def complete(self, model, messages, max_tokens, temperature):
         if model not in self.supported_models:
-            raise Exception("Model not supported")
+            raise ValueError("Model not supported")
 
         if model is None:
             model = self.model
 
         try:
-            response = litellm.completion(
+            return litellm.completion(
                 model=model,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
-            return response
-        except openai.APITimeoutError as e:
-            print(f"Raised error type: {type(e)}, Error: {e}")
-        except Exception as e:
-            print(f"Raised error type: {type(e)}, Error: {e}")
+        except openai.APITimeoutError as error:
+            print(f"Raised openai.APITimeoutError, Error: {error}")
+        except Exception as error:
+            print(f"Raised error type: {type(error)}, Error: {error}")
