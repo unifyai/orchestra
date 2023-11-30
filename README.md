@@ -14,6 +14,12 @@ This will start the server on the configured host.
 
 You can find swagger documentation at `/api/docs`.
 
+For development, you can activate the poetry virtual environment by:
+
+```bash
+poetry shell
+```
+
 ## Docker
 
 You can start the project with docker using this command:
@@ -110,6 +116,7 @@ pre-commit install
 Run tests before pushing them
 ```bash
 pre-commit run -a
+poetry run mypy .
 ```
 
 ## Migrations

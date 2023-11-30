@@ -2,7 +2,13 @@ from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
 class Anthropic(BaseCompletionProvider):
-    def __init__(self):
+    """
+    A completion provider that uses the Anthropic service.
+
+    Supported models: https://docs.anthropic.com/claude/reference/selecting-a-model
+    """
+
+    def __init__(self) -> None:
         self.supported_models = [
             "claude-2.1",
             "claude-2",
