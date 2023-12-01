@@ -5,9 +5,15 @@ from requests import request  # type: ignore
 security = HTTPBearer()
 
 
-async def _auth_api_key(
+async def auth_api_key(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> None:
+    """
+    Authenticate an API key.
+
+    :param credentials: current authorisation credentials.
+    :raises HTTPException: when api key is invalid.
+    """
     apikey = credentials.credentials
     auth_ret = request(
         "GET",
