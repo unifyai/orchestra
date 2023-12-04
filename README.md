@@ -59,7 +59,7 @@ orchestra
 ├── tests  # Tests for project.
 └── web  # Package contains web server. Handlers, startup config.
     ├── api  # Package with all handlers.
-    │   └── dependencies.py  # Contains utilities and helpers for the api.
+    │   └── dependencies.py  # Contains utilities and helpers for api/router.
     │   └── router.py  # Main router.
     ├── application.py  # FastAPI application configuration.
     └── lifetime.py  # Contains actions to perform on startup and shutdown.
@@ -166,7 +166,7 @@ api_router.include_router(
 )
 ```
 
-For example, this will protect all endpoints in the `/dummy` router/package:
+For example, this will protect all endpoints in the `/dummy` router:
 ```python
 api_router.include_router(
     dummy.router,
