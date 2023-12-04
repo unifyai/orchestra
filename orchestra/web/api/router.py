@@ -17,5 +17,4 @@ api_router.include_router(
     dummy.router,
     prefix="/dummy",
     tags=["dummy"],
-    # dependencies=AUTH, # noqa: E800
 )
