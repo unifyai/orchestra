@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     db_user: str = "orchestra"
     db_pass: str = "orchestra"
     db_base: str = "orchestra"
+    db_path_query: str = ""
     db_echo: bool = False
 
     # This variable is used to define
@@ -73,6 +74,7 @@ class Settings(BaseSettings):
             user=self.db_user,
             password=self.db_pass,
             path=f"/{self.db_base}",
+            query=self.db_path_query,
         )
 
     model_config = SettingsConfigDict(
