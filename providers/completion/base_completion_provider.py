@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional
+from typing import Dict, List, Optional, Set, Union
 
 import litellm
 import openai
@@ -10,8 +10,9 @@ logger = logging.getLogger(__name__)
 class BaseCompletionProvider:
     """Base class for completion providers."""
 
+    supported_models: Union[Set[str], Dict[str, str]] = {}
+
     def __init__(self) -> None:
-        self.supported_models: List[str] = []
         self.model: str = ""
 
     def set_api_key(self, api_key: str) -> None:  # noqa: D102
@@ -27,12 +28,14 @@ class BaseCompletionProvider:
         if model not in self.supported_models:
             raise ValueError("Model not supported")
 
-        if model is None:
-            model = self.model
+        if isinstance(self.supported_models, dict):
+            provider_model_endpoint = self.supported_models[model]
+        else:
+            provider_model_endpoint = model
 
         try:
             return litellm.completion(
-                model=model,
+                model=provider_model_endpoint,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,

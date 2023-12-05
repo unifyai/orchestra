@@ -8,9 +8,8 @@ class Replicate(BaseCompletionProvider):
     Source: https://replicate.com/explore
     """
 
-    def __init__(self) -> None:
-        self.supported_models = [
-            "replicate/mistralai/mistral-7b-instruct-v0.1",
-            "replicate/meta/llama-2-70b-chat",
-            "replicate/gpt-j-6b",
-        ]
+    supported_models = {
+        "mistral-7b-instruct-v0.1": "replicate/mistralai/mistral-7b-instruct-v0.1",
+        "llama-2-70b-chat": "replicate/meta/llama-2-70b-chat",
+        "gpt-j-6b": "replicate/gpt-j-6b",
+    }

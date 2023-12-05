@@ -72,7 +72,7 @@ class Settings(BaseSettings):
         port = self.db_port
         if not self.db_send_host:
             host = ""
-            port = None
+            port = None  # type: ignore
 
         return URL.build(
             scheme="postgresql+asyncpg",
