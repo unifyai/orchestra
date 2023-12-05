@@ -2,12 +2,14 @@ from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
 class Replicate(BaseCompletionProvider):
-    def __init__(self):
-        self.supported_models = [
-            "replicate/llama-2-70b-chat",
-            "replicate/a16z-infra/llama-2-13b-chat",
-            "replicate/vicuna-13b",
-            "replicate/daanelson/flan-t5-large",
-            "replicate/custom-llm-version-id",
-            "replicate/deployments/ishaan-jaff/ishaan-mistral",
-        ]
+    """
+    Initializes with list of few OSS models as example.
+
+    Source: https://replicate.com/explore
+    """
+
+    supported_models = {
+        "mistral-7b-instruct-v0.1": "replicate/mistralai/mistral-7b-instruct-v0.1",
+        "llama-2-70b-chat": "replicate/meta/llama-2-70b-chat",
+        "gpt-j-6b": "replicate/gpt-j-6b",
+    }

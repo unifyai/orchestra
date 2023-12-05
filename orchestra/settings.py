@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     db_user: str = "orchestra"
     db_pass: str = "orchestra"
     db_base: str = "orchestra"
+    db_path_query: str = ""
+    db_send_host: bool = True
     db_echo: bool = False
 
     # This variable is used to define
@@ -66,13 +68,20 @@ class Settings(BaseSettings):
 
         :return: database URL.
         """
+        host = self.db_host
+        port = self.db_port
+        if not self.db_send_host:
+            host = ""
+            port = None  # type: ignore
+
         return URL.build(
             scheme="postgresql+asyncpg",
-            host=self.db_host,
-            port=self.db_port,
+            host=host,
+            port=port,
             user=self.db_user,
             password=self.db_pass,
             path=f"/{self.db_base}",
+            query=self.db_path_query,
         )
 
     model_config = SettingsConfigDict(
