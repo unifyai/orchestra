@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set, Union
 
 import litellm
 import openai
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 class BaseCompletionProvider:
     """Base class for completion providers."""
 
-    supported_models: Dict[str, str] = {}
+    supported_models: Union[Set[str], Dict[str, str]] = {}
 
     def __init__(self) -> None:
         self.model: str = ""
@@ -28,7 +28,10 @@ class BaseCompletionProvider:
         if model not in self.supported_models:
             raise ValueError("Model not supported")
 
-        provider_model_endpoint = self.supported_models[model]
+        if isinstance(self.supported_models, dict):
+            provider_model_endpoint = self.supported_models[model]
+        else:
+            provider_model_endpoint = model
 
         try:
             return litellm.completion(
