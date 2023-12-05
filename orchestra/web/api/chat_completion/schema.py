@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from pydantic import BaseModel
 
@@ -14,7 +14,7 @@ class ChatCompletionRequest(BaseModel):
     """
 
     model: str
-    messages: List[Dict]
+    messages: List[Dict[str, str]]
     temperature: float
 
 
@@ -35,5 +35,5 @@ class ChatCompletionResponse(BaseModel):
     created: float
     id: str
     object: str = "chat.completion"
-    usage: Dict
-    choices: List[Dict]
+    usage: Dict[str, Any]
+    choices: List[Dict[str, Any]]
