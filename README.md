@@ -59,6 +59,7 @@ orchestra
 ├── tests  # Tests for project.
 └── web  # Package contains web server. Handlers, startup config.
     ├── api  # Package with all handlers.
+    │   └── dependencies.py  # Contains utilities and helpers for api/router.
     │   └── router.py  # Main router.
     ├── application.py  # FastAPI application configuration.
     └── lifetime.py  # Contains actions to perform on startup and shutdown.
@@ -150,6 +151,29 @@ alembic revision --autogenerate
 
 # For empty file generation.
 alembic revision
+```
+
+
+## Endpoint Protection
+
+To enable API key authentication on endpoints, you should add the following
+in the `orchestra/web/api/router.py` file:
+
+```python
+api_router.include_router(
+    ...,
+    dependencies=AUTH,
+)
+```
+
+For example, this will protect all endpoints in the `/dummy` router:
+```python
+api_router.include_router(
+    dummy.router,
+    prefix="/dummy",
+    tags=["dummy"],
+    dependencies=AUTH,
+)
 ```
 
 
