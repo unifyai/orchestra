@@ -9,18 +9,17 @@ class VertexAI(BaseCompletionProvider):
     Supported models: https://cloud.google.com/vertex-ai/docs/generative-ai/learn/models
     """
 
-    def __init__(self) -> None:
-        self.supported_models = [
-            "text-bison",
-            "chat-bison",
-            "code-bison",
-            "codechat-bison",
-            "code-gecko",
-            "text-bison-32k",
-            "chat-bison-32k",
-            "code-bison-32k",
-            "codechat-bison-32k",
-        ]
+    supported_models = {
+        "text-bison",
+        "chat-bison",
+        "code-bison",
+        "codechat-bison",
+        "code-gecko",
+        "text-bison-32k",
+        "chat-bison-32k",
+        "code-bison-32k",
+        "codechat-bison-32k",
+    }
 
     def set_project(self, vertex_project: str) -> None:  # noqa: D102
         litellm.vertex_project = vertex_project

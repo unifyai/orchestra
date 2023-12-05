@@ -8,10 +8,9 @@ class Anthropic(BaseCompletionProvider):
     Supported models: https://docs.anthropic.com/claude/reference/selecting-a-model
     """
 
-    def __init__(self) -> None:
-        self.supported_models = [
-            "claude-2.1",
-            "claude-2",
-            "claude-instant-1",
-            "claude-instant-1.2",
-        ]
+    supported_models = {
+        "claude-2.1",
+        "claude-2",
+        "claude-instant-1",
+        "claude-instant-1.2",
+    }
