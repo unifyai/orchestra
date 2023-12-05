@@ -1,0 +1,122 @@
+openapi: 3.0.3
+info:
+  title: Unify Model Hub
+  description: |-
+    This is the OpenAPI 3.0 specification for Unify's Model Hub.
+    
+    Some useful links:
+    - [Model Hub Docs](https://unify.ai/docs/modelhub/index.html)
+  contact:
+    email: hello@unify.ai
+  version: 0.0.1
+servers:
+  - url: https://api.unify.ai/v0
+paths:
+  /models:
+    get:
+      summary: List available models
+      description: Retrieve a list of all available models in the Unify Model Hub.
+      operationId: listModels
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              example:
+                models:
+                  - model: llama2
+                    endpoints:
+                      - anyscale
+                      - perplexity
+                      - replicate
+                      - ...
+                  - model: another_model
+                    endpoints:
+                      - endpoint_1
+                      - endpoint_2
+                      - ...
+      security: []
+  /endpoints/{modelId}:
+    get:
+      summary: List available endpoints for a model
+      description: Retrieves the list of available endpoints for a specific model in the Model Hub.
+      operationId: listEndpointsByModel
+      parameters:
+        - name: modelId
+          in: path
+          description: ID of pet to return
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              example:
+                model: llama2
+                endpoints:
+                  - anyscale
+                  - perplexity
+                  - replicate
+                  - ...
+        '404':
+          description: Model ID not found
+  /query:
+    post:
+      summary: Query a model endpoint.
+      description: Sends a given input to the specified model hosted in the specified endpoint. Both the **arguments and the response are model-specific** and therefor its format is expected to change from model to model. You can find the specific arguments and the response format in the corresponding model documentation. To use this endpoint you will need an API Key.
+      operationId: query
+      requestBody:
+              required: true
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      model:
+                        type: string
+                        description: The name of the model, same as model ID.
+                      endpoint:
+                        type: string
+                        description: The name of the endpoint, same as endpoint ID.
+                      arguments:
+                        type: object
+                        description: Model-specific parameters. Check out the model documentation for more information.
+                        additionalProperties: true
+                  example:
+                    model: "llama2"
+                    endpoint: "anyscale"
+                    arguments:
+                      arg1: 123
+                      arg2: "test"
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+              example:
+                response: "<Response text>"
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              example:
+                error: "Invalid API key"
+        '422':
+          description: Invalid arguments
+          content:
+            application/json:
+              example:
+                error: "The provided arguments are not correct for the specified model. Check out the model documentation for more information."
+      security:
+        - api_key: []
+components:
+  securitySchemes:
+    api_key:
+      type: apiKey
+      name: unify-api-key
+      in: header
