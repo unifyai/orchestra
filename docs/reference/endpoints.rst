@@ -4,6 +4,9 @@ Endpoints
 Welcome to the Endpoints API reference!
 This page is your go-to resource when it comes to learning about the different endpoints offered by the Model Hub. 
 
+.. note::
+  To use the endpoints you will need an API Key. If you don't have one yet, you can go through the instructions in 
+  `this page <https://unify.ai/docs/modelhub/home/getting_access.html>`_.
 
 -----
 
@@ -18,7 +21,9 @@ Retrieve a list of all available models in the Unify Model Hub.
 
 .. code-block:: bash
 
-  curl -X GET "https://api.unify.ai/v0/models" -H "Content-Type: application/json"
+  curl -X GET "https://api.unify.ai/v0/models" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: YOUR_API_KEY"
 
 
 **Responses**
@@ -58,6 +63,18 @@ Retrieve a list of all available models in the Unify Model Hub.
       "endpoints": ["anyscale", "perplexity", "replicate", "..."]
     }
 
+- **401 Unauthorized**
+
+  Invalid API key.
+
+  **Example Response**
+
+  .. code-block:: bash
+
+    {
+      "error": "Invalid API key"
+    }
+
 -----
 
 GET /endpoints/{model}
@@ -74,7 +91,9 @@ Retrieve the list of available endpoints for a specific model in the Model Hub.
 
 .. code-block:: bash
 
-  curl -X GET "https://api.unify.ai/v0/endpoints/llama2" -H "Content-Type: application/json"
+  curl -X GET "https://api.unify.ai/v0/endpoints/llama2" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: YOUR_API_KEY"
 
 **Responses**
 
@@ -94,6 +113,18 @@ Retrieve the list of available endpoints for a specific model in the Model Hub.
       "endpoints": ["anyscale", "perplexity", "replicate", "..."]
     }
 
+- **401 Unauthorized**
+
+  Invalid API key.
+
+  **Example Response**
+
+  .. code-block:: bash
+
+    {
+      "error": "Invalid API key"
+    }
+
 - **404 Not Found**
 
   Model ID not found. The specified model ID does not exist.
@@ -111,9 +142,12 @@ Retrieve the list of available endpoints for a specific model in the Model Hub.
 POST /query
 -----------
 
-**Query a Model Endpoint (🔑)**
+**Query a Model Endpoint**
 
-Send a given input to the specified model hosted in the specified endpoint. Both the **arguments and the response are model-specific** and, therefore, their format is expected to change from model to model. You can find the specific arguments and the response format in the corresponding model documentation. To use this endpoint, you will need an API Key.
+Send a given input to the specified model hosted in the specified endpoint. 
+Both the **arguments and the response are model-specific** and, therefore, their format is expected 
+to change from model to model. You can find the specific arguments and the response format in the 
+corresponding model documentation.
 
 **Request Body**
  | **model** *(string)*: ID of the model to query.

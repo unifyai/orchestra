@@ -35,6 +35,14 @@ paths:
                       - endpoint_1
                       - endpoint_2
                       - ...
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              example:
+                error: "Invalid API key"
+      security:
+        - api_key: []
   /endpoints/{model}:
     get:
       summary: List available endpoints for a model
@@ -59,8 +67,16 @@ paths:
                   - perplexity
                   - replicate
                   - ...
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              example:
+                error: "Invalid API key"
         '404':
           description: Model ID not found
+      security:
+        - api_key: []
   /query:
     post:
       summary: Query a model endpoint.
