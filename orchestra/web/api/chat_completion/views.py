@@ -1,19 +1,22 @@
 from fastapi import APIRouter
 from models.llm import CompletionsModel
 
-from orchestra.web.api.schema import CompletionRequest, CompletionResponse
+from orchestra.web.api.chat_completion.schema import (
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+)
 
 router = APIRouter()
 
 
-@router.post("/chat/completion", response_model=CompletionResponse)
-async def get_completions(request: CompletionRequest) -> CompletionResponse:
+@router.post("/chat/completion", response_model=ChatCompletionRequest)
+async def get_completions(request: ChatCompletionRequest) -> ChatCompletionResponse:
     """
     Get chat completions based on the request.
 
-    :param request: CompletionRequest object.
+    :param request: ChatCompletionRequest object.
 
-    :return: CompletionResponse object.
+    :return: ChatCompletionResponse object.
     """
     language_model = CompletionsModel(
         provider=request.model.split("/")[0],
@@ -24,7 +27,7 @@ async def get_completions(request: CompletionRequest) -> CompletionResponse:
         prompt=request.messages,
         temperature=request.temperature,
     )
-    return CompletionResponse(
+    return ChatCompletionResponse(
         model=request.model,
         created=response.get("created", None),
         choices=response.get("choices", None),
