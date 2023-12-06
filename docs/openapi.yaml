@@ -15,7 +15,7 @@ paths:
   /models:
     get:
       summary: List available models
-      description: Retrieve a list of all available models in the Unify Model Hub.
+      description: Retrieve a list of all available models and their endpoints in the Unify Model Hub.
       operationId: listModels
       responses:
         '200':
@@ -35,16 +35,15 @@ paths:
                       - endpoint_1
                       - endpoint_2
                       - ...
-      security: []
-  /endpoints/{modelId}:
+  /endpoints/{model}:
     get:
       summary: List available endpoints for a model
       description: Retrieves the list of available endpoints for a specific model in the Model Hub.
       operationId: listEndpointsByModel
       parameters:
-        - name: modelId
+        - name: model
           in: path
-          description: ID of pet to return
+          description: ID of model to get the endpoints from.
           required: true
           schema:
             type: string
@@ -76,10 +75,10 @@ paths:
                     properties:
                       model:
                         type: string
-                        description: The name of the model, same as model ID.
+                        description: ID of the model to query.
                       endpoint:
                         type: string
-                        description: The name of the endpoint, same as endpoint ID.
+                        description: ID of the endpoint to query.
                       arguments:
                         type: object
                         description: Model-specific parameters. Check out the model documentation for more information.
@@ -111,7 +110,7 @@ paths:
           content:
             application/json:
               example:
-                error: "The provided arguments are not correct for the specified model. Check out the model documentation for more information."
+                error: "The provided arguments don't correspond to the specified model."
       security:
         - api_key: []
 components:
