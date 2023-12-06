@@ -48,7 +48,6 @@ repos:
     name: Check with Flake8
     entry: poetry run flake8
     language: system
-    pass_filenames: false
     types: [python]
     args: [--count, .]
 
@@ -57,6 +56,5 @@ repos:
     entry: poetry run mypy
     language: system
     types: [python]
-    pass_filenames: false
     args:
     - "orchestra"
