@@ -1,12 +1,4 @@
-from providers.completion.anyscale import Anyscale
-from providers.completion.perplexity import Perplexity
-from providers.completion.together_ai import TogetherAI
-
-PROVIDER_CLASSES = {
-    "anyscale": Anyscale,
-    "perplexity": Perplexity,
-    "together_ai": TogetherAI,
-}
+from providers.completion import PROVIDER_CLASSES
 
 
 class CompletionsModel:
