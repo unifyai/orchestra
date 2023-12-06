@@ -23,9 +23,9 @@ class CompletionsModel:
 
         self.provider_obj = PROVIDER_CLASSES[provider]()
         self.model = model.lower()
-
-        key_env = str(f"ORCHESTRA_{provider.upper()}_API_KEY")
-        self.set_api_key(os.getenv(key_env))
+        api_key = str(os.getenv(f"ORCHESTRA_{provider.upper()}_API_KEY"))
+        if api_key is not None:
+            self.set_api_key(api_key)
 
     def set_api_key(self, api_key: str) -> None:  # noqa: D102
         self.provider_obj.set_api_key(api_key)
