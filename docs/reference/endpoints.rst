@@ -33,7 +33,7 @@ Retrieve a list of all available models in the Unify Model Hub.
   Successful operation.
 
   **Response**
-   | List of models with their corresponding endpoints.
+   | List of models with their corresponding providers.
 
   **Example Response**
 
@@ -43,7 +43,7 @@ Retrieve a list of all available models in the Unify Model Hub.
       "models": [
         {
           "model": "llama2",
-          "endpoints": [
+          "providers": [
             "anyscale",
             "perplexity",
             "replicate",
@@ -52,15 +52,15 @@ Retrieve a list of all available models in the Unify Model Hub.
         },
         {
           "model": "another_model",
-          "endpoints": [
-            "endpoint_1",
-            "endpoint_2",
+          "providers": [
+            "provider_1",
+            "provider_2",
             "..."
           ]
         },
       ]
       "model": "llama2",
-      "endpoints": ["anyscale", "perplexity", "replicate", "..."]
+      "providers": ["anyscale", "perplexity", "replicate", "..."]
     }
 
 - **401 Unauthorized**
@@ -77,21 +77,21 @@ Retrieve a list of all available models in the Unify Model Hub.
 
 -----
 
-GET /endpoints/{model}
+GET /providers/{model}
 ----------------------
 
-**List Available Endpoints for a Model**
+**List Available Providers for a Model**
 
-Retrieve the list of available endpoints for a specific model in the Model Hub.
+Retrieve the list of available providers for a specific model in the Model Hub.
 
 **Parameters**
- | **model** *(string)*: ID of the model to get the endpoints from.
+ | **model** *(string)*: ID of the model to get the providers of.
 
 **Example Request (curl)**
 
 .. code-block:: bash
 
-  curl -X GET "https://api.unify.ai/v0/endpoints/llama2" \
+  curl -X GET "https://api.unify.ai/v0/providers/llama2" \
   -H "Content-Type: application/json" \
   -H "Authorization: YOUR_API_KEY"
 
@@ -102,7 +102,7 @@ Retrieve the list of available endpoints for a specific model in the Model Hub.
   Successful operation.
 
   **Response** 
-   | Model ID and list of endpoints for the specified model.
+   | Model ID and list of providers for the specified model.
 
   **Example Response**
 
@@ -110,7 +110,7 @@ Retrieve the list of available endpoints for a specific model in the Model Hub.
 
     {
       "model": "llama2",
-      "endpoints": ["anyscale", "perplexity", "replicate", "..."]
+      "providers": ["anyscale", "perplexity", "replicate", "..."]
     }
 
 - **401 Unauthorized**
@@ -142,16 +142,16 @@ Retrieve the list of available endpoints for a specific model in the Model Hub.
 POST /query
 -----------
 
-**Query a Model Endpoint**
+**Query a Model Provider**
 
-Send a given input to the specified model hosted in the specified endpoint. 
+Send a given input to the specified model hosted in the specified provider. 
 Both the **arguments and the response are model-specific** and, therefore, their format is expected 
 to change from model to model. You can find the specific arguments and the response format in the 
 corresponding model documentation.
 
 **Request Body**
  | **model** *(string)*: ID of the model to query.
- | **endpoint** *(string)*: ID of the endpoint to query.
+ | **provider** *(string)*: ID of the provider to query.
  | **arguments** *(object)*: Model-specific parameters. Check out the model documentation for more information.
 
 **Example Request (curl)**
@@ -163,7 +163,7 @@ corresponding model documentation.
     -H "Authorization: YOUR_API_KEY" \
     -d '{
       "model": "llama2",
-      "endpoint": "anyscale",
+      "provider": "anyscale",
       "arguments": {
         "arg1": 123,
         "arg2": "test",
