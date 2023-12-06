@@ -4,9 +4,6 @@ Endpoints
 Welcome to the Endpoints API reference!
 This page is your go-to resource when it comes to learning about the different endpoints offered by the Model Hub. 
 
-.. toctree::
-  :maxdepth: 4
-  :hidden:
 
 -----
 
