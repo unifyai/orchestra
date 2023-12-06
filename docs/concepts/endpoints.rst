@@ -1,0 +1,4 @@
+Endpoints
+=========
+
+Lorem ipsum
