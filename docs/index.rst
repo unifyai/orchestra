@@ -17,7 +17,7 @@
   :caption: Concepts
 
   concepts/models.rst
-  concepts/endpoints.rst
+  concepts/providers.rst
   concepts/benchmarks.rst
   concepts/on_prem_images.rst
 

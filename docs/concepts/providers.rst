@@ -1,4 +1,4 @@
-Endpoints
+Providers
 =========
 
 Lorem ipsum
