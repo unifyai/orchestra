@@ -2,7 +2,7 @@ Endpoints
 =========
 
 Welcome to the Endpoints API reference!
-This page is your go-to resource when it comes to learning about the different endpoints offered by the Model Hub. 
+This page is your go-to resource when it comes to learning about the different endpoints offered by the Model Hub.
 
 .. toctree::
   :maxdepth: 4
@@ -85,7 +85,7 @@ Retrieve the list of available endpoints for a specific model in the Model Hub.
 
   Successful operation.
 
-  **Response** 
+  **Response**
    | Model ID and list of endpoints for the specified model.
 
   **Example Response**
@@ -146,7 +146,7 @@ Send a given input to the specified model hosted in the specified endpoint. Both
 
   Successful operation.
 
-  **Response** 
+  **Response**
    | Model-specific response, check out the model documentation for more information.
 
   **Example Response**
