@@ -1,0 +1,4 @@
+Pricing
+=======
+
+Lorem ipsum
