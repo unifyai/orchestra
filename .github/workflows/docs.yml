@@ -9,3 +9,5 @@ jobs:
     name: Update docs
     uses: unifyai/workflows/.github/workflows/docs.yml@main
     secrets: inherit
+    with:
+      repo-name: modelhub
