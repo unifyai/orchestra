@@ -26,6 +26,17 @@ async def get_completions(request: ChatCompletionRequest) -> ChatCompletionRespo
         messages=request.messages,
         temperature=request.temperature,
     )
+    if not response:
+        # TODO: Handle when response is None
+        return ChatCompletionResponse(
+            model=request.model,
+            created=0,
+            id="",
+            choices=[],
+            object="chat.completion",
+            usage={},
+        )
+
     usage = response["usage"].model_dump() if response["usage"] else None
     if response.get("choices", None):
         choices = []
