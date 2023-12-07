@@ -5,7 +5,7 @@ Welcome to the Endpoints API reference!
 This page is your go-to resource when it comes to learning about the different endpoints offered by the Model Hub.
 
 .. note::
-  To use the endpoints you will need an API Key. If you don't have one yet, you can go through the instructions in 
+  To use the endpoints you will need an API Key. If you don't have one yet, you can go through the instructions in
   `this page <https://unify.ai/docs/modelhub/home/getting_access.html>`_.
 
 -----
@@ -101,7 +101,7 @@ Retrieve the list of available providers for a specific model in the Model Hub.
 
   Successful operation.
 
-  **Response** 
+  **Response**
    | Model ID and list of providers for the specified model.
 
   **Example Response**
@@ -144,9 +144,9 @@ POST /query
 
 **Query a Model Provider**
 
-Send a given input to the specified model hosted in the specified provider. 
-Both the **arguments and the response are model-specific** and, therefore, their format is expected 
-to change from model to model. You can find the specific arguments and the response format in the 
+Send a given input to the specified model hosted in the specified provider.
+Both the **arguments and the response are model-specific** and, therefore, their format is expected
+to change from model to model. You can find the specific arguments and the response format in the
 corresponding model documentation.
 
 **Request Body**

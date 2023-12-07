@@ -76,7 +76,7 @@ paths:
         '404':
           description: Model ID not found
       security:
-        - api_key: []
+      - api_key: []
   /query:
     post:
       summary: Query a model provider.
