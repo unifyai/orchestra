@@ -4,12 +4,14 @@ from typing import Dict, List, Optional
 from litellm.utils import ModelResponse
 from providers.completion.anyscale import Anyscale
 from providers.completion.perplexity import Perplexity
+from providers.completion.replicate import Replicate
 from providers.completion.togetherai import TogetherAI
 
 PROVIDER_CLASSES = {
     "anyscale": Anyscale,
     "perplexity": Perplexity,
     "togetherai": TogetherAI,
+    "replicate": Replicate,
 }
 
 
