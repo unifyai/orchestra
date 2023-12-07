@@ -24,7 +24,7 @@ class ChatCompletionResponse(BaseModel):
 
     Attributes:
         model (str): The model identifier.
-        created (float): Timestamp indicating when the response was created.
+        created (int): Timestamp indicating when the response was created.
         id (str): Identifier for the completion response.
         object (str): The type of object, defaults to "chat.completion".
         usage (dict): Usage statistics or additional information.
@@ -32,7 +32,7 @@ class ChatCompletionResponse(BaseModel):
     """
 
     model: str
-    created: float
+    created: int
     id: Optional[str] = None
     object: str = "chat.completion"
     usage: Dict[str, Any]
