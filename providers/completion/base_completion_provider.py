@@ -11,6 +11,10 @@ logger = logging.getLogger(__name__)
 class BaseCompletionProvider:
     """Base class for completion providers."""
 
+    # TODO: Imo we should abstract this one level further into a task/modality
+    # agnostic class. Not really a ToDo but want to discuss this in the PR
+    # TODO: Also worth making this a property so that we can enforce definition
+    # on the child class
     supported_models: Union[Set[str], Dict[str, str]] = {}
 
     def __init__(self) -> None:
