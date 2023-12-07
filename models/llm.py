@@ -1,6 +1,7 @@
 import os
-from typing import Any, Dict, List
+from typing import Dict, List, Optional
 
+from litellm.utils import ModelResponse
 from providers.completion.anyscale import Anyscale
 from providers.completion.perplexity import Perplexity
 from providers.completion.togetherai import TogetherAI
@@ -36,7 +37,7 @@ class CompletionsModel:
         messages: List[Dict[str, str]],
         max_tokens: int = 16,
         temperature: float = 0.9,
-    ) -> Dict[str, Any]:
+    ) -> Optional[ModelResponse]:
         return self.provider_obj.complete(
             self.model,
             messages,
