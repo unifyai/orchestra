@@ -1,4 +1,3 @@
-import json
 import os
 from typing import Any, Dict, List
 
@@ -38,11 +37,9 @@ class CompletionsModel:
         max_tokens: int = 16,
         temperature: float = 0.9,
     ) -> Dict[str, Any]:
-        return json.loads(
-            self.provider_obj.complete(
-                self.model,
-                messages,
-                max_tokens,
-                temperature,
-            ),
+        return self.provider_obj.complete(
+            self.model,
+            messages,
+            max_tokens,
+            temperature,
         )
