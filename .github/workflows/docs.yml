@@ -1,0 +1,11 @@
+name: Update docs
+on:
+  push:
+    branches:
+      - "main"
+
+jobs:
+  update-docs:
+    name: Update docs
+    uses: unifyai/workflows/.github/workflows/docs.yml@master
+    secrets: inherit
