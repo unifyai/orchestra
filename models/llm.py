@@ -1,4 +1,6 @@
+import json
 import os
+from typing import Any, Dict
 
 from providers.completion.anyscale import Anyscale
 from providers.completion.perplexity import Perplexity
@@ -35,11 +37,13 @@ class CompletionsModel:
         prompt: str,
         max_tokens: int = 16,
         temperature: float = 0.9,
-    ) -> str:
+    ) -> Dict[str, Any]:
         messages = [{"content": prompt, "role": "user"}]
-        return self.provider_obj.complete(
-            self.model,
-            messages,
-            max_tokens,
-            temperature,
+        return json.loads(
+            self.provider_obj.complete(
+                self.model,
+                messages,
+                max_tokens,
+                temperature,
+            ),
         )
