@@ -3,14 +3,14 @@ info:
   title: Unify Model Hub
   description: |-
     This is the OpenAPI 3.0 specification for Unify's Model Hub.
-    
+
     Some useful links:
     - [Model Hub Docs](https://unify.ai/docs/modelhub/index.html)
   contact:
     email: hello@unify.ai
   version: 0.0.1
 servers:
-  - url: https://api.unify.ai/v0
+- url: https://api.unify.ai/v0
 paths:
   /models:
     get:
@@ -24,17 +24,17 @@ paths:
             application/json:
               example:
                 models:
-                  - model: llama2
-                    providers:
-                      - anyscale
-                      - perplexity
-                      - replicate
-                      - ...
-                  - model: another_model
-                    providers:
-                      - provider_1
-                      - provider_2
-                      - ...
+                - model: llama2
+                  providers:
+                  - anyscale
+                  - perplexity
+                  - replicate
+                  - '...'
+                - model: another_model
+                  providers:
+                  - provider_1
+                  - provider_2
+                  - '...'
         '401':
           description: Unauthorized
           content:
@@ -42,19 +42,19 @@ paths:
               example:
                 error: "Invalid API key"
       security:
-        - api_key: []
+      - api_key: []
   /providers/{model}:
     get:
       summary: List available providers for a model
       description: Retrieves the list of available providers for a specific model in the Model Hub.
       operationId: listProvidersByModel
       parameters:
-        - name: model
-          in: path
-          description: ID of model to get the providers from.
-          required: true
-          schema:
-            type: string
+      - name: model
+        in: path
+        description: ID of model to get the providers from.
+        required: true
+        schema:
+          type: string
       responses:
         '200':
           description: Successful operation
@@ -63,10 +63,10 @@ paths:
               example:
                 model: llama2
                 providers:
-                  - anyscale
-                  - perplexity
-                  - replicate
-                  - ...
+                - anyscale
+                - perplexity
+                - replicate
+                - '...'
         '401':
           description: Unauthorized
           content:
@@ -83,28 +83,28 @@ paths:
       description: Sends a given input to the specified model hosted in the specified provider. Both the **arguments and the response are model-specific** and therefor its format is expected to change from model to model. You can find the specific arguments and the response format in the corresponding model documentation. To use this provider you will need an API Key.
       operationId: query
       requestBody:
-              required: true
-              content:
-                application/json:
-                  schema:
-                    type: object
-                    properties:
-                      model:
-                        type: string
-                        description: ID of the model to query.
-                      provider:
-                        type: string
-                        description: ID of the provider to query.
-                      arguments:
-                        type: object
-                        description: Model-specific parameters. Check out the model documentation for more information.
-                        additionalProperties: true
-                  example:
-                    model: "llama2"
-                    provider: "anyscale"
-                    arguments:
-                      arg1: 123
-                      arg2: "test"
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model:
+                  type: string
+                  description: ID of the model to query.
+                provider:
+                  type: string
+                  description: ID of the provider to query.
+                arguments:
+                  type: object
+                  description: Model-specific parameters. Check out the model documentation for more information.
+                  additionalProperties: true
+            example:
+              model: "llama2"
+              provider: "anyscale"
+              arguments:
+                arg1: 123
+                arg2: "test"
       responses:
         '200':
           description: Successful operation
@@ -128,7 +128,7 @@ paths:
               example:
                 error: "The provided arguments don't correspond to the specified model."
       security:
-        - api_key: []
+      - api_key: []
 components:
   securitySchemes:
     api_key:
