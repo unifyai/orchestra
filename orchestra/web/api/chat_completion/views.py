@@ -24,7 +24,7 @@ async def get_completions(request: ChatCompletionRequest) -> ChatCompletionRespo
     )
 
     response = language_model.get_completion(
-        prompt=request.messages,
+        messages=request.messages,
         temperature=request.temperature,
     )
     return ChatCompletionResponse(

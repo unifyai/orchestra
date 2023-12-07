@@ -9,12 +9,12 @@ class ChatCompletionRequest(BaseModel):
 
     Attributes:
         model (str): The model identifier.
-        messages (List[Dict]): List of messages for completion.
+        messages (List[Dict[str]]): List of messages for completion.
         temperature (float): The temperature parameter for generating completions.
     """
 
     model: str
-    messages: str
+    messages: List[Dict[str, str]]
     temperature: float
 
 
