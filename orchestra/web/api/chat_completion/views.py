@@ -18,6 +18,12 @@ async def get_completions(request: ChatCompletionRequest) -> ChatCompletionRespo
 
     :return: ChatCompletionResponse object.
     """
+    # TODO: I think this should be the other way around (e.g. model/provider),
+    # otherwise it can get confussing once we add the people that uploaded the model
+    # imo (e.g. meta/llama-2-70b-chat/). Something like {uploaded_by}/{model}/{provider}
+    # (we won't have uploaded_by and provider at the same time, but gives structure
+    # I think) we could also have llama-2-70b-chat@replicate, which plays very nice
+    # with the meaning of @ and removes confussion from the use of /
     language_model = CompletionsModel(
         provider=request.model.split("/")[0],
         model=request.model.split("/")[1],
