@@ -1,118 +1,244 @@
-from providers.completion import PROVIDER_CLASSES
-from typing import List, Tuple
 import json
+import os
 import re
 import statistics
+
 from prettytable import PrettyTable
-import os
+from providers.completion import PROVIDER_CLASSES
 
 
 def evaluate_answers(
-    evaluator_model, provider, query, ground_truth, answer
+    evaluator_model,
+    provider,
+    query,
+    ground_truth,
+    answer,
 ) -> int:
-    # TODO: need to improve the system prompt
-    system = \
     """
-    You are given a problem and student's solution. If the correct answer is provided use it, otherwise first think about the solution yourself, then score the student's solution with one of these scores:
-    0 - Student provided incorrect or no solution
-    3 - Student provided correct solution
+    Evaluates the answer using the evaluator model and returns the score.
 
-    Your output should be using always this template:
-    Score: #
+    :param evaluator_model: The model used to evaluate the answer.
+    :param provider: The provider of the evaluator.
+    :param query: The problem sent to models being benchmarked.
+    :param ground_truth: The correct answer for the query.
+    :param answer: The answer to be evaluated.
+    :return: The score of the evaluated answer.
     """
+    system = (
+        "You are given a problem and student's solution. "
+        "If the correct answer is provided use it, otherwise first think about "
+        "the solution yourself, then score the student's solution "
+        "with one of these scores:\n"
+        "0 - Student provided incorrect or no solution\n"
+        "3 - Student provided correct solution\n\n"
+        "Your output should be using always this template:\n"
+        "Score: #\n"
+    )
     if ground_truth:
-        prompt = f"Problem: {query}\nCorrect answer: {ground_truth}\nStudent solution: {answer}"
+        prompt = (
+            f"Problem: {query}\n"
+            f"Correct answer: {ground_truth}\n"
+            f"Student solution: {answer}"
+        )
     else:
         prompt = f"Problem: {query}\nStudent solution: {answer}"
-        
-    evaluator_result = provider.complete(evaluator_model, [{"content": system, "role": "system"}, {"content": prompt, "role": "user"}])
+
+    evaluator_result = provider.complete(
+        evaluator_model,
+        [{"content": system, "role": "system"}, {"content": prompt, "role": "user"}],
+    )
     found = re.search(r"Score: (\d+)", evaluator_result.choices[0].message.content)
     if found:
         return int(found.group(1))
-    else: # TODO: this is a hack, fix it
-        return 0
+    return 0
 
 
-def run(models, benchmark_problems_path='benchmark/problems.jsonl', evaluator="gpt-4"):
-    """Benchmark the models on a list of problems."""
-    assert models, "No models provided to benchmark"
+def load_problems(benchmark_problems_path):
+    """
+    Load the problems from the benchmark_problems_path file.
+
+    :param benchmark_problems_path: JSONL file path with problems.
+    :return: List of problems.
+    """
     problems = []
-    with open(benchmark_problems_path, 'r') as file:
+    with open(benchmark_problems_path, "r") as file:
         lines = file.readlines()
         for line in lines:
             data = json.loads(line)
             problems.append((data[0], data[1]))
+    return problems
 
-    model_results = {}
-    traversed_providers = {}
-    for provider in PROVIDER_CLASSES:
-        for model in models:
-            if model.lower() in PROVIDER_CLASSES[provider].supported_models:
-                if provider in traversed_providers:
-                    _provider_obj = traversed_providers[provider]
-                else:
-                    _provider_obj = PROVIDER_CLASSES[provider]()
-                    _provider_obj.set_api_key(api_key=str(os.getenv(f"{provider.upper()}_API_KEY")))
-                    traversed_providers[provider] = _provider_obj # to avoid traversing the same provider twice
 
-                completion_results = [_provider_obj.complete(model, [{"content": prompt[0], "role": "user"}]) for prompt in problems]
-                model_results.setdefault(model, {})[provider] = {
-                    'output_answers': [obj.choices[0].message.content for obj in completion_results], 
-                    'total_latency': sum([result._response_ms for result in completion_results]),
-                    'total_tokens': sum([result.usage.completion_tokens for result in completion_results]),
-                    'median_latency': statistics.median([result._response_ms for result in completion_results]),
-                }
-                model_results[model][provider]['toks/sec'] = \
-                    model_results[model][provider]['total_tokens']*1000 / model_results[model][provider]['total_latency']
+def get_provider(provider, traversed_providers):
+    """
+    Get the provider object from the provider name.
 
-    if evaluator:
-        for provider in PROVIDER_CLASSES:
-            if evaluator.lower() in PROVIDER_CLASSES[provider].supported_models:
-                evaluator_provider = PROVIDER_CLASSES[provider]()
-                evaluator_provider.set_api_key(api_key=str(os.getenv(f"{provider.upper()}_API_KEY")))
-                break
+    Will avoid creating a new if it already exists.
 
-        for model in model_results:
-            for provider in model_results[model]:
-                model_results[model][provider]['score'] = sum([
-                        evaluate_answers(
-                        evaluator.lower(), 
-                        evaluator_provider, 
-                        prompt[0], 
-                        prompt[1], 
-                        answer
-                    ) for answer, prompt in zip(model_results[model][provider]['output_answers'], problems)])
+    :param provider: The provider answer get object of.
+    :param traversed_providers: List of traversed providers.
+    :return: Provider object.
+    """
+    if provider in traversed_providers:
+        provider_obj = traversed_providers.get(provider)
+    else:
+        provider_obj = PROVIDER_CLASSES[provider]()
+        provider_obj.set_api_key(
+            api_key=str(os.getenv(f"{provider.upper()}_API_KEY")),
+        )
+        traversed_providers[provider] = provider_obj  # noqa: WPS529
+    return provider_obj
 
-    # with open('model_results.json', 'r', encoding='utf-8') as f:
-    #     model_results = json.load(f)
 
+def get_completion_results(_provider_obj, model, problems):  # noqa: D103
+    return [
+        _provider_obj.complete(
+            model,
+            [{"content": prompt[0], "role": "user"}],
+        )
+        for prompt in problems
+    ]
+
+
+def get_evaluator_provider(evaluator):  # noqa: D103
+    for provider, provider_class in PROVIDER_CLASSES:
+        if evaluator.lower() in provider_class.supported_models:
+            evaluator_provider = provider_class()
+            evaluator_provider.set_api_key(
+                api_key=str(os.getenv(f"{provider.upper()}_API_KEY")),
+            )
+            return evaluator_provider
+
+
+def calculate_results(completion_results):  # noqa: D103
+    return {
+        "output_answers": [
+            obj.choices[0].message.content for obj in completion_results
+        ],
+        "total_latency": sum(
+            [result._response_ms for result in completion_results],  # noqa: WPS437
+        ),
+        "total_tokens": sum(
+            [result.usage.completion_tokens for result in completion_results],
+        ),
+        "median_latency": statistics.median(
+            [result._response_ms for result in completion_results],  # noqa: WPS437
+        ),
+    }
+
+
+def calculate_score(  # noqa: D103
+    evaluator,
+    evaluator_provider,
+    provider_data,
+    problems,
+):
+    return sum(
+        [
+            evaluate_answers(
+                evaluator.lower(),
+                evaluator_provider,
+                prompt[0],
+                prompt[1],
+                answer,
+            )
+            for answer, prompt in zip(
+                provider_data["output_answers"],
+                problems,
+            )
+        ],
+    )
+
+
+def create_table(model_results, evaluator):  # noqa: D103, WPS210
     headers = [
         "Model",
         "Provider",
         "Tokens",
         "Latency (s)",
         "Speed (tokens/sec)",
-        "QnA score",
     ]
 
-    if not evaluator:
-        headers.remove("QnA score")
-
+    if evaluator:
+        headers.append("QnA score")
     table = PrettyTable(headers)
 
-    for model in model_results:
-        for provider in model_results[model]:
+    for model_name, provider_results in model_results.items():
+        for provider_name, provider_data in provider_results.items():
             row_data = [
-                model,
-                provider,
-                model_results[model][provider]["total_tokens"],
-                f'{model_results[model][provider]["total_latency"]:.2f}',
-                f'{model_results[model][provider]["toks/sec"]:.2f}',
+                model_name,
+                provider_name,
+                provider_data["total_tokens"],
+                f'{provider_data["total_latency"]:.2f}',
+                f'{provider_data["toks/sec"]:.2f}',
             ]
             if evaluator:
-                row_data.append(model_results[model][provider]["score"])
+                row_data.append(provider_data["score"])
             table.add_row(row_data)
     return table
 
 
-print(run(["llama-2-7b-chat", "mistral-7b-instruct-v0.1"]))
+def run(  # noqa: C901, WPS210, WPS231
+    models,
+    benchmark_problems_path="benchmark/problems.jsonl",
+    evaluator="gpt-4",
+    print_table=False,
+):
+    """
+    Benchmarks selected language models across diverse cloud providers.
+
+    The generated table presents comprehensive results, including total token count,
+    latency, and throughput metrics for efficient comparison. For instance,
+    choosing 5 models supported by 3 providers results in a detailed 15-entry
+    benchmark summary.
+
+    :param models: List of models to benchmark.
+    :param benchmark_problems_path: JSONL file path with problems.
+    :param evaluator: Model used to evaluate the answers.
+    :param print_table: Whether to print the table or not.
+    :raises ValueError: If no models are provided to benchmark.
+    :return: Prettytable of tokens count, latency, throughput.
+    """
+    if not models:
+        raise ValueError("No models provided to benchmark")
+    problems = load_problems(benchmark_problems_path)
+
+    model_results = {}
+    traversed_providers = {}
+    for provider, provider_class in PROVIDER_CLASSES.items():
+        for model in models:
+            if model.lower() in provider_class.supported_models:
+                provider_obj = get_provider(provider, traversed_providers)
+                completion_results = get_completion_results(
+                    provider_obj,
+                    model,
+                    problems,
+                )
+
+                model_results.setdefault(model, {})[provider] = calculate_results(
+                    completion_results,
+                )
+                model_results[model][provider]["toks/sec"] = (
+                    model_results[model][provider]["total_tokens"]
+                    * 1000
+                    / model_results[model][provider]["total_latency"]
+                )
+
+    if evaluator:
+        evaluator_provider = get_evaluator_provider(evaluator)
+        for provider_results in model_results.values():
+            for provider_data in provider_results.values():
+                provider_data["score"] = calculate_score(
+                    evaluator,
+                    evaluator_provider,
+                    provider_data,
+                    problems,
+                )
+    table = create_table(model_results, evaluator)
+    if print_table:
+        print(table)  # noqa: WPS421
+    return table
+
+
+if __name__ == "__main__":
+    run(["llama-2-7b-chat", "mistral-7b-instruct-v0.1"], print_table=True)
