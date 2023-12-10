@@ -3,6 +3,7 @@ from typing import Dict, List, Optional, Set, Union
 
 import litellm
 import openai
+from litellm.utils import ModelResponse
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class BaseCompletionProvider:
         messages: List,  # type: ignore
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
-    ) -> litellm.ModelResponse:
+    ) -> Optional[ModelResponse]:
         if model not in self.supported_models:
             raise ValueError("Model not supported")
 
@@ -45,4 +46,4 @@ class BaseCompletionProvider:
         except Exception as error:
             error_type = type(error)
             logger.error(f"Raised error type: {error_type}, Error: {error}")
-        return ""
+        return None

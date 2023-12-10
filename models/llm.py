@@ -1,3 +1,7 @@
+import os
+from typing import Dict, List, Optional
+
+from litellm.utils import ModelResponse
 from providers.completion import PROVIDER_CLASSES
 
 
@@ -13,17 +17,19 @@ class CompletionsModel:
 
         self.provider_obj = PROVIDER_CLASSES[provider]()
         self.model = model.lower()
+        api_key = str(os.getenv(f"ORCHESTRA_{provider.upper()}_API_KEY"))
+        if api_key is not None:
+            self.set_api_key(api_key)
 
     def set_api_key(self, api_key: str) -> None:  # noqa: D102
         self.provider_obj.set_api_key(api_key)
 
     def get_completion(  # noqa: D102
         self,
-        prompt: str,
+        messages: List[Dict[str, str]],
         max_tokens: int = 16,
         temperature: float = 0.9,
-    ) -> str:
-        messages = [{"content": prompt, "role": "user"}]
+    ) -> Optional[ModelResponse]:
         return self.provider_obj.complete(
             self.model,
             messages,
