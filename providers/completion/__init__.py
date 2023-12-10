@@ -4,7 +4,7 @@ from providers.completion.anyscale import Anyscale
 from providers.completion.openai import OpenAI
 from providers.completion.perplexity import Perplexity
 from providers.completion.replicate import Replicate
-from providers.completion.together_ai import TogetherAI
+from providers.completion.togetherai import TogetherAI
 from providers.completion.vertexai import VertexAI
 
 PROVIDER_CLASSES = {

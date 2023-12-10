@@ -25,6 +25,7 @@ def evaluate_answers(
     :param query: The problem sent to models being benchmarked.
     :param ground_truth: The correct answer for the query.
     :param answer: The answer to be evaluated.
+    :raises ValueError: If evaluator_model provider throws error during API call.
     :return: The score of the evaluated answer.
     """
     system = (
@@ -50,6 +51,8 @@ def evaluate_answers(
         evaluator_model,
         [{"content": system, "role": "system"}, {"content": prompt, "role": "user"}],
     )
+    if evaluator_result is None:
+        raise ValueError(f"{evaluator_model} on {provider} threw an error during call")
     found = re.search(r"Score: (\d+)", evaluator_result.choices[0].message.content)
     if found:
         return int(found.group(1))
@@ -100,13 +103,16 @@ def get_completion_results(  # noqa: D103
     model: str,
     problems: List[tuple[str, str]],
 ) -> List[str]:
-    return [
-        provider.complete(
+    completion_results = []
+    for prompt in problems:
+        result = provider.complete(
             model,
             [{"content": prompt[0], "role": "user"}],
         )
-        for prompt in problems
-    ]
+        if result is None:
+            raise ValueError(f"{model} on {provider} threw an error during call")
+        completion_results.append(result)
+    return completion_results
 
 
 def get_evaluator_provider(evaluator: str) -> BaseCompletionProvider:  # noqa: D103
