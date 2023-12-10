@@ -24,7 +24,7 @@ class BaseCompletionProvider:
         messages: List,  # type: ignore
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
-    ) -> str:
+    ) -> litellm.ModelResponse:
         if model not in self.supported_models:
             raise ValueError("Model not supported")
 

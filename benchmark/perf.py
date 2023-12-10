@@ -2,17 +2,20 @@ import json
 import os
 import re
 import statistics
+from typing import Any, Dict, List
 
+from litellm import ModelResponse
 from prettytable import PrettyTable
 from providers.completion import PROVIDER_CLASSES
+from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
 def evaluate_answers(
-    evaluator_model,
-    provider,
-    query,
-    ground_truth,
-    answer,
+    evaluator_model: str,
+    provider: BaseCompletionProvider,
+    query: str,
+    ground_truth: str,
+    answer: str,
 ) -> int:
     """
     Evaluates the answer using the evaluator model and returns the score.
@@ -53,7 +56,7 @@ def evaluate_answers(
     return 0
 
 
-def load_problems(benchmark_problems_path):
+def load_problems(benchmark_problems_path: str) -> List[tuple[str, str]]:
     """
     Load the problems from the benchmark_problems_path file.
 
@@ -69,30 +72,36 @@ def load_problems(benchmark_problems_path):
     return problems
 
 
-def get_provider(provider, traversed_providers):
+def get_provider(
+    provider_name: str,
+    traversed_providers: Dict[str, BaseCompletionProvider],
+) -> BaseCompletionProvider:
     """
     Get the provider object from the provider name.
 
     Will avoid creating a new if it already exists.
 
-    :param provider: The provider answer get object of.
+    :param provider_name: The provider answer get object of.
     :param traversed_providers: List of traversed providers.
     :return: Provider object.
     """
-    if provider in traversed_providers:
-        provider_obj = traversed_providers.get(provider)
-    else:
-        provider_obj = PROVIDER_CLASSES[provider]()
+    provider_obj = traversed_providers.get(provider_name)
+    if provider_obj is None:
+        provider_obj = PROVIDER_CLASSES[provider_name]()
         provider_obj.set_api_key(
-            api_key=str(os.getenv(f"{provider.upper()}_API_KEY")),
+            api_key=str(os.getenv(f"{provider_name.upper()}_API_KEY")),
         )
-        traversed_providers[provider] = provider_obj  # noqa: WPS529
+        traversed_providers[provider_name] = provider_obj  # noqa: WPS529
     return provider_obj
 
 
-def get_completion_results(_provider_obj, model, problems):  # noqa: D103
+def get_completion_results(  # noqa: D103
+    provider: BaseCompletionProvider,
+    model: str,
+    problems: List[tuple[str, str]],
+) -> List[str]:
     return [
-        _provider_obj.complete(
+        provider.complete(
             model,
             [{"content": prompt[0], "role": "user"}],
         )
@@ -100,17 +109,20 @@ def get_completion_results(_provider_obj, model, problems):  # noqa: D103
     ]
 
 
-def get_evaluator_provider(evaluator):  # noqa: D103
-    for provider, provider_class in PROVIDER_CLASSES:
+def get_evaluator_provider(evaluator: str) -> BaseCompletionProvider:  # noqa: D103
+    for provider, provider_class in PROVIDER_CLASSES.items():
         if evaluator.lower() in provider_class.supported_models:
             evaluator_provider = provider_class()
             evaluator_provider.set_api_key(
                 api_key=str(os.getenv(f"{provider.upper()}_API_KEY")),
             )
             return evaluator_provider
+    raise ValueError("Evaluator model not supported")
 
 
-def calculate_results(completion_results):  # noqa: D103
+def calculate_results(  # noqa: D103
+    completion_results: List[ModelResponse],
+) -> Dict[str, Any]:
     return {
         "output_answers": [
             obj.choices[0].message.content for obj in completion_results
@@ -128,11 +140,11 @@ def calculate_results(completion_results):  # noqa: D103
 
 
 def calculate_score(  # noqa: D103
-    evaluator,
-    evaluator_provider,
-    provider_data,
-    problems,
-):
+    evaluator: str,
+    evaluator_provider: BaseCompletionProvider,
+    provider_data: Dict[str, List[str]],
+    problems: List[tuple[str, str]],
+) -> int:
     return sum(
         [
             evaluate_answers(
@@ -150,7 +162,10 @@ def calculate_score(  # noqa: D103
     )
 
 
-def create_table(model_results, evaluator):  # noqa: D103, WPS210
+def create_table(  # noqa: D103, WPS210
+    model_results: Dict[str, Any],
+    evaluator: str,
+) -> PrettyTable:
     headers = [
         "Model",
         "Provider",
@@ -179,11 +194,11 @@ def create_table(model_results, evaluator):  # noqa: D103, WPS210
 
 
 def run(  # noqa: C901, WPS210, WPS231
-    models,
-    benchmark_problems_path="benchmark/problems.jsonl",
-    evaluator="gpt-4",
-    print_table=False,
-):
+    models: List[str],
+    benchmark_problems_path: str = "benchmark/problems.jsonl",
+    evaluator: str = "gpt-4",
+    print_table: bool = False,
+) -> PrettyTable:
     """
     Benchmarks selected language models across diverse cloud providers.
 
@@ -203,8 +218,8 @@ def run(  # noqa: C901, WPS210, WPS231
         raise ValueError("No models provided to benchmark")
     problems = load_problems(benchmark_problems_path)
 
-    model_results = {}
-    traversed_providers = {}
+    model_results: Dict[str, Any] = {}
+    traversed_providers: Dict[str, BaseCompletionProvider] = {}
     for provider, provider_class in PROVIDER_CLASSES.items():
         for model in models:
             if model.lower() in provider_class.supported_models:
