@@ -5,11 +5,10 @@ services:
       ORCHESTRA_OPENTELEMETRY_ENDPOINT: "http://otel-collector:4317"
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.53.0
-    volumes:
-      # Adds config for opentelemetry.
-    - ./deploy/otel-collector-config.yml:/config.yml
-    command: --config config.yml
+    build:
+      context: .
+      dockerfile: ./deploy/otel.Dockerfile
+    image: otel-collector:${ORCHESTRA_VERSION:-latest}
     ports:
       # Collector's endpoint
     - "4317:4317"
