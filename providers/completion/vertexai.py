@@ -10,15 +10,51 @@ class VertexAI(BaseCompletionProvider):
     """
 
     supported_models = {
-        "text-bison",
-        "chat-bison",
-        "code-bison",
-        "codechat-bison",
-        "code-gecko",
-        "text-bison-32k",
-        "chat-bison-32k",
-        "code-bison-32k",
-        "codechat-bison-32k",
+        "text-bison": {
+            "endpoint": "text-bison",
+            "context_window": 8192,
+            "cost": {"prompt": -1, "completion": -1},
+        },
+        "chat-bison": {
+            "endpoint": "chat-bison",
+            "context_window": 8192,
+            "cost": {"prompt": -1, "completion": -1},
+        },
+        "code-bison": {
+            "endpoint": "code-bison",
+            "context_window": 6144,
+            "cost": {"prompt": -1, "completion": -1},
+        },
+        "codechat-bison": {
+            "endpoint": "codechat-bison",
+            "context_window": 6144,
+            "cost": {"prompt": -1, "completion": -1},
+        },
+        "code-gecko": {
+            "endpoint": "code-gecko",
+            "context_window": 2048,
+            "cost": {"prompt": -1, "completion": -1},
+        },
+        "text-bison-32k": {
+            "endpoint": "text-bison-32k",
+            "context_window": 32000,
+            "cost": {"prompt": -1, "completion": -1},
+        },
+        "chat-bison-32k": {
+            "endpoint": "chat-bison-32k",
+            "context_window": 32000,
+            "cost": {"prompt": -1, "completion": -1},
+        },
+        "code-bison-32k": {
+            "endpoint": "code-bison-32k",
+            "context_window": 32000,
+            "cost": {"prompt": -1, "completion": -1},
+        },
+        "codechat-bison-32k": {
+            "endpoint": "codechat-bison-32k",
+            "context_window": 32000,
+            "cost": {"prompt": -1, "completion": -1},
+        },
     }
 
     def set_project(self, vertex_project: str) -> None:  # noqa: D102
