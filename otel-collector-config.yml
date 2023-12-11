@@ -16,7 +16,7 @@ exporters:
 
   # Exports spans to jaeger.
   jaeger:
-    endpoint: "jaeger:14250"
+    endpoint: ${env:JAEGER_ENDPOINT}
     tls:
       insecure: true
 
