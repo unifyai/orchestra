@@ -43,9 +43,9 @@ def get_app() -> FastAPI:
     app = FastAPI(
         title="orchestra",
         version=metadata.version("orchestra"),
-        docs_url="/api/docs",
-        redoc_url="/api/redoc",
-        openapi_url="/api/openapi.json",
+        docs_url="/v0/docs",
+        redoc_url="/v0/redoc",
+        openapi_url="/v0/openapi.json",
         default_response_class=UJSONResponse,
     )
 
@@ -54,6 +54,6 @@ def get_app() -> FastAPI:
     register_shutdown_event(app)
 
     # Main router for the API.
-    app.include_router(router=api_router, prefix="/api")
+    app.include_router(router=api_router, prefix="/v0")
 
     return app
