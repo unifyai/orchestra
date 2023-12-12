@@ -30,7 +30,7 @@ class BaseCompletionProvider:
             raise ValueError("Model not supported")
 
         if isinstance(self.supported_models, dict):
-            provider_model_endpoint = self.supported_models[model]
+            provider_model_endpoint = self.supported_models[model]["endpoint"]
         else:
             provider_model_endpoint = model
 
