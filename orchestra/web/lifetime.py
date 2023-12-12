@@ -63,7 +63,7 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
         BatchSpanProcessor(
             OTLPSpanExporter(
                 endpoint=settings.opentelemetry_endpoint,
-                insecure=True,
+                insecure=not settings.opentelemetry_secure,
             ),
         ),
     )
