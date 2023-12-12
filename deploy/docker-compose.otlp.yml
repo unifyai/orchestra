@@ -2,17 +2,8 @@ services:
   api:
     environment:
       # Adds opentelemetry endpoint.
-      ORCHESTRA_OPENTELEMETRY_ENDPOINT: "http://otel-collector:4317"
+      ORCHESTRA_OPENTELEMETRY_ENDPOINT: "http://jaeger:4318/v1/traces"
       ORCHESTRA_OPENTELEMETRY_SECURE: "True"
-
-  otel-collector:
-    build:
-      context: .
-      dockerfile: ./deploy/otel.Dockerfile
-    image: otel-collector:${ORCHESTRA_VERSION:-latest}
-    ports:
-      # Collector's endpoint
-    - "4317:4317"
 
   jaeger:
     image: jaegertracing/all-in-one:1.52

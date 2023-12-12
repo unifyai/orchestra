@@ -14,7 +14,3 @@ services:
       # Enables autoreload.
       ORCHESTRA_RELOAD: "True"
       ORCHESTRA_OPENTELEMETRY_SECURE: "False"
-
-  otel-collector:
-    environment:
-      JAEGER_INSECURE: "true"
