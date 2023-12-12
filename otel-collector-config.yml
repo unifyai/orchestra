@@ -12,10 +12,10 @@ processors:
 exporters:
   # Exports spans to log.
   logging:
-    logLevel: info
+    verbosity: normal
 
   # Exports spans to jaeger.
-  jaeger:
+  otlp/jaeger:
     endpoint: ${env:JAEGER_ENDPOINT}
     tls:
       insecure: true
@@ -30,4 +30,4 @@ service:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [logging, jaeger]
+      exporters: [logging, otlp/jaeger]
