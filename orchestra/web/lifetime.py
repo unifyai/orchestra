@@ -1,7 +1,7 @@
 from typing import Awaitable, Callable
 
 from fastapi import FastAPI
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.resources import (
@@ -63,7 +63,6 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
         BatchSpanProcessor(
             OTLPSpanExporter(
                 endpoint=settings.opentelemetry_endpoint,
-                insecure=not settings.opentelemetry_secure,
             ),
         ),
     )
