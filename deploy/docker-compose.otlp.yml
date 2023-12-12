@@ -3,6 +3,7 @@ services:
     environment:
       # Adds opentelemetry endpoint.
       ORCHESTRA_OPENTELEMETRY_ENDPOINT: "http://otel-collector:4317"
+      ORCHESTRA_OPENTELEMETRY_SECURE: "True"
 
   otel-collector:
     build:
