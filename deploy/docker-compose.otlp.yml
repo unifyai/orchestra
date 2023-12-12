@@ -9,6 +9,8 @@ services:
       context: .
       dockerfile: ./deploy/otel.Dockerfile
     image: otel-collector:${ORCHESTRA_VERSION:-latest}
+    environment:
+      - JAEGER_ENDPOINT=jaeger-lz5fmz6i7q-ew.a.run.app:443
     ports:
       # Collector's endpoint
     - "4317:4317"
