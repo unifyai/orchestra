@@ -33,7 +33,6 @@ opentelemetry-instrumentation-fastapi = "^0.42b0"
 opentelemetry-instrumentation-sqlalchemy = "^0.42b0"
 loguru = "^0.7.0"
 litellm = "^1.10.4"
-grpcio = "1.56.0"
 
 
 [tool.poetry.dev-dependencies]
