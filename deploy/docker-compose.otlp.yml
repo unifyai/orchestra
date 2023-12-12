@@ -2,7 +2,7 @@ services:
   api:
     environment:
       # Adds opentelemetry endpoint.
-      ORCHESTRA_OPENTELEMETRY_ENDPOINT: "http://jaeger:4318/v1/traces"
+      ORCHESTRA_OPENTELEMETRY_ENDPOINT: "jaeger:4317"
       ORCHESTRA_OPENTELEMETRY_SECURE: "True"
 
   jaeger:
