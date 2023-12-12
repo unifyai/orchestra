@@ -85,7 +85,7 @@ class VertexAI(BaseCompletionProvider):
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json",
         }
-        url = f"https://us-central1-aiplatform.googleapis.com/v1/projects/{litellm.vertex_location}/locations/us-central1/publishers/google/models/{model_id}:countTokens"
+        url = f"https://us-central1-aiplatform.googleapis.com/v1/projects/{litellm.vertex_project}/locations/us-central1/publishers/google/models/{model_id}:countTokens"
         payload = {
             "instances": [
                 {"prompt": prompt},
