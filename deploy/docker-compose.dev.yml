@@ -13,3 +13,7 @@ services:
     environment:
       # Enables autoreload.
       ORCHESTRA_RELOAD: "True"
+
+  otel-collector:
+    environment:
+      JAEGER_INSECURE: "true"
