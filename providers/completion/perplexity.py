@@ -13,12 +13,12 @@ class Perplexity(BaseCompletionProvider):
         "codellama-34b-instruct": {
             "endpoint": "perplexity/codellama-34b-instruct",
             "context_window": 16384,
-            "cost": {"prompt": 0.35, "completion": 1.40},
+            "cost": {"prompt": 0.35, "completion": 1.4},
         },
         "llama-2-70b-chat": {
             "endpoint": "perplexity/llama-2-70b-chat",
             "context_window": 4096,
-            "cost": {"prompt": 0.70, "completion": 2.80},
+            "cost": {"prompt": 0.7, "completion": 2.8},
         },
         "mistral-7b-instruct": {
             "endpoint": "perplexity/mistral-7b-instruct",
@@ -33,7 +33,7 @@ class Perplexity(BaseCompletionProvider):
         "pplx-70b-chat": {
             "endpoint": "perplexity/pplx-70b-chat",
             "context_window": 4096,
-            "cost": {"prompt": 0.70, "completion": 2.80},
+            "cost": {"prompt": 0.7, "completion": 2.8},
         },
         "pplx-7b-online": {
             "endpoint": "perplexity/pplx-7b-online",
@@ -49,7 +49,7 @@ class Perplexity(BaseCompletionProvider):
             "context_window": 4096,
             "cost": {
                 "prompt": 0,
-                "completion": 2.80,
+                "completion": 2.8,
                 "online": {"charge_per_1000_requests": 5},
             },
         },

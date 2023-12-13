@@ -24,42 +24,42 @@ class VertexAI(BaseCompletionProvider):
         "chat-bison": {
             "endpoint": "chat-bison",
             "context_window": 8192,
-            "cost": {"prompt": 0.00025, "completion": 0.0005},
+            "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
         },
         "code-bison": {  # Preview, 100% discount
             "endpoint": "code-bison",
             "context_window": 6144,
-            "cost": {"prompt": 0, "completion": 0},
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
         "codechat-bison": {  # Preview, 100% discount
             "endpoint": "codechat-bison",
             "context_window": 6144,
-            "cost": {"prompt": 0, "completion": 0},
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
         "code-gecko": {  # Preview, 100% discount
             "endpoint": "code-gecko",
             "context_window": 2048,
-            "cost": {"prompt": 0, "completion": 0},
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
         "text-bison-32k": {
             "endpoint": "text-bison-32k",
             "context_window": 32000,
-            "cost": {"prompt": 0.00025, "completion": 0.0005},
+            "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
         },
         "chat-bison-32k": {
             "endpoint": "chat-bison-32k",
             "context_window": 32000,
-            "cost": {"prompt": 0.00025, "completion": 0.0005},
+            "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
         },
         "code-bison-32k": {  # Preview, 100% discount
             "endpoint": "code-bison-32k",
             "context_window": 32000,
-            "cost": {"prompt": 0, "completion": 0},
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
         "codechat-bison-32k": {  # Preview, 100% discount
             "endpoint": "codechat-bison-32k",
             "context_window": 32000,
-            "cost": {"prompt": 0, "completion": 0},
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
     }
 
@@ -71,7 +71,7 @@ class VertexAI(BaseCompletionProvider):
         """
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = json_credentials_path
         self.access_token = subprocess.getoutput(
-            "/workspaces/orchestra/google-cloud-sdk/bin/gcloud auth application-default print-access-token"
+            "/workspaces/orchestra/google-cloud-sdk/bin/gcloud auth application-default print-access-token",
         )
 
     def set_project(self, vertex_project: str) -> None:  # noqa: D102
@@ -91,5 +91,8 @@ class VertexAI(BaseCompletionProvider):
                 {"prompt": prompt},
             ],
         }
-        response = requests.post(url, headers=headers, json=payload)
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=5)
+        except requests.exceptions.Timeout:
+            raise Exception("Timeout while getting billable characters, ensure properly configured service account credentials") # noqa: WPS454
         return response.json()["totalBillableCharacters"]
