@@ -46,7 +46,7 @@ Table datapoint {
   id integer [primary key]
   endpoint_id integer [not null]
   measured_at timestamp [not null]
-  metric_name varchat [not null]
+  metric_name varchar [not null]
   value decimal [not null]
 }
 
