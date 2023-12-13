@@ -4,6 +4,7 @@ from orchestra.db.base import Base
 
 
 class Model(Base):
+    """Model class for the model table."""
 
     __tablename__ = "model"
 
@@ -19,6 +20,7 @@ class Model(Base):
 
 
 class License(Base):
+    """Model class for the license table."""
 
     __tablename__ = "license"
 
@@ -28,6 +30,7 @@ class License(Base):
 
 
 class Task(Base):
+    """Model class for the task table."""
 
     __tablename__ = "task"
 
@@ -36,6 +39,7 @@ class Task(Base):
 
 
 class Modality(Base):
+    """Model class for the modality table."""
 
     __tablename__ = "modality"
 
@@ -43,6 +47,7 @@ class Modality(Base):
 
 
 class Endpoint(Base):
+    """Model class for the endpoint table."""
 
     __tablename__ = "endpoint"
 
@@ -53,6 +58,7 @@ class Endpoint(Base):
 
 
 class Provider(Base):
+    """Model class for the provider table."""
 
     __tablename__ = "provider"
 
@@ -62,6 +68,7 @@ class Provider(Base):
 
 
 class Datapoint(Base):
+    """Model class for the datapoint table."""
 
     __tablename__ = "datapoint"
 
@@ -73,6 +80,7 @@ class Datapoint(Base):
 
 
 class Metric(Base):
+    """Model class for the metric table."""
 
     __tablename__ = "metric"
 
@@ -80,6 +88,7 @@ class Metric(Base):
 
 
 class Query(Base):
+    """Model class for the query table."""
 
     __tablename__ = "query"
 
@@ -91,6 +100,7 @@ class Query(Base):
 
 
 class User(Base):
+    """Model class for the user table."""
 
     __tablename__ = "user"
 
@@ -99,6 +109,7 @@ class User(Base):
 
 
 class Recharge(Base):
+    """Model class for the recharge table."""
 
     __tablename__ = "recharge"
 
@@ -110,6 +121,7 @@ class Recharge(Base):
 
 
 class RechargeType(Base):
+    """Model class for the recharge_type table."""
 
     __tablename__ = "recharge_type"
 
