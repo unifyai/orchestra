@@ -32,7 +32,7 @@ Table endpoint {
   id integer [primary key]
   model_id varchar [not null]
   model_uploaded_by integer [not null]
-  provider varchar [not null]
+  provider_id varchar [not null]
   created_at timestamp [not null]
 }
 
@@ -44,9 +44,9 @@ Table provider {
 
 Table datapoint {
   id integer [primary key]
-  endpoint integer [not null]
+  endpoint_id integer [not null]
   measured_at timestamp [not null]
-  metric varchat [not null]
+  metric_name varchat [not null]
   value decimal [not null]
 }
 
@@ -56,22 +56,24 @@ Table metric {
 
 Table query {
   id integer [primary key]
-  user integer [not null]
+  user_id integer [not null]
   at timestamp [not null]
-  endpoint integer [not null]
+  endpoint_id integer [not null]
   credits decimal [not null]
 }
 
 Table user {
-  // The username, company information and so on is stored somewhere else I guess
-  id integer [primary key] // maybe a foreign key to the table that already exists
+  // This id is the same as the user id in the console app table of users
+  // Every time a user is created in the console app, a new entry should
+  // be added here automatically with a default balance.
+  id integer [primary key]
   credits decimal [not null]
 }
 
 Table recharge {
   id integer [primary key]
   at timestamp [not null]
-  user integer [not null]
+  user_id integer [not null]
   quantity decimal [not null]
   type varchar [not null]
 }
@@ -85,10 +87,10 @@ Ref: model.task > task.name
 Ref: model.license > license.name
 Ref: task.modality > modality.name
 Ref: endpoint.(model_id, model_uploaded_by) > model.(id, uploaded_by)
-Ref: endpoint.provider > provider.id
-Ref: datapoint.endpoint > endpoint.id
-Ref: datapoint.metric > metric.name
-Ref: query.user > user.id
-Ref: query.endpoint > endpoint.id
-Ref: recharge.user > user.id
+Ref: endpoint.provider_id > provider.id
+Ref: datapoint.endpoint_id > endpoint.id
+Ref: datapoint.metric_name > metric.name
+Ref: query.user_id > user.id
+Ref: query.endpoint_id > endpoint.id
+Ref: recharge.user_id > user.id
 Ref: recharge.type > recharge_type.type
