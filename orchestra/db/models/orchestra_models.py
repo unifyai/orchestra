@@ -48,7 +48,6 @@ class Endpoint(Base):
 
     id = sa.Column(sa.Integer(), primary_key=True)
     model_id = sa.Column(sa.String(), sa.ForeignKey("model.id"), nullable=False)
-    # model_uploaded_by = sa.Column(sa.Integer(), sa.ForeignKey('model.uploaded_by'), nullable=False)
     provider_id = sa.Column(sa.String(), sa.ForeignKey("provider.id"), nullable=False)
     created_at = sa.Column(sa.TIMESTAMP(), nullable=False)
 
