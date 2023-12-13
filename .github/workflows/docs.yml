@@ -2,7 +2,7 @@ name: Update docs
 on:
   push:
     branches:
-      - "main"
+    - "main"
 
 jobs:
   update-docs:
