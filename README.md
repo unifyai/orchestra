@@ -1,5 +1,4 @@
 # orchestra
-
 ## Poetry
 
 This project uses poetry. It's a modern dependency management tool.
@@ -12,7 +11,7 @@ poetry run python -m orchestra
 
 This will start the server on the configured host.
 
-You can find swagger documentation at `/api/docs`.
+You can find swagger documentation at `/v0/docs`.
 
 For development, you can activate the poetry virtual environment by:
 
@@ -59,7 +58,7 @@ orchestra
 ├── tests  # Tests for project.
 └── web  # Package contains web server. Handlers, startup config.
     ├── api  # Package with all handlers.
-    │   └── dependencies.py  # Contains utilities and helpers for api/router.
+    │   └── dependencies.py  # Contains utilities and helpers for v0/router.
     │   └── router.py  # Main router.
     ├── application.py  # FastAPI application configuration.
     └── lifetime.py  # Contains actions to perform on startup and shutdown.

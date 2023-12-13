@@ -1,0 +1,96 @@
+// DB schema of the model hub
+// Docs: https://dbml.dbdiagram.io/docs
+
+Table model {
+  id integer [primary key]
+  model_code varchar // e.g. llama-2-70b-chat
+  uploaded_by integer
+  uploaded_at timestamp [not null]
+  task varchar [not null]
+  description text [not null]
+  license varchar
+  input_args_format text [not null]
+  output_format text [not null]
+  custom_fields text [note: 'Optional field for extra key:value pairs']
+}
+
+Table license {
+  name varchar [primary key]
+  image_url varchar
+  description text [not null]
+}
+
+Table task {
+  name varchar [primary key]
+  modality varchar [not null]
+}
+
+Table modality {
+  name varchar [primary key]
+}
+
+Table endpoint {
+  id integer [primary key]
+  model_id integer [not null]
+  provider_id varchar [not null]
+  created_at timestamp [not null]
+}
+
+Table provider {
+  id varchar [primary key]
+  name varchar [not null]
+  image_url varchar [not null]
+}
+
+Table datapoint {
+  id integer [primary key]
+  endpoint_id integer [not null]
+  measured_at timestamp [not null]
+  metric_name varchar [not null]
+  value decimal [not null]
+}
+
+Table metric {
+  name varchar [primary key]
+}
+
+Table query {
+  id integer [primary key]
+  user_id integer [not null]
+  at timestamp [not null]
+  endpoint_id integer [not null]
+  credits decimal [not null]
+}
+
+Table user {
+  // This id is the same as the user id in the console app table of users
+  // Every time a user is created in the console app, a new entry should
+  // be added here automatically with a default balance.
+  id integer [primary key]
+  credits decimal [not null]
+}
+
+Table recharge {
+  id integer [primary key]
+  at timestamp [not null]
+  user_id integer [not null]
+  quantity decimal [not null]
+  type varchar [not null]
+}
+
+Table recharge_type {
+  type varchar [primary key] // daily, free, manual, ...
+}
+
+Ref: model.uploaded_by > user.id
+Ref: model.task > task.name
+Ref: model.license > license.name
+Ref: task.modality > modality.name
+Ref: endpoint.model_id > model.id
+Ref: endpoint.provider_id > provider.id
+Ref: datapoint.endpoint_id > endpoint.id
+Ref: datapoint.metric_name > metric.name
+Ref: query.user_id > user.id
+Ref: query.endpoint_id > endpoint.id
+Ref: recharge.user_id > user.id
+Ref: recharge.type > recharge_type.type

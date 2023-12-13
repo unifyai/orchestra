@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     # Grpc endpoint for opentelemetry.
     # E.G. http://localhost:4317
     opentelemetry_endpoint: Optional[str] = None
+    opentelemetry_secure: bool = False
 
     @property
     def db_url(self) -> URL:
