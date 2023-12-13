@@ -14,7 +14,7 @@ export OPENAI_API_KEY="sk-"
 
 echo "Environment variables have been set."
 ```
-Run in terminal: 
+Run in terminal:
 ```bash
 source keys.sh
 ```

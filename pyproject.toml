@@ -49,6 +49,9 @@ anyio = "^3.6.2"
 pytest-env = "^0.8.1"
 httpx = "^0.23.3"
 
+[tool.poetry.group.dev.dependencies]
+types-requests = "^2.31.0.10"
+
 [tool.isort]
 profile = "black"
 multi_line_output = 3

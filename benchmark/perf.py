@@ -147,17 +147,17 @@ def get_cost(
     prompt_cost = 0
     completion_cost = 0
     for result, qna in zip(completion_results, problems):
-        cost_data = provider.supported_models[model]["cost"]
+        cost_data = provider.supported_models[model]["cost"]  # type: ignore
         if cost_data.get("per_character"):
             prompt_cost += (
-                provider.get_billable_characters(
+                provider.get_billable_characters(  # type: ignore
                     qna[0],
                     model,
                 )
                 * cost_data["prompt"]
             )
             completion_cost += (
-                provider.get_billable_characters(
+                provider.get_billable_characters(  # type: ignore
                     result.choices[0].message.content,
                     model,
                 )
@@ -165,7 +165,7 @@ def get_cost(
             )
         elif cost_data.get("per_second"):
             prompt_cost += (
-                provider.hardware_pricing_per_sec[cost_data["hardware"]]
+                provider.hardware_pricing_per_sec[cost_data["hardware"]]  # type: ignore
                 * result._response_ms  # noqa: WPS437
                 / 1000
             )
@@ -289,7 +289,7 @@ def run(  # noqa: C901, WPS210, WPS231
     benchmark_problems_path: str = "benchmark/problems.jsonl",
     evaluator: str = "gpt-4",
     print_table: bool = False,
-) -> PrettyTable:
+) -> Dict:
     """
     Benchmarks selected language models across diverse cloud providers.
 
@@ -315,7 +315,7 @@ def run(  # noqa: C901, WPS210, WPS231
     for provider_name, provider_class in PROVIDER_CLASSES.items():
         for model_name in models:
             if model_name.lower() in provider_class.supported_models:
-                logging.info(provider_name, model_name, end="| ")
+                logging.info(provider_name, model_name)
                 provider_obj = get_provider(provider_name, traversed_providers)
                 completion_results = get_completion_results(
                     provider_obj,
@@ -341,7 +341,11 @@ def run(  # noqa: C901, WPS210, WPS231
                 )
                 model_results[model_name][provider_name][
                     "context_window"
-                ] = provider_obj.supported_models[model_name.lower()]["context_window"]
+                ] = provider_obj.supported_models[  # type: ignore
+                    model_name.lower()
+                ][
+                    "context_window"
+                ]
         logging.info("")
     add_cost_per_million_tokens(model_results)
     if evaluator:
