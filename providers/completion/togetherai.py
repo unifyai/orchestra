@@ -7,6 +7,7 @@ class TogetherAI(BaseCompletionProvider):
     A completion provider that uses the TogetherAI service.
 
     Supported models: https://docs.together.ai/docs/inference-models
+    Pricing is per million tokens: https://www.together.ai/pricing
     """
 
     supported_models = {

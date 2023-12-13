@@ -50,6 +50,7 @@ def evaluate_answers(
     evaluator_result = provider.complete(
         evaluator_model,
         [{"content": system, "role": "system"}, {"content": prompt, "role": "user"}],
+        max_tokens=500,
     )
     if evaluator_result is None:
         raise ValueError(f"{evaluator_model} on {provider} threw an error during call")
@@ -158,7 +159,6 @@ def get_cost(
             hardware = provider.supported_models[model]["cost"]["hardware"]
             runtime_in_sec = result._response_ms / 1000  # noqa: WPS437
             prompt_cost += provider.hardware_pricing_per_sec[hardware] * runtime_in_sec
-            completion_cost += 0
         else:
             if provider.supported_models[model]["cost"].get("online"):
                 prompt_cost += (
@@ -203,7 +203,7 @@ def calculate_results(  # noqa: D103
             [result._response_ms for result in completion_results],  # noqa: WPS437
         ),
         "total_tokens": sum(
-            [result.usage.completion_tokens for result in completion_results],
+            [result.usage.total_tokens for result in completion_results],
         ),
         "median_latency": statistics.median(
             [result._response_ms for result in completion_results],  # noqa: WPS437
@@ -234,6 +234,14 @@ def calculate_score(  # noqa: D103
     )
 
 
+def calculate_cost_per_1m_toks(  # noqa: D103
+        model_results: Dict[str, Any],
+):
+    for model_name, provider_results in model_results.items():
+        for provider_name, provider_data in provider_results.items():
+            model_results[model_name][provider_name]['cost_per_1m_toks'] = provider_data["cost"]*1000000/provider_data["total_tokens"]
+
+
 def create_table(  # noqa: D103, WPS210
     model_results: Dict[str, Any],
     evaluator: str,
@@ -244,7 +252,7 @@ def create_table(  # noqa: D103, WPS210
         "Tokens",
         "Latency (s)",
         "Speed (tokens/sec)",
-        "Cost incurred on benchmarking ($)",
+        "Cost($)/1M tokens",
         "Context window",
     ]
 
@@ -260,7 +268,7 @@ def create_table(  # noqa: D103, WPS210
                 provider_data["total_tokens"],
                 f'{provider_data["total_latency"]:.2f}',
                 f'{provider_data["toks/sec"]:.2f}',
-                provider_data["cost"],
+                f'{provider_data["cost_per_1m_toks"]:.2f}',
                 provider_data["context_window"],
             ]
             if evaluator:
@@ -288,7 +296,7 @@ def run(  # noqa: C901, WPS210, WPS231
     :param evaluator: Model used to evaluate the answers.
     :param print_table: Whether to print the table or not.
     :raises ValueError: If no models are provided to benchmark.
-    :return: Prettytable of tokens count, latency, throughput.
+    :return: Dict with benchmarking results of model on providers.
     """
     if not models:
         raise ValueError("No models provided to benchmark")
@@ -327,8 +335,8 @@ def run(  # noqa: C901, WPS210, WPS231
                 model_results[model_name][provider_name][
                     "context_window"
                 ] = provider_obj.supported_models[model_name.lower()]["context_window"]
-        print('')
-
+        print()
+    calculate_cost_per_1m_toks(model_results)
     if evaluator:
         evaluator_provider = get_evaluator_provider(evaluator)
         for provider_results in model_results.values():
@@ -342,7 +350,7 @@ def run(  # noqa: C901, WPS210, WPS231
     table = create_table(model_results, evaluator)
     if print_table:
         print(table)  # noqa: WPS421
-    return table
+    return model_results
 
 
 if __name__ == "__main__":
