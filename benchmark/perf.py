@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import statistics
@@ -6,8 +7,14 @@ from typing import Any, Dict, List
 
 from litellm import ModelResponse
 from prettytable import PrettyTable
-from providers.completion import PROVIDER_CLASSES
+from providers.completion import PRICING_PER_TOKENS, PROVIDER_CLASSES
 from providers.completion.base_completion_provider import BaseCompletionProvider
+
+logger = logging.getLogger(__name__)
+
+
+MAX_TOKENS = 500
+COLD_START_THRESHOLD = 30000
 
 
 def evaluate_answers(
@@ -50,7 +57,7 @@ def evaluate_answers(
     evaluator_result = provider.complete(
         evaluator_model,
         [{"content": system, "role": "system"}, {"content": prompt, "role": "user"}],
-        max_tokens=500,
+        max_tokens=MAX_TOKENS,
     )
     if evaluator_result is None:
         raise ValueError(f"{evaluator_model} on {provider} threw an error during call")
@@ -113,7 +120,7 @@ def get_completion_results(  # noqa: D103
         if result is None:
             raise ValueError(f"{model} on {provider} threw an error during call")
         # handles cold-start skewing latency
-        if result._response_ms > 30000:
+        if result._response_ms > COLD_START_THRESHOLD:  # noqa: WPS437
             result = provider.complete(
                 model,
                 [{"content": prompt[0], "role": "user"}],
@@ -140,42 +147,38 @@ def get_cost(
     prompt_cost = 0
     completion_cost = 0
     for result, qna in zip(completion_results, problems):
-        if provider.supported_models[model]["cost"].get("per_character"):
+        cost_data = provider.supported_models[model]["cost"]
+        if cost_data.get("per_character"):
             prompt_cost += (
                 provider.get_billable_characters(
                     qna[0],
                     model,
                 )
-                * provider.supported_models[model]["cost"]["prompt"]
+                * cost_data["prompt"]
             )
             completion_cost += (
                 provider.get_billable_characters(
                     result.choices[0].message.content,
                     model,
                 )
-                * provider.supported_models[model]["cost"]["completion"]
+                * cost_data["completion"]
             )
-        elif provider.supported_models[model]["cost"].get("per_second"):
-            hardware = provider.supported_models[model]["cost"]["hardware"]
-            runtime_in_sec = result._response_ms / 1000  # noqa: WPS437
-            prompt_cost += provider.hardware_pricing_per_sec[hardware] * runtime_in_sec
-        else:
-            if provider.supported_models[model]["cost"].get("online"):
-                prompt_cost += (
-                    provider.supported_models[model]["cost"]["online"][
-                        "charge_per_1000_requests"
-                    ]
-                    / 1000
-                )
+        elif cost_data.get("per_second"):
             prompt_cost += (
-                result.usage.prompt_tokens
-                * provider.supported_models[model]["cost"]["prompt"]
-                / 1000000
+                provider.hardware_pricing_per_sec[cost_data["hardware"]]
+                * result._response_ms  # noqa: WPS437
+                / 1000
+            )
+        else:
+            if cost_data.get("online"):
+                prompt_cost += cost_data["online"]["charge_per_1000_requests"] / 1000
+            prompt_cost += (
+                result.usage.prompt_tokens * cost_data["prompt"] / PRICING_PER_TOKENS
             )
             completion_cost += (
                 result.usage.completion_tokens
-                * provider.supported_models[model]["cost"]["completion"]
-                / 1000000
+                * cost_data["completion"]
+                / PRICING_PER_TOKENS
             )
 
     return prompt_cost + completion_cost
@@ -234,12 +237,16 @@ def calculate_score(  # noqa: D103
     )
 
 
-def calculate_cost_per_1m_toks(  # noqa: D103
-        model_results: Dict[str, Any],
+def add_cost_per_million_tokens(  # noqa: D103
+    model_results: Dict[str, Any],
 ):
     for model_name, provider_results in model_results.items():
         for provider_name, provider_data in provider_results.items():
-            model_results[model_name][provider_name]['cost_per_1m_toks'] = provider_data["cost"]*1000000/provider_data["total_tokens"]
+            model_results[model_name][provider_name]["cost_per_1m_toks"] = (
+                provider_data["cost"]
+                * PRICING_PER_TOKENS
+                / provider_data["total_tokens"]
+            )
 
 
 def create_table(  # noqa: D103, WPS210
@@ -304,11 +311,11 @@ def run(  # noqa: C901, WPS210, WPS231
 
     model_results: Dict[str, Any] = {}
     traversed_providers: Dict[str, BaseCompletionProvider] = {}
-    print('Currently benchmarking: ')
+    logging.info("Currently benchmarking: ")
     for provider_name, provider_class in PROVIDER_CLASSES.items():
         for model_name in models:
             if model_name.lower() in provider_class.supported_models:
-                print(provider_name, model_name, end='| ')
+                logging.info(provider_name, model_name, end="| ")
                 provider_obj = get_provider(provider_name, traversed_providers)
                 completion_results = get_completion_results(
                     provider_obj,
@@ -335,8 +342,8 @@ def run(  # noqa: C901, WPS210, WPS231
                 model_results[model_name][provider_name][
                     "context_window"
                 ] = provider_obj.supported_models[model_name.lower()]["context_window"]
-        print()
-    calculate_cost_per_1m_toks(model_results)
+        logging.info("")
+    add_cost_per_million_tokens(model_results)
     if evaluator:
         evaluator_provider = get_evaluator_provider(evaluator)
         for provider_results in model_results.values():
@@ -354,23 +361,4 @@ def run(  # noqa: C901, WPS210, WPS231
 
 
 if __name__ == "__main__":
-    '''
-    Expects API keys are properly setup in the environment variables.
-
-    If not, create `keys.sh` with following snippet to setup:
-    --------------
-    #!/bin/bash
-
-    export ANYSCALE_API_KEY=""
-    export PERPLEXITY_API_KEY=""
-    export TOGETHERAI_API_KEY=""
-    export ANTHROPIC_API_KEY=""
-    export REPLICATE_API_KEY=""
-    export VERTEXAI_API_KEY=""
-    export OPENAI_API_KEY="sk-"
-
-    echo "Environment variables have been set."
-    --------------
-    Run in terminal: source keys.sh
-    '''
     run(["llama-2-7b-chat", "mistral-7b-instruct-v0.1"], print_table=True)

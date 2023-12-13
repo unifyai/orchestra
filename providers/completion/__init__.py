@@ -16,3 +16,5 @@ PROVIDER_CLASSES = {
     "vertexai": VertexAI,
     "openai": OpenAI,
 }
+
+PRICING_PER_TOKENS = 1000000

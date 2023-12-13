@@ -1,5 +1,5 @@
 import os
-import subprocess
+import subprocess  # noqa: S404
 
 import litellm
 import requests
@@ -10,9 +10,11 @@ class VertexAI(BaseCompletionProvider):
     """
     A completion provider that uses the VertexAI service.
 
-    Supported models: https://cloud.google.com/vertex-ai/docs/generative-ai/learn/models
+    Supported models:
+    https://cloud.google.com/vertex-ai/docs/generative-ai/learn/models
     Pricing is per character: https://docs.perplexity.ai/docs/pricing
-    Models in Preview stage (100% discounted): https://cloud.google.com/vertex-ai/docs/generative-ai/get-token-count#get_the_token_count_for_a_prompt
+    Models in Preview stage (100% discounted):
+    https://cloud.google.com/vertex-ai/docs/generative-ai/get-token-count
     """
 
     supported_models = {
@@ -63,15 +65,20 @@ class VertexAI(BaseCompletionProvider):
         },
     }
 
-    def set_service_account_credentials(self, json_credentials_path: str) -> None:
+    def set_service_account_credentials(
+        self,
+        json_credentials_path: str,
+        gcloud_install_path: str = "/workspaces/orchestra/google-cloud-sdk/bin/gcloud",
+    ) -> None:
         """
         Sets the service account credentials for GCP.
 
         :param json_credentials_path: Credentials json file.
+        :param gcloud_install_path: Path to the gcloud command.
         """
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = json_credentials_path
         self.access_token = subprocess.getoutput(
-            "/workspaces/orchestra/google-cloud-sdk/bin/gcloud auth application-default print-access-token",
+            f"{gcloud_install_path} auth application-default print-access-token",
         )
 
     def set_project(self, vertex_project: str) -> None:  # noqa: D102
@@ -80,12 +87,24 @@ class VertexAI(BaseCompletionProvider):
     def set_location(self, vertex_location: str) -> None:  # noqa: D102
         litellm.vertex_location = vertex_location
 
-    def get_billable_characters(self, prompt, model_id):
+    def get_billable_characters(self, prompt, model_id) -> int:
+        """
+        Gets the number of billable characters for a prompt.
+
+        :param prompt: The prompt to get the billable characters for.
+        :raises Exception: If the request times out.
+        :param model_id: The model ID to get the billable characters for.
+        :return: The number of billable characters.
+        """
         headers = {
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json",
         }
-        url = f"https://us-central1-aiplatform.googleapis.com/v1/projects/{litellm.vertex_project}/locations/us-central1/publishers/google/models/{model_id}:countTokens"
+        url = (
+            f"https://us-central1-aiplatform.googleapis.com/v1/projects/"
+            f"{litellm.vertex_project}/locations/us-central1/publishers/"
+            f"google/models/{model_id}:countTokens"
+        )
         payload = {
             "instances": [
                 {"prompt": prompt},
@@ -94,5 +113,10 @@ class VertexAI(BaseCompletionProvider):
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=5)
         except requests.exceptions.Timeout:
-            raise Exception("Timeout while getting billable characters, ensure properly configured service account credentials") # noqa: WPS454
+            raise Exception(  # noqa: WPS454
+                (
+                    "Timeout while getting billable characters, "
+                    "ensure properly configured service account credentials",
+                ),
+            )
         return response.json()["totalBillableCharacters"]
