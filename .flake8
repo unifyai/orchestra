@@ -113,3 +113,4 @@ exclude =
   ./var,
   ./.vscode,
   *migrations*,
+  google-cloud-sdk/,
