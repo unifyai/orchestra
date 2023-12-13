@@ -1,24 +1,24 @@
 Models
 ======
 
-Probably the more important concept within the Model Hub is the *model*. 
+Probably the more important concept within the Model Hub is the *model*.
 In this page, we'll explain what we mean by models and how they fit into the Unify Model Hub ecosystem.
 
 What is a Model?
 ----------------
 
-A **model** in the Unify Model Hub represents a specific machine learning system that has been integrated 
-into the hub for easy access and deployment. Models will be categorized based on their unique characteristics, 
+A **model** in the Unify Model Hub represents a specific machine learning system that has been integrated
+into the hub for easy access and deployment. Models will be categorized based on their unique characteristics,
 modalities, and tasks.
 
 Available Models
 ----------------
 
-We will be releasing a web interface for the Model Hub very soon, in the mean time. 
+We will be releasing a web interface for the Model Hub very soon, in the mean time.
 Here is a list of models currently available in Unify's Model Hub:
 
 .. note::
-  You can also retrieve a list of the available models programatically using 
+  You can also retrieve a list of the available models programatically using
   the `List Models Endpoint <https://unify.ai/docs/modelhub/reference/endpoints.html#get-models>`_.
 
 TODO: Add the model ID for models of different sizes, duplicate the list for each endpoint with the available models
