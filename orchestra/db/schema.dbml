@@ -1,0 +1,94 @@
+// DB schema of the model hub
+// Docs: https://dbml.dbdiagram.io/docs
+
+Table model {
+  id varchar [primary key]
+  uploaded_by integer [primary key]
+  uploaded_at timestamp [not null]
+  task varchar [not null]
+  description text [not null]
+  license varchar
+  input_args_format text [not null]
+  output_format text [not null]
+  custom_fields text [note: 'Optional field for extra key:value pairs']
+}
+
+Table license {
+  name varchar [primary key]
+  image_url varchar
+  description text [not null]
+}
+
+Table task {
+  name varchar [primary key]
+  modality varchar [not null]
+}
+
+Table modality {
+  name varchar [primary key]
+}
+
+Table endpoint {
+  id integer [primary key]
+  model_id varchar [not null]
+  model_uploaded_by integer [not null]
+  provider varchar [not null]
+  created_at timestamp [not null]
+}
+
+Table provider {
+  id varchar [primary key]
+  name varchar [not null]
+  image_url varchar [not null]
+}
+
+Table datapoint {
+  id integer [primary key]
+  endpoint integer [not null]
+  measured_at timestamp [not null]
+  metric varchat [not null]
+  value decimal [not null]
+}
+
+Table metric {
+  name varchar [primary key]
+}
+
+Table query {
+  id integer [primary key]
+  user integer [not null]
+  at timestamp [not null]
+  endpoint integer [not null]
+  credits decimal [not null]
+}
+
+Table user {
+  // The username, company information and so on is stored somewhere else I guess
+  id integer [primary key] // maybe a foreign key to the table that already exists
+  credits decimal [not null]
+}
+
+Table recharge {
+  id integer [primary key]
+  at timestamp [not null]
+  user integer [not null]
+  quantity decimal [not null]
+  type varchar [not null]
+}
+
+Table recharge_type {
+  type varchar [primary key] // daily, free, manual, ...
+}
+
+Ref: model.uploaded_by > user.id
+Ref: model.task > task.name
+Ref: model.license > license.name
+Ref: task.modality > modality.name
+Ref: endpoint.(model_id, model_uploaded_by) > model.(id, uploaded_by)
+Ref: endpoint.provider > provider.id
+Ref: datapoint.endpoint > endpoint.id
+Ref: datapoint.metric > metric.name
+Ref: query.user > user.id
+Ref: query.endpoint > endpoint.id
+Ref: recharge.user > user.id
+Ref: recharge.type > recharge_type.type
