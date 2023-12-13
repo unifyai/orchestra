@@ -2,8 +2,9 @@
 // Docs: https://dbml.dbdiagram.io/docs
 
 Table model {
-  id varchar [primary key]
-  uploaded_by integer [primary key]
+  id integer [primary key]
+  model_code varchar // e.g. llama-2-70b-chat
+  uploaded_by integer
   uploaded_at timestamp [not null]
   task varchar [not null]
   description text [not null]
@@ -30,8 +31,7 @@ Table modality {
 
 Table endpoint {
   id integer [primary key]
-  model_id varchar [not null]
-  model_uploaded_by integer [not null]
+  model_id integer [not null]
   provider_id varchar [not null]
   created_at timestamp [not null]
 }
@@ -86,7 +86,7 @@ Ref: model.uploaded_by > user.id
 Ref: model.task > task.name
 Ref: model.license > license.name
 Ref: task.modality > modality.name
-Ref: endpoint.(model_id, model_uploaded_by) > model.(id, uploaded_by)
+Ref: endpoint.model_id > model.id
 Ref: endpoint.provider_id > provider.id
 Ref: datapoint.endpoint_id > endpoint.id
 Ref: datapoint.metric_name > metric.name
