@@ -14,23 +14,30 @@ Models are categorized based on their characteristics, modalities, and tasks. Yo
 specific requirements, whether it's latency, throughput, or cost. You can learn more about this in the
 `benchmarks <https://unify.ai/docs/modelhub/concepts/benchmarks.html>`_ page.
 
+Types of Models
+---------------
+
 There are two types of models:
 
-- **Models uploaded by users**: When a user (which could be you!) uploads a model, we automatically create and benchmark
-  a set of endpoints by deploying the model accross various providers.
+Models uploaded by users
+^^^^^^^^^^^^^^^^^^^^^^^^
+When a user (which could be you!) uploads a model, we automatically create and benchmark a set of endpoints by deploying the model
+accross various providers.
 
-  - The :code:`model-id` of these models typically follows the format: :code:`<username>/llama-2-70b-chat`.
+The :code:`model-id` of these models typically follows the format: :code:`<username>/llama-2-70b-chat`.
 
-  .. note::
-    An interface to upload your own models will be available very soon, but currently, we are still testing this feature.
-    If you want to publish your model right away, please send us a mail to :code:`modelhub@unify.ai`!
+.. note::
+  An interface to upload your own models will be available very soon, but currently, we are still testing this feature.
+  If you want to publish your model right away, please send us a mail to :code:`modelhub@unify.ai`!
 
-- **Models uploaded by us (Unify!)**: In this case, we manage the model, serving as a reference point for particularly relevant
-  models. In this type of models you will find endpoints and benchmarks from the same providers as in user-uploaded models.
-  **However**, here you will also find `public endpoints <https://unify.ai/docs/modelhub/concepts/providers.html#public-endpoints>`_
-  hosting the model.
+Models uploaded by us
+^^^^^^^^^^^^^^^^^^^^^
+In this case, we manage the model, serving as a reference point for particularly relevant
+models. In this type of models you will find endpoints and benchmarks from the same providers as in user-uploaded models.
+**However**, here you will also find `public endpoints <https://unify.ai/docs/modelhub/concepts/providers.html#public-endpoints>`_
+hosting the model.
 
-  - In these cases, the :code:`model-id` won't have a username and will be simply formatted as :code:`llama-2-70b-chat`.
+In these cases, the :code:`model-id` won't have a username and will be simply formatted as :code:`llama-2-70b-chat`.
 
 
 Available Models
