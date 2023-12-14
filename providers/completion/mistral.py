@@ -9,7 +9,7 @@ class Mistral(BaseCompletionProvider):
     """
 
     supported_models = {
-        "mistral-tiny" # Mistral-7B-v0.2,
+        "mistral-tiny"  # Mistral-7B-v0.2,
         "mistral-small"  # Mixtral-8X7B-v0.1
         "mistal-medium",
     }
