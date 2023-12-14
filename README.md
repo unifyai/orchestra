@@ -138,7 +138,7 @@ If you want to revert migrations, you should run:
 alembic downgrade <revision_id>
 
 # Revert everything.
- alembic downgrade base
+alembic downgrade base
 ```
 
 ### Migration generation

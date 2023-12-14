@@ -1,15 +1,15 @@
-"""Created Orchestra Models.
+"""Created Updated Orchestra Models.
 
-Revision ID: 2badd346d324
+Revision ID: 36bbcf63defa
 Revises: 2b7380507a71
-Create Date: 2023-12-13 14:11:45.695948
+Create Date: 2023-12-14 12:51:35.851867
 
 """
 import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "2badd346d324"
+revision = "36bbcf63defa"
 down_revision = "2b7380507a71"
 branch_labels = None
 depends_on = None
@@ -36,9 +36,10 @@ def upgrade() -> None:
     )
     op.create_table(
         "provider",
-        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("name", sa.String(), nullable=False),
         sa.Column("image_url", sa.String(), nullable=False),
+        sa.Column("description", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_table(
@@ -48,7 +49,7 @@ def upgrade() -> None:
     )
     op.create_table(
         "user",
-        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("id", sa.String(), nullable=False),
         sa.Column("credits", sa.Numeric(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -56,7 +57,7 @@ def upgrade() -> None:
         "recharge",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("at", sa.TIMESTAMP(), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.String(), nullable=False),
         sa.Column("quantity", sa.Numeric(), nullable=False),
         sa.Column("type", sa.String(), nullable=False),
         sa.ForeignKeyConstraint(
@@ -81,8 +82,9 @@ def upgrade() -> None:
     )
     op.create_table(
         "model",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("uploaded_by", sa.Integer(), nullable=False),
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("model_code", sa.String(), nullable=True),
+        sa.Column("user_id", sa.String(), nullable=True),
         sa.Column("uploaded_at", sa.TIMESTAMP(), nullable=False),
         sa.Column("task", sa.String(), nullable=False),
         sa.Column("description", sa.Text(), nullable=False),
@@ -99,7 +101,7 @@ def upgrade() -> None:
             ["task.name"],
         ),
         sa.ForeignKeyConstraint(
-            ["uploaded_by"],
+            ["user_id"],
             ["user.id"],
         ),
         sa.PrimaryKeyConstraint("id"),
@@ -107,8 +109,8 @@ def upgrade() -> None:
     op.create_table(
         "endpoint",
         sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("model_id", sa.String(), nullable=False),
-        sa.Column("provider_id", sa.String(), nullable=False),
+        sa.Column("model_id", sa.Integer(), nullable=False),
+        sa.Column("provider_id", sa.Integer(), nullable=False),
         sa.Column("created_at", sa.TIMESTAMP(), nullable=False),
         sa.ForeignKeyConstraint(
             ["model_id"],
@@ -140,7 +142,7 @@ def upgrade() -> None:
     op.create_table(
         "query",
         sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.String(), nullable=False),
         sa.Column("at", sa.TIMESTAMP(), nullable=False),
         sa.Column("endpoint_id", sa.Integer(), nullable=False),
         sa.Column("credits", sa.Numeric(), nullable=False),
