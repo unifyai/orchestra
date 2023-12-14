@@ -32,14 +32,15 @@ Table modality {
 Table endpoint {
   id integer [primary key]
   model_id integer [not null]
-  provider_id varchar [not null]
+  provider_id integer [not null]
   created_at timestamp [not null]
 }
 
 Table provider {
-  id varchar [primary key]
+  id integer [primary key]
   name varchar [not null]
   image_url varchar [not null]
+  description text
 }
 
 Table datapoint {
