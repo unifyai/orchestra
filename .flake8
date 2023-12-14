@@ -74,6 +74,8 @@ ignore =
   WPS403,
   ; Found `noqa` comments overuse
   WPS402,
+  ; Found protected attribute usage
+  WPS437
 
 per-file-ignores =
   ; all tests

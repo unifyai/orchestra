@@ -5,6 +5,7 @@ import re
 import statistics
 from typing import Any, Dict, List
 
+import numpy as np
 from litellm import ModelResponse
 from prettytable import PrettyTable
 from providers.completion import PRICING_PER_TOKENS, PROVIDER_CLASSES
@@ -120,11 +121,15 @@ def get_completion_results(  # noqa: D103
         if result is None:
             raise ValueError(f"{model} on {provider} threw an error during call")
         # handles cold-start skewing latency
-        if result._response_ms > COLD_START_THRESHOLD:  # noqa: WPS437
+        if result._response_ms > COLD_START_THRESHOLD:
+            cold_start_latency = result._response_ms
             result = provider.complete(
                 model,
                 [{"content": prompt[0], "role": "user"}],
             )
+        else:
+            cold_start_latency = 0
+        result.cold_start_latency = cold_start_latency
         completion_results.append(result)
     return completion_results
 
@@ -166,7 +171,7 @@ def get_cost(
         elif cost_data.get("per_second"):
             prompt_cost += (
                 provider.hardware_pricing_per_sec[cost_data["hardware"]]  # type: ignore
-                * result._response_ms  # noqa: WPS437
+                * result._response_ms
                 / 1000
             )
         else:
@@ -197,21 +202,43 @@ def get_evaluator_provider(evaluator: str) -> BaseCompletionProvider:  # noqa: D
 
 def calculate_results(  # noqa: D103
     completion_results: List[ModelResponse],
+    model_name: str,
+    provider: BaseCompletionProvider,
 ) -> Dict[str, Any]:
-    return {
+    cleaned_output = {
         "output_answers": [
             obj.choices[0].message.content for obj in completion_results
         ],
         "total_latency": sum(
-            [result._response_ms for result in completion_results],  # noqa: WPS437
+            [result._response_ms for result in completion_results],
         ),
         "total_tokens": sum(
             [result.usage.total_tokens for result in completion_results],
         ),
         "median_latency": statistics.median(
-            [result._response_ms for result in completion_results],  # noqa: WPS437
+            [result._response_ms for result in completion_results],
         ),
     }
+    cleaned_output["toks/sec"] = (
+        cleaned_output["total_tokens"] * 1000 / cleaned_output["total_latency"]
+    )
+    cleaned_output["context_window"] = provider.supported_models[model_name.lower()][
+        "context_window"
+    ]
+
+    cold_start_avg = np.mean(
+        [result.cold_start_latency for result in completion_results],
+    )
+    if cold_start_avg == 0:
+        cleaned_output["cold_start_latency"] = "0"
+    else:
+        cold_start_std = np.std(
+            [result.cold_start_latency for result in completion_results],
+        )
+        cleaned_output[
+            "cold_start_latency"
+        ] = f"{cold_start_avg:.2f} ± {cold_start_std:.2f}"
+    return cleaned_output
 
 
 def calculate_score(  # noqa: D103
@@ -261,6 +288,7 @@ def create_table(  # noqa: D103, WPS210
         "Speed (tokens/sec)",
         "Cost($)/1M tokens",
         "Context window",
+        "Cold start",
     ]
 
     if evaluator:
@@ -277,6 +305,7 @@ def create_table(  # noqa: D103, WPS210
                 f'{provider_data["toks/sec"]:.2f}',
                 f'{provider_data["cost_per_1m_toks"]:.2f}',
                 provider_data["context_window"],
+                provider_data["cold_start_latency"],
             ]
             if evaluator:
                 row_data.append(provider_data["score"])
@@ -327,11 +356,8 @@ def run(  # noqa: C901, WPS210, WPS231
                     provider_name
                 ] = calculate_results(
                     completion_results,
-                )
-                model_results[model_name][provider_name]["toks/sec"] = (
-                    model_results[model_name][provider_name]["total_tokens"]
-                    * 1000
-                    / model_results[model_name][provider_name]["total_latency"]
+                    model_name,
+                    provider_obj,
                 )
                 model_results[model_name][provider_name]["cost"] = get_cost(
                     completion_results,
@@ -339,13 +365,6 @@ def run(  # noqa: C901, WPS210, WPS231
                     provider_obj,
                     problems,
                 )
-                model_results[model_name][provider_name][
-                    "context_window"
-                ] = provider_obj.supported_models[  # type: ignore
-                    model_name.lower()
-                ][
-                    "context_window"
-                ]
         logging.info("")
     add_cost_per_million_tokens(model_results)
     if evaluator:

@@ -17,4 +17,5 @@ echo "Environment variables have been set."
 Run in terminal:
 ```bash
 source keys.sh
+python benchmark/perf.py
 ```
