@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional
 
 import litellm
 import openai
@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class BaseCompletionProvider:
     """Base class for completion providers."""
 
-    supported_models: Union[Set[str], Dict[str, Any]] = {}
+    supported_models: Dict[str, Any] = {}
 
     def __init__(self) -> None:
         self.model: str = ""
