@@ -1,9 +1,54 @@
 Providers
 =========
 
-Lorem ipsum
+Another one of the main concepts in the Model Hub is the **provider**. Let's dive into it.
 
-TODO: Change endpoints in the models page?
+What is a Provider?
+-------------------
 
-You can think of a provider as a end-to-end deployment stack, each one of them have different features, capabilities, prices, and so on.
-some of them are completely hosted by other companies (such as ...,) and some others are services that we manage and benchmark for you.
+Think of a provider as a end-to-end deployment stack. Each provider comes with its unique set of features, performance capabilities,
+pricing, and so on. The Model Hub exposes an HTTP endpoint for every individual providers, allowing you to query the one
+that best fits your requirements while using a consistent request format and the same `API key <https://unify.ai/docs/modelhub/home/getting_access.html>`_.
+
+If we take a look at the page of one of the models, you'll find the different providers where this model is available.
+
+.. warning::
+    TODO: Image of the dashboard
+
+Types of Providers
+------------------
+
+We can categorze providers into various types, but fear not! Despite their differences under the hood, your developer experience
+is the same across all of them. The boundaries may sometimes seem a bit blurry here, but the following is a good mental model.
+
+Regardless of the services powering the endpoint, it's important to highlight that the Model Hub benchmarks them equally. This ensures that
+you have the flexibility the query the most suitable one for your specific use case without any kind of vendor lock-in.
+
+Public endpoints
+^^^^^^^^^^^^^^^^
+When working with popular models such as LLMs or Image Generation pipelines, it's not uncommon to find public endpoints offering inference
+as a service. Providers such as ..., ..., or ... expose APIs to query the models they are hosting in a straighforward manner, eliminating
+the need for any deployment. As mentioned earlier, this type of endpoints are only available in the `models managed by
+Unify <https://unify.ai/docs/modelhub/concepts/models.html#models-uploaded-by-us>`_, and not in those uploaded by users.
+
+Deployment services
+^^^^^^^^^^^^^^^^^^^
+On the other hand, there are several companies and services operating one level below, allowing developers to select or load a specific model
+and deploy it in the cloud. Similarly, these services expose the model through an endpoint, often passing on the hourly cost of the instance
+where the model is executed to the user. Providers such as ..., ...., or the `Hugging Face Inference Endpoints <>`_ fall under this category.
+
+Managed Infrastructure
+^^^^^^^^^^^^^^^^^^^^^^
+Last but certainly not least, we can go lower in the stack. Here we aren't dealing with companies building deployment services, which often
+translates to reduced endpoint costs. For instance, when deploying a deploy a model using ... instances and a model-specific inference server,
+or leveraging spesialized hardware like the Intel Gaudi 2 accelerators, manual infrastructure management becomes necessary.
+
+In these scenarios, we mix and match specialized tools to optimize models at various stages of the stack, ultimately exposing them to you
+through endpoints, just like the two other groups.
+
+
+Round Up
+--------
+
+We have seen what a provider is and how different types are all unified as part of the Model Hub. We have also mentioned the benchmarks
+a few times now, so let's talk about them in more detail in the next section.
