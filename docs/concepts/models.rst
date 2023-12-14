@@ -1,58 +1,51 @@
 Models
 ======
 
-Probably the more important concept within the Model Hub is the *model*.
-In this page, we'll explain what we mean by models and how they fit into the Unify Model Hub ecosystem.
+One of the key concepts within the Model Hub is the **model**.
+In this section, we'll explain what we mean by models and how they fit into the Model Hub ecosystem.
 
 What is a Model?
 ----------------
 
-A **model** in the Unify Model Hub represents a specific machine learning system that has been integrated
-into the hub for easy access and deployment. Models will be categorized based on their unique characteristics,
-modalities, and tasks.
+A **model** in the hub represents a specific machine learning system that has been integrated and benchmarked for informed
+and easy access and deployment.
+
+Models are categorized based on their characteristics, modalities, and tasks. You can filter models according to your
+specific requirements, whether it's latency, throughput, or cost. You can learn more about this in the
+`benchmarks <https://unify.ai/docs/modelhub/concepts/benchmarks.html>`_ page.
+
+There are two types of models:
+
+- **Models uploaded by users**: When a user (which could be you!) uploads a model, we automatically create and benchmark
+  a set of endpoints by deploying the model accross various providers.
+
+  - The :code:`model-id` of these models typically follows the format: :code:`<username>/llama-2-70b-chat`.
+
+  .. note::
+    An interface to upload your own models will be available very soon, but currently, we are still testing this feature.
+    If you want to publish your model right away, please send us a mail to :code:`modelhub@unify.ai`!
+
+- **Models uploaded by us (Unify!)**: In this case, we manage the model, serving as a reference point for particularly relevant
+  models. In this type of models you will find endpoints and benchmarks from the same providers as in user-uploaded models.
+  **However**, here you will also find `public endpoints <https://unify.ai/docs/modelhub/concepts/providers.html#public-endpoints>`_
+  hosting the model.
+
+  - In these cases, the :code:`model-id` won't have a username and will be simply formatted as :code:`llama-2-70b-chat`.
+
 
 Available Models
 ----------------
 
-We will be releasing a web interface for the Model Hub very soon, in the mean time.
-Here is a list of models currently available in Unify's Model Hub:
+The easiest way to explore the list of models in the Model hub is through the `web interface <https://unify.ai/modelhub>`_.
+Here, you can simply search for the model you are interested in, click on it, and access information about the available endpoints
+and the corresponding benchmarks.
 
-.. note::
-  You can also retrieve a list of the available models programatically using
-  the `List Models Endpoint <https://unify.ai/docs/modelhub/reference/endpoints.html#get-models>`_.
-
-TODO: Add the model ID for models of different sizes, duplicate the list for each endpoint with the available models
-
-Llama2
-~~~~~~
-
-- **Model ID**: :code:`llama2`
-- **Endpoints** - Endpoint ID:
-   - anyscale `[site] <https://www.anyscale.com/>`_ - :code:`anyscale`
-   - perplexity `[site] <https://www.perplexity.ai/>`_ - :code:`perplexity`
-   - replicate `[site] <https://replicate.com/>`_ - :code:`replicate`
-   - together.ai `[site] <https://www.together.ai/>`_ - :code:`together-ai`
-- **Query arguments** (`API Reference <https://unify.ai/docs/modelhub/reference/endpoints.html#post-query>`_):
-   - TODO
-- **Query response** (`API Reference <https://unify.ai/docs/modelhub/reference/endpoints.html#post-query>`_):
-   - TODO
+If you prefer programmatic access, you can also use the
+`List Models Endpoint <https://unify.ai/docs/modelhub/reference/endpoints.html#get-models>`_ in our API to obtain a list of models.
 
 
-Mistral
-~~~~~~~
+Round Up
+--------
 
-- **Model ID**: :code:`mistral`
-- **Endpoints** - Endpoint ID:
-   - anyscale `[site] <https://www.anyscale.com/>`_ - :code:`anyscale`
-   - perplexity `[site] <https://www.perplexity.ai/>`_ - :code:`perplexity`
-   - replicate `[site] <https://replicate.com/>`_ - :code:`replicate`
-- **Query arguments** (`API Reference <https://unify.ai/docs/modelhub/reference/endpoints.html#post-query>`_):
-   - TODO
-- **Query response** (`API Reference <https://unify.ai/docs/modelhub/reference/endpoints.html#post-query>`_):
-   - TODO
-
-
-Conclusion
-----------
-
-Understanding the available models and their endpoints is crucial for seamless integration with the Unify Model Hub. In the next sections, we'll delve into the details of interacting with these models through the provided API. Feel free to explore the specific models and endpoints that best suit your needs.
+You are now familiar with the different types of models that are available in the Model Hub, as well as how to navigate through
+them both via web and programatically. In the next section, we'll dive into the **Providers** and its role within the Model Hub!
