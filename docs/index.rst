@@ -9,7 +9,8 @@
   Welcome to the Model Hub! <self>
   home/getting_access.rst
   home/make_your_first_request.rst
-  home/pricing.rst
+..  home/pricing.rst
+  .. TODO: Add FAQ
 
 .. toctree::
   :hidden:
@@ -19,7 +20,8 @@
   concepts/models.rst
   concepts/providers.rst
   concepts/benchmarks.rst
-  concepts/on_prem_images.rst
+..  concepts/on_prem_images.rst
+  .. TODO: Credits
 
 .. toctree::
   :hidden:
@@ -27,12 +29,13 @@
   :caption: API reference
 
   reference/endpoints.rst
-  reference/images.rst
+..  reference/images.rst
 
-.. toctree::
-  :hidden:
-  :maxdepth: -1
-  :caption: Tools
+..
+  .. toctree::
+    :hidden:
+    :maxdepth: -1
+    :caption: Tools
 
-  tools/openapi.rst
-  tools/python_library.rst
+    tools/openapi.rst
+    tools/python_library.rst
