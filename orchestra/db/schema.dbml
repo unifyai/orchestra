@@ -4,7 +4,7 @@
 Table model {
   id integer [primary key]
   model_code varchar // e.g. llama-2-70b-chat
-  uploaded_by integer
+  user_id varchar // uploaded by
   uploaded_at timestamp [not null]
   task varchar [not null]
   description text [not null]
@@ -56,7 +56,7 @@ Table metric {
 
 Table query {
   id integer [primary key]
-  user_id integer [not null]
+  user_id varchar [not null]
   at timestamp [not null]
   endpoint_id integer [not null]
   credits decimal [not null]
@@ -66,14 +66,14 @@ Table user {
   // This id is the same as the user id in the console app table of users
   // Every time a user is created in the console app, a new entry should
   // be added here automatically with a default balance.
-  id integer [primary key]
+  id varchar [primary key]
   credits decimal [not null]
 }
 
 Table recharge {
   id integer [primary key]
   at timestamp [not null]
-  user_id integer [not null]
+  user_id varchar [not null]
   quantity decimal [not null]
   type varchar [not null]
 }
@@ -82,7 +82,7 @@ Table recharge_type {
   type varchar [primary key] // daily, free, manual, ...
 }
 
-Ref: model.uploaded_by > user.id
+Ref: model.user_id > user.id
 Ref: model.task > task.name
 Ref: model.license > license.name
 Ref: task.modality > modality.name
