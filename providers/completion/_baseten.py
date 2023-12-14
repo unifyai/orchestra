@@ -9,7 +9,19 @@ class Baseten(BaseCompletionProvider):
     """
 
     supported_models = {
-        "falcon-7b": "baseten/qvv0xeq",
-        "wizardlm-70b": "baseten/q841o8w",
-        "mpt-7b": "baseten/31dxrj3",
+        "falcon-7b": {
+            "endpoint": "baseten/qvv0xeq",
+            "context_window": 2048,
+            "cost": {"hardware": "a40", "per_hour": True},
+        },
+        "wizardlm-70b": {
+            "endpoint": "baseten/q841o8w",
+            "context_window": 4096,
+            "cost": {"hardware": "a40", "per_hour": True},
+        },
+        "mpt-7b": {
+            "endpoint": "baseten/31dxrj3",
+            "context_window": 2048,
+            "cost": {"hardware": "a40", "per_hour": True},
+        },
     }
