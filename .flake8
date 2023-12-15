@@ -3,7 +3,7 @@ max-complexity = 6
 inline-quotes = double
 max-line-length = 88
 extend-ignore = E203
-docstring_style=sphinx
+docstring_style = sphinx
 
 ignore =
   ; Found `f` string
@@ -72,6 +72,10 @@ ignore =
   WPS473,
   ; too many no-cover comments.
   WPS403,
+  ; Found `noqa` comments overuse
+  WPS402,
+  ; Found protected attribute usage
+  WPS437
 
 per-file-ignores =
   ; all tests
@@ -113,3 +117,4 @@ exclude =
   ./var,
   ./.vscode,
   *migrations*,
+  google-cloud-sdk/,
