@@ -1,14 +1,10 @@
-from providers.completion.base_completion_provider import BaseCompletionProvider
 import logging
-from typing import List, Optional, Dict
+from typing import Dict, List, Optional
 
 import openai
-
 from mistralai.client import MistralClient
-from mistralai.models.chat_completion import (
-    ChatCompletionResponse,
-    ChatMessage,
-)
+from mistralai.models.chat_completion import ChatCompletionResponse, ChatMessage
+from providers.completion.base_completion_provider import BaseCompletionProvider
 
 logger = logging.getLogger(__name__)
 
@@ -26,14 +22,28 @@ class Mistral(BaseCompletionProvider):
         "mistral-medium",
     }
 
-    def set_api_key(self, api_key: str) -> None:  # noqa: D102
+    def set_api_key(self, api_key: str) -> None:
+        """
+        Set the API key for Mistral.
+
+        :param api_key: The API key to set.
+        :type api_key: str
+        """
         self.client = MistralClient(api_key=api_key)
 
     def convert_messages(self, messages: List[Dict[str, str]]) -> List[ChatMessage]:
+        """
+        Convert a list of messages to Mistral's chat message format.
+
+        :param messages: List of messages with "role" and "content" keys.
+        :type messages: List[Dict[str, str]]
+        :return: List of ChatMessage objects.
+        :rtype: List[ChatMessage]
+        """
         messages_mistral = []
         for message in messages:
             messages_mistral.append(
-                ChatMessage(role=message["role"], content=message["content"])
+                ChatMessage(role=message["role"], content=message["content"]),
             )
         return messages_mistral
 
@@ -44,6 +54,22 @@ class Mistral(BaseCompletionProvider):
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
     ) -> Optional[ChatCompletionResponse]:
+        """
+        Complete a prompt using the Mistral service.
+
+        :param model: The Mistral model to use for completion.
+        :type model: str
+        :param messages: List of messages in the conversation.
+        :type messages: List
+        :param max_tokens: Maximum number of tokens in the generated completion.
+        :type max_tokens: Optional[int]
+        :param temperature: Controls the randomness of the generated completion.
+        :type temperature: Optional[float]
+        :return: Mistral chat completion response.
+        :rtype: Optional[ChatCompletionResponse]
+
+        :raises ValueError: If the specified model is not supported.
+        """
         if model not in self.supported_models:
             raise ValueError("Model not supported")
 
