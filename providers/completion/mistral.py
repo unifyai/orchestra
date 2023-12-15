@@ -17,9 +17,9 @@ class Mistral(BaseCompletionProvider):
     """
 
     supported_models = {
-        "mistral-tiny",  # Mistral-7B-v0.2
-        "mistral-small",  # Mixtral-8X7B-v0.1
-        "mistral-medium",
+        "mistral-tiny": "mistral-tiny",  # Mistral-7B-v0.2
+        "mistral-small": "mistral-small",  # Mixtral-8X7B-v0.1
+        "mistral-medium": "mistral-medium",
     }
 
     def set_api_key(self, api_key: str) -> None:
