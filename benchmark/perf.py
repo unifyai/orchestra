@@ -160,6 +160,7 @@ def get_cost(
                     model,
                 )
                 * cost_data["prompt"]
+                / 1000
             )
             completion_cost += (
                 provider.get_billable_characters(  # type: ignore
