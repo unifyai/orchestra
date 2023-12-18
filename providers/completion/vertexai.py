@@ -12,7 +12,7 @@ class VertexAI(BaseCompletionProvider):
 
     Supported models:
     https://cloud.google.com/vertex-ai/docs/generative-ai/learn/models
-    Pricing is per character: https://docs.perplexity.ai/docs/pricing
+    Pricing is per thousand character: https://cloud.google.com/vertex-ai/pricing
     Models in Preview stage (100% discounted):
     https://cloud.google.com/vertex-ai/docs/generative-ai/get-token-count
     """
@@ -61,6 +61,11 @@ class VertexAI(BaseCompletionProvider):
         "codechat-bison-32k": {  # Preview, 100% discount
             "endpoint": "codechat-bison-32k",
             "context_window": 32000,
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
+        },
+        "gemini-pro": {  # Preview, 100% discount
+            "endpoint": "gemini-pro",
+            "context_window": 32760,
             "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
     }
