@@ -9,8 +9,7 @@
   Welcome to the Model Hub! <self>
   home/getting_access.rst
   home/make_your_first_request.rst
-..  home/pricing.rst
-  .. TODO: Add FAQ
+  home/pricing.rst
 
 .. toctree::
   :hidden:
@@ -21,7 +20,6 @@
   concepts/providers.rst
   concepts/benchmarks.rst
 ..  concepts/on_prem_images.rst
-  .. TODO: Credits
 
 .. toctree::
   :hidden:

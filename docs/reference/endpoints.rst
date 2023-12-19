@@ -1,6 +1,9 @@
 Endpoints
 =========
 
+TODO: Explain the format specification inside the model hub website
+TODO: Mention that the openAI api is also available
+
 Welcome to the Endpoints API reference!
 This page is your go-to resource when it comes to learning about the different endpoints offered by the Model Hub.
 
