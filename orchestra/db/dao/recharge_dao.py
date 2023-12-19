@@ -1,3 +1,4 @@
+import datetime
 from typing import List, Optional
 
 from fastapi import Depends
@@ -16,7 +17,7 @@ class RechargeDAO:
 
     async def create_recharge(
         self,
-        at: str,
+        at: datetime.datetime,
         user_id: str,
         quantity: float,
         type: str,  # noqa: WPS125
@@ -54,7 +55,7 @@ class RechargeDAO:
 
     async def filter(
         self,
-        at: Optional[str] = None,
+        at: Optional[datetime.datetime] = None,
         user_id: Optional[str] = None,
         quantity: Optional[float] = None,
         type: Optional[str] = None,  # noqa: WPS125

@@ -1,3 +1,4 @@
+import datetime
 from typing import List, Optional
 
 from fastapi import Depends
@@ -18,7 +19,7 @@ class EndpointDAO:
         self,
         model_id: int,
         provider_id: int,
-        created_at: str,
+        created_at: datetime.datetime,
     ) -> None:
         """
         Add single endpoint to session.
@@ -53,12 +54,14 @@ class EndpointDAO:
         self,
         model_id: Optional[int] = None,
         provider_id: Optional[int] = None,
+        created_at: Optional[datetime.datetime] = None,
     ) -> List[Endpoint]:
         """
         Get specific endpoint model.
 
         :param model_id: model_id of endpoint instance.
         :param provider_id: provider_id of endpoint instance.
+        :param created_at: created_at of endpoint instance.
         :return: endpoint models.
         """
         query = select(Endpoint)
@@ -66,5 +69,7 @@ class EndpointDAO:
             query = query.where(Endpoint.model_id == model_id)
         if provider_id:
             query = query.where(Endpoint.provider_id == provider_id)
+        if created_at:
+            query = query.where(Endpoint.created_at == created_at)
         rows = await self.session.execute(query)
         return list(rows.scalars().fetchall())

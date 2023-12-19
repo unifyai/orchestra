@@ -1,3 +1,4 @@
+import datetime
 from typing import List, Optional
 
 from fastapi import Depends
@@ -18,7 +19,7 @@ class ModelDAO:
         self,
         model_code: str,
         user_id: str,
-        uploaded_at: str,
+        uploaded_at: datetime.datetime,
         task: str,
         description: str,
         license: str,
@@ -71,7 +72,7 @@ class ModelDAO:
         self,
         model_code: Optional[str] = None,
         user_id: Optional[str] = None,
-        uploaded_at: Optional[str] = None,
+        uploaded_at: Optional[datetime.datetime] = None,
         task: Optional[str] = None,
         description: Optional[str] = None,
         license: Optional[str] = None,
