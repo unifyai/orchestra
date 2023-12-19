@@ -91,5 +91,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
     )
 
+    model_config["protected_namespaces"] = ()
+
 
 settings = Settings()
