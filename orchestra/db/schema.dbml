@@ -3,7 +3,7 @@
 
 Table model {
   id integer [primary key]
-  model_code varchar // e.g. llama-2-70b-chat
+  mdl_code varchar // e.g. llama-2-70b-chat
   user_id varchar // uploaded by
   uploaded_at timestamp [not null]
   task varchar [not null]
@@ -31,7 +31,7 @@ Table modality {
 
 Table endpoint {
   id integer [primary key]
-  model_id integer [not null]
+  mdl_id integer [not null]
   provider_id integer [not null]
   created_at timestamp [not null]
 }
@@ -63,7 +63,7 @@ Table query {
   credits decimal [not null]
 }
 
-Table user {
+Table users {
   // This id is the same as the user id in the console app table of users
   // Every time a user is created in the console app, a new entry should
   // be added here automatically with a default balance.
@@ -87,7 +87,7 @@ Ref: model.user_id > user.id
 Ref: model.task > task.name
 Ref: model.license > license.name
 Ref: task.modality > modality.name
-Ref: endpoint.model_id > model.id
+Ref: endpoint.mdl_id > model.id
 Ref: endpoint.provider_id > provider.id
 Ref: datapoint.endpoint_id > endpoint.id
 Ref: datapoint.metric_name > metric.name
