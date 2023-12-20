@@ -1,3 +1,4 @@
+import datetime
 from typing import List, Optional
 
 from fastapi import Depends
@@ -16,9 +17,9 @@ class ModelDAO:
 
     async def create_model(  # noqa: WPS211
         self,
-        model_code: str,
+        mdl_code: str,
         user_id: str,
-        uploaded_at: str,
+        uploaded_at: datetime.datetime,
         task: str,
         description: str,
         license: str,
@@ -29,7 +30,7 @@ class ModelDAO:
         """
         Add single model to session.
 
-        :param model_code: model_code of a model.
+        :param mdl_code: mdl_code of a model.
         :param user_id: user_id of a model.
         :param uploaded_at: uploaded_at of a model.
         :param task: task of a model.
@@ -41,7 +42,7 @@ class ModelDAO:
         """
         self.session.add(
             Model(
-                model_code=model_code,
+                mdl_code=mdl_code,
                 user_id=user_id,
                 uploaded_at=uploaded_at,
                 task=task,
@@ -69,9 +70,9 @@ class ModelDAO:
 
     async def filter(  # noqa: WPS211, C901
         self,
-        model_code: Optional[str] = None,
+        mdl_code: Optional[str] = None,
         user_id: Optional[str] = None,
-        uploaded_at: Optional[str] = None,
+        uploaded_at: Optional[datetime.datetime] = None,
         task: Optional[str] = None,
         description: Optional[str] = None,
         license: Optional[str] = None,
@@ -82,7 +83,7 @@ class ModelDAO:
         """
         Get specific model model.
 
-        :param model_code: model_code of model instance.
+        :param mdl_code: mdl_code of model instance.
         :param user_id: user_id of model instance.
         :param uploaded_at: uploaded_at of model instance.
         :param task: task of model instance.
@@ -94,8 +95,8 @@ class ModelDAO:
         :return: model models.
         """
         query = select(Model)
-        if model_code:
-            query = query.where(Model.model_code == model_code)
+        if mdl_code:
+            query = query.where(Model.mdl_code == mdl_code)
         if user_id:
             query = query.where(Model.user_id == user_id)
         if uploaded_at:
