@@ -44,7 +44,7 @@ async def create_endpoint_model(
     """
     created_at = datetime.datetime.now()
     await endpoint_dao.create_endpoint(
-        model_id=new_endpoint_object.model_id,
+        mdl_id=new_endpoint_object.mdl_id,
         provider_id=new_endpoint_object.provider_id,
         created_at=created_at,
     )

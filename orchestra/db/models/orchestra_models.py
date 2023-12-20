@@ -9,7 +9,7 @@ class Model(Base):
     __tablename__ = "model"
 
     id = sa.Column(sa.Integer(), primary_key=True)
-    model_code = sa.Column(sa.String())
+    mdl_code = sa.Column(sa.String())
     user_id = sa.Column(sa.String(), sa.ForeignKey("user.id"))
     uploaded_at = sa.Column(sa.TIMESTAMP(), nullable=False)
     task = sa.Column(sa.String(), sa.ForeignKey("task.name"), nullable=False)
@@ -53,7 +53,7 @@ class Endpoint(Base):
     __tablename__ = "endpoint"
 
     id = sa.Column(sa.Integer(), primary_key=True)
-    model_id = sa.Column(sa.Integer(), sa.ForeignKey("model.id"), nullable=False)
+    mdl_id = sa.Column(sa.Integer(), sa.ForeignKey("model.id"), nullable=False)
     provider_id = sa.Column(sa.Integer(), sa.ForeignKey("provider.id"), nullable=False)
     created_at = sa.Column(sa.TIMESTAMP(), nullable=False)
 

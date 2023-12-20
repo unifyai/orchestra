@@ -41,7 +41,7 @@ async def create_model(
     """
     uploaded_at = datetime.datetime.now()
     await model_dao.create_model(
-        model_code=new_model_object.model_code,
+        mdl_code=new_model_object.mdl_code,
         user_id=new_model_object.user_id,
         uploaded_at=uploaded_at,
         task=new_model_object.task,

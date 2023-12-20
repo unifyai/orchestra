@@ -6,7 +6,7 @@ class ModelRequest(BaseModel):
     Request model for creating new model model.
 
     Attributes:
-        model_code (str): The model code of the model.
+        mdl_code (str): The model code of the model.
         user_id (str): The user id of the model.
         task (str): The task of the model.
         description (str): The description of the model.
@@ -16,7 +16,7 @@ class ModelRequest(BaseModel):
         custom_fields (str): The custom fields of the model.
     """
 
-    model_code: str
+    mdl_code: str
     user_id: str
     task: str
     description: str
@@ -32,7 +32,7 @@ class ModelResponse(BaseModel):
 
     Attributes:
         id (int): The id of the model.
-        model_code (str): The model code of the model.
+        mdl_code (str): The model code of the model.
         user_id (str): The user id of the model.
         uploaded_at (str): The uploaded at of the model.
         task (str): The task of the model.
@@ -44,7 +44,7 @@ class ModelResponse(BaseModel):
     """
 
     id: int
-    model_code: str
+    mdl_code: str
     user_id: str
     uploaded_at: str
     task: str

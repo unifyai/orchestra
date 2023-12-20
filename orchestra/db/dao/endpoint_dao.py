@@ -17,20 +17,20 @@ class EndpointDAO:
 
     async def create_endpoint(
         self,
-        model_id: int,
+        mdl_id: int,
         provider_id: int,
         created_at: datetime.datetime,
     ) -> None:
         """
         Add single endpoint to session.
 
-        :param model_id: model_id of a endpoint.
+        :param mdl_id: mdl_id of a endpoint.
         :param provider_id: provider_id of a endpoint.
         :param created_at: created_at of a endpoint.
         """
         self.session.add(
             Endpoint(
-                model_id=model_id,
+                mdl_id=mdl_id,
                 provider_id=provider_id,
                 created_at=created_at,
             ),
@@ -52,21 +52,21 @@ class EndpointDAO:
 
     async def filter(
         self,
-        model_id: Optional[int] = None,
+        mdl_id: Optional[int] = None,
         provider_id: Optional[int] = None,
         created_at: Optional[datetime.datetime] = None,
     ) -> List[Endpoint]:
         """
         Get specific endpoint model.
 
-        :param model_id: model_id of endpoint instance.
+        :param mdl_id: mdl_id of endpoint instance.
         :param provider_id: provider_id of endpoint instance.
         :param created_at: created_at of endpoint instance.
         :return: endpoint models.
         """
         query = select(Endpoint)
-        if model_id:
-            query = query.where(Endpoint.model_id == model_id)
+        if mdl_id:
+            query = query.where(Endpoint.mdl_id == mdl_id)
         if provider_id:
             query = query.where(Endpoint.provider_id == provider_id)
         if created_at:
