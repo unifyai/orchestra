@@ -10,7 +10,7 @@ class Model(Base):
 
     id = sa.Column(sa.Integer(), primary_key=True)
     mdl_code = sa.Column(sa.String())
-    user_id = sa.Column(sa.String(), sa.ForeignKey("user.id"))
+    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"))
     uploaded_at = sa.Column(sa.TIMESTAMP(), nullable=False)
     task = sa.Column(sa.String(), sa.ForeignKey("task.name"), nullable=False)
     description = sa.Column(sa.Text(), nullable=False)
@@ -95,16 +95,16 @@ class Query(Base):
     __tablename__ = "query"
 
     id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(sa.String(), sa.ForeignKey("user.id"), nullable=False)
+    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
     at = sa.Column(sa.TIMESTAMP(), nullable=False)
     endpoint_id = sa.Column(sa.Integer(), sa.ForeignKey("endpoint.id"), nullable=False)
     credits = sa.Column(sa.Numeric(), nullable=False)
 
 
-class User(Base):
-    """Model class for the user table."""
+class Users(Base):
+    """Model class for the users table."""
 
-    __tablename__ = "user"
+    __tablename__ = "users"
 
     id = sa.Column(sa.String(), primary_key=True)
     credits = sa.Column(sa.Numeric(), nullable=False)
@@ -117,7 +117,7 @@ class Recharge(Base):
 
     id = sa.Column(sa.Integer(), primary_key=True)
     at = sa.Column(sa.TIMESTAMP(), nullable=False)
-    user_id = sa.Column(sa.String(), sa.ForeignKey("user.id"), nullable=False)
+    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
     quantity = sa.Column(sa.Numeric(), nullable=False)
     type = sa.Column(sa.String(), sa.ForeignKey("recharge_type.type"), nullable=False)
 

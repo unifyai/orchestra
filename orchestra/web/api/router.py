@@ -15,7 +15,7 @@ from orchestra.web.api import (  # noqa: WPS235
     recharge,
     recharge_type,
     task,
-    user,
+    users,
 )
 from orchestra.web.api.dependencies import auth_api_key
 
@@ -23,7 +23,7 @@ AUTH = [Depends(auth_api_key)]
 
 api_router = APIRouter()
 api_router.include_router(monitoring.router)
-api_router.include_router(user.router, prefix="/user", tags=["user"])
+api_router.include_router(users.router, prefix="/users", tags=["users"])
 
 api_router.include_router(datapoint.router, prefix="/datapoint", tags=["datapoint"])
 api_router.include_router(endpoint.router, prefix="/endpoint", tags=["endpoint"])

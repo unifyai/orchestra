@@ -1,15 +1,15 @@
 """Created Updated Orchestra Models.
 
-Revision ID: d2124ac55033
+Revision ID: 0642c18bdb15
 Revises: 819cbf6e030b
-Create Date: 2023-12-20 14:37:09.786897
+Create Date: 2023-12-20 15:21:01.909822
 
 """
 import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "d2124ac55033"
+revision = "0642c18bdb15"
 down_revision = "819cbf6e030b"
 branch_labels = None
 depends_on = None
@@ -48,7 +48,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("type"),
     )
     op.create_table(
-        "user",
+        "users",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("credits", sa.Numeric(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
@@ -66,7 +66,7 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(
             ["user_id"],
-            ["user.id"],
+            ["users.id"],
         ),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -102,7 +102,7 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(
             ["user_id"],
-            ["user.id"],
+            ["users.id"],
         ),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -152,7 +152,7 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(
             ["user_id"],
-            ["user.id"],
+            ["users.id"],
         ),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -167,7 +167,7 @@ def downgrade() -> None:
     op.drop_table("model")
     op.drop_table("task")
     op.drop_table("recharge")
-    op.drop_table("user")
+    op.drop_table("users")
     op.drop_table("recharge_type")
     op.drop_table("provider")
     op.drop_table("modality")
