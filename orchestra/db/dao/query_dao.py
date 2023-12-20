@@ -1,3 +1,4 @@
+import datetime
 from typing import List, Optional
 
 from fastapi import Depends
@@ -17,7 +18,7 @@ class QueryDAO:
     async def create_query(
         self,
         user_id: str,
-        at: str,
+        at: datetime.datetime,
         endpoint_id: int,
         credits: float,
     ) -> None:
@@ -55,7 +56,7 @@ class QueryDAO:
     async def filter(
         self,
         user_id: Optional[str] = None,
-        at: Optional[str] = None,
+        at: Optional[datetime.datetime] = None,
         endpoint_id: Optional[int] = None,
         credits: Optional[float] = None,
     ) -> List[Query]:
