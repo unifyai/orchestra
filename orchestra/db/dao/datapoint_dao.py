@@ -1,3 +1,4 @@
+import datetime
 from typing import List, Optional
 
 from fastapi import Depends
@@ -17,7 +18,7 @@ class DatapointDAO:
     async def create_datapoint(
         self,
         endpoint_id: int,
-        measured_at: str,
+        measured_at: datetime.datetime,
         metric_name: str,
         value: float,
     ) -> None:
@@ -55,7 +56,7 @@ class DatapointDAO:
     async def filter(
         self,
         endpoint_id: Optional[int] = None,
-        measured_at: Optional[str] = None,
+        measured_at: Optional[datetime.datetime] = None,
         metric_name: Optional[str] = None,
         value: Optional[float] = None,
     ) -> List[Datapoint]:
