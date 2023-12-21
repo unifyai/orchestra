@@ -14,12 +14,25 @@ class Mistral(BaseCompletionProvider):
     A completion provider that uses the Mistral service.
 
     Supported models: https://docs.mistral.ai/platform/endpoints
+    Pricing is per million tokens: https://docs.mistral.ai/platform/pricing
     """
 
     supported_models = {
-        "mistral-tiny": "mistral-tiny",  # Mistral-7B-v0.2
-        "mistral-small": "mistral-small",  # Mixtral-8X7B-v0.1
-        "mistral-medium": "mistral-medium",
+        "mistral-tiny": {
+            "endpoint": "mistral-tiny",
+            "context_window": 8192,
+            "cost": {"prompt": 0.14, "completion": 0.42},
+        },
+        "mistral-small": {
+            "endpoint": "mistral-small",
+            "context_window": 32768,
+            "cost": {"prompt": 0.6, "completion": 1.8},
+        },
+        "mistral-medium": {
+            "endpoint": "mistral-medium",
+            "context_window": 32768,
+            "cost": {"prompt": 2.5, "completion": 7.5},
+        },
     }
 
     def set_api_key(self, api_key: str) -> None:
