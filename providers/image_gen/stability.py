@@ -53,7 +53,10 @@ class Stability:
         )
 
     def imagegen(
-        self, prompt: str, model: str, kwargs: Optional[Dict],
+        self,
+        prompt: str,
+        model: str,
+        kwargs: Optional[Dict],
     ) -> Optional[Dict]:
         """
         Generates images using the Stability API.
