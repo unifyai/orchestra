@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional
 
 import litellm
 import openai
@@ -12,7 +12,7 @@ class BaseCompletionProvider:
     """Base class for completion providers."""
 
     # TODO: Make this a property and enforce definition with NotImplemented
-    supported_models: Union[Set[str], Dict[str, str]] = {}
+    supported_models: Dict[str, Any] = {}
 
     def __init__(self) -> None:
         self.model: str = ""
@@ -31,7 +31,7 @@ class BaseCompletionProvider:
             raise ValueError("Model not supported")
 
         if isinstance(self.supported_models, dict):
-            provider_model_endpoint = self.supported_models[model]
+            provider_model_endpoint = self.supported_models[model]["endpoint"]
         else:
             provider_model_endpoint = model
 
