@@ -3,9 +3,9 @@ from fastapi.routing import APIRouter
 
 from orchestra.web.api import (  # noqa: WPS235
     chat_completion,
-    image_generation,
     datapoint,
     endpoint,
+    image_generation,
     license,
     metric,
     modality,
