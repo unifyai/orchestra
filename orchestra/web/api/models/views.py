@@ -1,8 +1,6 @@
 from typing import List, Set, Tuple
 
 from fastapi import APIRouter
-
-# FIXME: Change to database
 from models.llm import PROVIDER_CLASSES
 
 from orchestra.web.api.models.schema import ModelInfo, ModelInfoList
@@ -26,7 +24,6 @@ def _get_all_models() -> Set[str]:
     return all_model_ids
 
 
-# FIXME: Change to database
 def _generate_model_list() -> List[ModelInfo]:
     # hacky placeholder until the db is populated don't look
     all_model_ids = _get_all_models()
@@ -59,9 +56,4 @@ async def list_models() -> ModelInfoList:
 
     :returns: list of models.
     """
-    # TODO: Given that (1) users will upload their models and (2) the majority
-    # of the endpoints are going to be instances managed outside of the orchestra
-    # service, we need to store the model and their corresponding information
-    # in the external db
-
     return ModelInfoList(models=models)
