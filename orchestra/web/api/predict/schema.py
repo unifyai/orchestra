@@ -3,7 +3,7 @@ from typing import Any, Dict
 from pydantic import BaseModel
 
 
-class QueryRequest(BaseModel):
+class PredictRequest(BaseModel):
     """
     Request model for any model in the hub.
 
@@ -18,7 +18,7 @@ class QueryRequest(BaseModel):
     arguments: Dict[str, Any]
 
 
-class QueryResponse(BaseModel):
+class PredictResponse(BaseModel):
     """
     Response model for any model in the hub.
 

@@ -1,19 +1,19 @@
 from fastapi import APIRouter
 from models.llm import CompletionsModel
 
-from orchestra.web.api.query.schema import QueryRequest, QueryResponse
+from orchestra.web.api.predict.schema import PredictRequest, PredictResponse
 
 router = APIRouter()
 
 
-@router.post("/query", response_model=QueryResponse)
-async def get_query(request: QueryRequest) -> QueryResponse:
+@router.post("/query", response_model=PredictResponse)
+async def get_query(request: PredictRequest) -> PredictResponse:
     """
-    Get query result based on the request.
+    Get prediction result based on the request.
 
-    :param request: QueryRequest object.
+    :param request: PredictRequest object.
 
-    :return: Model-specific QueryResponse object.
+    :return: Model-specific PredictResponse object.
     """
     # TODO: Abstract this so that the modality and the task is
     # used to get the class (in this case, CompletionsModel)
@@ -32,7 +32,7 @@ async def get_query(request: QueryRequest) -> QueryResponse:
     )
     if not response:
         # TODO: Handle when response is None
-        return QueryResponse(
+        return PredictResponse(
             response={
                 "choices": [],
                 "usage": {},
@@ -45,7 +45,7 @@ async def get_query(request: QueryRequest) -> QueryResponse:
         for choice in response.get("choices", None):
             choices.append(choice.model_dump())
 
-    return QueryResponse(
+    return PredictResponse(
         response={
             "choices": choices,
             "usage": usage,
