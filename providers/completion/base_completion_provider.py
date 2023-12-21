@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 class BaseCompletionProvider:
     """Base class for completion providers."""
 
+    # TODO: Make this a property and enforce definition with NotImplemented
     supported_models: Dict[str, Any] = {}
 
     def __init__(self) -> None:
