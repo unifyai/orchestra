@@ -22,9 +22,7 @@ class CompletionsModel:
             self.set_api_key(api_key)
 
     def set_api_key(self, api_key: str) -> None:  # noqa: D102
-        self.provider_obj.set_api_key(
-            api_key,
-        )
+        self.provider_obj.set_api_key(api_key)
 
     def get_completion(  # noqa: D102
         self,

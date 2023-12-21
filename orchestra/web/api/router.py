@@ -25,9 +25,7 @@ AUTH = [Depends(auth_api_key)]
 
 api_router = APIRouter()
 api_router.include_router(monitoring.router)
-
 api_router.include_router(users.router, prefix="/users", tags=["users"])
-
 api_router.include_router(datapoint.router, prefix="/datapoint", tags=["datapoint"])
 api_router.include_router(endpoint.router, prefix="/endpoint", tags=["endpoint"])
 api_router.include_router(license.router, prefix="/license", tags=["license"])
@@ -45,7 +43,7 @@ api_router.include_router(
 api_router.include_router(task.router, prefix="/task", tags=["task"])
 
 # TODO: This probably requires a name change to avoid confussion
-api_router.include_router(models.router, tags=["models"], dependencies=AUTH)
+api_router.include_router(models.router, tags=["models"])
 api_router.include_router(predict.router, tags=["predict"], dependencies=AUTH)
 api_router.include_router(
     chat_completion.router,
