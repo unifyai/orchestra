@@ -1,9 +1,9 @@
 import logging
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import openai
+from octoai.chat import ChatCompletion
 from octoai.client import Client
-from octoai.chat import ChatCompletion, get_model_list
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,51 @@ class OctoAI(BaseCompletionProvider):
     A completion provider that uses the OctoAI service.
 
     Supported models: https://docs.octoai.cloud/docs/text-generation
+    Pricing: https://docs.octoai.cloud/docs/pricing (below are per million tokens)
     """
+
+    supported_models = {
+        "Llama2-70B-FP16": {
+            "endpoint": "Llama2-70B-FP16",
+            "context_window": 4096,
+            "cost": {"prompt": 0.6, "completion": 1.9},
+        },
+        "Llama2-70B-INT4": {
+            "endpoint": "Llama2-70B-INT4",
+            "context_window": 4096,
+            "cost": {"prompt": 0.6, "completion": 1.2},
+        },
+        "Llama2-13B-FP16": {
+            "endpoint": "Llama2-13B-FP16",
+            "context_window": 4096,
+            "cost": {"prompt": 0.2, "completion": 0.5},
+        },
+        "CodeLlama-34B-FP16": {
+            "endpoint": "CodeLlama-34B-FP16",
+            "context_window": 16384,
+            "cost": {"prompt": 0.5, "completion": 1.15},
+        },
+        "CodeLlama-34B-INT4": {
+            "endpoint": "CodeLlama-34B-INT4",
+            "context_window": 4096,
+            "cost": {"prompt": 0.5, "completion": 0.8},
+        },
+        "CodeLlama-13B-FP16": {
+            "endpoint": "CodeLlama-13B-FP16",
+            "context_window": 4096,
+            "cost": {"prompt": 0.2, "completion": 0.5},
+        },
+        "CodeLlama-7B-FP16": {
+            "endpoint": "CodeLlama-7B-FP16",
+            "context_window": 4096,
+            "cost": {"prompt": 0.1, "completion": 0.25},
+        },
+        "Mistral-7B-FP16": {
+            "endpoint": "Mistral-7B-FP16",
+            "context_window": 4096,
+            "cost": {"prompt": 0.1, "completion": 0.25},
+        },
+    }
 
     def set_api_key(self, api_key: str) -> None:
         """
@@ -48,8 +92,7 @@ class OctoAI(BaseCompletionProvider):
 
         :raises ValueError: If the specified model is not supported.
         """
-        print("models : ", get_model_list())
-        if model not in get_model_list():
+        if model not in self.supported_models:
             raise ValueError("Model not supported")
 
         provider_model_endpoint = model
