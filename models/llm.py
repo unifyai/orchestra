@@ -24,7 +24,7 @@ class CompletionsModel:
     def set_api_key(self, api_key: str) -> None:  # noqa: D102
         self.provider_obj.set_api_key(
             api_key,
-        )  # TODO: Question: This seems to be recursive?
+        )
 
     def get_completion(  # noqa: D102
         self,

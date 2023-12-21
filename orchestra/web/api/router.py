@@ -44,6 +44,7 @@ api_router.include_router(
 )
 api_router.include_router(task.router, prefix="/task", tags=["task"])
 
+# TODO: This probably requires a name change to avoid confussion
 api_router.include_router(models.router, tags=["models"], dependencies=AUTH)
 api_router.include_router(predict.router, tags=["predict"], dependencies=AUTH)
 api_router.include_router(

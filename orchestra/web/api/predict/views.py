@@ -6,8 +6,8 @@ from orchestra.web.api.predict.schema import PredictRequest, PredictResponse
 router = APIRouter()
 
 
-@router.post("/query", response_model=PredictResponse)
-async def get_query(request: PredictRequest) -> PredictResponse:
+@router.post("/predict", response_model=PredictResponse)
+async def get_prediction(request: PredictRequest) -> PredictResponse:
     """
     Get prediction result based on the request.
 
