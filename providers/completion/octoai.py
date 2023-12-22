@@ -5,6 +5,7 @@ import openai
 from octoai.chat import ChatCompletion
 from octoai.client import Client
 from providers.completion.base_completion_provider import BaseCompletionProvider
+
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,7 @@ class OctoAI(BaseCompletionProvider):
     Supported models: https://docs.octoai.cloud/docs/text-generation
     Pricing: https://docs.octoai.cloud/docs/pricing (below are per million tokens)
     """
-# \, 'codellama-34b-instruct-int4', 'mistral-7b-instruct-fp16', 'mixtral-8x7b-instruct-fp16']
+
     supported_models = {
         "llama-2-70b-chat-fp16": {
             "endpoint": "octoai/llama-2-70b-chat-fp16",
@@ -98,7 +99,6 @@ class OctoAI(BaseCompletionProvider):
 
         :raises ValueError: If the specified model is not supported.
         """
-        print("model is ", model)
         if model not in self.supported_models:
             raise ValueError("Model not supported")
 

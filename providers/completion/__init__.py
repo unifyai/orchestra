@@ -17,6 +17,8 @@ PROVIDER_CLASSES = {
     "replicate": Replicate,
     "vertexai": VertexAI,
     "openai": OpenAI,
+    "mistral": Mistral,
+    "octoai": OctoAI,
 }
 
 # Pricing info of providers with pay-per-token model is
