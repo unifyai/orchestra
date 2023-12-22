@@ -19,8 +19,8 @@ Types of Models
 
 There are two types of models:
 
-Models uploaded by users
-^^^^^^^^^^^^^^^^^^^^^^^^
+Models uploaded by the community
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 When a user (which could be you!) uploads a model, we automatically create and benchmark a set of endpoints by deploying the model
 accross various providers.
 

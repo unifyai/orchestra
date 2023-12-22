@@ -38,5 +38,5 @@ Feedback and Feature Requests
 -----------------------------
 
 We are excited to hear from you! Whether this is about something that you would do differently, or about a feature that you think would be useful to
-include, please let us know either through `our discord community <https://discord.com/invite/sXyFF8tDtm>`_ or send an email to
+include, please let us know either through `our Discord community <https://discord.com/invite/sXyFF8tDtm>`_ or send an email to
 :code:`modelhub@unify.ai`, we'll be more than happy to look into it.
