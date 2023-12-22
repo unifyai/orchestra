@@ -40,4 +40,5 @@ async def create_metric_model(
     """
     await metric_dao.create_metric(
         name=new_metric_object.name,
+        units=new_metric_object.units,
     )

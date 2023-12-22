@@ -87,6 +87,7 @@ class Metric(Base):
     __tablename__ = "metric"
 
     name = sa.Column(sa.String(), primary_key=True)
+    units = sa.Column(sa.String(), nullable=False)
 
 
 class Query(Base):
