@@ -7,9 +7,11 @@ class MetricModelRequest(BaseModel):
 
     Attributes:
         name (str): The name of the metric.
+        untis (str): The units of the metric.
     """
 
     name: str
+    units: str
 
 
 class MetricModelResponse(BaseModel):
@@ -18,6 +20,8 @@ class MetricModelResponse(BaseModel):
 
     Attributes:
         name (str): The name of the metric.
+        untis (str): The units of the metric.
     """
 
     name: str
+    units: str
