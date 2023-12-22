@@ -1,6 +1,7 @@
 """providers.completion package."""
 from providers.completion.anthropic import Anthropic
 from providers.completion.anyscale import Anyscale
+from providers.completion.mistral import Mistral
 from providers.completion.openai import OpenAI
 from providers.completion.perplexity import Perplexity
 from providers.completion.replicate import Replicate
@@ -15,6 +16,7 @@ PROVIDER_CLASSES = {
     "replicate": Replicate,
     "vertexai": VertexAI,
     "openai": OpenAI,
+    "mistral": Mistral,
 }
 
 # Pricing info of providers with pay-per-token model is
