@@ -1,9 +1,6 @@
 Endpoints
 =========
 
-TODO: Explain the format specification inside the model hub website
-TODO: Mention that the openAI api is also available
-
 Welcome to the Endpoints API reference!
 This page is your go-to resource when it comes to learning about the different endpoints offered by the Model Hub.
 
@@ -151,6 +148,8 @@ Send a given input to the specified model hosted in the specified provider.
 Both the **arguments and the response are model-specific** and, therefore, their format is expected
 to change from model to model. You can find the specific arguments and the response format in the
 corresponding model documentation.
+
+For Text-Generation models, you might want to use the :code:`POST /chat/completions` endpoint.
 
 **Request Body**
  | **model** *(string)*: ID of the model to query.
