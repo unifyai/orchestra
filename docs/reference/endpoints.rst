@@ -2,7 +2,8 @@ Endpoints
 =========
 
 Welcome to the Endpoints API reference!
-This page is your go-to resource when it comes to learning about the different endpoints offered by the Model Hub.
+This page is your go-to resource when it comes to learning about the different endpoints that allow you to
+interact with the Model Hub.
 
 .. note::
   To use the endpoints you will need an API Key. If you don't have one yet, you can go through the instructions in
