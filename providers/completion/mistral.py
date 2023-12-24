@@ -1,0 +1,28 @@
+from providers.completion.base_completion_provider import BaseCompletionProvider
+
+
+class Mistral(BaseCompletionProvider):
+    """
+    A completion provider that uses the Mistral service.
+
+    Supported models: https://docs.mistral.ai/platform/endpoints
+    Pricing is per million tokens: https://docs.mistral.ai/platform/pricing
+    """
+
+    supported_models = {
+        "mistral-tiny": {
+            "endpoint": "mistral/mistral-tiny",
+            "context_window": 32768,
+            "cost": {"prompt": 0.15, "completion": 0.46},
+        },
+        "mistral-small": {
+            "endpoint": "mistral/mistral-small",
+            "context_window": 32768,
+            "cost": {"prompt": 0.66, "completion": 1.97},
+        },
+        "mistral-medium": {
+            "endpoint": "mistral/mistral-medium",
+            "context_window": 32768,
+            "cost": {"prompt": 2.74, "completion": 8.21},
+        },
+    }

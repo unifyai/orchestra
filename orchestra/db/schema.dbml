@@ -3,8 +3,8 @@
 
 Table model {
   id integer [primary key]
-  model_code varchar // e.g. llama-2-70b-chat
-  uploaded_by integer
+  mdl_code varchar // e.g. llama-2-70b-chat
+  user_id varchar // uploaded by
   uploaded_at timestamp [not null]
   task varchar [not null]
   description text [not null]
@@ -31,15 +31,16 @@ Table modality {
 
 Table endpoint {
   id integer [primary key]
-  model_id integer [not null]
-  provider_id varchar [not null]
+  mdl_id integer [not null]
+  provider_id integer [not null]
   created_at timestamp [not null]
 }
 
 Table provider {
-  id varchar [primary key]
+  id integer [primary key]
   name varchar [not null]
   image_url varchar [not null]
+  description text
 }
 
 Table datapoint {
@@ -56,24 +57,24 @@ Table metric {
 
 Table query {
   id integer [primary key]
-  user_id integer [not null]
+  user_id varchar [not null]
   at timestamp [not null]
   endpoint_id integer [not null]
   credits decimal [not null]
 }
 
-Table user {
+Table users {
   // This id is the same as the user id in the console app table of users
   // Every time a user is created in the console app, a new entry should
   // be added here automatically with a default balance.
-  id integer [primary key]
+  id varchar [primary key]
   credits decimal [not null]
 }
 
 Table recharge {
   id integer [primary key]
   at timestamp [not null]
-  user_id integer [not null]
+  user_id varchar [not null]
   quantity decimal [not null]
   type varchar [not null]
 }
@@ -82,11 +83,11 @@ Table recharge_type {
   type varchar [primary key] // daily, free, manual, ...
 }
 
-Ref: model.uploaded_by > user.id
+Ref: model.user_id > user.id
 Ref: model.task > task.name
 Ref: model.license > license.name
 Ref: task.modality > modality.name
-Ref: endpoint.model_id > model.id
+Ref: endpoint.mdl_id > model.id
 Ref: endpoint.provider_id > provider.id
 Ref: datapoint.endpoint_id > endpoint.id
 Ref: datapoint.metric_name > metric.name

@@ -8,8 +8,9 @@ class Model(Base):
 
     __tablename__ = "model"
 
-    id = sa.Column(sa.String(), primary_key=True)
-    uploaded_by = sa.Column(sa.Integer(), sa.ForeignKey("user.id"), nullable=False)
+    id = sa.Column(sa.Integer(), primary_key=True)
+    mdl_code = sa.Column(sa.String())
+    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"))
     uploaded_at = sa.Column(sa.TIMESTAMP(), nullable=False)
     task = sa.Column(sa.String(), sa.ForeignKey("task.name"), nullable=False)
     description = sa.Column(sa.Text(), nullable=False)
@@ -52,8 +53,8 @@ class Endpoint(Base):
     __tablename__ = "endpoint"
 
     id = sa.Column(sa.Integer(), primary_key=True)
-    model_id = sa.Column(sa.String(), sa.ForeignKey("model.id"), nullable=False)
-    provider_id = sa.Column(sa.String(), sa.ForeignKey("provider.id"), nullable=False)
+    mdl_id = sa.Column(sa.Integer(), sa.ForeignKey("model.id"), nullable=False)
+    provider_id = sa.Column(sa.Integer(), sa.ForeignKey("provider.id"), nullable=False)
     created_at = sa.Column(sa.TIMESTAMP(), nullable=False)
 
 
@@ -62,9 +63,10 @@ class Provider(Base):
 
     __tablename__ = "provider"
 
-    id = sa.Column(sa.String(), primary_key=True)
+    id = sa.Column(sa.Integer(), primary_key=True)
     name = sa.Column(sa.String(), nullable=False)
     image_url = sa.Column(sa.String(), nullable=False)
+    description = sa.Column(sa.Text())
 
 
 class Datapoint(Base):
@@ -85,6 +87,7 @@ class Metric(Base):
     __tablename__ = "metric"
 
     name = sa.Column(sa.String(), primary_key=True)
+    units = sa.Column(sa.String(), nullable=False)
 
 
 class Query(Base):
@@ -93,18 +96,18 @@ class Query(Base):
     __tablename__ = "query"
 
     id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(sa.Integer(), sa.ForeignKey("user.id"), nullable=False)
+    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
     at = sa.Column(sa.TIMESTAMP(), nullable=False)
     endpoint_id = sa.Column(sa.Integer(), sa.ForeignKey("endpoint.id"), nullable=False)
     credits = sa.Column(sa.Numeric(), nullable=False)
 
 
-class User(Base):
-    """Model class for the user table."""
+class Users(Base):
+    """Model class for the users table."""
 
-    __tablename__ = "user"
+    __tablename__ = "users"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
+    id = sa.Column(sa.String(), primary_key=True)
     credits = sa.Column(sa.Numeric(), nullable=False)
 
 
@@ -115,7 +118,7 @@ class Recharge(Base):
 
     id = sa.Column(sa.Integer(), primary_key=True)
     at = sa.Column(sa.TIMESTAMP(), nullable=False)
-    user_id = sa.Column(sa.Integer(), sa.ForeignKey("user.id"), nullable=False)
+    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
     quantity = sa.Column(sa.Numeric(), nullable=False)
     type = sa.Column(sa.String(), sa.ForeignKey("recharge_type.type"), nullable=False)
 
