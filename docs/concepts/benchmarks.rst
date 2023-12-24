@@ -2,7 +2,7 @@ Benchmarks
 ==========
 
 The main goal of the Model Hub is to allow you to use the endpoint (and model!) that better suits your use case.
-This is not a trivial decision to make, and therefore need to be made based on data. That's why we benchmark
+This is not a trivial decision to make, and therefore it needs to be made based on data. That's why we benchmark
 every single endpoint offered through our API!
 
 What metrics are measured?
