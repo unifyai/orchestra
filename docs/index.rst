@@ -17,9 +17,9 @@
   :caption: Concepts
 
   concepts/models.rst
-  concepts/endpoints.rst
+  concepts/providers.rst
   concepts/benchmarks.rst
-  concepts/on_prem_images.rst
+..  concepts/on_prem_images.rst
 
 .. toctree::
   :hidden:
@@ -27,12 +27,13 @@
   :caption: API reference
 
   reference/endpoints.rst
-  reference/images.rst
+..  reference/images.rst
 
-.. toctree::
-  :hidden:
-  :maxdepth: -1
-  :caption: Tools
+..
+  .. toctree::
+    :hidden:
+    :maxdepth: -1
+    :caption: Tools
 
-  tools/openapi.rst
-  tools/python_library.rst
+    tools/openapi.rst
+    tools/python_library.rst
