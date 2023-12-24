@@ -2,7 +2,7 @@ Welcome to the Model Hub!
 =========================
 
 This is your central hub for machine learning deployment stacks and inference endpoints. If you're using or planning to use
-AI in your application or service, the Model hub offers various things:
+AI in your application or service, the Model hub offers various benefits:
 
 * **🌐 Streamlined Model Access**: Using any model is as simple as making a request to an endpoint. No need to set up any infrastructure
   yourself.
@@ -11,7 +11,7 @@ AI in your application or service, the Model hub offers various things:
   giving you the best infrastructure based on your priorities, be it high-throughput, low cost or low latency.
 
 * **⚖️ Impartial Arbiter**: We have no vested interest in you using one provider or another, we deploy models accross different providers
-  and objectively measure their performance. This allows us to route your requests to the deployment stack that better fits your needs.
+  and objectively measure their performance. This allows you to make an informed decision when selecting a provider based on your needs.
 
 * **🔑 One Single Key**: You only need a Unify API Key to access all the endpoints in the hub. No need to create accounts with every provider that
   you want to test.

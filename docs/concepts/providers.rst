@@ -1,7 +1,7 @@
 Providers
 =========
 
-Another one of the main concepts in the Model Hub is the **provider**. Let's dive into it.
+Another one of the main concepts in the Model Hub is the **provider**. Let's dive into it 🤿
 
 What is a Provider?
 -------------------
