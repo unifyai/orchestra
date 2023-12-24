@@ -142,10 +142,10 @@ Retrieve the list of available providers for a specific model in the Model Hub.
 
 -----
 
-POST /query
------------
+POST /inference
+---------------
 
-**Query a Model Provider**
+**Query a Model hosted in a given Provider**
 
 Send a given input to the specified model hosted in the specified provider.
 Both the **arguments and the response are model-specific** and, therefore, their format is expected
@@ -161,17 +161,91 @@ corresponding model documentation.
 
 .. code-block:: bash
 
-  curl -X POST "https://api.unify.ai/v0/query" \
+  curl -X POST "https://api.unify.ai/v0/inference" \
     -H "Content-Type: application/json" \
     -H "Authorization: YOUR_API_KEY" \
     -d '{
       "model": "llama2",
       "provider": "anyscale",
       "arguments": {
-        "arg1": 123,
-        "arg2": "test",
         "TODO": TODO: change this to fit the actual api of the models
       }
+    }'
+
+**Responses**
+
+- **200 OK**
+
+  Successful operation.
+
+  **Response**
+   | Model-specific response, check out the model documentation for more information.
+
+  **Example Response**
+
+  .. code-block:: bash
+
+    {
+      "response": "<Response text>"
+    }
+
+- **401 Unauthorized**
+
+  Invalid API key.
+
+  **Example Response**
+
+  .. code-block:: bash
+
+    {
+      "error": "Invalid API key"
+    }
+
+- **422 Unprocessable Entity**
+
+  Invalid arguments. The provided arguments don't correspond to the specified model.
+
+  **Example Response**
+
+  .. code-block:: bash
+
+    {
+      "error": "The provided arguments don't correspond to the specified model."
+    }
+
+-----
+
+POST /chat/completions
+----------------------
+
+**Query a Text-Generation Model hosted in a given Provider using the OpenAI API format**
+
+Send a given input to the specified model hosted in the specified provider.
+This endpoint follows the OpenAI specification for text completion, which is available
+`here. <https://platform.openai.com/docs/api-reference/chat/create>`_
+
+To specify the provider, make sure to append its name after the model id using :code:`@`.
+
+
+**Request Body**
+ | **model** *(string)*: ID of the model to query with format :code:`<uploaded_by>/<model_name>@<provider>`.
+   If the model is managed by Unify, the format will be :code:`<model_name>@<provider>`.
+ | **messages** *(array)*: A list of messages compromising the conversation so far.
+ | **frequency_penalty** *(float)*: TODO
+
+**Example Request (curl)**
+
+.. code-block:: bash
+
+  TODO: Update this
+  curl -X POST "https://api.unify.ai/v0/chat/completions" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: YOUR_API_KEY" \
+    -d '{
+      "model": "llama-2-7b-chat@replicate",
+      "messages": [
+        TODO
+      ]
     }'
 
 **Responses**

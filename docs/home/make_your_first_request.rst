@@ -69,8 +69,8 @@ If you are using **Python**, you can use the :code:`requests` library to query t
 Using the OpenAI API Format
 ---------------------------
 
-We also support the OpenAI API format for :code:`text-generation` models. More specifically, the :code:`/chat/completion` endpoint.
-The docs for this endpoint are available `here. <https://unify.ai/docs/modelhub/reference/endpoints.html#post-chat-completion>`_
+We also support the OpenAI API format for :code:`text-generation` models. More specifically, the :code:`/chat/completions` endpoint.
+The docs for this endpoint are available `here. <https://unify.ai/docs/modelhub/reference/endpoints.html#post-chat-completions>`_
 
 This API format wouldn't normally allow you to choose between providers for a given model. To bypass this limitation, the model
 name should have the format :code:`<uploaded_by>/<model_name>@<provider_name>`. For example, if :code:`john_doe` uploads a
