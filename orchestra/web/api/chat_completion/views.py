@@ -20,7 +20,7 @@ async def get_completions(request: ChatCompletionRequest) -> ChatCompletionRespo
     """
     language_model = CompletionsModel(
         provider=request.model.split("/")[0],
-        model=request.model.split("/")[1],
+        model=request.model.split("/")[-1],
     )
     response = language_model.get_completion(
         messages=request.messages,
