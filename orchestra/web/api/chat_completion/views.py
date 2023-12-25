@@ -20,7 +20,7 @@ async def get_completions(request: ChatCompletionRequest) -> ChatCompletionRespo
     """
     language_model = CompletionsModel(
         provider=request.model.split("/")[0],
-        model=request.model.split("/")[1],
+        model=request.model.split("/")[-1],
     )
     response = language_model.get_completion(
         messages=request.messages,
@@ -36,7 +36,9 @@ async def get_completions(request: ChatCompletionRequest) -> ChatCompletionRespo
             object="chat.completion",
             usage={},
         )
-
+    if isinstance(response, ChatCompletionResponse):
+        response.model = request.model
+        return response
     usage = response["usage"].model_dump() if response["usage"] else None
     if response.get("choices", None):
         choices = []
