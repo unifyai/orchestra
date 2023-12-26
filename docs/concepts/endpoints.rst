@@ -1,4 +1,0 @@
-Endpoints
-=========
-
-Lorem ipsum

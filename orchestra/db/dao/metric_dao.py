@@ -17,15 +17,18 @@ class MetricDAO:
     async def create_metric(
         self,
         name: str,
+        units: str,
     ) -> None:
         """
         Add single metric to session.
 
         :param name: name of a metric.
+        :param units: units of a metric.
         """
         self.session.add(
             Metric(
                 name=name,
+                units=units,
             ),
         )
 
