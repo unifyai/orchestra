@@ -5,13 +5,13 @@ from orchestra.web.api import (  # noqa: WPS235
     chat_completion,
     datapoint,
     endpoint,
+    inference,
     license,
     metric,
     modality,
     model,
     models,
     monitoring,
-    predict,
     provider,
     query,
     recharge,
@@ -44,7 +44,7 @@ api_router.include_router(task.router, prefix="/task", tags=["task"])
 
 # TODO: This probably requires a name change to avoid confussion
 api_router.include_router(models.router, tags=["models"])
-api_router.include_router(predict.router, tags=["predict"], dependencies=AUTH)
+api_router.include_router(inference.router, tags=["inference"], dependencies=AUTH)
 api_router.include_router(
     chat_completion.router,
     tags=["chat_completion"],
