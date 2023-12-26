@@ -34,10 +34,6 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
 
     :return: Model-specific InferenceResponse object.
     """
-    # TODO: Abstract this so that the modality and the task is
-    # used to get the class (in this case, CompletionsModel)
-
-    # TODO: Specify the arguments in the docs, discuss how are we going to define it
     # TODO: Add error 422 for incorrect arguments, model, or provider
     # TODO: Add error 500
     model_type = get_model_type(request.model)
@@ -88,17 +84,17 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             model=request.model,
         )
         kwargs = {
-            "image": request.arguments["image"],
-            "height": request.arguments["height"],
-            "width": request.arguments["width"],
-            "steps": request.arguments["steps"],
-            "samples": request.arguments["samples"],
-            "cfg_scale": request.arguments["cfg_scale"],
-            "sampler": request.arguments["sampler"],
-            "seed": request.arguments["seed"],
-            "mask_image": request.arguments["mask_image"],
-            "start_schedule": request.arguments["start_schedule"],
-            "end_schedule": request.arguments["end_schedule"],
+            "image": request.arguments.get("image", None),
+            "height": request.arguments.get("height", None),
+            "width": request.arguments.get("width", None),
+            "steps": request.arguments.get("steps", None),
+            "samples": request.arguments.get("samples", None),
+            "cfg_scale": request.arguments.get("cfg_scale", None),
+            "sampler": request.arguments.get("sampler", None),
+            "seed": request.arguments.get("seed", None),
+            "mask_image": request.arguments.get("mask_image", None),
+            "start_schedule": request.arguments.get("start_schedule", None),
+            "end_schedule": request.arguments.get("end_schedule", None),
         }
         response = image_model.get_image(
             prompt=request.arguments["prompt"],

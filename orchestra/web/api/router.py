@@ -5,7 +5,6 @@ from orchestra.web.api import (  # noqa: WPS235
     chat_completion,
     datapoint,
     endpoint,
-    image_generation,
     inference,
     license,
     metric,
@@ -49,10 +48,5 @@ api_router.include_router(inference.router, tags=["inference"], dependencies=AUT
 api_router.include_router(
     chat_completion.router,
     tags=["chat_completion"],
-    dependencies=AUTH,
-)
-api_router.include_router(
-    image_generation.router,
-    tags=["image_generation"],
     dependencies=AUTH,
 )
