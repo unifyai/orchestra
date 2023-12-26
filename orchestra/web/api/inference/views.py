@@ -6,7 +6,7 @@ from models.imagegen import ImagegenModel
 from models.llm import CompletionsModel
 
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
-from orchestra.web.api.predict.schema import PredictRequest, PredictResponse
+from orchestra.web.api.inference.schema import InferenceRequest, InferenceResponse
 
 router = APIRouter()
 
@@ -23,16 +23,16 @@ def get_model_type(model_name):  # noqa: D103
         return "image"
 
 
-@router.post("/predict", response_model=PredictResponse)
-async def get_prediction(
-    request: PredictRequest,
-) -> PredictResponse:  # noqa: C901, WPS212, WPS210, WPS231, E501
+@router.post("/inference", response_model=InferenceResponse)
+async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
+    request: InferenceRequest,
+) -> InferenceResponse:
     """
-    Get prediction result based on the request.
+    Get inference result based on the request.
 
-    :param request: PredictRequest object.
+    :param request: InferenceRequest object.
 
-    :return: Model-specific PredictResponse object.
+    :return: Model-specific InferenceResponse object.
     """
     # TODO: Abstract this so that the modality and the task is
     # used to get the class (in this case, CompletionsModel)
@@ -52,7 +52,7 @@ async def get_prediction(
         )
         if not response:
             # TODO: Handle when response is None
-            return PredictResponse(
+            return InferenceResponse(
                 response={
                     "model": request.model,
                     "created": 0,
@@ -64,7 +64,7 @@ async def get_prediction(
             )
         if isinstance(response, ChatCompletionResponse):
             response.model = request.model
-            return PredictResponse(
+            return InferenceResponse(
                 response=response.model_dump(),
             )
         usage = response["usage"].model_dump() if response["usage"] else None
@@ -72,7 +72,7 @@ async def get_prediction(
             choices = []
             for choice in response.get("choices", None):
                 choices.append(choice.model_dump())
-        return PredictResponse(
+        return InferenceResponse(
             response={
                 "model": request.model,
                 "created": response.get("created", None),
@@ -106,7 +106,7 @@ async def get_prediction(
         )
         if not response:
             # TODO: Handle when response is None
-            return PredictResponse(
+            return InferenceResponse(
                 response={
                     "model": request.model,
                     "created": 0,
@@ -119,7 +119,7 @@ async def get_prediction(
             for image in response.get("images", [])  # Use empty list for default
             if image is not None
         ]
-        return PredictResponse(
+        return InferenceResponse(
             response={
                 "model": request.model,
                 "created": response.get("created", None),
@@ -128,7 +128,7 @@ async def get_prediction(
             },
         )
     # TODO: Add error 422 for incorrect arguments, model, or provider
-    return PredictResponse(
+    return InferenceResponse(
         response={
             "Error": "Unknown model or provider",
         },
