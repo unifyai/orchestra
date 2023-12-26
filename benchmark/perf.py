@@ -384,7 +384,7 @@ def run(  # noqa: C901, WPS210, WPS231
                     provider_obj,
                     problems,
                 )
-        logger.info("")
+        logger.info("--------------------")
     add_cost_per_million_tokens(model_results)
     if evaluator:
         evaluator_provider = get_evaluator_provider(evaluator)
@@ -408,6 +408,6 @@ if __name__ == "__main__":
         for provider in PROVIDER_CLASSES.values()
         for model in provider.supported_models.keys()
     ]
-    model_list = ["llama-2-7b-chat"]
+    model_list = ["llama-2-7b-chat-hf", "gemini-pro"]
     benchmarking_results = run(model_list, print_table=True)
     logger.info(benchmarking_results)
