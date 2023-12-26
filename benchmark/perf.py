@@ -3,7 +3,7 @@ import logging
 import os
 import re
 import statistics
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, cast
 
 import numpy as np
 from litellm import ModelResponse
@@ -105,6 +105,9 @@ def get_provider(
     if provider_obj is None:
         provider_obj = PROVIDER_CLASSES[provider_name]()
         if provider_name == "vertexai":
+            from providers.completion.vertexai import VertexAI  # noqa: WPS433
+
+            provider_obj = cast(VertexAI, provider_obj)
             provider_obj.set_service_account_credentials(
                 str(os.getenv("ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON")),
             )
@@ -122,7 +125,7 @@ def get_completion_results(  # noqa: D103
     provider: BaseCompletionProvider,
     model: str,
     problems: List[tuple[str, str]],
-) -> List[str]:
+) -> Optional[List[str]]:
     completion_results = []
     for prompt in problems:
         result = provider.complete(
@@ -400,7 +403,11 @@ def run(  # noqa: C901, WPS210, WPS231
 
 
 if __name__ == "__main__":
-    # model_list = [model for provider in PROVIDER_CLASSES.values() for model in provider.supported_models.keys()]
-    # benchmarking_results = run(model_list, print_table=True)
-    benchmarking_results = run(["llama-2-7b-chat"], print_table=True)
-    print(benchmarking_results)
+    model_list = [
+        model
+        for provider in PROVIDER_CLASSES.values()
+        for model in provider.supported_models.keys()
+    ]
+    model_list = ["llama-2-7b-chat"]
+    benchmarking_results = run(model_list, print_table=True)
+    logger.info(benchmarking_results)
