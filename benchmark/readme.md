@@ -4,13 +4,16 @@ If not, create `keys.sh` with following snippet to setup:
 ```bash
 #!/bin/bash
 
-export ANYSCALE_API_KEY=""
-export PERPLEXITY_API_KEY=""
-export TOGETHERAI_API_KEY=""
-export ANTHROPIC_API_KEY=""
-export REPLICATE_API_KEY=""
-export VERTEXAI_API_KEY=""
-export OPENAI_API_KEY="sk-"
+export ORCHESTRA_ANYSCALE_API_KEY=""
+export ORCHESTRA_PERPLEXITY_API_KEY=""
+export ORCHESTRA_TOGETHERAI_API_KEY=""
+export ORCHESTRA_ANTHROPIC_API_KEY=""
+export ORCHESTRA_REPLICATE_API_KEY=""
+export ORCHESTRA_OPENAI_API_KEY="sk-"
+export ORCHESTRA_MISTRAL_API_KEY=""
+export ORCHESTRA_VERTEXAI_PROJECT=""
+export ORCHESTRA_VERTEXAI_LOCATION=""
+export ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON=""
 
 echo "Environment variables have been set."
 ```

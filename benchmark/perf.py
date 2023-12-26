@@ -12,7 +12,11 @@ from providers.completion import PRICING_PER_TOKENS, PROVIDER_CLASSES
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
+handler = logging.StreamHandler()
+handler.setLevel(logging.INFO)
+logger.addHandler(handler)
 
 MAX_TOKENS = 500
 COLD_START_THRESHOLD = 30000
@@ -100,9 +104,16 @@ def get_provider(
     provider_obj = traversed_providers.get(provider_name)
     if provider_obj is None:
         provider_obj = PROVIDER_CLASSES[provider_name]()
-        provider_obj.set_api_key(
-            api_key=str(os.getenv(f"{provider_name.upper()}_API_KEY")),
-        )
+        if provider_name == "vertexai":
+            provider_obj.set_service_account_credentials(
+                str(os.getenv("ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON")),
+            )
+            provider_obj.set_project(str(os.getenv("ORCHESTRA_VERTEXAI_PROJECT")))
+            provider_obj.set_location(str(os.getenv("ORCHESTRA_VERTEXAI_LOCATION")))
+        else:
+            provider_obj.set_api_key(
+                api_key=str(os.getenv(f"ORCHESTRA_{provider_name.upper()}_API_KEY")),
+            )
         traversed_providers[provider_name] = provider_obj  # noqa: WPS529
     return provider_obj
 
@@ -119,7 +130,7 @@ def get_completion_results(  # noqa: D103
             [{"content": prompt[0], "role": "user"}],
         )
         if result is None:
-            raise ValueError(f"{model} on {provider} threw an error during call")
+            return None
         # handles cold-start skewing latency
         if result._response_ms > COLD_START_THRESHOLD:
             cold_start_latency = result._response_ms
@@ -168,6 +179,7 @@ def get_cost(
                     model,
                 )
                 * cost_data["completion"]
+                / 1000
             )
         elif cost_data.get("per_second"):
             prompt_cost += (
@@ -191,11 +203,11 @@ def get_cost(
 
 
 def get_evaluator_provider(evaluator: str) -> BaseCompletionProvider:  # noqa: D103
-    for provider, provider_class in PROVIDER_CLASSES.items():
+    for provider_name, provider_class in PROVIDER_CLASSES.items():
         if evaluator.lower() in provider_class.supported_models:
             evaluator_provider = provider_class()
             evaluator_provider.set_api_key(
-                api_key=str(os.getenv(f"{provider.upper()}_API_KEY")),
+                api_key=str(os.getenv(f"ORCHESTRA_{provider_name.upper()}_API_KEY")),
             )
             return evaluator_provider
     raise ValueError("Evaluator model not supported")
@@ -285,7 +297,7 @@ def create_table(  # noqa: D103, WPS210
         "Model",
         "Provider",
         "Tokens",
-        "Latency (s)",
+        "Latency (ms)",
         "Speed (tokens/sec)",
         "Cost($)/1M tokens",
         "Context window",
@@ -341,17 +353,20 @@ def run(  # noqa: C901, WPS210, WPS231
 
     model_results: Dict[str, Any] = {}
     traversed_providers: Dict[str, BaseCompletionProvider] = {}
-    logging.info("Currently benchmarking: ")
+    logger.info("Currently benchmarking: ")
     for provider_name, provider_class in PROVIDER_CLASSES.items():
         for model_name in models:
             if model_name.lower() in provider_class.supported_models:
-                logging.info(provider_name, model_name)
+                logger.info(f"{model_name} on {provider_name}")
                 provider_obj = get_provider(provider_name, traversed_providers)
                 completion_results = get_completion_results(
                     provider_obj,
                     model_name,
                     problems,
                 )
+                if completion_results is None:
+                    logger.error(f"{model_name} on {provider_name} was skipped")
+                    continue
 
                 model_results.setdefault(model_name, {})[
                     provider_name
@@ -366,7 +381,7 @@ def run(  # noqa: C901, WPS210, WPS231
                     provider_obj,
                     problems,
                 )
-        logging.info("")
+        logger.info("")
     add_cost_per_million_tokens(model_results)
     if evaluator:
         evaluator_provider = get_evaluator_provider(evaluator)
@@ -385,4 +400,7 @@ def run(  # noqa: C901, WPS210, WPS231
 
 
 if __name__ == "__main__":
-    run(["llama-2-7b-chat", "mistral-7b-instruct-v0.1"], print_table=True)
+    # model_list = [model for provider in PROVIDER_CLASSES.values() for model in provider.supported_models.keys()]
+    # benchmarking_results = run(model_list, print_table=True)
+    benchmarking_results = run(["llama-2-7b-chat"], print_table=True)
+    print(benchmarking_results)

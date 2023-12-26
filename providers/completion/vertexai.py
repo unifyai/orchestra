@@ -124,4 +124,4 @@ class VertexAI(BaseCompletionProvider):
                     "ensure properly configured service account credentials",
                 ),
             )
-        return response.json()["totalBillableCharacters"]
+        return response.json().get("totalBillableCharacters", 0)
