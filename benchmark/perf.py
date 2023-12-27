@@ -1,3 +1,5 @@
+import datetime
+import hashlib
 import json
 import logging
 import os
@@ -6,6 +8,7 @@ import statistics
 from typing import Any, Dict, List, Optional, cast
 
 import numpy as np
+import requests
 from litellm import ModelResponse
 from prettytable import PrettyTable
 from providers.completion import PRICING_PER_TOKENS, PROVIDER_CLASSES
@@ -20,6 +23,8 @@ logger.addHandler(handler)
 
 MAX_TOKENS = 500
 COLD_START_THRESHOLD = 30000
+
+HTTP_SUCCESS = 200
 
 
 def evaluate_answers(
@@ -403,6 +408,34 @@ def run(  # noqa: C901, WPS210, WPS231
     return model_results
 
 
+def get_id(name: str) -> int:  # noqa: D103
+    return int(hashlib.sha256(name.encode("utf-8")).hexdigest(), 16) % (  # noqa: WPS432
+        10**8
+    )
+
+
+def put_data_to_db(data, db_put_url, timeout):  # noqa: D103
+    try:
+        response = requests.put(
+            db_put_url,
+            headers={
+                "accept": "application/json",
+                "Content-Type": "application/json",
+            },
+            data=json.dumps(data),
+            timeout=timeout,
+        )
+    except requests.exceptions.Timeout:
+        logger.error(
+            f"Timeout on {data['metric_name']}, {data['value']}",
+        )
+    if response.status_code != HTTP_SUCCESS:
+        logger.error(
+            f"{response.status_code}, {response.text} "
+            f"on {data['metric_name']}, {data['value']}",
+        )
+
+
 if __name__ == "__main__":
     ORCHESTRA_VERTEXAI_PROJECT = "saas-368716"
     ORCHESTRA_VERTEXAI_LOCATION = "us-central1"
@@ -427,3 +460,28 @@ if __name__ == "__main__":
     model_list = ["llama-2-7b-chat-hf", "gemini-pro"]
     benchmarking_results = run(model_list, print_table=True)
     logger.info(benchmarking_results)
+    logger.info("Pushing benchmarking results to db")
+    METRICS_TO_PUSH = [
+        "toks/sec",
+        "cost_per_1m_toks",
+        "context_window",
+        "cold_start_latency",
+    ]
+    for model_name, provider_results in benchmarking_results.items():
+        for provider_name, provider_data in provider_results.items():
+            datapoint_id = get_id(f"{model_name}_{provider_name}")
+            current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            for metric_name, value in provider_data.items():
+                if metric_name in METRICS_TO_PUSH:
+                    data = {
+                        "id": datapoint_id,
+                        "endpoint_id": datapoint_id,
+                        "measured_at": current_time,
+                        "metric_name": metric_name,
+                        "value": round(value, 2) if isinstance(value, float) else value,
+                    }
+                    put_data_to_db(
+                        data,
+                        db_put_url="http://127.0.0.1:8000/v0/datapoint/",
+                        timeout=5,
+                    )
