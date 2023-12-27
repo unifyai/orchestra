@@ -3,15 +3,16 @@ from fastapi.routing import APIRouter
 
 from orchestra.web.api import (  # noqa: WPS235
     chat_completion,
+    credits,
     datapoint,
     endpoint,
+    inference,
     license,
     metric,
     modality,
     model,
     models,
     monitoring,
-    predict,
     provider,
     query,
     recharge,
@@ -25,6 +26,8 @@ AUTH = [Depends(auth_api_key)]
 
 api_router = APIRouter()
 api_router.include_router(monitoring.router)
+
+# Those endpoitns will be hidden or protected later
 api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(datapoint.router, prefix="/datapoint", tags=["datapoint"])
 api_router.include_router(endpoint.router, prefix="/endpoint", tags=["endpoint"])
@@ -44,7 +47,8 @@ api_router.include_router(task.router, prefix="/task", tags=["task"])
 
 # TODO: This probably requires a name change to avoid confussion
 api_router.include_router(models.router, tags=["models"])
-api_router.include_router(predict.router, tags=["predict"], dependencies=AUTH)
+api_router.include_router(credits.router, prefix="/credits", tags=["credits"])
+api_router.include_router(inference.router, tags=["inference"], dependencies=AUTH)
 api_router.include_router(
     chat_completion.router,
     tags=["chat_completion"],
