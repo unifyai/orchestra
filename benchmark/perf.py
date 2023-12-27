@@ -109,10 +109,11 @@ def get_provider(
 
             provider_obj = cast(VertexAI, provider_obj)
             provider_obj.set_service_account_credentials(
-                str(os.getenv("ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON")),
+                ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON,
+                ORCHESTRA_VERTEXAI_GCLOUD_PATH,
             )
-            provider_obj.set_project(str(os.getenv("ORCHESTRA_VERTEXAI_PROJECT")))
-            provider_obj.set_location(str(os.getenv("ORCHESTRA_VERTEXAI_LOCATION")))
+            provider_obj.set_project(ORCHESTRA_VERTEXAI_PROJECT)
+            provider_obj.set_location(ORCHESTRA_VERTEXAI_LOCATION)
         else:
             provider_obj.set_api_key(
                 api_key=str(os.getenv(f"ORCHESTRA_{provider_name.upper()}_API_KEY")),
@@ -403,6 +404,21 @@ def run(  # noqa: C901, WPS210, WPS231
 
 
 if __name__ == "__main__":
+    ORCHESTRA_VERTEXAI_PROJECT = "saas-368716"
+    ORCHESTRA_VERTEXAI_LOCATION = "us-central1"
+    TESTING = False
+
+    ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON = (
+        "/workspaces/orchestra/application_default_credentials.json"
+        if TESTING
+        else "/secrets/application_default_credentials.json"
+    )
+    ORCHESTRA_VERTEXAI_GCLOUD_PATH = (
+        "/workspaces/orchestra/google-cloud-sdk/bin/gcloud"
+        if TESTING
+        else "/app/src/google-cloud-sdk/bin/gcloud"
+    )
+
     model_list = [
         model
         for provider in PROVIDER_CLASSES.values()

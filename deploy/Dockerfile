@@ -15,6 +15,14 @@ WORKDIR /app/src
 
 # Installing requirements
 RUN poetry install --only main
+
+# Install curl
+RUN apt-get update && apt-get install -y curl
+
+# Download and install Google Cloud SDK
+RUN curl https://sdk.cloud.google.com > install.sh
+RUN bash install.sh --disable-prompts
+
 # Removing gcc
 RUN apt-get purge -y \
   gcc \
