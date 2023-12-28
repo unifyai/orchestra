@@ -8,12 +8,12 @@ every single endpoint offered through our API!
 What metrics are measured?
 --------------------------
 
-Next to each endpoint you will see a set of metrics. These metrics refer to each one of the endpoints, and therefore,
-they focus on the infrastructure and the service instead of the model.
+Each provider endpoint is accompanied by a set of metrics that provide insights into the performance of the underlying infrastructure,
+independent of the model itself.
 
-- **Latency**: TODO
-- **Throughput**: TODO
-- **Cold start**: P90 and P70 TODO
+- **Latency**: Average time taken to process a single data, calculated using a set of internal benchmarking dataset processed individually.
+- **Throughput**: Measures the number of data processed per second. For instance, in Language Models (LLMs), it would be calculated as tokens per second.
+- **Cold start**: Time required for the endpoint to be ready to process requests after a period of inactivity.
 - **Price**: TODO. Pay per inference, this can very from model task to model task, for example, in LLMs, you will see the
 price per number of input tokens and output tokens. For image generation, the price per image will be shown.
 
@@ -23,9 +23,11 @@ price per number of input tokens and output tokens. For image generation, the pr
 How are the benchmarks calculated?
 ----------------------------------
 
-TODO: General description of the benchmark metodology.
+Our automated benchmarking, which runs daily, utilizes a varied dataset. Each data point is processed individually,
+rather than in batches, to prevent potential latency issues specific to certain models.
 
-Altought we try to mitigate it with (TODO), some metrics are inherently noise due to network latency.
+Although we attempt to mitigate it by regularly running benchmarks to average out inconsistencies,
+some metrics are inherently noise due to network latency.
 When looking at the website, you will see (MA5) next to some of the metrics, this means that the actual number that is shown
 is the result of taking the moving average of the metric over its last five measurements.
 
