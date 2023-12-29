@@ -15,34 +15,86 @@ class VertexAI(BaseCompletionProvider):
     Pricing is per thousand character: https://cloud.google.com/vertex-ai/pricing
     Models in Preview stage (100% discounted):
     https://cloud.google.com/vertex-ai/docs/generative-ai/get-token-count
+    Deprecation:
+    https://cloud.google.com/vertex-ai/docs/generative-ai/learn/model-versioning
     """
 
     supported_models = {
         "text-bison": {
-            "endpoint": "text-bison",
+            "endpoint": "text-bison",  # redirects to latest
             "context_window": 8192,
             "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
         },
+        "text-bison@002": {
+            "endpoint": "text-bison@002",
+            "context_window": 8192,
+            "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
+        },
+        "text-bison@001": {
+            "endpoint": "text-bison@001",
+            "context_window": 8192,
+            "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
+        },  # shutdown on 2024-07-06
         "chat-bison": {
-            "endpoint": "chat-bison",
+            "endpoint": "chat-bison",  # redirects to latest
             "context_window": 8192,
             "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
         },
+        "chat-bison@002": {
+            "endpoint": "chat-bison@002",
+            "context_window": 8192,
+            "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
+        },
+        "chat-bison@001": {
+            "endpoint": "chat-bison@001",
+            "context_window": 8192,
+            "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
+        },  # shutdown on 2024-07-06
         "code-bison": {  # Preview, 100% discount
-            "endpoint": "code-bison",
+            "endpoint": "code-bison",  # redirects to latest
             "context_window": 6144,
             "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
+        "code-bison@002": {  # Preview, 100% discount
+            "endpoint": "code-bison@002",
+            "context_window": 6144,
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
+        },
+        "code-bison@001": {  # Preview, 100% discount
+            "endpoint": "code-bison@001",
+            "context_window": 6144,
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
+        },  # shutdown on 2024-07-06
         "codechat-bison": {  # Preview, 100% discount
-            "endpoint": "codechat-bison",
+            "endpoint": "codechat-bison",  # redirects to latest
             "context_window": 6144,
             "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
+        "codechat-bison@002": {  # Preview, 100% discount
+            "endpoint": "codechat-bison@002",
+            "context_window": 6144,
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
+        },
+        "codechat-bison@001": {  # Preview, 100% discount
+            "endpoint": "codechat-bison@001",
+            "context_window": 6144,
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
+        },  # shutdown on 2024-07-06
         "code-gecko": {  # Preview, 100% discount
-            "endpoint": "code-gecko",
+            "endpoint": "code-gecko",  # redirects to latest
             "context_window": 2048,
             "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
+        "code-gecko@002": {  # Preview, 100% discount
+            "endpoint": "code-gecko@002",
+            "context_window": 2048,
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
+        },
+        "code-gecko@001": {  # Preview, 100% discount
+            "endpoint": "code-gecko@001",
+            "context_window": 2048,
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
+        },  # shutdown on 2024-07-06
         "text-bison-32k": {
             "endpoint": "text-bison-32k",
             "context_window": 32000,
