@@ -8,7 +8,7 @@ class CompletionsModel:
     """Sets up a general CompletionsModel service."""
 
     def __init__(self, provider: str, model: str) -> None:
-        from providers.completion import PROVIDER_CLASSES
+        from providers.completion import PROVIDER_CLASSES  # noqa: WPS433
 
         if provider.lower() not in PROVIDER_CLASSES:
             raise Exception("Provider not supported by Unify")  # noqa: WPS454
