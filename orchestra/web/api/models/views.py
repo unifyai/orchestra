@@ -1,7 +1,7 @@
 from typing import List, Set, Tuple
 
 from fastapi import APIRouter
-from models.llm import PROVIDER_CLASSES
+from providers.completion import PROVIDER_CLASSES
 
 from orchestra.web.api.models.schema import ModelInfo, ModelInfoList
 
