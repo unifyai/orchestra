@@ -2,13 +2,14 @@ import os
 from typing import Dict, List, Optional
 
 from litellm.utils import ModelResponse
-from providers.completion import PROVIDER_CLASSES
 
 
 class CompletionsModel:
     """Sets up a general CompletionsModel service."""
 
     def __init__(self, provider: str, model: str) -> None:
+        from providers.completion import PROVIDER_CLASSES
+
         if provider.lower() not in PROVIDER_CLASSES:
             raise Exception("Provider not supported by Unify")  # noqa: WPS454
 
