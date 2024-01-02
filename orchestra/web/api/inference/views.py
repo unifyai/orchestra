@@ -15,7 +15,7 @@ def get_model_type(model_name):  # noqa: D103
     chat_models = re.compile(
         r"(gpt|llama|zephyr|mistral|mixtral|pplx|falcon|wizard|mpt|claude)",  # noqa: WPS360, E501
     )
-    image_models = re.compile(r"diffusion")  # noqa: WPS360
+    image_models = re.compile(r"diffusion|sd")  # noqa: WPS360
 
     if chat_models.search(model_name):
         return "chat"
@@ -95,6 +95,15 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             "mask_image": request.arguments.get("mask_image", None),
             "start_schedule": request.arguments.get("start_schedule", None),
             "end_schedule": request.arguments.get("end_schedule", None),
+            "prompt_2": request.arguments.get("prompt_2", None),
+            "negative_prompt": request.arguments.get("negative_prompt", None),
+            "negative_prompt_2": request.arguments.get("negative_prompt_2", None),
+            "strength": request.arguments.get("strength", None),
+            "use_refiner": request.arguments.get("use_refiner", False),
+            "high_noise_frac": request.arguments.get("high_noise_frac", None),
+            "checkpoint": request.arguments.get("checkpoint", None),
+            "loras": request.arguments.get("loras", None),
+            "textual_inversions": request.arguments.get("textual_inversions", None),
         }
         response = image_model.get_image(
             prompt=request.arguments["prompt"],
