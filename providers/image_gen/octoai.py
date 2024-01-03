@@ -1,13 +1,15 @@
-import logging
-from typing import Dict, List, Optional
-import requests
 import base64
+import logging
+from typing import Any, Dict, List, Optional
+
 import openai
+import requests
+from providers.image_gen.base_imagegen_provider import BaseImageGenProvider
 
 logger = logging.getLogger(__name__)
 
 
-class OctoAI:
+class OctoAI(BaseImageGenProvider):
     """
     A image generation provider provider that uses the OctoAI service.
 
@@ -19,24 +21,27 @@ class OctoAI:
         "sdxl",
     ]
 
-    def __init__(self) -> None:
-        self.model: str = ""
+    def parse_prompt(self, prompt_list):  # noqa: D102
+        positive_prompt_str = ""
+        negative_prompt_str = ""
+        for prompt in prompt_list:
+            text = prompt.get("text")
+            weight = prompt.get("weight", 1)
+            if weight != 1:
+                text = f"{text} :{abs(weight)}"  # noqa: WPS237
+                text = f"({text})"
+            if weight < 0:
+                negative_prompt_str += text + " "  # noqa: WPS336
+            else:
+                positive_prompt_str += text + " "  # noqa: WPS336
+        return positive_prompt_str, negative_prompt_str
 
-    def set_api_key(self, api_key: str, engine: str = "") -> None:
-        """
-        Call the config setter for Stability.
-
-        :param api_key: The API key to set.
-        :type api_key: str
-        """
-        self.api_key = api_key
-
-    def imagegen(
+    def imagegen(  # noqa: C901, WPS210, WPS231, E501
         self,
         prompt: str,
         model: str,
         kwargs: Optional[Dict],
-    ) -> Optional[Dict]:
+    ) -> Optional[Any]:
         """
         Generates images using the Stability API.
 
@@ -49,7 +54,11 @@ class OctoAI:
         :return: A dictionary containing the generated images,
             or None if an error occurs.
         :rtype: Optional[Dict]
+
+        :raises ValueError: If the specified model is not supported.
         """
+        if model not in self.supported_models:
+            raise ValueError("Model not supported")
         try:
             if kwargs is None:
                 kwargs = {}
@@ -58,33 +67,41 @@ class OctoAI:
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
             }
-            payload = {
-                "prompt": prompt,
-                "prompt_2": kwargs.get("prompt_2", None),
-                "negative_prompt": kwargs.get("negative_prompt", None),
-                "negative_prompt_2": kwargs.get("negative_prompt_2", None),
-                "sampler": kwargs.get("sampler", "DDIM"),
-                "height": kwargs.get("height", None),
-                "width": kwargs.get("width", None),
-                "cfg_scale": kwargs.get("cfg_scale", None),
-                "steps": kwargs.get("steps", None),
-                "num_images": kwargs.get("samples", None),
-                "seed": kwargs.get("seed", None),
-                "use_refiner": kwargs.get("use_refiner", False),
-                "high_noise_frac": kwargs.get("high_noise_frac", None),
-                "checkpoint": kwargs.get("checkpoint", None),
-                "loras": kwargs.get("loras", None),
-                "textual_inversions": kwargs.get("textual_inversions", None),
-                "vae": kwargs.get("vae", None),
-                "init_image": kwargs.get("image", None),
-                "strength": kwargs.get("strength", None),
-                "mask_image": kwargs.get("mask_image", None),
-                "seed": kwargs.get("seed", None),
+            prompt, negative_prompt = self.parse_prompt(prompt)
+            kwargs_to_payload_keys = {
+                "sampler": "sampler",
+                "height": "height",
+                "width": "width",
+                "cfg_scale": "cfg_scale",
+                "steps": "steps",
+                "samples": "num_images",
+                "seed": "seed",
+                "use_refiner": "use_refiner",
+                "high_noise_frac": "high_noise_frac",
+                "checkpoint": "checkpoint",
+                "loras": "loras",
+                "textual_inversions": "textual_inversions",
+                "vae": "vae",
+                "init_image": "init_image",
+                "strength": "strength",
+                "mask_image": "mask_image",
             }
+            payload = {
+                payload_key: kwargs.get(kwargs_key, None)
+                for kwargs_key, payload_key in kwargs_to_payload_keys.items()
+                if kwargs.get(kwargs_key, None) is not None
+            }
+            payload["prompt"] = prompt
+            if negative_prompt != "":
+                payload["negative_prompt"] = negative_prompt
 
-            response = requests.post(url, headers=headers, json=payload)
-
-            if response.status_code != 200:
+            response = requests.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=30,  # noqa: WPS432, E501, C812
+            )
+            if response.status_code != 200:  # noqa: WPS432
                 return response
 
             img_list = response.json()["images"]
@@ -97,5 +114,3 @@ class OctoAI:
             error_type = type(error)
             logger.error(f"Raised error type: {error_type}, Error: {error}")
         return None
-
-

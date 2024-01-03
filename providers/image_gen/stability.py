@@ -1,14 +1,15 @@
+import base64
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import openai
-from stability_sdk import client
-from stability_sdk.interfaces.gooseai.generation import generation_pb2 as generation
+import requests
+from providers.image_gen.base_imagegen_provider import BaseImageGenProvider
 
 logger = logging.getLogger(__name__)
 
 
-class Stability:
+class Stability(BaseImageGenProvider):
     """
     A image generation provider provider that uses the Stability service.
 
@@ -18,46 +19,15 @@ class Stability:
     supported_models: List[str] = [
         "stable-diffusion-xl-1024-v0-9",
         "stable-diffusion-xl-1024-v1-0",
+        "stable-diffusion-v1-6",
     ]
 
-    def __init__(self) -> None:
-        self.model: str = ""
-        self._stability_client: client = None  # Rename instance attribute
-
-    def set_api_key(self, api_key: str, engine: str = "") -> None:
-        """
-        Call the config setter for Stability.
-
-        :param api_key: The API key to set.
-        :type api_key: str
-        :param engine: The engine (model) to use.
-        :type engine: str
-        """
-        self.set_stability_config(api_key, engine)
-
-    def set_stability_config(self, api_key: str, engine: str):
-        """
-        Set the config parameters for Stability.
-
-        :param api_key: The API key to set.
-        :type api_key: str
-        :param engine: The engine (model) to use.
-        :type engine: str
-        :raises ValueError: If the provided engine is not supported.
-        """
-        if engine not in self.supported_models:
-            raise ValueError("Model not supported")
-        self._stability_client = client.StabilityInference(
-            key=api_key,
-            engine=engine,
-        )
-
-    def imagegen(
+    def imagegen(  # noqa: C901, WPS212, WPS210, WPS231, E501
         self,
         prompt: str,
         model: str,
         kwargs: Optional[Dict],
-    ) -> Optional[Dict]:
+    ) -> Optional[Any]:
         """
         Generates images using the Stability API.
 
@@ -70,29 +40,68 @@ class Stability:
         :return: A dictionary containing the generated images,
             or None if an error occurs.
         :rtype: Optional[Dict]
+
+        :raises ValueError: If the specified model is not supported.
         """
+        if model not in self.supported_models:
+            raise ValueError("Model not supported")
         try:
             if kwargs is None:
                 kwargs = {}
-            response = self._stability_client.generate(  # Use renamed attribute
-                prompt=prompt,
-                seed=kwargs.get("seed", None),
-                init_image=kwargs.get("init_image", None),
-                height=kwargs.get("height", None),
-                width=kwargs.get("width", None),
-                steps=kwargs.get("steps", None),
-                samples=kwargs.get("samples", None),
-                cfg_scale=kwargs.get("cfg_scale", None),
-                sampler=kwargs.get("sampler", None),
-                mask_image=kwargs.get("mask_image", None),
-                start_schedule=kwargs.get("start_schedule", None),
-                end_schedule=kwargs.get("end_schedule", None),
-            )
+            engine_id = f"https://api.stability.ai/v1/generation/{model}/"
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            }
+            kwargs_keys = [
+                "seed",
+                "height",
+                "width",
+                "steps",
+                "samples",
+                "cfg_scale",
+                "sampler",
+                "mask_image",
+                "style_preset",
+                "clip_guidance_preset",
+            ]
+            payload = {
+                key: kwargs.get(key)
+                for key in kwargs_keys
+                if kwargs.get(key) is not None
+            }
+            payload["text_prompts"] = prompt
+
+            if kwargs.get("init_image", None) is not None:
+                payload["init_image"] = kwargs.get("init_image", None)
+                if kwargs.get("strength", None) is not None:
+                    payload["image_strength"] = kwargs.get("strength", None)
+                engine_id += "image-to-image"  # noqa: WPS336
+                if kwargs.get("mask_source", None) is not None:
+                    payload["mask_source"] = kwargs.get("mask_source", None)
+                    if kwargs.get("mask_image", None) is not None:
+                        payload["mask_image"] = kwargs.get(  # noqa: WPS220, E501
+                            "mask_image",
+                            None,  # noqa: C812
+                        )
+                    engine_id += "/masking"  # noqa: WPS336
+            else:
+                engine_id += "text-to-image"  # noqa: WPS336
+
+            response = requests.post(
+                engine_id,
+                headers=headers,
+                json=payload,
+                timeout=30,  # noqa: C812, WPS432, E501
+            )  # noqa: E501
+
+            if response.status_code != 200:  # noqa: WPS432
+                return response
+
             images = [
-                artifact.binary
-                for resp in response
-                for artifact in resp.artifacts
-                if artifact.type == generation.ARTIFACT_IMAGE
+                base64.b64decode(image["base64"])
+                for image in response.json()["artifacts"]
             ]
 
             return {"images": images}

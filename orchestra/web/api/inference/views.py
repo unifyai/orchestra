@@ -84,7 +84,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             model=request.model,
         )
         kwargs = {
-            "image": request.arguments.get("image", None),
+            "init_image": request.arguments.get("init_image", None),
             "height": request.arguments.get("height", None),
             "width": request.arguments.get("width", None),
             "steps": request.arguments.get("steps", None),
@@ -95,9 +95,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             "mask_image": request.arguments.get("mask_image", None),
             "start_schedule": request.arguments.get("start_schedule", None),
             "end_schedule": request.arguments.get("end_schedule", None),
-            "prompt_2": request.arguments.get("prompt_2", None),
             "negative_prompt": request.arguments.get("negative_prompt", None),
-            "negative_prompt_2": request.arguments.get("negative_prompt_2", None),
             "strength": request.arguments.get("strength", None),
             "use_refiner": request.arguments.get("use_refiner", False),
             "high_noise_frac": request.arguments.get("high_noise_frac", None),
