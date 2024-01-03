@@ -117,8 +117,8 @@ def get_provider(
                 ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON,
                 ORCHESTRA_VERTEXAI_GCLOUD_PATH,
             )
-            provider_obj.set_project(ORCHESTRA_VERTEXAI_PROJECT)
-            provider_obj.set_location(ORCHESTRA_VERTEXAI_LOCATION)
+            provider_obj.set_project(str(os.getenv("ORCHESTRA_VERTEXAI_PROJECT")))
+            provider_obj.set_location(str(os.getenv("ORCHESTRA_VERTEXAI_LOCATION")))
         else:
             provider_obj.set_api_key(
                 api_key=str(os.getenv(f"ORCHESTRA_{provider_name.upper()}_API_KEY")),
@@ -437,27 +437,18 @@ def put_data_to_db(data, db_put_url, timeout):  # noqa: D103
 
 
 if __name__ == "__main__":
-    ORCHESTRA_VERTEXAI_PROJECT = "saas-368716"
-    ORCHESTRA_VERTEXAI_LOCATION = "us-central1"
     TESTING = False
 
     ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON = (
-        "/workspaces/orchestra/application_default_credentials.json"
-        if TESTING
-        else "/secrets/application_default_credentials.json"
+        "/secrets/application_default_credentials.json"
     )
-    ORCHESTRA_VERTEXAI_GCLOUD_PATH = (
-        "/workspaces/orchestra/google-cloud-sdk/bin/gcloud"
-        if TESTING
-        else "/app/src/google-cloud-sdk/bin/gcloud"
-    )
+    ORCHESTRA_VERTEXAI_GCLOUD_PATH = "/app/src/google-cloud-sdk/bin/gcloud"
 
     model_list = [
         model
         for provider in PROVIDER_CLASSES.values()
         for model in provider.supported_models.keys()
     ]
-    model_list = ["llama-2-7b-chat-hf", "gemini-pro"]
     benchmarking_results = run(model_list, print_table=True)
     logger.info(benchmarking_results)
     logger.info("Pushing benchmarking results to db")
