@@ -1,6 +1,6 @@
 import base64
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import openai
 import requests
@@ -16,10 +16,10 @@ class OctoAI(BaseImageGenProvider):
     Supported models: https://docs.octoai.cloud/docs/image-gen-api-docs
     """
 
-    supported_models: List[str] = [
-        "sd",
-        "sdxl",
-    ]
+    supported_models: Dict[str, Any] = {
+        "stable-diffusion-xl-1.0": "sdxl",
+        "stable-diffusion-v1-5": "sd",
+    }
 
     def parse_prompt(self, prompt_list):  # noqa: D102
         positive_prompt_str = ""
@@ -60,9 +60,10 @@ class OctoAI(BaseImageGenProvider):
         if model not in self.supported_models:
             raise ValueError("Model not supported")
         try:
+            endpoint = self.supported_models[model]
             if kwargs is None:
                 kwargs = {}
-            url = f"https://image.octoai.run/generate/{model}"
+            url = f"https://image.octoai.run/generate/{endpoint}"
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
@@ -101,6 +102,7 @@ class OctoAI(BaseImageGenProvider):
                 json=payload,
                 timeout=30,  # noqa: WPS432, E501, C812
             )
+
             if response.status_code != 200:  # noqa: WPS432
                 return response
 

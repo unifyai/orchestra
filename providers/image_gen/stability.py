@@ -1,6 +1,6 @@
 import base64
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import openai
 import requests
@@ -16,11 +16,11 @@ class Stability(BaseImageGenProvider):
     Supported models: https://platform.stability.ai/docs/features/api-parameters#engine
     """
 
-    supported_models: List[str] = [
-        "stable-diffusion-xl-1024-v0-9",
-        "stable-diffusion-xl-1024-v1-0",
-        "stable-diffusion-v1-6",
-    ]
+    supported_models: Dict[str, Any] = {
+        "stable-diffusion-xl-0.9": "stable-diffusion-xl-1024-v0-9",
+        "stable-diffusion-xl-1.0": "stable-diffusion-xl-1024-v1-0",
+        "stable-diffusion-v1-6": "stable-diffusion-v1-6",
+    }
 
     def imagegen(  # noqa: C901, WPS212, WPS210, WPS231, E501
         self,
@@ -48,7 +48,8 @@ class Stability(BaseImageGenProvider):
         try:
             if kwargs is None:
                 kwargs = {}
-            engine_id = f"https://api.stability.ai/v1/generation/{model}/"
+            endpoint = self.supported_models[model]
+            engine_id = f"https://api.stability.ai/v1/generation/{endpoint}/"
             headers = {
                 "Content-Type": "application/json",
                 "Accept": "application/json",

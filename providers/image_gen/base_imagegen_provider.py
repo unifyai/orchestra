@@ -1,11 +1,11 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 
 class BaseImageGenProvider(ABC):
     """Base class for image generation providers."""
 
-    supported_models: List[str] = []
+    supported_models: Dict[str, Any] = {}
 
     def __init__(self) -> None:
         self.model: str = ""
