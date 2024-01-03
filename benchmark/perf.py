@@ -444,6 +444,8 @@ if __name__ == "__main__":
     )
     ORCHESTRA_VERTEXAI_GCLOUD_PATH = "/app/src/google-cloud-sdk/bin/gcloud"
 
+    DB_URL = "https://orchestra-lz5fmz6i7q-ew.a.run.app/v0/datapoint/"
+
     model_list = [
         model
         for provider in PROVIDER_CLASSES.values()
@@ -473,6 +475,6 @@ if __name__ == "__main__":
                     }
                     put_data_to_db(
                         data,
-                        db_put_url="http://127.0.0.1:8000/v0/datapoint/",
+                        db_put_url=DB_URL,
                         timeout=5,
                     )
