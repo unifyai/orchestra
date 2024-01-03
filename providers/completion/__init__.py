@@ -12,7 +12,7 @@ from providers.completion.vertexai import VertexAI
 PROVIDER_CLASSES = {
     "anyscale": Anyscale,
     "perplexity": Perplexity,
-    "together_ai": TogetherAI,
+    "togetherai": TogetherAI,
     "anthropic": Anthropic,
     "replicate": Replicate,
     "vertexai": VertexAI,
