@@ -93,7 +93,6 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             "sampler": request.arguments.get("sampler", None),
             "seed": request.arguments.get("seed", None),
             "mask_image": request.arguments.get("mask_image", None),
-            "negative_prompt": request.arguments.get("negative_prompt", None),
             "strength": request.arguments.get("strength", None),
             "use_refiner": request.arguments.get("use_refiner", False),
             "high_noise_frac": request.arguments.get("high_noise_frac", None),
