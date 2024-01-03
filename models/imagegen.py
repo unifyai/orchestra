@@ -17,10 +17,10 @@ class ImagegenModel:
         self.model = model.lower()
         api_key = str(os.getenv(f"ORCHESTRA_{provider.upper()}_API_KEY"))
         if api_key is not None:
-            self.set_api_key(api_key, model)
+            self.set_api_key(api_key)
 
-    def set_api_key(self, api_key: str, model: str = "") -> None:  # noqa: D102
-        self.provider_obj.set_api_key(api_key, model)
+    def set_api_key(self, api_key: str) -> None:  # noqa: D102
+        self.provider_obj.set_api_key(api_key)
 
     def get_image(  # noqa: D102
         self,
