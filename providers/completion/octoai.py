@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import List, Optional
 
@@ -76,6 +77,17 @@ class OctoAI(BaseCompletionProvider):
         """
         self.client = Client(token=api_key)
 
+    async def async_generator_wrapper(  # noqa: D102, WPS210, WPS231, WPS210
+        self,
+        response,
+        model,
+    ):
+        for part in response:
+            part_dict = part.dict()
+            part_dict["model"] = model
+            part_json = json.dumps(part_dict)
+            yield part_json
+
     def complete(  # noqa: WPS211
         self,
         model: str,
@@ -107,6 +119,17 @@ class OctoAI(BaseCompletionProvider):
 
         provider_model_endpoint = model
         try:
+            if stream:
+                return self.async_generator_wrapper(
+                    self.client.chat.completions.create(
+                        model=provider_model_endpoint,
+                        messages=messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        stream=stream,
+                    ),
+                    model,
+                )
             response = self.client.chat.completions.create(
                 model=provider_model_endpoint,
                 messages=messages,
