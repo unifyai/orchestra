@@ -1,7 +1,9 @@
 import base64
 import re
+from typing import AsyncIterator, Union
 
 from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
 from models.imagegen import ImagegenModel
 from models.llm import CompletionsModel
 
@@ -26,7 +28,7 @@ def get_model_type(model_name):  # noqa: D103
 @router.post("/inference", response_model=InferenceResponse)
 async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
     request: InferenceRequest,
-) -> InferenceResponse:
+) -> Union[InferenceResponse, StreamingResponse]:
     """
     Get inference result based on the request.
 
@@ -42,10 +44,14 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             provider=request.provider,
             model=request.model,
         )
+
         response = language_model.get_completion(
             messages=request.arguments["messages"],
             temperature=request.arguments["temperature"],
+            max_tokens=request.arguments.get("max_tokens", None),
+            stream=request.arguments.get("stream", False),
         )
+
         if not response:
             # TODO: Handle when response is None
             return InferenceResponse(
@@ -63,7 +69,18 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             return InferenceResponse(
                 response=response.model_dump(),
             )
-        usage = response["usage"].model_dump() if response["usage"] else None
+
+        if isinstance(response, AsyncIterator):
+            return StreamingResponse(
+                response,
+            )
+
+        if not isinstance(response["usage"], dict) and response["usage"]:
+            usage = response["usage"].model_dump()
+        elif response["usage"]:
+            usage = response["usage"]
+        else:
+            usage = None
         if response.get("choices", None):
             choices = []
             for choice in response.get("choices", None):
