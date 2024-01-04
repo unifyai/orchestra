@@ -33,17 +33,10 @@ class CompletionsModel:
         stream: bool = False,
     ) -> Union[ModelResponse, AsyncIterator[str]]:
 
-        if stream:
-            return self.provider_obj.complete_stream(
-                self.model,
-                messages,
-                max_tokens,
-                temperature,
-            )
-
         return self.provider_obj.complete(
             self.model,
             messages,
             max_tokens,
             temperature,
+            stream,
         )

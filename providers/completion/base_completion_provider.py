@@ -20,12 +20,13 @@ class BaseCompletionProvider:
     def set_api_key(self, api_key: str) -> None:  # noqa: D102
         litellm.api_key = api_key
 
-    def complete(  # noqa: D102, WPS211
+    def complete(  # noqa: D102, WPS211, C901
         self,
         model: str,
         messages: List,  # type: ignore
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        stream: Optional[bool] = False,
     ) -> Optional[Any]:
         if model not in self.supported_models:
             raise ValueError("Model not supported")
@@ -36,6 +37,17 @@ class BaseCompletionProvider:
             provider_model_endpoint = model
 
         try:
+            if stream:
+                return self.async_generator_wrapper(
+                    litellm.completion(
+                        model=provider_model_endpoint,
+                        messages=messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        stream=True,
+                    ),
+                    model,
+                )
             return litellm.completion(
                 model=provider_model_endpoint,
                 messages=messages,
@@ -82,36 +94,3 @@ class BaseCompletionProvider:
 
             part_json = json.dumps(part_dict)
             yield part_json
-
-    def complete_stream(  # noqa: D102, WPS211
-        self,
-        model: str,
-        messages: List,  # type: ignore
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-    ) -> Optional[Any]:
-        if model not in self.supported_models:
-            raise ValueError("Model not supported")
-
-        if isinstance(self.supported_models, dict):
-            provider_model_endpoint = self.supported_models[model]["endpoint"]
-        else:
-            provider_model_endpoint = model
-
-        try:
-            return self.async_generator_wrapper(
-                litellm.completion(
-                    model=provider_model_endpoint,
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    stream=True,
-                ),
-                model,
-            )
-        except openai.APITimeoutError as error:
-            logger.error(f"Raised openai.APITimeoutError, Error: {error}")
-        except Exception as error:
-            error_type = type(error)
-            logger.error(f"Raised error type: {error_type}, Error: {error}")
-        return None
