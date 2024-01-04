@@ -44,13 +44,12 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             provider=request.provider,
             model=request.model,
         )
-        stream = request.arguments.get("stream", False)
 
         response = language_model.get_completion(
             messages=request.arguments["messages"],
             temperature=request.arguments["temperature"],
             max_tokens=request.arguments.get("max_tokens", None),
-            stream=stream,
+            stream=request.arguments.get("stream", False),
         )
 
         if not response:
