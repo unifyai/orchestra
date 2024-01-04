@@ -28,7 +28,7 @@ class CompletionsModel:
     def get_completion(  # noqa: D102
         self,
         messages: List[Dict[str, str]],
-        max_tokens: int = 16,
+        max_tokens: int = 512,
         temperature: float = 0.9,
         stream: bool = False,
     ) -> Union[ModelResponse, AsyncIterator[str]]:
