@@ -1,17 +1,17 @@
 import datetime
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.models.orchestra_models import Model
-from orchestra.web.api.model.schema import ModelRequest, ModelResponse
+from orchestra.web.api.model.schema import ModelResponse
 
 router = APIRouter()
 
 
-@router.get("/", response_model=List[ModelResponse])
+@router.get("/get_all_models", response_model=List[ModelResponse])
 async def get_models(
     limit: int = 10,
     offset: int = 0,
@@ -28,26 +28,42 @@ async def get_models(
     return await model_dao.get_all_models(limit=limit, offset=offset)
 
 
-@router.put("/")
-async def create_model(
-    new_model_object: ModelRequest,
+@router.get("/get_model", response_model=List[ModelResponse])
+async def get_model(  # noqa: WPS211, C901
+    mdl_code: str,
+    user_id: str,
+    uploaded_at: Optional[datetime.datetime] = None,
+    task: Optional[str] = None,
+    description: Optional[str] = None,
+    license: Optional[str] = None,
+    input_args_format: Optional[str] = None,
+    output_format: Optional[str] = None,
+    custom_fields: Optional[str] = None,
     model_dao: ModelDAO = Depends(),
-) -> None:
+) -> List[Model]:
     """
-    Creates model model in the database.
+    Retrieve specific model object from the database.
 
-    :param new_model_object: new model model item.
+    :param mdl_code: mdl_code of model instance.
+    :param user_id: user_id of model instance.
+    :param uploaded_at: uploaded_at of model instance.
+    :param task: task of model instance.
+    :param description: description of model instance.
+    :param license: license of model instance.
+    :param input_args_format: input_args_format of model instance.
+    :param output_format: output_format of model instance.
+    :param custom_fields: custom_fields of model instance.
     :param model_dao: DAO for model models.
+    :return: list of model objects from database.
     """
-    uploaded_at = datetime.datetime.now()
-    await model_dao.create_model(
-        mdl_code=new_model_object.mdl_code,
-        user_id=new_model_object.user_id,
+    return await model_dao.filter(
+        mdl_code=mdl_code,
+        user_id=user_id,
         uploaded_at=uploaded_at,
-        task=new_model_object.task,
-        description=new_model_object.description,
-        license=new_model_object.license,
-        input_args_format=new_model_object.input_args_format,
-        output_format=new_model_object.output_format,
-        custom_fields=new_model_object.custom_fields,
+        task=task,
+        description=description,
+        license=license,
+        input_args_format=input_args_format,
+        output_format=output_format,
+        custom_fields=custom_fields,
     )
