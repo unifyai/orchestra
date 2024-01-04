@@ -1,5 +1,5 @@
 import os
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from litellm.utils import ModelResponse
 
@@ -36,4 +36,18 @@ class CompletionsModel:
             messages,
             max_tokens,
             temperature,
+        )
+
+    async def get_completion_stream(  # noqa: D102
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int = 16,
+        temperature: float = 0.9,
+    ) -> Optional[Any]:
+        return self.provider_obj.complete(
+            self.model,
+            messages,
+            max_tokens,
+            temperature,
+            stream=True,
         )

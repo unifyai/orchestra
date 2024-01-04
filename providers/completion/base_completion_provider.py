@@ -3,7 +3,6 @@ from typing import Any, Dict, List, Optional
 
 import litellm
 import openai
-from litellm.utils import ModelResponse
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +19,14 @@ class BaseCompletionProvider:
     def set_api_key(self, api_key: str) -> None:  # noqa: D102
         litellm.api_key = api_key
 
-    def complete(  # noqa: D102
+    def complete(  # noqa: D102, WPS211
         self,
         model: str,
         messages: List,  # type: ignore
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
-    ) -> Optional[ModelResponse]:
+        stream: Optional[bool] = False,
+    ) -> Optional[Any]:
         if model not in self.supported_models:
             raise ValueError("Model not supported")
 
@@ -41,6 +41,7 @@ class BaseCompletionProvider:
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                stream=stream,
             )
         except openai.APITimeoutError as error:
             logger.error(f"Raised openai.APITimeoutError, Error: {error}")

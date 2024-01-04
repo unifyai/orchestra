@@ -76,12 +76,13 @@ class OctoAI(BaseCompletionProvider):
         """
         self.client = Client(token=api_key)
 
-    def complete(
+    def complete(  # noqa: WPS211
         self,
         model: str,
         messages: List,  # type: ignore
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        stream: Optional[bool] = False,
     ) -> Optional[ChatCompletion]:
         """
         Complete a prompt using the OctoAI service.
@@ -94,6 +95,8 @@ class OctoAI(BaseCompletionProvider):
         :type max_tokens: Optional[int]
         :param temperature: Controls the randomness of the generated completion.
         :type temperature: Optional[float]
+        :param stream: Whether to stream the response.
+        :type stream: Optional[bool]
         :return: OctoAI chat completion response.
         :rtype: Optional[ChatCompletion]
 

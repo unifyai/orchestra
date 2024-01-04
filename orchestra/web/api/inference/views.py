@@ -1,7 +1,10 @@
 import base64
+import json
 import re
+from typing import Union
 
 from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
 from models.imagegen import ImagegenModel
 from models.llm import CompletionsModel
 
@@ -23,10 +26,36 @@ def get_model_type(model_name):  # noqa: D103
         return "image"
 
 
+async def async_generator_wrapper(response, model):  # noqa: D103, WPS10, WPS231, WPS210
+    response = await response
+    for part in response:
+        if not isinstance(part["usage"], dict) and part["usage"]:
+            usage = part["usage"].model_dump()
+        elif part["usage"]:
+            usage = part["usage"].model_dump()
+        else:
+            usage = None
+        choices = []
+        if part.get("choices", None):
+            for choice in part.get("choices", None):
+                choices.append(choice.model_dump())
+        part_dict = {
+            "model": model,
+            "created": part.get("created", None),
+            "id": part["id"],
+            "choices": choices,
+            "object": part.get("object", "chat.completion"),
+            "usage": usage,
+        }
+
+        part_json = json.dumps(part_dict)
+        yield part_json
+
+
 @router.post("/inference", response_model=InferenceResponse)
 async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
     request: InferenceRequest,
-) -> InferenceResponse:
+) -> Union[InferenceResponse, StreamingResponse]:
     """
     Get inference result based on the request.
 
@@ -42,10 +71,23 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             provider=request.provider,
             model=request.model,
         )
+        stream = request.arguments.get("stream", False)
+        if stream:
+            stream_wrapper = language_model.get_completion_stream(
+                messages=request.arguments["messages"],
+                temperature=request.arguments["temperature"],
+                max_tokens=request.arguments.get("max_tokens", None),
+            )
+            return StreamingResponse(
+                async_generator_wrapper(stream_wrapper, request.model),
+            )
+
         response = language_model.get_completion(
             messages=request.arguments["messages"],
             temperature=request.arguments["temperature"],
+            max_tokens=request.arguments.get("max_tokens", None),
         )
+
         if not response:
             # TODO: Handle when response is None
             return InferenceResponse(
@@ -63,7 +105,13 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             return InferenceResponse(
                 response=response.model_dump(),
             )
-        usage = response["usage"].model_dump() if response["usage"] else None
+
+        if not isinstance(response["usage"], dict) and response["usage"]:
+            usage = response["usage"].model_dump()
+        elif response["usage"]:
+            usage = response["usage"]
+        else:
+            usage = None
         if response.get("choices", None):
             choices = []
             for choice in response.get("choices", None):
