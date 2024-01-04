@@ -10,7 +10,7 @@ from orchestra.web.api.credits.schema import CreditsResponse
 router = APIRouter()
 
 
-@router.get("/", response_model=List[CreditsResponse])
+@router.get("/get_credits", response_model=List[CreditsResponse])
 async def get_credits(
     id: str = "",  # noqa: WPS125
     users_dao: UsersDAO = Depends(),

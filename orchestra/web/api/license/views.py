@@ -5,12 +5,12 @@ from fastapi.param_functions import Depends
 
 from orchestra.db.dao.license_dao import LicenseDAO
 from orchestra.db.models.orchestra_models import License
-from orchestra.web.api.license.schema import LicenseModelRequest, LicenseModelResponse
+from orchestra.web.api.license.schema import LicenseModelResponse
 
 router = APIRouter()
 
 
-@router.get("/", response_model=List[LicenseModelResponse])
+@router.get("/get_all_licenses", response_model=List[LicenseModelResponse])
 async def get_license_models(
     limit: int = 10,
     offset: int = 0,
@@ -27,19 +27,16 @@ async def get_license_models(
     return await license_dao.get_all_licenses(limit=limit, offset=offset)
 
 
-@router.put("/")
-async def create_license_model(
-    new_license_object: LicenseModelRequest,
+@router.get("/get_license", response_model=List[LicenseModelResponse])
+async def get_license(
+    name: str,
     license_dao: LicenseDAO = Depends(),
-) -> None:
+) -> List[License]:
     """
-    Creates license model in the database.
+    Retrieve specific license object from the database.
 
-    :param new_license_object: new license model item.
+    :param name: name of license instance.
     :param license_dao: DAO for license models.
+    :return: list of license objects from database.
     """
-    await license_dao.create_license(
-        name=new_license_object.name,
-        image_url=new_license_object.image_url,
-        description=new_license_object.description,
-    )
+    return await license_dao.filter(name=name)

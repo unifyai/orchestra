@@ -5,15 +5,12 @@ from fastapi.param_functions import Depends
 
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.models.orchestra_models import Provider
-from orchestra.web.api.provider.schema import (
-    ProviderModelRequest,
-    ProviderModelResponse,
-)
+from orchestra.web.api.provider.schema import ProviderModelResponse
 
 router = APIRouter()
 
 
-@router.get("/", response_model=List[ProviderModelResponse])
+@router.get("/get_all_providers", response_model=List[ProviderModelResponse])
 async def get_provider_models(
     limit: int = 10,
     offset: int = 0,
@@ -30,19 +27,16 @@ async def get_provider_models(
     return await provider_dao.get_all_providers(limit=limit, offset=offset)
 
 
-@router.put("/")
-async def create_provider_model(
-    new_provider_object: ProviderModelRequest,
+@router.get("/get_provider", response_model=List[ProviderModelResponse])
+async def get_provider(
+    name: str,
     provider_dao: ProviderDAO = Depends(),
-) -> None:
+) -> List[Provider]:
     """
-    Creates provider model in the database.
+    Retrieve specific provider object from the database.
 
-    :param new_provider_object: new provider model item.
+    :param name: name of provider object.
     :param provider_dao: DAO for provider models.
+    :return: provider object from database.
     """
-    await provider_dao.create_provider(
-        name=new_provider_object.name,
-        image_url=new_provider_object.image_url,
-        description=new_provider_object.description,
-    )
+    return await provider_dao.filter(name=name)

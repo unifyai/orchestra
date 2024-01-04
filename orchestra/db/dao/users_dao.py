@@ -48,21 +48,16 @@ class UsersDAO:
 
     async def filter(
         self,
-        id: Optional[str] = None,  # noqa: WPS125
-        credits: Optional[float] = None,
+        id: Optional[str],  # noqa: WPS125
     ) -> List[Users]:
         """
         Get specific users model.
 
         :param id: id of users instance.
-        :param credits: credits of users instance.
         :return: stream of users.
         """
         query = select(Users)
-        if id:
-            query = query.where(Users.id == id)
-        if credits:
-            query = query.where(Users.credits == credits)
+        query = query.where(Users.id == id)
 
         raw_users = await self.session.execute(query)
 

@@ -5,12 +5,12 @@ from fastapi.param_functions import Depends
 
 from orchestra.db.dao.task_dao import TaskDAO
 from orchestra.db.models.orchestra_models import Task
-from orchestra.web.api.task.schema import TaskModelRequest, TaskModelResponse
+from orchestra.web.api.task.schema import TaskModelResponse
 
 router = APIRouter()
 
 
-@router.get("/", response_model=List[TaskModelResponse])
+@router.get("/get_all_tasks", response_model=List[TaskModelResponse])
 async def get_task_models(
     limit: int = 10,
     offset: int = 0,
@@ -27,18 +27,16 @@ async def get_task_models(
     return await task_dao.get_all_tasks(limit=limit, offset=offset)
 
 
-@router.put("/")
-async def create_task_model(
-    new_task_object: TaskModelRequest,
+@router.get("/get_task", response_model=List[TaskModelResponse])
+async def get_task(
+    name: str,
     task_dao: TaskDAO = Depends(),
-) -> None:
+) -> List[Task]:
     """
-    Creates task model in the database.
+    Retrieve specific task object from the database.
 
-    :param new_task_object: new task model item.
+    :param name: name of task object.
     :param task_dao: DAO for task models.
+    :return: task object from database.
     """
-    await task_dao.create_task(
-        name=new_task_object.name,
-        modality=new_task_object.modality,
-    )
+    return await task_dao.filter(name=name)
