@@ -1,4 +1,7 @@
+from typing import AsyncIterator, Union
+
 from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
 from models.llm import CompletionsModel
 
 from orchestra.web.api.chat_completion.schema import (
@@ -10,7 +13,9 @@ router = APIRouter()
 
 
 @router.post("/chat/completion", response_model=ChatCompletionResponse)
-async def get_completions(request: ChatCompletionRequest) -> ChatCompletionResponse:
+async def get_completions(  # noqa: C901, WPS210
+    request: ChatCompletionRequest,
+) -> Union[ChatCompletionResponse, StreamingResponse]:
     """
     Get chat completions based on the request.
 
@@ -22,9 +27,13 @@ async def get_completions(request: ChatCompletionRequest) -> ChatCompletionRespo
         provider=request.model.split("/")[0],
         model=request.model.split("/")[-1],
     )
+    stream = request.stream
+    if stream is None:
+        stream = False
     response = language_model.get_completion(
         messages=request.messages,
         temperature=request.temperature,
+        stream=stream,
     )
     if not response:
         # TODO: Handle when response is None
@@ -39,6 +48,11 @@ async def get_completions(request: ChatCompletionRequest) -> ChatCompletionRespo
     if isinstance(response, ChatCompletionResponse):
         response.model = request.model
         return response
+
+    if isinstance(response, AsyncIterator):
+        return StreamingResponse(
+            response,
+        )
     usage = response["usage"].model_dump() if response["usage"] else None
     if response.get("choices", None):
         choices = []

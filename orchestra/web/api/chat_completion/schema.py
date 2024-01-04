@@ -16,6 +16,7 @@ class ChatCompletionRequest(BaseModel):
     model: str
     messages: List[Dict[str, str]]
     temperature: float
+    stream: Optional[bool] = False
 
 
 class ChatCompletionResponse(BaseModel):
