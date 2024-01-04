@@ -437,7 +437,6 @@ def put_data_to_db(data, db_put_url, timeout):  # noqa: D103
 
 
 if __name__ == "__main__":
-    TESTING = False
 
     ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON = (
         "/secrets/application_default_credentials.json"
