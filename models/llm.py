@@ -1,7 +1,7 @@
 import os
-from typing import Any, Dict, List, Optional
+from typing import AsyncIterator, Dict, List, Union
 
-from litellm.utils import ModelResponse
+from litellm import ModelResponse
 
 
 class CompletionsModel:
@@ -30,24 +30,20 @@ class CompletionsModel:
         messages: List[Dict[str, str]],
         max_tokens: int = 16,
         temperature: float = 0.9,
-    ) -> Optional[ModelResponse]:
-        return self.provider_obj.complete(
-            self.model,
-            messages,
-            max_tokens,
-            temperature,
-        )
+        stream: bool = False,
+    ) -> Union[ModelResponse, AsyncIterator[str]]:
 
-    async def get_completion_stream(  # noqa: D102
-        self,
-        messages: List[Dict[str, str]],
-        max_tokens: int = 16,
-        temperature: float = 0.9,
-    ) -> Optional[Any]:
+        if stream:
+            return self.provider_obj.complete_stream(
+                self.model,
+                messages,
+                max_tokens,
+                temperature,
+            )
+
         return self.provider_obj.complete(
             self.model,
             messages,
             max_tokens,
             temperature,
-            stream=True,
         )
