@@ -93,7 +93,7 @@ class OctoAI(BaseCompletionProvider):
         model: str,
         messages: List,  # type: ignore
         max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
+        temperature: Optional[float] = 0.9,
         stream: Optional[bool] = False,
     ) -> Optional[ChatCompletion]:
         """
