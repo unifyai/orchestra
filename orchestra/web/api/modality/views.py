@@ -5,15 +5,12 @@ from fastapi.param_functions import Depends
 
 from orchestra.db.dao.modality_dao import ModalityDAO
 from orchestra.db.models.orchestra_models import Modality
-from orchestra.web.api.modality.schema import (
-    ModalityModelRequest,
-    ModalityModelResponse,
-)
+from orchestra.web.api.modality.schema import ModalityModelResponse
 
 router = APIRouter()
 
 
-@router.get("/", response_model=List[ModalityModelResponse])
+@router.get("/get_all_modalities", response_model=List[ModalityModelResponse])
 async def get_modality_models(
     limit: int = 10,
     offset: int = 0,
@@ -30,17 +27,16 @@ async def get_modality_models(
     return await modality_dao.get_all_modalities(limit=limit, offset=offset)
 
 
-@router.put("/")
-async def create_modality_model(
-    new_modality_object: ModalityModelRequest,
+@router.get("/get_modality", response_model=List[ModalityModelResponse])
+async def get_modality(
+    name: str,
     modality_dao: ModalityDAO = Depends(),
-) -> None:
+) -> List[Modality]:
     """
-    Creates modality model in the database.
+    Retrieve specific modality object from the database.
 
-    :param new_modality_object: new modality model item.
+    :param name: name of modality object.
     :param modality_dao: DAO for modality models.
+    :return: modality object from database.
     """
-    await modality_dao.create_modality(
-        name=new_modality_object.name,
-    )
+    return await modality_dao.filter(name=name)

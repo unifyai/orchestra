@@ -5,12 +5,12 @@ from fastapi.param_functions import Depends
 
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.models.orchestra_models import Users
-from orchestra.web.api.users.schema import UsersModelRequest, UsersModelResponse
+from orchestra.web.api.users.schema import UsersModelResponse
 
 router = APIRouter()
 
 
-@router.get("/", response_model=List[UsersModelResponse])
+@router.get("/get_all_users", response_model=List[UsersModelResponse])
 async def get_users_models(
     limit: int = 10,
     offset: int = 0,
@@ -27,15 +27,16 @@ async def get_users_models(
     return await users_dao.get_all_users(limit=limit, offset=offset)
 
 
-@router.put("/")
-async def create_users_model(
-    new_users_object: UsersModelRequest,
+@router.get("/get_user", response_model=List[UsersModelResponse])
+async def get_user(
+    id: str,  # noqa: WPS125
     users_dao: UsersDAO = Depends(),
-) -> None:
+) -> List[Users]:
     """
-    Creates users model in the database.
+    Retrieve specific users object from the database.
 
-    :param new_users_object: new users model item.
+    :param id: id of users instance.
     :param users_dao: DAO for users models.
+    :return: list of users objects from database.
     """
-    await users_dao.create_users(id=new_users_object.id, credits=float(0))
+    return await users_dao.filter(id=id)
