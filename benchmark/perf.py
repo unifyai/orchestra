@@ -114,8 +114,8 @@ def get_provider(
 
             provider_obj = cast(VertexAI, provider_obj)
             provider_obj.set_service_account_credentials(
-                ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON,
-                ORCHESTRA_VERTEXAI_GCLOUD_PATH,
+                str(os.getenv("ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON")),
+                str(os.getenv("ORCHESTRA_VERTEXAI_GCLOUD_PATH")),
             )
             provider_obj.set_project(str(os.getenv("ORCHESTRA_VERTEXAI_PROJECT")))
             provider_obj.set_location(str(os.getenv("ORCHESTRA_VERTEXAI_LOCATION")))
@@ -438,13 +438,6 @@ def put_data_to_db(data, db_put_url, timeout):  # noqa: D103
 
 if __name__ == "__main__":
 
-    ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON = (
-        "/secrets/application_default_credentials.json"
-    )
-    ORCHESTRA_VERTEXAI_GCLOUD_PATH = "/app/src/google-cloud-sdk/bin/gcloud"
-
-    DB_URL = "https://orchestra-lz5fmz6i7q-ew.a.run.app/v0/datapoint/"
-
     model_list = [
         model
         for provider in PROVIDER_CLASSES.values()
@@ -474,6 +467,6 @@ if __name__ == "__main__":
                     }
                     put_data_to_db(
                         data,
-                        db_put_url=DB_URL,
+                        db_put_url=str(os.getenv("DB_URL")),
                         timeout=5,
                     )
