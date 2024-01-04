@@ -459,7 +459,6 @@ if __name__ == "__main__":
             for metric_name, value in provider_data.items():
                 if metric_name in METRICS_TO_PUSH:
                     data = {
-                        "id": datapoint_id,
                         "endpoint_id": datapoint_id,
                         "measured_at": current_time,
                         "metric_name": metric_name,
