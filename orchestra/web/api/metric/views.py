@@ -5,12 +5,12 @@ from fastapi.param_functions import Depends
 
 from orchestra.db.dao.metric_dao import MetricDAO
 from orchestra.db.models.orchestra_models import Metric
-from orchestra.web.api.metric.schema import MetricModelRequest, MetricModelResponse
+from orchestra.web.api.metric.schema import MetricModelResponse
 
 router = APIRouter()
 
 
-@router.get("/", response_model=List[MetricModelResponse])
+@router.get("/get_all_metrics", response_model=List[MetricModelResponse])
 async def get_metric_models(
     limit: int = 10,
     offset: int = 0,
@@ -27,18 +27,16 @@ async def get_metric_models(
     return await metric_dao.get_all_metrics(limit=limit, offset=offset)
 
 
-@router.put("/")
-async def create_metric_model(
-    new_metric_object: MetricModelRequest,
+@router.get("/get_metric", response_model=List[MetricModelResponse])
+async def get_metric(
+    name: str,
     metric_dao: MetricDAO = Depends(),
-) -> None:
+) -> List[Metric]:
     """
-    Creates metric model in the database.
+    Retrieve specific metric object from the database.
 
-    :param new_metric_object: new metric model item.
+    :param name: name of metric instance.
     :param metric_dao: DAO for metric models.
+    :return: list of metric objects from database.
     """
-    await metric_dao.create_metric(
-        name=new_metric_object.name,
-        units=new_metric_object.units,
-    )
+    return await metric_dao.filter(name=name)
