@@ -199,3 +199,16 @@ docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orc
 ```bash
 pytest -vv .
 ```
+## Setting up the database locally
+To setup the database locally, you need to create a dump file of the staging database. To do so, run the following commands
+```bash
+gcloud sql connect staging
+```
+After connecting to staging, run the following command on your terminal. This will create a dump file. 
+```bash
+pg_dump -h 34.141.85.117 -p 5432 -U postgres orchestra > orchestra.sql
+```
+Now, connect to psql and run the following command to populate your local orchestra database
+```bash
+\i <path to orchestra.sql>
+```
