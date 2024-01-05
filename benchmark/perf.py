@@ -1,5 +1,5 @@
+import asyncio
 import datetime
-import hashlib
 import json
 import logging
 import os
@@ -8,11 +8,20 @@ import statistics
 from typing import Any, Dict, List, Optional, cast
 
 import numpy as np
-import requests
 from litellm import ModelResponse
 from prettytable import PrettyTable
 from providers.completion import PRICING_PER_TOKENS, PROVIDER_CLASSES
 from providers.completion.base_completion_provider import BaseCompletionProvider
+
+from orchestra.db.dao.datapoint_dao import DatapointDAO
+from orchestra.db.dao.endpoint_dao import EndpointDAO
+from orchestra.db.dao.model_dao import ModelDAO
+from orchestra.db.dao.provider_dao import ProviderDAO
+from orchestra.web.api.admin.schema import DatapointModelRequest, EndpointModelRequest
+from orchestra.web.api.admin.views import create_datapoint_model, create_endpoint_model
+from orchestra.web.api.endpoint.views import get_endpoint
+from orchestra.web.api.model.views import get_model
+from orchestra.web.api.provider.views import get_provider
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -23,8 +32,6 @@ logger.addHandler(handler)
 
 MAX_TOKENS = 500
 COLD_START_THRESHOLD = 30000
-
-HTTP_SUCCESS = 200
 
 
 def evaluate_answers(
@@ -93,7 +100,7 @@ def load_problems(benchmark_problems_path: str) -> List[tuple[str, str]]:
     return problems
 
 
-def get_provider(
+def get_provider_obj(
     provider_name: str,
     traversed_providers: Dict[str, BaseCompletionProvider],
 ) -> BaseCompletionProvider:
@@ -335,7 +342,7 @@ def create_table(  # noqa: D103, WPS210
     return table
 
 
-def run(  # noqa: C901, WPS210, WPS231
+def run_benchmark(  # noqa: C901, WPS210, WPS231
     models: List[str],
     benchmark_problems_path: str = "benchmark/problems.jsonl",
     evaluator: str = "gpt-4",
@@ -367,7 +374,7 @@ def run(  # noqa: C901, WPS210, WPS231
         for model_name in models:
             if model_name.lower() in provider_class.supported_models:
                 logger.info(f"{model_name} on {provider_name}")
-                provider_obj = get_provider(provider_name, traversed_providers)
+                provider_obj = get_provider_obj(provider_name, traversed_providers)
                 completion_results = get_completion_results(
                     provider_obj,
                     model_name,
@@ -408,64 +415,127 @@ def run(  # noqa: C901, WPS210, WPS231
     return model_results
 
 
-def get_id(name: str) -> int:  # noqa: D103
-    return int(hashlib.sha256(name.encode("utf-8")).hexdigest(), 16) % (  # noqa: WPS432
-        10**8
+async def get_or_create_endpoint(  # noqa: D103
+    mdl_id,
+    provider_id,
+    endpoint_dao,
+    model_name,
+    provider_name,
+):
+    endpoint_id = await get_endpoint(mdl_id, provider_id, endpoint_dao)
+    if not endpoint_id:
+        logger.info(
+            f"No endpoints found for {model_name}({mdl_id}), "
+            f"{provider_name}({provider_id}), creating new endpoint",
+        )
+        endpoint_obj = EndpointModelRequest(
+            mdl_id=mdl_id,
+            provider_id=provider_id,
+        )
+        await create_endpoint_model(endpoint_obj, endpoint_dao)
+        logger.info("Endpoint created")
+        endpoint_id = await get_endpoint(mdl_id, provider_id, endpoint_dao)
+    elif len(endpoint_id) > 1:
+        logger.info(
+            f"Multiple endpoints found for {model_name}, {provider_name}, "
+            f"using first: {endpoint_id[0].id}",
+        )
+    return endpoint_id[0].id
+
+
+async def put_data_to_db(  # noqa: D103, WPS211
+    data,
+    model_name,
+    provider_name,
+    provider_dao,
+    model_dao,
+    endpoint_dao,
+    datapoint_dao,
+):
+    provider_id = await get_provider(provider_name, provider_dao)
+    mdl_id = await get_model(model_name, model_dao)
+
+    endpoint_id = await get_or_create_endpoint(
+        mdl_id,
+        provider_id,
+        endpoint_dao,
+        model_name,
+        provider_name,
+    )
+    datapoint_obj = DatapointModelRequest(
+        endpoint_id=endpoint_id,
+        measured_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        metric_name=data["metric_name"],
+        value=data["value"],
+    )
+    await create_datapoint_model(datapoint_obj, datapoint_dao)
+    logger.info(
+        f"Datapoint added for {model_name}, {provider_name} "
+        f"(endpoint_id: {endpoint_id})",
     )
 
 
-def put_data_to_db(data, db_put_url, timeout):  # noqa: D103
-    try:
-        response = requests.put(
-            db_put_url,
-            headers={
-                "accept": "application/json",
-                "Content-Type": "application/json",
-            },
-            data=json.dumps(data),
-            timeout=timeout,
-        )
-    except requests.exceptions.Timeout:
-        logger.error(
-            f"Timeout on {data['metric_name']}, {data['value']}",
-        )
-    if response.status_code != HTTP_SUCCESS:
-        logger.error(
-            f"{response.status_code}, {response.text} "
-            f"on {data['metric_name']}, {data['value']}",
-        )
+async def process_benchmarking_results(  # noqa: D103, WPS210, WPS231
+    benchmarking_results,
+    daos,
+    metrics_to_push,
+):
+    tasks = []
+    for model_name, provider_results in benchmarking_results.items():
+        for provider_name, provider_data in provider_results.items():
+            for metric_name, value in provider_data.items():
+                if metric_name in metrics_to_push:
+                    data = {
+                        "metric_name": metric_name,
+                        "value": round(value, 2) if isinstance(value, float) else value,
+                    }
+                    task = put_data_to_db(
+                        data,
+                        model_name,
+                        provider_name,
+                        daos.provider_dao,
+                        daos.model_dao,
+                        daos.endpoint_dao,
+                        daos.datapoint_dao,
+                    )
+                    tasks.append(task)
+    total_write_count = len(tasks)
+    logger.info(f"Pushing {total_write_count} benchmarking results entries to db")
+    await asyncio.gather(*tasks)
+
+
+class DAOs:  # noqa: D101
+    def __init__(self, provider_dao, model_dao, endpoint_dao, datapoint_dao):
+        self.provider_dao = provider_dao
+        self.model_dao = model_dao
+        self.endpoint_dao = endpoint_dao
+        self.datapoint_dao = datapoint_dao
 
 
 if __name__ == "__main__":
+    provider_dao = ProviderDAO()
+    model_dao = ModelDAO()
+    endpoint_dao = EndpointDAO()
+    datapoint_dao = DatapointDAO()
+    daos = DAOs(provider_dao, model_dao, endpoint_dao, datapoint_dao)
 
     model_list = [
         model
         for provider in PROVIDER_CLASSES.values()
         for model in provider.supported_models.keys()
     ]
-    benchmarking_results = run(model_list, print_table=True)
+    benchmarking_results = run_benchmark(model_list, print_table=True)
     logger.info(benchmarking_results)
-    logger.info("Pushing benchmarking results to db")
-    METRICS_TO_PUSH = [
+    metrics_to_push = [
         "toks/sec",
         "cost_per_1m_toks",
         "context_window",
         "cold_start_latency",
     ]
-    for model_name, provider_results in benchmarking_results.items():
-        for provider_name, provider_data in provider_results.items():
-            datapoint_id = get_id(f"{model_name}_{provider_name}")
-            current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            for metric_name, value in provider_data.items():
-                if metric_name in METRICS_TO_PUSH:
-                    data = {
-                        "endpoint_id": datapoint_id,
-                        "measured_at": current_time,
-                        "metric_name": metric_name,
-                        "value": round(value, 2) if isinstance(value, float) else value,
-                    }
-                    put_data_to_db(
-                        data,
-                        db_put_url=str(os.getenv("DB_URL")),
-                        timeout=5,
-                    )
+    asyncio.run(
+        process_benchmarking_results(
+            benchmarking_results,
+            daos,
+            metrics_to_push,
+        ),
+    )
