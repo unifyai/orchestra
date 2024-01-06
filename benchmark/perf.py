@@ -23,6 +23,9 @@ from orchestra.web.api.endpoint.views import get_endpoint
 from orchestra.web.api.model.views import get_model
 from orchestra.web.api.provider.views import get_provider
 
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -477,48 +480,40 @@ async def put_data_to_db(  # noqa: D103, WPS211
 
 async def process_benchmarking_results(  # noqa: D103, WPS210, WPS231
     benchmarking_results,
-    daos,
     metrics_to_push,
 ):
-    tasks = []
-    for model_name, provider_results in benchmarking_results.items():
-        for provider_name, provider_data in provider_results.items():
-            for metric_name, value in provider_data.items():
-                if metric_name in metrics_to_push:
-                    data = {
-                        "metric_name": metric_name,
-                        "value": round(value, 2) if isinstance(value, float) else value,
-                    }
-                    task = put_data_to_db(
-                        data,
-                        model_name,
-                        provider_name,
-                        daos.provider_dao,
-                        daos.model_dao,
-                        daos.endpoint_dao,
-                        daos.datapoint_dao,
-                    )
-                    tasks.append(task)
-    total_write_count = len(tasks)
-    logger.info(f"Pushing {total_write_count} benchmarking results entries to db")
-    await asyncio.gather(*tasks)
-
-
-class DAOs:  # noqa: D101
-    def __init__(self, provider_dao, model_dao, endpoint_dao, datapoint_dao):
-        self.provider_dao = provider_dao
-        self.model_dao = model_dao
-        self.endpoint_dao = endpoint_dao
-        self.datapoint_dao = datapoint_dao
+    engine = create_async_engine('postgresql+asyncpg://orchestra:password@localhost:5432/orchestra')
+    async_session = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with async_session() as session:
+        provider_dao = ProviderDAO(session)
+        model_dao = ModelDAO(session)
+        endpoint_dao = EndpointDAO(session)
+        datapoint_dao = DatapointDAO(session)
+        tasks = []
+        for model_name, provider_results in benchmarking_results.items():
+            for provider_name, provider_data in provider_results.items():
+                for metric_name, value in provider_data.items():
+                    if metric_name in metrics_to_push:
+                        data = {
+                            "metric_name": metric_name,
+                            "value": round(value, 2) if isinstance(value, float) else value,
+                        }
+                        task = put_data_to_db(
+                            data,
+                            model_name,
+                            provider_name,
+                            provider_dao,
+                            model_dao,
+                            endpoint_dao,
+                            datapoint_dao,
+                        )
+                        tasks.append(task)
+        total_write_count = len(tasks)
+        logger.info(f"Pushing {total_write_count} benchmarking results entries to db")
+        await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":
-    provider_dao = ProviderDAO()
-    model_dao = ModelDAO()
-    endpoint_dao = EndpointDAO()
-    datapoint_dao = DatapointDAO()
-    daos = DAOs(provider_dao, model_dao, endpoint_dao, datapoint_dao)
-
     model_list = [
         model
         for provider in PROVIDER_CLASSES.values()
@@ -536,7 +531,6 @@ if __name__ == "__main__":
     asyncio.run(
         process_benchmarking_results(
             benchmarking_results,
-            daos,
             metrics_to_push,
         ),
     )
