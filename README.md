@@ -204,11 +204,36 @@ To setup the database locally, you need to create a dump file of the staging dat
 ```bash
 gcloud sql connect staging
 ```
-After connecting to staging, run the following command on your terminal. This will create a dump file. 
+After connecting to staging, run the following command on your terminal. This will create a dump file.
 ```bash
 pg_dump -h 34.141.85.117 -p 5432 -U postgres orchestra > orchestra.sql
 ```
 Now, connect to psql and run the following command to populate your local orchestra database
 ```bash
 \i <path to orchestra.sql>
+```
+
+
+## Debugging in vscode
+
+To run the debugger you will need a valid connection to a db. To run `orchestra` in debug model, your `launch.json` file should look something like this:
+
+```python
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: FastAPI",
+            "type": "python",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "orchestra.web.application:get_app",
+                "--reload"
+            ],
+            "jinja": true,
+            "justMyCode": true
+        }
+    ]
+}
 ```
