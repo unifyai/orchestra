@@ -43,6 +43,8 @@ But you have to rebuild image every time you modify `poetry.lock` or `pyproject.
 docker-compose -f deploy/docker-compose.yml --project-directory . build
 ```
 
+It is recommended to use the poetry commands for local development as docker does not play well with the database.
+
 ## Project structure
 
 ```bash
