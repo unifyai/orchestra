@@ -166,7 +166,7 @@ in the `orchestra/web/api/router.py` file:
 ```python
 api_router.include_router(
     ...,
-    dependencies=AUTH,
+    dependencies=API_KEY_AUTH,
 )
 ```
 
@@ -176,7 +176,7 @@ api_router.include_router(
     dummy.router,
     prefix="/dummy",
     tags=["dummy"],
-    dependencies=AUTH,
+    dependencies=API_KEY_AUTH,
 )
 ```
 
