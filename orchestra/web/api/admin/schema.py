@@ -1,6 +1,6 @@
 import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, PositiveFloat
 
 
 class DatapointModelRequest(BaseModel):
@@ -110,6 +110,21 @@ class ProviderModelRequest(BaseModel):
     name: str
     image_url: str
     description: str
+
+
+class RechargeModelRequest(BaseModel):
+    """
+    Request model for creating new recharge model.
+
+    Attributes:
+        user_id (str): The id of the user.
+        quantity (float): The quantity of the recharge.
+        type (str): The type of the recharge.
+    """
+
+    user_id: str
+    quantity: PositiveFloat
+    type: str
 
 
 class RechargeTypeModelRequest(BaseModel):

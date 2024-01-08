@@ -10,8 +10,10 @@ from orchestra.db.dao.metric_dao import MetricDAO
 from orchestra.db.dao.modality_dao import ModalityDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
+from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.recharge_type_dao import RechargeTypeDAO
 from orchestra.db.dao.task_dao import TaskDAO
+from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     DatapointModelRequest,
     EndpointModelRequest,
@@ -20,6 +22,7 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     ModalityModelRequest,
     ModelRequest,
     ProviderModelRequest,
+    RechargeModelRequest,
     RechargeTypeModelRequest,
     TaskModelRequest,
 )
@@ -156,6 +159,33 @@ async def create_provider_model(
         name=new_provider_object.name,
         image_url=new_provider_object.image_url,
         description=new_provider_object.description,
+    )
+
+
+@router.put("/create_recharge")
+async def create_recharge_model(
+    new_recharge_object: RechargeModelRequest,
+    recharge_dao: RechargeDAO = Depends(),
+    user_dao: UsersDAO = Depends(),
+) -> None:
+    """
+    Creates recharge model in the database.
+
+    :param new_recharge_object: new recharge model item.
+    :param recharge_dao: DAO for recharge models.
+    :param user_dao: DAO for user models.
+    """
+    at = datetime.datetime.now()
+    await user_dao.recharge_credit(
+        user_id=new_recharge_object.user_id,
+        quantity=new_recharge_object.quantity,
+    )
+
+    await recharge_dao.create_recharge(
+        at=at,
+        user_id=new_recharge_object.user_id,
+        quantity=new_recharge_object.quantity,
+        type=new_recharge_object.type,
     )
 
 
