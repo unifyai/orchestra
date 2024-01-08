@@ -196,12 +196,14 @@ I prefer doing it with docker:
 docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:13.8-bullseye
 ```
 
-
 2. Run the pytest.
 ```bash
 pytest -vv .
 ```
+
 ## Setting up the database locally
+
+### Getting local dump file
 To setup the database locally, you need to create a dump file of the staging database. To do so, run the following commands
 ```bash
 gcloud sql connect staging
@@ -210,11 +212,40 @@ After connecting to staging, run the following command on your terminal. This wi
 ```bash
 pg_dump -h 34.141.85.117 -p 5432 -U postgres orchestra > orchestra.sql
 ```
-Now, connect to psql and run the following command to populate your local orchestra database
+
+### Setting up the database in the docker container
+This way you can configure your database that is spun up using the docker compose.
 ```bash
-\i <path to orchestra.sql>
+docker exec -it <postgres:13.8-bullseye_container_id>/bin/bash
 ```
 
+Now, connect to psql and run the following command to populate your local orchestra database
+```bash
+psql -h 127.0.0.1  -p 5432 -U orchestra -d orchestra
+```
+
+```sql
+\connect orchestra;
+\i <snapshot_name>.sql
+```
+
+### Setting up the local database
+To populate database for the local orchestra, run the following commands
+```bash
+poetry run python -m orchestra
+docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:13.8-bullseye
+alembic upgrade head
+```
+
+Now, connect to psql and run the following command to populate your local orchestra database
+```bash
+psql -h 127.0.0.1  -p 5432 -U orchestra -d orchestra
+```
+
+```sql
+\connect orchestra;
+\i <snapshot_name>.sql
+```
 
 ## Debugging in vscode
 
