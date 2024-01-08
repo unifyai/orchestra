@@ -39,7 +39,7 @@ async def auth_admin_key(
     :raises HTTPException: when admin key is invalid.
     """
     admin_key = credentials.credentials
-    if admin_key != os.environ["ADMIN_KEY"]:
+    if admin_key != os.environ["ORCHESTRA_ADMIN_KEY"]:
         raise HTTPException(
             status_code=403,  # noqa: WPS432
             detail="admin unauthorized.",
