@@ -49,6 +49,7 @@ docker-compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml --p
 docker rmi $(docker images -q)
 docker volume prune
 ```
+It is recommended to use the poetry commands for local development as docker does not play well with the database.
 
 ## Project structure
 
@@ -228,12 +229,12 @@ I prefer doing it with docker:
 docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:13.8-bullseye
 ```
 
-
 2. Run the pytest.
 ```bash
 pytest -vv .
 ```
 ## Setting up the database locally
+### Getting local dump file
 1. To setup the database locally, you need to create a dump file of the staging database. To do so, you can either run the following commands:
     - Connect to the sql database using gcloud:
         ```bash
@@ -251,3 +252,61 @@ pytest -vv .
     \i <path to orchestra.sql>
     \q
     ```
+
+### Setting up the database in the docker container
+This way you can configure your database that is spun up using the docker compose.
+```bash
+docker exec -it <postgres:13.8-bullseye_container_id>/bin/bash
+```
+
+Now, connect to psql and run the following command to populate your local orchestra database
+```bash
+psql -h 127.0.0.1  -p 5432 -U orchestra -d orchestra
+```
+
+```sql
+\connect orchestra;
+\i <snapshot_name>.sql
+```
+
+### Setting up the local database
+To populate database for the local orchestra, run the following commands
+```bash
+poetry run python -m orchestra
+docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:13.8-bullseye
+alembic upgrade head
+```
+
+Now, connect to psql and run the following command to populate your local orchestra database
+```bash
+psql -h 127.0.0.1  -p 5432 -U orchestra -d orchestra
+```
+
+```sql
+\connect orchestra;
+\i <snapshot_name>.sql
+```
+
+## Debugging in vscode
+
+To run the debugger you will need a valid connection to a db. To run `orchestra` in debug model, your `launch.json` file should look something like this:
+
+```python
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: FastAPI",
+            "type": "python",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "orchestra.web.application:get_app",
+                "--reload"
+            ],
+            "jinja": true,
+            "justMyCode": true
+        }
+    ]
+}
+```
