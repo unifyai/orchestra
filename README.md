@@ -158,7 +158,9 @@ alembic revision
 
 ## Endpoint Protection
 
-To enable API key authentication on endpoints, you should add the following
+### User-Facing
+
+To enable user API key authentication on endpoints, you should add the following
 in the `orchestra/web/api/router.py` file:
 
 ```python
@@ -175,6 +177,29 @@ api_router.include_router(
     prefix="/dummy",
     tags=["dummy"],
     dependencies=AUTH,
+)
+```
+
+### Admin Authentication
+
+To enable admin-only API key authentication on endpoints, you should add the following
+in the `orchestra/web/api/router.py` file:
+
+```python
+api_router.include_router(
+    ...,
+    dependencies=ADMIN_AUTH,
+)
+```
+
+For example, this will protect all endpoints in the `/dummy` router
+to allow admin-only access:
+```python
+api_router.include_router(
+    dummy.router,
+    prefix="/dummy",
+    tags=["dummy"],
+    dependencies=ADMIN_AUTH,
 )
 ```
 
