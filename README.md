@@ -212,13 +212,13 @@ pytest -vv .
         ```bash
         gcloud sql connect staging
         ```
-    - After connecting to staging, run the following command on your terminal. This will create a dump file. 
+    - After connecting to staging, run the following command on your terminal. This will create a dump file.
         ```bash
         pg_dump -h 34.141.85.117 -p 5432 -U postgres orchestra > orchestra.sql
         ```
     OR
-    - Use GCP UI to pg_dump the data into a SQL through the [export page here](https://console.cloud.google.com/sql/instances/dev/export?project=saas-368716)
-2. Now, connect to psql and run the following command to populate your local orchestra database. Note: this step assumes you've database setup and running. 
+    - Use GCP UI to pg_dump the data through the [export page here](https://console.cloud.google.com/sql/instances/dev/export?project=saas-368716) into [temp_file_holder](https://console.cloud.google.com/storage/browser/temp_file_holder;tab=objects?forceOnBucketsSortingFiltering=true&project=saas-368716&prefix=&forceOnObjectsSortingFiltering=false) bucket and then download from there.
+2. Now, connect to psql and run the following command to populate your local orchestra database. Note: this step assumes you've database setup and running.
     ```bash
     PGPASSWORD=orchestra psql -h localhost -U orchestra -d orchestra
     \i <path to orchestra.sql>
