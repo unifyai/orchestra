@@ -12,6 +12,8 @@ from litellm import ModelResponse
 from prettytable import PrettyTable
 from providers.completion import PRICING_PER_TOKENS, PROVIDER_CLASSES
 from providers.completion.base_completion_provider import BaseCompletionProvider
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 
 from orchestra.db.dao.datapoint_dao import DatapointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
@@ -22,9 +24,6 @@ from orchestra.web.api.admin.views import create_datapoint_model, create_endpoin
 from orchestra.web.api.endpoint.views import get_endpoint
 from orchestra.web.api.model.views import get_model
 from orchestra.web.api.provider.views import get_provider
-
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -425,7 +424,11 @@ async def get_or_create_endpoint(  # noqa: D103
     model_name,
     provider_name,
 ):
-    endpoint_id = await get_endpoint(mdl_id, provider_id, endpoint_dao)
+    endpoint_id = await get_endpoint(
+        mdl_id=mdl_id,
+        provider_id=provider_id,
+        endpoint_dao=endpoint_dao,
+    )
     if not endpoint_id:
         logger.info(
             f"No endpoints found for {model_name}({mdl_id}), "
@@ -435,9 +438,16 @@ async def get_or_create_endpoint(  # noqa: D103
             mdl_id=mdl_id,
             provider_id=provider_id,
         )
-        await create_endpoint_model(endpoint_obj, endpoint_dao)
+        await create_endpoint_model(
+            new_endpoint_object=endpoint_obj,
+            endpoint_dao=endpoint_dao,
+        )
         logger.info("Endpoint created")
-        endpoint_id = await get_endpoint(mdl_id, provider_id, endpoint_dao)
+        endpoint_id = await get_endpoint(
+            mdl_id=mdl_id,
+            provider_id=provider_id,
+            endpoint_dao=endpoint_dao,
+        )
     elif len(endpoint_id) > 1:
         logger.info(
             f"Multiple endpoints found for {model_name}, {provider_name}, "
@@ -446,71 +456,77 @@ async def get_or_create_endpoint(  # noqa: D103
     return endpoint_id[0].id
 
 
-async def put_data_to_db(  # noqa: D103, WPS211
+async def put_data_to_db(  # noqa: D103, WPS211, WPS210
     data,
     model_name,
     provider_name,
-    provider_dao,
-    model_dao,
-    endpoint_dao,
-    datapoint_dao,
+    async_session,
 ):
-    provider_id = await get_provider(provider_name, provider_dao)
-    mdl_id = await get_model(model_name, model_dao)
+    async with async_session() as session:
+        provider_dao = ProviderDAO(session)
+        model_dao = ModelDAO(session)
+        endpoint_dao = EndpointDAO(session)
+        datapoint_dao = DatapointDAO(session)
+        logger.info(f"{provider_name}, {model_name}")
+        provider_id = await get_provider(name=provider_name, provider_dao=provider_dao)
+        mdl_id = await get_model(mdl_code=model_name, model_dao=model_dao)
 
-    endpoint_id = await get_or_create_endpoint(
-        mdl_id,
-        provider_id,
-        endpoint_dao,
-        model_name,
-        provider_name,
-    )
-    datapoint_obj = DatapointModelRequest(
-        endpoint_id=endpoint_id,
-        measured_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        metric_name=data["metric_name"],
-        value=data["value"],
-    )
-    await create_datapoint_model(datapoint_obj, datapoint_dao)
-    logger.info(
-        f"Datapoint added for {model_name}, {provider_name} "
-        f"(endpoint_id: {endpoint_id})",
-    )
+        endpoint_id = await get_or_create_endpoint(
+            mdl_id[0].id,
+            provider_id[0].id,
+            endpoint_dao,
+            model_name,
+            provider_name,
+        )
+        datapoint_obj = DatapointModelRequest(
+            endpoint_id=endpoint_id,
+            measured_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            metric_name=data["metric_name"],
+            value=data["value"],
+        )
+        await create_datapoint_model(
+            new_datapoint_object=datapoint_obj,
+            datapoint_dao=datapoint_dao,
+        )
+        await session.commit()
+        logger.info(
+            f"Datapoint added for {model_name}, {provider_name} "
+            f"(endpoint_id: {endpoint_id})",
+        )
 
 
 async def process_benchmarking_results(  # noqa: D103, WPS210, WPS231
     benchmarking_results,
     metrics_to_push,
 ):
-    engine = create_async_engine('postgresql+asyncpg://orchestra:password@localhost:5432/orchestra')
+    user = os.getenv("ORCHESTRA_STAGING_DB_USER", "orchestra")
+    password = os.getenv("ORCHESTRA_STAGING_DB_PASSWORD", "orchestra")
+    host = os.getenv("ORCHESTRA_DB_HOST", "localhost")
+    port = os.getenv("ORCHESTRA_DB_PORT", "5432")
+    db_name = os.getenv("ORCHESTRA_STAGING_DB_BASE", "orchestra")
+    db_url = f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{db_name}"  # noqa: WPS221, E501
+    logger.info(db_url)
+    engine = create_async_engine(db_url)
     async_session = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-    async with async_session() as session:
-        provider_dao = ProviderDAO(session)
-        model_dao = ModelDAO(session)
-        endpoint_dao = EndpointDAO(session)
-        datapoint_dao = DatapointDAO(session)
-        tasks = []
-        for model_name, provider_results in benchmarking_results.items():
-            for provider_name, provider_data in provider_results.items():
-                for metric_name, value in provider_data.items():
-                    if metric_name in metrics_to_push:
-                        data = {
-                            "metric_name": metric_name,
-                            "value": round(value, 2) if isinstance(value, float) else value,
-                        }
-                        task = put_data_to_db(
-                            data,
-                            model_name,
-                            provider_name,
-                            provider_dao,
-                            model_dao,
-                            endpoint_dao,
-                            datapoint_dao,
-                        )
-                        tasks.append(task)
-        total_write_count = len(tasks)
-        logger.info(f"Pushing {total_write_count} benchmarking results entries to db")
-        await asyncio.gather(*tasks)
+    tasks = []
+    for model_name, provider_results in benchmarking_results.items():
+        for provider_name, provider_data in provider_results.items():
+            for metric_name, value in provider_data.items():
+                if metric_name in metrics_to_push:
+                    data = {
+                        "metric_name": metric_name,
+                        "value": round(value, 2) if isinstance(value, float) else value,
+                    }
+                    task = put_data_to_db(
+                        data,
+                        model_name,
+                        provider_name,
+                        async_session,
+                    )
+                    tasks.append(task)
+    total_write_count = len(tasks)
+    logger.info(f"Pushing {total_write_count} benchmarking results entries to db")
+    await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":
