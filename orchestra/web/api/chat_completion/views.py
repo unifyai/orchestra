@@ -27,13 +27,11 @@ async def get_completions(  # noqa: C901, WPS210
         provider=request.model.split("/")[0],
         model=request.model.split("/")[-1],
     )
-    stream = request.stream
-    if stream is None:
-        stream = False
+
     response = language_model.get_completion(
         messages=request.messages,
         temperature=request.temperature,
-        stream=stream,
+        stream=request.stream,
     )
     if not response:
         # TODO: Handle when response is None

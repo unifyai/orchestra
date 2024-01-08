@@ -25,6 +25,9 @@ class CompletionsModel:
     def set_api_key(self, api_key: str) -> None:  # noqa: D102
         self.provider_obj.set_api_key(api_key)
 
+    def get_cost_max(self) -> float:  # noqa: D102
+        return self.provider_obj.get_cost(self.model)
+
     def get_completion(  # noqa: D102
         self,
         messages: List[Dict[str, str]],

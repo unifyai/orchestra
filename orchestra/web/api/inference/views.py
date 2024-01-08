@@ -1,14 +1,17 @@
 import base64
 import re
+import requests
 from typing import AsyncIterator, Union
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from models.imagegen import ImagegenModel
 from models.llm import CompletionsModel
 
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
 from orchestra.web.api.inference.schema import InferenceRequest, InferenceResponse
+
+# from orchestra.web.api.recharge.schema import RechargeRequest, RechargeResponse
 
 router = APIRouter()
 
@@ -27,6 +30,7 @@ def get_model_type(model_name):  # noqa: D103
 
 @router.post("/inference", response_model=InferenceResponse)
 async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
+    request_fastapi: Request,
     request: InferenceRequest,
 ) -> Union[InferenceResponse, StreamingResponse]:
     """
@@ -38,12 +42,30 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
     """
     # TODO: Add error 422 for incorrect arguments, model, or provider
     # TODO: Add error 500
+    user_id = request_fastapi.state.user_id
+    print(f"user id used is {user_id}")
+    available_credits = requests.request(
+        "GET",
+        f"http://127.0.0.1:8000/v0/get_credits?id={user_id}",
+        headers={},
+        timeout=5,
+    ).json()["credits"]
+    print('available_credits', available_credits)
+
     model_type = get_model_type(request.model)
     if model_type == "chat":
         language_model = CompletionsModel(
             provider=request.provider,
             model=request.model,
         )
+
+        # cost_max = language_model.get_cost_max()
+        # if available_credits < cost_max:
+        #     return InferenceResponse(
+        #         response={
+        #             "Error": "Insufficient credits",
+        #         },
+        #     )
 
         response = language_model.get_completion(
             messages=request.arguments["messages"],
@@ -52,6 +74,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             stream=request.arguments.get("stream", False),
         )
 
+        # available_credits -= cost 
         if not response:
             # TODO: Handle when response is None
             return InferenceResponse(
