@@ -1,3 +1,4 @@
+import decimal
 from typing import List, Optional
 
 from fastapi import Depends
@@ -62,3 +63,26 @@ class UsersDAO:
         raw_users = await self.session.execute(query)
 
         return list(raw_users.scalars().fetchall())
+
+    async def recharge_credit(
+        self,
+        user_id: str,
+        quantity: float,
+    ) -> None:
+        """
+        Recharge credit of a users.
+
+        :param user_id: id of a user.
+        :param quantity: positive number of credits to recharge.
+        """
+        query = select(Users)
+        query = query.where(Users.id == user_id)
+
+        raw_users = await self.session.execute(query)
+        user = raw_users.scalars().first()
+        if user is not None:
+            setattr(  # noqa: B010
+                user,
+                "credits",
+                user.credits + decimal.Decimal(quantity),
+            )
