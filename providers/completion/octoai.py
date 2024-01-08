@@ -84,7 +84,6 @@ class OctoAI(BaseCompletionProvider):
     ):
         for part in response:
             part_dict = part.dict()
-            print("part is ", part_dict)
             part_dict["model"] = model
             part_json = json.dumps(part_dict)
             yield part_json

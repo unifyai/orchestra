@@ -1,17 +1,17 @@
 import base64
 import re
-import requests
-from typing import AsyncIterator, Union
+from typing import Union
 
 from fastapi import APIRouter, Request
+from fastapi.param_functions import Depends
 from fastapi.responses import StreamingResponse
 from models.imagegen import ImagegenModel
 from models.llm import CompletionsModel
 
+from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
 from orchestra.web.api.inference.schema import InferenceRequest, InferenceResponse
-
-# from orchestra.web.api.recharge.schema import RechargeRequest, RechargeResponse
+from orchestra.web.api.users.views import get_credits
 
 router = APIRouter()
 
@@ -32,25 +32,21 @@ def get_model_type(model_name):  # noqa: D103
 async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
     request_fastapi: Request,
     request: InferenceRequest,
+    users_dao: UsersDAO = Depends(),
 ) -> Union[InferenceResponse, StreamingResponse]:
     """
     Get inference result based on the request.
 
+    :param request_fastapi: FastAPI request object.
     :param request: InferenceRequest object.
-
+    :param users_dao: DAO for users models.
     :return: Model-specific InferenceResponse object.
     """
     # TODO: Add error 422 for incorrect arguments, model, or provider
     # TODO: Add error 500
     user_id = request_fastapi.state.user_id
-    print(f"user id used is {user_id}")
-    available_credits = requests.request(
-        "GET",
-        f"http://127.0.0.1:8000/v0/get_credits?id={user_id}",
-        headers={},
-        timeout=5,
-    ).json()["credits"]
-    print('available_credits', available_credits)
+    users = await get_credits(user_id, users_dao)
+    available_credits = float(users[0].credits if users else 0)
 
     model_type = get_model_type(request.model)
     if model_type == "chat":
@@ -59,22 +55,37 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             model=request.model,
         )
 
-        # cost_max = language_model.get_cost_max()
-        # if available_credits < cost_max:
-        #     return InferenceResponse(
-        #         response={
-        #             "Error": "Insufficient credits",
-        #         },
-        #     )
+        cost_max = language_model.get_cost_max()
+        if available_credits < cost_max:
+            return InferenceResponse(
+                response={
+                    "Error": "Insufficient credits",
+                },
+            )
+        stream = request.arguments.get("stream", False)
+        if stream:
+            response = language_model.get_completion(
+                messages=request.arguments["messages"],
+                temperature=request.arguments.get("temperature", 0.9),  # noqa: WPS432
+                max_tokens=request.arguments.get("max_tokens", None),
+                stream=stream,
+            )
 
-        response = language_model.get_completion(
-            messages=request.arguments["messages"],
-            temperature=request.arguments.get("temperature", 0.9),  # noqa: WPS432
-            max_tokens=request.arguments.get("max_tokens", None),
-            stream=request.arguments.get("stream", False),
-        )
+            async def stream_and_update_db():  # noqa: WPS430
+                async for part_json in response.generator():
+                    yield part_json
+                await users_dao.recharge_credit(user_id, -response.total_cost)
 
-        # available_credits -= cost 
+            return StreamingResponse(stream_and_update_db())
+        else:
+            response, cost = language_model.get_completion(
+                messages=request.arguments["messages"],
+                temperature=request.arguments.get("temperature", 0.9),  # noqa: WPS432
+                max_tokens=request.arguments.get("max_tokens", None),
+                stream=stream,
+            )
+            await users_dao.recharge_credit(user_id, -cost)
+
         if not response:
             # TODO: Handle when response is None
             return InferenceResponse(
@@ -91,11 +102,6 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             response.model = request.model
             return InferenceResponse(
                 response=response.model_dump(),
-            )
-
-        if isinstance(response, AsyncIterator):
-            return StreamingResponse(
-                response,
             )
 
         if not isinstance(response["usage"], dict) and response["usage"]:

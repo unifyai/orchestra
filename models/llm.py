@@ -1,5 +1,5 @@
 import os
-from typing import AsyncIterator, Dict, List, Union
+from typing import Any, Dict, List, Union
 
 from litellm import ModelResponse
 
@@ -26,7 +26,7 @@ class CompletionsModel:
         self.provider_obj.set_api_key(api_key)
 
     def get_cost_max(self) -> float:  # noqa: D102
-        return self.provider_obj.get_cost(self.model)
+        return self.provider_obj.get_cost_max(self.model)
 
     def get_completion(  # noqa: D102
         self,
@@ -34,7 +34,7 @@ class CompletionsModel:
         max_tokens: int = 512,
         temperature: float = 0.9,
         stream: bool = False,
-    ) -> Union[ModelResponse, AsyncIterator[str]]:
+    ) -> Union[ModelResponse, Any]:
 
         return self.provider_obj.complete(
             self.model,
