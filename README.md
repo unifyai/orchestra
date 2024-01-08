@@ -203,7 +203,7 @@ api_router.include_router(
 )
 ```
 
-For testing purposes, an example is to add `ORCHESTRA_ADMIN_KEY="testing-123"` to the `.env` file for verifying the behaviour of the `ORCHESTRA_ADMIN_KEY`.
+For testing purposes, an example is to add `ORCHESTRA_ADMIN_KEY="testing-123"` to the `.env` file for verifying the behaviour of the admin key authentication.
 
 
 ## Running tests
