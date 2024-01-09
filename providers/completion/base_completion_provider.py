@@ -3,9 +3,9 @@ import logging
 from typing import Any, Dict, List, Optional
 
 import litellm
-from litellm.utils import Usage
 import openai
 import tiktoken
+from litellm.utils import Usage
 
 logger = logging.getLogger(__name__)
 
@@ -102,18 +102,21 @@ class BaseCompletionProvider:
 
         try:
             if stream:
-                return AsyncGeneratorWrapper(
-                    litellm.completion(
-                        model=provider_model_endpoint,
-                        messages=messages,
-                        max_tokens=max_tokens,
-                        temperature=temperature,
-                        stream=True,
+                return (
+                    AsyncGeneratorWrapper(
+                        litellm.completion(
+                            model=provider_model_endpoint,
+                            messages=messages,
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                            stream=True,
+                        ),
+                        model,
+                        messages,
+                        compute_cost_streaming=self.compute_cost_streaming,
                     ),
-                    model,
-                    messages,
-                    compute_cost_streaming=self.compute_cost_streaming,
-                ), None
+                    None,
+                )
             response = litellm.completion(
                 model=provider_model_endpoint,
                 messages=messages,
@@ -157,7 +160,10 @@ class AsyncGeneratorWrapper:  # noqa: D101
                 else:
                     usage = part["usage"]
 
-                choices = [choice.model_dump() for choice in part.get("choices", []) if hasattr(choice, 'model_dump')]
+                choices = [
+                    getattr(choice, "model_dump", lambda: None)()
+                    for choice in part.get("choices", [])
+                ]
 
                 part_dict = {
                     "model": self._model,

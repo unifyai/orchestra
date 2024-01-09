@@ -65,12 +65,13 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             )
         stream = request.arguments.get("stream", False)
         response, cost = language_model.get_completion(
-                messages=request.arguments["messages"],
-                temperature=request.arguments.get("temperature", 0.9),  # noqa: WPS432
-                max_tokens=request.arguments.get("max_tokens", None),
-                stream=stream,
-            )
+            messages=request.arguments["messages"],
+            temperature=request.arguments.get("temperature", 0.9),  # noqa: WPS432
+            max_tokens=request.arguments.get("max_tokens", None),
+            stream=stream,
+        )
         if stream:
+
             async def stream_and_update_db():  # noqa: WPS430
                 async for part_json in response.generator():
                     yield part_json
