@@ -10,17 +10,17 @@ class Anyscale(BaseCompletionProvider):
     """
 
     supported_models = {
-        "llama-2-7b-chat-hf": {
+        "llama-2-7b-chat": {
             "endpoint": "anyscale/meta-llama/Llama-2-7b-chat-hf",
             "context_window": 4096,
             "cost": {"prompt": 0.15, "completion": 0.15},
         },
-        "llama-2-13b-chat-hf": {
+        "llama-2-13b-chat": {
             "endpoint": "anyscale/meta-llama/Llama-2-13b-chat-hf",
             "context_window": 4096,
             "cost": {"prompt": 0.25, "completion": 0.25},
         },
-        "llama-2-70b-chat-hf": {
+        "llama-2-70b-chat": {
             "endpoint": "anyscale/meta-llama/Llama-2-70b-chat-hf",
             "context_window": 4096,
             "cost": {"prompt": 1, "completion": 1},
@@ -30,7 +30,7 @@ class Anyscale(BaseCompletionProvider):
             "context_window": 16384,
             "cost": {"prompt": 0.15, "completion": 0.15},
         },
-        "codellama-34b-instruct-hf": {
+        "codellama-34b-instruct": {
             "endpoint": "anyscale/codellama/CodeLlama-34b-Instruct-hf",
             "context_window": 16384,
             "cost": {"prompt": 1, "completion": 1},
