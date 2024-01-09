@@ -24,7 +24,7 @@ class OctoAI(BaseCompletionProvider):
     """
 
     supported_models = {
-        "llama-2-70b-chat-fp16": {
+        "llama-2-70b-chat": {
             "endpoint": "octoai/llama-2-70b-chat-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.6, "completion": 1.9},
@@ -34,12 +34,12 @@ class OctoAI(BaseCompletionProvider):
             "context_window": 4096,
             "cost": {"prompt": 0.6, "completion": 1.2},
         },
-        "llama-2-13b-chat-fp16": {
+        "llama-2-13b-chat": {
             "endpoint": "octoai/llama-2-13b-chat-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.2, "completion": 0.5},
         },
-        "codellama-34b-instruct-fp16": {
+        "codellama-34b-instruct": {
             "endpoint": "octoai/codellama-34b-instruct-fp16",
             "context_window": 16384,
             "cost": {"prompt": 0.5, "completion": 1.15},
@@ -49,22 +49,22 @@ class OctoAI(BaseCompletionProvider):
             "context_window": 4096,
             "cost": {"prompt": 0.5, "completion": 0.8},
         },
-        "codellama-13b-instruct-fp16": {
+        "codellama-13b-instruct": {
             "endpoint": "octoai/codellama-13b-instruct-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.2, "completion": 0.5},
         },
-        "codellama-7b-instruct-fp16": {
+        "codellama-7b-instruct": {
             "endpoint": "octoai/codellama-7b-instruct-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.1, "completion": 0.25},
         },
-        "mistral-7b-instruct-fp16": {
+        "mistral-7b-instruct-v0.1": {  # TODO: Ask which version this is
             "endpoint": "octoai/mistral-7b-instruct-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.1, "completion": 0.25},
         },
-        "mixtral-8x7b-instruct-fp16": {
+        "mixtral-8x7b-instruct-v0.1": {
             "endpoint": "octoai/mixtral-8x7b-instruct-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.2, "completion": 0.5},
