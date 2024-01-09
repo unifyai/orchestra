@@ -25,10 +25,10 @@ class BaseCompletionProvider:
     def get_cost_max(self, model: str) -> float:  # noqa: D102
         if model not in self.supported_models:
             raise ValueError("Model not supported")
-        return (
-            self.supported_models[model]["cost"]["completion"]
-            / 1e6  # noqa: WPS432
-            * self.supported_models[model]["context_window"]
+        return self.compute_cost(
+            model,
+            0,
+            self.supported_models[model]["context_window"],
         )
 
     def compute_cost(
