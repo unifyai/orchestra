@@ -6,14 +6,14 @@ For local, create `keys.sh` with following snippet to setup:
 #!/bin/bash
 
 export ORCHESTRA_ANYSCALE_API_KEY=""
-export ORCHESTRA_PERPLEXITY_API_KEY=""
-export ORCHESTRA_TOGETHERAI_API_KEY=""
+export ORCHESTRA_PERPLEXITY_AI_API_KEY=""
+export ORCHESTRA_TOGETHER_AI_API_KEY=""
 export ORCHESTRA_ANTHROPIC_API_KEY=""
 export ORCHESTRA_REPLICATE_API_KEY=""
 export ORCHESTRA_OPENAI_API_KEY="sk-"
-export ORCHESTRA_MISTRAL_API_KEY=""
-export ORCHESTRA_VERTEXAI_PROJECT="saas-368716"
-export ORCHESTRA_VERTEXAI_LOCATION="us-central1"
+export ORCHESTRA_MISTRAL_AI_API_KEY=""
+export ORCHESTRA_VERTEX_AI_PROJECT="saas-368716"
+export ORCHESTRA_VERTEX_AI_LOCATION="us-central1"
 
 echo "Environment variables have been set."
 ```
