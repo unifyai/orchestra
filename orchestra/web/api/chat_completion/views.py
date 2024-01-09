@@ -34,7 +34,7 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
     :raises HTTPException: when user has insufficient credits.
     """
     user_id = request_fastapi.state.user_id
-    users = await get_credits(user_id, users_dao)
+    users = await get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(users[0].credits if users else 0)
     language_model = CompletionsModel(
         provider=request.model.split("/")[0],
