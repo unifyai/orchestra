@@ -10,12 +10,12 @@ class Mistral(BaseCompletionProvider):
     """
 
     supported_models = {
-        "mistral-tiny": {
+        "mistral-7b-instruct-v0.2": {
             "endpoint": "mistral/mistral-tiny",
             "context_window": 32768,
             "cost": {"prompt": 0.15, "completion": 0.46},
         },
-        "mistral-small": {
+        "mixtral-8x7b-v0.1": {
             "endpoint": "mistral/mistral-small",
             "context_window": 32768,
             "cost": {"prompt": 0.66, "completion": 1.97},

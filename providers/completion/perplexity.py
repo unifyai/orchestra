@@ -20,7 +20,7 @@ class Perplexity(BaseCompletionProvider):
             "context_window": 4096,
             "cost": {"prompt": 0.7, "completion": 2.8},
         },
-        "mistral-7b-instruct": {
+        "mistral-7b-instruct-v0.2": {
             "endpoint": "perplexity/mistral-7b-instruct",
             "context_window": 4096,
             "cost": {"prompt": 0.07, "completion": 0.28},

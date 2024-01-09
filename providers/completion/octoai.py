@@ -24,48 +24,48 @@ class OctoAI(BaseCompletionProvider):
     """
 
     supported_models = {
-        "llama-2-70b-chat-fp16": {
-            "endpoint": "octoai/llama-2-70b-chat-fp16",
+        "llama-2-70b-chat": {
+            "endpoint": "llama-2-70b-chat-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.6, "completion": 1.9},
         },
         "llama-2-70b-chat-int4": {
-            "endpoint": "octoai/llama-2-70b-chat-int4",
+            "endpoint": "llama-2-70b-chat-int4",
             "context_window": 4096,
             "cost": {"prompt": 0.6, "completion": 1.2},
         },
-        "llama-2-13b-chat-fp16": {
-            "endpoint": "octoai/llama-2-13b-chat-fp16",
+        "llama-2-13b-chat": {
+            "endpoint": "llama-2-13b-chat-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.2, "completion": 0.5},
         },
-        "codellama-34b-instruct-fp16": {
-            "endpoint": "octoai/codellama-34b-instruct-fp16",
+        "codellama-34b-instruct": {
+            "endpoint": "codellama-34b-instruct-fp16",
             "context_window": 16384,
             "cost": {"prompt": 0.5, "completion": 1.15},
         },
         "codellama-34b-instruct-int4": {
-            "endpoint": "octoai/codellama-34b-instruct-int4",
+            "endpoint": "codellama-34b-instruct-int4",
             "context_window": 4096,
             "cost": {"prompt": 0.5, "completion": 0.8},
         },
-        "codellama-13b-instruct-fp16": {
-            "endpoint": "octoai/codellama-13b-instruct-fp16",
+        "codellama-13b-instruct": {
+            "endpoint": "codellama-13b-instruct-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.2, "completion": 0.5},
         },
-        "codellama-7b-instruct-fp16": {
-            "endpoint": "octoai/codellama-7b-instruct-fp16",
+        "codellama-7b-instruct": {
+            "endpoint": "codellama-7b-instruct-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.1, "completion": 0.25},
         },
-        "mistral-7b-instruct-fp16": {
-            "endpoint": "octoai/mistral-7b-instruct-fp16",
+        "mistral-7b-instruct-v0.1": {  # TODO: Ask which version this is
+            "endpoint": "mistral-7b-instruct-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.1, "completion": 0.25},
         },
-        "mixtral-8x7b-instruct-fp16": {
-            "endpoint": "octoai/mixtral-8x7b-instruct-fp16",
+        "mixtral-8x7b-instruct-v0.1": {
+            "endpoint": "mixtral-8x7b-instruct-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.2, "completion": 0.5},
         },
@@ -109,7 +109,7 @@ class OctoAI(BaseCompletionProvider):
         if model not in self.supported_models:
             raise ValueError("Model not supported")
 
-        provider_model_endpoint = model
+        provider_model_endpoint = self.supported_models[model]["endpoint"]
         try:
             if stream:
                 return (
@@ -162,6 +162,7 @@ class OctoAIAsyncGeneratorWrapper(AsyncGeneratorWrapper):
         try:  # noqa: WPS501
             for part in self._response:
                 part_dict = part.dict()
+                part_dict["model"] = "octoai/" + self._model  # noqa: WPS336
                 part_json = json.dumps(part_dict)
                 part_text = part_dict["choices"][0]["delta"]["content"]
                 whole += part_text if part_text else ""
