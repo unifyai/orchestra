@@ -2,9 +2,10 @@ import base64
 import re
 from typing import Union
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.param_functions import Depends
 from fastapi.responses import StreamingResponse
+from litellm.utils import Usage
 from models.imagegen import ImagegenModel
 from models.llm import CompletionsModel
 
@@ -41,6 +42,8 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
     :param request: InferenceRequest object.
     :param users_dao: DAO for users models.
     :return: Model-specific InferenceResponse object.
+
+    :raises HTTPException: when user has insufficient credits.
     """
     # TODO: Add error 422 for incorrect arguments, model, or provider
     # TODO: Add error 500
@@ -58,10 +61,9 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
 
         cost_max = language_model.get_cost_max()
         if available_credits < cost_max:
-            return InferenceResponse(
-                response={
-                    "Error": "Insufficient credits",
-                },
+            raise HTTPException(
+                status_code=402,  # noqa: WPS432
+                detail="Insufficient credits",
             )
         stream = request.arguments.get("stream", False)
         response, cost = language_model.get_completion(
@@ -99,16 +101,16 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
                 response=response.model_dump(),
             )
 
-        if not isinstance(response["usage"], dict) and response["usage"]:
+        if isinstance(response["usage"], Usage):
             usage = response["usage"].model_dump()
-        elif response["usage"]:
-            usage = response["usage"]
         else:
-            usage = None
-        if response.get("choices", None):
-            choices = []
-            for choice in response.get("choices", None):
-                choices.append(choice.model_dump())
+            usage = response["usage"]
+
+        choices = [
+            getattr(choice, "model_dump", lambda: None)()
+            for choice in response.get("choices", [])
+        ]
+
         return InferenceResponse(
             response={
                 "model": request.model,
