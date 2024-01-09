@@ -26,7 +26,11 @@ ADMIN_AUTH = [Depends(auth_admin_key)]
 api_router = APIRouter()
 api_router.include_router(monitoring.router)
 
-api_router.include_router(users.router, tags=["users"])
+api_router.include_router(
+    users.router,
+    tags=["users"],
+    dependencies=API_KEY_AUTH,
+)
 api_router.include_router(datapoint.router, prefix="/datapoint", tags=["datapoint"])
 api_router.include_router(endpoint.router, prefix="/endpoint", tags=["endpoint"])
 api_router.include_router(license.router, tags=["license"])
