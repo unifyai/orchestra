@@ -14,7 +14,9 @@ class CompletionsModel:
             raise Exception("Provider not supported by Unify")  # noqa: WPS454
 
         if model.lower() not in PROVIDER_CLASSES[provider].supported_models:
-            raise Exception(f"Model not supported by {provider}")  # noqa: WPS454
+            raise Exception(  # noqa: WPS454
+                f"Model {model} not supported by {provider}",
+            )
 
         self.provider_obj = PROVIDER_CLASSES[provider]()
         self.model = model.lower()
