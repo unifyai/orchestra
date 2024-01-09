@@ -3,6 +3,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 import litellm
+from litellm.utils import Usage
 import openai
 import tiktoken
 
@@ -81,10 +82,7 @@ class BaseCompletionProvider:
         tokens = encoding.encode(completions)
         completion_tokens = len(tokens)
 
-        return (
-            self.supported_models[model]["cost"]["prompt"] * prompt_tokens
-            + self.supported_models[model]["cost"]["completion"] * completion_tokens
-        ) / 1e6  # noqa: WPS432
+        return self.compute_cost(model, prompt_tokens, completion_tokens)
 
     def complete(  # noqa: D102, WPS211, C901, WPS231
         self,
@@ -115,19 +113,17 @@ class BaseCompletionProvider:
                     model,
                     messages,
                     compute_cost_streaming=self.compute_cost_streaming,
-                )
+                ), None
             response = litellm.completion(
                 model=provider_model_endpoint,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
-            if not isinstance(response["usage"], dict) and response["usage"]:
+            if isinstance(response["usage"], Usage):
                 usage = response["usage"].model_dump()
-            elif response["usage"]:
-                usage = response["usage"]
             else:
-                usage = None
+                usage = response["usage"]
 
             return response, self.compute_cost(
                 model,
@@ -156,23 +152,12 @@ class AsyncGeneratorWrapper:  # noqa: D101
         whole = ""
         try:  # noqa: WPS501
             for part in self._response:
-                if not isinstance(  # noqa: WPS337
-                    part.get("usage", None),
-                    dict,
-                ) and part.get(
-                    "usage",
-                    None,
-                ):
+                if isinstance(part["usage"], Usage):
                     usage = part["usage"].model_dump()
-                elif part.get("usage", None):
-                    usage = part["usage"]
                 else:
-                    usage = None
+                    usage = part["usage"]
 
-                choices = []
-                if part.get("choices", None):
-                    for choice in part.get("choices", None):
-                        choices.append(choice.model_dump())  # noqa: WPS220
+                choices = [choice.model_dump() for choice in part.get("choices", []) if hasattr(choice, 'model_dump')]
 
                 part_dict = {
                     "model": self._model,
@@ -184,7 +169,7 @@ class AsyncGeneratorWrapper:  # noqa: D101
                 }
                 part_json = json.dumps(part_dict)
                 part_text = choices[0]["delta"]["content"]
-                whole += choices[0]["delta"]["content"] if part_text is not None else ""
+                whole += part_text if part_text else ""
                 yield part_json
         finally:
             self.total_cost = self._compute_cost_streaming(

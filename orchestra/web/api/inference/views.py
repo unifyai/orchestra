@@ -44,6 +44,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
     """
     # TODO: Add error 422 for incorrect arguments, model, or provider
     # TODO: Add error 500
+    # TODO: Create a separate function and endpoint for updating credits
     user_id = request_fastapi.state.user_id
     users = await get_credits(user_id, users_dao)
     available_credits = float(users[0].credits if users else 0)
@@ -63,14 +64,13 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
                 },
             )
         stream = request.arguments.get("stream", False)
-        if stream:
-            response = language_model.get_completion(
+        response, cost = language_model.get_completion(
                 messages=request.arguments["messages"],
                 temperature=request.arguments.get("temperature", 0.9),  # noqa: WPS432
                 max_tokens=request.arguments.get("max_tokens", None),
                 stream=stream,
             )
-
+        if stream:
             async def stream_and_update_db():  # noqa: WPS430
                 async for part_json in response.generator():
                     yield part_json
@@ -78,12 +78,6 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
 
             return StreamingResponse(stream_and_update_db())
         else:
-            response, cost = language_model.get_completion(
-                messages=request.arguments["messages"],
-                temperature=request.arguments.get("temperature", 0.9),  # noqa: WPS432
-                max_tokens=request.arguments.get("max_tokens", None),
-                stream=stream,
-            )
             await users_dao.recharge_credit(user_id, -cost)
 
         if not response:
