@@ -55,6 +55,15 @@ class Replicate(BaseCompletionProvider):
         },
     }
 
+    def get_cost_max(self, model_name: str) -> float:  # noqa: D102
+        if model_name not in self.supported_models:
+            raise ValueError("Model not supported")
+        cost_data = self.supported_models[model_name]["cost"]
+        # Defined constant used to approximate maximum cost.
+        # Represents the maximum time a server might take to process a request.
+        max_runtime_secs = 100
+        return self.hardware_pricing_per_sec[cost_data["hardware"]] * max_runtime_secs
+
     def compute_cost(
         self,
         model_name: str,

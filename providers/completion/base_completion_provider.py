@@ -26,13 +26,13 @@ class BaseCompletionProvider:
     def set_api_key(self, api_key: str) -> None:  # noqa: D102
         litellm.api_key = api_key
 
-    def get_cost_max(self, model: str) -> float:  # noqa: D102
-        if model not in self.supported_models:
+    def get_cost_max(self, model_name: str) -> float:  # noqa: D102
+        if model_name not in self.supported_models:
             raise ValueError("Model not supported")
-        return self.compute_cost(
-            model,
-            0,
-            self.supported_models[model]["context_window"],
+        return (
+            self.supported_models[model_name]["cost"]["completion"]
+            * self.supported_models[model_name]["context_window"]
+            / PRICING_PER_TOKENS
         )
 
     def compute_cost(
