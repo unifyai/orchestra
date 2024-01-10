@@ -517,7 +517,6 @@ if __name__ == "__main__":
         for model in provider.supported_models.keys()
     ]
     model_list = list(set(model_list))
-    model_list = ["llama-2-7b-chat"]
     benchmarking_results = run_benchmark(model_list, print_table=True)
     logger.info(benchmarking_results)
     metrics_to_push = [
