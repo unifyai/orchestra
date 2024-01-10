@@ -60,7 +60,7 @@ steps:
     --image=$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
   - >-
     --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID,gcb-trigger-id=$_TRIGGER_ID
-  - '--region=$_JOB_REGION'
+  - '--region=$_BENCHMARK_JOB_REGION'
   - '--quiet'
   id: Update benchmarking image
   entrypoint: gcloud
@@ -72,7 +72,7 @@ steps:
   - jobs
   - execute
   - $_BENCHMARK_JOB_NAME
-  - '--region=$_JOB_REGION'
+  - '--region=$_BENCHMARK_JOB_REGION'
   - '--wait'
   id: Benchmark
   entrypoint: gcloud
@@ -103,6 +103,7 @@ options:
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
 substitutions:
   _JOB_REGION: europe-west3
+  _BENCHMARK_JOB_REGION: europe-west1
   _SERVICE_NAME: orchestra
   _TRIGGER_ID: 0bfee4b7-25c8-453a-8484-fca72480864c
   REPO_NAME: orchestra
