@@ -1,9 +1,15 @@
 import os
 import subprocess  # noqa: S404
+from typing import List
 
 import litellm
 import requests
+from litellm.utils import ModelResponse
 from providers.completion.base_completion_provider import BaseCompletionProvider
+
+# Pricing info of providers with pay-per-character model (only Vertex AI currently)
+# is standardized to per thousand tokens.
+PRICING_PER_CHARACTERS = 1000
 
 
 class VertexAI(BaseCompletionProvider):
@@ -177,3 +183,44 @@ class VertexAI(BaseCompletionProvider):
                 ),
             )
         return response.json().get("totalBillableCharacters", 0)
+
+    def get_cost_max(self, model_name: str) -> float:  # noqa: D102
+        if model_name not in self.supported_models:
+            raise ValueError("Model not supported")
+        return (
+            self.supported_models[model_name]["cost"]["completion"]
+            * self.supported_models[model_name]["context_window"]
+            / PRICING_PER_CHARACTERS
+        )
+
+    def compute_cost(
+        self,
+        model_name: str,
+        prompts: List[str],
+        response: ModelResponse,
+    ) -> float:
+        """
+        Compute the cost of a completion.
+
+        :param model_name: The model to use for completion.
+        :param prompts: List of the prompt texts.
+        :param response: Model response from LiteLLM completion.
+
+        :return: The cost of the completion.
+        """
+        cost_data = self.supported_models[model_name]["cost"]  # type: ignore
+        prompt_cost = sum(
+            self.get_billable_characters(prompt, model_name)  # type: ignore
+            * cost_data["prompt"]
+            / PRICING_PER_CHARACTERS
+            for prompt in prompts
+        )
+        completion_cost = (
+            self.get_billable_characters(  # type: ignore
+                response.choices[0].message.content,
+                model_name,
+            )
+            * cost_data["completion"]
+            / PRICING_PER_CHARACTERS
+        )
+        return prompt_cost + completion_cost
