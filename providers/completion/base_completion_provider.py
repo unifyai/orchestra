@@ -5,9 +5,17 @@ from typing import Any, Dict, List, Optional
 import litellm
 import openai
 import tiktoken
-from litellm.utils import Usage
+from litellm.utils import ModelResponse, Usage
 
 logger = logging.getLogger(__name__)
+
+# Pricing info of providers with pay-per-token model is
+# standardized to per million tokens.
+PRICING_PER_TOKENS = 1000000
+
+# Pricing info of providers with pay-per-character model (only Vertex AI currently)
+# is standardized to per thousand tokens.
+PRICING_PER_CHARACTERS = 1000
 
 
 class BaseCompletionProvider:
@@ -33,26 +41,54 @@ class BaseCompletionProvider:
 
     def compute_cost(
         self,
-        model: str,
-        prompt_tokens: int,
-        completion_tokens: int,
+        model_name: str,
+        prompts: List[str],
+        response: ModelResponse,
     ) -> float:
         """
         Compute the cost of a completion.
 
-        :param model: The model to use for completion.
-        :type model: str
-        :param prompt_tokens: Number of tokens in the prompt.
-        :type prompt_tokens: int
-        :param completion_tokens: Number of tokens in the completion.
-        :type completion_tokens: int
+        :param model_name: The model to use for completion.
+        :param prompts: List of the prompt texts.
+        :param response: Model response from LiteLLM completion.
 
         :return: The cost of the completion.
         """
-        return (
-            self.supported_models[model]["cost"]["prompt"] * prompt_tokens
-            + self.supported_models[model]["cost"]["completion"] * completion_tokens
-        ) / 1e6  # noqa: WPS432
+        cost_data = self.supported_models[model_name]["cost"]  # type: ignore
+        if cost_data.get("per_character"):
+            prompt_cost = sum(
+                self.get_billable_characters(prompt, model_name)  # type: ignore
+                * cost_data["prompt"]
+                / PRICING_PER_CHARACTERS
+                for prompt in prompts
+            )
+            completion_cost = (
+                self.get_billable_characters(  # type: ignore
+                    response.choices[0].message.content,
+                    model_name,
+                )
+                * cost_data["completion"]
+                / PRICING_PER_CHARACTERS
+            )
+
+        elif cost_data.get("per_second"):
+            prompt_cost = (
+                self.hardware_pricing_per_sec[cost_data["hardware"]]  # type: ignore
+                * response._response_ms
+                / 1000
+            )
+        else:
+            if cost_data.get("online"):
+                prompt_cost = cost_data["online"]["charge_per_1000_requests"] / 1000
+            prompt_cost += (
+                response.usage.prompt_tokens * cost_data["prompt"] / PRICING_PER_TOKENS
+            )
+            completion_cost = (
+                response.usage.completion_tokens
+                * cost_data["completion"]
+                / PRICING_PER_TOKENS
+            )
+        return prompt_cost + completion_cost
 
     def compute_cost_streaming(  # noqa: WPS210
         self,
@@ -123,15 +159,11 @@ class BaseCompletionProvider:
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
-            if isinstance(response["usage"], Usage):
-                usage = response["usage"].model_dump()
-            else:
-                usage = response["usage"]
 
             return response, self.compute_cost(
                 model,
-                usage["prompt_tokens"],
-                usage["completion_tokens"],
+                [item["content"] for item in messages],
+                response,
             )
         except openai.APIError as error:
             logger.error(f"Raised openai.APIError, Error: {error}")
