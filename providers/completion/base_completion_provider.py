@@ -13,10 +13,6 @@ logger = logging.getLogger(__name__)
 # standardized to per million tokens.
 PRICING_PER_TOKENS = 1000000
 
-# Pricing info of providers with pay-per-character model (only Vertex AI currently)
-# is standardized to per thousand tokens.
-PRICING_PER_CHARACTERS = 1000
-
 
 class BaseCompletionProvider:
     """Base class for completion providers."""
@@ -55,39 +51,17 @@ class BaseCompletionProvider:
         :return: The cost of the completion.
         """
         cost_data = self.supported_models[model_name]["cost"]  # type: ignore
-        if cost_data.get("per_character"):
-            prompt_cost = sum(
-                self.get_billable_characters(prompt, model_name)  # type: ignore
-                * cost_data["prompt"]
-                / PRICING_PER_CHARACTERS
-                for prompt in prompts
-            )
-            completion_cost = (
-                self.get_billable_characters(  # type: ignore
-                    response.choices[0].message.content,
-                    model_name,
-                )
-                * cost_data["completion"]
-                / PRICING_PER_CHARACTERS
-            )
-
-        elif cost_data.get("per_second"):
-            prompt_cost = (
-                self.hardware_pricing_per_sec[cost_data["hardware"]]  # type: ignore
-                * response._response_ms
-                / 1000
-            )
-        else:
-            if cost_data.get("online"):
-                prompt_cost = cost_data["online"]["charge_per_1000_requests"] / 1000
-            prompt_cost += (
-                response.usage.prompt_tokens * cost_data["prompt"] / PRICING_PER_TOKENS
-            )
-            completion_cost = (
-                response.usage.completion_tokens
-                * cost_data["completion"]
-                / PRICING_PER_TOKENS
-            )
+        prompt_cost = 0
+        if cost_data.get("online"):
+            prompt_cost += cost_data["online"]["charge_per_1000_requests"] / 1000
+        prompt_cost += (
+            response.usage.prompt_tokens * cost_data["prompt"] / PRICING_PER_TOKENS
+        )
+        completion_cost = (
+            response.usage.completion_tokens
+            * cost_data["completion"]
+            / PRICING_PER_TOKENS
+        )
         return prompt_cost + completion_cost
 
     def compute_cost_streaming(  # noqa: WPS210

@@ -1,8 +1,10 @@
 import os
 import subprocess  # noqa: S404
+from typing import List
 
 import litellm
 import requests
+from litellm.utils import ModelResponse
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
@@ -121,6 +123,9 @@ class VertexAI(BaseCompletionProvider):
             "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
     }
+    # Pricing info of providers with pay-per-character model (only Vertex AI currently)
+    # is standardized to per thousand tokens.
+    pricing_per_characters = 1000
 
     def set_service_account_credentials(
         self,
@@ -177,3 +182,35 @@ class VertexAI(BaseCompletionProvider):
                 ),
             )
         return response.json().get("totalBillableCharacters", 0)
+
+    def compute_cost(
+        self,
+        model_name: str,
+        prompts: List[str],
+        response: ModelResponse,
+    ) -> float:
+        """
+        Compute the cost of a completion.
+
+        :param model_name: The model to use for completion.
+        :param prompts: List of the prompt texts.
+        :param response: Model response from LiteLLM completion.
+
+        :return: The cost of the completion.
+        """
+        cost_data = self.supported_models[model_name]["cost"]  # type: ignore
+        prompt_cost = sum(
+            self.get_billable_characters(prompt, model_name)  # type: ignore
+            * cost_data["prompt"]
+            / self.pricing_per_characters
+            for prompt in prompts
+        )
+        completion_cost = (
+            self.get_billable_characters(  # type: ignore
+                response.choices[0].message.content,
+                model_name,
+            )
+            * cost_data["completion"]
+            / self.pricing_per_characters
+        )
+        return prompt_cost + completion_cost

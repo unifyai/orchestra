@@ -1,4 +1,7 @@
 # flake8: noqa: E501
+from typing import List, Optional
+
+from litellm.utils import ModelResponse
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
@@ -51,3 +54,26 @@ class Replicate(BaseCompletionProvider):
             "cost": {"hardware": "a40-large", "per_second": True},
         },
     }
+
+    def compute_cost(
+        self,
+        model_name: str,
+        prompts: Optional[List[str]],
+        response: ModelResponse,
+    ) -> float:
+        """
+        Compute the cost of a completion.
+
+        :param model_name: The model to use for completion.
+        :param prompts: List of the prompt texts.
+        :param response: Model response from LiteLLM completion.
+
+        :return: The cost of the completion.
+        """
+        cost_data = self.supported_models[model_name]["cost"]  # type: ignore
+        total_cost = (
+            self.hardware_pricing_per_sec[cost_data["hardware"]]  # type: ignore
+            * response._response_ms
+            / 1000
+        )
+        return total_cost
