@@ -19,7 +19,7 @@ router = APIRouter()
 
 def get_model_type(model_name):  # noqa: D103
     chat_models = re.compile(
-        r"(gpt|llama|zephyr|mistral|mixtral|pplx|falcon|wizard|mpt|claude)",  # noqa: WPS360, E501
+        r"(gpt|llama|zephyr|mistral|mixtral|pplx|falcon|wizard|mpt|claude|yi|chronos|alpaca|nous|hermes|platypus|pythia|qwen|redpajama)",  # noqa: WPS360, E501
     )
     image_models = re.compile(r"diffusion|sd")  # noqa: WPS360
 
