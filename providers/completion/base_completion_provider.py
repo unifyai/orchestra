@@ -84,7 +84,7 @@ class BaseCompletionProvider:
             completion_tokens = len(tokens)
 
             return self.compute_cost(model, prompt_tokens, completion_tokens)
-        except:
+        except Exception:
             return 0
 
     def complete(  # noqa: D102, WPS211, C901, WPS231
