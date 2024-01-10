@@ -125,7 +125,7 @@ class VertexAI(BaseCompletionProvider):
     def set_service_account_credentials(
         self,
         json_credentials_path: str,
-        gcloud_install_path: str = "/workspaces/orchestra/google-cloud-sdk/bin/gcloud",
+        gcloud_install_path: str,
     ) -> None:
         """
         Sets the service account credentials for GCP.
@@ -176,4 +176,4 @@ class VertexAI(BaseCompletionProvider):
                     "ensure properly configured service account credentials",
                 ),
             )
-        return response.json()["totalBillableCharacters"]
+        return response.json().get("totalBillableCharacters", 0)
