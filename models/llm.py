@@ -1,5 +1,5 @@
 import os
-from typing import AsyncIterator, Dict, List, Union
+from typing import Any, Dict, List, Union
 
 from litellm import ModelResponse
 
@@ -14,7 +14,9 @@ class CompletionsModel:
             raise Exception("Provider not supported by Unify")  # noqa: WPS454
 
         if model.lower() not in PROVIDER_CLASSES[provider].supported_models:
-            raise Exception(f"Model not supported by {provider}")  # noqa: WPS454
+            raise Exception(  # noqa: WPS454
+                f"Model {model} not supported by {provider}",
+            )
 
         self.provider_obj = PROVIDER_CLASSES[provider]()
         self.model = model.lower()
@@ -25,13 +27,16 @@ class CompletionsModel:
     def set_api_key(self, api_key: str) -> None:  # noqa: D102
         self.provider_obj.set_api_key(api_key)
 
+    def get_cost_max(self) -> float:  # noqa: D102
+        return self.provider_obj.get_cost_max(self.model)
+
     def get_completion(  # noqa: D102
         self,
         messages: List[Dict[str, str]],
         max_tokens: int = 512,
         temperature: float = 0.9,
         stream: bool = False,
-    ) -> Union[ModelResponse, AsyncIterator[str]]:
+    ) -> Union[ModelResponse, Any]:
 
         return self.provider_obj.complete(
             self.model,

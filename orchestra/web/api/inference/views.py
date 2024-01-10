@@ -1,14 +1,18 @@
 import base64
 import re
-from typing import AsyncIterator, Union
+from typing import Union
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.param_functions import Depends
 from fastapi.responses import StreamingResponse
+from litellm.utils import Usage
 from models.imagegen import ImagegenModel
 from models.llm import CompletionsModel
 
+from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
 from orchestra.web.api.inference.schema import InferenceRequest, InferenceResponse
+from orchestra.web.api.users.views import get_credits
 
 router = APIRouter()
 
@@ -27,17 +31,27 @@ def get_model_type(model_name):  # noqa: D103
 
 @router.post("/inference", response_model=InferenceResponse)
 async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
+    request_fastapi: Request,
     request: InferenceRequest,
+    users_dao: UsersDAO = Depends(),
 ) -> Union[InferenceResponse, StreamingResponse]:
     """
     Get inference result based on the request.
 
+    :param request_fastapi: FastAPI request object.
     :param request: InferenceRequest object.
-
+    :param users_dao: DAO for users models.
     :return: Model-specific InferenceResponse object.
+
+    :raises HTTPException: when user has insufficient credits.
     """
     # TODO: Add error 422 for incorrect arguments, model, or provider
     # TODO: Add error 500
+    # TODO: Create a separate function and endpoint for updating credits
+    user_id = request_fastapi.state.user_id
+    users = await get_credits(request_fastapi, users_dao=users_dao)
+    available_credits = float(users[0].credits if users else 0)
+
     model_type = get_model_type(request.model)
     if model_type == "chat":
         language_model = CompletionsModel(
@@ -45,12 +59,29 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             model=request.model,
         )
 
-        response = language_model.get_completion(
+        cost_max = language_model.get_cost_max()
+        if available_credits < cost_max:
+            raise HTTPException(
+                status_code=402,  # noqa: WPS432
+                detail="Insufficient credits",
+            )
+        stream = request.arguments.get("stream", False)
+        response, cost = language_model.get_completion(
             messages=request.arguments["messages"],
             temperature=request.arguments.get("temperature", 0.9),  # noqa: WPS432
             max_tokens=request.arguments.get("max_tokens", None),
-            stream=request.arguments.get("stream", False),
+            stream=stream,
         )
+        if stream:
+
+            async def stream_and_update_db():  # noqa: WPS430
+                async for part_json in response.generator():
+                    yield part_json
+                await users_dao.recharge_credit(user_id, -response.total_cost)
+
+            return StreamingResponse(stream_and_update_db())
+        else:
+            await users_dao.recharge_credit(user_id, -cost)
 
         if not response:
             # TODO: Handle when response is None
@@ -70,21 +101,16 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
                 response=response.model_dump(),
             )
 
-        if isinstance(response, AsyncIterator):
-            return StreamingResponse(
-                response,
-            )
-
-        if not isinstance(response["usage"], dict) and response["usage"]:
+        if isinstance(response["usage"], Usage):
             usage = response["usage"].model_dump()
-        elif response["usage"]:
-            usage = response["usage"]
         else:
-            usage = None
-        if response.get("choices", None):
-            choices = []
-            for choice in response.get("choices", None):
-                choices.append(choice.model_dump())
+            usage = response["usage"]
+
+        choices = [
+            getattr(choice, "model_dump", lambda: None)()
+            for choice in response.get("choices", [])
+        ]
+
         return InferenceResponse(
             response={
                 "model": request.model,
