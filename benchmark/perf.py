@@ -326,7 +326,31 @@ def create_table(  # noqa: D103, WPS210
     return table
 
 
-def run_benchmark(  # noqa: C901, WPS210, WPS231
+def benchmark_model(  # noqa: D103, WPS211
+    model_name,
+    provider_name,
+    provider_class,
+    traversed_providers,
+    problems,
+    model_results,
+):
+    if model_name.lower() in provider_class.supported_models:
+        logger.info(f"{model_name} on {provider_name}")
+        provider_obj = get_provider_obj(provider_name, traversed_providers)
+        completion_results = get_completion_results(provider_obj, model_name, problems)
+        if completion_results is None:
+            logger.error(f"{model_name} on {provider_name} was skipped")
+            raise ValueError(f"{model_name} completion is None")
+
+        model_results.setdefault(model_name, {})[provider_name] = calculate_results(
+            completion_results,
+            model_name,
+            provider_obj,
+        )
+        add_cost_info(model_results, model_name, provider_name, provider_obj)
+
+
+def run_benchmark(  # noqa: C901, WPS210, WPS220, WPS231
     models: List[str],
     benchmark_problems_path: str = "benchmark/problems.jsonl",
     evaluator: Optional[str] = None,
@@ -356,30 +380,18 @@ def run_benchmark(  # noqa: C901, WPS210, WPS231
     logger.info("Currently benchmarking: ")
     for provider_name, provider_class in PROVIDER_CLASSES.items():
         for model_name in models:
-            if model_name.lower() in provider_class.supported_models:
-                logger.info(f"{model_name} on {provider_name}")
-                provider_obj = get_provider_obj(provider_name, traversed_providers)
-                completion_results = get_completion_results(
-                    provider_obj,
-                    model_name,
-                    problems,
-                )
-                if completion_results is None:
-                    logger.error(f"{model_name} on {provider_name} was skipped")
-                    continue
-
-                model_results.setdefault(model_name, {})[
-                    provider_name
-                ] = calculate_results(
-                    completion_results,
-                    model_name,
-                    provider_obj,
-                )
-                add_cost_info(
-                    model_results,
+            try:
+                benchmark_model(
                     model_name,
                     provider_name,
-                    provider_obj,
+                    provider_class,
+                    traversed_providers,
+                    problems,
+                    model_results,
+                )
+            except Exception as benchmark_error:
+                logger.error(
+                    f"{model_name} in {provider_name} throwed: {benchmark_error}.",
                 )
         logger.info("--------------------")
     if evaluator:
@@ -517,8 +529,8 @@ if __name__ == "__main__":
         for model in provider.supported_models.keys()
     ]
     model_list = list(set(model_list))
-    benchmarking_results = run_benchmark(model_list, print_table=True)
-    logger.info(benchmarking_results)
+    benchmarking_results = run_benchmark(model_list, print_table=False)
+    logger.info("Pushing metrics to DB")
     metrics_to_push = [
         "output_toks_per_sec",
         "context_window",
