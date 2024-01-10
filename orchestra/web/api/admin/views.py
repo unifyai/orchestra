@@ -34,20 +34,16 @@ router = APIRouter()
 
 
 @router.get("/get_all_users", response_model=List[UsersModelResponse])
-async def get_users_models(
-    limit: int = 10,
-    offset: int = 0,
+async def get_all_users_models(
     users_dao: UsersDAO = Depends(),
 ) -> List[Users]:
     """
     Retrieve all users objects from the database.
 
-    :param limit: limit of users objects, defaults to 10.
-    :param offset: offset of users objects, defaults to 0.
     :param users_dao: DAO for users models.
     :return: list of users objects from database.
     """
-    return await users_dao.get_all_users(limit=limit, offset=offset)
+    return await users_dao.get_all_users()
 
 
 @router.get("/get_user", response_model=List[UsersModelResponse])
