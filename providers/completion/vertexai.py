@@ -25,12 +25,12 @@ class VertexAI(BaseCompletionProvider):
             "context_window": 8192,
             "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
         },
-        "text-bison@002": {
+        "text-bison-002": {
             "endpoint": "text-bison@002",
             "context_window": 8192,
             "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
         },
-        "text-bison@001": {
+        "text-bison-001": {
             "endpoint": "text-bison@001",
             "context_window": 8192,
             "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
@@ -40,12 +40,12 @@ class VertexAI(BaseCompletionProvider):
             "context_window": 8192,
             "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
         },
-        "chat-bison@002": {
+        "chat-bison-002": {
             "endpoint": "chat-bison@002",
             "context_window": 8192,
             "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
         },
-        "chat-bison@001": {
+        "chat-bison-001": {
             "endpoint": "chat-bison@001",
             "context_window": 8192,
             "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
@@ -55,12 +55,12 @@ class VertexAI(BaseCompletionProvider):
             "context_window": 6144,
             "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
-        "code-bison@002": {  # Preview, 100% discount
+        "code-bison-002": {  # Preview, 100% discount
             "endpoint": "code-bison@002",
             "context_window": 6144,
             "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
-        "code-bison@001": {  # Preview, 100% discount
+        "code-bison-001": {  # Preview, 100% discount
             "endpoint": "code-bison@001",
             "context_window": 6144,
             "cost": {"prompt": 0, "completion": 0, "per_character": True},
@@ -70,12 +70,12 @@ class VertexAI(BaseCompletionProvider):
             "context_window": 6144,
             "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
-        "codechat-bison@002": {  # Preview, 100% discount
+        "codechat-bison-002": {  # Preview, 100% discount
             "endpoint": "codechat-bison@002",
             "context_window": 6144,
             "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
-        "codechat-bison@001": {  # Preview, 100% discount
+        "codechat-bison-001": {  # Preview, 100% discount
             "endpoint": "codechat-bison@001",
             "context_window": 6144,
             "cost": {"prompt": 0, "completion": 0, "per_character": True},
@@ -85,12 +85,12 @@ class VertexAI(BaseCompletionProvider):
             "context_window": 2048,
             "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
-        "code-gecko@002": {  # Preview, 100% discount
+        "code-gecko-002": {  # Preview, 100% discount
             "endpoint": "code-gecko@002",
             "context_window": 2048,
             "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
-        "code-gecko@001": {  # Preview, 100% discount
+        "code-gecko-001": {  # Preview, 100% discount
             "endpoint": "code-gecko@001",
             "context_window": 2048,
             "cost": {"prompt": 0, "completion": 0, "per_character": True},
