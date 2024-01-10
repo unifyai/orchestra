@@ -31,7 +31,7 @@ async def get_models(
 @router.get("/get_model", response_model=List[ModelResponse])
 async def get_model(  # noqa: WPS211, C901
     mdl_code: str,
-    user_id: str,
+    user_id: Optional[str] = None,
     uploaded_at: Optional[datetime.datetime] = None,
     task: Optional[str] = None,
     description: Optional[str] = None,
