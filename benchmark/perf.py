@@ -133,7 +133,7 @@ def get_provider_obj(
             provider_obj.set_api_key(
                 api_key=str(
                     os.getenv(
-                        f"ORCHESTRA_{provider_name.replace(' ', '_').upper()}_API_KEY",  # noqa: WPS237, E501
+                        f"ORCHESTRA_{provider_name.replace('-', '_').upper()}_API_KEY",  # noqa: WPS237, E501
                     ),
                 ),
             )
