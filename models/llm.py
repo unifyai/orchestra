@@ -21,7 +21,9 @@ class CompletionsModel:
         self.provider_obj = PROVIDER_CLASSES[provider]()
         self.model = model.lower()
         api_key = str(
-            os.getenv(f"ORCHESTRA_{provider.upper().replace('-', '_').upper()}_API_KEY")
+            os.getenv(
+                f"ORCHESTRA_{provider.replace('-', '_').upper()}_API_KEY",  # noqa: WPS237, E501
+            ),
         )
 
         if api_key is not None:
