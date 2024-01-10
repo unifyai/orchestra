@@ -72,17 +72,20 @@ class BaseCompletionProvider:
 
         :return: The cost of the completion.
         """
-        total_prompt = ""
-        for item in messages:  # noqa: WPS519
-            total_prompt += item["content"]
-        encoding = tiktoken.get_encoding("cl100k_base")
-        tokens = encoding.encode(total_prompt)
-        prompt_tokens = len(tokens)
+        try:
+            total_prompt = ""
+            for item in messages:  # noqa: WPS519
+                total_prompt += item["content"]
+            encoding = tiktoken.get_encoding("cl100k_base")
+            tokens = encoding.encode(total_prompt)
+            prompt_tokens = len(tokens)
 
-        tokens = encoding.encode(completions)
-        completion_tokens = len(tokens)
+            tokens = encoding.encode(completions)
+            completion_tokens = len(tokens)
 
-        return self.compute_cost(model, prompt_tokens, completion_tokens)
+            return self.compute_cost(model, prompt_tokens, completion_tokens)
+        except:
+            return 0
 
     def complete(  # noqa: D102, WPS211, C901, WPS231
         self,
