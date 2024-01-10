@@ -523,11 +523,11 @@ async def process_benchmarking_results(  # noqa: D103, WPS210, WPS231
     benchmarking_results,
     metrics_to_push,
 ):
-    user = os.getenv("ORCHESTRA_STAGING_DB_USER", "orchestra")
-    password = os.getenv("ORCHESTRA_STAGING_DB_PASSWORD", "orchestra")
+    user = os.getenv("ORCHESTRA_DB_USER", "orchestra")
+    password = os.getenv("ORCHESTRA_DB_PASS", "orchestra")
     host = os.getenv("ORCHESTRA_DB_HOST", "localhost")
     port = os.getenv("ORCHESTRA_DB_PORT", "5432")
-    db_name = os.getenv("ORCHESTRA_STAGING_DB_BASE", "orchestra")
+    db_name = os.getenv("ORCHESTRA_DB_BASE", "orchestra")
     db_url = f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{db_name}"  # noqa: WPS221, E501
     logger.info(db_url)
     engine = create_async_engine(db_url)
