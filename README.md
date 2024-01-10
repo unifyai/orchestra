@@ -44,6 +44,12 @@ But you have to rebuild image every time you modify `poetry.lock` or `pyproject.
 docker-compose -f deploy/docker-compose.yml --project-directory . build
 ```
 
+### Remove all old artifacts in local
+```bash
+docker-compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml --project-directory . down --volumes --remove-orphans
+docker rmi $(docker images -q)
+docker volume prune
+```
 It is recommended to use the poetry commands for local development as docker does not play well with the database.
 
 ## Project structure
@@ -228,18 +234,25 @@ docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orc
 ```bash
 pytest -vv .
 ```
-
 ## Setting up the database locally
-
 ### Getting local dump file
-To setup the database locally, you need to create a dump file of the staging database. To do so, run the following commands
-```bash
-gcloud sql connect staging
-```
-After connecting to staging, run the following command on your terminal. This will create a dump file.
-```bash
-pg_dump -h 34.141.85.117 -p 5432 -U postgres orchestra > orchestra.sql
-```
+1. To setup the database locally, you need to create a dump file of the staging database. To do so, you can either run the following commands:
+    - Connect to the sql database using gcloud:
+        ```bash
+        gcloud sql connect staging
+        ```
+    - After connecting to staging, run the following command on your terminal. This will create a dump file.
+        ```bash
+        pg_dump -h 34.141.85.117 -p 5432 -U postgres orchestra > orchestra.sql
+        ```
+    OR
+    - Use GCP UI to pg_dump the data through the [export page here](https://console.cloud.google.com/sql/instances/dev/export?project=saas-368716) into [temp_file_holder](https://console.cloud.google.com/storage/browser/temp_file_holder;tab=objects?forceOnBucketsSortingFiltering=true&project=saas-368716&prefix=&forceOnObjectsSortingFiltering=false) bucket and then download from there.
+2. Now, connect to psql and run the following command to populate your local orchestra database. Note: this step assumes you've database setup and running.
+    ```bash
+    PGPASSWORD=orchestra psql -h localhost -U orchestra -d orchestra
+    \i <path to orchestra.sql>
+    \q
+    ```
 
 ### Setting up the database in the docker container
 This way you can configure your database that is spun up using the docker compose.
