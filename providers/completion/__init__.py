@@ -10,15 +10,15 @@ from providers.completion.togetherai import TogetherAI
 from providers.completion.vertexai import VertexAI
 
 PROVIDER_CLASSES = {
-    "Anyscale": Anyscale,
-    "Perplexity AI": Perplexity,
-    "Together AI": TogetherAI,
-    "Anthropic": Anthropic,
-    "Replicate": Replicate,
-    "Vertex AI": VertexAI,
-    "OpenAI": OpenAI,
-    "Mistral AI": Mistral,
-    "OctoAI": OctoAI,
+    "anyscale": Anyscale,
+    "perplexity-ai": Perplexity,
+    "together-ai": TogetherAI,
+    "anthropic": Anthropic,
+    "replicate": Replicate,
+    "vertex-ai": VertexAI,
+    "openai": OpenAI,
+    "mistral-ai": Mistral,
+    "octoai": OctoAI,
 }
 
 # Pricing info of providers with pay-per-token model is
