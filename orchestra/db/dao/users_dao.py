@@ -33,16 +33,14 @@ class UsersDAO:
             ),
         )
 
-    async def get_all_users(self, limit: int, offset: int) -> List[Users]:
+    async def get_all_users(self) -> List[Users]:
         """
         Get all users models with limit/offset pagination.
 
-        :param limit: limit of users.
-        :param offset: offset of users.
         :return: stream of users.
         """
         raw_users = await self.session.execute(
-            select(Users).limit(limit).offset(offset),
+            select(Users),
         )
 
         return list(raw_users.scalars().fetchall())
