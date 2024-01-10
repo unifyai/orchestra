@@ -81,7 +81,10 @@ def evaluate_answers(
     )
     if evaluator_result is None:
         raise ValueError(f"{evaluator_model} on {provider} threw an error during call")
-    found = re.search(r"Score: (\d+)", evaluator_result.choices[0].message.content)
+    found = re.search(
+        r"Score: (\d+)",
+        evaluator_result[0].choices[0].message.content,  # noqa: WPS219, E501
+    )
     if found:
         return int(found.group(1))
     return 0
@@ -155,16 +158,16 @@ def get_completion_results(  # noqa: D103
         if result is None:
             return None
         # handles cold-start skewing latency
-        if result._response_ms > COLD_START_THRESHOLD:
-            cold_start_latency = result._response_ms
+        if result[0]._response_ms > COLD_START_THRESHOLD:
+            cold_start_latency = result[0]._response_ms
             result = provider.complete(
                 model,
                 [{"content": prompt[0], "role": "user"}],
             )
         else:
             cold_start_latency = 0
-        result.cold_start_latency = cold_start_latency
-        completion_results.append(result)
+        result[0].cold_start_latency = cold_start_latency
+        completion_results.append(result[0])
     return completion_results
 
 
