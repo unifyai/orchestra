@@ -20,7 +20,3 @@ PROVIDER_CLASSES = {
     "mistral-ai": Mistral,
     "octoai": OctoAI,
 }
-
-# Pricing info of providers with pay-per-token model is
-# standardized to per million tokens.
-PRICING_PER_TOKENS = 1000000

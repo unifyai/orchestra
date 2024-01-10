@@ -5,9 +5,13 @@ from typing import Any, Dict, List, Optional
 import litellm
 import openai
 import tiktoken
-from litellm.utils import Usage
+from litellm.utils import ModelResponse, Usage
 
 logger = logging.getLogger(__name__)
+
+# Pricing info of providers with pay-per-token model is
+# standardized to per million tokens.
+PRICING_PER_TOKENS = 1000000
 
 
 class BaseCompletionProvider:
@@ -22,37 +26,43 @@ class BaseCompletionProvider:
     def set_api_key(self, api_key: str) -> None:  # noqa: D102
         litellm.api_key = api_key
 
-    def get_cost_max(self, model: str) -> float:  # noqa: D102
-        if model not in self.supported_models:
+    def get_cost_max(self, model_name: str) -> float:  # noqa: D102
+        if model_name not in self.supported_models:
             raise ValueError("Model not supported")
-        return self.compute_cost(
-            model,
-            0,
-            self.supported_models[model]["context_window"],
+        return (
+            self.supported_models[model_name]["cost"]["completion"]
+            * self.supported_models[model_name]["context_window"]
+            / PRICING_PER_TOKENS
         )
 
     def compute_cost(
         self,
-        model: str,
-        prompt_tokens: int,
-        completion_tokens: int,
+        model_name: str,
+        prompts: List[str],
+        response: ModelResponse,
     ) -> float:
         """
         Compute the cost of a completion.
 
-        :param model: The model to use for completion.
-        :type model: str
-        :param prompt_tokens: Number of tokens in the prompt.
-        :type prompt_tokens: int
-        :param completion_tokens: Number of tokens in the completion.
-        :type completion_tokens: int
+        :param model_name: The model to use for completion.
+        :param prompts: List of the prompt texts.
+        :param response: Model response from LiteLLM completion.
 
         :return: The cost of the completion.
         """
-        return (
-            self.supported_models[model]["cost"]["prompt"] * prompt_tokens
-            + self.supported_models[model]["cost"]["completion"] * completion_tokens
-        ) / 1e6  # noqa: WPS432
+        cost_data = self.supported_models[model_name]["cost"]  # type: ignore
+        prompt_cost = 0
+        if cost_data.get("online"):
+            prompt_cost += cost_data["online"]["charge_per_1000_requests"] / 1000
+        prompt_cost += (
+            response.usage.prompt_tokens * cost_data["prompt"] / PRICING_PER_TOKENS
+        )
+        completion_cost = (
+            response.usage.completion_tokens
+            * cost_data["completion"]
+            / PRICING_PER_TOKENS
+        )
+        return prompt_cost + completion_cost
 
     def compute_cost_streaming(  # noqa: WPS210
         self,
@@ -82,8 +92,13 @@ class BaseCompletionProvider:
 
             tokens = encoding.encode(completions)
             completion_tokens = len(tokens)
+            response = ModelResponse(usage=Usage(prompt_tokens, completion_tokens))
 
-            return self.compute_cost(model, prompt_tokens, completion_tokens)
+            return self.compute_cost(
+                model,
+                [item["content"] for item in messages],  # noqa: WPS441
+                response,
+            )
         except Exception:
             return 0
 
@@ -126,15 +141,11 @@ class BaseCompletionProvider:
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
-            if isinstance(response["usage"], Usage):
-                usage = response["usage"].model_dump()
-            else:
-                usage = response["usage"]
 
             return response, self.compute_cost(
                 model,
-                usage["prompt_tokens"],
-                usage["completion_tokens"],
+                [item["content"] for item in messages],
+                response,
             )
         except openai.APIError as error:
             logger.error(f"Raised openai.APIError, Error: {error}")

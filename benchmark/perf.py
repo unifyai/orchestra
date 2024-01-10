@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, cast
 import numpy as np
 from litellm import ModelResponse
 from prettytable import PrettyTable
-from providers.completion import PRICING_PER_TOKENS, PROVIDER_CLASSES
+from providers.completion import PROVIDER_CLASSES
 from providers.completion.base_completion_provider import BaseCompletionProvider
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -173,77 +173,36 @@ def get_completion_results(  # noqa: D103
 
 def add_cost_info(  # noqa: WPS211
     model_results: Dict[str, Any],
-    completion_results: List[ModelResponse],
     model_name: str,
     provider_name: str,
     provider: BaseCompletionProvider,
-    problems: List[tuple[str, str]],
 ):
     """
-    Adds cost metadata to the model_results dict.
+    Adds input & output cost metadata to the model_results dict.
 
     :param model_results: The model and provider results dict.
-    :param completion_results: The completion results of the model.
     :param model_name: The model to calculate the cost of.
     :param provider_name: The provider to calculate the cost of.
     :param provider: The provider object of the model.
-    :param problems: The problems containing input prompts.
     """
-    prompt_cost = 0
-    completion_cost = 0
-    for result, qna in zip(completion_results, problems):
-        cost_data = provider.supported_models[model_name]["cost"]  # type: ignore
-        if cost_data.get("per_character"):
-            model_results[model_name][provider_name][
-                "input_cost_llm_per_character"
-            ] = cost_data["prompt"]
-            model_results[model_name][provider_name][
-                "output_cost_llm_per_character"
-            ] = cost_data["completion"]
-            prompt_cost += (
-                provider.get_billable_characters(  # type: ignore
-                    qna[0],
-                    model_name,
-                )
-                * cost_data["prompt"]
-                / 1000
-            )
-            completion_cost += (
-                provider.get_billable_characters(  # type: ignore
-                    result.choices[0].message.content,
-                    model_name,
-                )
-                * cost_data["completion"]
-                / 1000
-            )
-        elif cost_data.get("per_second"):
-            logger.info(
-                f"Per second pricing not supported yet so skipped "
-                f"{model_name}: {provider_name} ",
-            )
-            prompt_cost += (
-                provider.hardware_pricing_per_sec[cost_data["hardware"]]  # type: ignore
-                * result._response_ms
-                / 1000
-            )
-        else:
-            model_results[model_name][provider_name]["input_cost_llm"] = cost_data[
-                "prompt"
-            ]
-            model_results[model_name][provider_name]["output_cost_llm"] = cost_data[
-                "completion"
-            ]
-            if cost_data.get("online"):
-                prompt_cost += cost_data["online"]["charge_per_1000_requests"] / 1000
-            prompt_cost += (
-                result.usage.prompt_tokens * cost_data["prompt"] / PRICING_PER_TOKENS
-            )
-            completion_cost += (
-                result.usage.completion_tokens
-                * cost_data["completion"]
-                / PRICING_PER_TOKENS
-            )
-    model_results[model_name][provider_name]["cost"] = prompt_cost + completion_cost
+    cost_data = provider.supported_models[model_name]["cost"]  # type: ignore
+    if cost_data.get("per_character"):
+        model_results[model_name][provider_name][
+            "input_cost_llm_per_character"
+        ] = cost_data["prompt"]
+        model_results[model_name][provider_name][
+            "output_cost_llm_per_character"
+        ] = cost_data["completion"]
+    elif cost_data.get("per_second"):
+        logger.info(
+            f"Per second pricing not supported yet so skipped "
+            f"{model_name}: {provider_name} ",
+        )
+    else:
+        model_results[model_name][provider_name]["input_cost_llm"] = cost_data["prompt"]
+        model_results[model_name][provider_name]["output_cost_llm"] = cost_data[
+            "completion"
+        ]
 
 
 def get_evaluator_provider(evaluator: str) -> BaseCompletionProvider:  # noqa: D103
@@ -418,11 +377,9 @@ def run_benchmark(  # noqa: C901, WPS210, WPS231
                 )
                 add_cost_info(
                     model_results,
-                    completion_results,
                     model_name,
                     provider_name,
                     provider_obj,
-                    problems,
                 )
         logger.info("--------------------")
     if evaluator:
