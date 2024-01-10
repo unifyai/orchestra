@@ -91,8 +91,13 @@ class BaseCompletionProvider:
 
         tokens = encoding.encode(completions)
         completion_tokens = len(tokens)
+        response = ModelResponse(usage=Usage(prompt_tokens, completion_tokens))
 
-        return self.compute_cost(model, prompt_tokens, completion_tokens)
+        return self.compute_cost(
+            model,
+            [item["content"] for item in messages],  # noqa: WPS441
+            response,
+        )
 
     def complete(  # noqa: D102, WPS211, C901, WPS231
         self,
