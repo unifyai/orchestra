@@ -44,15 +44,16 @@ Available Models
 ----------------
 
 The easiest way to explore the list of models in the hub is through the `web interface <https://unify.ai/hub>`_.
-Here, you can simply search for the model you are interested in, click on it, and access information about the available endpoints
-and the corresponding benchmarks.
+Here, you can simply search for the model you are interested in and click on it to visualise the benchmarks and all the
+relevant information about the available endpoints.
 
-If you prefer programmatic access, you can also use the
-`List Models Endpoint <https://unify.ai/docs/hub/reference/endpoints.html#get-models>`_ in our API to obtain a list of models.
+..
+  If you prefer programmatic access, you can also use the
+  `List Models Endpoint <https://unify.ai/docs/hub/reference/endpoints.html#get-models>`_ in our API to obtain a list of models.
 
 
 Round Up
 --------
 
-You are now familiar with the different types of models that are available in the Hub, as well as how to navigate through
-them both via web and programatically. In the next section, we'll dive into the **Providers** and its role within the Hub!
+You are now familiar with the different types of models that are available in the Hub. In the next section,
+we'll dive into the **Providers** and its role within the Hub!
