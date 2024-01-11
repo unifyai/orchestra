@@ -10,5 +10,4 @@ jobs:
     uses: unifyai/workflows/.github/workflows/docs.yml@main
     secrets: inherit
     with:
-      repo-name: modelhub
-      docs-repo: unifyai/docs-staging
+      repo-name: hub
