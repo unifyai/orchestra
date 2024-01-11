@@ -162,7 +162,7 @@ class OctoAIAsyncGeneratorWrapper(AsyncGeneratorWrapper):
         try:  # noqa: WPS501
             for part in self._response:
                 part_dict = part.dict()
-                part_dict["model"] = "octoai/" + self._model  # noqa: WPS336
+                part_dict["model"] = f"{self._model}@octoai"
                 part_json = json.dumps(part_dict)
                 part_text = part_dict["choices"][0]["delta"]["content"]
                 whole += part_text if part_text else ""

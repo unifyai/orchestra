@@ -36,9 +36,10 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
     user_id = request_fastapi.state.user_id
     users = await get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(users[0].credits if users else 0)
+    model, provider = request.model.split("@")
     language_model = CompletionsModel(
-        provider=request.model.split("/")[0],
-        model=request.model.split("/")[-1],
+        provider=provider,
+        model=model,
     )
     cost_max = language_model.get_cost_max()
     if available_credits < cost_max:
