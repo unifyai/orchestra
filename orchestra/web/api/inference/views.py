@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import re
@@ -82,6 +83,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
                     part_dict["model"] = model
                     part_dict["provider"] = provider
                     yield json.dumps(part_dict)
+                    await asyncio.sleep(0)
                 await users_dao.recharge_credit(user_id, -response.total_cost)
 
             return StreamingResponse(stream_and_update_db())
