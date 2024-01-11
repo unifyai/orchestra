@@ -489,18 +489,10 @@ async def put_data_to_db(  # noqa: D103, WPS211, WPS210
 
 
 async def process_benchmarking_results(  # noqa: D103, WPS210, WPS231
+    async_session,
     benchmarking_results,
     metrics_to_push,
 ):
-    user = os.getenv("ORCHESTRA_DB_USER", "orchestra")
-    password = os.getenv("ORCHESTRA_DB_PASS", "orchestra")
-    host = os.getenv("ORCHESTRA_DB_HOST", "localhost")
-    port = os.getenv("ORCHESTRA_DB_PORT", "5432")
-    db_name = os.getenv("ORCHESTRA_DB_BASE", "orchestra")
-    db_url = f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{db_name}"  # noqa: WPS221, E501
-    logger.info(db_url)
-    engine = create_async_engine(db_url)
-    async_session = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     tasks = []
     for model_name, provider_results in benchmarking_results.items():
         for provider_name, provider_data in provider_results.items():
@@ -529,20 +521,33 @@ if __name__ == "__main__":
         for model in provider.supported_models.keys()
     ]
     model_list = list(set(model_list))
-    benchmarking_results = run_benchmark(model_list, print_table=False)
-    logger.info("Pushing metrics to DB")
-    metrics_to_push = [
-        "output_toks_per_sec",
-        "context_window",
-        "cold_start_latency",
-        "input_cost_llm",
-        "output_cost_llm",
-        "input_cost_llm_per_character",
-        "output_cost_llm_per_character",
-    ]
-    asyncio.run(
-        process_benchmarking_results(
-            benchmarking_results,
-            metrics_to_push,
-        ),
-    )
+    user = os.getenv("ORCHESTRA_DB_USER", "orchestra")
+    password = os.getenv("ORCHESTRA_DB_PASS", "orchestra")
+    host = os.getenv("ORCHESTRA_DB_HOST", "localhost")
+    port = os.getenv("ORCHESTRA_DB_PORT", "5432")
+    db_name = os.getenv("ORCHESTRA_DB_BASE", "orchestra")
+    db_url = f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{db_name}"  # noqa: WPS221, E501
+    logger.info(db_url)
+    engine = create_async_engine(db_url)
+    async_session = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    for model in model_list:
+        benchmarking_results = run_benchmark([model], print_table=False)
+        logger.info(f"Pushing {model} metrics to DB")
+        metrics_to_push = [
+            "output_toks_per_sec",
+            "context_window",
+            "cold_start_latency",
+            "input_cost_llm",
+            "output_cost_llm",
+            "input_cost_llm_per_character",
+            "output_cost_llm_per_character",
+        ]
+        try:
+            asyncio.run(
+                process_benchmarking_results(
+                    benchmarking_results,
+                    metrics_to_push,
+                ),
+            )
+        except Exception as db_exception:
+            logger.error(f"{model} db insertion failed with exception: {db_exception}")
