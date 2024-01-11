@@ -4,9 +4,7 @@ from fastapi.routing import APIRouter
 from orchestra.web.api import (  # noqa: WPS235
     admin,
     chat_completion,
-    endpoint,
     inference,
-    license,
     metric,
     modality,
     model,
@@ -26,8 +24,6 @@ api_router.include_router(
     tags=["users"],
     dependencies=API_KEY_AUTH,
 )
-api_router.include_router(endpoint.router, prefix="/endpoint", tags=["endpoint"])
-api_router.include_router(license.router, tags=["license"])
 api_router.include_router(metric.router, tags=["metric"])
 api_router.include_router(modality.router, tags=["modality"])
 api_router.include_router(model.router, tags=["model"])
