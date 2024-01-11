@@ -1,3 +1,4 @@
+import json
 from typing import Union
 
 from fastapi import APIRouter, HTTPException, Request
@@ -67,8 +68,9 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
     if stream:
 
         async def stream_and_update_db():  # noqa: WPS430
-            async for part_json in response.generator():
-                yield part_json
+            async for part_dict in response.generator():
+                part_dict["model"] = f"{model}@{provider}"
+                yield json.dumps(part_dict)
             await users_dao.recharge_credit(user_id, -response.total_cost)
 
         return StreamingResponse(stream_and_update_db())
@@ -76,7 +78,7 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
         await users_dao.recharge_credit(user_id, -cost)
 
     if isinstance(response, ChatCompletionResponse):
-        response.model = request.model
+        response.model = f"{model}@{provider}"
         return response
 
     if isinstance(response["usage"], Usage):
@@ -90,7 +92,7 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
             choices.append(choice.model_dump())
 
     return ChatCompletionResponse(
-        model=request.model,
+        model=f"{model}@{provider}",
         created=response.get("created", None),
         id=response.get("id", None),
         choices=choices,
