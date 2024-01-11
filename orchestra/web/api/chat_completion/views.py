@@ -63,9 +63,6 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
             object="chat.completion",
             usage={},
         )
-    if isinstance(response, ChatCompletionResponse):
-        response.model = request.model
-        return response
 
     if stream:
 
@@ -77,6 +74,10 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
         return StreamingResponse(stream_and_update_db())
     else:
         await users_dao.recharge_credit(user_id, -cost)
+
+    if isinstance(response, ChatCompletionResponse):
+        response.model = request.model
+        return response
 
     if isinstance(response["usage"], Usage):
         usage = response["usage"].model_dump()
