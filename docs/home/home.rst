@@ -4,14 +4,15 @@ Welcome to the Hub!
 This is your central hub for machine learning deployment stacks and inference endpoints. If you're using or planning to use
 AI in your application or service, the hub offers various benefits:
 
-* **🌐 Streamlined Model Access**: Using any model is as simple as making a request to an endpoint. No need to set up any infrastructure
-  yourself.
-
 * **🚀 Infrastructure Autotuning**: For any given model, the Hub benchmarks all kind of deployment services and stacks,
   giving you the best infrastructure based on your priorities, be it high-throughput, low cost or low latency.
 
-* **⚖️ Impartial Arbiter**: We have no vested interest in you using one provider or another, we deploy models accross different providers
-  and objectively measure their performance. This allows you to make an informed decision when selecting a provider based on your needs.
+* **⚖️ Impartial Arbiter**: We have no vested interest in you using one provider or another, we deploy and benchmark models accross
+  different providers to objectively measure their performance. This allows you to make an informed decision when selecting the
+  model or provider that fits your needs.
+
+* **🌐 Streamlined Model Access**: Using any model is as simple as making a request to an endpoint. No need to set up any infrastructure
+  yourself.
 
 * **🔑 One Single Key**: You only need a Unify API Key to access all the endpoints in the hub. No need to create accounts with every provider that
   you want to test.
