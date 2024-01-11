@@ -10,10 +10,11 @@ You can think of a provider as a end-to-end deployment stack. Each provider come
 pricing, and so on. The Hub exposes an HTTP endpoint for every individual providers, allowing you to query the one
 that best fits your requirements while using a consistent request format and the same `API key <https://unify.ai/docs/hub/home/getting_access.html>`_.
 
-If we take a look at the page of one of the models, you'll find the different providers where this model is available.
+If you look at the page of `one of the models <http://unify.ai/hub/llama-2-70b-chat>`_, you'll find the different
+providers and endpoints where this model is available (with their corresponding benchmark results!).
 
-.. warning::
-    TODO: Image of the dashboard
+..
+  TODO: Image of the dashboard
 
 Types of Providers
 ------------------
