@@ -69,18 +69,6 @@ steps:
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   args:
   - run
-  - jobs
-  - execute
-  - $_BENCHMARK_JOB_NAME
-  - '--region=$_BENCHMARK_JOB_REGION'
-  - '--wait'
-  id: Benchmark
-  entrypoint: gcloud
-  waitFor:
-  - 'Update benchmarking image'
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  args:
-  - run
   - services
   - update
   - $_SERVICE_NAME
