@@ -20,8 +20,11 @@ from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.web.api.admin.schema import DatapointModelRequest, EndpointModelRequest
-from orchestra.web.api.admin.views import create_datapoint_model, create_endpoint_model
-from orchestra.web.api.endpoint.views import get_endpoint
+from orchestra.web.api.admin.views import (
+    create_datapoint_model,
+    create_endpoint_model,
+    get_endpoint,
+)
 from orchestra.web.api.model.views import get_model
 from orchestra.web.api.provider.views import get_provider
 
