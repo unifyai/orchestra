@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Union
 
@@ -71,6 +72,7 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
             async for part_dict in response.generator():
                 part_dict["model"] = f"{model}@{provider}"
                 yield json.dumps(part_dict)
+                await asyncio.sleep(0)
             await users_dao.recharge_credit(user_id, -response.total_cost)
 
         return StreamingResponse(stream_and_update_db())
