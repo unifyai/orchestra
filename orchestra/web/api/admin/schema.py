@@ -211,3 +211,35 @@ class DatapointModelResponse(BaseModel):
     measured_at: datetime.datetime
     metric_name: str
     value: float
+
+
+class EndpointModelResponse(BaseModel):
+    """
+    Response model for endpoint models.
+
+    Attributes:
+        id (int): The id of the endpoint.
+        mdl_id (int): The id of the model.
+        provider_id (int): The id of the provider.
+        created_at (datetime): The time the endpoint was created.
+    """
+
+    id: int
+    mdl_id: int
+    provider_id: int
+    created_at: datetime.datetime
+
+
+class LicenseModelResponse(BaseModel):
+    """
+    Response model for license models.
+
+    Attributes:
+        name (str): The name of the license.
+        image_url (str): The image url of the license.
+        description (str): The description of the license.
+    """
+
+    name: str
+    image_url: str
+    description: str

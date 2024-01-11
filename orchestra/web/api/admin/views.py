@@ -17,6 +17,8 @@ from orchestra.db.dao.task_dao import TaskDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.models.orchestra_models import (
     Datapoint,
+    Endpoint,
+    License,
     Recharge,
     RechargeType,
     Users,
@@ -25,7 +27,9 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     DatapointModelRequest,
     DatapointModelResponse,
     EndpointModelRequest,
+    EndpointModelResponse,
     LicenseModelRequest,
+    LicenseModelResponse,
     MetricModelRequest,
     ModalityModelRequest,
     ModelRequest,
@@ -185,6 +189,78 @@ async def get_datapoint(
         metric_name=metric_name,
         value=value,
     )
+
+
+@router.get("/get_all_endpoints", response_model=List[EndpointModelResponse])
+async def get_endpoint_models(
+    limit: int = 10,
+    offset: int = 0,
+    endpoint_dao: EndpointDAO = Depends(),
+) -> List[Endpoint]:
+    """
+    Retrieve all endpoint objects from the database.
+
+    :param limit: limit of endpoint objects, defaults to 10.
+    :param offset: offset of endpoint objects, defaults to 0.
+    :param endpoint_dao: DAO for endpoint models.
+    :return: list of endpoint objects from database.
+    """
+    return await endpoint_dao.get_all_endpoints(limit=limit, offset=offset)
+
+
+@router.get("/get_endpoint", response_model=List[EndpointModelResponse])
+async def get_endpoint(
+    mdl_id: Optional[int] = None,
+    provider_id: Optional[int] = None,
+    created_at: Optional[datetime.datetime] = None,
+    endpoint_dao: EndpointDAO = Depends(),
+) -> List[Endpoint]:
+    """
+    Retrieve specific endpoint object from the database.
+
+    :param mdl_id: mdl_id of endpoint object.
+    :param provider_id: provider_id of endpoint object.
+    :param created_at: created_at of endpoint object.
+    :param endpoint_dao: DAO for endpoint models.
+    :return: endpoint object from database.
+    """
+    return await endpoint_dao.filter(
+        mdl_id=mdl_id,
+        provider_id=provider_id,
+        created_at=created_at,
+    )
+
+
+@router.get("/get_all_licenses", response_model=List[LicenseModelResponse])
+async def get_license_models(
+    limit: int = 10,
+    offset: int = 0,
+    license_dao: LicenseDAO = Depends(),
+) -> List[License]:
+    """
+    Retrieve all license objects from the database.
+
+    :param limit: limit of license objects, defaults to 10.
+    :param offset: offset of license objects, defaults to 0.
+    :param license_dao: DAO for license models.
+    :return: list of license objects from database.
+    """
+    return await license_dao.get_all_licenses(limit=limit, offset=offset)
+
+
+@router.get("/get_license", response_model=List[LicenseModelResponse])
+async def get_license(
+    name: str,
+    license_dao: LicenseDAO = Depends(),
+) -> List[License]:
+    """
+    Retrieve specific license object from the database.
+
+    :param name: name of license instance.
+    :param license_dao: DAO for license models.
+    :return: list of license objects from database.
+    """
+    return await license_dao.filter(name=name)
 
 
 @router.put("/create_datapoint")
