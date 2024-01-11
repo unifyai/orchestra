@@ -39,4 +39,4 @@ api_router.include_router(
     tags=["admin"],
     dependencies=ADMIN_AUTH,
 )
-api_router.include_router(monitoring.router, tags=["admin"], dependencies=ADMIN_AUTH)
+api_router.include_router(monitoring.router)
