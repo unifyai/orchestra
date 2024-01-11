@@ -93,16 +93,15 @@ For Text-Generation models, you might want to use the :code:`POST /chat/completi
 
 .. code-block:: bash
 
-  curl -X POST "https://api.unify.ai/v0/inference" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: YOUR_API_KEY" \
-    -d '{
-      "model": "llama2",
-      "provider": "anyscale",
-      "arguments": {
-        "TODO": TODO: change this to fit the actual api of the models
-      }
-    }'
+    curl -X POST "https://api.unify.ai/v0/inference" \
+        -H "accept: application/json" \
+        -H "Authorization: Bearer YOUR_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "model": "<model_name>",
+            "provider": "<provider_name>",
+            "arguments": <Model Inference Input Arguments>
+        }'
 
 **Responses**
 
@@ -118,7 +117,7 @@ For Text-Generation models, you might want to use the :code:`POST /chat/completi
   .. code-block:: bash
 
     {
-      "response": "<Response text>"
+      "response": <Model Inference Output Format>
     }
 
 - **401 Unauthorized**
@@ -158,26 +157,24 @@ This endpoint follows the OpenAI specification for text completion, which is ava
 
 To specify the provider, make sure to append its name after the model id using :code:`@`.
 
-
-**Request Body**
- | **model** *(string)*: ID of the model to query with format :code:`<uploaded_by>/<model_name>@<provider>`.
-   If the model is managed by Unify, the format will be :code:`<model_name>@<provider>`.
- | **messages** *(array)*: A list of messages compromising the conversation so far.
- | **frequency_penalty** *(float)*: TODO
-
 **Example Request (curl)**
 
 .. code-block:: bash
 
-  TODO: Update this
-  curl -X POST "https://api.unify.ai/v0/chat/completions" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: YOUR_API_KEY" \
+    curl -X 'POST' \
+    'https://api.unify.ai/v0/chat/completion' \
+    -H 'accept: application/json' \
+    -H 'Authorization: Bearer YOUR_API_KEY' \
+    -H 'Content-Type: application/json' \
     -d '{
-      "model": "llama-2-7b-chat@replicate",
-      "messages": [
-        TODO
-      ]
+    "model": "llama-2-7b-chat@anyscale",
+    "messages": [
+        {
+            "role": "user",
+            "content": "Explain who Newton was and his entire theory of gravitation. Give a long detailed response please and explain all of his achievements"
+        }
+    ],
+    "stream": false
     }'
 
 **Responses**
@@ -187,14 +184,30 @@ To specify the provider, make sure to append its name after the model id using :
   Successful operation.
 
   **Response**
-   | Model-specific response, check out the model documentation for more information.
+   | Response following the schema of the chat completion object from OpenAI, defined `here. <https://platform.openai.com/docs/api-reference/chat/object>`_
 
   **Example Response**
 
   .. code-block:: bash
 
     {
-      "response": "<Response text>"
+        'model': 'llama-2-7b-chat@anyscale',
+        'created': 1704999905,
+        'id': 'meta-llama/Llama-2-7b-chat-hf-xR868C-T4Z-TKLtfXxZSvq57WmhxB34El5ZUuXsAtFU',
+        'object': 'chat.completion',
+        'usage': {
+            'completion_tokens': 512,
+            'prompt_tokens': 34,
+            'total_tokens': 546
+            },
+        'choices': [{
+            'finish_reason': 'length',
+            'index': 0,
+            'message': {
+                'content': 'Isaac Newton (1643-1727) was a...',
+                'role': 'assistant'
+            }
+        }]
     }
 
 - **401 Unauthorized**
