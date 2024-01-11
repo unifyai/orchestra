@@ -341,32 +341,18 @@ def benchmark_model(  # noqa: D103, WPS211
 ):
     if model_name.lower() in provider_class.supported_models:
         logger.info(f"{model_name} on {provider_name}")
-        # provider_obj = get_provider_obj(provider_name, traversed_providers)
-        # completion_results = get_completion_results(provider_obj, model_name, problems)
-        # if completion_results is None:
-        #     logger.error(f"{model_name} on {provider_name} was skipped")
-        #     raise ValueError(f"{model_name} completion is None")
+        provider_obj = get_provider_obj(provider_name, traversed_providers)
+        completion_results = get_completion_results(provider_obj, model_name, problems)
+        if completion_results is None:
+            logger.error(f"{model_name} on {provider_name} was skipped")
+            raise ValueError(f"{model_name} completion is None")
 
-        # model_results.setdefault(model_name, {})[provider_name] = calculate_results(
-        #     completion_results,
-        #     model_name,
-        #     provider_obj,
-        # )
-        # add_cost_info(model_results, model_name, provider_name, provider_obj)
-        metrics_to_push = [
-            "output_toks_per_sec",
-            "context_window",
-            "cold_start_latency",
-            # "cold_start_latency_std",
-            "input_cost_llm",
-            "output_cost_llm",
-            "input_cost_llm_per_character",
-            "output_cost_llm_per_character",
-        ]
-        results = {}
-        for i, metric in enumerate(metrics_to_push):
-            results[metric] = i
-        model_results.setdefault(model_name, {})[provider_name] = results
+        model_results.setdefault(model_name, {})[provider_name] = calculate_results(
+            completion_results,
+            model_name,
+            provider_obj,
+        )
+        add_cost_info(model_results, model_name, provider_name, provider_obj)
 
 
 def run_benchmark(  # noqa: C901, WPS210, WPS220, WPS231
@@ -441,7 +427,7 @@ async def get_or_create_endpoint(  # noqa: D103
         provider_id=provider_id,
         endpoint_dao=endpoint_dao,
     )
-    if not endpoint_id:
+    if not endpoint_id:  # noqa: WPS504
         logger.info(
             f"No endpoints found for {model_name}({mdl_id}), "
             f"{provider_name}({provider_id}), creating new endpoint",
@@ -454,7 +440,6 @@ async def get_or_create_endpoint(  # noqa: D103
             new_endpoint_object=endpoint_obj,
             endpoint_dao=endpoint_dao,
         )
-        logger.info("Endpoint created")
         endpoint_id = await get_endpoint(
             mdl_id=mdl_id,
             provider_id=provider_id,
@@ -498,7 +483,7 @@ async def put_data_to_db(  # noqa: D103, WPS211, WPS210
         )
 
 
-async def process_benchmarking_results(  # noqa: D103, WPS210, WPS231
+async def process_benchmarking_results(  # noqa: D103, WPS210, WPS231, C901
     benchmarking_results,
     metrics_to_push,
 ):
@@ -520,15 +505,16 @@ async def process_benchmarking_results(  # noqa: D103, WPS210, WPS231
                 endpoint_dao = EndpointDAO(session)
                 logger.info(f"{provider_name}, {model_name}")
                 provider_id = await get_provider(
-                    name=provider_name, provider_dao=provider_dao
+                    name=provider_name,
+                    provider_dao=provider_dao,
                 )
                 mdl_id = await get_model(mdl_code=model_name, model_dao=model_dao)
-                if mdl_id is None:
+                if not mdl_id:  # noqa: WPS504
                     logger.info(f"Skipping since model: {model_name} not found in db")
                     endpoint_id = None
-                elif provider_id is None:
+                elif not provider_id:  # noqa: WPS504
                     logger.info(
-                        f"Skipping since provider: {provider_name} not found in db"
+                        f"Skipping since provider: {provider_name} not found in db",
                     )
                     endpoint_id = None
                 else:
@@ -542,20 +528,20 @@ async def process_benchmarking_results(  # noqa: D103, WPS210, WPS231
                 await session.commit()
             if endpoint_id is None:
                 continue
-            # for metric_name, value in provider_data.items():
-            #     if metric_name in metrics_to_push:
-            #         data = {
-            #             "metric_name": metric_name,
-            #             "value": round(value, 2) if isinstance(value, float) else value,
-            #         }
-            #         task = put_data_to_db(
-            #             data,
-            #             model_name,
-            #             provider_name,
-            #             async_session,
-            #             endpoint_id,
-            #         )
-            #         tasks.append(task)
+            for metric_name, value in provider_data.items():
+                if metric_name in metrics_to_push:
+                    data = {
+                        "metric_name": metric_name,
+                        "value": round(value, 2) if isinstance(value, float) else value,
+                    }
+                    task = put_data_to_db(
+                        data,
+                        model_name,
+                        provider_name,
+                        async_session,
+                        endpoint_id,
+                    )
+                    tasks.append(task)
     total_write_count = len(tasks)
     logger.info(f"Pushing {total_write_count} benchmarking results entries to db")
     await asyncio.gather(*tasks)
