@@ -162,3 +162,52 @@ class UsersModelResponse(BaseModel):
 
     id: str
     credits: float
+
+
+class RechargeTypeModelResponse(BaseModel):
+    """
+    Response model for recharge_type models.
+
+    Attributes:
+        type (str): The type of the recharge_type.
+    """
+
+    type: str
+
+
+class RechargeModelResponse(BaseModel):
+    """
+    Response model for recharge models.
+
+    Attributes:
+        id (int): The id of the recharge.
+        user_id (str): The id of the user.
+        at (datetime): The time of the recharge.
+        quantity (float): The quantity of the recharge.
+        type (str): The type of the recharge.
+    """
+
+    id: int
+    at: datetime.datetime
+    user_id: str
+    quantity: float
+    type: str
+
+
+class DatapointModelResponse(BaseModel):
+    """
+    Response model for datapoint models.
+
+    Attributes:
+        id (int): The id of the datapoint.
+        endpoint_id (int): The id of the endpoint.
+        measured_at (datetime): The time of the measurement.
+        metric_name (str): The name of the metric.
+        value (float): The value of the metric.
+    """
+
+    id: int
+    endpoint_id: int
+    measured_at: datetime.datetime
+    metric_name: str
+    value: float
