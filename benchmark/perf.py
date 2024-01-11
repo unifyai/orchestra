@@ -545,6 +545,7 @@ if __name__ == "__main__":
         try:
             asyncio.run(
                 process_benchmarking_results(
+                    async_session,
                     benchmarking_results,
                     metrics_to_push,
                 ),
