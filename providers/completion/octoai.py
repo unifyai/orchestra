@@ -9,6 +9,7 @@ from providers.completion.base_completion_provider import (
     AsyncGeneratorWrapper,
     BaseCompletionProvider,
 )
+from litellm.utils import ModelResponse, Usage
 
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
 
@@ -143,9 +144,8 @@ class OctoAI(BaseCompletionProvider):
                 choices=response.get("choices", None),
             ), self.compute_cost(
                 model,
-                usage["prompt_tokens"],
-                usage["completion_tokens"],
-            )
+                [item["content"] for item in messages],
+                ModelResponse(usage=Usage(usage["prompt_tokens"], usage["completion_tokens"])))
         except openai.APITimeoutError as error:
             logger.error(f"Raised openai.APITimeoutError, Error: {error}")
         except Exception as error:
