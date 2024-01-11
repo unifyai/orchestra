@@ -7,6 +7,7 @@ import re
 import statistics
 from typing import Any, Dict, List, Optional, cast
 
+import numpy as np
 from litellm import ModelResponse
 from prettytable import PrettyTable
 from providers.completion import PROVIDER_CLASSES
@@ -241,7 +242,18 @@ def calculate_results(  # noqa: D103
         "context_window"
     ]
 
-    cleaned_output["cold_start_latency"] = "0"
+    cold_start_avg = np.mean(
+        [result.cold_start_latency for result in completion_results],
+    )
+    if cold_start_avg == 0:
+        cleaned_output["cold_start_latency_mean"] = 0
+        cleaned_output["cold_start_latency_std"] = 0
+    else:
+        cold_start_std = np.std(
+            [result.cold_start_latency for result in completion_results],
+        )
+        cleaned_output["cold_start_latency_mean"] = round(cold_start_avg, 2)
+        cleaned_output["cold_start_latency_std"] = round(cold_start_std, 2)
     return cleaned_output
 
 
@@ -281,7 +293,8 @@ def create_table(  # noqa: D103, WPS210
         "Input cost",
         "Output cost",
         "Context window",
-        "Cold start",
+        "Cold start mean (ms)",
+        "Cold start std (ms)",
     ]
 
     if evaluator:
@@ -295,8 +308,8 @@ def create_table(  # noqa: D103, WPS210
                 model_name,
                 provider_name,
                 provider_data["total_output_tokens"],
-                f'{provider_data["total_latency"]:.2f}',
-                f'{provider_data["output_toks_per_sec"]:.2f}',
+                round(provider_data["total_latency"], 2),
+                round(provider_data["output_toks_per_sec"], 2),
                 provider_data.get(
                     "input_cost_llm",
                     provider_data.get("input_cost_llm_per_character", "NA"),
@@ -306,7 +319,8 @@ def create_table(  # noqa: D103, WPS210
                     provider_data.get("output_cost_llm_per_character", "NA"),
                 ),
                 provider_data["context_window"],
-                provider_data["cold_start_latency"],
+                provider_data["cold_start_latency_mean"],
+                provider_data["cold_start_latency_std"],
             ]
             if evaluator:
                 row_data.append(provider_data["score"])
@@ -522,7 +536,8 @@ if __name__ == "__main__":
     metrics_to_push = [
         "output_toks_per_sec",
         "context_window",
-        "cold_start_latency",
+        "cold_start_latency_mean",
+        "cold_start_latency_std",
         "input_cost_llm",
         "output_cost_llm",
         "input_cost_llm_per_character",
