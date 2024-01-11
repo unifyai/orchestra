@@ -341,32 +341,18 @@ def benchmark_model(  # noqa: D103, WPS211
 ):
     if model_name.lower() in provider_class.supported_models:
         logger.info(f"{model_name} on {provider_name}")
-        # provider_obj = get_provider_obj(provider_name, traversed_providers)
-        # completion_results = get_completion_results(provider_obj, model_name, problems)
-        # if completion_results is None:
-        #     logger.error(f"{model_name} on {provider_name} was skipped")
-        #     raise ValueError(f"{model_name} completion is None")
+        provider_obj = get_provider_obj(provider_name, traversed_providers)
+        completion_results = get_completion_results(provider_obj, model_name, problems)
+        if completion_results is None:
+            logger.error(f"{model_name} on {provider_name} was skipped")
+            raise ValueError(f"{model_name} completion is None")
 
-        # model_results.setdefault(model_name, {})[provider_name] = calculate_results(
-        #     completion_results,
-        #     model_name,
-        #     provider_obj,
-        # )
-        # add_cost_info(model_results, model_name, provider_name, provider_obj)
-        metrics_to_push = [
-            "output_toks_per_sec",
-            "context_window",
-            "cold_start_latency",
-            # "cold_start_latency_std",
-            "input_cost_llm",
-            "output_cost_llm",
-            "input_cost_llm_per_character",
-            "output_cost_llm_per_character",
-        ]
-        results = {}
-        for i, metric in enumerate(metrics_to_push):
-            results[metric] = i
-        model_results.setdefault(model_name, {})[provider_name] = results
+        model_results.setdefault(model_name, {})[provider_name] = calculate_results(
+            completion_results,
+            model_name,
+            provider_obj,
+        )
+        add_cost_info(model_results, model_name, provider_name, provider_obj)
 
 
 def run_benchmark(  # noqa: C901, WPS210, WPS220, WPS231
@@ -423,8 +409,8 @@ def run_benchmark(  # noqa: C901, WPS210, WPS220, WPS231
                     provider_data,
                     problems,
                 )
+    table = create_table(model_results, evaluator)
     if print_table:
-        table = create_table(model_results, evaluator)
         print(table)  # noqa: WPS421
     return model_results
 
@@ -465,11 +451,6 @@ async def get_or_create_endpoint(  # noqa: D103
             f"Multiple endpoints found for {model_name}, {provider_name}, "
             f"using first: {endpoint_id[0].id}",
         )
-    else:
-        logger.info(
-            f"Singular endpoint found for {model_name}({mdl_id}), "
-            f"{provider_name}({provider_id}), as expected",
-        )
     return endpoint_id[0].id
 
 
@@ -495,21 +476,21 @@ async def put_data_to_db(  # noqa: D103, WPS211, WPS210
             model_name,
             provider_name,
         )
-        # datapoint_obj = DatapointModelRequest(
-        #     endpoint_id=endpoint_id,
-        #     measured_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        #     metric_name=data["metric_name"],
-        #     value=data["value"],
-        # )
-        # await create_datapoint_model(
-        #     new_datapoint_object=datapoint_obj,
-        #     datapoint_dao=datapoint_dao,
-        # )
+        datapoint_obj = DatapointModelRequest(
+            endpoint_id=endpoint_id,
+            measured_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            metric_name=data["metric_name"],
+            value=data["value"],
+        )
+        await create_datapoint_model(
+            new_datapoint_object=datapoint_obj,
+            datapoint_dao=datapoint_dao,
+        )
         await session.commit()
-        # logger.info(
-        #     f"Datapoint added for {model_name}, {provider_name} "
-        #     f"(endpoint_id: {endpoint_id})",
-        # )
+        logger.info(
+            f"Datapoint added for {model_name}, {provider_name} "
+            f"(endpoint_id: {endpoint_id})",
+        )
 
 
 async def process_benchmarking_results(  # noqa: D103, WPS210, WPS231
