@@ -79,7 +79,8 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
 
             async def stream_and_update_db():  # noqa: WPS430
                 async for part_dict in response.generator():
-                    part_dict["model"] = f"{model}@{provider}"
+                    part_dict["model"] = model
+                    part_dict["provider"] = provider
                     yield json.dumps(part_dict)
                 await users_dao.recharge_credit(user_id, -response.total_cost)
 
@@ -91,7 +92,8 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             # TODO: Handle when response is None
             return InferenceResponse(
                 response={
-                    "model": request.model,
+                    "model": model,
+                    "provider": provider,
                     "created": 0,
                     "id": "",
                     "choices": [],
@@ -100,9 +102,11 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
                 },
             )
         if isinstance(response, ChatCompletionResponse):
-            response.model = f"{model}@{provider}"
+            response = response.model_dump()
+            response["model"] = model
+            response["provider"] = provider
             return InferenceResponse(
-                response=response.model_dump(),
+                response=response,
             )
 
         if isinstance(response["usage"], Usage):
@@ -117,7 +121,8 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
 
         return InferenceResponse(
             response={
-                "model": f"{model}@{provider}",
+                "model": model,
+                "provider": provider,
                 "created": response.get("created", None),
                 "id": response["id"],
                 "choices": choices,
