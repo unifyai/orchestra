@@ -3,28 +3,29 @@ Endpoints
 
 Welcome to the Endpoints API reference!
 This page is your go-to resource when it comes to learning about the different endpoints that allow you to
-interact with the Model Hub.
+interact with the Hub.
 
 .. note::
   To use the endpoints you will need an API Key. If you don't have one yet, you can go through the instructions in
-  `this page <https://unify.ai/docs/modelhub/home/getting_access.html>`_.
+  `this page <https://unify.ai/docs/hub/home/getting_access.html>`_.
 
 -----
 
-GET /models
+GET /get_credits
 -----------
 
-**List Available Models**
+**Get Current Credit Balance**
 
-Retrieve a list of all available models in the Unify Model Hub.
+Retrieve the credit balance for the authenticated account.
 
 **Example Request (curl)**
 
 .. code-block:: bash
 
-  curl -X GET "https://api.unify.ai/v0/models" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: YOUR_API_KEY"
+  curl -X 'GET' \
+    'https://api.unify.ai/v0/get_credits' \
+    -H 'accept: application/json' \
+    -H 'Authorization: Bearer YOUR_API_KEY'
 
 
 **Responses**
@@ -34,34 +35,15 @@ Retrieve a list of all available models in the Unify Model Hub.
   Successful operation.
 
   **Response**
-   | List of models with their corresponding providers.
+   | Credits balance in the account associated with the API key used for the request.
 
   **Example Response**
 
   .. code-block:: bash
 
     {
-      "models": [
-        {
-          "model": "llama2",
-          "providers": [
-            "anyscale",
-            "perplexity",
-            "replicate",
-            "..."
-          ]
-        },
-        {
-          "model": "another_model",
-          "providers": [
-            "provider_1",
-            "provider_2",
-            "..."
-          ]
-        },
-      ]
-      "model": "llama2",
-      "providers": ["anyscale", "perplexity", "replicate", "..."]
+      "id": "corresponding_user_id",
+      "credits": 232.32
     }
 
 - **401 Unauthorized**
@@ -76,66 +58,16 @@ Retrieve a list of all available models in the Unify Model Hub.
       "error": "Invalid API key"
     }
 
------
+- **403 Forbidden**
 
-GET /providers/{model}
-----------------------
-
-**List Available Providers for a Model**
-
-Retrieve the list of available providers for a specific model in the Model Hub.
-
-**Parameters**
- | **model** *(string)*: ID of the model to get the providers of.
-
-**Example Request (curl)**
-
-.. code-block:: bash
-
-  curl -X GET "https://api.unify.ai/v0/providers/llama2" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: YOUR_API_KEY"
-
-**Responses**
-
-- **200 OK**
-
-  Successful operation.
-
-  **Response**
-   | Model ID and list of providers for the specified model.
+  Not authenticated.
 
   **Example Response**
 
   .. code-block:: bash
 
     {
-      "model": "llama2",
-      "providers": ["anyscale", "perplexity", "replicate", "..."]
-    }
-
-- **401 Unauthorized**
-
-  Invalid API key.
-
-  **Example Response**
-
-  .. code-block:: bash
-
-    {
-      "error": "Invalid API key"
-    }
-
-- **404 Not Found**
-
-  Model ID not found. The specified model ID does not exist.
-
-  **Example Response**
-
-  .. code-block:: bash
-
-    {
-      "error": "Model ID not found. The specified model ID does not exist."
+      "detail": "Not authenticated"
     }
 
 -----
@@ -161,16 +93,15 @@ For Text-Generation models, you might want to use the :code:`POST /chat/completi
 
 .. code-block:: bash
 
-  curl -X POST "https://api.unify.ai/v0/inference" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: YOUR_API_KEY" \
-    -d '{
-      "model": "llama2",
-      "provider": "anyscale",
-      "arguments": {
-        "TODO": TODO: change this to fit the actual api of the models
-      }
-    }'
+    curl -X POST "https://api.unify.ai/v0/inference" \
+        -H "accept: application/json" \
+        -H "Authorization: Bearer YOUR_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "model": "<model_name>",
+            "provider": "<provider_name>",
+            "arguments": <Model Inference Input Arguments>
+        }'
 
 **Responses**
 
@@ -186,7 +117,7 @@ For Text-Generation models, you might want to use the :code:`POST /chat/completi
   .. code-block:: bash
 
     {
-      "response": "<Response text>"
+      "response": <Model Inference Output Format>
     }
 
 - **401 Unauthorized**
@@ -226,26 +157,24 @@ This endpoint follows the OpenAI specification for text completion, which is ava
 
 To specify the provider, make sure to append its name after the model id using :code:`@`.
 
-
-**Request Body**
- | **model** *(string)*: ID of the model to query with format :code:`<uploaded_by>/<model_name>@<provider>`.
-   If the model is managed by Unify, the format will be :code:`<model_name>@<provider>`.
- | **messages** *(array)*: A list of messages compromising the conversation so far.
- | **frequency_penalty** *(float)*: TODO
-
 **Example Request (curl)**
 
 .. code-block:: bash
 
-  TODO: Update this
-  curl -X POST "https://api.unify.ai/v0/chat/completions" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: YOUR_API_KEY" \
+    curl -X 'POST' \
+    'https://api.unify.ai/v0/chat/completion' \
+    -H 'accept: application/json' \
+    -H 'Authorization: Bearer YOUR_API_KEY' \
+    -H 'Content-Type: application/json' \
     -d '{
-      "model": "llama-2-7b-chat@replicate",
-      "messages": [
-        TODO
-      ]
+    "model": "llama-2-7b-chat@anyscale",
+    "messages": [
+        {
+            "role": "user",
+            "content": "Explain who Newton was and his entire theory of gravitation. Give a long detailed response please and explain all of his achievements"
+        }
+    ],
+    "stream": false
     }'
 
 **Responses**
@@ -255,14 +184,30 @@ To specify the provider, make sure to append its name after the model id using :
   Successful operation.
 
   **Response**
-   | Model-specific response, check out the model documentation for more information.
+   | Response following the schema of the chat completion object from OpenAI, defined `here. <https://platform.openai.com/docs/api-reference/chat/object>`_
 
   **Example Response**
 
   .. code-block:: bash
 
     {
-      "response": "<Response text>"
+        'model': 'llama-2-7b-chat@anyscale',
+        'created': 1704999905,
+        'id': 'meta-llama/Llama-2-7b-chat-hf-xR868C-T4Z-TKLtfXxZSvq57WmhxB34El5ZUuXsAtFU',
+        'object': 'chat.completion',
+        'usage': {
+            'completion_tokens': 512,
+            'prompt_tokens': 34,
+            'total_tokens': 546
+            },
+        'choices': [{
+            'finish_reason': 'length',
+            'index': 0,
+            'message': {
+                'content': 'Isaac Newton (1643-1727) was a...',
+                'role': 'assistant'
+            }
+        }]
     }
 
 - **401 Unauthorized**
