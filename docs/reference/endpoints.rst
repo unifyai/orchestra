@@ -11,6 +11,67 @@ interact with the Hub.
 
 -----
 
+GET /get_credits
+-----------
+
+**Get Current Credit Balance**
+
+Retrieve the credit balance for the authenticated account.
+
+**Example Request (curl)**
+
+.. code-block:: bash
+
+  curl -X 'GET' \
+    'https://api.unify.ai/v0/get_credits' \
+    -H 'accept: application/json' \
+    -H 'Authorization: Bearer YOUR_API_KEY'
+
+
+**Responses**
+
+- **200 OK**
+
+  Successful operation.
+
+  **Response**
+   | Credits balance in the account associated with the API key used for the request.
+
+  **Example Response**
+
+  .. code-block:: bash
+
+    {
+      "id": "corresponding_user_id",
+      "credits": 232.32
+    }
+
+- **401 Unauthorized**
+
+  Invalid API key.
+
+  **Example Response**
+
+  .. code-block:: bash
+
+    {
+      "error": "Invalid API key"
+    }
+
+- **403 Forbidden**
+
+  Not authenticated.
+
+  **Example Response**
+
+  .. code-block:: bash
+
+    {
+      "detail": "Not authenticated"
+    }
+
+-----
+
 POST /inference
 ---------------
 
