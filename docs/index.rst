@@ -6,7 +6,7 @@
   :hidden:
   :maxdepth: -1
 
-  Welcome to the Model Hub! <self>
+  Welcome to the Hub! <self>
   home/getting_access.rst
   home/make_your_first_request.rst
   home/pricing.rst
