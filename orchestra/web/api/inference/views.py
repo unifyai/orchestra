@@ -50,8 +50,8 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
     # TODO: Add error 500
     # TODO: Create a separate function and endpoint for updating credits
     user_id = request_fastapi.state.user_id
-    users = await get_credits(request_fastapi, users_dao=users_dao)
-    available_credits = float(users[0].credits if users else 0)
+    user = await get_credits(request_fastapi, users_dao=users_dao)
+    available_credits = float(user.credits if user else 0)
 
     model_type = get_model_type(request.model)
     if model_type == "chat":
