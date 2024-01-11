@@ -341,18 +341,32 @@ def benchmark_model(  # noqa: D103, WPS211
 ):
     if model_name.lower() in provider_class.supported_models:
         logger.info(f"{model_name} on {provider_name}")
-        provider_obj = get_provider_obj(provider_name, traversed_providers)
-        completion_results = get_completion_results(provider_obj, model_name, problems)
-        if completion_results is None:
-            logger.error(f"{model_name} on {provider_name} was skipped")
-            raise ValueError(f"{model_name} completion is None")
+        # provider_obj = get_provider_obj(provider_name, traversed_providers)
+        # completion_results = get_completion_results(provider_obj, model_name, problems)
+        # if completion_results is None:
+        #     logger.error(f"{model_name} on {provider_name} was skipped")
+        #     raise ValueError(f"{model_name} completion is None")
 
-        model_results.setdefault(model_name, {})[provider_name] = calculate_results(
-            completion_results,
-            model_name,
-            provider_obj,
-        )
-        add_cost_info(model_results, model_name, provider_name, provider_obj)
+        # model_results.setdefault(model_name, {})[provider_name] = calculate_results(
+        #     completion_results,
+        #     model_name,
+        #     provider_obj,
+        # )
+        # add_cost_info(model_results, model_name, provider_name, provider_obj)
+        metrics_to_push = [
+            "output_toks_per_sec",
+            "context_window",
+            "cold_start_latency",
+            # "cold_start_latency_std",
+            "input_cost_llm",
+            "output_cost_llm",
+            "input_cost_llm_per_character",
+            "output_cost_llm_per_character",
+        ]
+        results = {}
+        for i, metric in enumerate(metrics_to_push):
+            results[metric] = i
+        model_results.setdefault(model_name, {})[provider_name] = results
 
 
 def run_benchmark(  # noqa: C901, WPS210, WPS220, WPS231
@@ -409,8 +423,8 @@ def run_benchmark(  # noqa: C901, WPS210, WPS220, WPS231
                     provider_data,
                     problems,
                 )
-    table = create_table(model_results, evaluator)
     if print_table:
+        table = create_table(model_results, evaluator)
         print(table)  # noqa: WPS421
     return model_results
 
@@ -447,9 +461,13 @@ async def get_or_create_endpoint(  # noqa: D103
             endpoint_dao=endpoint_dao,
         )
     elif len(endpoint_id) > 1:
-        logger.info(
+        logger.error(
             f"Multiple endpoints found for {model_name}, {provider_name}, "
             f"using first: {endpoint_id[0].id}",
+        )
+    else:
+        logger.info(
+            f"Single endpoint found for {model_name}, {provider_name} as expected",
         )
     return endpoint_id[0].id
 
@@ -459,23 +477,10 @@ async def put_data_to_db(  # noqa: D103, WPS211, WPS210
     model_name,
     provider_name,
     async_session,
+    endpoint_id,
 ):
     async with async_session() as session:
-        provider_dao = ProviderDAO(session)
-        model_dao = ModelDAO(session)
-        endpoint_dao = EndpointDAO(session)
         datapoint_dao = DatapointDAO(session)
-        logger.info(f"{provider_name}, {model_name}")
-        provider_id = await get_provider(name=provider_name, provider_dao=provider_dao)
-        mdl_id = await get_model(mdl_code=model_name, model_dao=model_dao)
-
-        endpoint_id = await get_or_create_endpoint(
-            mdl_id[0].id,
-            provider_id[0].id,
-            endpoint_dao,
-            model_name,
-            provider_name,
-        )
         datapoint_obj = DatapointModelRequest(
             endpoint_id=endpoint_id,
             measured_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -509,19 +514,48 @@ async def process_benchmarking_results(  # noqa: D103, WPS210, WPS231
     tasks = []
     for model_name, provider_results in benchmarking_results.items():
         for provider_name, provider_data in provider_results.items():
-            for metric_name, value in provider_data.items():
-                if metric_name in metrics_to_push:
-                    data = {
-                        "metric_name": metric_name,
-                        "value": round(value, 2) if isinstance(value, float) else value,
-                    }
-                    task = put_data_to_db(
-                        data,
+            async with async_session() as session:
+                provider_dao = ProviderDAO(session)
+                model_dao = ModelDAO(session)
+                endpoint_dao = EndpointDAO(session)
+                logger.info(f"{provider_name}, {model_name}")
+                provider_id = await get_provider(
+                    name=provider_name, provider_dao=provider_dao
+                )
+                mdl_id = await get_model(mdl_code=model_name, model_dao=model_dao)
+                if mdl_id is None:
+                    logger.info(f"Skipping since model: {model_name} not found in db")
+                    endpoint_id = None
+                elif provider_id is None:
+                    logger.info(
+                        f"Skipping since provider: {provider_name} not found in db"
+                    )
+                    endpoint_id = None
+                else:
+                    endpoint_id = await get_or_create_endpoint(
+                        mdl_id[0].id,
+                        provider_id[0].id,
+                        endpoint_dao,
                         model_name,
                         provider_name,
-                        async_session,
                     )
-                    tasks.append(task)
+                await session.commit()
+            if endpoint_id is None:
+                continue
+            # for metric_name, value in provider_data.items():
+            #     if metric_name in metrics_to_push:
+            #         data = {
+            #             "metric_name": metric_name,
+            #             "value": round(value, 2) if isinstance(value, float) else value,
+            #         }
+            #         task = put_data_to_db(
+            #             data,
+            #             model_name,
+            #             provider_name,
+            #             async_session,
+            #             endpoint_id,
+            #         )
+            #         tasks.append(task)
     total_write_count = len(tasks)
     logger.info(f"Pushing {total_write_count} benchmarking results entries to db")
     await asyncio.gather(*tasks)
