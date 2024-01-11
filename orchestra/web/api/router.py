@@ -4,18 +4,10 @@ from fastapi.routing import APIRouter
 from orchestra.web.api import (  # noqa: WPS235
     admin,
     chat_completion,
-    datapoint,
-    endpoint,
     inference,
-    license,
-    metric,
-    modality,
     model,
     monitoring,
     provider,
-    recharge,
-    recharge_type,
-    task,
     users,
 )
 from orchestra.web.api.dependencies import auth_admin_key, auth_api_key
@@ -29,20 +21,8 @@ api_router.include_router(
     tags=["users"],
     dependencies=API_KEY_AUTH,
 )
-api_router.include_router(datapoint.router, prefix="/datapoint", tags=["datapoint"])
-api_router.include_router(endpoint.router, prefix="/endpoint", tags=["endpoint"])
-api_router.include_router(license.router, tags=["license"])
-api_router.include_router(metric.router, tags=["metric"])
-api_router.include_router(modality.router, tags=["modality"])
 api_router.include_router(model.router, tags=["model"])
 api_router.include_router(provider.router, tags=["provider"])
-api_router.include_router(recharge.router, prefix="/recharge", tags=["recharge"])
-api_router.include_router(
-    recharge_type.router,
-    prefix="/recharge_type",
-    tags=["recharge_type"],
-)
-api_router.include_router(task.router, tags=["task"])
 api_router.include_router(
     inference.router,
     tags=["inference"],
@@ -59,4 +39,4 @@ api_router.include_router(
     tags=["admin"],
     dependencies=ADMIN_AUTH,
 )
-api_router.include_router(monitoring.router)
+api_router.include_router(monitoring.router, tags=["admin"], dependencies=ADMIN_AUTH)

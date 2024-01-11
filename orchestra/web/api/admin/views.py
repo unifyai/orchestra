@@ -1,5 +1,5 @@
 import datetime
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter
 from fastapi.param_functions import Depends
@@ -15,18 +15,36 @@ from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.recharge_type_dao import RechargeTypeDAO
 from orchestra.db.dao.task_dao import TaskDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.models.orchestra_models import Users
+from orchestra.db.models.orchestra_models import (  # noqa: WPS235
+    Datapoint,
+    Endpoint,
+    License,
+    Metric,
+    Modality,
+    Recharge,
+    RechargeType,
+    Task,
+    Users,
+)
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     DatapointModelRequest,
+    DatapointModelResponse,
     EndpointModelRequest,
+    EndpointModelResponse,
     LicenseModelRequest,
+    LicenseModelResponse,
     MetricModelRequest,
+    MetricModelResponse,
     ModalityModelRequest,
+    ModalityModelResponse,
     ModelRequest,
     ProviderModelRequest,
     RechargeModelRequest,
+    RechargeModelResponse,
     RechargeTypeModelRequest,
+    RechargeTypeModelResponse,
     TaskModelRequest,
+    TaskModelResponse,
     UsersModelResponse,
 )
 
@@ -59,6 +77,292 @@ async def get_user(
     :return: list of users objects from database.
     """
     return await users_dao.filter(id=id)
+
+
+@router.get("/get_all_recharge_types", response_model=List[RechargeTypeModelResponse])
+async def get_recharge_type_models(
+    limit: int = 10,
+    offset: int = 0,
+    recharge_type_dao: RechargeTypeDAO = Depends(),
+) -> List[RechargeType]:
+    """
+    Retrieve all recharge_type objects from the database.
+
+    :param limit: limit of recharge_type objects, defaults to 10.
+    :param offset: offset of recharge_type objects, defaults to 0.
+    :param recharge_type_dao: DAO for recharge_type models.
+    :return: list of recharge_type objects from database.
+    """
+    return await recharge_type_dao.get_all_recharge_types(limit=limit, offset=offset)
+
+
+@router.get("/get_recharge_type", response_model=List[RechargeTypeModelResponse])
+async def get_recharge_type(
+    type: str,  # noqa: WPS125
+    recharge_type_dao: RechargeTypeDAO = Depends(),
+) -> List[RechargeType]:
+    """
+    Retrieve specific recharge_type object from the database.
+
+    :param type: type of recharge_type object.
+    :param recharge_type_dao: DAO for recharge_type models.
+    :return: recharge_type object from database.
+    """
+    return await recharge_type_dao.filter(type=type)
+
+
+@router.get("/get_all_recharges", response_model=List[RechargeModelResponse])
+async def get_recharge_models(
+    limit: int = 10,
+    offset: int = 0,
+    recharge_dao: RechargeDAO = Depends(),
+) -> List[Recharge]:
+    """
+    Retrieve all recharge objects from the database.
+
+    :param limit: limit of recharge objects, defaults to 10.
+    :param offset: offset of recharge objects, defaults to 0.
+    :param recharge_dao: DAO for recharge models.
+    :return: list of recharge objects from database.
+    """
+    return await recharge_dao.get_all_recharges(limit=limit, offset=offset)
+
+
+@router.get("/get_recharge", response_model=List[RechargeModelResponse])
+async def get_recharge(
+    at: datetime.datetime = datetime.datetime.now(),
+    user_id: str = "",
+    quantity: float = 0,
+    type: str = "",  # noqa: WPS125
+    recharge_dao: RechargeDAO = Depends(),
+) -> List[Recharge]:
+    """
+    Retrieve specific recharge object from the database.
+
+    :param at: at of recharge instance.
+    :param user_id: user_id of recharge instance.
+    :param quantity: quantity of recharge instance.
+    :param type: type of recharge instance.
+    :param recharge_dao: DAO for recharge models.
+    :return: list of recharge objects from database.
+    """
+    return await recharge_dao.filter(
+        at=at,
+        user_id=user_id,
+        quantity=quantity,
+        type=type,
+    )
+
+
+@router.get("/get_all_datapoints", response_model=List[DatapointModelResponse])
+async def get_datapoint_models(
+    limit: int = 10,
+    offset: int = 0,
+    datapoint_dao: DatapointDAO = Depends(),
+) -> List[Datapoint]:
+    """
+    Retrieve all datapoint objects from the database.
+
+    :param limit: limit of datapoint objects, defaults to 10.
+    :param offset: offset of datapoint objects, defaults to 0.
+    :param datapoint_dao: DAO for datapoint models.
+    :return: list of datapoint objects from database.
+    """
+    return await datapoint_dao.get_all_datapoints(limit=limit, offset=offset)
+
+
+@router.get("/get_datapoint", response_model=List[DatapointModelResponse])
+async def get_datapoint(
+    endpoint_id: Optional[int] = None,
+    measured_at: Optional[datetime.datetime] = None,
+    metric_name: Optional[str] = None,
+    value: Optional[float] = None,
+    datapoint_dao: DatapointDAO = Depends(),
+) -> List[Datapoint]:
+    """
+    Retrieve specific datapoint object from the database.
+
+    :param endpoint_id: endpoint_id of datapoint object.
+    :param measured_at: measured_at of datapoint object.
+    :param metric_name: metric_name of datapoint object.
+    :param value: value of datapoint object.
+    :param datapoint_dao: DAO for datapoint models.
+    :return: datapoint object from database.
+    """
+    return await datapoint_dao.filter(
+        endpoint_id=endpoint_id,
+        measured_at=measured_at,
+        metric_name=metric_name,
+        value=value,
+    )
+
+
+@router.get("/get_all_endpoints", response_model=List[EndpointModelResponse])
+async def get_endpoint_models(
+    limit: int = 10,
+    offset: int = 0,
+    endpoint_dao: EndpointDAO = Depends(),
+) -> List[Endpoint]:
+    """
+    Retrieve all endpoint objects from the database.
+
+    :param limit: limit of endpoint objects, defaults to 10.
+    :param offset: offset of endpoint objects, defaults to 0.
+    :param endpoint_dao: DAO for endpoint models.
+    :return: list of endpoint objects from database.
+    """
+    return await endpoint_dao.get_all_endpoints(limit=limit, offset=offset)
+
+
+@router.get("/get_endpoint", response_model=List[EndpointModelResponse])
+async def get_endpoint(
+    mdl_id: Optional[int] = None,
+    provider_id: Optional[int] = None,
+    created_at: Optional[datetime.datetime] = None,
+    endpoint_dao: EndpointDAO = Depends(),
+) -> List[Endpoint]:
+    """
+    Retrieve specific endpoint object from the database.
+
+    :param mdl_id: mdl_id of endpoint object.
+    :param provider_id: provider_id of endpoint object.
+    :param created_at: created_at of endpoint object.
+    :param endpoint_dao: DAO for endpoint models.
+    :return: endpoint object from database.
+    """
+    return await endpoint_dao.filter(
+        mdl_id=mdl_id,
+        provider_id=provider_id,
+        created_at=created_at,
+    )
+
+
+@router.get("/get_all_licenses", response_model=List[LicenseModelResponse])
+async def get_license_models(
+    limit: int = 10,
+    offset: int = 0,
+    license_dao: LicenseDAO = Depends(),
+) -> List[License]:
+    """
+    Retrieve all license objects from the database.
+
+    :param limit: limit of license objects, defaults to 10.
+    :param offset: offset of license objects, defaults to 0.
+    :param license_dao: DAO for license models.
+    :return: list of license objects from database.
+    """
+    return await license_dao.get_all_licenses(limit=limit, offset=offset)
+
+
+@router.get("/get_license", response_model=List[LicenseModelResponse])
+async def get_license(
+    name: str,
+    license_dao: LicenseDAO = Depends(),
+) -> List[License]:
+    """
+    Retrieve specific license object from the database.
+
+    :param name: name of license instance.
+    :param license_dao: DAO for license models.
+    :return: list of license objects from database.
+    """
+    return await license_dao.filter(name=name)
+
+
+@router.get("/get_all_metrics", response_model=List[MetricModelResponse])
+async def get_metric_models(
+    limit: int = 10,
+    offset: int = 0,
+    metric_dao: MetricDAO = Depends(),
+) -> List[Metric]:
+    """
+    Retrieve all metric objects from the database.
+
+    :param limit: limit of metric objects, defaults to 10.
+    :param offset: offset of metric objects, defaults to 0.
+    :param metric_dao: DAO for metric models.
+    :return: list of metric objects from database.
+    """
+    return await metric_dao.get_all_metrics(limit=limit, offset=offset)
+
+
+@router.get("/get_metric", response_model=List[MetricModelResponse])
+async def get_metric(
+    name: str,
+    metric_dao: MetricDAO = Depends(),
+) -> List[Metric]:
+    """
+    Retrieve specific metric object from the database.
+
+    :param name: name of metric instance.
+    :param metric_dao: DAO for metric models.
+    :return: list of metric objects from database.
+    """
+    return await metric_dao.filter(name=name)
+
+
+@router.get("/get_all_modalities", response_model=List[ModalityModelResponse])
+async def get_modality_models(
+    limit: int = 10,
+    offset: int = 0,
+    modality_dao: ModalityDAO = Depends(),
+) -> List[Modality]:
+    """
+    Retrieve all modality objects from the database.
+
+    :param limit: limit of modality objects, defaults to 10.
+    :param offset: offset of modality objects, defaults to 0.
+    :param modality_dao: DAO for modality models.
+    :return: list of modality objects from database.
+    """
+    return await modality_dao.get_all_modalities(limit=limit, offset=offset)
+
+
+@router.get("/get_modality", response_model=List[ModalityModelResponse])
+async def get_modality(
+    name: str,
+    modality_dao: ModalityDAO = Depends(),
+) -> List[Modality]:
+    """
+    Retrieve specific modality object from the database.
+
+    :param name: name of modality object.
+    :param modality_dao: DAO for modality models.
+    :return: modality object from database.
+    """
+    return await modality_dao.filter(name=name)
+
+
+@router.get("/get_all_tasks", response_model=List[TaskModelResponse])
+async def get_task_models(
+    limit: int = 10,
+    offset: int = 0,
+    task_dao: TaskDAO = Depends(),
+) -> List[Task]:
+    """
+    Retrieve all task objects from the database.
+
+    :param limit: limit of task objects, defaults to 10.
+    :param offset: offset of task objects, defaults to 0.
+    :param task_dao: DAO for task models.
+    :return: list of task objects from database.
+    """
+    return await task_dao.get_all_tasks(limit=limit, offset=offset)
+
+
+@router.get("/get_task", response_model=List[TaskModelResponse])
+async def get_task(
+    name: str,
+    task_dao: TaskDAO = Depends(),
+) -> List[Task]:
+    """
+    Retrieve specific task object from the database.
+
+    :param name: name of task object.
+    :param task_dao: DAO for task models.
+    :return: task object from database.
+    """
+    return await task_dao.filter(name=name)
 
 
 @router.put("/create_datapoint")
