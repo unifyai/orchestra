@@ -5,12 +5,9 @@ from orchestra.web.api import (  # noqa: WPS235
     admin,
     chat_completion,
     inference,
-    metric,
-    modality,
     model,
     monitoring,
     provider,
-    task,
     users,
 )
 from orchestra.web.api.dependencies import auth_admin_key, auth_api_key
@@ -24,11 +21,8 @@ api_router.include_router(
     tags=["users"],
     dependencies=API_KEY_AUTH,
 )
-api_router.include_router(metric.router, tags=["metric"])
-api_router.include_router(modality.router, tags=["modality"])
 api_router.include_router(model.router, tags=["model"])
 api_router.include_router(provider.router, tags=["provider"])
-api_router.include_router(task.router, tags=["task"])
 api_router.include_router(
     inference.router,
     tags=["inference"],

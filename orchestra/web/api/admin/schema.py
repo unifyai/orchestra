@@ -243,3 +243,40 @@ class LicenseModelResponse(BaseModel):
     name: str
     image_url: str
     description: str
+
+
+class MetricModelResponse(BaseModel):
+    """
+    Response model for metric models.
+
+    Attributes:
+        name (str): The name of the metric.
+        untis (str): The units of the metric.
+    """
+
+    name: str
+    units: str
+
+
+class ModalityModelResponse(BaseModel):
+    """
+    Response model for modality models.
+
+    Attributes:
+        name (str): The name of the modality.
+    """
+
+    name: str
+
+
+class TaskModelResponse(BaseModel):
+    """
+    Response model for task models.
+
+    Attributes:
+        name (str): The name of the task.
+        modality (str): The modality of the task.
+    """
+
+    name: str
+    modality: str
