@@ -11,11 +11,13 @@ class ChatCompletionRequest(BaseModel):
         model (str): The model identifier.
         messages (List[Dict[str]]): List of messages for completion.
         temperature (float): The temperature parameter for generating completions.
+        stream (bool): Whether to stream the response.
     """
 
     model: str
     messages: List[Dict[str, str]]
-    temperature: float
+    temperature: float = 0.9
+    stream: bool = False
 
 
 class ChatCompletionResponse(BaseModel):

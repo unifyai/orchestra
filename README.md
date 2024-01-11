@@ -1,4 +1,6 @@
 # orchestra
+
+
 ## Poetry
 
 This project uses poetry. It's a modern dependency management tool.
@@ -41,6 +43,14 @@ But you have to rebuild image every time you modify `poetry.lock` or `pyproject.
 ```bash
 docker-compose -f deploy/docker-compose.yml --project-directory . build
 ```
+
+### Remove all old artifacts in local
+```bash
+docker-compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml --project-directory . down --volumes --remove-orphans
+docker rmi $(docker images -q)
+docker volume prune
+```
+It is recommended to use the poetry commands for local development as docker does not play well with the database.
 
 ## Project structure
 
@@ -155,13 +165,15 @@ alembic revision
 
 ## Endpoint Protection
 
-To enable API key authentication on endpoints, you should add the following
+### User-Facing
+
+To enable user API key authentication on endpoints, you should add the following
 in the `orchestra/web/api/router.py` file:
 
 ```python
 api_router.include_router(
     ...,
-    dependencies=AUTH,
+    dependencies=API_KEY_AUTH,
 )
 ```
 
@@ -171,9 +183,34 @@ api_router.include_router(
     dummy.router,
     prefix="/dummy",
     tags=["dummy"],
-    dependencies=AUTH,
+    dependencies=API_KEY_AUTH,
 )
 ```
+
+### Admin Authentication
+
+To enable admin-only API key authentication on endpoints, you should add the following
+in the `orchestra/web/api/router.py` file:
+
+```python
+api_router.include_router(
+    ...,
+    dependencies=ADMIN_AUTH,
+)
+```
+
+For example, this will protect all endpoints in the `/dummy` router
+to allow admin-only access:
+```python
+api_router.include_router(
+    dummy.router,
+    prefix="/dummy",
+    tags=["dummy"],
+    dependencies=ADMIN_AUTH,
+)
+```
+
+For testing purposes, an example is to add `ORCHESTRA_ADMIN_KEY="testing-123"` to the `.env` file for verifying the behaviour of the admin key authentication.
 
 
 ## Running tests
@@ -193,8 +230,84 @@ I prefer doing it with docker:
 docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:13.8-bullseye
 ```
 
-
 2. Run the pytest.
 ```bash
 pytest -vv .
+```
+## Setting up the database locally
+### Getting local dump file
+1. To setup the database locally, you need to create a dump file of the staging database. To do so, you can either run the following commands:
+    - Connect to the sql database using gcloud:
+        ```bash
+        gcloud sql connect staging
+        ```
+    - After connecting to staging, run the following command on your terminal. This will create a dump file.
+        ```bash
+        pg_dump -h 34.141.85.117 -p 5432 -U postgres orchestra > orchestra.sql
+        ```
+    OR
+    - Use GCP UI to pg_dump the data through the [export page here](https://console.cloud.google.com/sql/instances/dev/export?project=saas-368716) into [temp_file_holder](https://console.cloud.google.com/storage/browser/temp_file_holder;tab=objects?forceOnBucketsSortingFiltering=true&project=saas-368716&prefix=&forceOnObjectsSortingFiltering=false) bucket and then download from there.
+2. Now, connect to psql and run the following command to populate your local orchestra database. Note: this step assumes you've database setup and running.
+    ```bash
+    PGPASSWORD=orchestra psql -h localhost -U orchestra -d orchestra
+    \i <path to orchestra.sql>
+    \q
+    ```
+
+### Setting up the database in the docker container
+This way you can configure your database that is spun up using the docker compose.
+```bash
+docker exec -it <postgres:13.8-bullseye_container_id>/bin/bash
+```
+
+Now, connect to psql and run the following command to populate your local orchestra database
+```bash
+psql -h 127.0.0.1  -p 5432 -U orchestra -d orchestra
+```
+
+```sql
+\connect orchestra;
+\i <snapshot_name>.sql
+```
+
+### Setting up the local database
+To populate database for the local orchestra, run the following commands
+```bash
+poetry run python -m orchestra
+docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:13.8-bullseye
+alembic upgrade head
+```
+
+Now, connect to psql and run the following command to populate your local orchestra database
+```bash
+psql -h 127.0.0.1  -p 5432 -U orchestra -d orchestra
+```
+
+```sql
+\connect orchestra;
+\i <snapshot_name>.sql
+```
+
+## Debugging in vscode
+
+To run the debugger you will need a valid connection to a db. To run `orchestra` in debug model, your `launch.json` file should look something like this:
+
+```python
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: FastAPI",
+            "type": "python",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "orchestra.web.application:get_app",
+                "--reload"
+            ],
+            "jinja": true,
+            "justMyCode": true
+        }
+    ]
+}
 ```

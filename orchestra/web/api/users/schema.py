@@ -1,20 +1,9 @@
 from pydantic import BaseModel
 
 
-class UsersModelRequest(BaseModel):
+class CreditsResponse(BaseModel):
     """
-    Request model for creating new users model.
-
-    Attributes:
-        id (str): The id of the users.
-    """
-
-    id: str
-
-
-class UsersModelResponse(BaseModel):
-    """
-    Response model for users models.
+    Response model for credits models.
 
     Attributes:
         id (str): The id of the users.

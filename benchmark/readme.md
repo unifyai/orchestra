@@ -1,18 +1,26 @@
 Expects API keys are properly setup in the environment variables.
 
-If not, create `keys.sh` with following snippet to setup:
+For GCP, ensure secrets are properly set up.
+For local, create `keys.sh` with following snippet to setup:
 ```bash
 #!/bin/bash
 
-export ANYSCALE_API_KEY=""
-export PERPLEXITY_API_KEY=""
-export TOGETHERAI_API_KEY=""
-export ANTHROPIC_API_KEY=""
-export REPLICATE_API_KEY=""
-export VERTEXAI_API_KEY=""
-export OPENAI_API_KEY="sk-"
+export ORCHESTRA_ANYSCALE_API_KEY=""
+export ORCHESTRA_PERPLEXITY_AI_API_KEY=""
+export ORCHESTRA_TOGETHER_AI_API_KEY=""
+export ORCHESTRA_ANTHROPIC_API_KEY=""
+export ORCHESTRA_REPLICATE_API_KEY=""
+export ORCHESTRA_OPENAI_API_KEY="sk-"
+export ORCHESTRA_MISTRAL_AI_API_KEY=""
+export ORCHESTRA_VERTEX_AI_PROJECT="saas-368716"
+export ORCHESTRA_VERTEX_AI_LOCATION="us-central1"
 
 echo "Environment variables have been set."
+```
+Update this in perf.py
+```
+ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON = "/workspaces/orchestra/application_default_credentials.json"
+ORCHESTRA_VERTEXAI_GCLOUD_PATH = "/workspaces/orchestra/google-cloud-sdk/bin/gcloud"
 ```
 Run in terminal:
 ```bash

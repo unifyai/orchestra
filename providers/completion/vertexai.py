@@ -1,9 +1,15 @@
 import os
 import subprocess  # noqa: S404
+from typing import List
 
 import litellm
 import requests
+from litellm.utils import ModelResponse
 from providers.completion.base_completion_provider import BaseCompletionProvider
+
+# Pricing info of providers with pay-per-character model (only Vertex AI currently)
+# is standardized to per thousand tokens.
+PRICING_PER_CHARACTERS = 1000
 
 
 class VertexAI(BaseCompletionProvider):
@@ -15,34 +21,86 @@ class VertexAI(BaseCompletionProvider):
     Pricing is per thousand character: https://cloud.google.com/vertex-ai/pricing
     Models in Preview stage (100% discounted):
     https://cloud.google.com/vertex-ai/docs/generative-ai/get-token-count
+    Deprecation:
+    https://cloud.google.com/vertex-ai/docs/generative-ai/learn/model-versioning
     """
 
     supported_models = {
         "text-bison": {
-            "endpoint": "text-bison",
+            "endpoint": "text-bison",  # redirects to latest
             "context_window": 8192,
             "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
         },
+        "text-bison-002": {
+            "endpoint": "text-bison@002",
+            "context_window": 8192,
+            "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
+        },
+        "text-bison-001": {
+            "endpoint": "text-bison@001",
+            "context_window": 8192,
+            "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
+        },  # shutdown on 2024-07-06
         "chat-bison": {
-            "endpoint": "chat-bison",
+            "endpoint": "chat-bison",  # redirects to latest
             "context_window": 8192,
             "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
         },
+        "chat-bison-002": {
+            "endpoint": "chat-bison@002",
+            "context_window": 8192,
+            "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
+        },
+        "chat-bison-001": {
+            "endpoint": "chat-bison@001",
+            "context_window": 8192,
+            "cost": {"prompt": 0.00025, "completion": 0.0005, "per_character": True},
+        },  # shutdown on 2024-07-06
         "code-bison": {  # Preview, 100% discount
-            "endpoint": "code-bison",
+            "endpoint": "code-bison",  # redirects to latest
             "context_window": 6144,
             "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
+        "code-bison-002": {  # Preview, 100% discount
+            "endpoint": "code-bison@002",
+            "context_window": 6144,
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
+        },
+        "code-bison-001": {  # Preview, 100% discount
+            "endpoint": "code-bison@001",
+            "context_window": 6144,
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
+        },  # shutdown on 2024-07-06
         "codechat-bison": {  # Preview, 100% discount
-            "endpoint": "codechat-bison",
+            "endpoint": "codechat-bison",  # redirects to latest
             "context_window": 6144,
             "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
+        "codechat-bison-002": {  # Preview, 100% discount
+            "endpoint": "codechat-bison@002",
+            "context_window": 6144,
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
+        },
+        "codechat-bison-001": {  # Preview, 100% discount
+            "endpoint": "codechat-bison@001",
+            "context_window": 6144,
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
+        },  # shutdown on 2024-07-06
         "code-gecko": {  # Preview, 100% discount
-            "endpoint": "code-gecko",
+            "endpoint": "code-gecko",  # redirects to latest
             "context_window": 2048,
             "cost": {"prompt": 0, "completion": 0, "per_character": True},
         },
+        "code-gecko-002": {  # Preview, 100% discount
+            "endpoint": "code-gecko@002",
+            "context_window": 2048,
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
+        },
+        "code-gecko-001": {  # Preview, 100% discount
+            "endpoint": "code-gecko@001",
+            "context_window": 2048,
+            "cost": {"prompt": 0, "completion": 0, "per_character": True},
+        },  # shutdown on 2024-07-06
         "text-bison-32k": {
             "endpoint": "text-bison-32k",
             "context_window": 32000,
@@ -73,7 +131,7 @@ class VertexAI(BaseCompletionProvider):
     def set_service_account_credentials(
         self,
         json_credentials_path: str,
-        gcloud_install_path: str = "/workspaces/orchestra/google-cloud-sdk/bin/gcloud",
+        gcloud_install_path: str,
     ) -> None:
         """
         Sets the service account credentials for GCP.
@@ -124,4 +182,45 @@ class VertexAI(BaseCompletionProvider):
                     "ensure properly configured service account credentials",
                 ),
             )
-        return response.json()["totalBillableCharacters"]
+        return response.json().get("totalBillableCharacters", 0)
+
+    def get_cost_max(self, model_name: str) -> float:  # noqa: D102
+        if model_name not in self.supported_models:
+            raise ValueError("Model not supported")
+        return (
+            self.supported_models[model_name]["cost"]["completion"]
+            * self.supported_models[model_name]["context_window"]
+            / PRICING_PER_CHARACTERS
+        )
+
+    def compute_cost(
+        self,
+        model_name: str,
+        prompts: List[str],
+        response: ModelResponse,
+    ) -> float:
+        """
+        Compute the cost of a completion.
+
+        :param model_name: The model to use for completion.
+        :param prompts: List of the prompt texts.
+        :param response: Model response from LiteLLM completion.
+
+        :return: The cost of the completion.
+        """
+        cost_data = self.supported_models[model_name]["cost"]  # type: ignore
+        prompt_cost = sum(
+            self.get_billable_characters(prompt, model_name)  # type: ignore
+            * cost_data["prompt"]
+            / PRICING_PER_CHARACTERS
+            for prompt in prompts
+        )
+        completion_cost = (
+            self.get_billable_characters(  # type: ignore
+                response.choices[0].message.content,
+                model_name,
+            )
+            * cost_data["completion"]
+            / PRICING_PER_CHARACTERS
+        )
+        return prompt_cost + completion_cost

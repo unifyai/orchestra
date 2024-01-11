@@ -1,4 +1,7 @@
 # flake8: noqa: E501
+from typing import List, Optional
+
+from litellm.utils import ModelResponse
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
@@ -51,3 +54,35 @@ class Replicate(BaseCompletionProvider):
             "cost": {"hardware": "a40-large", "per_second": True},
         },
     }
+
+    def get_cost_max(self, model_name: str) -> float:  # noqa: D102
+        if model_name not in self.supported_models:
+            raise ValueError("Model not supported")
+        cost_data = self.supported_models[model_name]["cost"]
+        # Defined constant used to approximate maximum cost.
+        # Represents the maximum time a server might take to process a request.
+        max_runtime_secs = 100
+        return self.hardware_pricing_per_sec[cost_data["hardware"]] * max_runtime_secs
+
+    def compute_cost(
+        self,
+        model_name: str,
+        prompts: Optional[List[str]],
+        response: ModelResponse,
+    ) -> float:
+        """
+        Compute the cost of a completion.
+
+        :param model_name: The model to use for completion.
+        :param prompts: List of the prompt texts.
+        :param response: Model response from LiteLLM completion.
+
+        :return: The cost of the completion.
+        """
+        cost_data = self.supported_models[model_name]["cost"]  # type: ignore
+        total_cost = (
+            self.hardware_pricing_per_sec[cost_data["hardware"]]  # type: ignore
+            * response._response_ms
+            / 1000
+        )
+        return total_cost

@@ -1,3 +1,4 @@
+import decimal
 from typing import List, Optional
 
 from fastapi import Depends
@@ -32,38 +33,54 @@ class UsersDAO:
             ),
         )
 
-    async def get_all_users(self, limit: int, offset: int) -> List[Users]:
+    async def get_all_users(self) -> List[Users]:
         """
         Get all users models with limit/offset pagination.
 
-        :param limit: limit of users.
-        :param offset: offset of users.
         :return: stream of users.
         """
         raw_users = await self.session.execute(
-            select(Users).limit(limit).offset(offset),
+            select(Users),
         )
 
         return list(raw_users.scalars().fetchall())
 
     async def filter(
         self,
-        id: Optional[str] = None,  # noqa: WPS125
-        credits: Optional[float] = None,
+        id: Optional[str],  # noqa: WPS125
     ) -> List[Users]:
         """
         Get specific users model.
 
         :param id: id of users instance.
-        :param credits: credits of users instance.
         :return: stream of users.
         """
         query = select(Users)
-        if id:
-            query = query.where(Users.id == id)
-        if credits:
-            query = query.where(Users.credits == credits)
+        query = query.where(Users.id == id)
 
         raw_users = await self.session.execute(query)
 
         return list(raw_users.scalars().fetchall())
+
+    async def recharge_credit(
+        self,
+        user_id: str,
+        quantity: float,
+    ) -> None:
+        """
+        Recharge credit of a users.
+
+        :param user_id: id of a user.
+        :param quantity: positive number of credits to recharge.
+        """
+        query = select(Users)
+        query = query.where(Users.id == user_id)
+
+        raw_users = await self.session.execute(query)
+        user = raw_users.scalars().first()
+        if user is not None:
+            setattr(  # noqa: B010
+                user,
+                "credits",
+                user.credits + decimal.Decimal(quantity),
+            )

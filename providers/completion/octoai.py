@@ -1,10 +1,14 @@
+import json
 import logging
 from typing import List, Optional
 
 import openai
 from octoai.chat import ChatCompletion
 from octoai.client import Client
-from providers.completion.base_completion_provider import BaseCompletionProvider
+from providers.completion.base_completion_provider import (
+    AsyncGeneratorWrapper,
+    BaseCompletionProvider,
+)
 
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
 
@@ -20,48 +24,48 @@ class OctoAI(BaseCompletionProvider):
     """
 
     supported_models = {
-        "llama-2-70b-chat-fp16": {
-            "endpoint": "octoai/llama-2-70b-chat-fp16",
+        "llama-2-70b-chat": {
+            "endpoint": "llama-2-70b-chat-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.6, "completion": 1.9},
         },
         "llama-2-70b-chat-int4": {
-            "endpoint": "octoai/llama-2-70b-chat-int4",
+            "endpoint": "llama-2-70b-chat-int4",
             "context_window": 4096,
             "cost": {"prompt": 0.6, "completion": 1.2},
         },
-        "llama-2-13b-chat-fp16": {
-            "endpoint": "octoai/llama-2-13b-chat-fp16",
+        "llama-2-13b-chat": {
+            "endpoint": "llama-2-13b-chat-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.2, "completion": 0.5},
         },
-        "codellama-34b-instruct-fp16": {
-            "endpoint": "octoai/codellama-34b-instruct-fp16",
+        "codellama-34b-instruct": {
+            "endpoint": "codellama-34b-instruct-fp16",
             "context_window": 16384,
             "cost": {"prompt": 0.5, "completion": 1.15},
         },
         "codellama-34b-instruct-int4": {
-            "endpoint": "octoai/codellama-34b-instruct-int4",
+            "endpoint": "codellama-34b-instruct-int4",
             "context_window": 4096,
             "cost": {"prompt": 0.5, "completion": 0.8},
         },
-        "codellama-13b-instruct-fp16": {
-            "endpoint": "octoai/codellama-13b-instruct-fp16",
+        "codellama-13b-instruct": {
+            "endpoint": "codellama-13b-instruct-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.2, "completion": 0.5},
         },
-        "codellama-7b-instruct-fp16": {
-            "endpoint": "octoai/codellama-7b-instruct-fp16",
+        "codellama-7b-instruct": {
+            "endpoint": "codellama-7b-instruct-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.1, "completion": 0.25},
         },
-        "mistral-7b-instruct-fp16": {
-            "endpoint": "octoai/mistral-7b-instruct-fp16",
+        "mistral-7b-instruct-v0.1": {  # TODO: Ask which version this is
+            "endpoint": "mistral-7b-instruct-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.1, "completion": 0.25},
         },
-        "mixtral-8x7b-instruct-fp16": {
-            "endpoint": "octoai/mixtral-8x7b-instruct-fp16",
+        "mixtral-8x7b-instruct-v0.1": {
+            "endpoint": "mixtral-8x7b-instruct-fp16",
             "context_window": 4096,
             "cost": {"prompt": 0.2, "completion": 0.5},
         },
@@ -76,12 +80,13 @@ class OctoAI(BaseCompletionProvider):
         """
         self.client = Client(token=api_key)
 
-    def complete(
+    def complete(  # noqa: WPS211
         self,
         model: str,
         messages: List,  # type: ignore
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = 512,
+        temperature: Optional[float] = 0.9,
+        stream: Optional[bool] = False,
     ) -> Optional[ChatCompletion]:
         """
         Complete a prompt using the OctoAI service.
@@ -94,6 +99,8 @@ class OctoAI(BaseCompletionProvider):
         :type max_tokens: Optional[int]
         :param temperature: Controls the randomness of the generated completion.
         :type temperature: Optional[float]
+        :param stream: Whether to stream the response.
+        :type stream: Optional[bool]
         :return: OctoAI chat completion response.
         :rtype: Optional[ChatCompletion]
 
@@ -102,21 +109,42 @@ class OctoAI(BaseCompletionProvider):
         if model not in self.supported_models:
             raise ValueError("Model not supported")
 
-        provider_model_endpoint = model
+        provider_model_endpoint = self.supported_models[model]["endpoint"]
         try:
+            if stream:
+                return (
+                    OctoAIAsyncGeneratorWrapper(
+                        self.client.chat.completions.create(
+                            model=provider_model_endpoint,
+                            messages=messages,
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                            stream=stream,
+                        ),
+                        model,
+                        messages,
+                        compute_cost_streaming=self.compute_cost_streaming,
+                    ),
+                    None,
+                )
             response = self.client.chat.completions.create(
                 model=provider_model_endpoint,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
             ).dict()
+            usage = response["usage"]
             return ChatCompletionResponse(
-                model="rand",
+                model=model,
                 created=response.get("created", None),
                 id=response.get("id", None),
                 object=response.get("object", None),
                 usage=response.get("usage", None),
                 choices=response.get("choices", None),
+            ), self.compute_cost(
+                model,
+                usage["prompt_tokens"],
+                usage["completion_tokens"],
             )
         except openai.APITimeoutError as error:
             logger.error(f"Raised openai.APITimeoutError, Error: {error}")
@@ -124,3 +152,24 @@ class OctoAI(BaseCompletionProvider):
             error_type = type(error)
             logger.error(f"Raised error type: {error_type}, Error: {error}")
         return None
+
+
+class OctoAIAsyncGeneratorWrapper(AsyncGeneratorWrapper):
+    """A wrapper for the OctoAI async generator."""
+
+    async def generator(self):  # noqa: D102, C901, WPS210, WPS231
+        whole = ""
+        try:  # noqa: WPS501
+            for part in self._response:
+                part_dict = part.dict()
+                part_dict["model"] = "octoai/" + self._model  # noqa: WPS336
+                part_json = json.dumps(part_dict)
+                part_text = part_dict["choices"][0]["delta"]["content"]
+                whole += part_text if part_text else ""
+                yield part_json
+        finally:
+            self.total_cost = self._compute_cost_streaming(
+                self._model,
+                whole,
+                self._messages,
+            )

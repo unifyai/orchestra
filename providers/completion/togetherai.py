@@ -176,6 +176,21 @@ class TogetherAI(BaseCompletionProvider):
             "context_window": 4096,
             "cost": {"prompt": 0.2, "completion": 0.2},
         },
+        "mistral-7b-instruct-v0.2": {
+            "endpoint": "together_ai/mistralai/Mistral-7B-Instruct-v0.2",
+            "context_window": 32768,
+            "cost": {"prompt": 0.2, "completion": 0.2},
+        },
+        "mixtral-8x7b-v0.1": {
+            "endpoint": "together_ai/mistralai/Mixtral-8x7B-v0.1",
+            "context_window": 32768,
+            "cost": {"prompt": 0.6, "completion": 0.6},
+        },
+        "mixtral-8x7b-instruct-v0.1": {
+            "endpoint": "together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
+            "context_window": 32768,
+            "cost": {"prompt": 0.6, "completion": 0.6},
+        },
         "mythomax-l2-13b": {
             "endpoint": "together_ai/Gryphe/MythoMax-L2-13b",
             "context_window": 4096,

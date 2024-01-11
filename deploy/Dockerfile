@@ -3,6 +3,12 @@ RUN apt-get update && apt-get install -y \
   gcc \
   && rm -rf /var/lib/apt/lists/*
 
+# Install curl
+RUN apt-get update && apt-get install -y curl
+
+# Download and install Google Cloud SDK
+RUN curl https://sdk.cloud.google.com > install.sh
+RUN bash install.sh --disable-prompts
 
 RUN pip install poetry==1.4.2
 
@@ -15,6 +21,7 @@ WORKDIR /app/src
 
 # Installing requirements
 RUN poetry install --only main
+
 # Removing gcc
 RUN apt-get purge -y \
   gcc \

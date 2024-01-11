@@ -1,21 +1,27 @@
 import base64
 import re
+from typing import Union
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.param_functions import Depends
+from fastapi.responses import StreamingResponse
+from litellm.utils import Usage
 from models.imagegen import ImagegenModel
 from models.llm import CompletionsModel
 
+from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
 from orchestra.web.api.inference.schema import InferenceRequest, InferenceResponse
+from orchestra.web.api.users.views import get_credits
 
 router = APIRouter()
 
 
 def get_model_type(model_name):  # noqa: D103
     chat_models = re.compile(
-        r"(gpt|llama|zephyr|mistral|mixtral|pplx|falcon|wizard|mpt|claude)",  # noqa: WPS360, E501
+        r"(gpt|llama|zephyr|mistral|mixtral|pplx|falcon|wizard|mpt|claude|yi|chronos|alpaca|nous|hermes|platypus|pythia|qwen|redpajama)",  # noqa: WPS360, E501
     )
-    image_models = re.compile(r"diffusion")  # noqa: WPS360
+    image_models = re.compile(r"diffusion|sd")  # noqa: WPS360
 
     if chat_models.search(model_name):
         return "chat"
@@ -25,27 +31,58 @@ def get_model_type(model_name):  # noqa: D103
 
 @router.post("/inference", response_model=InferenceResponse)
 async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
+    request_fastapi: Request,
     request: InferenceRequest,
-) -> InferenceResponse:
+    users_dao: UsersDAO = Depends(),
+) -> Union[InferenceResponse, StreamingResponse]:
     """
     Get inference result based on the request.
 
+    :param request_fastapi: FastAPI request object.
     :param request: InferenceRequest object.
-
+    :param users_dao: DAO for users models.
     :return: Model-specific InferenceResponse object.
+
+    :raises HTTPException: when user has insufficient credits.
     """
     # TODO: Add error 422 for incorrect arguments, model, or provider
     # TODO: Add error 500
+    # TODO: Create a separate function and endpoint for updating credits
+    user_id = request_fastapi.state.user_id
+    users = await get_credits(request_fastapi, users_dao=users_dao)
+    available_credits = float(users[0].credits if users else 0)
+
     model_type = get_model_type(request.model)
     if model_type == "chat":
         language_model = CompletionsModel(
             provider=request.provider,
             model=request.model,
         )
-        response = language_model.get_completion(
+
+        cost_max = language_model.get_cost_max()
+        if available_credits < cost_max:
+            raise HTTPException(
+                status_code=402,  # noqa: WPS432
+                detail="Insufficient credits",
+            )
+        stream = request.arguments.get("stream", False)
+        response, cost = language_model.get_completion(
             messages=request.arguments["messages"],
-            temperature=request.arguments["temperature"],
+            temperature=request.arguments.get("temperature", 0.9),  # noqa: WPS432
+            max_tokens=request.arguments.get("max_tokens", None),
+            stream=stream,
         )
+        if stream:
+
+            async def stream_and_update_db():  # noqa: WPS430
+                async for part_json in response.generator():
+                    yield part_json
+                await users_dao.recharge_credit(user_id, -response.total_cost)
+
+            return StreamingResponse(stream_and_update_db())
+        else:
+            await users_dao.recharge_credit(user_id, -cost)
+
         if not response:
             # TODO: Handle when response is None
             return InferenceResponse(
@@ -63,11 +100,17 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             return InferenceResponse(
                 response=response.model_dump(),
             )
-        usage = response["usage"].model_dump() if response["usage"] else None
-        if response.get("choices", None):
-            choices = []
-            for choice in response.get("choices", None):
-                choices.append(choice.model_dump())
+
+        if isinstance(response["usage"], Usage):
+            usage = response["usage"].model_dump()
+        else:
+            usage = response["usage"]
+
+        choices = [
+            getattr(choice, "model_dump", lambda: None)()
+            for choice in response.get("choices", [])
+        ]
+
         return InferenceResponse(
             response={
                 "model": request.model,
@@ -84,7 +127,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             model=request.model,
         )
         kwargs = {
-            "image": request.arguments.get("image", None),
+            "init_image": request.arguments.get("init_image", None),
             "height": request.arguments.get("height", None),
             "width": request.arguments.get("width", None),
             "steps": request.arguments.get("steps", None),
@@ -93,8 +136,12 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             "sampler": request.arguments.get("sampler", None),
             "seed": request.arguments.get("seed", None),
             "mask_image": request.arguments.get("mask_image", None),
-            "start_schedule": request.arguments.get("start_schedule", None),
-            "end_schedule": request.arguments.get("end_schedule", None),
+            "strength": request.arguments.get("strength", None),
+            "use_refiner": request.arguments.get("use_refiner", False),
+            "high_noise_frac": request.arguments.get("high_noise_frac", None),
+            "checkpoint": request.arguments.get("checkpoint", None),
+            "loras": request.arguments.get("loras", None),
+            "textual_inversions": request.arguments.get("textual_inversions", None),
         }
         response = image_model.get_image(
             prompt=request.arguments["prompt"],
