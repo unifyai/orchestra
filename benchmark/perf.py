@@ -363,8 +363,10 @@ def benchmark_model(  # noqa: D103, WPS211
             "input_cost_llm_per_character",
             "output_cost_llm_per_character",
         ]
+        results = {}
         for i, metric in enumerate(metrics_to_push):
-            model_results[model_name][provider_name][metric] = i
+            results[metric] = i
+        model_results.setdefault(model_name, {})[provider_name] = results
 
 
 def run_benchmark(  # noqa: C901, WPS210, WPS220, WPS231
@@ -563,6 +565,8 @@ if __name__ == "__main__":
         "input_cost_llm_per_character",
         "output_cost_llm_per_character",
     ]
+    print(benchmarking_results)
+    exit()
     asyncio.run(
         process_benchmarking_results(
             benchmarking_results,
