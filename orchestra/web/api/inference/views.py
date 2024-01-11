@@ -1,4 +1,5 @@
 import base64
+import json
 import re
 from typing import Union
 
@@ -54,6 +55,8 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
 
     model_type = get_model_type(request.model)
     if model_type == "chat":
+        provider = request.provider
+        model = request.model
         language_model = CompletionsModel(
             provider=request.provider,
             model=request.model,
@@ -75,8 +78,9 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
         if stream:
 
             async def stream_and_update_db():  # noqa: WPS430
-                async for part_json in response.generator():
-                    yield part_json
+                async for part_dict in response.generator():
+                    part_dict["model"] = f"{model}@{provider}"
+                    yield json.dumps(part_dict)
                 await users_dao.recharge_credit(user_id, -response.total_cost)
 
             return StreamingResponse(stream_and_update_db())
@@ -96,7 +100,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
                 },
             )
         if isinstance(response, ChatCompletionResponse):
-            response.model = request.model
+            response.model = f"{model}@{provider}"
             return InferenceResponse(
                 response=response.model_dump(),
             )
@@ -113,7 +117,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
 
         return InferenceResponse(
             response={
-                "model": request.model,
+                "model": f"{model}@{provider}",
                 "created": response.get("created", None),
                 "id": response["id"],
                 "choices": choices,

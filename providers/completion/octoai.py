@@ -1,15 +1,14 @@
-import json
 import logging
 from typing import List, Optional
 
 import openai
+from litellm.utils import ModelResponse, Usage
 from octoai.chat import ChatCompletion
 from octoai.client import Client
 from providers.completion.base_completion_provider import (
     AsyncGeneratorWrapper,
     BaseCompletionProvider,
 )
-from litellm.utils import ModelResponse, Usage
 
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
 
@@ -145,7 +144,10 @@ class OctoAI(BaseCompletionProvider):
             ), self.compute_cost(
                 model,
                 [item["content"] for item in messages],
-                ModelResponse(usage=Usage(usage["prompt_tokens"], usage["completion_tokens"])))
+                ModelResponse(
+                    usage=Usage(usage["prompt_tokens"], usage["completion_tokens"]),
+                ),
+            )
         except openai.APITimeoutError as error:
             logger.error(f"Raised openai.APITimeoutError, Error: {error}")
         except Exception as error:
@@ -163,10 +165,9 @@ class OctoAIAsyncGeneratorWrapper(AsyncGeneratorWrapper):
             for part in self._response:
                 part_dict = part.dict()
                 part_dict["model"] = f"{self._model}@octoai"
-                part_json = json.dumps(part_dict)
                 part_text = part_dict["choices"][0]["delta"]["content"]
                 whole += part_text if part_text else ""
-                yield part_json
+                yield part_dict
         finally:
             self.total_cost = self._compute_cost_streaming(
                 self._model,

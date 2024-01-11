@@ -1,4 +1,3 @@
-import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -187,10 +186,9 @@ class AsyncGeneratorWrapper:  # noqa: D101
                     "object": part.get("object", "chat.completion"),
                     "usage": usage,
                 }
-                part_json = json.dumps(part_dict)
                 part_text = choices[0]["delta"]["content"]
                 whole += part_text if part_text else ""
-                yield part_json
+                yield part_dict
         finally:
             self.total_cost = self._compute_cost_streaming(
                 self._model,
