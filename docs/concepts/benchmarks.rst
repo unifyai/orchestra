@@ -8,7 +8,7 @@ benchmarking every single endpoint out there.
 The data that is available now comes from the v0 of our benchmarking logic. However, we are working on a thorough
 benchmarking toolkit that will power our benchmarks. Fear not, it will be open source.
 
-In this page, you will very soon find a detailed overview of this toolkit and the Hub benchmarking methodology, including
+In this page, you will soon find a detailed overview of this toolkit and the Hub benchmarking methodology, including
 the measured metrics, the rationale behind each one of them, and how are we calculating them.
 
 ..
@@ -21,7 +21,9 @@ the measured metrics, the rationale behind each one of them, and how are we calc
     ----------------------------------
 
 
-What about model comparisons?
------------------------------
+..
+    What about model comparisons?
+    -----------------------------
 
-We will very soon add support for direct comparison between both the metrics and the outputs of different models, stay tuned!
+..
+    We will very soon add support for direct comparison between both the metrics and the outputs of different models, stay tuned!

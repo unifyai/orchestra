@@ -93,20 +93,18 @@ This is again just an HTTP endpoint, so you can query it using **cURL**:
 .. code-block:: bash
 
     curl -X 'POST' \
-    'https://api.unify.ai/v0/chat/completion' \
-    -H 'accept: application/json' \
-    -H 'Authorization: Bearer YOUR_API_KEY' \
-    -H 'Content-Type: application/json' \
-    -d '{
-    "model": "llama-2-7b-chat@anyscale",
-    "messages": [
-        {
-            "role": "user",
-            "content": "Explain who Newton was and his entire theory of gravitation. Give a long detailed response please and explain all of his achievements"
-        }
-    ],
-    "stream": false
-    }'
+        'https://api.unify.ai/v0/chat/completion' \
+        -H 'accept: application/json' \
+        -H 'Authorization: Bearer YOUR_API_KEY' \
+        -H 'Content-Type: application/json' \
+        -d '{
+        "model": "llama-2-7b-chat@anyscale",
+            "messages": [{
+                "role": "user",
+                "content": "Explain who Newton was and his entire theory of gravitation. Give a long detailed response please and explain all of his achievements"
+            }],
+            "stream": false
+        }'
 
 Or using **Python**:
 
