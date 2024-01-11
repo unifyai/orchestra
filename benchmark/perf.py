@@ -565,8 +565,6 @@ if __name__ == "__main__":
         "input_cost_llm_per_character",
         "output_cost_llm_per_character",
     ]
-    print(benchmarking_results)
-    exit()
     asyncio.run(
         process_benchmarking_results(
             benchmarking_results,
