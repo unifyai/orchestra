@@ -549,3 +549,4 @@ if __name__ == "__main__":
             metrics_to_push,
         ),
     )
+    logger.info("All done. Closing job.")
