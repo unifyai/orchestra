@@ -3,11 +3,11 @@ Endpoints
 
 Welcome to the Endpoints API reference!
 This page is your go-to resource when it comes to learning about the different endpoints that allow you to
-interact with the Model Hub.
+interact with the Hub.
 
 .. note::
   To use the endpoints you will need an API Key. If you don't have one yet, you can go through the instructions in
-  `this page <https://unify.ai/docs/modelhub/home/getting_access.html>`_.
+  `this page <https://unify.ai/docs/hub/home/getting_access.html>`_.
 
 -----
 
@@ -16,7 +16,7 @@ GET /models
 
 **List Available Models**
 
-Retrieve a list of all available models in the Unify Model Hub.
+Retrieve a list of all available models in the Unify Hub.
 
 **Example Request (curl)**
 
@@ -83,7 +83,7 @@ GET /providers/{model}
 
 **List Available Providers for a Model**
 
-Retrieve the list of available providers for a specific model in the Model Hub.
+Retrieve the list of available providers for a specific model in the Hub.
 
 **Parameters**
  | **model** *(string)*: ID of the model to get the providers of.

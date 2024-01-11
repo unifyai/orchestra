@@ -4,18 +4,18 @@ Make your First Request
 Before starting to make requests, you will need two things:
 
 #. **A Unify API Key**. If you don't have one yet, you can follow the instructions in
-   `Getting Access <https://unify.ai/docs/modelhub/home/getting_access.html>`_ to generate it.
+   `Getting Access <https://unify.ai/docs/hub/home/getting_access.html>`_ to generate it.
 
 #. **A model ID**. You can find the model you want to query using the
-   `Model Hub web interface. <https://unify.ai/modelhub>`_ For this example, we will use the :code:`llama-2-7b-chat`
+   `Hub web interface. <https://unify.ai/hub>`_ For this example, we will use the :code:`llama-2-7b-chat`
    model, hosted in :code:`replicate`. We (Unify) are managing this model, so we can refer to it using only its
-   name (as explained `here! <https://unify.ai/docs/modelhub/concepts/models.html>`_)
+   name (as explained `here! <https://unify.ai/docs/hub/concepts/models.html>`_)
 
 Using the :code:`inference` Endpoint
 ------------------------------------
 
 All models, independently of the task, can be queried through the :code:`inference` endpoint. The API reference for this is
-`here. <https://unify.ai/docs/modelhub/reference/endpoints.html#post-query>`_
+`here. <https://unify.ai/docs/hub/reference/endpoints.html#post-query>`_
 
 In this case, you will have to specify the :code:`model` and the :code:`provider` that you want to use. In our case,
 this are :code:`llama-2-7b-chat` and :code:`replicate`. Additionaly, you'll have to pass the model :code:`arguments`.
@@ -24,7 +24,7 @@ For each model, the available :code:`arguments` may vary, you can always double 
 In the header, you will need to include the **Unify API Key** that is associated with your account.
 
 .. note::
-    This is just an HTTP POST request, you can interact with the Model Hub using your preferred language!
+    This is just an HTTP POST request, you can interact with the Hub using your preferred language!
 
 Using **cURL**, the request would look like this:
 
@@ -70,7 +70,7 @@ Using the OpenAI API Format
 ---------------------------
 
 We also support the OpenAI API format for :code:`text-generation` models. More specifically, the :code:`/chat/completions` endpoint.
-The docs for this endpoint are available `here. <https://unify.ai/docs/modelhub/reference/endpoints.html#post-chat-completions>`_
+The docs for this endpoint are available `here. <https://unify.ai/docs/hub/reference/endpoints.html#post-chat-completions>`_
 
 This API format wouldn't normally allow you to choose between providers for a given model. To bypass this limitation, the model
 name should have the format :code:`<uploaded_by>/<model_name>@<provider_name>`. For example, if :code:`john_doe` uploads a
@@ -98,7 +98,7 @@ Using the OpenAI SDK
 .. important::
     TODO: Test this, it should work but not sure about it huehue
 
-Given that the OpenAI SDK wraps the OpenAI format, we can also use it to interact with the Model Hub by just changing the
+Given that the OpenAI SDK wraps the OpenAI format, we can also use it to interact with the Hub by just changing the
 server URL.
 
 .. code-block:: python

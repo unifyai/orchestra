@@ -1,14 +1,14 @@
 Providers
 =========
 
-Another one of the main concepts in the Model Hub is the **provider**. Let's dive into it 🤿
+Another one of the main concepts in the Hub is the **provider**. Let's dive into it 🤿
 
 What is a Provider?
 -------------------
 
 You can think of a provider as a end-to-end deployment stack. Each provider comes with its unique set of features, performance capabilities,
-pricing, and so on. The Model Hub exposes an HTTP endpoint for every individual providers, allowing you to query the one
-that best fits your requirements while using a consistent request format and the same `API key <https://unify.ai/docs/modelhub/home/getting_access.html>`_.
+pricing, and so on. The Hub exposes an HTTP endpoint for every individual providers, allowing you to query the one
+that best fits your requirements while using a consistent request format and the same `API key <https://unify.ai/docs/hub/home/getting_access.html>`_.
 
 If we take a look at the page of one of the models, you'll find the different providers where this model is available.
 
@@ -21,7 +21,7 @@ Types of Providers
 We can categorze providers into various types, but fear not! Despite their differences under the hood, your developer experience
 is the same across all of them. The boundaries may sometimes seem a bit blurry here, but the following is a good mental model.
 
-Regardless of the services powering the endpoint, it's important to highlight that the Model Hub benchmarks them equally. This ensures that
+Regardless of the services powering the endpoint, it's important to highlight that the Hub benchmarks them equally. This ensures that
 you have the flexibility the query the most suitable one for your specific use case without any kind of vendor lock-in.
 
 Public endpoints
@@ -30,7 +30,7 @@ When working with popular models such as LLMs or Image Generation pipelines, it'
 as a service. Providers such as `stability.ai <https://stability.ai/>`_, `Anyscale <https://www.anyscale.com/endpoints>`_, or
 `together.ai <https://www.together.ai/>`_ expose APIs to query the models they are hosting in a straighforward manner, eliminating
 the need for any deployment. As mentioned earlier, this type of endpoints are only available in the `models managed by
-Unify <https://unify.ai/docs/modelhub/concepts/models.html#models-uploaded-by-us>`_, and not in those uploaded by users.
+Unify <https://unify.ai/docs/hub/concepts/models.html#models-uploaded-by-us>`_, and not in those uploaded by users.
 
 Deployment services
 ^^^^^^^^^^^^^^^^^^^
@@ -53,5 +53,5 @@ through endpoints, just like the two other groups.
 Round Up
 --------
 
-We have seen what a provider is and how different types are all unified as part of the Model Hub. We have also mentioned the benchmarks
+We have seen what a provider is and how different types are all unified as part of the Hub. We have also mentioned the benchmarks
 a few times now, so let's talk about them in more detail in the next section.
