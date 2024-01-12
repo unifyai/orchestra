@@ -315,3 +315,7 @@ To run the debugger you will need a valid connection to a db. To run `orchestra`
 ## Staging environment
 
 The `staging` branch has CI/CD already setup. All changes there will reflect to https://service.a.run.app.
+
+## Telemetry
+
+For instructions to access the telemetry dashboard and how it's setup, please see [Telemetry.md](./Telemetry.md)
