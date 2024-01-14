@@ -5,12 +5,17 @@ from starlette import status
 
 
 @pytest.mark.anyio
-async def test_credits(client: AsyncClient, fastapi_app: FastAPI) -> None:  # noqa: WPS218, E501
+async def test_credits(  # noqa: WPS218, E501
+    client: AsyncClient,
+    fastapi_app: FastAPI,
+) -> float:
     """
     Checks the credits endpoint.
 
     :param client: client for the app.
     :param fastapi_app: current FastAPI application.
+
+    :return: credits.
     """
     url = fastapi_app.url_path_for("get_credits")
     headers = {
@@ -27,3 +32,5 @@ async def test_credits(client: AsyncClient, fastapi_app: FastAPI) -> None:  # no
     assert isinstance(response_dict["credits"], float)
     assert "id" in response_dict
     assert isinstance(response_dict["id"], str)
+
+    return response_dict["credits"]
