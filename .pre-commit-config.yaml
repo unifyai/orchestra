@@ -60,3 +60,10 @@ repos:
     pass_filenames: false
     args:
     - "orchestra"
+
+  - id: pytest
+    name: Run tests with Pytest
+    entry: poetry run pytest
+    language: system
+    types: [python]
+    pass_filenames: false
