@@ -3,6 +3,7 @@ from typing import Any, AsyncGenerator
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -43,6 +44,10 @@ async def _engine() -> AsyncGenerator[AsyncEngine, None]:
     engine = create_async_engine(str(settings.db_url))
     async with engine.begin() as conn:
         await conn.run_sync(meta.create_all)
+        insert_user = text(
+            "INSERT INTO users VALUES ('clj3s02hf0000s60k7a2qsv0r', 10);",
+        )
+        await conn.execute(insert_user)
 
     try:
         yield engine
