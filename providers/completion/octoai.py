@@ -1,3 +1,4 @@
+import datetime
 import logging
 from typing import List, Optional
 
@@ -80,7 +81,7 @@ class OctoAI(BaseCompletionProvider):
         """
         self.client = Client(token=api_key)
 
-    def complete(  # noqa: WPS211
+    def complete(  # noqa: WPS211, WPS210
         self,
         model: str,
         messages: List,  # type: ignore
@@ -127,12 +128,14 @@ class OctoAI(BaseCompletionProvider):
                     ),
                     None,
                 )
+            start_time = datetime.datetime.now()
             response = self.client.chat.completions.create(
                 model=provider_model_endpoint,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
             ).dict()
+            end_time = datetime.datetime.now()
             usage = response["usage"]
             return ChatCompletionResponse(
                 model=model,
@@ -141,6 +144,7 @@ class OctoAI(BaseCompletionProvider):
                 object=response.get("object", None),
                 usage=response.get("usage", None),
                 choices=response.get("choices", None),
+                _response_ms=(end_time - start_time).total_seconds() * 1000,
             ), self.compute_cost(
                 model,
                 [item["content"] for item in messages],
