@@ -45,7 +45,7 @@ async def _engine() -> AsyncGenerator[AsyncEngine, None]:
     async with engine.begin() as conn:
         await conn.run_sync(meta.create_all)
         insert_user = text(
-            "INSERT INTO users VALUES ('clj3s02hf0000s60k7a2qsv0r', 10);",
+            "INSERT INTO users VALUES ('clb5hx8d40002s601hooxp3ct', 10);",
         )
         await conn.execute(insert_user)
 

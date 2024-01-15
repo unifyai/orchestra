@@ -20,7 +20,7 @@ async def test_credits(  # noqa: WPS218, E501
     url = fastapi_app.url_path_for("get_credits")
     headers = {
         "accept": "application/json",
-        "Authorization": "Bearer foI1elDa24CgSyCJWtPQX1161dbLv4X6bLpTJEDkFBQ=",
+        "Authorization": "Bearer mulv3oHXCvkUsodxgNgUbJJdbcu4XbP5NDEa4xk3wf8=",
         "Content-Type": "application/json",
     }
 
