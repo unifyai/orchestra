@@ -496,7 +496,8 @@ async def put_data_to_db(  # noqa: D103, WPS211, WPS210
         )
         await session.commit()
         logger.info(
-            f"Datapoint ({data['metric_name']}) added for {model_name}, "
+            f"Datapoint ({data['metric_name']}, "
+            f"{data['value']}) added for {model_name}, ",
             f"{provider_name} (endpoint_id: {endpoint_id})",
         )
 
@@ -523,7 +524,6 @@ async def process_benchmarking_results(  # noqa: D103, WPS210, WPS231, C901
                 provider_dao = ProviderDAO(session)
                 model_dao = ModelDAO(session)
                 endpoint_dao = EndpointDAO(session)
-                logger.info(f"{provider_name}, {model_name}")
                 provider_id = await get_provider(
                     name=provider_name,
                     provider_dao=provider_dao,
