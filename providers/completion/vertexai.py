@@ -217,7 +217,7 @@ class VertexAI(BaseCompletionProvider):
         )
         completion_cost = (
             self.get_billable_characters(  # type: ignore
-                response.choices[0].message.content,
+                response.choices[0]["message"]["content"],
                 model_name,
             )
             * cost_data["completion"]
