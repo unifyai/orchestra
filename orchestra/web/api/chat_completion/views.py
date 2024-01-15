@@ -64,6 +64,7 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
             choices=[],
             object="chat.completion",
             usage={},
+            _response_ms=0,
         )
 
     if stream:
@@ -100,4 +101,5 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
         choices=choices,
         object=response.get("object", None),
         usage=usage,
+        _response_ms=response.get("_response_ms", None),
     )

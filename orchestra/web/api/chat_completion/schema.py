@@ -31,6 +31,7 @@ class ChatCompletionResponse(BaseModel):
         object (str): The type of object, defaults to "chat.completion".
         usage (dict): Usage statistics or additional information.
         choices (List[Dict]): List of completion choices.
+        _response_ms (float): Response time in milliseconds.
     """
 
     model: str
@@ -39,3 +40,8 @@ class ChatCompletionResponse(BaseModel):
     object: str = "chat.completion"
     usage: Dict[str, Any]
     choices: List[Dict[str, Any]]
+    _response_ms: float
+
+    def __init__(self, **data: Any) -> None:
+        super().__init__(**data)
+        self._response_ms = data["_response_ms"]
