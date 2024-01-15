@@ -5,9 +5,8 @@ import logging
 import os
 import re
 import statistics
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
-import numpy as np
 from litellm import ModelResponse
 from prettytable import PrettyTable
 from providers.completion import PROVIDER_CLASSES
@@ -125,7 +124,7 @@ def get_provider_obj(
     provider_obj = traversed_providers.get(provider_name)
     if provider_obj is None:
         provider_obj = PROVIDER_CLASSES[provider_name]()
-        if provider_name == "Vertex AI":
+        if provider_name == "vertex-ai":
             from providers.completion.vertexai import VertexAI  # noqa: WPS433
 
             provider_obj = cast(VertexAI, provider_obj)
@@ -147,12 +146,15 @@ def get_provider_obj(
     return provider_obj
 
 
-def get_completion_results(  # noqa: D103
+def get_completion_results(  # noqa: D103, WPS234
     provider: BaseCompletionProvider,
     model: str,
     problems: List[tuple[str, str]],
-) -> Optional[List[ModelResponse]]:
+) -> Optional[Tuple[List[ModelResponse], float]]:
     completion_results = []
+    # cold start would be relevant only for the first prompt
+    # so keeping only a single cold start latency value
+    cold_start_latency = 0
     for prompt in tqdm(problems):
         result = provider.complete(
             model,
@@ -163,15 +165,13 @@ def get_completion_results(  # noqa: D103
         # handles cold-start skewing latency
         if result[0]._response_ms > COLD_START_THRESHOLD:
             cold_start_latency = result[0]._response_ms
+            logger.info(f"Cold start of {cold_start_latency} detected, re-querying")
             result = provider.complete(
                 model,
                 [{"content": prompt[0], "role": "user"}],
             )
-        else:
-            cold_start_latency = 0
-        result[0].cold_start_latency = cold_start_latency
         completion_results.append(result[0])
-    return completion_results
+    return completion_results, cold_start_latency
 
 
 def add_cost_info(  # noqa: WPS211
@@ -239,6 +239,7 @@ def calculate_results(  # noqa: D103
     completion_results: List[ModelResponse],
     model_name: str,
     provider: BaseCompletionProvider,
+    cold_start_latency: int,
 ) -> Dict[str, Any]:
     cleaned_output = {
         "output_answers": [
@@ -260,19 +261,7 @@ def calculate_results(  # noqa: D103
     cleaned_output["context_window"] = provider.supported_models[model_name.lower()][
         "context_window"
     ]
-
-    cold_start_avg = np.mean(
-        [result.cold_start_latency for result in completion_results],
-    )
-    if cold_start_avg == 0:
-        cleaned_output["cold_start_latency"] = 0
-        cleaned_output["cold_start_latency_std"] = 0
-    else:
-        cold_start_std = np.std(
-            [result.cold_start_latency for result in completion_results],
-        )
-        cleaned_output["cold_start_latency"] = round(cold_start_avg, 2)
-        cleaned_output["cold_start_latency_std"] = round(cold_start_std, 2)
+    cleaned_output["cold_start_latency"] = round(cold_start_latency, 2)
     return cleaned_output
 
 
@@ -312,8 +301,7 @@ def create_table(  # noqa: D103, WPS210
         "Input cost",
         "Output cost",
         "Context window",
-        "Cold start mean (ms)",
-        "Cold start std (ms)",
+        "Cold start (ms)",
     ]
 
     if evaluator:
@@ -339,7 +327,6 @@ def create_table(  # noqa: D103, WPS210
                 ),
                 provider_data["context_window"],
                 provider_data["cold_start_latency"],
-                provider_data["cold_start_latency_std"],
             ]
             if evaluator:
                 row_data.append(provider_data["score"])
@@ -358,7 +345,11 @@ def benchmark_model(  # noqa: D103, WPS211
     if model_name.lower() in provider_class.supported_models:
         logger.info(f"{model_name} on {provider_name}")
         provider_obj = get_provider_obj(provider_name, traversed_providers)
-        completion_results = get_completion_results(provider_obj, model_name, problems)
+        completion_results, cold_start_latency = get_completion_results(
+            provider_obj,
+            model_name,
+            problems,
+        )
         if completion_results is None:
             logger.error(f"{model_name} on {provider_name} was skipped")
             raise ValueError(f"{model_name} completion is None")
@@ -367,6 +358,7 @@ def benchmark_model(  # noqa: D103, WPS211
             completion_results,
             model_name,
             provider_obj,
+            cold_start_latency,
         )
         add_cost_info(
             model_results,
@@ -590,7 +582,6 @@ if __name__ == "__main__":
             "output_toks_per_sec",
             "context_window",
             "cold_start_latency",
-            # "cold_start_latency_std",
             "input_cost_llm",
             "output_cost_llm",
             "input_cost_llm_per_character",
