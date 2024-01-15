@@ -47,7 +47,7 @@ jobs:
       run: poetry run mypy .
   pytest:
     runs-on: ubuntu-latest
-    environment: orchestra-test
+    environment: orchestra-testing
     services:
 
       orchestra-db:
