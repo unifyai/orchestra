@@ -125,7 +125,7 @@ def get_provider_obj(
     provider_obj = traversed_providers.get(provider_name)
     if provider_obj is None:
         provider_obj = PROVIDER_CLASSES[provider_name]()
-        if provider_name == "Vertex AI":
+        if provider_name == "vertex-ai":
             from providers.completion.vertexai import VertexAI  # noqa: WPS433
 
             provider_obj = cast(VertexAI, provider_obj)
