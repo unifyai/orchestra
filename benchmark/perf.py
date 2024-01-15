@@ -151,7 +151,7 @@ def get_completion_results(  # noqa: D103
     provider: BaseCompletionProvider,
     model: str,
     problems: List[tuple[str, str]],
-) -> Optional[List[str]]:
+) -> Optional[List[ModelResponse]]:
     completion_results = []
     for prompt in tqdm(problems):
         result = provider.complete(
@@ -179,6 +179,8 @@ def add_cost_info(  # noqa: WPS211
     model_name: str,
     provider_name: str,
     provider: BaseCompletionProvider,
+    completion_results: List[ModelResponse],
+    problems: List[tuple[str, str]],
 ):
     """
     Adds input & output cost metadata to the model_results dict.
@@ -187,7 +189,18 @@ def add_cost_info(  # noqa: WPS211
     :param model_name: The model to calculate the cost of.
     :param provider_name: The provider to calculate the cost of.
     :param provider: The provider object of the model.
+    :param completion_results: The completion results of the model.
+    :param problems: The problems used to benchmark the model.
     """
+    model_results[model_name][provider_name]["cost_to_bench"] = 0
+    for result, problem in zip(completion_results, problems):
+        model_results[model_name][provider_name][
+            "cost_to_bench"
+        ] += provider.compute_cost(
+            model_name,
+            [problem[0]],
+            result,
+        )
     cost_data = provider.supported_models[model_name]["cost"]  # type: ignore
     if cost_data.get("per_character"):
         model_results[model_name][provider_name][
@@ -352,7 +365,14 @@ def benchmark_model(  # noqa: D103, WPS211
             model_name,
             provider_obj,
         )
-        add_cost_info(model_results, model_name, provider_name, provider_obj)
+        add_cost_info(
+            model_results,
+            model_name,
+            provider_name,
+            provider_obj,
+            completion_results,
+            problems,
+        )
 
 
 def run_benchmark(  # noqa: C901, WPS210, WPS220, WPS231
@@ -478,8 +498,8 @@ async def put_data_to_db(  # noqa: D103, WPS211, WPS210
         )
         await session.commit()
         logger.info(
-            f"Datapoint added for {model_name}, {provider_name} "
-            f"(endpoint_id: {endpoint_id})",
+            f"Datapoint ({data['metric_name']}) added for {model_name}, "
+            f"{provider_name} (endpoint_id: {endpoint_id})",
         )
 
 
@@ -497,8 +517,10 @@ async def process_benchmarking_results(  # noqa: D103, WPS210, WPS231, C901
     engine = create_async_engine(db_url)
     async_session = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     tasks = []
+    total_cost_to_bench = 0
     for model_name, provider_results in benchmarking_results.items():
         for provider_name, provider_data in provider_results.items():
+            total_cost_to_bench += provider_data["cost_to_bench"]
             async with async_session() as session:
                 provider_dao = ProviderDAO(session)
                 model_dao = ModelDAO(session)
@@ -543,6 +565,7 @@ async def process_benchmarking_results(  # noqa: D103, WPS210, WPS231, C901
                     )
                     tasks.append(task)
     total_write_count = len(tasks)
+    logger.info(f"Total cost incurred to run this benchmark: ${total_cost_to_bench}")
     logger.info(f"Pushing {total_write_count} benchmarking results entries to db")
     await asyncio.gather(*tasks)
 
@@ -554,6 +577,7 @@ if __name__ == "__main__":
         for model in provider.supported_models.keys()
     ]
     model_list = list(set(model_list))
+    model_list = ["llama-2-7b-chat", "gpt-3.5-turbo"]
     benchmarking_results = run_benchmark(model_list, print_table=False)
     logger.info("Pushing metrics to DB")
     metrics_to_push = [
