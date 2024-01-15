@@ -17,14 +17,11 @@ async def test_credits(  # noqa: WPS218, E501
 
     :return: credits.
     """
-    url = fastapi_app.url_path_for("get_credits")
-    headers = {
-        "accept": "application/json",
-        "Authorization": "Bearer mulv3oHXCvkUsodxgNgUbJJdbcu4XbP5NDEa4xk3wf8=",
-        "Content-Type": "application/json",
-    }
+    from orchestra.tests.utils import HEADERS  # noqa: WPS433
 
-    response = await client.get(url, headers=headers)
+    url = fastapi_app.url_path_for("get_credits")
+
+    response = await client.get(url, headers=HEADERS)
     assert response.status_code == status.HTTP_200_OK
     response_dict = response.json()
     assert isinstance(response_dict, dict)

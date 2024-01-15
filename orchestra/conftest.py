@@ -1,3 +1,4 @@
+import os
 from typing import Any, AsyncGenerator
 
 import pytest
@@ -44,8 +45,13 @@ async def _engine() -> AsyncGenerator[AsyncEngine, None]:
     engine = create_async_engine(str(settings.db_url))
     async with engine.begin() as conn:
         await conn.run_sync(meta.create_all)
+        user_id = str(
+            os.getenv(
+                "AUTH_ACCOUNT_USER_ID",
+            ),
+        )
         insert_user = text(
-            "INSERT INTO users VALUES ('clb5hx8d40002s601hooxp3ct', 10);",
+            f"INSERT INTO users VALUES ('{user_id}', 10);",  # noqa: S608
         )
         await conn.execute(insert_user)
 

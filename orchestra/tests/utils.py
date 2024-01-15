@@ -1,12 +1,18 @@
 import json
+import os
 
 from starlette import status
 
 from orchestra.tests.test_credits import test_credits
 
+api_key = str(
+    os.getenv(
+        "AUTH_ACCOUNT_API_KEY",
+    ),
+)
 HEADERS = {
     "accept": "application/json",
-    "Authorization": "Bearer mulv3oHXCvkUsodxgNgUbJJdbcu4XbP5NDEa4xk3wf8=",
+    "Authorization": f"Bearer {api_key}",
     "Content-Type": "application/json",
 }
 
