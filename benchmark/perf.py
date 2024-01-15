@@ -239,13 +239,13 @@ def calculate_results(  # noqa: D103
 ) -> Dict[str, Any]:
     cleaned_output = {
         "output_answers": [
-            obj.choices[0].message.content for obj in completion_results
+            obj.choices[0]["message"]["content"] for obj in completion_results
         ],
         "total_latency": sum(
             [result._response_ms for result in completion_results],
         ),
         "total_output_tokens": sum(
-            [result.usage.total_tokens for result in completion_results],
+            [result.usage["total_tokens"] for result in completion_results],
         ),
         "median_latency": statistics.median(
             [result._response_ms for result in completion_results],

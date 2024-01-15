@@ -54,10 +54,10 @@ class BaseCompletionProvider:
         if cost_data.get("online"):
             prompt_cost += cost_data["online"]["charge_per_1000_requests"] / 1000
         prompt_cost += (
-            response.usage.prompt_tokens * cost_data["prompt"] / PRICING_PER_TOKENS
+            response.usage["prompt_tokens"] * cost_data["prompt"] / PRICING_PER_TOKENS
         )
         completion_cost = (
-            response.usage.completion_tokens
+            response.usage["completion_tokens"]
             * cost_data["completion"]
             / PRICING_PER_TOKENS
         )
