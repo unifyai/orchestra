@@ -17,7 +17,7 @@ from orchestra.tests.utils import (
     "model",
     ["gpt-3.5-turbo@openai", "mistral-7b-instruct-v0.1@octoai"],
 )
-async def test_inference_no_streaming(  # noqa: WPS218, E501
+async def test_inference_text_completion_no_streaming(  # noqa: WPS218, E501
     model: str,
     client: AsyncClient,
     fastapi_app: FastAPI,
@@ -55,7 +55,7 @@ async def test_inference_no_streaming(  # noqa: WPS218, E501
     "model",
     ["gpt-3.5-turbo@openai", "mistral-7b-instruct-v0.1@octoai"],
 )
-async def test_inference_streaming(  # noqa: WPS218, E501
+async def test_inference_text_completion_streaming(  # noqa: WPS218, E501
     model: str,
     client: AsyncClient,
     fastapi_app: FastAPI,
