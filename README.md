@@ -257,7 +257,7 @@ pytest -vv .
 ### Setting up the database in the docker container
 This way you can configure your database that is spun up using the docker compose.
 ```bash
-docker exec -it <postgres:13.8-bullseye_container_id>/bin/bash
+docker exec -it <postgres:13.8-bullseye_container_id> /bin/bash
 ```
 
 Now, connect to psql and run the following command to populate your local orchestra database
