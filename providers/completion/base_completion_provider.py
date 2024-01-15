@@ -51,6 +51,13 @@ class BaseCompletionProvider:
         """
         cost_data = self.supported_models[model_name]["cost"]  # type: ignore
         prompt_cost = 0
+        if cost_data.get("hardware"):
+            cost_data = self.supported_models[model_name]["cost"]  # type: ignore
+            return (
+                self.hardware_pricing_per_sec[cost_data["hardware"]]  # type: ignore
+                * response._response_ms
+                / 1000
+            )
         if cost_data.get("online"):
             prompt_cost += cost_data["online"]["charge_per_1000_requests"] / 1000
         prompt_cost += (
