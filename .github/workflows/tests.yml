@@ -77,6 +77,8 @@ jobs:
       env:
         ORCHESTRA_HOST: "0.0.0.0"
         ORCHESTRA_DB_HOST: localhost
+      secrets:
         ORCHESTRA_OCTOAI_API_KEY: ${{ secrets.ORCHESTRA_OCTOAI_API_KEY }}
         ORCHESTRA_OPENAI_API_KEY: ${{ secrets.ORCHESTRA_OPENAI_API_KEY }}
         ORCHESTRA_ANYSCALE_API_KEY: ${{ secrets.ORCHESTRA_ANYSCALE_API_KEY }}
+      environment: orchestra-testing
