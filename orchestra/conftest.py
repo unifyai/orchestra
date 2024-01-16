@@ -1,8 +1,10 @@
+import os
 from typing import Any, AsyncGenerator
 
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -43,6 +45,15 @@ async def _engine() -> AsyncGenerator[AsyncEngine, None]:
     engine = create_async_engine(str(settings.db_url))
     async with engine.begin() as conn:
         await conn.run_sync(meta.create_all)
+        user_id = str(
+            os.getenv(
+                "AUTH_ACCOUNT_USER_ID",
+            ),
+        )
+        insert_user = text(
+            f"INSERT INTO users VALUES ('{user_id}', 10);",  # noqa: S608
+        )
+        await conn.execute(insert_user)
 
     try:
         yield engine
