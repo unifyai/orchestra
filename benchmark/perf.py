@@ -496,8 +496,8 @@ async def put_data_to_db(  # noqa: D103, WPS211, WPS210
         )
         await session.commit()
         logger.info(
-            f"Datapoint ({data['metric_name']}, "
-            f"{data['value']}) added for {model_name}, ",
+            f"Datapoint ({data['metric_name']}, "  # noqa: WPS221
+            f"{data['value']}) added for {model_name}, "
             f"{provider_name} (endpoint_id: {endpoint_id})",
         )
 
