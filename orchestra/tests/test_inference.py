@@ -11,11 +11,13 @@ from orchestra.tests.utils import (
     generate_data_inference_chat_completion,
 )
 
+MODELS = ["gpt-3.5-turbo@openai", "mistral-7b-instruct-v0.1@octoai"]
+
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "model",
-    ["gpt-3.5-turbo@openai", "mistral-7b-instruct-v0.1@octoai"],
+    MODELS,
 )
 async def test_inference_text_completion_no_streaming(  # noqa: WPS218, E501
     model: str,
@@ -23,7 +25,7 @@ async def test_inference_text_completion_no_streaming(  # noqa: WPS218, E501
     fastapi_app: FastAPI,
 ) -> None:
     """
-    Checks the inference endpoint for litellm providers, no streaming.
+    Checks the inference endpoint for text completion without streaming.
 
     :param client: client for the app.
     :param fastapi_app: current FastAPI application.
@@ -53,7 +55,7 @@ async def test_inference_text_completion_no_streaming(  # noqa: WPS218, E501
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "model",
-    ["gpt-3.5-turbo@openai", "mistral-7b-instruct-v0.1@octoai"],
+    MODELS,
 )
 async def test_inference_text_completion_streaming(  # noqa: WPS218, E501
     model: str,
@@ -61,7 +63,7 @@ async def test_inference_text_completion_streaming(  # noqa: WPS218, E501
     fastapi_app: FastAPI,
 ) -> None:
     """
-    Checks the inference endpoint for octoai, with streaming.
+    Checks the inference endpoint for text completion with streaming.
 
     :param client: client for the app.
     :param fastapi_app: current FastAPI application.

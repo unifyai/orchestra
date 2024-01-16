@@ -11,11 +11,13 @@ from orchestra.tests.utils import (
     generate_data_chat_completions,
 )
 
+MODELS = ["llama-2-7b-chat@anyscale", "mistral-7b-instruct-v0.1@octoai"]
+
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "model",
-    ["llama-2-7b-chat@anyscale", "mistral-7b-instruct-v0.1@octoai"],
+    MODELS,
 )
 async def test_chat_completions_no_streaming(  # noqa: WPS218, E501
     model: str,
@@ -23,7 +25,7 @@ async def test_chat_completions_no_streaming(  # noqa: WPS218, E501
     fastapi_app: FastAPI,
 ) -> None:
     """
-    Checks the chat completions endpoint for litellm providers, no streaming.
+    Checks the chat completions endpoint without streaming.
 
     :param client: client for the app.
     :param fastapi_app: current FastAPI application.
@@ -48,7 +50,7 @@ async def test_chat_completions_no_streaming(  # noqa: WPS218, E501
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "model",
-    ["llama-2-7b-chat@anyscale", "mistral-7b-instruct-v0.1@octoai"],
+    MODELS,
 )
 async def test_chat_completions_streaming(  # noqa: WPS218, E501
     model: str,
@@ -56,7 +58,7 @@ async def test_chat_completions_streaming(  # noqa: WPS218, E501
     fastapi_app: FastAPI,
 ) -> None:
     """
-    Checks the chat completions endpoint for octoai, with streaming.
+    Checks the chat completions endpoint with streaming.
 
     :param client: client for the app.
     :param fastapi_app: current FastAPI application.
