@@ -51,16 +51,20 @@ class ProviderDAO:
 
     async def filter(
         self,
+        id: Optional[int] = None,  # noqa: WPS125
         name: Optional[str] = None,
     ) -> List[Provider]:
         """
         Get specific provider model.
 
+        :param id: id of provider instance.
         :param name: name of provider instance.
         :return: provider models.
         """
-        raw_providers = await self.session.execute(
-            select(Provider).filter(Provider.name == name),
-        )
-
+        query = select(Provider)
+        if id:
+            query = query.where(Provider.id == id)
+        if name:
+            query = query.where(Provider.name == name)
+        raw_providers = await self.session.execute(query)
         return list(raw_providers.scalars().fetchall())

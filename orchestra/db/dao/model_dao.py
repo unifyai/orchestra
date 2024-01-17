@@ -70,6 +70,7 @@ class ModelDAO:
 
     async def filter(  # noqa: WPS211, C901
         self,
+        id: Optional[int] = None,  # noqa: WPS125
         mdl_code: Optional[str] = None,
         user_id: Optional[str] = None,
         uploaded_at: Optional[datetime.datetime] = None,
@@ -83,6 +84,7 @@ class ModelDAO:
         """
         Get specific model model.
 
+        :param id: id of model instance.
         :param mdl_code: mdl_code of model instance.
         :param user_id: user_id of model instance.
         :param uploaded_at: uploaded_at of model instance.
@@ -95,6 +97,8 @@ class ModelDAO:
         :return: model models.
         """
         query = select(Model)
+        if id:
+            query = query.where(Model.id == id)
         if mdl_code:
             query = query.where(Model.mdl_code == mdl_code)
         if user_id:
