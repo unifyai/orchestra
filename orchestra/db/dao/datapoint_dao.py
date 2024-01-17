@@ -53,8 +53,9 @@ class DatapointDAO:
 
         return list(raw_datapoints.scalars().fetchall())
 
-    async def filter(
+    async def filter(  # noqa: WPS211
         self,
+        id: Optional[int] = None,  # noqa: WPS125
         endpoint_id: Optional[int] = None,
         measured_at: Optional[datetime.datetime] = None,
         metric_name: Optional[str] = None,
@@ -63,6 +64,7 @@ class DatapointDAO:
         """
         Get specific datapoint model.
 
+        :param id: id of datapoint instance.
         :param endpoint_id: endpoint_id of datapoint instance.
         :param measured_at: measured_at of datapoint instance.
         :param metric_name: metric_name of datapoint instance.
@@ -70,6 +72,8 @@ class DatapointDAO:
         :return: datapoint models.
         """
         query = select(Datapoint)
+        if id:
+            query = query.where(Datapoint.id == id)
         if endpoint_id:
             query = query.where(Datapoint.endpoint_id == endpoint_id)
         if measured_at:
