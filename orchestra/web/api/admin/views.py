@@ -197,7 +197,7 @@ async def get_datapoint(
     )
 
 
-@router.get("/get_all_endpoints", response_model=List[EndpointModelResponse])
+@router.get("/get_all_endpoints_raw", response_model=List[EndpointModelResponse])
 async def get_endpoint_models(
     limit: int = 10,
     offset: int = 0,
@@ -211,7 +211,7 @@ async def get_endpoint_models(
     :param endpoint_dao: DAO for endpoint models.
     :return: list of endpoint objects from database.
     """
-    return await endpoint_dao.get_all_endpoints(limit=limit, offset=offset)
+    return await endpoint_dao.get_all_endpoints_raw(limit=limit, offset=offset)
 
 
 @router.get("/get_endpoint", response_model=List[EndpointModelResponse])
