@@ -129,16 +129,18 @@ async def get_recharge_models(
 
 
 @router.get("/get_recharge", response_model=List[RechargeModelResponse])
-async def get_recharge(
-    at: datetime.datetime = datetime.datetime.now(),
-    user_id: str = "",
-    quantity: float = 0,
-    type: str = "",  # noqa: WPS125
+async def get_recharge(  # noqa: WPS211
+    id: Optional[int] = None,  # noqa: WPS125
+    at: Optional[datetime.datetime] = None,
+    user_id: Optional[str] = None,
+    quantity: Optional[int] = None,
+    type: Optional[str] = None,  # noqa: WPS125
     recharge_dao: RechargeDAO = Depends(),
 ) -> List[Recharge]:
     """
     Retrieve specific recharge object from the database.
 
+    :param id: id of recharge instance.
     :param at: at of recharge instance.
     :param user_id: user_id of recharge instance.
     :param quantity: quantity of recharge instance.
@@ -147,6 +149,7 @@ async def get_recharge(
     :return: list of recharge objects from database.
     """
     return await recharge_dao.filter(
+        id=id,
         at=at,
         user_id=user_id,
         quantity=quantity,
@@ -172,7 +175,8 @@ async def get_datapoint_models(
 
 
 @router.get("/get_datapoint", response_model=List[DatapointModelResponse])
-async def get_datapoint(
+async def get_datapoint(  # noqa: WPS211
+    id: Optional[int] = None,  # noqa: WPS125
     endpoint_id: Optional[int] = None,
     measured_at: Optional[datetime.datetime] = None,
     metric_name: Optional[str] = None,
@@ -182,6 +186,7 @@ async def get_datapoint(
     """
     Retrieve specific datapoint object from the database.
 
+    :param id: id of datapoint object.
     :param endpoint_id: endpoint_id of datapoint object.
     :param measured_at: measured_at of datapoint object.
     :param metric_name: metric_name of datapoint object.
@@ -190,6 +195,7 @@ async def get_datapoint(
     :return: datapoint object from database.
     """
     return await datapoint_dao.filter(
+        id=id,
         endpoint_id=endpoint_id,
         measured_at=measured_at,
         metric_name=metric_name,
@@ -197,7 +203,7 @@ async def get_datapoint(
     )
 
 
-@router.get("/get_all_endpoints", response_model=List[EndpointModelResponse])
+@router.get("/get_all_endpoints_raw", response_model=List[EndpointModelResponse])
 async def get_endpoint_models(
     limit: int = 10,
     offset: int = 0,
@@ -211,11 +217,12 @@ async def get_endpoint_models(
     :param endpoint_dao: DAO for endpoint models.
     :return: list of endpoint objects from database.
     """
-    return await endpoint_dao.get_all_endpoints(limit=limit, offset=offset)
+    return await endpoint_dao.get_all_endpoints_raw(limit=limit, offset=offset)
 
 
 @router.get("/get_endpoint", response_model=List[EndpointModelResponse])
 async def get_endpoint(
+    id: Optional[int] = None,  # noqa: WPS125
     mdl_id: Optional[int] = None,
     provider_id: Optional[int] = None,
     created_at: Optional[datetime.datetime] = None,
@@ -224,6 +231,7 @@ async def get_endpoint(
     """
     Retrieve specific endpoint object from the database.
 
+    :param id: id of endpoint object.
     :param mdl_id: mdl_id of endpoint object.
     :param provider_id: provider_id of endpoint object.
     :param created_at: created_at of endpoint object.
@@ -231,6 +239,7 @@ async def get_endpoint(
     :return: endpoint object from database.
     """
     return await endpoint_dao.filter(
+        id=id,
         mdl_id=mdl_id,
         provider_id=provider_id,
         created_at=created_at,

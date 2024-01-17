@@ -53,8 +53,9 @@ class RechargeDAO:
 
         return list(raw_recharges.scalars().fetchall())
 
-    async def filter(
+    async def filter(  # noqa: WPS211
         self,
+        id: Optional[int] = None,  # noqa: WPS125
         at: Optional[datetime.datetime] = None,
         user_id: Optional[str] = None,
         quantity: Optional[float] = None,
@@ -63,6 +64,7 @@ class RechargeDAO:
         """
         Get specific recharge model.
 
+        :param id: id of recharge instance.
         :param at: at of recharge instance.
         :param user_id: user_id of recharge instance.
         :param quantity: quantity of recharge instance.
@@ -70,6 +72,8 @@ class RechargeDAO:
         :return: stream of recharges.
         """
         query = select(Recharge)
+        if id:
+            query = query.where(Recharge.id == id)
         if at:
             query = query.where(Recharge.at == at)
         if user_id:

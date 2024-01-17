@@ -36,7 +36,7 @@ class EndpointDAO:
             ),
         )
 
-    async def get_all_endpoints(self, limit: int, offset: int) -> List[Endpoint]:
+    async def get_all_endpoints_raw(self, limit: int, offset: int) -> List[Endpoint]:
         """
         Get all endpoint models with limit/offset pagination.
 
@@ -52,6 +52,7 @@ class EndpointDAO:
 
     async def filter(
         self,
+        id: Optional[int] = None,  # noqa: WPS125
         mdl_id: Optional[int] = None,
         provider_id: Optional[int] = None,
         created_at: Optional[datetime.datetime] = None,
@@ -59,12 +60,15 @@ class EndpointDAO:
         """
         Get specific endpoint model.
 
+        :param id: id of endpoint instance.
         :param mdl_id: mdl_id of endpoint instance.
         :param provider_id: provider_id of endpoint instance.
         :param created_at: created_at of endpoint instance.
         :return: endpoint models.
         """
         query = select(Endpoint)
+        if id:
+            query = query.where(Endpoint.id == id)
         if mdl_id:
             query = query.where(Endpoint.mdl_id == mdl_id)
         if provider_id:

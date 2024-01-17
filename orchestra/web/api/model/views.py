@@ -11,7 +11,7 @@ from orchestra.web.api.model.schema import ModelResponse
 router = APIRouter()
 
 
-@router.get("/get_all_models", response_model=List[ModelResponse])
+@router.get("/models", response_model=List[ModelResponse])
 async def get_models(
     limit: int = 10,
     offset: int = 0,
@@ -30,7 +30,7 @@ async def get_models(
 
 @router.get("/get_model", response_model=List[ModelResponse])
 async def get_model(  # noqa: WPS211, C901
-    mdl_code: str,
+    mdl_code: Optional[str] = None,
     user_id: Optional[str] = None,
     uploaded_at: Optional[datetime.datetime] = None,
     task: Optional[str] = None,

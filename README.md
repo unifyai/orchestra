@@ -256,6 +256,12 @@ pytest -vv .
 
 ### Setting up the database in the docker container
 This way you can configure your database that is spun up using the docker compose.
+
+Copy over the dump file to the docker container
+```bash
+docker cp <file_name>.sql <postgres:13.8-bullseye_container_id>:/<file_name>.sql
+```
+
 ```bash
 docker exec -it <postgres:13.8-bullseye_container_id> /bin/bash
 ```
