@@ -15,6 +15,7 @@ class Model(Base):
     task = sa.Column(sa.String(), sa.ForeignKey("task.name"), nullable=False)
     description = sa.Column(sa.Text(), nullable=False)
     license = sa.Column(sa.String(), sa.ForeignKey("license.name"))
+    active = sa.Column(sa.Boolean(), server_default="f", nullable=False)  # type: ignore
     input_args_format = sa.Column(sa.Text(), nullable=False)
     output_format = sa.Column(sa.Text(), nullable=False)
     custom_fields = sa.Column(sa.Text())

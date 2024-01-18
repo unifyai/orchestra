@@ -36,6 +36,7 @@ async def get_model(  # noqa: WPS211, C901
     task: Optional[str] = None,
     description: Optional[str] = None,
     license: Optional[str] = None,
+    active: Optional[bool] = None,
     input_args_format: Optional[str] = None,
     output_format: Optional[str] = None,
     custom_fields: Optional[str] = None,
@@ -50,6 +51,7 @@ async def get_model(  # noqa: WPS211, C901
     :param task: task of model instance.
     :param description: description of model instance.
     :param license: license of model instance.
+    :param active: is model instance active.
     :param input_args_format: input_args_format of model instance.
     :param output_format: output_format of model instance.
     :param custom_fields: custom_fields of model instance.
@@ -63,6 +65,7 @@ async def get_model(  # noqa: WPS211, C901
         task=task,
         description=description,
         license=license,
+        active=active,
         input_args_format=input_args_format,
         output_format=output_format,
         custom_fields=custom_fields,

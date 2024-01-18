@@ -482,6 +482,7 @@ async def create_model(
         task=new_model_object.task,
         description=new_model_object.description,
         license=new_model_object.license,
+        active=new_model_object.active,
         input_args_format=new_model_object.input_args_format,
         output_format=new_model_object.output_format,
         custom_fields=new_model_object.custom_fields,

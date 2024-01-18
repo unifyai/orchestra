@@ -82,6 +82,7 @@ class ModelRequest(BaseModel):
         task (str): The task of the model.
         description (str): The description of the model.
         license (str): The license of the model.
+        active (bool): Whether the model is active.
         input_args_format (str): The input args format of the model.
         output_format (str): The output format of the model.
         custom_fields (str): The custom fields of the model.
@@ -92,6 +93,7 @@ class ModelRequest(BaseModel):
     task: str
     description: str
     license: str
+    active: bool
     input_args_format: str
     output_format: str
     custom_fields: str
