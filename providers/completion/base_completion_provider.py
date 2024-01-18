@@ -207,7 +207,7 @@ class AsyncGeneratorWrapper:  # noqa: D101
                 whole += part_text if part_text else ""
                 yield part_dict
         finally:
-            if isinstance(usage, Usage):
+            if isinstance(usage, Usage) and usage != Usage():
                 self.total_cost = self._compute_cost(
                     self._model,
                     [item["content"] for item in self._messages],
