@@ -12,6 +12,8 @@ Table model {
   input_args_format text [not null]
   output_format text [not null]
   custom_fields text [note: 'Optional field for extra key:value pairs']
+  active boolean [not null]
+  is_private boolean [not null]
 }
 
 Table license {
@@ -45,14 +47,34 @@ Table provider {
 
 Table datapoint {
   id integer [primary key]
-  endpoint_id integer [not null]
+  benchmark_run_id integer [not null]
   measured_at timestamp [not null]
   metric_name varchar [not null]
   value decimal [not null]
+  tooltip varchar
+}
+
+Table benchmark_regime {
+  name varchar [primary key]
+}
+
+Table benchmark_region {
+  name varchar [primary key]
+}
+
+Table benchmark_run {
+  id integer [primary key]
+  endpoint_id integer [not null]
+  regime varchar [not null]
+  region varchar [not null]
 }
 
 Table metric {
   name varchar [primary key]
+  display_name varchar [not null]
+  tooltip varchar
+  priority integer [not null]
+  plottable boolean [not null] // Not sure if this is a word open to suggestions
 }
 
 Table query {
@@ -83,6 +105,7 @@ Table recharge_type {
   type varchar [primary key] // daily, free, manual, ...
 }
 
+// TODO: Fix these
 Ref: model.user_id > user.id
 Ref: model.task > task.name
 Ref: model.license > license.name
