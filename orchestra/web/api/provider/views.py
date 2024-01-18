@@ -10,7 +10,7 @@ from orchestra.web.api.provider.schema import ProviderModelResponse
 router = APIRouter()
 
 
-@router.get("/get_all_providers", response_model=List[ProviderModelResponse])
+@router.get("/providers", response_model=List[ProviderModelResponse])
 async def get_provider_models(
     limit: int = 10,
     offset: int = 0,

@@ -5,9 +5,8 @@ import logging
 import os
 import re
 import statistics
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
-import numpy as np
 from litellm import ModelResponse
 from prettytable import PrettyTable
 from providers.completion import PROVIDER_CLASSES
@@ -55,7 +54,6 @@ def evaluate_answers(
     :param query: The problem sent to models being benchmarked.
     :param ground_truth: The correct answer for the query.
     :param answer: The answer to be evaluated.
-    :raises ValueError: If evaluator_model provider throws error during API call.
     :return: The score of the evaluated answer.
     """
     system = (
@@ -83,7 +81,8 @@ def evaluate_answers(
         max_tokens=MAX_TOKENS,
     )
     if evaluator_result is None:
-        raise ValueError(f"{evaluator_model} on {provider} threw an error during call")
+        logger.error(f"{evaluator_model} on {provider} threw an error during call")
+        return 0
     found = re.search(
         r"Score: (\d+)",
         evaluator_result[0].choices[0].message.content,  # noqa: WPS219, E501
@@ -125,7 +124,7 @@ def get_provider_obj(
     provider_obj = traversed_providers.get(provider_name)
     if provider_obj is None:
         provider_obj = PROVIDER_CLASSES[provider_name]()
-        if provider_name == "Vertex AI":
+        if provider_name == "vertex-ai":
             from providers.completion.vertexai import VertexAI  # noqa: WPS433
 
             provider_obj = cast(VertexAI, provider_obj)
@@ -147,12 +146,15 @@ def get_provider_obj(
     return provider_obj
 
 
-def get_completion_results(  # noqa: D103
+def get_completion_results(  # noqa: D103, WPS234
     provider: BaseCompletionProvider,
     model: str,
     problems: List[tuple[str, str]],
-) -> Optional[List[ModelResponse]]:
+) -> Optional[Tuple[List[ModelResponse], float]]:
     completion_results = []
+    # cold start would be relevant only for the first prompt
+    # so keeping only a single cold start latency value
+    cold_start_latency = 0
     for prompt in tqdm(problems):
         result = provider.complete(
             model,
@@ -163,15 +165,13 @@ def get_completion_results(  # noqa: D103
         # handles cold-start skewing latency
         if result[0]._response_ms > COLD_START_THRESHOLD:
             cold_start_latency = result[0]._response_ms
+            logger.info(f"Cold start of {cold_start_latency} detected, re-querying")
             result = provider.complete(
                 model,
                 [{"content": prompt[0], "role": "user"}],
             )
-        else:
-            cold_start_latency = 0
-        result[0].cold_start_latency = cold_start_latency
         completion_results.append(result[0])
-    return completion_results
+    return completion_results, cold_start_latency
 
 
 def add_cost_info(  # noqa: WPS211
@@ -212,7 +212,7 @@ def add_cost_info(  # noqa: WPS211
     elif cost_data.get("per_second"):
         logger.info(
             f"Per second pricing not supported yet so skipped "
-            f"{model_name}: {provider_name} ",
+            f"{model_name} on {provider_name} ",
         )
     else:
         model_results[model_name][provider_name]["input_cost_llm"] = cost_data["prompt"]
@@ -221,7 +221,9 @@ def add_cost_info(  # noqa: WPS211
         ]
 
 
-def get_evaluator_provider(evaluator: str) -> BaseCompletionProvider:  # noqa: D103
+def get_evaluator_provider(  # noqa: D103
+    evaluator: str,
+) -> Optional[BaseCompletionProvider]:
     for provider_name, provider_class in PROVIDER_CLASSES.items():
         if evaluator in provider_class.supported_models:
             evaluator_provider = provider_class()
@@ -229,13 +231,15 @@ def get_evaluator_provider(evaluator: str) -> BaseCompletionProvider:  # noqa: D
                 api_key=str(os.getenv(f"ORCHESTRA_{provider_name.upper()}_API_KEY")),
             )
             return evaluator_provider
-    raise ValueError("Evaluator model not supported")
+    logger.error("Evaluator model not supported so skipped student-teacher scoring")
+    return None
 
 
 def calculate_results(  # noqa: D103
     completion_results: List[ModelResponse],
     model_name: str,
     provider: BaseCompletionProvider,
+    cold_start_latency: int,
 ) -> Dict[str, Any]:
     cleaned_output = {
         "output_answers": [
@@ -257,19 +261,7 @@ def calculate_results(  # noqa: D103
     cleaned_output["context_window"] = provider.supported_models[model_name.lower()][
         "context_window"
     ]
-
-    cold_start_avg = np.mean(
-        [result.cold_start_latency for result in completion_results],
-    )
-    if cold_start_avg == 0:
-        cleaned_output["cold_start_latency"] = 0
-        cleaned_output["cold_start_latency_std"] = 0
-    else:
-        cold_start_std = np.std(
-            [result.cold_start_latency for result in completion_results],
-        )
-        cleaned_output["cold_start_latency"] = round(cold_start_avg, 2)
-        cleaned_output["cold_start_latency_std"] = round(cold_start_std, 2)
+    cleaned_output["cold_start_latency"] = round(cold_start_latency, 2)
     return cleaned_output
 
 
@@ -309,8 +301,7 @@ def create_table(  # noqa: D103, WPS210
         "Input cost",
         "Output cost",
         "Context window",
-        "Cold start mean (ms)",
-        "Cold start std (ms)",
+        "Cold start (ms)",
     ]
 
     if evaluator:
@@ -336,7 +327,6 @@ def create_table(  # noqa: D103, WPS210
                 ),
                 provider_data["context_window"],
                 provider_data["cold_start_latency"],
-                provider_data["cold_start_latency_std"],
             ]
             if evaluator:
                 row_data.append(provider_data["score"])
@@ -355,7 +345,11 @@ def benchmark_model(  # noqa: D103, WPS211
     if model_name.lower() in provider_class.supported_models:
         logger.info(f"{model_name} on {provider_name}")
         provider_obj = get_provider_obj(provider_name, traversed_providers)
-        completion_results = get_completion_results(provider_obj, model_name, problems)
+        completion_results, cold_start_latency = get_completion_results(
+            provider_obj,
+            model_name,
+            problems,
+        )
         if completion_results is None:
             logger.error(f"{model_name} on {provider_name} was skipped")
             raise ValueError(f"{model_name} completion is None")
@@ -364,6 +358,7 @@ def benchmark_model(  # noqa: D103, WPS211
             completion_results,
             model_name,
             provider_obj,
+            cold_start_latency,
         )
         add_cost_info(
             model_results,
@@ -380,7 +375,7 @@ def run_benchmark(  # noqa: C901, WPS210, WPS220, WPS231
     benchmark_problems_path: str = "benchmark/problems.jsonl",
     evaluator: Optional[str] = None,
     print_table: bool = False,
-) -> Dict:
+) -> Optional[Dict]:
     """
     Benchmarks selected language models across diverse cloud providers.
 
@@ -393,11 +388,11 @@ def run_benchmark(  # noqa: C901, WPS210, WPS220, WPS231
     :param benchmark_problems_path: JSONL file path with problems.
     :param evaluator: Model used to evaluate the answers. Should be SOTA like gpt-4.
     :param print_table: Whether to print the table or not.
-    :raises ValueError: If no models are provided to benchmark.
     :return: Dict with benchmarking results of model on providers.
     """
     if not models:
-        raise ValueError("No models provided to benchmark")
+        logger.error("No models provided to benchmark")
+        return None
     problems = load_problems(benchmark_problems_path)
 
     model_results: Dict[str, Any] = {}
@@ -405,6 +400,8 @@ def run_benchmark(  # noqa: C901, WPS210, WPS220, WPS231
     logger.info("Currently benchmarking: ")
     for provider_name, provider_class in PROVIDER_CLASSES.items():
         for model_name in models:
+            # keep this try except block since it helps catch edge case
+            # errors inside imported functions
             try:
                 benchmark_model(
                     model_name,
@@ -421,14 +418,15 @@ def run_benchmark(  # noqa: C901, WPS210, WPS220, WPS231
         logger.info("--------------------")
     if evaluator:
         evaluator_provider = get_evaluator_provider(evaluator)
-        for provider_results in model_results.values():
-            for provider_data in provider_results.values():
-                provider_data["score"] = calculate_score(
-                    evaluator,
-                    evaluator_provider,
-                    provider_data,
-                    problems,
-                )
+        if evaluator_provider:
+            for provider_results in model_results.values():
+                for provider_data in provider_results.values():
+                    provider_data["score"] = calculate_score(
+                        evaluator,
+                        evaluator_provider,
+                        provider_data,
+                        problems,
+                    )
     if print_table:
         table = create_table(model_results, evaluator)
         print(table)  # noqa: WPS421
@@ -498,7 +496,8 @@ async def put_data_to_db(  # noqa: D103, WPS211, WPS210
         )
         await session.commit()
         logger.info(
-            f"Datapoint ({data['metric_name']}) added for {model_name}, "
+            f"Datapoint ({data['metric_name']}, "  # noqa: WPS221
+            f"{data['value']}) added for {model_name}, "
             f"{provider_name} (endpoint_id: {endpoint_id})",
         )
 
@@ -525,7 +524,6 @@ async def process_benchmarking_results(  # noqa: D103, WPS210, WPS231, C901
                 provider_dao = ProviderDAO(session)
                 model_dao = ModelDAO(session)
                 endpoint_dao = EndpointDAO(session)
-                logger.info(f"{provider_name}, {model_name}")
                 provider_id = await get_provider(
                     name=provider_name,
                     provider_dao=provider_dao,
@@ -578,21 +576,23 @@ if __name__ == "__main__":
     ]
     model_list = list(set(model_list))
     benchmarking_results = run_benchmark(model_list, print_table=False)
-    logger.info("Pushing metrics to DB")
-    metrics_to_push = [
-        "output_toks_per_sec",
-        "context_window",
-        "cold_start_latency",
-        # "cold_start_latency_std",
-        "input_cost_llm",
-        "output_cost_llm",
-        "input_cost_llm_per_character",
-        "output_cost_llm_per_character",
-    ]
-    asyncio.run(
-        process_benchmarking_results(
-            benchmarking_results,
-            metrics_to_push,
-        ),
-    )
-    logger.info("All done. Closing job.")
+    if benchmarking_results:
+        logger.info("Pushing metrics to DB")
+        metrics_to_push = [
+            "output_toks_per_sec",
+            "context_window",
+            "cold_start_latency",
+            "input_cost_llm",
+            "output_cost_llm",
+            "input_cost_llm_per_character",
+            "output_cost_llm_per_character",
+        ]
+        asyncio.run(
+            process_benchmarking_results(
+                benchmarking_results,
+                metrics_to_push,
+            ),
+        )
+        logger.info("All done. Closing job.")
+    else:
+        logger.error("Closing job since benchmarking results are empty")
