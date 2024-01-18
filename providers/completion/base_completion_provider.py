@@ -166,7 +166,12 @@ class BaseCompletionProvider:
 
 class AsyncGeneratorWrapper:  # noqa: D101
     def __init__(  # noqa: WPS211
-        self, response, model, messages, compute_cost_streaming, compute_cost=None,  # noqa: WPS211, E501
+        self,
+        response,
+        model,
+        messages,
+        compute_cost_streaming,
+        compute_cost=None,  # noqa: WPS211, E501
     ):
         self._response = response
         self._model = model
@@ -181,8 +186,6 @@ class AsyncGeneratorWrapper:  # noqa: D101
         try:  # noqa: WPS501
             for part in self._response:
                 usage = part.get("usage", {})
-                if isinstance(usage, Usage):
-                    usage = usage.model_dump()
 
                 choices = [
                     getattr(choice, "model_dump", lambda: None)()
@@ -192,10 +195,13 @@ class AsyncGeneratorWrapper:  # noqa: D101
                 part_dict = {
                     "model": self._model,
                     "created": part.get("created", None),
-                    "id": part.get("id", f"chatcmpl-{str(uuid.uuid4())}"),  # noqa: WPS237, E501
+                    "id": part.get(
+                        "id",
+                        f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237, E501
+                    ),
                     "choices": choices,
                     "object": part.get("object", "chat.completion.chunk"),
-                    "usage": usage,
+                    "usage": usage.model_dump() if isinstance(usage, Usage) else usage,
                 }
                 part_text = choices[0]["delta"]["content"]
                 whole += part_text if part_text else ""

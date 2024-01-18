@@ -15,6 +15,7 @@ from litellm.utils import (
     Usage,
 )
 from providers.completion.base_completion_provider import (
+    PRICING_PER_TOKENS,
     AsyncGeneratorWrapper,
     BaseCompletionProvider,
 )
@@ -40,22 +41,22 @@ class Replicate(BaseCompletionProvider):
     }
     supported_models = {
         "mistral-7b-instruct-v0.1": {
-            "endpoint": "replicate/mistralai/mistral-7b-instruct-v0.1:83b6a56e7c828e667f21fd596c338fd4f0039b46bcfa18d973e8e70e455fda70",  # noqa: E501
+            "endpoint": "mistralai/mistral-7b-instruct-v0.1:83b6a56e7c828e667f21fd596c338fd4f0039b46bcfa18d973e8e70e455fda70",  # noqa: E501
             "context_window": 16384,
             "cost": {"hardware": "a40", "per_second": True},
         },
         "mistral-7b-instruct-v0.2": {
-            "endpoint": "replicate/mistralai/mistral-7b-instruct-v0.2",
+            "endpoint": "mistralai/mistral-7b-instruct-v0.2",
             "context_window": 16384,
             "cost": {"prompt": 0.05, "completion": 0.25},
         },
         "mixtral-8x7b-instruct-v0.1": {
-            "endpoint": "replicate/mistralai/mixtral-8x7b-instruct-v0.1",
+            "endpoint": "mistralai/mixtral-8x7b-instruct-v0.1",
             "context_window": 16384,
             "cost": {"prompt": 0.30, "completion": 1.00},  # noqa: WPS339
         },
         "mistral-7b-v0.1": {
-            "endpoint": "replicate/mistralai/mistral-7b-v0.1",
+            "endpoint": "mistralai/mistral-7b-v0.1",
             "context_window": 4096,
             "cost": {"prompt": 0.05, "completion": 0.25},
         },
@@ -65,22 +66,22 @@ class Replicate(BaseCompletionProvider):
             "cost": {"prompt": 0.65, "completion": 2.75},
         },
         "llama-2-70b-chat": {
-            "endpoint": "replicate/meta/llama-2-70b-chat",
+            "endpoint": "meta/llama-2-70b-chat",
             "context_window": 4096,
             "cost": {"prompt": 0.65, "completion": 2.75},
         },
         "gpt-j-6b": {
-            "endpoint": "replicate/gpt-j-6b:b3546aeec6c9891f0dd9929c2d3bedbf013c12e02e7dd0346af09c37e008c827",  # noqa: E501
+            "endpoint": "gpt-j-6b:b3546aeec6c9891f0dd9929c2d3bedbf013c12e02e7dd0346af09c37e008c827",  # noqa: E501
             "context_window": 2048,
             "cost": {"hardware": "a100-40gb", "per_second": True},
         },
         "llama-2-13b": {
-            "endpoint": "replicate/meta/llama-2-13b",
+            "endpoint": "meta/llama-2-13b",
             "context_window": 4096,
             "cost": {"prompt": 0.10, "completion": 0.50},  # noqa: WPS339
         },
         "llama-2-13b-chat": {
-            "endpoint": "replicate/meta/llama-2-13b-chat",
+            "endpoint": "meta/llama-2-13b-chat",
             "context_window": 4096,
             "cost": {"prompt": 0.10, "completion": 0.50},  # noqa: WPS339
         },
@@ -90,39 +91,9 @@ class Replicate(BaseCompletionProvider):
             "cost": {"prompt": 0.05, "completion": 0.25},
         },
         "llama-2-7b-chat": {
-            "endpoint": "replicate/meta/llama-2-7b-chat",
+            "endpoint": "meta/llama-2-7b-chat",
             "context_window": 4096,
             "cost": {"prompt": 0.05, "completion": 0.25},
-        },
-        "codellama-7b-instruct-gguf": {
-            "endpoint": "e0c796e98861b1e30f43ad63071936875d6c88351093dc036180472d968dac5e",  # noqa: E501
-            "context_window": 16384,
-            "cost": {"hardware": "a40", "per_second": True},
-        },
-        "llama-2-13b-chat-gguf": {
-            "endpoint": "60ec5dda9ff9ee0b6f786c9d1157842e6ab3cc931139ad98fe99e08a35c5d4d4",  # noqa: E501
-            "context_window": 16384,
-            "cost": {"hardware": "a40", "per_second": True},
-        },
-        "llama-2-70b-chat-gguf": {
-            "endpoint": "51b87745820e6a8de6ad7bceb340bb6ba85f7ba6dab8e02bb7e2de0853425f4c",  # noqa: E501
-            "context_window": 16384,
-            "cost": {"hardware": "a40", "per_second": True},
-        },
-        "llama-2-13b-gguf": {
-            "endpoint": "f705c8ea4ab595d627754bbdb4c3a8c1344eab9a0082e31d553692fa0532eb07",  # noqa: E501
-            "context_window": 16384,
-            "cost": {"hardware": "a40", "per_second": True},
-        },
-        "wizardcoder-python-34b-v1-gguf": {
-            "endpoint": "67eed332a5389263b8ede41be3ee7dc119fa984e2bde287814c4abed19a45e54",  # noqa: E501
-            "context_window": 16384,
-            "cost": {"hardware": "a40", "per_second": True},
-        },
-        "codellama-34b-instruct-gguf": {
-            "endpoint": "f1091fa795c142a018268b193c9eea729e0a3f4d55d723df0b69f17b863bf5ea",  # noqa: E501
-            "context_window": 16384,
-            "cost": {"hardware": "a40", "per_second": True},
         },
     }
 
@@ -181,7 +152,7 @@ class Replicate(BaseCompletionProvider):
         self.prompt = prompt_factory(model=endpoint, messages=messages)
         input_data = {
             "prompt": self.prompt,
-            "max_tokens": max_tokens,
+            "max_new_tokens": max_tokens,
             "temperature": temperature,
         }
         prediction_url = self.start_prediction(
@@ -224,7 +195,11 @@ class Replicate(BaseCompletionProvider):
                 ]
                 * max_runtime_secs
             )
-        return 0
+        return (
+            self.supported_models[model_name]["cost"]["completion"]
+            * self.supported_models[model_name]["context_window"]
+            / PRICING_PER_TOKENS
+        )
 
     def handle_prediction_response_streaming(  # noqa: D102, E501, WPS210, WPS231
         self,
@@ -326,14 +301,6 @@ class Replicate(BaseCompletionProvider):
             "%Y-%m-%dT%H:%M:%S.%fZ",
         )
         created = time.mktime(timestamp.timetuple())
-        start_time = datetime.strptime(
-            response_data["started_at"],
-            "%Y-%m-%dT%H:%M:%S.%fZ",
-        )
-        end_time = datetime.strptime(
-            response_data["completed_at"],
-            "%Y-%m-%dT%H:%M:%S.%fZ",
-        )
         prompt_tokens = response_data["metrics"]["input_token_count"]
         completion_tokens = response_data["metrics"]["output_token_count"]
         total_tokens = prompt_tokens + completion_tokens
@@ -349,13 +316,11 @@ class Replicate(BaseCompletionProvider):
             tokens_per_second=tokens_per_second,
         )
 
-        response_ms = (end_time - start_time).total_seconds() * 1000
-
         response = ModelResponse(
             id=f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237
             choices=[Choices(message=Message(), index=0, finish_reason="stop")],
             created=created,
-            response_ms=response_ms,
+            response_ms=predict_time,
             usage=usage,
             object="chat.completion",
         )
