@@ -30,6 +30,7 @@ async def get_models(
 
 @router.get("/get_model", response_model=List[ModelResponse])
 async def get_model(  # noqa: WPS211, C901
+    id: Optional[int] = None,  # noqa: WPS125
     mdl_code: Optional[str] = None,
     user_id: Optional[str] = None,
     uploaded_at: Optional[datetime.datetime] = None,
@@ -45,6 +46,7 @@ async def get_model(  # noqa: WPS211, C901
     """
     Retrieve specific model object from the database.
 
+    :param id: id of model instance.
     :param mdl_code: mdl_code of model instance.
     :param user_id: user_id of model instance.
     :param uploaded_at: uploaded_at of model instance.
@@ -59,6 +61,7 @@ async def get_model(  # noqa: WPS211, C901
     :return: list of model objects from database.
     """
     return await model_dao.filter(
+        id=id,
         mdl_code=mdl_code,
         user_id=user_id,
         uploaded_at=uploaded_at,

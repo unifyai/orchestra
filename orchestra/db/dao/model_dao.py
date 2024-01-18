@@ -126,3 +126,58 @@ class ModelDAO:
             query = query.where(Model.custom_fields == custom_fields)
         rows = await self.session.execute(query)
         return list(rows.scalars().fetchall())
+
+    async def update_model(  # noqa: WPS211, WPS213, WPS231, C901
+        self,
+        id: int,  # noqa: WPS125
+        mdl_code: Optional[str] = None,
+        user_id: Optional[str] = None,
+        uploaded_at: Optional[datetime.datetime] = None,
+        task: Optional[str] = None,
+        description: Optional[str] = None,
+        license: Optional[str] = None,
+        active: Optional[bool] = None,
+        input_args_format: Optional[str] = None,
+        output_format: Optional[str] = None,
+        custom_fields: Optional[str] = None,
+    ) -> None:
+        """
+        Update specific model model.
+
+        :param id: id of model instance.
+        :param mdl_code: mdl_code of model instance.
+        :param user_id: user_id of model instance.
+        :param uploaded_at: uploaded_at of model instance.
+        :param task: task of model instance.
+        :param description: description of model instance.
+        :param license: license of model instance.
+        :param active: is model instance active.
+        :param input_args_format: input_args_format of model instance.
+        :param output_format: output_format of model instance.
+        :param custom_fields: custom_fields of model instance.
+        """
+        query = select(Model)
+        query = query.where(Model.id == id)
+        raw_model = await self.session.execute(query)
+        model = raw_model.scalars().first()
+        if model is not None:
+            if mdl_code:
+                setattr(model, "mdl_code", mdl_code)  # noqa: B010
+            if user_id:
+                setattr(model, "user_id", user_id)  # noqa: B010
+            if uploaded_at:
+                setattr(model, "uploaded_at", uploaded_at)  # noqa: B010
+            if task:
+                setattr(model, "task", task)  # noqa: B010
+            if description:
+                setattr(model, "description", description)  # noqa: B010
+            if license:
+                setattr(model, "license", license)  # noqa: B010
+            if active is not None:
+                setattr(model, "active", active)  # noqa: B010
+            if input_args_format:
+                setattr(model, "input_args_format", input_args_format)  # noqa: B010
+            if output_format:
+                setattr(model, "output_format", output_format)  # noqa: B010
+            if custom_fields:
+                setattr(model, "custom_fields", custom_fields)  # noqa: B010
