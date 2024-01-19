@@ -11,7 +11,11 @@ from orchestra.tests.utils import (
     generate_data_chat_completions,
 )
 
-MODELS = ["llama-2-7b-chat@anyscale", "mistral-7b-instruct-v0.1@octoai"]
+MODELS = [
+    "llama-2-7b-chat@anyscale",
+    "mistral-7b-instruct-v0.1@octoai",
+    "mistral-7b-instruct-v0.2@replicate",
+]
 
 
 @pytest.mark.anyio
