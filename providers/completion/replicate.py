@@ -231,7 +231,7 @@ class Replicate(BaseCompletionProvider):
                             delta=Delta(content=new_output, role="assistant"),
                         ),
                     ]
-                    created = time.time()
+                    created = int(time.time())
 
                     usage = Usage()
                     if status == "succeeded":
