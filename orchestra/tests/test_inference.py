@@ -11,7 +11,11 @@ from orchestra.tests.utils import (
     generate_data_inference_chat_completion,
 )
 
-MODELS = ["gpt-3.5-turbo@openai", "mistral-7b-instruct-v0.1@octoai"]
+MODELS = [
+    "gpt-3.5-turbo@openai",
+    "mistral-7b-instruct-v0.1@octoai",
+    "llama-2-7b-chat@replicate",
+]
 
 
 @pytest.mark.anyio
