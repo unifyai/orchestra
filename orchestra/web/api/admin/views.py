@@ -177,7 +177,7 @@ async def get_datapoint_models(
 @router.get("/get_datapoint", response_model=List[DatapointModelResponse])
 async def get_datapoint(  # noqa: WPS211
     id: Optional[int] = None,  # noqa: WPS125
-    endpoint_id: Optional[int] = None,
+    benchmark_run_id: Optional[int] = None,
     measured_at: Optional[datetime.datetime] = None,
     metric_name: Optional[str] = None,
     value: Optional[float] = None,
@@ -187,7 +187,7 @@ async def get_datapoint(  # noqa: WPS211
     Retrieve specific datapoint object from the database.
 
     :param id: id of datapoint object.
-    :param endpoint_id: endpoint_id of datapoint object.
+    :param benchmark_run_id: benchmark_run_id of datapoint object.
     :param measured_at: measured_at of datapoint object.
     :param metric_name: metric_name of datapoint object.
     :param value: value of datapoint object.
@@ -196,7 +196,7 @@ async def get_datapoint(  # noqa: WPS211
     """
     return await datapoint_dao.filter(
         id=id,
-        endpoint_id=endpoint_id,
+        benchmark_run_id=benchmark_run_id,
         measured_at=measured_at,
         metric_name=metric_name,
         value=value,
@@ -386,7 +386,7 @@ async def create_datapoint_model(
     :param datapoint_dao: DAO for datapoint models.
     """
     await datapoint_dao.create_datapoint(
-        endpoint_id=new_datapoint_object.endpoint_id,
+        benchmark_run_id=new_datapoint_object.benchmark_run_id,
         measured_at=new_datapoint_object.measured_at,
         metric_name=new_datapoint_object.metric_name,
         value=new_datapoint_object.value,
