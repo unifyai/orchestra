@@ -67,6 +67,8 @@ Table benchmark_run {
   endpoint_id integer [not null]
   regime varchar [not null]
   region varchar [not null]
+  input_seq_len integer [not null]
+  output_seq_len integer [not null]
 }
 
 Table metric {
