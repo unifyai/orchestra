@@ -107,6 +107,10 @@ Table recharge_type {
   type varchar [primary key] // daily, free, manual, ...
 }
 
+Table user {
+  id varchar [primary key]
+}
+
 // TODO: Fix these
 Ref: model.user_id > user.id
 Ref: model.task > task.name
@@ -114,7 +118,7 @@ Ref: model.license > license.name
 Ref: task.modality > modality.name
 Ref: endpoint.mdl_id > model.id
 Ref: endpoint.provider_id > provider.id
-Ref: datapoint.endpoint_id > endpoint.id
+Ref: datapoint.benchmark_run_id > benchmark_run.id
 Ref: datapoint.metric_name > metric.name
 Ref: query.user_id > user.id
 Ref: query.endpoint_id > endpoint.id
