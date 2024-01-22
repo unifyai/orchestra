@@ -49,6 +49,7 @@ async def get_endpoint_models(  # noqa: WPS210
                 mdl_task=str(model_inst.task),
                 mdl_description=str(model_inst.description),
                 mdl_license=str(model_inst.license),
+                mdl_active=model_inst.active,  # type: ignore
                 mdl_input_args_format=str(model_inst.input_args_format),
                 mdl_output_format=str(model_inst.output_format),
                 mdl_custom_fields=str(model_inst.custom_fields),
@@ -109,6 +110,7 @@ async def get_endpoint(  # noqa: WPS210, WPS211, WPS217
                 mdl_task=str(model_inst.task),
                 mdl_description=str(model_inst.description),
                 mdl_license=str(model_inst.license),
+                mdl_active=model_inst.active,  # type: ignore
                 mdl_input_args_format=str(model_inst.input_args_format),
                 mdl_output_format=str(model_inst.output_format),
                 mdl_custom_fields=str(model_inst.custom_fields),

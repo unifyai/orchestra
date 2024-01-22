@@ -18,6 +18,7 @@ class EndpointModelResponseVerbose(BaseModel):
         mdl_task (str): The task of the model.
         mdl_description (str): The description of the model.
         mdl_license (str): The license of the model.
+        mdl_active (bool): Whether the model is active.
         mdl_input_args_format (str): The input args format of the model.
         mdl_output_format (str): The output format of the model.
         mdl_custom_fields (str): The custom fields of the model.
@@ -37,6 +38,7 @@ class EndpointModelResponseVerbose(BaseModel):
     mdl_task: str
     mdl_description: str
     mdl_license: str
+    mdl_active: bool
     mdl_input_args_format: str
     mdl_output_format: str
     mdl_custom_fields: str
