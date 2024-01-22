@@ -30,12 +30,14 @@ async def get_models(
 
 @router.get("/get_model", response_model=List[ModelResponse])
 async def get_model(  # noqa: WPS211, C901
+    id: Optional[int] = None,  # noqa: WPS125
     mdl_code: Optional[str] = None,
     user_id: Optional[str] = None,
     uploaded_at: Optional[datetime.datetime] = None,
     task: Optional[str] = None,
     description: Optional[str] = None,
     license: Optional[str] = None,
+    active: Optional[bool] = None,
     input_args_format: Optional[str] = None,
     output_format: Optional[str] = None,
     custom_fields: Optional[str] = None,
@@ -44,12 +46,14 @@ async def get_model(  # noqa: WPS211, C901
     """
     Retrieve specific model object from the database.
 
+    :param id: id of model instance.
     :param mdl_code: mdl_code of model instance.
     :param user_id: user_id of model instance.
     :param uploaded_at: uploaded_at of model instance.
     :param task: task of model instance.
     :param description: description of model instance.
     :param license: license of model instance.
+    :param active: is model instance active.
     :param input_args_format: input_args_format of model instance.
     :param output_format: output_format of model instance.
     :param custom_fields: custom_fields of model instance.
@@ -57,12 +61,14 @@ async def get_model(  # noqa: WPS211, C901
     :return: list of model objects from database.
     """
     return await model_dao.filter(
+        id=id,
         mdl_code=mdl_code,
         user_id=user_id,
         uploaded_at=uploaded_at,
         task=task,
         description=description,
         license=license,
+        active=active,
         input_args_format=input_args_format,
         output_format=output_format,
         custom_fields=custom_fields,
