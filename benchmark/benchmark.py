@@ -5,6 +5,13 @@
 import asyncio
 import os
 import random
+from typing import Dict, List
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+
+from orchestra.db.models.orchestra_models import Endpoint, Model, Provider
 
 
 def read_configs():
@@ -15,7 +22,7 @@ def read_configs():
     raise NotImplementedError
 
 
-def get_db_engine():  # noqa: WPS210
+def get_db_session():  # noqa: WPS210
     """
     Initializes an async db engine
     """
@@ -101,8 +108,29 @@ async def worker_loop(input_queue, output_queue, done_event, configs):
     done_event.set()
 
 
-def retrieve_all_endpoints():
-    raise NotImplementedError
+async def retrieve_all_endpoints(async_session: AsyncSession) -> List[Dict]:
+    """Retrieves a list of all the endpoints in the db.
+
+    Args:
+        async_session (AsyncSession): Async SQLAlchemy session.
+
+    Returns:
+        List[Dict]: List of endpoints dictionaries with keys "id", "provider"
+        and "model".
+    """
+    async with async_session() as session:
+        stmt = select(Endpoint, Model, Provider).join(Model).join(Provider)
+        results = await session.execute(stmt)
+    endpoints = []
+    for result in results.all():
+        endpoints.append(
+            {
+                "id": result.Endpoint.id,
+                "provider": result.Provider.name,
+                "model": result.Model.mdl_code,
+            }
+        )
+    return endpoints
 
 
 def store_datapoint():
@@ -123,11 +151,10 @@ async def main():
         # raise ValueError("Region ENV VAR was not declared")
 
     # Initialise db engine
-    # db_engine = get_db_engine()
+    async_db_session = get_db_session()
 
     # Get list of endpoints in our db
-    # endpoints = retrieve_all_endpoints()
-    endpoints = ["String1", "String2", "String3", "String4", "String5"]
+    endpoints = await retrieve_all_endpoints(async_db_session)
 
     # Configure concurrent workers and tasks
     num_workers = int(os.getenv("BENCHMARK_NUM_WORKERS", "5"))
