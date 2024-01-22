@@ -38,7 +38,7 @@ def assert_model(response_json):  # noqa: WPS218
     assert isinstance(provider, str)
 
     assert "created" in response_json
-    assert isinstance(response_json["created"], int)
+    assert isinstance(response_json["created"], float)
 
     assert "id" in response_json
     assert isinstance(response_json["id"], str)

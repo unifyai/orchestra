@@ -231,7 +231,7 @@ class Replicate(BaseCompletionProvider):
                             delta=Delta(content=new_output, role="assistant"),
                         ),
                     ]
-                    created = int(time.time())
+                    created = time.time()
 
                     usage = Usage()
                     if status == "succeeded":
@@ -320,7 +320,7 @@ class Replicate(BaseCompletionProvider):
             id=f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237
             choices=[Choices(message=Message(), index=0, finish_reason="stop")],
             created=created,
-            response_ms=predict_time,
+            _response_ms=predict_time,
             usage=usage,
             object="chat.completion",
         )

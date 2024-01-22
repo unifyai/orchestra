@@ -1,4 +1,5 @@
 import logging
+import time
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -185,6 +186,7 @@ class AsyncGeneratorWrapper:  # noqa: D101
         usage = {}
         try:  # noqa: WPS501
             for part in self._response:
+                created = time.time()
                 usage = part.get("usage", {})
 
                 choices = [
@@ -194,7 +196,7 @@ class AsyncGeneratorWrapper:  # noqa: D101
 
                 part_dict = {
                     "model": self._model,
-                    "created": part.get("created", None),
+                    "created": created,
                     "id": part.get(
                         "id",
                         f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237, E501

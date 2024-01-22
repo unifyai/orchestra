@@ -148,14 +148,14 @@ def get_provider_obj(
     return provider_obj
 
 
-async def calculate_metrics(  # noqa: WPS211, WPS210
+async def calculate_metrics(  # noqa: WPS211, WPS210, WPS234
     provider: BaseCompletionProvider,
     model: str,
     messages: List[Dict[str, str]],
     stream: bool = True,
     requeries: int = 0,
     cold_start_latency: float = 0,
-) -> Tuple[List[ModelResponse], float]:
+) -> Optional[Tuple[List[ModelResponse], float]]:
     """
     Calculate the metrics of the model.
 
@@ -169,11 +169,15 @@ async def calculate_metrics(  # noqa: WPS211, WPS210
     :return: The completion results and cold start latency.
     """
     start_time = time.perf_counter()
-    result, cost, = provider.complete(
+    result, _ = provider.complete(  # type: ignore
         model=model,
         messages=messages,
         stream=stream,
     )
+
+    if result is None:
+        return None
+
     completions = []
     usage = {}
     async for part in result.generator():
@@ -198,8 +202,13 @@ async def calculate_metrics(  # noqa: WPS211, WPS210
                 f"failed after {requeries} attempts",
             )
             return None
-        calculate_metrics(
-            provider, model, messages, stream, requeries + 1, cold_start_latency,
+        return await calculate_metrics(  # type: ignore
+            provider,
+            model,
+            messages,
+            stream,
+            requeries + 1,
+            cold_start_latency,
         )
 
     if isinstance(usage, Usage) and usage != Usage():
@@ -248,10 +257,10 @@ async def get_completion_results(  # noqa: D103, WPS234
     completion_results = []
     # cold start would be relevant only for the first prompt
     # so keeping only a single cold start latency value
-    cold_start_latency = 0
+    cold_start_latency = 0.0  # noqa: WPS358
     for prompt in tqdm(problems):
         time.perf_counter()
-        result, cold_start = await calculate_metrics(
+        result, cold_start = await calculate_metrics(  # type: ignore
             provider,
             model,
             [{"content": prompt[0], "role": "user"}],

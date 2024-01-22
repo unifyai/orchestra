@@ -1,5 +1,6 @@
 import datetime
 import logging
+import time
 from typing import List, Optional
 
 import openai
@@ -167,8 +168,10 @@ class OctoAIAsyncGeneratorWrapper(AsyncGeneratorWrapper):
         whole = ""
         try:  # noqa: WPS501
             for part in self._response:
+                created = time.time()
                 part_dict = part.dict()
                 part_dict["model"] = f"{self._model}@octoai"
+                part_dict["created"] = created
                 part_text = part_dict["choices"][0]["delta"]["content"]
                 whole += part_text if part_text else ""
                 yield part_dict
