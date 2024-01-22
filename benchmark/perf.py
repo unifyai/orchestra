@@ -5,9 +5,11 @@ import logging
 import os
 import re
 import statistics
+import time
 from typing import Any, Dict, List, Optional, Tuple, cast
 
-from litellm import ModelResponse
+import tiktoken
+from litellm import ModelResponse, Usage
 from prettytable import PrettyTable
 from providers.completion import PROVIDER_CLASSES
 from providers.completion.base_completion_provider import BaseCompletionProvider
@@ -146,7 +148,99 @@ def get_provider_obj(
     return provider_obj
 
 
-def get_completion_results(  # noqa: D103, WPS234
+async def calculate_metrics(  # noqa: WPS211, WPS210
+    provider: BaseCompletionProvider,
+    model: str,
+    messages: List[Dict[str, str]],
+    stream: bool = True,
+    requeries: int = 0,
+    cold_start_latency: float = 0,
+) -> Tuple[List[ModelResponse], float]:
+    """
+    Calculate the metrics of the model.
+
+    :param provider: The provider of the model.
+    :param model: The model to calculate the metrics of.
+    :param messages: The messages to send to the model.
+    :param stream: Whether to stream the results or not.
+    :param requeries: The number of times the model has been re-queried.
+    :param cold_start_latency: The cold start latency of the model.
+
+    :return: The completion results and cold start latency.
+    """
+    start_time = time.perf_counter()
+    result, cost, = provider.complete(
+        model=model,
+        messages=messages,
+        stream=stream,
+    )
+    completions = []
+    usage = {}
+    async for part in result.generator():
+        usage = part.get("usage", {})
+        completions.append(
+            {
+                "content": part["choices"][0]["delta"]["content"],
+                "reception_time": part["created"],
+            },
+        )
+        await asyncio.sleep(0)
+    end_time = time.perf_counter()
+
+    latency = end_time - start_time
+
+    if latency > COLD_START_THRESHOLD:
+        cold_start_latency = end_time - start_time
+        logger.info(f"Cold start of {cold_start_latency} detected, re-querying")
+        if requeries == 2:
+            logger.error(
+                f"Cold start of {cold_start_latency} detected, re-querying "
+                f"failed after {requeries} attempts",
+            )
+            return None
+        calculate_metrics(
+            provider, model, messages, stream, requeries + 1, cold_start_latency,
+        )
+
+    if isinstance(usage, Usage) and usage != Usage():
+        prompt_tokens = usage.prompt_tokens
+        completion_tokens = usage.completion_tokens
+        total_tokens = usage.total_tokens
+        latency = usage.predict_time
+        time_to_first_token = usage.time_to_first_token
+    else:
+        first_token_time = completions[0]["reception_time"]
+        time_to_first_token = first_token_time - start_time
+        inter_token_latency = (completions[-1]["reception_time"] - first_token_time) / (
+            len(completions) - 1
+        )
+        tokenizer = tiktoken.get_encoding("cl100k_base")
+        content = " ".join(
+            [
+                completion["content"]
+                for completion in completions
+                if completion["content"] is not None
+            ],
+        )
+        tokenized_completion_length = tokenizer.encode(content)
+        completion_tokens = len(tokenized_completion_length)
+        prompt_tokens = len(tokenizer.encode(messages[0]["content"]))
+        total_tokens = prompt_tokens + completion_tokens
+    completions_full = ModelResponse(
+        choices=[{"message": {"content": content}}],
+        _response_ms=latency,
+        usage={
+            "total_tokens": total_tokens,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+        },
+        inter_token_latency=inter_token_latency,
+        time_to_first_token=time_to_first_token,
+    )
+    return completions_full, cold_start_latency
+
+
+async def get_completion_results(  # noqa: D103, WPS234
     provider: BaseCompletionProvider,
     model: str,
     problems: List[tuple[str, str]],
@@ -156,21 +250,18 @@ def get_completion_results(  # noqa: D103, WPS234
     # so keeping only a single cold start latency value
     cold_start_latency = 0
     for prompt in tqdm(problems):
-        result = provider.complete(
+        time.perf_counter()
+        result, cold_start = await calculate_metrics(
+            provider,
             model,
             [{"content": prompt[0], "role": "user"}],
+            stream=True,
         )
+        cold_start_latency = max(cold_start, cold_start_latency)
         if result is None:
             return None
-        # handles cold-start skewing latency
-        if result[0]._response_ms > COLD_START_THRESHOLD:
-            cold_start_latency = result[0]._response_ms
-            logger.info(f"Cold start of {cold_start_latency} detected, re-querying")
-            result = provider.complete(
-                model,
-                [{"content": prompt[0], "role": "user"}],
-            )
-        completion_results.append(result[0])
+        completion_results.append(result)
+
     return completion_results, cold_start_latency
 
 
@@ -253,6 +344,12 @@ def calculate_results(  # noqa: D103
         ),
         "median_latency": statistics.median(
             [result._response_ms for result in completion_results],
+        ),
+        "time_to_first_token": statistics.mean(
+            [obj.time_to_first_token for obj in completion_results],
+        ),
+        "inter_token_latency": statistics.mean(
+            [obj.inter_token_latency for obj in completion_results],
         ),
     }
     cleaned_output["output_toks_per_sec"] = (
@@ -345,10 +442,12 @@ def benchmark_model(  # noqa: D103, WPS211
     if model_name.lower() in provider_class.supported_models:
         logger.info(f"{model_name} on {provider_name}")
         provider_obj = get_provider_obj(provider_name, traversed_providers)
-        completion_results, cold_start_latency = get_completion_results(
-            provider_obj,
-            model_name,
-            problems,
+        completion_results, cold_start_latency = asyncio.run(
+            get_completion_results(
+                provider_obj,
+                model_name,
+                problems,
+            ),
         )
         if completion_results is None:
             logger.error(f"{model_name} on {provider_name} was skipped")
