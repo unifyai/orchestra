@@ -320,7 +320,7 @@ class Replicate(BaseCompletionProvider):
             id=f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237
             choices=[Choices(message=Message(), index=0, finish_reason="stop")],
             created=created,
-            response_ms=predict_time,
+            _response_ms=predict_time * 1000,
             usage=usage,
             object="chat.completion",
         )
