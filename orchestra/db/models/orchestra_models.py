@@ -18,6 +18,16 @@ class Model(Base):
     input_args_format = sa.Column(sa.Text(), nullable=False)
     output_format = sa.Column(sa.Text(), nullable=False)
     custom_fields = sa.Column(sa.Text())
+    active = sa.Column(
+        sa.Boolean(),
+        server_default="f",
+        nullable=False,
+    )  # type: ignore
+    is_private = sa.Column(
+        sa.Boolean(),
+        server_default="f",
+        nullable=False,
+    )  # type: ignore
 
 
 class License(Base):
@@ -75,10 +85,44 @@ class Datapoint(Base):
     __tablename__ = "datapoint"
 
     id = sa.Column(sa.Integer(), primary_key=True)
-    endpoint_id = sa.Column(sa.Integer(), sa.ForeignKey("endpoint.id"), nullable=False)
+    benchmark_run_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("benchmark_run.id"),
+        nullable=False,
+    )
     measured_at = sa.Column(sa.TIMESTAMP(), nullable=False)
     metric_name = sa.Column(sa.String(), sa.ForeignKey("metric.name"), nullable=False)
     value = sa.Column(sa.Numeric(), nullable=False)
+    tooltip = sa.Column(sa.String())
+
+
+class BenchmarkRegime(Base):
+    """Model class for the benchmark_regime table."""
+
+    __tablename__ = "benchmark_regime"
+
+    name = sa.Column(sa.String(), primary_key=True)
+
+
+class BenchmarkRegion(Base):
+    """Model class for the benchmark_region table."""
+
+    __tablename__ = "benchmark_region"
+
+    name = sa.Column(sa.String(), primary_key=True)
+
+
+class BenchmarkRun(Base):
+    """Model class for the benchmark_run table."""
+
+    __tablename__ = "benchmark_run"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    endpoint_id = sa.Column(sa.Integer(), nullable=False)
+    regime = sa.Column(sa.String(), nullable=False)
+    region = sa.Column(sa.String(), nullable=False)
+    input_seq_len = sa.Column(sa.Integer(), nullable=False)
+    output_seq_len = sa.Column(sa.Integer(), nullable=False)
 
 
 class Metric(Base):
@@ -87,7 +131,10 @@ class Metric(Base):
     __tablename__ = "metric"
 
     name = sa.Column(sa.String(), primary_key=True)
-    units = sa.Column(sa.String(), nullable=False)
+    display_name = sa.Column(sa.String(), nullable=False)
+    tooltip = sa.Column(sa.String())
+    priority = sa.Column(sa.Integer(), nullable=False)
+    plottable = sa.Column(sa.Boolean(), nullable=False)  # type: ignore
 
 
 class Query(Base):

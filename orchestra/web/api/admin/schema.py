@@ -8,13 +8,13 @@ class DatapointModelRequest(BaseModel):
     Request model for creating new datapoint model.
 
     Attributes:
-        endpoint_id (int): The id of the endpoint.
+        benchmark_run_id (int): The id of the endpoint.
         measured_at (datetime): The time of the measurement.
         metric_name (str): The name of the metric.
         value (float): The value of the metric.
     """
 
-    endpoint_id: int
+    benchmark_run_id: int
     measured_at: datetime.datetime
     metric_name: str
     value: float
@@ -82,6 +82,7 @@ class ModelRequest(BaseModel):
         task (str): The task of the model.
         description (str): The description of the model.
         license (str): The license of the model.
+        active (bool): Whether the model is active.
         input_args_format (str): The input args format of the model.
         output_format (str): The output format of the model.
         custom_fields (str): The custom fields of the model.
@@ -92,6 +93,7 @@ class ModelRequest(BaseModel):
     task: str
     description: str
     license: str
+    active: bool
     input_args_format: str
     output_format: str
     custom_fields: str
@@ -200,14 +202,14 @@ class DatapointModelResponse(BaseModel):
 
     Attributes:
         id (int): The id of the datapoint.
-        endpoint_id (int): The id of the endpoint.
+        benchmark_run_id (int): The id of the endpoint.
         measured_at (datetime): The time of the measurement.
         metric_name (str): The name of the metric.
         value (float): The value of the metric.
     """
 
     id: int
-    endpoint_id: int
+    benchmark_run_id: int
     measured_at: datetime.datetime
     metric_name: str
     value: float
