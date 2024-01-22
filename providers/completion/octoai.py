@@ -140,7 +140,7 @@ class OctoAI(BaseCompletionProvider):
             usage = response["usage"]
             return ChatCompletionResponse(
                 model=model,
-                created=response.get("created", None),
+                created=end_time.timestamp(),
                 id=response.get("id", None),
                 object=response.get("object", None),
                 usage=response.get("usage", None),

@@ -149,6 +149,7 @@ class BaseCompletionProvider:
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
+            response.created = time.time()
 
             return response, self.compute_cost(
                 model,

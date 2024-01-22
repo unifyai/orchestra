@@ -300,7 +300,7 @@ class Replicate(BaseCompletionProvider):
             response_data["created_at"],
             "%Y-%m-%dT%H:%M:%S.%fZ",
         )
-        created = time.mktime(timestamp.timetuple())
+        created = timestamp.timestamp()
         prompt_tokens = response_data["metrics"]["input_token_count"]
         completion_tokens = response_data["metrics"]["output_token_count"]
         total_tokens = prompt_tokens + completion_tokens
