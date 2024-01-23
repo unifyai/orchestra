@@ -7,6 +7,8 @@ import os
 import random
 from typing import Dict, List
 
+import yaml
+from aibench.runner import AIBenchRunner
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -14,10 +16,30 @@ from sqlalchemy.orm import sessionmaker
 from orchestra.db.models.orchestra_models import Endpoint, Model, Provider
 
 
-def read_configs(config_file):
-    """Reads config file and returns a list of dictionaries."""
-    # Returns a list of dictionaries
-    return
+def read_configs(config_file: str) -> List[Dict]:
+    """Reads config file and returns a list of dictionaries.
+
+    The YAML config file has to follow the structure:
+    ===================================
+    ---
+    runner_name_1:
+        load: <number of concurrent requests to make>
+        input_policy: <Input loading policy, must be one of short, long, or mixed>
+    <...>
+    runner_name_n:
+        <...>
+    ===================================
+
+
+    Args:
+        config_file (str): YAML File
+
+    Returns:
+        List[Dict]: _description_
+    """
+    with open(config_file, "r") as file:
+        data = yaml.safe_load(file)
+    return list(data.values())
 
 
 def create_db_session() -> AsyncSession:  # noqa: WPS210
@@ -80,14 +102,14 @@ async def worker_loop(input_queue, output_queue, done_event, configs):
         endpoint_fn = None  # TODO
 
         # Initialise the benchmark runner(s)
-        # benchmark_runners = list()
-        # for config in configs:
-        #     benchmark_runners.append(AIBenchRunner(endpoint_fn, **config))
+        benchmark_runners = list()
+        for config in configs:
+            benchmark_runners.append(AIBenchRunner(endpoint_fn, **config))
 
         # Iterate over each runner
         # for runner in benchmark_runners:
         #     # Run the benchmark
-        #     result = runner()
+        #     result = await runner()
         #     # Store the result in the db
         #     # TODO: This should actually put the results into a queue that
         #     # gets consumed by the db task we will need a new table which
@@ -144,9 +166,7 @@ def store_datapoint():
 
 async def main():  # noqa: WPS210
     # Define config file to use
-    CONFIG_FILE = "production_benchmark.config"  # json/yaml
-    # Read the config file where all the configurations are defined
-    # This includes the load testing parameters, the number of inputs, length of the inputs, and length of the outputs
+    CONFIG_FILE = os.getenv("BENCHMARK_CONFIG_FILE", "benchmark/test.config.yml")
     configs = read_configs(CONFIG_FILE)
 
     # Get region information from the GCP instance
@@ -167,6 +187,7 @@ async def main():  # noqa: WPS210
     input_queue, output_queue = asyncio.Queue(), asyncio.Queue()
     # Create an event to signal the completion of worker tasks
     done_events = [asyncio.Event() for _ in range(num_workers)]
+
     # Spawn worker tasks
     worker_tasks = []
     for i in range(num_workers):
@@ -184,8 +205,8 @@ async def main():  # noqa: WPS210
     # Enqueue each endpoint that is active
     # We need to ensure that we are not hampering the measurements by
     # overloading the CPU (BENCHMARK_NUM_WORKERS needs to be tuned)
-    for string in endpoints:
-        await input_queue.put(string)
+    for endpoint in endpoints:
+        await input_queue.put(endpoint)
 
     # Add None to the queue for each worker to signal them to stop
     for _ in range(num_workers):
@@ -193,7 +214,6 @@ async def main():  # noqa: WPS210
 
     # Wait for all tasks to complete
     await asyncio.gather(*worker_tasks)
-
     # Wait for the print task to complete before cancelling
     await db_task
 

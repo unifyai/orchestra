@@ -1,11 +1,9 @@
 class AIBenchRunner:
-    def __init__(self, fn, load_testing_policy, test_load, input_length, output_length):
+    def __init__(self, fn, test_load, input_policy):
         # Config
         self.fn = fn  # assumes fn takes a string as the input and returns strings asynchronously (streaming)
-        self.load_testing_policy = load_testing_policy  # concurrent | QPS
-        self.test_load = test_load  # 1 | 10
-        self.target_input_length = input_length
-        self.target_output_length = output_length
+        self.test_load = test_load
+        self.input_policy = input_policy  # short | long | mixed
 
         # Computed metrics
         self.ttft = list()
@@ -29,7 +27,21 @@ class AIBenchRunner:
     def QPS(self):
         raise NotImplementedError
 
-    def __call__(self):
+    async def say_after(self, delay, what):
+        print(time.time())
+        await asyncio.sleep(delay)
+        print(what)
+
+    async def __call__(self):
+        concurrent_requests = []
+        num_concurrent_req = 100
+        for i in range(num_concurrent_req):
+            concurrent_requests.append(asyncio.create_task(
+            self.say_after(10, 'hello')))
+
+        print(f"started at {time.strftime('%X')}")
+
+        await asyncio.gather(*concurrent_requests)
         # all "computed metrics" should be calculated here depending on the load_testing_policy
         # for test_load > 1 we should store **all** the data. This means that the returned metrics should be
         # lists, it's up to the higher layers to aggregate them if they want.
@@ -48,4 +60,4 @@ class AIBenchRunner:
         #   "output_tks_per_sec": List<float>,
         #   "failed_queries": int,
         # }
-        raise NotImplementedError
+        # raise NotImplementedError
