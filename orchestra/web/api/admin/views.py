@@ -390,6 +390,7 @@ async def create_datapoint_model(
         measured_at=new_datapoint_object.measured_at,
         metric_name=new_datapoint_object.metric_name,
         value=new_datapoint_object.value,
+        tooltip=new_datapoint_object.tooltip,
     )
 
 
