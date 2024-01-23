@@ -12,12 +12,14 @@ class DatapointModelRequest(BaseModel):
         measured_at (datetime): The time of the measurement.
         metric_name (str): The name of the metric.
         value (float): The value of the metric.
+        tooltip (str): The tooltip of the metric.
     """
 
     benchmark_run_id: int
     measured_at: datetime.datetime
     metric_name: str
     value: float
+    tooltip: str
 
 
 class EndpointModelRequest(BaseModel):
