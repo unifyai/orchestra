@@ -15,12 +15,13 @@ class DatapointDAO:
     def __init__(self, session: AsyncSession = Depends(get_db_session)):
         self.session = session
 
-    async def create_datapoint(
+    async def create_datapoint(  # noqa: WPS211
         self,
         benchmark_run_id: int,
         measured_at: datetime.datetime,
         metric_name: str,
         value: float,
+        tooltip: str,
     ) -> None:
         """
         Add single datapoint to session.
@@ -29,6 +30,8 @@ class DatapointDAO:
         :param measured_at: measured_at of a datapoint.
         :param metric_name: metric_name of a datapoint.
         :param value: value of a datapoint.
+        :param tooltip: tooltip of a datapoint.
+
         """
         self.session.add(
             Datapoint(
@@ -36,6 +39,7 @@ class DatapointDAO:
                 measured_at=measured_at,
                 metric_name=metric_name,
                 value=value,
+                tooltip=tooltip,
             ),
         )
 
