@@ -443,7 +443,10 @@ async def create_metric_model(
     """
     await metric_dao.create_metric(
         name=new_metric_object.name,
-        units=new_metric_object.units,
+        display_name=new_metric_object.display_name,
+        tooltip=new_metric_object.tooltip,
+        priority=new_metric_object.priority,
+        plottable=new_metric_object.plottable,
     )
 
 
