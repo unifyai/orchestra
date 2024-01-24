@@ -74,6 +74,7 @@ async def db_loop(output_queue, done_events, period):
         processed_results = []
         while not output_queue.empty():
             processed_results.append(await output_queue.get())
+            output_queue.task_done()
 
         if processed_results:
             print("Processed results:", processed_results)
