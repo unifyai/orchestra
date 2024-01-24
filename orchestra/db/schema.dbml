@@ -121,3 +121,4 @@ Ref: recharge.user_id > users.id
 Ref: recharge.type > recharge_type.type
 Ref: benchmark_run.regime > benchmark_regime.name
 Ref: benchmark_run.region > benchmark_region.name
+Ref: benchmark_run.endpoint_id > endpoint.id

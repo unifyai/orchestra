@@ -118,7 +118,11 @@ class BenchmarkRun(Base):
     __tablename__ = "benchmark_run"
 
     id = sa.Column(sa.Integer(), primary_key=True)
-    endpoint_id = sa.Column(sa.Integer(), nullable=False)
+    endpoint_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("endpoint.id"),
+        nullable=False,
+    )
     regime = sa.Column(
         sa.String(),
         sa.ForeignKey("benchmark_regime.name"),
