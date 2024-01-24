@@ -56,7 +56,6 @@ class AIBenchRunner:
         prompt_tokens = []
         output_tokens = []
         total_tokens = []
-        output_tks_per_sec = []
         while not self.ttft.empty():
             ttft.append(await self.ttft.get())
         while not self.end_to_end_latency.empty():
@@ -71,8 +70,6 @@ class AIBenchRunner:
             output_tokens.append(await self.output_tokens.get())
         while not self.total_tokens.empty():
             total_tokens.append(await self.total_tokens.get())
-        while not self.output_tks_per_sec.empty():
-            output_tks_per_sec.append(await self.output_tks_per_sec.get())
         return {
             "load": self.load,
             "input_policy": self.input_policy,
@@ -83,7 +80,7 @@ class AIBenchRunner:
             "prompt_tokens": prompt_tokens,
             "output_tokens": output_tokens,
             "total_tokens": total_tokens,
-            "output_tks_per_sec": output_tks_per_sec,
+            "output_tks_per_sec": self.output_tks_per_sec,
             "failed_queries": self.failed_queries,
         }
 
@@ -146,7 +143,6 @@ class AIBenchRunner:
 
         await self.end_to_end_latency.put(end_time - start_time)
         await self.itl.put(itl)
-        await self.output_tks_per_sec.put(1 / itl)
         # TODO: remove this dependency on litellm by using the else completely
         # ask apara to confirm if both equivalent
         if isinstance(usage, Usage) and usage != Usage():
