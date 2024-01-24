@@ -177,7 +177,7 @@ async def get_datapoint_models(
 @router.get("/get_datapoint", response_model=List[DatapointModelResponse])
 async def get_datapoint(  # noqa: WPS211
     id: Optional[int] = None,  # noqa: WPS125
-    endpoint_id: Optional[int] = None,
+    benchmark_run_id: Optional[int] = None,
     measured_at: Optional[datetime.datetime] = None,
     metric_name: Optional[str] = None,
     value: Optional[float] = None,
@@ -187,7 +187,7 @@ async def get_datapoint(  # noqa: WPS211
     Retrieve specific datapoint object from the database.
 
     :param id: id of datapoint object.
-    :param endpoint_id: endpoint_id of datapoint object.
+    :param benchmark_run_id: benchmark_run_id of datapoint object.
     :param measured_at: measured_at of datapoint object.
     :param metric_name: metric_name of datapoint object.
     :param value: value of datapoint object.
@@ -196,7 +196,7 @@ async def get_datapoint(  # noqa: WPS211
     """
     return await datapoint_dao.filter(
         id=id,
-        endpoint_id=endpoint_id,
+        benchmark_run_id=benchmark_run_id,
         measured_at=measured_at,
         metric_name=metric_name,
         value=value,
@@ -386,10 +386,11 @@ async def create_datapoint_model(
     :param datapoint_dao: DAO for datapoint models.
     """
     await datapoint_dao.create_datapoint(
-        endpoint_id=new_datapoint_object.endpoint_id,
+        benchmark_run_id=new_datapoint_object.benchmark_run_id,
         measured_at=new_datapoint_object.measured_at,
         metric_name=new_datapoint_object.metric_name,
         value=new_datapoint_object.value,
+        tooltip=new_datapoint_object.tooltip,
     )
 
 
@@ -443,7 +444,10 @@ async def create_metric_model(
     """
     await metric_dao.create_metric(
         name=new_metric_object.name,
-        units=new_metric_object.units,
+        display_name=new_metric_object.display_name,
+        tooltip=new_metric_object.tooltip,
+        priority=new_metric_object.priority,
+        plottable=new_metric_object.plottable,
     )
 
 
@@ -482,9 +486,56 @@ async def create_model(
         task=new_model_object.task,
         description=new_model_object.description,
         license=new_model_object.license,
+        active=new_model_object.active,
         input_args_format=new_model_object.input_args_format,
         output_format=new_model_object.output_format,
         custom_fields=new_model_object.custom_fields,
+    )
+
+
+@router.put("/update_model")
+async def update_model(  # noqa: WPS211
+    id: int,  # noqa: WPS125
+    mdl_code: Optional[str] = None,
+    user_id: Optional[str] = None,
+    uploaded_at: Optional[datetime.datetime] = None,
+    task: Optional[str] = None,
+    description: Optional[str] = None,
+    license: Optional[str] = None,
+    active: Optional[bool] = None,
+    input_args_format: Optional[str] = None,
+    output_format: Optional[str] = None,
+    custom_fields: Optional[str] = None,
+    model_dao: ModelDAO = Depends(),
+) -> None:
+    """
+    Update specific model model.
+
+    :param id: id of model instance.
+    :param mdl_code: mdl_code of model instance.
+    :param user_id: user_id of model instance.
+    :param uploaded_at: uploaded_at of model instance.
+    :param task: task of model instance.
+    :param description: description of model instance.
+    :param license: license of model instance.
+    :param active: is model instance active.
+    :param input_args_format: input_args_format of model instance.
+    :param output_format: output_format of model instance.
+    :param custom_fields: custom_fields of model instance.
+    :param model_dao: DAO for model models.
+    """
+    await model_dao.update_model(
+        id=id,
+        mdl_code=mdl_code,
+        user_id=user_id,
+        uploaded_at=uploaded_at,
+        task=task,
+        description=description,
+        license=license,
+        active=active,
+        input_args_format=input_args_format,
+        output_format=output_format,
+        custom_fields=custom_fields,
     )
 
 
