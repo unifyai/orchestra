@@ -5,7 +5,8 @@
 import asyncio
 import os
 import random
-from typing import Dict, List
+import logging
+from typing import Dict, List, cast
 
 import yaml
 from aibench.runner import AIBenchRunner
@@ -13,8 +14,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from providers.completion import PROVIDER_CLASSES
+from providers.completion.base_completion_provider import BaseCompletionProvider
 from orchestra.db.models.orchestra_models import Endpoint, Model, Provider
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
+handler = logging.StreamHandler()
+handler.setLevel(logging.INFO)
+logger.addHandler(handler)
 
 def read_configs(config_file: str) -> List[Dict]:
     """Reads config file and returns a list of dictionaries.
@@ -111,12 +119,15 @@ async def worker_loop(
             break
 
         # Retrieve/fabricate a callable based on the model the provider
-        endpoint_fn = None  # TODO
+        provider_obj = get_provider_obj(endpoint["provider"])
+        # TODO: This is a hack to get the callable, we need to refactor this
+        # .complete expects model name and messages as arguments
+        endpoint_fn = getattr(provider_obj, "complete")
 
         # Initialise the benchmark runner(s)
         benchmark_runners = list()
         for config in configs:
-            benchmark_runners.append(AIBenchRunner(endpoint_fn, **config))
+            benchmark_runners.append(AIBenchRunner(endpoint_fn, endpoint['model'], **config))
 
         # Iterate over each runner
         for runner in benchmark_runners:
@@ -164,6 +175,37 @@ async def retrieve_all_endpoints(async_session: AsyncSession) -> List[Dict]:
 
 def store_datapoint():
     raise NotImplementedError
+
+
+def get_provider_obj(
+    provider_name: str,
+) -> BaseCompletionProvider:
+    """
+    Get the provider object from the provider name.
+
+    :param provider_name: The provider answer get object of.
+    :return: Provider object.
+    """
+    provider_obj = PROVIDER_CLASSES[provider_name]()
+    if provider_name == "vertex-ai":
+        from providers.completion.vertexai import VertexAI  # noqa: WPS433
+
+        provider_obj = cast(VertexAI, provider_obj)
+        provider_obj.set_service_account_credentials(
+            str(os.getenv("ORCHESTRA_VERTEX_AI_SERVICE_ACC_JSON")),
+            str(os.getenv("ORCHESTRA_VERTEX_AI_GCLOUD_PATH")),
+        )
+        provider_obj.set_project(str(os.getenv("ORCHESTRA_VERTEX_AI_PROJECT")))
+        provider_obj.set_location(str(os.getenv("ORCHESTRA_VERTEX_AI_LOCATION")))
+    else:
+        provider_obj.set_api_key(
+            api_key=str(
+                os.getenv(
+                    f"ORCHESTRA_{provider_name.replace('-', '_').upper()}_API_KEY",  # noqa: WPS237, E501
+                ),
+            ),
+        )
+    return provider_obj
 
 
 async def main():  # noqa: WPS210
