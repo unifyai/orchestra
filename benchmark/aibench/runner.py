@@ -1,8 +1,11 @@
+import asyncio
+
+
 class AIBenchRunner:
-    def __init__(self, fn, test_load, input_policy):
+    def __init__(self, fn, load, input_policy):
         # Config
         self.fn = fn  # assumes fn takes a string as the input and returns strings asynchronously (streaming)
-        self.test_load = test_load
+        self.load = load
         self.input_policy = input_policy  # short | long | mixed
 
         # Computed metrics
@@ -15,10 +18,13 @@ class AIBenchRunner:
 
     @property
     def itl(self):
+        # TODO: Deal with division by zero?
         return [
             (e2e_lat - ttft) / (o_tks - 1)
             for e2e_lat, ttft, o_tks in zip(
-                self.end_to_end_latency, self.ttft, self.output_tokens
+                self.end_to_end_latency,
+                self.ttft,
+                self.output_tokens,
             )
         ]
 
@@ -31,8 +37,10 @@ class AIBenchRunner:
         raise NotImplementedError
 
     def as_dict(self):
+        # TODO: Prob validate rules among the metrics
+        # i.e. ttft + itl * num_output_toks <= e2e latency
         return {
-            "test_load": self.test_load,
+            "load": self.load,
             "input_policy": self.input_policy,
             "ttft": self.ttft,
             "e2e_latency": self.end_to_end_latency,
@@ -43,14 +51,18 @@ class AIBenchRunner:
             "failed_queries": self.failed_queries,
         }
 
+    async def compute_metrics(self):
+        self.ttft.append(1)  # TODO
+        self.end_to_end_latency.append(2)  # TODO
+        self.itl.append(1)  # TODO
+        self.output_tokens.append(10)  # TODO
+        await asyncio.sleep(0.25)
+
     async def __call__(self):
         concurrent_requests = []
+        self.cold_start = 1  # TODO
         num_concurrent_req = 100
         for i in range(num_concurrent_req):
-            concurrent_requests.append(asyncio.create_task(
-            self.say_after(10, 'hello')))
-
-        print(f"started at {time.strftime('%X')}")
-
+            concurrent_requests.append(asyncio.create_task(self.compute_metrics()))
         await asyncio.gather(*concurrent_requests)
         return self.as_dict()
