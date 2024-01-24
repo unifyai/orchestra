@@ -119,8 +119,16 @@ class BenchmarkRun(Base):
 
     id = sa.Column(sa.Integer(), primary_key=True)
     endpoint_id = sa.Column(sa.Integer(), nullable=False)
-    regime = sa.Column(sa.String(), nullable=False)
-    region = sa.Column(sa.String(), nullable=False)
+    regime = sa.Column(
+        sa.String(),
+        sa.ForeignKey("benchmark_regime.name"),
+        nullable=False,
+    )
+    region = sa.Column(
+        sa.String(),
+        sa.ForeignKey("benchmark_region.name"),
+        nullable=False,
+    )
     input_seq_len = sa.Column(sa.Integer(), nullable=False)
     output_seq_len = sa.Column(sa.Integer(), nullable=False)
 
