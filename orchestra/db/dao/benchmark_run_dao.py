@@ -19,8 +19,7 @@ class BenchmarkRunDAO:
         endpoint_id: int,
         regime: str,
         region: str,
-        input_seq_len: int,
-        output_seq_len: int,
+        seq_len: str,
     ) -> None:
         """
         Add single benchmark_run to session.
@@ -28,16 +27,14 @@ class BenchmarkRunDAO:
         :param endpoint_id: endpoint_id of a benchmark_run.
         :param regime: regime of a benchmark_run.
         :param region: region of a benchmark_run.
-        :param input_seq_len: input_seq_len of a benchmark_run.
-        :param output_seq_len: output_seq_len of a benchmark_run.
+        :param seq_len: seq_len of a benchmark_run.
         """
         self.session.add(
             BenchmarkRun(
                 endpoint_id=endpoint_id,
                 regime=regime,
                 region=region,
-                input_seq_len=input_seq_len,
-                output_seq_len=output_seq_len,
+                seq_len=seq_len,
             ),
         )
 
@@ -65,8 +62,7 @@ class BenchmarkRunDAO:
         endpoint_id: Optional[int] = None,
         regime: Optional[str] = None,
         region: Optional[str] = None,
-        input_seq_len: Optional[int] = None,
-        output_seq_len: Optional[int] = None,
+        seq_len: Optional[str] = None,
     ) -> List[BenchmarkRun]:
         """
         Filter benchmark_run models by given parameters.
@@ -75,8 +71,7 @@ class BenchmarkRunDAO:
         :param endpoint_id: endpoint_id of a benchmark_run.
         :param regime: regime of a benchmark_run.
         :param region: region of a benchmark_run.
-        :param input_seq_len: input_seq_len of a benchmark_run.
-        :param output_seq_len: output_seq_len of a benchmark_run.
+        :param seq_len: seq_len of a benchmark_run.
         :return: benchmark_runs.
         """
         query = select(BenchmarkRun)
@@ -88,9 +83,7 @@ class BenchmarkRunDAO:
             query = query.where(BenchmarkRun.regime == regime)
         if region:
             query = query.where(BenchmarkRun.region == region)
-        if input_seq_len:
-            query = query.where(BenchmarkRun.input_seq_len == input_seq_len)
-        if output_seq_len:
-            query = query.where(BenchmarkRun.output_seq_len == output_seq_len)
+        if seq_len:
+            query = query.where(BenchmarkRun.seq_len == seq_len)
         rows = await self.session.execute(query)
         return list(rows.scalars().fetchall())
