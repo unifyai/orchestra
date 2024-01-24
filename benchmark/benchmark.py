@@ -84,15 +84,26 @@ async def db_loop(output_queue, done_events, period):
             break
 
 
-async def process_string(string):
-    # Simulate some processing
-    await asyncio.sleep(random.uniform(0.1, 2))
-    return f"Processed: {string}"
+async def worker_loop(
+    input_queue: asyncio.Queue,
+    output_queue: asyncio.Queue,
+    done_event: asyncio.Event,
+    configs: List[Dict],
+) -> None:
+    """Worker loop that runs multiple benchmarks serially for a specific endpoint.
 
+    This worker participates in two consumer-producer schemes. It consumes endpoints
+    from a `input_queue` and runs all the benchmarks specified in `configs` on it.
+    The results of these benchmarks (produced by the worker) are pushed to an
+    `output_queue` that is consumed by a db task that commits the results regularly.
 
-async def worker_loop(input_queue, output_queue, done_event, configs):
+    Args:
+        input_queue (asyncio.Queue): Queue of input endpoints.
+        output_queue (asyncio.Queue): Queue of results datapoints.
+        done_event (asyncio.Event): Event used to signal when the worker is done.
+        configs (List[Dict]): List of configurations defining the benchmarks to run.
+    """
     while True:
-
         # Get an endpoint from the input queue
         endpoint = await input_queue.get()
         # Check if we need to stop
@@ -108,26 +119,16 @@ async def worker_loop(input_queue, output_queue, done_event, configs):
             benchmark_runners.append(AIBenchRunner(endpoint_fn, **config))
 
         # Iterate over each runner
-        # for runner in benchmark_runners:
-        #     # Run the benchmark
-        #     result = await runner()
-        #     # Store the result in the db
-        #     # TODO: This should actually put the results into a queue that
-        #     # gets consumed by the db task we will need a new table which
-        #     # stores each run, with its regime (concurrency or QPS) and region
-        #     # the datapoints will then have a runID pointing to that run and
-        #     # will store the actual value
-        #     # store_datapoint(db_engine, region, result)
-        #     # Log results
-        #     logging.info(repr(runner))
+        for runner in benchmark_runners:
+            # Run the benchmark
+            result = await runner()
+            # Push the result into the db queue
+            await output_queue.put(result)
+            # Log results
+            # TODO logging.info(repr(runner))
 
         # Log endpoint metrics
-
-        # Process the string
-        result = await process_string(endpoint)
-
-        # Push results into the output queue
-        await output_queue.put(result)
+        # TODO
 
         # Mark the task as done
         input_queue.task_done()
