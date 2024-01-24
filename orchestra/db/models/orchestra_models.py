@@ -112,6 +112,14 @@ class BenchmarkRegion(Base):
     name = sa.Column(sa.String(), primary_key=True)
 
 
+class BenchmarkSeqLen(Base):
+    """Model class for the seq_len table."""
+
+    __tablename__ = "benchmark_seq_len"
+
+    name = sa.Column(sa.String(), primary_key=True)
+
+
 class BenchmarkRun(Base):
     """Model class for the benchmark_run table."""
 
@@ -133,8 +141,11 @@ class BenchmarkRun(Base):
         sa.ForeignKey("benchmark_region.name"),
         nullable=False,
     )
-    input_seq_len = sa.Column(sa.Integer(), nullable=False)
-    output_seq_len = sa.Column(sa.Integer(), nullable=False)
+    seq_len = sa.Column(
+        sa.String(),
+        sa.ForeignKey("benchmark_seq_len.name"),
+        nullable=False,
+    )
 
 
 class Metric(Base):
