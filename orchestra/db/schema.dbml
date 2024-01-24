@@ -67,8 +67,11 @@ Table benchmark_run {
   endpoint_id integer [not null]
   regime varchar [not null]
   region varchar [not null]
-  input_seq_len integer [not null]
-  output_seq_len integer [not null]
+  seq_len varchar [not null]
+}
+
+Table benchmark_seq_len {
+  name varchar [primary key]
 }
 
 Table metric {
@@ -122,3 +125,4 @@ Ref: recharge.type > recharge_type.type
 Ref: benchmark_run.regime > benchmark_regime.name
 Ref: benchmark_run.region > benchmark_region.name
 Ref: benchmark_run.endpoint_id > endpoint.id
+Ref: benchmark_run.seq_len > benchmark_seq_len.name
