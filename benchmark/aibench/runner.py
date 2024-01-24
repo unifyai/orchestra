@@ -53,22 +53,4 @@ class AIBenchRunner:
         print(f"started at {time.strftime('%X')}")
 
         await asyncio.gather(*concurrent_requests)
-        # all "computed metrics" should be calculated here depending on the load_testing_policy
-        # for test_load > 1 we should store **all** the data. This means that the returned metrics should be
-        # lists, it's up to the higher layers to aggregate them if they want.
-        # the returned dict should include `output_tks_per_sec` as well.
-        # i.e.
-        # result = {
-        #   "load_testing_policy": str,
-        #   "test_load": int,
-        #   "target_input_length": int,
-        #   "target_output_length": int",
-        #   "ttft": "List<float>",
-        #   "end_to_end_latency": "List<float>",
-        #   "itl": "List<float>",
-        #   "cold_start": "List<float>",
-        #   "output_tokens": "List<int>",
-        #   "output_tks_per_sec": List<float>,
-        #   "failed_queries": int,
-        # }
-        # raise NotImplementedError
+        return self.as_dict()
