@@ -83,7 +83,8 @@ class AIBenchRunner:
 
     def _get_samples(self, filename):   
         with open(filename, 'r') as file:
-            samples =  [line.strip() for line in file]
+            f = json.load(file)
+            samples = [item['prompt'].strip("\n") for item in f]
         return samples
 
     def _get_prompt(self, repeats, seed=21):
