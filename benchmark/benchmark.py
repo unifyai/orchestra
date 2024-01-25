@@ -6,8 +6,7 @@ import asyncio
 import datetime
 import logging
 import os
-import random
-from typing import Dict, List
+from typing import Dict, List, Union
 
 import yaml
 from aibench.runner import AIBenchRunner
@@ -15,33 +14,22 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from orchestra.db.models.orchestra_models import (
-    Endpoint,
-    Model,
-    Provider,
-    BenchmarkRun,
-    BenchmarkRegion,
+from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     BenchmarkRegime,
+    BenchmarkRegion,
+    BenchmarkRun,
     BenchmarkSeqLen,
     Datapoint,
+    Endpoint,
     Metric,
+    Model,
+    Provider,
 )
 
 
 def read_configs(config_file: str) -> List[Dict]:
+    # noqa: DAR101, DAR201
     """Reads config file and returns a list of dictionaries.
-
-    The YAML config file has to follow the structure:
-    ===================================
-    ---
-    runner_name_1:
-        load: <number of concurrent requests to make>
-        input_policy: <Input loading policy, must be one of short, long, or mixed>
-    <...>
-    runner_name_n:
-        <...>
-    ===================================
-
 
     Args:
         config_file (str): YAML File
@@ -55,6 +43,7 @@ def read_configs(config_file: str) -> List[Dict]:
 
 
 def create_db_session() -> sessionmaker:  # noqa: WPS210
+    # noqa: DAR201
     """Creates an async db session.
 
     If ORCHESTRA_<> env vars are not defined, it defaults to
@@ -71,25 +60,49 @@ def create_db_session() -> sessionmaker:  # noqa: WPS210
     db_url = f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{db_name}"  # noqa: WPS221, E501
     # TODO: logger.info(db_url)
     engine = create_async_engine(db_url)
-    async_session = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-    return async_session
+    return sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
-async def get_names(async_session, table_class):
-    # TODO: Docs
+
+async def get_names(
+    async_session: AsyncSession,
+    table_class: Union[Metric, BenchmarkRegime, BenchmarkRegion, BenchmarkSeqLen],
+) -> List[str]:  # noqa: DAR101, DAR201
+    """Returns a list of names from a given table in a DB.
+
+    Args:
+        async_session (AsyncSession): DB session.
+        table_class (Union[Metric, BenchmarkRegime, BenchmarkRegion, BenchmarkSeqLen]):
+        Model class for a given table. This table must have a 'name' column.
+
+    Returns:
+        List[str]: List of names from the entries in the specified table.
+    """
     stmt = select(table_class.name)
     query = await async_session.execute(stmt)
     return [entry[0] for entry in query.all()]
 
-async def db_loop(output_queue, done_events, period, async_session):
+
+async def db_loop(  # noqa: WPS210, WPS217
+    output_queue: asyncio.Queue,
+    done_events: List[asyncio.Event],
+    period: int,
+    async_session: sessionmaker,
+):  # noqa: DAR101
+    """Main DB loop. Consumes and stores data from output_queue periodically.
+
+    Args:
+        output_queue (asyncio.Queue): Results queue consumed by the loop. This
+        is populated by the workers.
+        done_events (List[asyncio.Event]): List of events representing the
+        workers status.
+        period (int): Number of seconds to wait between sending data to the DB.
+        async_session (sessionmaker): DB session maker.
     """
-    Coroutine loop to commit results into the db every `period` seconds
-    TODO: Docs
-    """
-    async with async_session() as session:
-        metrics = await get_names(session, Metric)
-        regimes = await get_names(session, BenchmarkRegime)
-        regions = await get_names(session, BenchmarkRegion)
-        seq_lens = await get_names(session, BenchmarkSeqLen)
+    async with async_session() as q_session:
+        metrics = await get_names(q_session, Metric)
+        regimes = await get_names(q_session, BenchmarkRegime)
+        regions = await get_names(q_session, BenchmarkRegion)
+        seq_lens = await get_names(q_session, BenchmarkSeqLen)
     while True:
         await asyncio.sleep(period)
 
@@ -110,19 +123,19 @@ async def db_loop(output_queue, done_events, period, async_session):
             break
 
 
-async def worker_loop(
+async def worker_loop(  # noqa: WPS210
     input_queue: asyncio.Queue,
     output_queue: asyncio.Queue,
     done_event: asyncio.Event,
     configs: List[Dict],
     region: str,
-) -> None:
+) -> None:  # noqa: DAR101
     """Worker loop that runs multiple benchmarks serially for a specific endpoint.
 
     This worker participates in two consumer-producer schemes. It consumes endpoints
-    from a `input_queue` and runs all the benchmarks specified in `configs` on it.
+    from an input_queue and runs all the benchmarks specified in configs on it.
     The results of these benchmarks (produced by the worker) are pushed to an
-    `output_queue` that is consumed by a db task that commits the results regularly.
+    output_queue that is consumed by a db task that commits the results regularly.
 
     Args:
         input_queue (asyncio.Queue): Queue of input endpoints.
@@ -142,7 +155,7 @@ async def worker_loop(
         endpoint_fn = None  # TODO
 
         # Initialise the benchmark runner(s)
-        benchmark_runners = list()
+        benchmark_runners = []
         for config in configs:
             benchmark_runners.append(AIBenchRunner(endpoint_fn, **config))
 
@@ -169,6 +182,7 @@ async def worker_loop(
 
 
 async def retrieve_all_endpoints(async_session: sessionmaker) -> List[Dict]:
+    # noqa: DAR101, DAR201
     """Retrieves a list of all the endpoints in the db.
 
     Args:
@@ -194,8 +208,9 @@ async def retrieve_all_endpoints(async_session: sessionmaker) -> List[Dict]:
 
 
 async def commit_benchmark_runs(
-    brs: List[Dict], async_session: AsyncSession
-) -> List[BenchmarkRun]:
+    brs: List[Dict],
+    async_session: AsyncSession,
+) -> List[BenchmarkRun]:  # noqa: DAR101, DAR201
     """Creates and commits a set of BenchmarkRuns to the db.
 
     BenchmarkRuns entries are created from a list of benchmark run results.
@@ -208,8 +223,8 @@ async def commit_benchmark_runs(
         async_session (AsyncSession): Async session for the database.
 
     Returns:
-        List[BenchmarkRun]: List of BenchmarkRun objects. These have been commited to the db,
-        so they have a valid id associated.
+        List[BenchmarkRun]: List of BenchmarkRun objects. These have been commited
+        to the db, so they have a valid id associated.
     """
     # TODO: Check what happens here when two scripts do
     # this at the same time (different regions)
@@ -227,9 +242,20 @@ async def commit_benchmark_runs(
     return new_brs
 
 
-async def add_br_datapoints(
-    br_id: int, br_result: Dict, async_session: AsyncSession, db_metrics: List[str]
-):
+async def add_br_datapoints(  # noqa: WPS210
+    br_id: int,
+    br_result: Dict,
+    async_session: AsyncSession,
+    db_metrics: List[str],
+):  # noqa: DAR101
+    """Adds all datapoints in a benchmark_result to a db session. These are not commited.
+
+    Args:
+        br_id (int): ID of the BenchmarkRun in the DB.
+        br_result (Dict): BenchmarkRun result dict from an AIBenchRunner instance.
+        async_session (AsyncSession): DB session.
+        db_metrics (List[str]): List of metrics already defined in the DB.
+    """
     # TODO: Docs
     # rollback db session if there is any exception
     # check if the region exists, if not, raise an exception
@@ -245,20 +271,22 @@ async def add_br_datapoints(
         if isinstance(data, (int, float)):
             data = [data]
         for dp in data:
-            new_dp = Datapoint(
-                measured_at=datetime.datetime.now(),
-                metric_name=metric,
-                value=dp,
-                benchmark_run_id=br_id,
+            async_session.add(
+                Datapoint(
+                    measured_at=datetime.datetime.now(),
+                    metric_name=metric,
+                    value=dp,
+                    benchmark_run_id=br_id,
+                ),
             )
-            async_session.add(new_dp)
 
 
 async def main():  # noqa: WPS210
+    """Main benchmark orchestrator orchestrator."""  # noqa: DAR401
     # Define config file to use
-    CONFIG_FILE = os.getenv("BENCHMARK_CONFIG_FILE", "benchmark/test.config.yml")
-    configs = read_configs(CONFIG_FILE)
-    logging.info(f"Read {len(configs)} from {CONFIG_FILE}")
+    config_file = os.getenv("BENCHMARK_CONFIG_FILE", "benchmark/test.config.yml")
+    configs = read_configs(config_file)
+    logging.info(f"Read {len(configs)} from {config_file}")  # noqa: WPS237
 
     # Get region information from the GCP instance
     region = os.getenv("BENCHMARK_REGION")
@@ -290,7 +318,7 @@ async def main():  # noqa: WPS210
 
     # Spawn worker tasks
     worker_tasks = []
-    for i in range(num_workers):
+    for i in range(num_workers):  # noqa: WPS111
         worker = worker_loop(input_queue, output_queue, done_events[i], configs, region)
         worker_tasks.append(asyncio.create_task(worker))
     # Spawn the periodic db commit task
