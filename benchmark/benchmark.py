@@ -89,6 +89,7 @@ async def worker_loop(
     output_queue: asyncio.Queue,
     done_event: asyncio.Event,
     configs: List[Dict],
+    region: str,
 ) -> None:
     """Worker loop that runs multiple benchmarks serially for a specific endpoint.
 
@@ -102,6 +103,7 @@ async def worker_loop(
         output_queue (asyncio.Queue): Queue of results datapoints.
         done_event (asyncio.Event): Event used to signal when the worker is done.
         configs (List[Dict]): List of configurations defining the benchmarks to run.
+        region (str): Name of the cloud region where the benchmark is running.
     """
     while True:
         # Get an endpoint from the input queue
@@ -122,6 +124,9 @@ async def worker_loop(
         for runner in benchmark_runners:
             # Run the benchmark
             result = await runner()
+            result["region"] = region
+            result["regime"] = f"concurrent-{result['load']}"
+            result["endpoint_id"] = endpoint["id"]
             # Push the result into the db queue
             await output_queue.put(result)
             # Log results
