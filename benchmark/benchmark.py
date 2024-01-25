@@ -42,14 +42,14 @@ def read_configs(config_file: str) -> List[Dict]:
     return list(data.values())
 
 
-def create_db_session() -> AsyncSession:  # noqa: WPS210
+def create_db_session() -> sessionmaker:  # noqa: WPS210
     """Creates an async db session.
 
     If ORCHESTRA_<> env vars are not defined, it defaults to
     orchestra:orchestra@localhost:5432/orchestra.
 
     Returns:
-        AsyncSession: Async SQLAlchemy session.
+        sessionmaker: Async SQLAlchemy session maker.
     """
     user = os.getenv("ORCHESTRA_DB_USER", "orchestra")
     password = os.getenv("ORCHESTRA_DB_PASS", "orchestra")
@@ -137,11 +137,11 @@ async def worker_loop(
     done_event.set()
 
 
-async def retrieve_all_endpoints(async_session: AsyncSession) -> List[Dict]:
+async def retrieve_all_endpoints(async_session: sessionmaker) -> List[Dict]:
     """Retrieves a list of all the endpoints in the db.
 
     Args:
-        async_session (AsyncSession): Async SQLAlchemy session.
+        async_session (sessionmaker): Async SQLAlchemy session maker.
 
     Returns:
         List[Dict]: List of endpoints dictionaries with keys "id", "provider"
