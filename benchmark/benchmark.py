@@ -3,6 +3,7 @@
 # This file will be called from each one of the instances running in
 # different regions
 import asyncio
+import datetime
 import logging
 import os
 import random
@@ -14,7 +15,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from orchestra.db.models.orchestra_models import Endpoint, Model, Provider
+from orchestra.db.models.orchestra_models import (
+    Endpoint,
+    Model,
+    Provider,
+    BenchmarkRun,
+    BenchmarkRegion,
+    BenchmarkRegime,
+    BenchmarkSeqLen,
+    Datapoint,
+    Metric,
+)
 
 
 def read_configs(config_file: str) -> List[Dict]:
@@ -58,27 +69,41 @@ def create_db_session() -> sessionmaker:  # noqa: WPS210
     port = os.getenv("ORCHESTRA_DB_PORT", "5432")
     db_name = os.getenv("ORCHESTRA_DB_BASE", "orchestra")
     db_url = f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{db_name}"  # noqa: WPS221, E501
-    # logger.info(db_url)
+    # TODO: logger.info(db_url)
     engine = create_async_engine(db_url)
     async_session = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     return async_session
 
+async def get_names(async_session, table_class):
+    # TODO: Docs
+    stmt = select(table_class.name)
+    query = await async_session.execute(stmt)
+    return [entry[0] for entry in query.all()]
 
-async def db_loop(output_queue, done_events, period):
+async def db_loop(output_queue, done_events, period, async_session):
     """
     Coroutine loop to commit results into the db every `period` seconds
+    TODO: Docs
     """
+    async with async_session() as session:
+        metrics = await get_names(session, Metric)
+        regimes = await get_names(session, BenchmarkRegime)
+        regions = await get_names(session, BenchmarkRegion)
+        seq_lens = await get_names(session, BenchmarkSeqLen)
     while True:
         await asyncio.sleep(period)
 
         # Unload the output queue and commit benchmark runs to the db
-        benchmark_runs = []
+        brs_results = []
         while not output_queue.empty():
-            benchmark_runs.append(await output_queue.get())
+            brs_results.append(await output_queue.get())
             output_queue.task_done()
 
-        if processed_results:
-            print("Processed results:", processed_results)
+        async with async_session() as session:
+            brs = await commit_benchmark_runs(brs_results, session)
+            for br, br_result in zip(brs, brs_results):
+                await add_br_datapoints(br.id, br_result, session, metrics)
+            await session.commit()
 
         # Check if all worker tasks have completed
         if all(done_event.is_set() for done_event in done_events):
@@ -168,8 +193,65 @@ async def retrieve_all_endpoints(async_session: sessionmaker) -> List[Dict]:
     return endpoints
 
 
-def store_datapoint():
-    raise NotImplementedError
+async def commit_benchmark_runs(
+    brs: List[Dict], async_session: AsyncSession
+) -> List[BenchmarkRun]:
+    """Creates and commits a set of BenchmarkRuns to the db.
+
+    BenchmarkRuns entries are created from a list of benchmark run results.
+    These benchmark run results can be built based on the results of an AIBenchRunner,
+    however, this function expects key-value pairs for **region** and **endpoint_id**
+    as well, which are not included by default in the runner results.
+
+    Args:
+        brs (List[Dict]): List of benchmark runs results.
+        async_session (AsyncSession): Async session for the database.
+
+    Returns:
+        List[BenchmarkRun]: List of BenchmarkRun objects. These have been commited to the db,
+        so they have a valid id associated.
+    """
+    # TODO: Check what happens here when two scripts do
+    # this at the same time (different regions)
+    new_brs = []
+    for br in brs:
+        new_br = BenchmarkRun(
+            endpoint_id=br["endpoint_id"],
+            regime=br["regime"],
+            region=br["region"],
+            seq_len=br["input_policy"],
+        )
+        async_session.add(new_br)
+        new_brs.append(new_br)
+    await async_session.commit()
+    return new_brs
+
+
+async def add_br_datapoints(
+    br_id: int, br_result: Dict, async_session: AsyncSession, db_metrics: List[str]
+):
+    # TODO: Docs
+    # rollback db session if there is any exception
+    # check if the region exists, if not, raise an exception
+    # check if the regime exists, if not, raise an exception
+    # check if the seq_length exists, if not, raise an exception
+    keys_to_ignore = {"load", "input_policy", "region", "regime", "endpoint_id"}
+    metrics_to_add = set(br_result.keys()).intersection(set(db_metrics))
+    logging.info(f"Adding the following metrics for br {br_id}: {metrics_to_add}")
+    ignored_metrics = set(br_result.keys()) - metrics_to_add - keys_to_ignore
+    logging.warning(f"Ignoring the following metrics: {ignored_metrics}")
+    for metric in metrics_to_add:
+        data = br_result[metric]
+        if isinstance(data, (int, float)):
+            data = [data]
+        for dp in data:
+            new_dp = Datapoint(
+                measured_at=datetime.datetime.now(),
+                metric_name=metric,
+                value=dp,
+                benchmark_run_id=br_id,
+            )
+            async_session.add(new_dp)
 
 
 async def main():  # noqa: WPS210
@@ -191,11 +273,11 @@ async def main():  # noqa: WPS210
     endpoints = await retrieve_all_endpoints(async_db_session)
     # TODO: remove this
     endpoints = [
-        {'id': 1250, 'provider': 'anyscale', 'model': 'llama-2-70b-chat'}, 
-        {'id': 1251, 'provider': 'perplexity-ai', 'model': 'llama-2-70b-chat'}, 
-        {'id': 1252, 'provider': 'together-ai', 'model': 'llama-2-70b-chat'}, 
-        {'id': 1253, 'provider': 'replicate', 'model': 'llama-2-70b-chat'}, 
-        {'id': 1254, 'provider': 'octoai', 'model': 'llama-2-70b-chat'}
+        {"id": 1250, "provider": "anyscale", "model": "llama-2-70b-chat"},
+        {"id": 1251, "provider": "perplexity-ai", "model": "llama-2-70b-chat"},
+        {"id": 1252, "provider": "together-ai", "model": "llama-2-70b-chat"},
+        {"id": 1253, "provider": "replicate", "model": "llama-2-70b-chat"},
+        {"id": 1254, "provider": "octoai", "model": "llama-2-70b-chat"},
     ]
 
     # Configure concurrent workers and tasks
@@ -217,6 +299,7 @@ async def main():  # noqa: WPS210
             output_queue,
             done_events,
             db_commit_period,
+            async_db_session,
         ),
     )
 
