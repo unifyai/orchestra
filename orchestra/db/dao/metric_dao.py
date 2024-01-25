@@ -17,6 +17,7 @@ class MetricDAO:
     async def create_metric(  # noqa: WPS211
         self,
         name: str,
+        units: str,
         display_name: str,
         tooltip: Optional[str] = None,
         priority: int = 0,
@@ -26,6 +27,7 @@ class MetricDAO:
         Add single metric to session.
 
         :param name: name of a metric.
+        :param units: units of a metric.
         :param display_name: display_name of a metric.
         :param tooltip: tooltip of a metric.
         :param priority: priority of a metric.
@@ -34,6 +36,7 @@ class MetricDAO:
         self.session.add(
             Metric(
                 name=name,
+                units=units,
                 display_name=display_name,
                 tooltip=tooltip,
                 priority=priority,
@@ -55,9 +58,10 @@ class MetricDAO:
 
         return list(raw_metrics.scalars().fetchall())
 
-    async def filter(  # noqa: WPS211
+    async def filter(  # noqa: WPS211, C901
         self,
         name: Optional[str] = None,  # noqa: WPS125
+        units: Optional[str] = None,
         display_name: Optional[str] = None,
         tooltip: Optional[str] = None,
         priority: Optional[int] = None,
@@ -67,6 +71,7 @@ class MetricDAO:
         Filter metrics by given parameters.
 
         :param name: name of a metric.
+        :param units: units of a metric.
         :param display_name: display_name of a metric.
         :param tooltip: tooltip of a metric.
         :param priority: priority of a metric.
@@ -76,6 +81,8 @@ class MetricDAO:
         query = select(Metric)
         if name:
             query = query.where(Metric.name == name)
+        if units:
+            query = query.where(Metric.units == units)
         if display_name:
             query = query.where(Metric.display_name == display_name)
         if tooltip:

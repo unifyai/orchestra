@@ -1,3 +1,4 @@
+import datetime
 from typing import List, Optional
 
 from fastapi import Depends
@@ -20,6 +21,7 @@ class BenchmarkRunDAO:
         regime: str,
         region: str,
         seq_len: str,
+        measured_at: datetime.datetime,
     ) -> None:
         """
         Add single benchmark_run to session.
@@ -28,6 +30,7 @@ class BenchmarkRunDAO:
         :param regime: regime of a benchmark_run.
         :param region: region of a benchmark_run.
         :param seq_len: seq_len of a benchmark_run.
+        :param measured_at: measured_at of a benchmark_run.
         """
         self.session.add(
             BenchmarkRun(
@@ -35,6 +38,7 @@ class BenchmarkRunDAO:
                 regime=regime,
                 region=region,
                 seq_len=seq_len,
+                measured_at=measured_at,
             ),
         )
 
@@ -63,6 +67,7 @@ class BenchmarkRunDAO:
         regime: Optional[str] = None,
         region: Optional[str] = None,
         seq_len: Optional[str] = None,
+        measured_at: Optional[datetime.datetime] = None,
     ) -> List[BenchmarkRun]:
         """
         Filter benchmark_run models by given parameters.
@@ -72,6 +77,7 @@ class BenchmarkRunDAO:
         :param regime: regime of a benchmark_run.
         :param region: region of a benchmark_run.
         :param seq_len: seq_len of a benchmark_run.
+        :param measured_at: measured_at of a benchmark_run.
         :return: benchmark_runs.
         """
         query = select(BenchmarkRun)
@@ -85,5 +91,7 @@ class BenchmarkRunDAO:
             query = query.where(BenchmarkRun.region == region)
         if seq_len:
             query = query.where(BenchmarkRun.seq_len == seq_len)
+        if measured_at:
+            query = query.where(BenchmarkRun.measured_at == measured_at)
         rows = await self.session.execute(query)
         return list(rows.scalars().fetchall())
