@@ -90,10 +90,10 @@ class Datapoint(Base):
         sa.ForeignKey("benchmark_run.id"),
         nullable=False,
     )
-    measured_at = sa.Column(sa.TIMESTAMP(), nullable=False)
     metric_name = sa.Column(sa.String(), sa.ForeignKey("metric.name"), nullable=False)
     value = sa.Column(sa.Numeric(), nullable=False)
     tooltip = sa.Column(sa.String())
+    measured_at = sa.Column(sa.TIMESTAMP(), nullable=False)
 
 
 class BenchmarkRegime(Base):
@@ -146,6 +146,7 @@ class BenchmarkRun(Base):
         sa.ForeignKey("benchmark_seq_len.name"),
         nullable=False,
     )
+    measured_at = sa.Column(sa.TIMESTAMP(), nullable=False)
 
 
 class Metric(Base):
@@ -154,6 +155,7 @@ class Metric(Base):
     __tablename__ = "metric"
 
     name = sa.Column(sa.String(), primary_key=True)
+    units = sa.Column(sa.String(), nullable=False)
     display_name = sa.Column(sa.String(), nullable=False)
     tooltip = sa.Column(sa.String())
     priority = sa.Column(sa.Integer(), nullable=False)

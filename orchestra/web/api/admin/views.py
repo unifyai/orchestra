@@ -178,9 +178,9 @@ async def get_datapoint_models(
 async def get_datapoint(  # noqa: WPS211
     id: Optional[int] = None,  # noqa: WPS125
     benchmark_run_id: Optional[int] = None,
-    measured_at: Optional[datetime.datetime] = None,
     metric_name: Optional[str] = None,
     value: Optional[float] = None,
+    measured_at: Optional[datetime.datetime] = None,
     datapoint_dao: DatapointDAO = Depends(),
 ) -> List[Datapoint]:
     """
@@ -188,18 +188,18 @@ async def get_datapoint(  # noqa: WPS211
 
     :param id: id of datapoint object.
     :param benchmark_run_id: benchmark_run_id of datapoint object.
-    :param measured_at: measured_at of datapoint object.
     :param metric_name: metric_name of datapoint object.
     :param value: value of datapoint object.
+    :param measured_at: measured_at of datapoint object.
     :param datapoint_dao: DAO for datapoint models.
     :return: datapoint object from database.
     """
     return await datapoint_dao.filter(
         id=id,
         benchmark_run_id=benchmark_run_id,
-        measured_at=measured_at,
         metric_name=metric_name,
         value=value,
+        measured_at=measured_at,
     )
 
 
@@ -296,18 +296,35 @@ async def get_metric_models(
 
 
 @router.get("/get_metric", response_model=List[MetricModelResponse])
-async def get_metric(
+async def get_metric(  # noqa: WPS211
     name: str,
+    units: str,
+    display_name: str,
+    tooltip: str,
+    priority: int,
+    plottable: bool,
     metric_dao: MetricDAO = Depends(),
 ) -> List[Metric]:
     """
     Retrieve specific metric object from the database.
 
     :param name: name of metric instance.
+    :param units: units of metric instance.
+    :param display_name: display_name of metric instance.
+    :param tooltip: tooltip of metric instance.
+    :param priority: priority of metric instance.
+    :param plottable: plottable of metric instance.
     :param metric_dao: DAO for metric models.
     :return: list of metric objects from database.
     """
-    return await metric_dao.filter(name=name)
+    return await metric_dao.filter(
+        name=name,
+        units=units,
+        display_name=display_name,
+        tooltip=tooltip,
+        priority=priority,
+        plottable=plottable,
+    )
 
 
 @router.get("/get_all_modalities", response_model=List[ModalityModelResponse])
@@ -444,6 +461,7 @@ async def create_metric_model(
     """
     await metric_dao.create_metric(
         name=new_metric_object.name,
+        units=new_metric_object.units,
         display_name=new_metric_object.display_name,
         tooltip=new_metric_object.tooltip,
         priority=new_metric_object.priority,
