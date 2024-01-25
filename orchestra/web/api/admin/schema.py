@@ -56,6 +56,7 @@ class MetricModelRequest(BaseModel):
 
     Attributes:
         name (str): The name of the metric.
+        units (str): The units of the metric.
         display_name (str): The display_name of the metric.
         tooltip (str): The tooltip of the metric.
         priority (int): The priority of the metric.
@@ -63,6 +64,7 @@ class MetricModelRequest(BaseModel):
     """
 
     name: str
+    units: str
     display_name: str
     tooltip: str
     priority: int
@@ -262,10 +264,19 @@ class MetricModelResponse(BaseModel):
     Attributes:
         name (str): The name of the metric.
         untis (str): The units of the metric.
+        display_name (str): The display_name of the metric.
+        tooltip (str): The tooltip of the metric.
+        priority (int): The priority of the metric.
+        plottable (bool): The plottable of the metric.
+
     """
 
     name: str
     units: str
+    display_name: str
+    tooltip: str
+    priority: int
+    plottable: bool
 
 
 class ModalityModelResponse(BaseModel):
