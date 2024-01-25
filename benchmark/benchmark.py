@@ -85,6 +85,9 @@ async def db_loop(output_queue, done_events, period):
             benchmark_runs.append(await output_queue.get())
             output_queue.task_done()
 
+        # TODO: Commit benchmark_runs to the db
+        # store_datapoint(benchmark_runs)
+
         if benchmark_runs:
             print("Processed results:", benchmark_runs)
 
@@ -120,7 +123,7 @@ async def worker_loop(
         # Check if we need to stop
         if endpoint is None:
             break
-
+        print("Testing: {}".format(endpoint))
         # Retrieve/fabricate a callable based on the model the provider
         provider_obj = get_provider_obj(endpoint["provider"])
         # TODO: This is a hack to get the callable, we need to refactor this
@@ -235,11 +238,11 @@ async def main():  # noqa: WPS210
     endpoints = await retrieve_all_endpoints(async_db_session)
     # TODO: remove this
     endpoints = [
-        {"id": 1250, "provider": "anyscale", "model": "llama-2-70b-chat"},
-        {"id": 1251, "provider": "perplexity-ai", "model": "llama-2-70b-chat"},
-        {"id": 1252, "provider": "together-ai", "model": "llama-2-70b-chat"},
-        {"id": 1253, "provider": "replicate", "model": "llama-2-70b-chat"},
-        {"id": 1254, "provider": "octoai", "model": "llama-2-70b-chat"},
+        {"id": 1250, "provider": "anyscale", "model": "llama-2-7b-chat"},
+        # {"id": 1251, "provider": "perplexity-ai", "model": "llama-2-70b-chat"},
+        # {"id": 1252, "provider": "together-ai", "model": "llama-2-70b-chat"},
+        # {"id": 1253, "provider": "replicate", "model": "llama-2-70b-chat"},
+        # {"id": 1254, "provider": "octoai", "model": "llama-2-70b-chat"},
     ]
 
     # Configure concurrent workers and tasks
