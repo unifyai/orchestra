@@ -6,7 +6,6 @@ import time
 import aiohttp
 import tiktoken
 from litellm import Usage
-import re
 
 
 class AIBenchRunner:
@@ -28,6 +27,9 @@ class AIBenchRunner:
         self.total_tokens = asyncio.Queue()
         self.failed_queries = 0
 
+        # Prompt queue
+        self.prompt_queue = asyncio.Queue()
+
     @property
     def calculate_itl(self):
         # TODO: Deal with division by zero?
@@ -42,7 +44,7 @@ class AIBenchRunner:
 
     @staticmethod
     def output_tks_per_sec(itl):
-        return [1 / i for i in itl]
+        return [round(1 / i, 2) for i in itl]
 
     def __repr__(self):
         # developer facing print (for logging)
@@ -56,17 +58,17 @@ class AIBenchRunner:
         output_tokens = []
         total_tokens = []
         while not self.ttft.empty():
-            ttft.append(await self.ttft.get())
+            ttft.append(round(await self.ttft.get(), 2))
         while not self.end_to_end_latency.empty():
-            end_to_end_latency.append(await self.end_to_end_latency.get())
+            end_to_end_latency.append(round(await self.end_to_end_latency.get(), 2))
         while not self.itl.empty():
-            itl.append(await self.itl.get())
+            itl.append(round(await self.itl.get(), 2))
         while not self.prompt_tokens.empty():
-            prompt_tokens.append(await self.prompt_tokens.get())
+            prompt_tokens.append(round(await self.prompt_tokens.get(), 2))
         while not self.output_tokens.empty():
-            output_tokens.append(await self.output_tokens.get())
+            output_tokens.append(round(await self.output_tokens.get(), 2))
         while not self.total_tokens.empty():
-            total_tokens.append(await self.total_tokens.get())
+            total_tokens.append(round(await self.total_tokens.get(), 2))
         return {
             "load": self.load,
             "input_policy": self.input_policy,
@@ -81,21 +83,21 @@ class AIBenchRunner:
             "failed_queries": self.failed_queries,
         }
 
-    def _get_samples(self, filename):   
-        with open(filename, 'r') as file:
+    def _get_samples(self, filename):
+        with open(filename, "r") as file:
             f = json.load(file)
-            samples = [item['prompt'].strip("\n") for item in f]
+            samples = [item["prompt"].replace("\n", "") for item in f]
         return samples
 
-    def prepare_prompts(self, repeats, seed=21):
+    def prepare_prompts(self):
         # TODO: if not a instruct model, then max_tokens needs to be set based on repeats value
-        preamble = f"Repeat the following line {repeats} times without generating the EOS token earlier than that: \n"
+        # TODO: replace randint to consider length of prompt (in json)
+        preamble = f"Repeat the following line {random.randint(5, 100)} times without generating the EOS token earlier than that: \n"
         samples = {}
         if self.input_policy in ["short", "mixed"]:
-            samples["short"] = self._get_samples("prompts_short.txt")
+            samples["short"] = self._get_samples("prompts_short.json")
         if self.input_policy in ["long", "mixed"]:
-            samples["long"] = self._get_samples("prompts_long.txt")
-        random.seed(seed)
+            samples["long"] = self._get_samples("prompts_long.json")
         if self.input_policy == "mixed":
             combined_samples = samples["short"] + samples["long"]
             prompts = random.sample(combined_samples, self.load)
@@ -110,9 +112,12 @@ class AIBenchRunner:
             return int(random.normalvariate(1000, 100))
 
     async def compute_metrics(self):
-        prompt = self._get_prompt()
+        prompt = await self.prompt_queue.get()
         max_tokens = self._max_token_sampler()
         messages = [{"role": "user", "content": prompt}]
+        # TODO: max_tokens seem to be not respected?
+        # check by printing max_tokens value here
+        # then check the `output_tokens` in processed results
         result, _ = self.fn(  # type: ignore
             model=self.model,
             messages=messages,
@@ -167,15 +172,16 @@ class AIBenchRunner:
             await self.output_tokens.put(output_tokens)
             await self.total_tokens.put(prompt_tokens + output_tokens)
             await self.ttft.put(first_token_time - start_time)
+        self.prompt_queue.task_done()
 
     async def __call__(self):
         self.cold_start = 1  # TODO
         concurrent_requests = []
-        num_concurrent_req = self.load
-        print('num_concurrent_req', num_concurrent_req)
-        for i in range(num_concurrent_req):
+        for prompt in self.prepare_prompts():
+            await self.prompt_queue.put(prompt)
+        print("num_concurrent_req", self.load)
+        for i in range(self.load):
             concurrent_requests.append(asyncio.create_task(self.compute_metrics()))
-
         await asyncio.gather(*concurrent_requests)
         data_dict = await self.unwrap_to_dict()
         return data_dict
@@ -185,6 +191,9 @@ class AIBenchRunner:
     async def dummy_fn(url, data, headers, auth):
         async with aiohttp.ClientSession() as session:
             async with session.put(
-                url, data=json.dumps(data), headers=headers, auth=auth
+                url,
+                data=json.dumps(data),
+                headers=headers,
+                auth=auth,
             ) as response:
                 return await response.json()
