@@ -6,6 +6,7 @@ import time
 import aiohttp
 import tiktoken
 from litellm import Usage
+import re
 
 
 class AIBenchRunner:
@@ -84,22 +85,26 @@ class AIBenchRunner:
             "failed_queries": self.failed_queries,
         }
 
-    def _get_prompt(self):
-        # TODO: update logic to use bookcorpus
-        # and length based on input_policy using count from cl100_k
-        prompt = (
-            f"Repeat the following lines {random.randint(5, 100)} times "
-            "without generating the EOS token earlier than that",
-        )
-        prompt += (
-            "Flies are buzzing round my head \n"
-            "Vultures circling the dead \n"
-            "Picking up every last crumb \n"
-            "The big fish eat the little ones \n"
-            "The big fish eat the little ones \n"
-            "Not my problem, give me some \n"
-        )
-        return prompt
+    def _get_samples(self, filename):   
+        with open(filename, 'r') as file:
+            samples =  [line.strip() for line in file]
+        return samples
+
+    def _get_prompt(self, repeats, seed=21):
+        # TODO: if not a instruct model, then max_tokens needs to be set based on repeats value
+        preamble = f"Repeat the following lines {repeats} times without generating the EOS token earlier than that: "
+        samples = {}
+        if self.policy in ["short", "mixed"]:
+            samples["short"] = self._get_samples("prompts_short.txt")
+        if self.policy in ["long", "mixed"]:
+            samples["long"] = self._get_samples("prompts_long.txt")
+
+        if self.policy == "mixed":
+            combined_samples = samples["short"] + samples["long"]
+            prompts = random.choice(combined_samples, seed=seed, size=self.load)
+        else:
+            prompts = random.choice(samples[self.policy], seed=seed, size=self.load)
+        return [preamble + prompt for prompt in prompts]
 
     def _max_token_sampler(self):
         if self.input_policy == "short":
