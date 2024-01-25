@@ -87,20 +87,20 @@ class AIBenchRunner:
             samples = [item['prompt'].strip("\n") for item in f]
         return samples
 
-    def _get_prompt(self, repeats, seed=21):
+    def prepare_prompts(self, repeats, seed=21):
         # TODO: if not a instruct model, then max_tokens needs to be set based on repeats value
-        preamble = f"Repeat the following lines {repeats} times without generating the EOS token earlier than that: "
+        preamble = f"Repeat the following line {repeats} times without generating the EOS token earlier than that: \n"
         samples = {}
-        if self.policy in ["short", "mixed"]:
+        if self.input_policy in ["short", "mixed"]:
             samples["short"] = self._get_samples("prompts_short.txt")
-        if self.policy in ["long", "mixed"]:
+        if self.input_policy in ["long", "mixed"]:
             samples["long"] = self._get_samples("prompts_long.txt")
-
-        if self.policy == "mixed":
+        random.seed(seed)
+        if self.input_policy == "mixed":
             combined_samples = samples["short"] + samples["long"]
-            prompts = random.choice(combined_samples, seed=seed, size=self.load)
+            prompts = random.sample(combined_samples, self.load)
         else:
-            prompts = random.choice(samples[self.policy], seed=seed, size=self.load)
+            prompts = random.sample(samples[self.input_policy], self.load)
         return [preamble + prompt for prompt in prompts]
 
     def _max_token_sampler(self):
