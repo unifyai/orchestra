@@ -3,26 +3,27 @@
 # This file will be called from each one of the instances running in
 # different regions
 import asyncio
-import os
-import random
 import logging
+import os
 from typing import Dict, List, cast
 
 import yaml
 from aibench.runner import AIBenchRunner
+from providers.completion import PROVIDER_CLASSES
+from providers.completion.base_completion_provider import BaseCompletionProvider
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from providers.completion import PROVIDER_CLASSES
-from providers.completion.base_completion_provider import BaseCompletionProvider
 from orchestra.db.models.orchestra_models import Endpoint, Model, Provider
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 handler = logging.StreamHandler()
 handler.setLevel(logging.INFO)
 logger.addHandler(handler)
+
 
 def read_configs(config_file: str) -> List[Dict]:
     """Reads config file and returns a list of dictionaries.
@@ -50,14 +51,14 @@ def read_configs(config_file: str) -> List[Dict]:
     return list(data.values())
 
 
-def create_db_session() -> AsyncSession:  # noqa: WPS210
+def create_db_session() -> sessionmaker:  # noqa: WPS210
     """Creates an async db session.
 
     If ORCHESTRA_<> env vars are not defined, it defaults to
     orchestra:orchestra@localhost:5432/orchestra.
 
     Returns:
-        AsyncSession: Async SQLAlchemy session.
+        sessionmaker: Async SQLAlchemy session maker.
     """
     user = os.getenv("ORCHESTRA_DB_USER", "orchestra")
     password = os.getenv("ORCHESTRA_DB_PASS", "orchestra")
@@ -78,14 +79,14 @@ async def db_loop(output_queue, done_events, period):
     while True:
         await asyncio.sleep(period)
 
-        # Print and clear the output queue
-        processed_results = []
+        # Unload the output queue and commit benchmark runs to the db
+        benchmark_runs = []
         while not output_queue.empty():
-            processed_results.append(await output_queue.get())
+            benchmark_runs.append(await output_queue.get())
             output_queue.task_done()
 
-        if processed_results:
-            print("Processed results:", processed_results)
+        if benchmark_runs:
+            print("Processed results:", benchmark_runs)
 
         # Check if all worker tasks have completed
         if all(done_event.is_set() for done_event in done_events):
@@ -97,6 +98,7 @@ async def worker_loop(
     output_queue: asyncio.Queue,
     done_event: asyncio.Event,
     configs: List[Dict],
+    region: str,
 ) -> None:
     """Worker loop that runs multiple benchmarks serially for a specific endpoint.
 
@@ -110,6 +112,7 @@ async def worker_loop(
         output_queue (asyncio.Queue): Queue of results datapoints.
         done_event (asyncio.Event): Event used to signal when the worker is done.
         configs (List[Dict]): List of configurations defining the benchmarks to run.
+        region (str): Name of the cloud region where the benchmark is running.
     """
     while True:
         # Get an endpoint from the input queue
@@ -127,12 +130,17 @@ async def worker_loop(
         # Initialise the benchmark runner(s)
         benchmark_runners = list()
         for config in configs:
-            benchmark_runners.append(AIBenchRunner(endpoint_fn, endpoint['model'], **config))
+            benchmark_runners.append(
+                AIBenchRunner(endpoint_fn, endpoint["model"], **config),
+            )
 
         # Iterate over each runner
         for runner in benchmark_runners:
             # Run the benchmark
             result = await runner()
+            result["region"] = region
+            result["regime"] = f"concurrent-{result['load']}"
+            result["endpoint_id"] = endpoint["id"]
             # Push the result into the db queue
             await output_queue.put(result)
             # Log results
@@ -148,11 +156,11 @@ async def worker_loop(
     done_event.set()
 
 
-async def retrieve_all_endpoints(async_session: AsyncSession) -> List[Dict]:
+async def retrieve_all_endpoints(async_session: sessionmaker) -> List[Dict]:
     """Retrieves a list of all the endpoints in the db.
 
     Args:
-        async_session (AsyncSession): Async SQLAlchemy session.
+        async_session (sessionmaker): Async SQLAlchemy session maker.
 
     Returns:
         List[Dict]: List of endpoints dictionaries with keys "id", "provider"
@@ -212,20 +220,30 @@ async def main():  # noqa: WPS210
     # Define config file to use
     CONFIG_FILE = os.getenv("BENCHMARK_CONFIG_FILE", "benchmark/test.config.yml")
     configs = read_configs(CONFIG_FILE)
+    logger.info(f"Read {len(configs)} from {CONFIG_FILE}")
 
     # Get region information from the GCP instance
     region = os.getenv("BENCHMARK_REGION")
     if not region:
         raise ValueError("BENCHMARK_REGION env was not declared")
+    logger.info(f"Running benchmark in '{region}' region.")
 
     # Initialise db engine
     async_db_session = create_db_session()
 
     # Get list of endpoints in our db
     endpoints = await retrieve_all_endpoints(async_db_session)
+    # TODO: remove this
+    endpoints = [
+        {"id": 1250, "provider": "anyscale", "model": "llama-2-70b-chat"},
+        {"id": 1251, "provider": "perplexity-ai", "model": "llama-2-70b-chat"},
+        {"id": 1252, "provider": "together-ai", "model": "llama-2-70b-chat"},
+        {"id": 1253, "provider": "replicate", "model": "llama-2-70b-chat"},
+        {"id": 1254, "provider": "octoai", "model": "llama-2-70b-chat"},
+    ]
 
     # Configure concurrent workers and tasks
-    num_workers = int(os.getenv("BENCHMARK_NUM_WORKERS", "5"))
+    num_workers = int(os.getenv("BENCHMARK_NUM_WORKERS", "3"))
     db_commit_period = int(os.getenv("BENCHMARK_DB_COMMIT_PERIOD", "10"))
     # Create an asyncio.Queue for inputs (endpoints) and outputs (datapoints)
     input_queue, output_queue = asyncio.Queue(), asyncio.Queue()
@@ -235,7 +253,7 @@ async def main():  # noqa: WPS210
     # Spawn worker tasks
     worker_tasks = []
     for i in range(num_workers):
-        worker = worker_loop(input_queue, output_queue, done_events[i], configs)
+        worker = worker_loop(input_queue, output_queue, done_events[i], configs, region)
         worker_tasks.append(asyncio.create_task(worker))
     # Spawn the periodic db commit task
     db_task = asyncio.create_task(
