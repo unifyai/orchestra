@@ -3,6 +3,7 @@
 # This file will be called from each one of the instances running in
 # different regions
 import asyncio
+import logging
 import os
 import random
 from typing import Dict, List
@@ -70,10 +71,10 @@ async def db_loop(output_queue, done_events, period):
     while True:
         await asyncio.sleep(period)
 
-        # Print and clear the output queue
-        processed_results = []
+        # Unload the output queue and commit benchmark runs to the db
+        benchmark_runs = []
         while not output_queue.empty():
-            processed_results.append(await output_queue.get())
+            benchmark_runs.append(await output_queue.get())
             output_queue.task_done()
 
         if processed_results:
@@ -175,20 +176,30 @@ async def main():  # noqa: WPS210
     # Define config file to use
     CONFIG_FILE = os.getenv("BENCHMARK_CONFIG_FILE", "benchmark/test.config.yml")
     configs = read_configs(CONFIG_FILE)
+    logging.info(f"Read {len(configs)} from {CONFIG_FILE}")
 
     # Get region information from the GCP instance
     region = os.getenv("BENCHMARK_REGION")
     if not region:
         raise ValueError("BENCHMARK_REGION env was not declared")
+    logging.info(f"Running benchmark in '{region}' region.")
 
     # Initialise db engine
     async_db_session = create_db_session()
 
     # Get list of endpoints in our db
     endpoints = await retrieve_all_endpoints(async_db_session)
+    # TODO: remove this
+    endpoints = [
+        {'id': 1250, 'provider': 'anyscale', 'model': 'llama-2-70b-chat'}, 
+        {'id': 1251, 'provider': 'perplexity-ai', 'model': 'llama-2-70b-chat'}, 
+        {'id': 1252, 'provider': 'together-ai', 'model': 'llama-2-70b-chat'}, 
+        {'id': 1253, 'provider': 'replicate', 'model': 'llama-2-70b-chat'}, 
+        {'id': 1254, 'provider': 'octoai', 'model': 'llama-2-70b-chat'}
+    ]
 
     # Configure concurrent workers and tasks
-    num_workers = int(os.getenv("BENCHMARK_NUM_WORKERS", "5"))
+    num_workers = int(os.getenv("BENCHMARK_NUM_WORKERS", "3"))
     db_commit_period = int(os.getenv("BENCHMARK_DB_COMMIT_PERIOD", "10"))
     # Create an asyncio.Queue for inputs (endpoints) and outputs (datapoints)
     input_queue, output_queue = asyncio.Queue(), asyncio.Queue()
@@ -198,7 +209,7 @@ async def main():  # noqa: WPS210
     # Spawn worker tasks
     worker_tasks = []
     for i in range(num_workers):
-        worker = worker_loop(input_queue, output_queue, done_events[i], configs)
+        worker = worker_loop(input_queue, output_queue, done_events[i], configs, region)
         worker_tasks.append(asyncio.create_task(worker))
     # Spawn the periodic db commit task
     db_task = asyncio.create_task(
