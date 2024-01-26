@@ -227,7 +227,7 @@ For running tests on your local machine.
 
 I prefer doing it with docker:
 ```
-docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:13.8-bullseye
+docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:15.2-bullseye
 ```
 
 2. Run the pytest.
@@ -259,11 +259,11 @@ This way you can configure your database that is spun up using the docker compos
 
 Copy over the dump file to the docker container
 ```bash
-docker cp <file_name>.sql <postgres:13.8-bullseye_container_id>:/<file_name>.sql
+docker cp <file_name>.sql <postgres:15.2-bullseye_container_id>:/<file_name>.sql
 ```
 
 ```bash
-docker exec -it <postgres:13.8-bullseye_container_id> /bin/bash
+docker exec -it <postgres:15.2-bullseye_container_id> /bin/bash
 ```
 
 Now, connect to psql and run the following command to populate your local orchestra database
@@ -280,7 +280,7 @@ psql -h 127.0.0.1  -p 5432 -U orchestra -d orchestra
 To populate database for the local orchestra, run the following commands
 ```bash
 poetry run python -m orchestra
-docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:13.8-bullseye
+docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:15.2-bullseye
 alembic upgrade head
 ```
 

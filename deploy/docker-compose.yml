@@ -22,7 +22,7 @@ services:
       ORCHESTRA_DB_BASE: orchestra
 
   db:
-    image: postgres:13.8-bullseye
+    image: postgres:15.2-bullseye
     hostname: orchestra-db
     environment:
       POSTGRES_PASSWORD: "orchestra"
