@@ -15,27 +15,31 @@ class DatapointDAO:
     def __init__(self, session: AsyncSession = Depends(get_db_session)):
         self.session = session
 
-    async def create_datapoint(
+    async def create_datapoint(  # noqa: WPS211
         self,
-        endpoint_id: int,
+        benchmark_run_id: int,
         measured_at: datetime.datetime,
         metric_name: str,
         value: float,
+        tooltip: str,
     ) -> None:
         """
         Add single datapoint to session.
 
-        :param endpoint_id: endpoint_id of a datapoint.
+        :param benchmark_run_id: benchmark_run_id of a datapoint.
         :param measured_at: measured_at of a datapoint.
         :param metric_name: metric_name of a datapoint.
         :param value: value of a datapoint.
+        :param tooltip: tooltip of a datapoint.
+
         """
         self.session.add(
             Datapoint(
-                endpoint_id=endpoint_id,
+                benchmark_run_id=benchmark_run_id,
                 measured_at=measured_at,
                 metric_name=metric_name,
                 value=value,
+                tooltip=tooltip,
             ),
         )
 
@@ -56,7 +60,7 @@ class DatapointDAO:
     async def filter(  # noqa: WPS211
         self,
         id: Optional[int] = None,  # noqa: WPS125
-        endpoint_id: Optional[int] = None,
+        benchmark_run_id: Optional[int] = None,
         measured_at: Optional[datetime.datetime] = None,
         metric_name: Optional[str] = None,
         value: Optional[float] = None,
@@ -65,7 +69,7 @@ class DatapointDAO:
         Get specific datapoint model.
 
         :param id: id of datapoint instance.
-        :param endpoint_id: endpoint_id of datapoint instance.
+        :param benchmark_run_id: benchmark_run_id of datapoint instance.
         :param measured_at: measured_at of datapoint instance.
         :param metric_name: metric_name of datapoint instance.
         :param value: value of datapoint instance.
@@ -74,8 +78,8 @@ class DatapointDAO:
         query = select(Datapoint)
         if id:
             query = query.where(Datapoint.id == id)
-        if endpoint_id:
-            query = query.where(Datapoint.endpoint_id == endpoint_id)
+        if benchmark_run_id:
+            query = query.where(Datapoint.benchmark_run_id == benchmark_run_id)
         if measured_at:
             query = query.where(Datapoint.measured_at == measured_at)
         if metric_name:

@@ -14,21 +14,30 @@ class MetricDAO:
     def __init__(self, session: AsyncSession = Depends(get_db_session)):
         self.session = session
 
-    async def create_metric(
+    async def create_metric(  # noqa: WPS211
         self,
         name: str,
-        units: str,
+        display_name: str,
+        tooltip: Optional[str] = None,
+        priority: int = 0,
+        plottable: bool = False,
     ) -> None:
         """
         Add single metric to session.
 
         :param name: name of a metric.
-        :param units: units of a metric.
+        :param display_name: display_name of a metric.
+        :param tooltip: tooltip of a metric.
+        :param priority: priority of a metric.
+        :param plottable: plottable of a metric.
         """
         self.session.add(
             Metric(
                 name=name,
-                units=units,
+                display_name=display_name,
+                tooltip=tooltip,
+                priority=priority,
+                plottable=plottable,
             ),
         )
 
@@ -46,18 +55,34 @@ class MetricDAO:
 
         return list(raw_metrics.scalars().fetchall())
 
-    async def filter(
+    async def filter(  # noqa: WPS211
         self,
-        name: Optional[str] = None,
+        name: Optional[str] = None,  # noqa: WPS125
+        display_name: Optional[str] = None,
+        tooltip: Optional[str] = None,
+        priority: Optional[int] = None,
+        plottable: Optional[bool] = None,
     ) -> List[Metric]:
         """
-        Get specific metric model.
+        Filter metrics by given parameters.
 
-        :param name: name of metric instance.
-        :return: metric models.
+        :param name: name of a metric.
+        :param display_name: display_name of a metric.
+        :param tooltip: tooltip of a metric.
+        :param priority: priority of a metric.
+        :param plottable: plottable of a metric.
+        :return: metrics models.
         """
         query = select(Metric)
         if name:
             query = query.where(Metric.name == name)
-        rows = await self.session.execute(query)
-        return list(rows.scalars().fetchall())
+        if display_name:
+            query = query.where(Metric.display_name == display_name)
+        if tooltip:
+            query = query.where(Metric.tooltip == tooltip)
+        if priority:
+            query = query.where(Metric.priority == priority)
+        if plottable is not None:
+            query = query.where(Metric.plottable == plottable)
+        raw_metrics = await self.session.execute(query)
+        return list(raw_metrics.scalars().fetchall())

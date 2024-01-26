@@ -67,8 +67,11 @@ Table benchmark_run {
   endpoint_id integer [not null]
   regime varchar [not null]
   region varchar [not null]
-  input_seq_len integer [not null]
-  output_seq_len integer [not null]
+  seq_len varchar [not null]
+}
+
+Table benchmark_seq_len {
+  name varchar [primary key]
 }
 
 Table metric {
@@ -107,11 +110,6 @@ Table recharge_type {
   type varchar [primary key] // daily, free, manual, ...
 }
 
-Table user {
-  id varchar [primary key]
-}
-
-// TODO: Fix these
 Ref: model.user_id > user.id
 Ref: model.task > task.name
 Ref: model.license > license.name
@@ -120,7 +118,11 @@ Ref: endpoint.mdl_id > model.id
 Ref: endpoint.provider_id > provider.id
 Ref: datapoint.benchmark_run_id > benchmark_run.id
 Ref: datapoint.metric_name > metric.name
-Ref: query.user_id > user.id
+Ref: query.user_id > users.id
 Ref: query.endpoint_id > endpoint.id
-Ref: recharge.user_id > user.id
+Ref: recharge.user_id > users.id
 Ref: recharge.type > recharge_type.type
+Ref: benchmark_run.regime > benchmark_regime.name
+Ref: benchmark_run.region > benchmark_region.name
+Ref: benchmark_run.endpoint_id > endpoint.id
+Ref: benchmark_run.seq_len > benchmark_seq_len.name
