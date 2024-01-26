@@ -35,7 +35,7 @@ def read_configs(config_file: str) -> List[Dict]:
         config_file (str): YAML File
 
     Returns:
-        List[Dict]: _description_
+        List[Dict]: List of dictionaries, one for each defined runner.
     """
     with open(config_file, "r") as file:
         data = yaml.safe_load(file)
@@ -256,8 +256,7 @@ async def add_br_datapoints(  # noqa: WPS210
         async_session (AsyncSession): DB session.
         db_metrics (List[str]): List of metrics already defined in the DB.
     """
-    # TODO: Docs
-    # rollback db session if there is any exception
+    # TODO: rollback db session if there is any exception
     # check if the region exists, if not, raise an exception
     # check if the regime exists, if not, raise an exception
     # check if the seq_length exists, if not, raise an exception
