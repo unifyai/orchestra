@@ -43,7 +43,7 @@ class AIBenchRunner:
 
     @staticmethod
     def output_tks_per_sec(itl):
-        return [round(1 / i, 2) for i in itl]
+        return [round(1 / i, 4) for i in itl]
 
     def __repr__(self):
         # developer facing print (for logging)
@@ -59,17 +59,17 @@ class AIBenchRunner:
         output_tokens = []
         total_tokens = []
         while not self.ttft.empty():
-            ttft.append(round(await self.ttft.get(), 2))
+            ttft.append(round(await self.ttft.get(), 4))
         while not self.end_to_end_latency.empty():
-            end_to_end_latency.append(round(await self.end_to_end_latency.get(), 2))
+            end_to_end_latency.append(round(await self.end_to_end_latency.get(), 4))
         while not self.itl.empty():
-            itl.append(round(await self.itl.get(), 2))
+            itl.append(round(await self.itl.get(), 4))
         while not self.prompt_tokens.empty():
-            prompt_tokens.append(round(await self.prompt_tokens.get(), 2))
+            prompt_tokens.append(round(await self.prompt_tokens.get(), 4))
         while not self.output_tokens.empty():
-            output_tokens.append(round(await self.output_tokens.get(), 2))
+            output_tokens.append(round(await self.output_tokens.get(), 4))
         while not self.total_tokens.empty():
-            total_tokens.append(round(await self.total_tokens.get(), 2))
+            total_tokens.append(round(await self.total_tokens.get(), 4))
         return {
             "load": self.load,
             "input_policy": self.input_policy,
