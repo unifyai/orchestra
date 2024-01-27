@@ -9,9 +9,10 @@ from litellm import Usage  # TODO: this needs to go
 
 
 class AIBenchRunner:
-    def __init__(self, fn, load, input_policy):
+    def __init__(self, fn, model, load, input_policy):
         # Config
         self.fn = fn  # assumes fn takes a string as the input and returns strings asynchronously (streaming)
+        self.model = model # TODO: will be removed when benchmark has appropriate changes!
         self.load = load
         self.input_policy = input_policy  # short | long | mixed
 
@@ -30,7 +31,7 @@ class AIBenchRunner:
         self.prompt_queue = asyncio.Queue()
 
     @property
-    def itl(self):
+    def calculate_itl(self):
         # TODO: Deal with division by zero?
         return [
             (e2e_lat - ttft) / (o_tks - 1)
@@ -49,7 +50,7 @@ class AIBenchRunner:
         # developer facing print (for logging)
         raise NotImplementedError
 
-    async def to_dict(self):
+    async def unwrap_to_dict(self):
         # TODO: Prob validate rules among the metrics
         # i.e. ttft + itl * num_output_toks <= e2e latency
         ttft = []
@@ -144,7 +145,7 @@ class AIBenchRunner:
 
         first_token_time = completions[0]["reception_time"]
         # TODO: apara confirm if this gives better granularity
-        # vs using the self.itl fn defined above
+        # vs using the self.calculate_itl fn defined above
         itl = (completions[-1]["reception_time"] - first_token_time) / (
             len(completions) - 1
         )
@@ -184,7 +185,7 @@ class AIBenchRunner:
         for i in range(self.load):
             concurrent_requests.append(asyncio.create_task(self.compute_metrics()))
         await asyncio.gather(*concurrent_requests)
-        data_dict = await self.to_dict()
+        data_dict = await self.unwrap_to_dict()
         return data_dict
 
     # clean up the following code to comply with .complete provider i/o
