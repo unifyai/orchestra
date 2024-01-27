@@ -325,37 +325,6 @@ def get_provider_obj(
     return provider_obj
 
 
-def get_provider_obj(
-    provider_name: str,
-) -> BaseCompletionProvider:
-    """
-    Get the provider object from the provider name.
-
-    :param provider_name: The provider answer get object of.
-    :return: Provider object.
-    """
-    provider_obj = PROVIDER_CLASSES[provider_name]()
-    if provider_name == "vertex-ai":
-        from providers.completion.vertexai import VertexAI  # noqa: WPS433
-
-        provider_obj = cast(VertexAI, provider_obj)
-        provider_obj.set_service_account_credentials(
-            str(os.getenv("ORCHESTRA_VERTEX_AI_SERVICE_ACC_JSON")),
-            str(os.getenv("ORCHESTRA_VERTEX_AI_GCLOUD_PATH")),
-        )
-        provider_obj.set_project(str(os.getenv("ORCHESTRA_VERTEX_AI_PROJECT")))
-        provider_obj.set_location(str(os.getenv("ORCHESTRA_VERTEX_AI_LOCATION")))
-    else:
-        provider_obj.set_api_key(
-            api_key=str(
-                os.getenv(
-                    f"ORCHESTRA_{provider_name.replace('-', '_').upper()}_API_KEY",  # noqa: WPS237, E501
-                ),
-            ),
-        )
-    return provider_obj
-
-
 async def main():  # noqa: WPS210
     """Main benchmark orchestrator orchestrator."""  # noqa: DAR401
     # Define config file to use
