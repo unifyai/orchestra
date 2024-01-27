@@ -179,7 +179,12 @@ class AIBenchRunner:
             )
             await asyncio.sleep(0)
         first_token_time = completions[0]["reception_time"]
-        second_token_time = completions[1]["reception_time"]
+        try:
+            second_token_time = completions[1]["reception_time"]
+        except IndexError:
+            # for provider where streaming is broken and whole text
+            # is returned at once, check only the first token
+            second_token_time = 0
 
         cold_start = first_token_time - start_time
         # TODO: verify if complies with whitepaper
