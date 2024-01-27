@@ -9,10 +9,9 @@ from litellm import Usage  # TODO: this needs to go
 
 
 class AIBenchRunner:
-    def __init__(self, fn, model, load, input_policy):
+    def __init__(self, fn, load, input_policy):
         # Config
         self.fn = fn  # assumes fn takes a string as the input and returns strings asynchronously (streaming)
-        self.model = model # TODO: will be removed when benchmark has appropriate changes!
         self.load = load
         self.input_policy = input_policy  # short | long | mixed
 
@@ -116,12 +115,12 @@ class AIBenchRunner:
     async def compute_metrics(self):
         prompt = await self.prompt_queue.get()
         max_tokens = self._max_token_sampler()
+        print(max_tokens)
         messages = [{"role": "user", "content": prompt}]
         # TODO: max_tokens seem to be not respected?
         # check by printing max_tokens value here
         # then check the `output_tokens` in processed results
         result, _ = self.fn(  # type: ignore
-            model=self.model,
             messages=messages,
             max_tokens=max_tokens,
             stream=True,

@@ -6,12 +6,11 @@ import asyncio
 import datetime
 import logging
 import os
-from typing import Dict, List, Union, cast
+from typing import Dict, List, Union
 
 import yaml
 from aibench.runner import AIBenchRunner
-from providers.completion import PROVIDER_CLASSES
-from providers.completion.base_completion_provider import BaseCompletionProvider
+from models.llm import CompletionsModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -120,6 +119,7 @@ async def db_loop(  # noqa: WPS210, WPS217
         while not output_queue.empty():
             brs_results.append(await output_queue.get())
             output_queue.task_done()
+        print(brs_results)
 
         async with async_session() as session:
             brs = await commit_benchmark_runs(brs_results, session)
@@ -161,16 +161,17 @@ async def worker_loop(  # noqa: WPS210
             break
         print("Testing: {}".format(endpoint))
         # Retrieve/fabricate a callable based on the model the provider
-        provider_obj = get_provider_obj(endpoint["provider"])
-        # TODO: This is a hack to get the callable, we need to refactor this
-        # .complete expects model name and messages as arguments
-        endpoint_fn = getattr(provider_obj, "complete")
+        language_model = CompletionsModel(
+            provider=endpoint["provider"],
+            model=endpoint["model"],
+        )
+        endpoint_fn = getattr(language_model, "get_completion")
 
         # Initialise the benchmark runner(s)
         benchmark_runners = []
         for config in configs:
             benchmark_runners.append(
-                AIBenchRunner(endpoint_fn, endpoint["model"], **config),
+                AIBenchRunner(endpoint_fn, **config),
             )
 
         # Iterate over each runner
@@ -294,37 +295,6 @@ async def add_br_datapoints(  # noqa: WPS210
             )
 
 
-def get_provider_obj(
-    provider_name: str,
-) -> BaseCompletionProvider:
-    """
-    Get the provider object from the provider name.
-
-    :param provider_name: The provider answer get object of.
-    :return: Provider object.
-    """
-    provider_obj = PROVIDER_CLASSES[provider_name]()
-    if provider_name == "vertex-ai":
-        from providers.completion.vertexai import VertexAI  # noqa: WPS433
-
-        provider_obj = cast(VertexAI, provider_obj)
-        provider_obj.set_service_account_credentials(
-            str(os.getenv("ORCHESTRA_VERTEX_AI_SERVICE_ACC_JSON")),
-            str(os.getenv("ORCHESTRA_VERTEX_AI_GCLOUD_PATH")),
-        )
-        provider_obj.set_project(str(os.getenv("ORCHESTRA_VERTEX_AI_PROJECT")))
-        provider_obj.set_location(str(os.getenv("ORCHESTRA_VERTEX_AI_LOCATION")))
-    else:
-        provider_obj.set_api_key(
-            api_key=str(
-                os.getenv(
-                    f"ORCHESTRA_{provider_name.replace('-', '_').upper()}_API_KEY",  # noqa: WPS237, E501
-                ),
-            ),
-        )
-    return provider_obj
-
-
 async def main():  # noqa: WPS210
     """Main benchmark orchestrator orchestrator."""  # noqa: DAR401
     # Define config file to use
@@ -346,10 +316,8 @@ async def main():  # noqa: WPS210
     # TODO: remove this
     endpoints = [
         {"id": 1250, "provider": "anyscale", "model": "llama-2-7b-chat"},
-        # {"id": 1251, "provider": "perplexity-ai", "model": "llama-2-70b-chat"},
-        # {"id": 1252, "provider": "together-ai", "model": "llama-2-70b-chat"},
-        # {"id": 1253, "provider": "replicate", "model": "llama-2-70b-chat"},
-        # {"id": 1254, "provider": "octoai", "model": "llama-2-70b-chat"},
+        # {"id": 1252, "provider": "together-ai", "model": "llama-2-7b-chat"},
+        # {"id": 1253, "provider": "replicate", "model": "llama-2-7b-chat"},
     ]
 
     # Configure concurrent workers and tasks
