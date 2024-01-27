@@ -158,8 +158,41 @@ class AIBenchRunner:
         await self.ttft.put((first_token_time - start_time) * 1000)
         self.prompt_queue.task_done()
 
+    async def check_for_coldstart(self, threshold):
+        messages = [{"role": "user", "content": "2+2 is "}]
+        start_time = time.perf_counter()
+        result, _ = self.fn(  # type: ignore
+            messages=messages,
+            max_tokens=10,
+            stream=True,
+        )
+        if result is None:
+            print("Run during cold start failed")
+            return 0
+        completions = []
+        async for part in result.generator():
+            completions.append(
+                {
+                    "content": part["choices"][0]["delta"]["content"],
+                    "reception_time": time.perf_counter(),  # TODO: verify if right?
+                },
+            )
+            await asyncio.sleep(0)
+        first_token_time = completions[0]["reception_time"]
+        second_token_time = completions[1]["reception_time"]
+
+        cold_start = first_token_time - start_time
+        # TODO: verify if complies with whitepaper
+        if (
+            cold_start > threshold
+            and (second_token_time - first_token_time) * 10 <= cold_start
+        ):
+            return cold_start
+        else:
+            return 0
+
     async def __call__(self):
-        self.cold_start = 1  # TODO
+        self.cold_start = await self.check_for_coldstart(threshold=30)
         concurrent_requests = []
         for prompt in self.prepare_prompts():
             await self.prompt_queue.put(prompt)
