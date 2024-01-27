@@ -5,7 +5,6 @@ import time
 
 import aiohttp
 import tiktoken
-from litellm import Usage  # TODO: this needs to go
 
 
 class AIBenchRunner:
@@ -19,7 +18,6 @@ class AIBenchRunner:
         # TODO: These need to be aligned between them
         self.ttft = asyncio.Queue()
         self.end_to_end_latency = asyncio.Queue()
-        self.itl = asyncio.Queue()
         self.cold_start = 0
         self.prompt_tokens = asyncio.Queue()
         self.output_tokens = asyncio.Queue()
@@ -29,15 +27,15 @@ class AIBenchRunner:
         # Prompt queue
         self.prompt_queue = asyncio.Queue()
 
-    @property
-    def calculate_itl(self):
+    @staticmethod
+    def calculate_itl(end_to_end_latency, ttft, output_tokens):
         # TODO: Deal with division by zero?
         return [
-            (e2e_lat - ttft) / (o_tks - 1)
+            round((e2e_lat - ttft) / (o_tks - 1), 4)
             for e2e_lat, ttft, o_tks in zip(
-                self.end_to_end_latency,
-                self.ttft,
-                self.output_tokens,
+                end_to_end_latency,
+                ttft,
+                output_tokens,
             )
         ]
 
@@ -54,7 +52,6 @@ class AIBenchRunner:
         # i.e. ttft + itl * num_output_toks <= e2e latency
         ttft = []
         end_to_end_latency = []
-        itl = []
         prompt_tokens = []
         output_tokens = []
         total_tokens = []
@@ -62,14 +59,15 @@ class AIBenchRunner:
             ttft.append(round(await self.ttft.get(), 4))
         while not self.end_to_end_latency.empty():
             end_to_end_latency.append(round(await self.end_to_end_latency.get(), 4))
-        while not self.itl.empty():
-            itl.append(round(await self.itl.get(), 4))
         while not self.prompt_tokens.empty():
             prompt_tokens.append(round(await self.prompt_tokens.get(), 4))
         while not self.output_tokens.empty():
             output_tokens.append(round(await self.output_tokens.get(), 4))
         while not self.total_tokens.empty():
             total_tokens.append(round(await self.total_tokens.get(), 4))
+
+        itl = self.calculate_itl(end_to_end_latency, ttft, output_tokens)
+        output_tks_per_sec = self.output_tks_per_sec(itl)
         return {
             "load": self.load,
             "input_policy": self.input_policy,
@@ -80,11 +78,12 @@ class AIBenchRunner:
             "prompt_tokens": prompt_tokens,
             "output_tokens": output_tokens,
             "total_tokens": total_tokens,
-            "output_tks_per_sec": self.output_tks_per_sec(itl),
+            "output_tks_per_sec": output_tks_per_sec,
             "failed_queries": self.failed_queries,
         }
 
-    def _get_samples(self, filename):
+    @staticmethod
+    def _get_samples(filename):
         with open(filename, "r") as file:
             f = json.load(file)
             samples = [item["prompt"].replace("\n", "") for item in f]
@@ -93,7 +92,7 @@ class AIBenchRunner:
     def prepare_prompts(self):
         # TODO: if not a instruct model, then max_tokens needs to be set based on repeats value
         # TODO: replace randint to consider length of prompt (in json)
-        preamble = f"Repeat the following line {random.randint(5, 100)} times without generating the EOS token earlier than that: \n"
+        preamble = f"Repeat the following line {random.randint(5, 20)} times without generating the EOS token earlier than that: \n"
         samples = {}
         if self.input_policy in ["short", "mixed"]:
             samples["short"] = self._get_samples("prompts_short.json")
@@ -131,48 +130,32 @@ class AIBenchRunner:
         completions = []
         start_time = time.perf_counter()
         async for part in result.generator():
-            usage = part.get("usage", {})
             completions.append(
                 {
                     "content": part["choices"][0]["delta"]["content"],
-                    "reception_time": part["created"],
+                    "reception_time": time.perf_counter(),  # TODO: verify if right?
                 },
             )
-            # TODO: check w apara if this is needed?
             await asyncio.sleep(0)
         end_time = time.perf_counter()
-
+        # TODO: remove?
+        # these artifacts sort of give away we're using litellm
         first_token_time = completions[0]["reception_time"]
-        # TODO: apara confirm if this gives better granularity
-        # vs using the self.calculate_itl fn defined above
-        itl = (completions[-1]["reception_time"] - first_token_time) / (
-            len(completions) - 1
+        await self.end_to_end_latency.put((end_time - start_time) * 1000)
+        tokenizer = tiktoken.get_encoding("cl100k_base")
+        content = " ".join(
+            [
+                completion["content"]
+                for completion in completions
+                if completion["content"] is not None
+            ],
         )
-
-        await self.end_to_end_latency.put(end_time - start_time)
-        await self.itl.put(itl)
-        # TODO: remove this dependency on litellm by using the else completely
-        # ask apara to confirm if both equivalent
-        if isinstance(usage, Usage) and usage != Usage():
-            await self.prompt_tokens.put(usage.prompt_tokens)
-            await self.output_tokens.put(usage.completion_tokens)
-            await self.total_tokens.put(usage.total_tokens)
-            await self.ttft.put(usage.time_to_first_token)
-        else:
-            tokenizer = tiktoken.get_encoding("cl100k_base")
-            content = " ".join(
-                [
-                    completion["content"]
-                    for completion in completions
-                    if completion["content"] is not None
-                ],
-            )
-            prompt_tokens = len(tokenizer.encode(messages[0]["content"]))
-            output_tokens = len(tokenizer.encode(content))
-            await self.prompt_tokens.put(prompt_tokens)
-            await self.output_tokens.put(output_tokens)
-            await self.total_tokens.put(prompt_tokens + output_tokens)
-            await self.ttft.put(first_token_time - start_time)
+        prompt_tokens = len(tokenizer.encode(messages[0]["content"]))
+        output_tokens = len(tokenizer.encode(content))
+        await self.prompt_tokens.put(prompt_tokens)
+        await self.output_tokens.put(output_tokens)
+        await self.total_tokens.put(prompt_tokens + output_tokens)
+        await self.ttft.put((first_token_time - start_time) * 1000)
         self.prompt_queue.task_done()
 
     async def __call__(self):
