@@ -119,7 +119,6 @@ async def db_loop(  # noqa: WPS210, WPS217
         while not output_queue.empty():
             brs_results.append(await output_queue.get())
             output_queue.task_done()
-        print(brs_results)
 
         async with async_session() as session:
             brs = await commit_benchmark_runs(brs_results, session)
@@ -337,7 +336,7 @@ async def main():  # noqa: WPS210
     ]
     # Configure concurrent workers and tasks
     num_workers = int(os.getenv("BENCHMARK_NUM_WORKERS", "3"))
-    db_commit_period = int(os.getenv("BENCHMARK_DB_COMMIT_PERIOD", "10"))
+    db_commit_period = int(os.getenv("BENCHMARK_DB_COMMIT_PERIOD", "60"))
     # Create an asyncio.Queue for inputs (endpoints) and outputs (datapoints)
     input_queue, output_queue = asyncio.Queue(), asyncio.Queue()
     # Create an event to signal the completion of worker tasks

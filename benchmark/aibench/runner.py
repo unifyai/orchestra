@@ -116,7 +116,6 @@ class AIBenchRunner:
     async def compute_metrics(self):
         prompt = await self.prompt_queue.get()
         max_tokens = self._max_token_sampler()
-        print(max_tokens)
         # TODO: max_tokens seem to be not respected?
         # check by printing max_tokens value here
         # then check the `output_tokens` in processed results
@@ -150,7 +149,6 @@ class AIBenchRunner:
                 if completion["content"] is not None
             ],
         )
-        print(content)
         prompt_tokens = len(tokenizer.encode(prompt))
         output_tokens = len(tokenizer.encode(content))
         await self.prompt_tokens.put(prompt_tokens)
@@ -201,7 +199,6 @@ class AIBenchRunner:
         concurrent_requests = []
         for prompt in self.prepare_prompts():
             await self.prompt_queue.put(prompt)
-        print("num_concurrent_req", self.load)
         for i in range(self.load):
             concurrent_requests.append(asyncio.create_task(self.compute_metrics()))
         await asyncio.gather(*concurrent_requests)
