@@ -44,7 +44,7 @@ class AIBenchRunner:
 
     @staticmethod
     def output_tks_per_sec(itl):
-        return [1 / i for i in itl]
+        return [1000 / i for i in itl]
 
     def __repr__(self):
         # developer facing print (for logging)
