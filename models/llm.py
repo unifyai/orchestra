@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, cast
 
 from litellm import ModelResponse
 
@@ -20,17 +20,27 @@ class CompletionsModel:
 
         self.provider_obj = PROVIDER_CLASSES[provider]()
         self.model = model.lower()
-        api_key = str(
-            os.getenv(
-                f"ORCHESTRA_{provider.replace('-', '_').upper()}_API_KEY",  # noqa: WPS237, E501
-            ),
-        )
 
-        if api_key is not None:
-            self.set_api_key(api_key)
+        if provider == "vertex-ai":
+            from providers.completion.vertexai import VertexAI  # noqa: WPS433
 
-    def set_api_key(self, api_key: str) -> None:  # noqa: D102
-        self.provider_obj.set_api_key(api_key)
+            self.provider_obj = cast(VertexAI, self.provider_obj)
+            self.provider_obj.set_service_account_credentials(
+                str(os.getenv("ORCHESTRA_VERTEX_AI_SERVICE_ACC_JSON")),
+                str(os.getenv("ORCHESTRA_VERTEX_AI_GCLOUD_PATH")),
+            )
+            self.provider_obj.set_project(str(os.getenv("ORCHESTRA_VERTEX_AI_PROJECT")))
+            self.provider_obj.set_location(
+                str(os.getenv("ORCHESTRA_VERTEX_AI_LOCATION")),
+            )
+        else:
+            self.provider_obj.set_api_key(
+                api_key=str(
+                    os.getenv(
+                        f"ORCHESTRA_{provider.replace('-', '_').upper()}_API_KEY",  # noqa: WPS237, E501
+                    ),
+                ),
+            )
 
     def get_cost_max(self) -> float:  # noqa: D102
         return self.provider_obj.get_cost_max(self.model)
