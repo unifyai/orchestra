@@ -31,7 +31,7 @@ class AIBenchRunner:
     def calculate_itl(end_to_end_latency, ttft, output_tokens):
         # TODO: Deal with division by zero?
         return [
-            round((e2e_lat - ttft) / (o_tks - 1), 4)
+            (e2e_lat - ttft) / (o_tks - 1)
             for e2e_lat, ttft, o_tks in zip(
                 end_to_end_latency,
                 ttft,
@@ -41,7 +41,7 @@ class AIBenchRunner:
 
     @staticmethod
     def output_tks_per_sec(itl):
-        return [round(1 / i, 4) for i in itl]
+        return [1 / i for i in itl]
 
     def __repr__(self):
         # developer facing print (for logging)
@@ -56,15 +56,15 @@ class AIBenchRunner:
         output_tokens = []
         total_tokens = []
         while not self.ttft.empty():
-            ttft.append(round(await self.ttft.get(), 4))
+            ttft.append(await self.ttft.get())
         while not self.end_to_end_latency.empty():
-            end_to_end_latency.append(round(await self.end_to_end_latency.get(), 4))
+            end_to_end_latency.append(await self.end_to_end_latency.get())
         while not self.prompt_tokens.empty():
-            prompt_tokens.append(round(await self.prompt_tokens.get(), 4))
+            prompt_tokens.append(await self.prompt_tokens.get())
         while not self.output_tokens.empty():
-            output_tokens.append(round(await self.output_tokens.get(), 4))
+            output_tokens.append(await self.output_tokens.get())
         while not self.total_tokens.empty():
-            total_tokens.append(round(await self.total_tokens.get(), 4))
+            total_tokens.append(await self.total_tokens.get())
 
         itl = self.calculate_itl(end_to_end_latency, ttft, output_tokens)
         output_tks_per_sec = self.output_tks_per_sec(itl)
