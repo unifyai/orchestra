@@ -331,9 +331,9 @@ async def main():  # noqa: WPS210
     logger.info(f"Found {len(endpoints)} endpoints where Model is active in the db.")
     # TODO: remove this
     endpoints = [
-        # {"id": 1252, "provider": "together-ai", "model": "llama-2-7b-chat"},
-        {"id": 1250, "provider": "anyscale", "model": "llama-2-7b-chat"},
-        {"id": 1253, "provider": "replicate", "model": "llama-2-7b-chat"},
+        # {"id": 1240, "provider": "together-ai", "model": "llama-2-7b-chat"},
+        {"id": 1239, "provider": "anyscale", "model": "llama-2-7b-chat"},
+        {"id": 1241, "provider": "replicate", "model": "llama-2-7b-chat"},
     ]
     # Configure concurrent workers and tasks
     num_workers = int(os.getenv("BENCHMARK_NUM_WORKERS", "3"))
