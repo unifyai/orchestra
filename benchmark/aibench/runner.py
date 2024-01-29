@@ -86,13 +86,12 @@ class AIBenchRunner:
     def _get_samples(filename):
         with open(filename, "r") as file:
             f = json.load(file)
-            samples = [item["prompt"].replace("\n", "") for item in f]
+            samples = [(item["prompt"].replace("\n", ""), item["length"]) for item in f]
         return samples
 
     def prepare_prompts(self):
         # TODO: if not a instruct model, then max_tokens needs to be set based on repeats value
         # TODO: replace randint to consider length of prompt (in json)
-        preamble = f"Repeat the following line {random.randint(5, 20)} times without generating the EOS token earlier than that: \n"
         samples = {}
         if self.input_policy in ["short", "mixed"]:
             samples["short"] = self._get_samples("prompts_short.json")
@@ -103,7 +102,12 @@ class AIBenchRunner:
             prompts = random.sample(combined_samples, self.load)
         else:
             prompts = random.sample(samples[self.input_policy], self.load)
-        return [preamble + prompt for prompt in prompts]
+        all_prompts = []
+        for prompt in prompts:
+            count = {random.randint(0, int((4096 - prompt[1]) / prompt[1]))}
+            preamble = f"Repeat the following line {count} times without generating the EOS token earlier than that: \n"
+            all_prompts.append(preamble + prompt[0])
+        return all_prompts
 
     def _max_token_sampler(self):
         if self.input_policy == "short":
