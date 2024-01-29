@@ -208,7 +208,7 @@ async def retrieve_all_endpoints(async_session: sessionmaker) -> List[Dict]:
         and "model".
     """
     async with async_session() as session:
-        stmt = select(Endpoint, Model, Provider).join(Model).join(Provider)
+        stmt = select(Endpoint, Model, Provider).join(Model).join(Provider).where(Model.active == True)
         results = await session.execute(stmt)
     endpoints = []
     for result in results.all():
@@ -313,13 +313,13 @@ async def main():  # noqa: WPS210
 
     # Get list of endpoints in our db
     endpoints = await retrieve_all_endpoints(async_db_session)
+    logger.info(f"Found {len(endpoints)} endpoints where Model is active in the db.")
     # TODO: remove this
     endpoints = [
         # {"id": 1252, "provider": "together-ai", "model": "llama-2-7b-chat"},
         {"id": 1250, "provider": "anyscale", "model": "llama-2-7b-chat"},
         {"id": 1253, "provider": "replicate", "model": "llama-2-7b-chat"},
     ]
-
     # Configure concurrent workers and tasks
     num_workers = int(os.getenv("BENCHMARK_NUM_WORKERS", "3"))
     db_commit_period = int(os.getenv("BENCHMARK_DB_COMMIT_PERIOD", "10"))
