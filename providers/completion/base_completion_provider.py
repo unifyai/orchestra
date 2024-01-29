@@ -161,7 +161,7 @@ class BaseCompletionProvider:
         except Exception as error:
             error_type = type(error)
             logger.error(f"Raised error type: {error_type}, Error: {error}")
-        return None
+        return None, None
 
 
 class AsyncGeneratorWrapper:  # noqa: D101

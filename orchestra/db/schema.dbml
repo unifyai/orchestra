@@ -112,7 +112,7 @@ Table recharge_type {
   type varchar [primary key] // daily, free, manual, ...
 }
 
-Ref: model.user_id > users.id
+Ref: model.user_id > user.id
 Ref: model.task > task.name
 Ref: model.license > license.name
 Ref: task.modality > modality.name
