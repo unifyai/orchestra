@@ -264,6 +264,7 @@ async def commit_benchmark_runs(
             regime=br["regime"],
             region=br["region"],
             seq_len=br["input_policy"],
+            measured_at=datetime.datetime.now(),
         )
         async_session.add(new_br)
         new_brs.append(new_br)

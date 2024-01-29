@@ -27,6 +27,9 @@ class AIBenchRunner:
         # Prompt queue
         self.prompt_queue = asyncio.Queue()
 
+        # Tokenizer
+        self.tokenizer = tiktoken.get_encoding("cl100k_base")
+
     @staticmethod
     def calculate_itl(end_to_end_latency, ttft, output_tokens):
         # TODO: Deal with division by zero?
@@ -141,7 +144,6 @@ class AIBenchRunner:
         # these artifacts sort of give away we're using litellm
         first_token_time = completions[0]["reception_time"]
         await self.end_to_end_latency.put((end_time - start_time) * 1000)
-        tokenizer = tiktoken.get_encoding("cl100k_base")
         content = "".join(
             [
                 completion["content"]
@@ -149,8 +151,8 @@ class AIBenchRunner:
                 if completion["content"] is not None
             ],
         )
-        prompt_tokens = len(tokenizer.encode(prompt))
-        output_tokens = len(tokenizer.encode(content))
+        prompt_tokens = len(self.tokenizer.encode(prompt))
+        output_tokens = len(self.tokenizer.encode(content))
         await self.prompt_tokens.put(prompt_tokens)
         await self.output_tokens.put(output_tokens)
         await self.total_tokens.put(prompt_tokens + output_tokens)
