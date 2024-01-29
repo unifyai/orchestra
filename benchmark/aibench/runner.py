@@ -91,7 +91,6 @@ class AIBenchRunner:
 
     def prepare_prompts(self):
         # TODO: if not a instruct model, then max_tokens needs to be set based on repeats value
-        # TODO: replace randint to consider length of prompt (in json)
         samples = {}
         if self.input_policy in ["short", "mixed"]:
             samples["short"] = self._get_samples("prompts_short.json")
