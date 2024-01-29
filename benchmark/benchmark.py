@@ -10,6 +10,7 @@ from typing import Dict, List, Union
 
 import yaml
 from aibench.runner import AIBenchRunner
+from models.llm import CompletionsModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -25,6 +26,13 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     Model,
     Provider,
 )
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+handler = logging.StreamHandler()
+handler.setLevel(logging.INFO)
+logger.addHandler(handler)
 
 
 def read_configs(config_file: str) -> List[Dict]:
@@ -111,6 +119,7 @@ async def db_loop(  # noqa: WPS210, WPS217
         while not output_queue.empty():
             brs_results.append(await output_queue.get())
             output_queue.task_done()
+        print(brs_results)
 
         async with async_session() as session:
             brs = await commit_benchmark_runs(brs_results, session)
@@ -150,14 +159,30 @@ async def worker_loop(  # noqa: WPS210
         # Check if we need to stop
         if endpoint is None:
             break
-
+        print("Testing: {}".format(endpoint))
         # Retrieve/fabricate a callable based on the model the provider
-        endpoint_fn = None  # TODO
+        language_model = CompletionsModel(
+            provider=endpoint["provider"],
+            model=endpoint["model"],
+        )
+
+        def endpoint_fn(prompt, max_tokens):
+            message = [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt},
+            ]
+            return language_model.get_completion(
+                message,
+                max_tokens=max_tokens,
+                stream=True,
+            )
 
         # Initialise the benchmark runner(s)
         benchmark_runners = []
         for config in configs:
-            benchmark_runners.append(AIBenchRunner(endpoint_fn, **config))
+            benchmark_runners.append(
+                AIBenchRunner(endpoint_fn, **config),
+            )
 
         # Iterate over each runner
         for runner in benchmark_runners:
@@ -193,7 +218,12 @@ async def retrieve_all_endpoints(async_session: sessionmaker) -> List[Dict]:
         and "model".
     """
     async with async_session() as session:
-        stmt = select(Endpoint, Model, Provider).join(Model).join(Provider)
+        stmt = (
+            select(Endpoint, Model, Provider)
+            .join(Model)
+            .join(Provider)
+            .where(Model.active == True)
+        )
         results = await session.execute(stmt)
     endpoints = []
     for result in results.all():
@@ -285,28 +315,26 @@ async def main():  # noqa: WPS210
     # Define config file to use
     config_file = os.getenv("BENCHMARK_CONFIG_FILE", "benchmark/test.config.yml")
     configs = read_configs(config_file)
-    logging.info(f"Read {len(configs)} from {config_file}")  # noqa: WPS237
+    logger.info(f"Read {len(configs)} from {config_file}")  # noqa: WPS237
 
     # Get region information from the GCP instance
     region = os.getenv("BENCHMARK_REGION")
     if not region:
         raise ValueError("BENCHMARK_REGION env was not declared")
-    logging.info(f"Running benchmark in '{region}' region.")
+    logger.info(f"Running benchmark in '{region}' region.")
 
     # Initialise db engine
     async_db_session = create_db_session()
 
     # Get list of endpoints in our db
     endpoints = await retrieve_all_endpoints(async_db_session)
+    logger.info(f"Found {len(endpoints)} endpoints where Model is active in the db.")
     # TODO: remove this
     endpoints = [
-        {"id": 1250, "provider": "anyscale", "model": "llama-2-70b-chat"},
-        {"id": 1251, "provider": "perplexity-ai", "model": "llama-2-70b-chat"},
-        {"id": 1252, "provider": "together-ai", "model": "llama-2-70b-chat"},
-        {"id": 1253, "provider": "replicate", "model": "llama-2-70b-chat"},
-        {"id": 1254, "provider": "octoai", "model": "llama-2-70b-chat"},
+        # {"id": 1252, "provider": "together-ai", "model": "llama-2-7b-chat"},
+        {"id": 1250, "provider": "anyscale", "model": "llama-2-7b-chat"},
+        {"id": 1253, "provider": "replicate", "model": "llama-2-7b-chat"},
     ]
-
     # Configure concurrent workers and tasks
     num_workers = int(os.getenv("BENCHMARK_NUM_WORKERS", "3"))
     db_commit_period = int(os.getenv("BENCHMARK_DB_COMMIT_PERIOD", "10"))
