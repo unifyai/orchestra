@@ -165,7 +165,17 @@ async def worker_loop(  # noqa: WPS210
             provider=endpoint["provider"],
             model=endpoint["model"],
         )
-        endpoint_fn = getattr(language_model, "get_completion")
+
+        def endpoint_fn(prompt, max_tokens):
+            message = [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt},
+            ]
+            return language_model.get_completion(
+                message,
+                max_tokens=max_tokens,
+                stream=True,
+            )
 
         # Initialise the benchmark runner(s)
         benchmark_runners = []
@@ -208,7 +218,12 @@ async def retrieve_all_endpoints(async_session: sessionmaker) -> List[Dict]:
         and "model".
     """
     async with async_session() as session:
-        stmt = select(Endpoint, Model, Provider).join(Model).join(Provider).where(Model.active == True)
+        stmt = (
+            select(Endpoint, Model, Provider)
+            .join(Model)
+            .join(Provider)
+            .where(Model.active == True)
+        )
         results = await session.execute(stmt)
     endpoints = []
     for result in results.all():

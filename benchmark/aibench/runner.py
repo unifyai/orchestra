@@ -90,7 +90,6 @@ class AIBenchRunner:
         return samples
 
     def prepare_prompts(self):
-        # TODO: if not a instruct model, then max_tokens needs to be set based on repeats value
         samples = {}
         if self.input_policy in ["short", "mixed"]:
             samples["short"] = self._get_samples("prompts_short.json")
@@ -118,14 +117,12 @@ class AIBenchRunner:
         prompt = await self.prompt_queue.get()
         max_tokens = self._max_token_sampler()
         print(max_tokens)
-        messages = [{"role": "user", "content": prompt}]
         # TODO: max_tokens seem to be not respected?
         # check by printing max_tokens value here
         # then check the `output_tokens` in processed results
         result, _ = self.fn(  # type: ignore
-            messages=messages,
+            prompt=prompt,
             max_tokens=max_tokens,
-            stream=True,
         )
         if result is None:
             self.failed_queries += 1
@@ -146,14 +143,15 @@ class AIBenchRunner:
         first_token_time = completions[0]["reception_time"]
         await self.end_to_end_latency.put((end_time - start_time) * 1000)
         tokenizer = tiktoken.get_encoding("cl100k_base")
-        content = " ".join(
+        content = "".join(
             [
                 completion["content"]
                 for completion in completions
                 if completion["content"] is not None
             ],
         )
-        prompt_tokens = len(tokenizer.encode(messages[0]["content"]))
+        print(content)
+        prompt_tokens = len(tokenizer.encode(prompt))
         output_tokens = len(tokenizer.encode(content))
         await self.prompt_tokens.put(prompt_tokens)
         await self.output_tokens.put(output_tokens)
@@ -162,12 +160,11 @@ class AIBenchRunner:
         self.prompt_queue.task_done()
 
     async def check_for_coldstart(self, threshold):
-        messages = [{"role": "user", "content": "2+2 is "}]
+        prompt = "2+2 is "
         start_time = time.perf_counter()
         result, _ = self.fn(  # type: ignore
-            messages=messages,
+            prompt=prompt,
             max_tokens=10,
-            stream=True,
         )
         if result is None:
             print("Run during cold start failed")
