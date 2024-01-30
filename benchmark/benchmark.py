@@ -165,7 +165,7 @@ async def worker_loop(  # noqa: WPS210
             model=endpoint["model"],
         )
 
-        def endpoint_fn(prompt, max_tokens):
+        def endpoint_fn(prompt, max_tokens, stream):
             message = [
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": prompt},
@@ -173,7 +173,7 @@ async def worker_loop(  # noqa: WPS210
             return language_model.get_completion(
                 message,
                 max_tokens=max_tokens,
-                stream=True,
+                stream=stream,
             )
 
         # Initialise the benchmark runner(s)
@@ -332,8 +332,13 @@ async def main():  # noqa: WPS210
     # TODO: remove this
     endpoints = [
         # {"id": 1240, "provider": "together-ai", "model": "llama-2-7b-chat"},
-        {"id": 1239, "provider": "anyscale", "model": "llama-2-7b-chat"},
-        {"id": 1241, "provider": "replicate", "model": "llama-2-7b-chat"},
+        # {"id": 1239, "provider": "anyscale", "model": "llama-2-7b-chat"},
+        # {"id": 1241, "provider": "replicate", "model": "llama-2-7b-chat"},
+        {"id": 1250, "provider": "anyscale", "model": "llama-2-70b-chat"},
+        {"id": 1251, "provider": "perplexity-ai", "model": "llama-2-70b-chat"},
+        {"id": 1252, "provider": "together-ai", "model": "llama-2-70b-chat"},
+        {"id": 1253, "provider": "replicate", "model": "llama-2-70b-chat"},
+        {"id": 1254, "provider": "octoai", "model": "llama-2-70b-chat"},
     ]
     # Configure concurrent workers and tasks
     num_workers = int(os.getenv("BENCHMARK_NUM_WORKERS", "3"))
