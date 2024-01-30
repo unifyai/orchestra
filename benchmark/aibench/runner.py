@@ -12,7 +12,7 @@ class AIBenchRunner:
         # Config
         self.fn = fn  # assumes fn takes a string as the input and returns strings asynchronously (streaming)
         self.load = load
-        self.input_policy = input_policy  # short | long | mixed
+        self.input_policy = input_policy  # short | long
 
         # Computed metrics
         # TODO: These need to be aligned between them
@@ -83,16 +83,8 @@ class AIBenchRunner:
         return samples
 
     def prepare_prompts(self):
-        samples = {}
-        if self.input_policy in ["short", "mixed"]:
-            samples["short"] = self._get_samples("prompts_short.json")
-        if self.input_policy in ["long", "mixed"]:
-            samples["long"] = self._get_samples("prompts_long.json")
-        if self.input_policy == "mixed":
-            combined_samples = samples["short"] + samples["long"]
-            prompts = random.sample(combined_samples, self.load)
-        else:
-            prompts = random.sample(samples[self.input_policy], self.load)
+        samples_fname = f"prompts_{self.input_policy}.json"
+        prompts = random.sample(self._get_samples(samples_fname), self.load)
         all_prompts = []
         for prompt in prompts:
             count = {random.randint(0, int((4096 - prompt[1]) / prompt[1]))}
