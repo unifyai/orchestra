@@ -165,7 +165,7 @@ async def worker_loop(  # noqa: WPS210
             model=endpoint["model"],
         )
 
-        def endpoint_fn(prompt, max_tokens):
+        def endpoint_fn(prompt, max_tokens, stream):
             message = [
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": prompt},
@@ -173,7 +173,7 @@ async def worker_loop(  # noqa: WPS210
             return language_model.get_completion(
                 message,
                 max_tokens=max_tokens,
-                stream=True,
+                stream=stream,
             )
 
         # Initialise the benchmark runner(s)
