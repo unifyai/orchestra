@@ -15,7 +15,6 @@ class AIBenchRunner:
         self.input_policy = input_policy  # short | long
 
         # Computed metrics
-        # TODO: These need to be aligned between them
         self.ttft = []
         self.end_to_end_latency = []
         self.cold_start = 0
@@ -33,7 +32,6 @@ class AIBenchRunner:
 
     @property
     def itl(self):
-        # TODO: Deal with division by zero?
         return [
             (e2e_lat - ttft) / (o_tks - 1)
             for e2e_lat, ttft, o_tks in zip(
@@ -123,7 +121,7 @@ class AIBenchRunner:
             completions.append(
                 {
                     "content": part["choices"][0]["delta"]["content"],
-                    "reception_time": time.perf_counter(),  # TODO: verify if right?
+                    "reception_time": time.perf_counter(),
                 },
             )
             await asyncio.sleep(0)
@@ -168,7 +166,7 @@ class AIBenchRunner:
             completions.append(
                 {
                     "content": part["choices"][0]["delta"]["content"],
-                    "reception_time": time.perf_counter(),  # TODO: verify if right?
+                    "reception_time": time.perf_counter(),
                 },
             )
             await asyncio.sleep(0)
@@ -181,7 +179,6 @@ class AIBenchRunner:
             second_token_time = 0
 
         cold_start = first_token_time - start_time
-        # TODO: verify if complies with whitepaper
         if (
             cold_start > threshold
             and (second_token_time - first_token_time) * 10 <= cold_start
@@ -191,7 +188,7 @@ class AIBenchRunner:
             return 0
 
     async def __call__(self):
-        self.cold_start = await self.check_coldstart(threshold=30)
+        self.cold_start = await self.check_coldstart(threshold=15)  # TODO: magic number
         concurrent_requests = []
         for prompt in self.prepare_prompts():
             await self.prompt_queue.put(prompt)

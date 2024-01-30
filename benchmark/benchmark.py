@@ -186,14 +186,17 @@ async def worker_loop(  # noqa: WPS210
         # Iterate over each runner
         for runner in benchmark_runners:
             # Run the benchmark
-            result = await runner()
-            result["region"] = region
-            result["regime"] = f"concurrent-{result['load']}"
-            result["endpoint_id"] = endpoint["id"]
-            # Push the result into the db queue
-            await output_queue.put(result)
-            # Log results
-            # TODO logging.info(repr(runner))
+            try:
+                result = await runner()
+                result["region"] = region
+                result["regime"] = f"concurrent-{result['load']}"
+                result["endpoint_id"] = endpoint["id"]
+                # Push the result into the db queue
+                await output_queue.put(result)
+                # Log results
+                # TODO logging.info(repr(runner))
+            except Exception as e:
+                logging.error(f"Exception raised in runner: {e}")
 
         # Log endpoint metrics
         # TODO
@@ -330,6 +333,7 @@ async def main():  # noqa: WPS210
     endpoints = await retrieve_all_endpoints(async_db_session)
     logger.info(f"Found {len(endpoints)} endpoints where Model is active in the db.")
     # TODO: remove this
+    """
     endpoints = [
         # {"id": 1240, "provider": "together-ai", "model": "llama-2-7b-chat"},
         # {"id": 1239, "provider": "anyscale", "model": "llama-2-7b-chat"},
@@ -340,6 +344,7 @@ async def main():  # noqa: WPS210
         {"id": 1253, "provider": "replicate", "model": "llama-2-70b-chat"},
         {"id": 1254, "provider": "octoai", "model": "llama-2-70b-chat"},
     ]
+    """
     # Configure concurrent workers and tasks
     num_workers = int(os.getenv("BENCHMARK_NUM_WORKERS", "3"))
     db_commit_period = int(os.getenv("BENCHMARK_DB_COMMIT_PERIOD", "60"))
