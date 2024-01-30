@@ -16,74 +16,64 @@ class AIBenchRunner:
 
         # Computed metrics
         # TODO: These need to be aligned between them
-        self.ttft = asyncio.Queue()
-        self.end_to_end_latency = asyncio.Queue()
+        self.ttft = []
+        self.end_to_end_latency = []
         self.cold_start = 0
-        self.prompt_tokens = asyncio.Queue()
-        self.output_tokens = asyncio.Queue()
-        self.total_tokens = asyncio.Queue()
+        self.prompt_tokens = []
+        self.output_tokens = []
+        self.total_tokens = []
         self.failed_queries = 0
 
-        # Prompt queue
+        # Queues
         self.prompt_queue = asyncio.Queue()
+        self.results_queue = asyncio.Queue()
 
         # Tokenizer
         self.tokenizer = tiktoken.get_encoding("cl100k_base")
 
-    @staticmethod
-    def calculate_itl(end_to_end_latency, ttft, output_tokens):
+    @property
+    def itl(self):
         # TODO: Deal with division by zero?
         return [
             (e2e_lat - ttft) / (o_tks - 1)
             for e2e_lat, ttft, o_tks in zip(
-                end_to_end_latency,
-                ttft,
-                output_tokens,
+                self.end_to_end_latency,
+                self.ttft,
+                self.output_tokens,
             )
         ]
 
-    @staticmethod
-    def output_tks_per_sec(itl):
-        return [1000 / i for i in itl]
+    @property
+    def output_tks_per_sec(self):
+        return [1000 / i for i in self.itl]
 
-    def __repr__(self):
-        # developer facing print (for logging)
-        raise NotImplementedError
-
-    async def unwrap_to_dict(self):
+    def as_dict(self):
         # TODO: Prob validate rules among the metrics
         # i.e. ttft + itl * num_output_toks <= e2e latency
-        ttft = []
-        end_to_end_latency = []
-        prompt_tokens = []
-        output_tokens = []
-        total_tokens = []
-        while not self.ttft.empty():
-            ttft.append(await self.ttft.get())
-        while not self.end_to_end_latency.empty():
-            end_to_end_latency.append(await self.end_to_end_latency.get())
-        while not self.prompt_tokens.empty():
-            prompt_tokens.append(await self.prompt_tokens.get())
-        while not self.output_tokens.empty():
-            output_tokens.append(await self.output_tokens.get())
-        while not self.total_tokens.empty():
-            total_tokens.append(await self.total_tokens.get())
-
-        itl = self.calculate_itl(end_to_end_latency, ttft, output_tokens)
-        output_tks_per_sec = self.output_tks_per_sec(itl)
         return {
             "load": self.load,
             "input_policy": self.input_policy,
-            "ttft": ttft,
-            "e2e_latency": end_to_end_latency,
-            "itl": itl,
+            "ttft": self.ttft,
+            "e2e_latency": self.end_to_end_latency,
+            "itl": self.itl,
             "cold_start": self.cold_start,
-            "prompt_tokens": prompt_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": total_tokens,
-            "output_tks_per_sec": output_tks_per_sec,
+            "prompt_tokens": self.prompt_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.total_tokens,
+            "output_tks_per_sec": self.output_tks_per_sec,
             "failed_queries": self.failed_queries,
         }
+
+    async def unpack_metrics(self):
+        while not self.results_queue.empty():
+            req_result: dict = await self.results_queue.get()
+            self.ttft.append(req_result["ttft"])
+            self.end_to_end_latency.append(req_result["e2e_latency"])
+            self.prompt_tokens.append(req_result["prompt_tokens"])
+            self.output_tokens.append(req_result["output_tokens"])
+            self.total_tokens.append(req_result["total_tokens"])
+            self.failed_queries += req_result["failed_queries"]
+            self.results_queue.task_done()
 
     @staticmethod
     def _get_samples(filename):
@@ -119,19 +109,25 @@ class AIBenchRunner:
     async def compute_metrics(self):
         prompt = await self.prompt_queue.get()
         max_tokens = self._max_token_sampler()
+        completions = []
+        metrics_dict = {}
         # TODO: max_tokens seem to be not respected?
         # check by printing max_tokens value here
         # then check the `output_tokens` in processed results
+        # TODO: remove the double return
         result, _ = self.fn(  # type: ignore
             prompt=prompt,
             max_tokens=max_tokens,
+            stream=True,
         )
+
+        metrics_dict["failed_queries"] = 0
         if result is None:
-            self.failed_queries += 1
+            metrics_dict["failed_queries"] = 1
             return
-        completions = []
+
         start_time = time.perf_counter()
-        async for part in result.generator():
+        async for part in result.generator():  # TODO: Is this a litellm dependency?
             completions.append(
                 {
                     "content": part["choices"][0]["delta"]["content"],
@@ -142,8 +138,6 @@ class AIBenchRunner:
         end_time = time.perf_counter()
         # TODO: remove?
         # these artifacts sort of give away we're using litellm
-        first_token_time = completions[0]["reception_time"]
-        await self.end_to_end_latency.put((end_time - start_time) * 1000)
         content = "".join(
             [
                 completion["content"]
@@ -151,25 +145,33 @@ class AIBenchRunner:
                 if completion["content"] is not None
             ],
         )
-        prompt_tokens = len(self.tokenizer.encode(prompt))
-        output_tokens = len(self.tokenizer.encode(content))
-        await self.prompt_tokens.put(prompt_tokens)
-        await self.output_tokens.put(output_tokens)
-        await self.total_tokens.put(prompt_tokens + output_tokens)
-        await self.ttft.put((first_token_time - start_time) * 1000)
+
+        metrics_dict["ttft"] = (completions[0]["reception_time"] - start_time) * 1000
+        metrics_dict["e2e_latency"] = (end_time - start_time) * 1000
+        metrics_dict["prompt_tokens"] = len(self.tokenizer.encode(prompt))
+        metrics_dict["output_tokens"] = len(self.tokenizer.encode(content))
+        metrics_dict["total_tokens"] = (
+            metrics_dict["prompt_tokens"] + metrics_dict["output_tokens"]
+        )
+
+        await self.results_queue.put(metrics_dict)
         self.prompt_queue.task_done()
 
-    async def check_for_coldstart(self, threshold):
+    async def check_coldstart(self, threshold):
         prompt = "2+2 is "
-        start_time = time.perf_counter()
+        completions = []
+
         result, _ = self.fn(  # type: ignore
             prompt=prompt,
             max_tokens=10,
+            stream=True,
         )
+
         if result is None:
             print("Run during cold start failed")
             return 0
-        completions = []
+
+        start_time = time.perf_counter()
         async for part in result.generator():
             completions.append(
                 {
@@ -197,15 +199,15 @@ class AIBenchRunner:
             return 0
 
     async def __call__(self):
-        self.cold_start = await self.check_for_coldstart(threshold=30)
+        self.cold_start = await self.check_coldstart(threshold=30)
         concurrent_requests = []
         for prompt in self.prepare_prompts():
             await self.prompt_queue.put(prompt)
         for i in range(self.load):
             concurrent_requests.append(asyncio.create_task(self.compute_metrics()))
         await asyncio.gather(*concurrent_requests)
-        data_dict = await self.unwrap_to_dict()
-        return data_dict
+        await self.unpack_metrics()
+        return self.as_dict()
 
     # clean up the following code to comply with .complete provider i/o
     # needed for presenting as dummy fn
