@@ -186,14 +186,17 @@ async def worker_loop(  # noqa: WPS210
         # Iterate over each runner
         for runner in benchmark_runners:
             # Run the benchmark
-            result = await runner()
-            result["region"] = region
-            result["regime"] = f"concurrent-{result['load']}"
-            result["endpoint_id"] = endpoint["id"]
-            # Push the result into the db queue
-            await output_queue.put(result)
-            # Log results
-            # TODO logging.info(repr(runner))
+            try:
+                result = await runner()
+                result["region"] = region
+                result["regime"] = f"concurrent-{result['load']}"
+                result["endpoint_id"] = endpoint["id"]
+                # Push the result into the db queue
+                await output_queue.put(result)
+                # Log results
+                # TODO logging.info(repr(runner))
+            except Exception as e:
+                logging.error(f"Exception raised in runner: {e}")
 
         # Log endpoint metrics
         # TODO
