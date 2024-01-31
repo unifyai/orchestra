@@ -242,13 +242,3 @@ class AIBenchRunner:
         await asyncio.gather(*concurrent_requests)
         await self.unpack_metrics()
         return self.as_dict()
-
-    async def dummy_fn(url, data, headers, auth):
-        async with aiohttp.ClientSession() as session:
-            async with session.put(
-                url,
-                data=json.dumps(data),
-                headers=headers,
-                auth=auth,
-            ) as response:
-                return await response.json()
