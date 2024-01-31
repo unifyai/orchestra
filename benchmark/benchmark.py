@@ -160,10 +160,15 @@ async def worker_loop(  # noqa: WPS210
             break
         print("Testing: {}".format(endpoint))
         # Retrieve/fabricate a callable based on the model the provider
-        language_model = CompletionsModel(
-            provider=endpoint["provider"],
-            model=endpoint["model"],
-        )
+        try:
+            language_model = CompletionsModel(
+                provider=endpoint["provider"],
+                model=endpoint["model"],
+            )
+        except Exception as e:
+            logging.error("Exception raised loading CompletionsModel: {e}")
+            input_queue.task_done()
+            continue
 
         def endpoint_fn(prompt, max_tokens, stream):
             message = [
