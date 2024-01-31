@@ -7,6 +7,7 @@ import datetime
 import logging
 import os
 from typing import Dict, List, Union
+from providers.completion import PROVIDER_CLASSES
 
 import yaml
 from aibench.runner import AIBenchRunner
@@ -196,6 +197,13 @@ async def worker_loop(  # noqa: WPS210
                 result["region"] = region
                 result["regime"] = f"concurrent-{result['load']}"
                 result["endpoint_id"] = endpoint["id"]
+                try:
+                    provider = PROVIDER_CLASSES[endpoint["provider"]]()
+                    cost = provider.supported_models[endpoint["model"]]["cost"]
+                    result["input_cost_per_token"] = cost["prompt"]
+                    result["output_cost_per_token"] = cost["completion"]
+                except Exception as e:
+                    logging.error(f"Cost not computed correctly: {e}")
                 # Push the result into the db queue
                 await output_queue.put(result)
                 # Log results
