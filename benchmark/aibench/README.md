@@ -30,11 +30,6 @@ bench_runner = AIBenchRunner(
 result = await bench_runner()
 ```
 
-### Requirements
-- Python 3.7+
-- aiohttp library
-- tiktoken library
-
 # Metrics
 
 The benchmark provides the following metrics:
