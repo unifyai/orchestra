@@ -166,7 +166,7 @@ async def worker_loop(  # noqa: WPS210
                 model=endpoint["model"],
             )
         except Exception as e:
-            logging.error("Exception raised loading CompletionsModel: {e}")
+            logging.error(f"Exception raised loading CompletionsModel: {e}")
             input_queue.task_done()
             continue
 
