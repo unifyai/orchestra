@@ -15,7 +15,7 @@ class Mistral(BaseCompletionProvider):
             "context_window": 32768,
             "cost": {"prompt": 0.15, "completion": 0.46},
         },
-        "mixtral-8x7b-v0.1": {
+        "mixtral-8x7b-instruct-v0.1": {
             "endpoint": "mistral/mistral-small",
             "context_window": 32768,
             "cost": {"prompt": 0.66, "completion": 1.97},
