@@ -9,28 +9,11 @@ This code provides a benchmarking tool, `AIBench`, for evaluating the performanc
 3. Create an instance of `AIBenchRunner` by providing the LLM function, load (concurrent requests), input policy (short or long), and an optional seed for randomization.
 4. Run the benchmark using the `__call__` method of the `AIBenchRunner` instance.
 
-Example:
+## Examples:
+Examples will be added in the coming days.
 
-```python
-from runner import AIBenchRunner
 
-async def your_llm_function(prompt, max_tokens, stream):
-    # Your LLM function implementation here
-    # ...
-
-# Create AIBenchRunner instance
-bench_runner = AIBenchRunner(
-    fn=your_llm_function,
-    load=10,
-    input_policy="short",
-    seed=42
-)
-
-# Run the benchmark
-result = await bench_runner()
-```
-
-# Metrics
+## Metrics
 
 The benchmark provides the following metrics:
 
