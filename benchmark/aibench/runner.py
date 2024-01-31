@@ -8,13 +8,20 @@ import tiktoken
 
 
 class AIBenchRunner:
-    def __init__(self, fn, load, input_policy):
-        # Config
-        self.fn = fn  # assumes fn takes a string as the input and returns strings asynchronously (streaming)
-        self.load = load
-        self.input_policy = input_policy  # short | long
 
-        # Computed metrics
+    def __init__(self, fn, load, input_policy, seed=42):
+        """
+        Initialize the AIBenchRunner.
+
+        :param fn: The function to benchmark. Takes as input a string and returns a string asynchronously (streaming).
+        :param load: The number of concurrent requests to run.
+        :param input_policy: The input policy to use (short or long).
+        :param seed: The seed for the random number generator.
+        """
+        self.fn = fn
+        self.load = load
+        self.input_policy = input_policy
+
         self.ttft = []
         self.end_to_end_latency = []
         self.cold_start = 0
@@ -23,15 +30,20 @@ class AIBenchRunner:
         self.total_tokens = []
         self.failed_queries = 0
 
-        # Queues
         self.prompt_queue = asyncio.Queue()
         self.results_queue = asyncio.Queue()
 
-        # Tokenizer
         self.tokenizer = tiktoken.get_encoding("cl100k_base")
+
+        random.seed(seed)
 
     @property
     def itl(self):
+        """
+        Compute the input tokens per second.
+
+        :return: The input tokens per second.
+        """
         return [
             (e2e_lat - ttft) / (o_tks - 1)
             for e2e_lat, ttft, o_tks in zip(
@@ -43,11 +55,19 @@ class AIBenchRunner:
 
     @property
     def output_tks_per_sec(self):
+        """
+        Compute the output tokens per second.
+
+        :return: The output tokens per second.
+        """
         return [1000 / i for i in self.itl]
 
     def as_dict(self):
-        # TODO: Prob validate rules among the metrics
-        # i.e. ttft + itl * num_output_toks <= e2e latency
+        """
+        Return the metrics such as itl, cold_start etc as a dictionary.
+
+        :return: The metrics as a dictionary.
+        """
         return {
             "load": self.load,
             "input_policy": self.input_policy,
@@ -63,6 +83,7 @@ class AIBenchRunner:
         }
 
     async def unpack_metrics(self):
+        """Unpack the metrics from the results queue."""
         while not self.results_queue.empty():
             req_result: dict = await self.results_queue.get()
             self.ttft.append(req_result["ttft"])
@@ -75,12 +96,24 @@ class AIBenchRunner:
 
     @staticmethod
     def _get_samples(filename):
+        """
+        Get samples from a json file.
+
+        :param filename: The name of the file to read.
+
+        :return: The samples.
+        """
         with open(filename, "r") as file:
             f = json.load(file)
             samples = [(item["prompt"].replace("\n", ""), item["length"]) for item in f]
         return samples
 
     def prepare_prompts(self):
+        """
+        Prepare the prompts for the benchmark.
+
+        :return: The prompts.
+        """
         samples_fname = f"prompts_{self.input_policy}.json"
         prompts = random.sample(self._get_samples(samples_fname), self.load)
         all_prompts = []
@@ -91,20 +124,23 @@ class AIBenchRunner:
         return all_prompts
 
     def _max_token_sampler(self):
+        """
+        Sample the maximum number of tokens to generate.
+
+        :return: The maximum number of tokens to generate.
+        """
         if self.input_policy == "short":
             return int(random.normalvariate(200, 20))
-        else:
-            return int(random.normalvariate(1000, 100))
+        
+        return int(random.normalvariate(1000, 100))
 
     async def compute_metrics(self):
+        """Compute the metrics for a single request."""
         prompt = await self.prompt_queue.get()
         max_tokens = self._max_token_sampler()
         completions = []
         metrics_dict = {}
-        # TODO: max_tokens seem to be not respected?
-        # check by printing max_tokens value here
-        # then check the `output_tokens` in processed results
-        # TODO: remove the double return
+
         result, _ = self.fn(  # type: ignore
             prompt=prompt,
             max_tokens=max_tokens,
@@ -117,7 +153,7 @@ class AIBenchRunner:
             return
 
         start_time = time.perf_counter()
-        async for part in result.generator():  # TODO: Is this a litellm dependency?
+        async for part in result.generator():
             completions.append(
                 {
                     "content": part["choices"][0]["delta"]["content"],
@@ -126,8 +162,7 @@ class AIBenchRunner:
             )
             await asyncio.sleep(0)
         end_time = time.perf_counter()
-        # TODO: remove?
-        # these artifacts sort of give away we're using litellm
+
         content = "".join(
             [
                 completion["content"]
@@ -148,6 +183,13 @@ class AIBenchRunner:
         self.prompt_queue.task_done()
 
     async def check_coldstart(self, threshold):
+        """
+        Check if the endpoint suffers from a cold start.
+
+        :param threshold: The threshold for the cold start.
+
+        :return: The cold start time.
+        """
         prompt = "2+2 is "
         completions = []
 
@@ -174,8 +216,6 @@ class AIBenchRunner:
         try:
             second_token_time = completions[1]["reception_time"]
         except IndexError:
-            # for provider where streaming is broken and whole text
-            # is returned at once, check only the first token
             second_token_time = 0
 
         cold_start = first_token_time - start_time
@@ -184,11 +224,16 @@ class AIBenchRunner:
             and (second_token_time - first_token_time) * 10 <= cold_start
         ):
             return cold_start
-        else:
-            return 0
+    
+        return 0
 
     async def __call__(self):
-        self.cold_start = await self.check_coldstart(threshold=15)  # TODO: magic number
+        """
+        Run the benchmark.
+
+        :return: The metrics as a dictionary.
+        """
+        self.cold_start = await self.check_coldstart(threshold=15)
         concurrent_requests = []
         for prompt in self.prepare_prompts():
             await self.prompt_queue.put(prompt)
@@ -198,8 +243,6 @@ class AIBenchRunner:
         await self.unpack_metrics()
         return self.as_dict()
 
-    # clean up the following code to comply with .complete provider i/o
-    # needed for presenting as dummy fn
     async def dummy_fn(url, data, headers, auth):
         async with aiohttp.ClientSession() as session:
             async with session.put(
