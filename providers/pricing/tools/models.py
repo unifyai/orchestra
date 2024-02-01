@@ -1,7 +1,8 @@
 from dataclasses import asdict, dataclass, fields
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Union
 
 from providers.pricing.tools.utils import empty_as_none
+
 
 def bool_loader(x: Union[bool, str]) -> bool:
     if isinstance(x, bool):

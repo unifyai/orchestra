@@ -9,7 +9,9 @@ class AbstractProvider(ABC):
 
     @abstractmethod
     def get(
-        self, query_filter: Optional[QueryFilter] = None, balance_resources: bool = True
+        self,
+        query_filter: Optional[QueryFilter] = None,
+        balance_resources: bool = True,
     ) -> List[RawCatalogItem]:
         pass
 

@@ -9,7 +9,10 @@ T = TypeVar("T", bound=RawCatalogItem)
 
 def dump(items: List[T], path: str, *, cls: Type[T] = RawCatalogItem):
     with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=[field.name for field in dataclasses.fields(cls)])
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[field.name for field in dataclasses.fields(cls)],
+        )
         writer.writeheader()
         for item in items:
             writer.writerow(item.dict())
