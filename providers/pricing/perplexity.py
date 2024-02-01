@@ -20,8 +20,7 @@ class PerplexityProvider(AbstractProvider):
         )
         html_page = urlopen(req).read()
         soup = BeautifulSoup(html_page, "html.parser")
-        pricing_tables = soup.find_all("table")
-        self.pricing_tables = pricing_tables
+        self.pricing_tables = soup.find_all("table")
         # perplexity only lists pricing according to model size
         # so pulling all supported models
         self.perplexity_models = set(Perplexity().supported_models)
