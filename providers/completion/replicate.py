@@ -164,7 +164,7 @@ class Replicate(BaseCompletionProvider):
 
         if stream:
             return (
-                AsyncGeneratorWrapper(
+                ReplicateAsyncGeneratorWrapper(
                     self.handle_prediction_response_streaming(prediction_url),
                     model,
                     messages,
@@ -326,3 +326,47 @@ class Replicate(BaseCompletionProvider):
         )
         response["choices"][0]["message"]["content"] = output_string
         return response
+
+
+class ReplicateAsyncGeneratorWrapper(AsyncGeneratorWrapper):
+    """A wrapper for the Replicate async generator."""
+
+    async def generator(self):  # noqa: D102, C901, WPS210, WPS231
+        whole = ""
+        usage = {}
+        try:  # noqa: WPS501
+            for part in self._response:
+                usage = part.get("usage", {})
+
+                choices = [
+                    getattr(choice, "model_dump", lambda: None)()
+                    for choice in part.get("choices", [])
+                ]
+
+                part_dict = {
+                    "model": self._model,
+                    "created": part.get("created", None),
+                    "id": part.get(
+                        "id",
+                        f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237, E501
+                    ),
+                    "choices": choices,
+                    "object": part.get("object", "chat.completion.chunk"),
+                    "usage": usage.model_dump() if isinstance(usage, Usage) else usage,
+                }
+                part_text = choices[0]["delta"]["content"]
+                whole += part_text if part_text else ""
+                yield part_dict
+        finally:
+            if isinstance(usage, Usage) and usage != Usage():
+                self.total_cost = self._compute_cost(
+                    self._model,
+                    [item["content"] for item in self._messages],
+                    ModelResponse(usage=usage),
+                )
+            else:
+                self.total_cost = self._compute_cost_streaming(
+                    self._model,
+                    whole,
+                    self._messages,
+                )
