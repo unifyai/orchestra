@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class MistralProvider(AbstractProvider):
-    NAME = "mistral"
+    NAME = "mistral-ai"
 
     def __init__(self):
         req = Request(
@@ -61,3 +61,8 @@ def find_and_convert(search_str):
     # need to use API to fetch currency exchange rate
     usd_pr = eur_pr * 1.08
     return usd_pr
+
+
+if __name__ == "__main__":
+    provider = MistralProvider()
+    print(provider.get())

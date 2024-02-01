@@ -1,0 +1,53 @@
+import logging
+import re
+from typing import List, Optional
+from urllib.request import Request, urlopen
+
+from bs4 import BeautifulSoup
+from providers.pricing import AbstractProvider
+from providers.pricing.tools.models import QueryFilter, RawCatalogItem
+
+logger = logging.getLogger(__name__)
+
+
+class OctoAIProvider(AbstractProvider):
+    NAME = "octoai"
+
+    def __init__(self):
+        req = Request(
+            "https://docs.octoai.cloud/docs/pricing",
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        html_page = urlopen(req).read()
+        soup = BeautifulSoup(html_page, "html.parser")
+        pricing_tables = soup.find_all("table")
+        self.pricing_tables = pricing_tables
+
+    def get(
+        self,
+        query_filter: Optional[QueryFilter] = None,
+        balance_resources: bool = True,
+    ) -> List[RawCatalogItem]:
+        offers = []
+        for row in self.pricing_tables[-2].find_all("tr")[1:]:
+            cols = row.find_all("td")
+            model_name = cols[0].text.strip()
+            # parameter_precision = cols[1].text.strip()
+            input_pr = cols[2].text[1:].split("/")[0].strip()
+            output_pr = cols[3].text[1:].split("/")[0].strip()
+
+            # standardize pricing to per million
+            input_pr = float(input_pr) * 1000
+            output_pr = float(output_pr) * 1000
+            offer = RawCatalogItem(
+                model_name=model_name,
+                in_price=input_pr,
+                out_price=output_pr,
+            )
+            offers.append(offer)
+        return sorted(offers, key=lambda i: i.in_price)
+
+
+if __name__ == "__main__":
+    provider = OctoAIProvider()
+    print(provider.get())
