@@ -43,7 +43,9 @@ Using **cURL**, the request would look like this:
                     "content": "Explain who Newton was and his entire theory of gravitation. Give a long detailed response please and explain all of his achievements"
                 }],
                 "temperature": 0.5,
-                "max_tokens": 1000 }
+                "max_tokens": 1000,
+                "stream": true
+            }
         }'
 
 If you are using **Python**, you can use the :code:`requests` library to query the model:
@@ -62,18 +64,25 @@ If you are using **Python**, you can use the :code:`requests` library to query t
         "provider": "anyscale",
         "arguments": {
             "messages": [{
-                    "role": "user",
-                    "content": "Explain who Newton was and his entire theory of gravitation. Give a long detailed response please and explain all of his achievements"
-                }],
-                "temperature": 0.5,
-                "max_tokens": 1000
+                "role": "user",
+                "content": "Explain who Newton was and his entire theory of gravitation. Give a long detailed response please and explain all of his achievements"
+            }],
+            "temperature": 0.5,
+            "max_tokens": 1000,
+            "stream": True,
         }
     }
 
-    response = requests.post(url, json=payload, headers=headers)
+    response = requests.post(url, json=payload, headers=headers, stream=True)
 
     print(response.status_code)
-    print(response.json())
+
+    if response.status_code == 200:
+        for chunk in response.iter_content(chunk_size=1024):
+            if chunk:
+                print(chunk.decode("utf-8"))
+    else:
+        print(response.text)
 
 
 Using the OpenAI API Format
@@ -103,7 +112,7 @@ This is again just an HTTP endpoint, so you can query it using **cURL**:
                 "role": "user",
                 "content": "Explain who Newton was and his entire theory of gravitation. Give a long detailed response please and explain all of his achievements"
             }],
-            "stream": false
+            "stream": true
         }'
 
 Or using **Python**:
@@ -124,12 +133,18 @@ Or using **Python**:
                 "role": "user",
                 "content": "Explain who Newton was and his entire theory of gravitation. Give a long detailed response please and explain all of his achievements"
             }],
-        "stream": False
+        "stream": True
     }
 
-    response = requests.post(url, json=payload, headers=headers)
+    response = requests.post(url, json=payload, headers=headers, stream=True)
 
     print(response.status_code)
-    print(response.json())
+
+    if response.status_code == 200:
+        for chunk in response.iter_content(chunk_size=1024):
+            if chunk:
+                print(chunk.decode("utf-8"))
+    else:
+        print(response.text)
 
 Or any other language!
