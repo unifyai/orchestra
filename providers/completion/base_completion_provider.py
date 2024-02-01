@@ -6,7 +6,7 @@ import litellm
 import openai
 import tiktoken
 from litellm.utils import ModelResponse, Usage
-import asyncio 
+
 logger = logging.getLogger(__name__)
 
 # Pricing info of providers with pay-per-token model is
