@@ -6,7 +6,7 @@ import litellm
 import openai
 import tiktoken
 from litellm.utils import ModelResponse, Usage
-
+import asyncio 
 logger = logging.getLogger(__name__)
 
 # Pricing info of providers with pay-per-token model is
@@ -129,7 +129,7 @@ class BaseCompletionProvider:
             if stream:
                 return (
                     AsyncGeneratorWrapper(
-                        litellm.completion(
+                        litellm.acompletion(
                             model=provider_model_endpoint,
                             messages=messages,
                             max_tokens=max_tokens,
@@ -184,7 +184,7 @@ class AsyncGeneratorWrapper:  # noqa: D101
         whole = ""
         usage = {}
         try:  # noqa: WPS501
-            for part in self._response:
+            async for part in await self._response:
                 usage = part.get("usage", {})
 
                 choices = [
