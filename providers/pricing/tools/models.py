@@ -13,13 +13,15 @@ def bool_loader(x: Union[bool, str]) -> bool:
 @dataclass
 class RawCatalogItem:
     model_name: Optional[str]
-    price: Optional[float]
+    in_price: Optional[float]
+    out_price: Optional[float]
 
     @staticmethod
     def from_dict(v: dict) -> "RawCatalogItem":
         return RawCatalogItem(
             model_name=empty_as_none(v.get("model_name")),
-            price=empty_as_none(v.get("price"), loader=float),
+            in_price=empty_as_none(v.get("in_price"), loader=float),
+            out_price=empty_as_none(v.get("out_price"), loader=float),
         )
 
     def dict(self) -> Dict[str, Union[str, int, float, bool, None]]:
@@ -36,7 +38,8 @@ class CatalogItem(RawCatalogItem):
     """
 
     model_name: str
-    price: float
+    in_price: float
+    out_price: float
     provider: str
 
     @staticmethod
@@ -49,13 +52,17 @@ class QueryFilter:
     """
     Attributes:
         provider: name of the provider to filter by. If not specified, all providers will be used
-        min_price: minimum price per hour in USD
-        max_price: maximum price per hour in USD
+        min_price_inp: minimum input price in USD
+        max_price_inp: maximum input price in USD
+        min_price_out: minimum output price in USD
+        max_price_out: maximum output price in USD
     """
 
     provider: Optional[List[str]] = None
-    min_price: Optional[float] = None
-    max_price: Optional[float] = None
+    min_price_inp: Optional[float] = None
+    max_price_inp: Optional[float] = None
+    min_price_out: Optional[float] = None
+    max_price_out: Optional[float] = None
 
     def __post_init__(self):
         if self.provider is not None:
