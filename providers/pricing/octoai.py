@@ -43,6 +43,7 @@ class OctoAIProvider(AbstractProvider):
                 model_name=model_name,
                 in_price=input_pr,
                 out_price=output_pr,
+                request_price=None,
             )
             offers.append(offer)
         return sorted(offers, key=lambda i: i.in_price)

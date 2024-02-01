@@ -15,6 +15,7 @@ class RawCatalogItem:
     model_name: Optional[str]
     in_price: Optional[float]
     out_price: Optional[float]
+    request_price: Optional[float] # only perplexity for now
 
     @staticmethod
     def from_dict(v: dict) -> "RawCatalogItem":
@@ -22,6 +23,7 @@ class RawCatalogItem:
             model_name=empty_as_none(v.get("model_name")),
             in_price=empty_as_none(v.get("in_price"), loader=float),
             out_price=empty_as_none(v.get("out_price"), loader=float),
+            request_price=empty_as_none(v.get("request_price"), loader=float),
         )
 
     def dict(self) -> Dict[str, Union[str, int, float, bool, None]]:
@@ -34,12 +36,14 @@ class CatalogItem(RawCatalogItem):
     Attributes:
         model_name: name of the model
         price: $ per 1M of tokens
+        request_price: $ per 1000 of requests
         provider: name of the provider
     """
 
     model_name: str
     in_price: float
     out_price: float
+    request_price: float
     provider: str
 
     @staticmethod

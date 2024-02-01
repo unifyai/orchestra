@@ -43,12 +43,14 @@ class MistralProvider(AbstractProvider):
                         model_name=model_name,
                         in_price=inp_conv_pr,
                         out_price=out_conv_pr,
+                        request_price=None,
                     )
                 else:
                     offer = RawCatalogItem(
                         model_name=model_name,
                         in_price=inp_conv_pr,
                         out_price=0.0,
+                        request_price=None,
                     )
                 offers.append(offer)
         return sorted(offers, key=lambda i: i.in_price)
