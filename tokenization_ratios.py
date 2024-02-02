@@ -70,7 +70,7 @@ def encode(batch, tokenizer):
     batch['knt'] = encoded_batch['length']
     return batch
 def concatenate_columns(dataset):
-    text = ' '.join([str(value) for value in dataset])
+    text = ' '.join([str(value) for value in dataset.values()])
     return {'text': text}
 def get_tokens(dataset, tokenizer):
     if tokenizer == "openai":
