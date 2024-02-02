@@ -167,7 +167,7 @@ class OctoAIAsyncGeneratorWrapper(AsyncGeneratorWrapper):
         whole = ""
         try:  # noqa: WPS501
             for part in self._response:
-                if part["choices"][0]["delta"]["content"] is None:
+                if part.choices[0].delta.content is None:
                     continue
                 part_dict = part.dict()
                 part_dict["model"] = f"{self._model}@octoai"

@@ -185,7 +185,7 @@ class AsyncGeneratorWrapper:  # noqa: D101
         usage = {}
         try:  # noqa: WPS501
             async for part in await self._response:
-                if part["choices"][0]["delta"]["content"] is None:
+                if part.choices[0].delta.content is None:
                     continue
                 usage = part.get("usage", {})
 
