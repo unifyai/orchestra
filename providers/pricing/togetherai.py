@@ -22,7 +22,7 @@ class TogetherAIProvider(AbstractProvider):
         html_page = urlopen(req).read()
         soup = BeautifulSoup(html_page, "html.parser")
         self.pricing_tables = soup.find_all('ul', class_='pricing-list w-list-unstyled')
-        togetherai_models = set(TogetherAI().supported_models)
+        self.togetherai_models = set(TogetherAI().supported_models)
 
     def get(
         self,
@@ -45,6 +45,7 @@ class TogetherAIProvider(AbstractProvider):
                             model_size_to_pr[curr_model_size] = price.text
                             curr_model_size = None
         for i, (size, cost) in enumerate(model_size_to_pr.items()):
+            cost = float(cost[1:])
             relevant_models = []
             # CHAT, LANGUAGE, AND CODE MODELS
             if i <= 4:
@@ -92,7 +93,6 @@ class TogetherAIProvider(AbstractProvider):
 
             for model_name in relevant_models:
                 self.togetherai_models.remove(model_name)
-                cost = float(cost[1:])
                 offer = RawCatalogItem(
                     model_name=model_name,
                     in_price=cost,
