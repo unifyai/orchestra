@@ -118,6 +118,8 @@ class AIBenchRunner:
 
         start_time = time.perf_counter()
         async for part in result.generator():  # TODO: Is this a litellm dependency?
+            if part["choices"][0]["delta"]["content"] is None:
+                continue
             completions.append(
                 {
                     "content": part["choices"][0]["delta"]["content"],
