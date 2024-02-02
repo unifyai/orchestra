@@ -24,12 +24,13 @@ async def auth_api_key(
         f"https://cloud-db-gateway-94jg94af.ew.gateway.dev/apikey/{apikey}",
         headers={},
     )
-    request_fastapi.state.user_id = auth_ret.json()["user_id"]
+
     if auth_ret.status_code != 200:  # noqa: WPS432
         raise HTTPException(
             status_code=404,  # noqa: WPS432
-            detail="api key is not valid.",
+            detail="Invalid API key",
         )
+    request_fastapi.state.user_id = auth_ret.json()["user_id"]
 
 
 async def auth_admin_key(
