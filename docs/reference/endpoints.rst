@@ -162,7 +162,7 @@ To specify the provider, make sure to append its name after the model id using :
 .. code-block:: bash
 
     curl -X 'POST' \
-    'https://api.unify.ai/v0/chat/completion' \
+    'https://api.unify.ai/v0/chat/completions' \
     -H 'accept: application/json' \
     -H 'Authorization: Bearer YOUR_API_KEY' \
     -H 'Content-Type: application/json' \

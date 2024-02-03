@@ -102,7 +102,7 @@ This is again just an HTTP endpoint, so you can query it using **cURL**:
 .. code-block:: bash
 
     curl -X 'POST' \
-        'https://api.unify.ai/v0/chat/completion' \
+        'https://api.unify.ai/v0/chat/completions' \
         -H 'accept: application/json' \
         -H 'Authorization: Bearer YOUR_API_KEY' \
         -H 'Content-Type: application/json' \
@@ -121,7 +121,7 @@ Or using **Python**:
 
     import requests
 
-    url = "https://api.unify.ai/v0/chat/completion"
+    url = "https://api.unify.ai/v0/chat/completions"
     headers = {
         "Authorization": "Bearer YOUR_API_KEY",
     }

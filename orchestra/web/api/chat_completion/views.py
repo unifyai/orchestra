@@ -18,7 +18,7 @@ from orchestra.web.api.users.views import get_credits
 router = APIRouter()
 
 
-@router.post("/chat/completion", response_model=ChatCompletionResponse)
+@router.post("/chat/completions", response_model=ChatCompletionResponse)
 async def get_completions(  # noqa: C901, WPS210, WPS231
     request_fastapi: Request,
     request: ChatCompletionRequest,
