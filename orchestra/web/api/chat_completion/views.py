@@ -72,7 +72,7 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
         async def stream_and_update_db():  # noqa: WPS430
             async for part_dict in response.generator():
                 part_dict["model"] = f"{model}@{provider}"
-                yield json.dumps(part_dict)
+                yield f"data: {json.dumps(part_dict)}\n\n"
                 await asyncio.sleep(0)
             await users_dao.recharge_credit(user_id, -response.total_cost)
 
