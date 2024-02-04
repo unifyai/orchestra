@@ -18,13 +18,10 @@ class CompletionsModel:
                 f"Model {model} not supported by {provider}",
             )
 
-        self.provider = provider
         self.provider_obj = PROVIDER_CLASSES[provider]()
         self.model = model.lower()
 
-    def set_credentials(self):
-        """Set the credentials for the provider."""
-        if self.provider == "vertex-ai":
+        if provider == "vertex-ai":
             from providers.completion.vertexai import VertexAI  # noqa: WPS433
 
             self.provider_obj = cast(VertexAI, self.provider_obj)
@@ -40,7 +37,7 @@ class CompletionsModel:
             self.provider_obj.set_api_key(
                 api_key=str(
                     os.getenv(
-                        f"ORCHESTRA_{self.provider.replace('-', '_').upper()}_API_KEY",  # noqa: WPS237, E501
+                        f"ORCHESTRA_{provider.replace('-', '_').upper()}_API_KEY",  # noqa: WPS237, E501
                     ),
                 ),
             )
@@ -55,7 +52,7 @@ class CompletionsModel:
         temperature: float = 0.9,
         stream: bool = False,
     ) -> Union[ModelResponse, Any]:
-        self.set_credentials()
+
         return self.provider_obj.complete(
             self.model,
             messages,
