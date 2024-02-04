@@ -135,7 +135,7 @@ class BaseCompletionProvider:
                             max_tokens=max_tokens,
                             temperature=temperature,
                             stream=True,
-                            api_key=self.api_key
+                            api_key=self.api_key,
                         ),
                         model,
                         messages,

@@ -22,8 +22,8 @@ class CompletionsModel:
         self.provider_obj = PROVIDER_CLASSES[provider]()
         self.model = model.lower()
 
-
     def set_credentials(self):
+        """Set the credentials for the provider."""
         if self.provider == "vertex-ai":
             from providers.completion.vertexai import VertexAI  # noqa: WPS433
 
