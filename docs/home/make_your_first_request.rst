@@ -152,7 +152,7 @@ Or any other language!
 Compatible Tools
 ----------------
 
-Thanks to the OpenAI format compatible endpoint, you can use most tools in a straightforward way. For example:
+Thanks to the OpenAI-compatible endpoint, you can easily integrate with lots of LLM tools. For example:
 
 OpenAI SDK
 **********
