@@ -24,7 +24,7 @@ class BaseCompletionProvider:
         self.model: str = ""
 
     def set_api_key(self, api_key: str) -> None:  # noqa: D102
-        litellm.api_key = api_key
+        self.api_key = api_key
 
     def get_cost_max(self, model_name: str) -> float:  # noqa: D102
         if model_name not in self.supported_models:
@@ -135,6 +135,7 @@ class BaseCompletionProvider:
                             max_tokens=max_tokens,
                             temperature=temperature,
                             stream=True,
+                            api_key=self.api_key,
                         ),
                         model,
                         messages,
@@ -147,6 +148,7 @@ class BaseCompletionProvider:
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                api_key=self.api_key,
             )
 
             return response, self.compute_cost(
