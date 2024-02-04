@@ -181,7 +181,7 @@ endpoints by simply configuring the OpenAI Client like this:
 Open Interpreter
 ****************
 
-Likewise, you can easily leverage the OpenAI format with external tools, such as 
+Likewise, you can easily use other tools such as 
 `Open Interpreter. <https://github.com/KillianLucas/open-interpreter>`_ 
 
 Let's take a look at this code snippet:
