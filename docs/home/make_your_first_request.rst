@@ -157,7 +157,7 @@ Thanks to the OpenAI format compatible endpoint, you can use most tools in a str
 OpenAI SDK
 **********
 
-If your code is using the ``OpenAI SDK <https://github.com/openai/openai-python>`_, you can switch to the Hub 
+If your code is using the `OpenAI SDK <https://github.com/openai/openai-python>`_, you can switch to the Hub 
 endpoints by simply configuring the OpenAI Client like this:
 
 .. code-block:: python
