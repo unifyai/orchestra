@@ -198,4 +198,4 @@ Let's take a look at this code snippet:
 
     interpreter.chat()
 
-In this case, we only need to mark the model as :code:`openai/x` to use the :code:/chat/completions` standard!
+In this case, we only need to mark the model as :code:`openai/x` to use the :code:`/chat/completions` format!
