@@ -20,8 +20,7 @@ class MistralProvider(AbstractProvider):
         )
         html_page = urlopen(req).read()
         soup = BeautifulSoup(html_page, "html.parser")
-        pricing_tables = soup.find_all("table")
-        self.pricing_tables = pricing_tables
+        self.pricing_tables = soup.find_all("table")
 
     def get(
         self,
