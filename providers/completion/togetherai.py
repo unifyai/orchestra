@@ -335,56 +335,5 @@ class TogetherAI(BaseCompletionProvider):
         },
     }
 
-    def complete(  # noqa: D102, WPS211, C901, WPS231
-    self,
-    model: str,
-    messages: List,  # type: ignore
-    max_tokens: Optional[int] = 512,
-    temperature: Optional[float] = 0.9,
-    stream: Optional[bool] = False,
-) -> Optional[Any]:
-        if model not in self.supported_models:
-            raise ValueError("Model not supported")
-
-        if isinstance(self.supported_models, dict):
-            provider_model_endpoint = self.supported_models[model]["endpoint"]
-        else:
-            provider_model_endpoint = model
-
-        if stream:
-            client = AsyncOpenAI(api_key=self.api_key, base_url="https://api.together.xyz/v1")
-        else:
-            client = OpenAI(api_key=self.api_key, base_url="https://api.together.xyz/v1")
-
-        try:
-            response = client.chat.completions.create(
-                            model=provider_model_endpoint,
-                            messages=messages,
-                            max_tokens=max_tokens,
-                            temperature=temperature,
-                            stream=stream,
-                        )
-            if stream:
-                return (
-                    AsyncGeneratorWrapper(
-                        response,
-                        model,
-                        messages,
-                        compute_cost_streaming=self.compute_cost_streaming,
-                    ),
-                    None,
-                )
-
-            return response, self.compute_cost(
-                model,
-                [item["content"] for item in messages],
-                response,
-            )
-        except openai.APIError as error:
-            logger.error(f"Raised openai.APIError, Error: {error}")
-        except openai.APITimeoutError as error:
-            logger.error(f"Raised openai.APITimeoutError, Error: {error}")
-        except Exception as error:
-            error_type = type(error)
-            logger.error(f"Raised error type: {error_type}, Error: {error}")
-        return None, None
+    base_url = "https://api.together.xyz/v1"
+    

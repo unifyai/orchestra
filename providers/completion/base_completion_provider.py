@@ -2,7 +2,7 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
-import litellm
+from openai import AsyncOpenAI, OpenAI
 import openai
 import tiktoken
 from litellm.utils import ModelResponse, Usage
@@ -109,14 +109,70 @@ class BaseCompletionProvider:
         except Exception:
             return 0
 
+    # def complete(  # noqa: D102, WPS211, C901, WPS231
+    #     self,
+    #     model: str,
+    #     messages: List,  # type: ignore
+    #     max_tokens: Optional[int] = 512,
+    #     temperature: Optional[float] = 0.9,
+    #     stream: Optional[bool] = False,
+    # ) -> Optional[Any]:
+    #     if model not in self.supported_models:
+    #         raise ValueError("Model not supported")
+
+    #     if isinstance(self.supported_models, dict):
+    #         provider_model_endpoint = self.supported_models[model]["endpoint"]
+    #     else:
+    #         provider_model_endpoint = model
+
+    #     try:
+    #         if stream:
+    #             return (
+    #                 AsyncGeneratorWrapper(
+    #                     litellm.acompletion(
+    #                         model=provider_model_endpoint,
+    #                         messages=messages,
+    #                         max_tokens=max_tokens,
+    #                         temperature=temperature,
+    #                         stream=True,
+    #                         api_key=self.api_key,
+    #                     ),
+    #                     model,
+    #                     messages,
+    #                     compute_cost_streaming=self.compute_cost_streaming,
+    #                 ),
+    #                 None,
+    #             )
+    #         response = litellm.completion(
+    #             model=provider_model_endpoint,
+    #             messages=messages,
+    #             max_tokens=max_tokens,
+    #             temperature=temperature,
+    #             api_key=self.api_key,
+    #         )
+
+    #         return response, self.compute_cost(
+    #             model,
+    #             [item["content"] for item in messages],
+    #             response,
+    #         )
+    #     except openai.APIError as error:
+    #         logger.error(f"Raised openai.APIError, Error: {error}")
+    #     except openai.APITimeoutError as error:
+    #         logger.error(f"Raised openai.APITimeoutError, Error: {error}")
+    #     except Exception as error:
+    #         error_type = type(error)
+    #         logger.error(f"Raised error type: {error_type}, Error: {error}")
+    #     return None, None
+
     def complete(  # noqa: D102, WPS211, C901, WPS231
-        self,
-        model: str,
-        messages: List,  # type: ignore
-        max_tokens: Optional[int] = 512,
-        temperature: Optional[float] = 0.9,
-        stream: Optional[bool] = False,
-    ) -> Optional[Any]:
+    self,
+    model: str,
+    messages: List,  # type: ignore
+    max_tokens: Optional[int] = 512,
+    temperature: Optional[float] = 0.9,
+    stream: Optional[bool] = False,
+) -> Optional[Any]:
         if model not in self.supported_models:
             raise ValueError("Model not supported")
 
@@ -125,31 +181,29 @@ class BaseCompletionProvider:
         else:
             provider_model_endpoint = model
 
+        if stream:
+            client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+        else:
+            client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+
         try:
-            if stream:
-                return (
-                    AsyncGeneratorWrapper(
-                        litellm.acompletion(
+            response = client.chat.completions.create(
                             model=provider_model_endpoint,
                             messages=messages,
                             max_tokens=max_tokens,
                             temperature=temperature,
-                            stream=True,
-                            api_key=self.api_key,
-                        ),
+                            stream=stream,
+                        )
+            if stream:
+                return (
+                    AsyncGeneratorWrapper(
+                        response,
                         model,
                         messages,
                         compute_cost_streaming=self.compute_cost_streaming,
                     ),
                     None,
                 )
-            response = litellm.completion(
-                model=provider_model_endpoint,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                api_key=self.api_key,
-            )
 
             return response, self.compute_cost(
                 model,
@@ -164,7 +218,6 @@ class BaseCompletionProvider:
             error_type = type(error)
             logger.error(f"Raised error type: {error_type}, Error: {error}")
         return None, None
-
 
 class AsyncGeneratorWrapper:  # noqa: D101
     def __init__(  # noqa: WPS211
