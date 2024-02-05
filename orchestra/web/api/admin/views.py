@@ -4,6 +4,7 @@ from typing import List, Optional
 from fastapi import APIRouter
 from fastapi.param_functions import Depends
 
+from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.datapoint_dao import DatapointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.license_dao import LicenseDAO
@@ -16,6 +17,7 @@ from orchestra.db.dao.recharge_type_dao import RechargeTypeDAO
 from orchestra.db.dao.task_dao import TaskDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.models.orchestra_models import (  # noqa: WPS235
+    BenchmarkRun,
     Datapoint,
     Endpoint,
     License,
@@ -27,6 +29,7 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     Users,
 )
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
+    BenchmarkRunModelResponse,
     DatapointModelRequest,
     DatapointModelResponse,
     EndpointModelRequest,
@@ -155,6 +158,23 @@ async def get_recharge(  # noqa: WPS211
         quantity=quantity,
         type=type,
     )
+
+
+@router.get("/get_all_benchmark_runs", response_model=List[BenchmarkRunModelResponse])
+async def get_benchmark_run_models(
+    limit: int = 10,
+    offset: int = 0,
+    benchmark_run_dao: BenchmarkRunDAO = Depends(),
+) -> List[BenchmarkRun]:
+    """
+    Retrieve all benchmark_run objects from the database.
+
+    :param limit: limit of benchmark_run objects, defaults to 10.
+    :param offset: offset of benchmark_run objects, defaults to 0.
+    :param benchmark_run_dao: DAO for benchmark_run models.
+    :return: list of benchmark_run objects from database.
+    """
+    return await benchmark_run_dao.get_all_benchmark_runs(limit=limit, offset=offset)
 
 
 @router.get("/get_all_datapoints", response_model=List[DatapointModelResponse])

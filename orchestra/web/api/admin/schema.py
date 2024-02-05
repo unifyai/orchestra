@@ -225,6 +225,27 @@ class DatapointModelResponse(BaseModel):
     value: float
 
 
+class BenchmarkRunModelResponse(BaseModel):
+    """
+    Response model for benchmark_run models.
+
+    Attributes:
+        id (int): The id of the benchmark_run.
+        endpoint_id (int): The id of the endpoint.
+        regime (str): The regime of the benchmark_run.
+        region (str): The region of the benchmark_run.
+        seq_len (str): The seq_len of the benchmark_run.
+        measured_at (datetime): The time of the benchmark_run.
+    """
+
+    id: int
+    endpoint_id: int
+    regime: str
+    region: str
+    seq_len: str
+    measured_at: datetime.datetime
+
+
 class EndpointModelResponse(BaseModel):
     """
     Response model for endpoint models.
