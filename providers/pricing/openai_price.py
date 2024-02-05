@@ -6,6 +6,8 @@ from bs4 import BeautifulSoup
 from providers.pricing import AbstractProvider
 from providers.pricing.tools.models import QueryFilter, RawCatalogItem
 
+from providers.completion.openai_provider import OpenAI
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,6 +22,7 @@ class OpenAIProvider(AbstractProvider):
         html_page = urlopen(req).read()
         soup = BeautifulSoup(html_page, "html.parser")
         self.pricing_tables = soup.find_all("table")
+        self.supported_models = set(OpenAI().supported_models)
 
     def get(
         self,
@@ -27,6 +30,7 @@ class OpenAIProvider(AbstractProvider):
         balance_resources: bool = True,
     ) -> List[RawCatalogItem]:
         offers = []
+        found_models = []
         for table in self.pricing_tables:
             table_headers = table.find_all("span", class_="f-heading-5")
             if table_headers[0].text != "Model" or table_headers[1].text != "Input":
@@ -53,6 +57,18 @@ class OpenAIProvider(AbstractProvider):
                     request_price=None,
                 )
                 offers.append(offer)
+                found_models.append(model_name)
+        # checking if any model left
+        models_missing_in_unify = []
+        for model_name in found_models:
+            try:
+                self.supported_models.remove(model_name)
+            except KeyError:
+                models_missing_in_unify.append(model_name)
+        if models_missing_in_unify:
+            print(f"Found in pricing page but not in our list ({self.NAME}): {models_missing_in_unify}")
+        if self.supported_models != set():
+            print(f"Models not in pricing table ({self.NAME}): {list(self.supported_models)}")
         return sorted(offers, key=lambda i: i.in_price)
 
 

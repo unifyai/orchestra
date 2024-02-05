@@ -8,6 +8,8 @@ from selenium.webdriver.common.by import By
 from providers.pricing import AbstractProvider
 from providers.pricing.tools.models import QueryFilter, RawCatalogItem
 
+from providers.completion.replicate import Replicate
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,6 +32,7 @@ class ReplicateProvider(AbstractProvider):
 
         content = driver.find_element(By.CSS_SELECTOR, "div[class*='space-y-lh'")
         self.rows = content.find_elements(By.TAG_NAME, "table")
+        self.supported_models = set(Replicate().supported_models)
 
     def get(
         self,
@@ -37,9 +40,10 @@ class ReplicateProvider(AbstractProvider):
         balance_resources: bool = True,
     ) -> List[RawCatalogItem]:
         offers = []
+        found_models = []
         for row in self.rows[0].text.split("\n")[1:]:
             cols = row.split(" ")
-            model_name = cols[0]
+            model_name = cols[0].split("/")[1]
             input_pr = float(cols[1][1:])
             output_pr = float(cols[5][1:])
             offer = RawCatalogItem(
@@ -49,8 +53,19 @@ class ReplicateProvider(AbstractProvider):
                 request_price=None,
             )
             offers.append(offer)
+            found_models.append(model_name)
+        # checking if any model left
+        models_missing_in_unify = []
+        for model_name in found_models:
+            try:
+                self.supported_models.remove(model_name)
+            except KeyError:
+                models_missing_in_unify.append(model_name)
+        if models_missing_in_unify:
+            print(f"Found in pricing page but not in our list ({self.NAME}): {models_missing_in_unify}")
+        if self.supported_models != set():
+            print(f"Models not in pricing table ({self.NAME}): {list(self.supported_models)}")
         return sorted(offers, key=lambda i: i.in_price)
-
 
 
 if __name__ == "__main__":
