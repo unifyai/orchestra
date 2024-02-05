@@ -25,6 +25,11 @@ class Anyscale(BaseCompletionProvider):
             "context_window": 4096,
             "cost": {"prompt": 1, "completion": 1},
         },
+        "llama-guard-7b": {
+            "endpoint": "anyscale/Meta-Llama/Llama-Guard-7b",
+            "context_window": 4096,
+            "cost": {"prompt": 0.15, "completion": 0.15},
+        },
         "mistral-7b-instruct-v0.1": {
             "endpoint": "anyscale/mistralai/Mistral-7B-Instruct-v0.1",
             "context_window": 16384,
@@ -35,9 +40,24 @@ class Anyscale(BaseCompletionProvider):
             "context_window": 32768,
             "cost": {"prompt": 0.50, "completion": 0.50},
         },
+        "mistral-7b-openorca": {
+            "endpoint": "anyscale/Open-Orca/Mistral-7B-OpenOrca",
+            "context_window": 8192,
+            "cost": {"prompt": 0.15, "completion": 0.15},
+        },
+        "neuralhermes-2.5-mistral-7b": {
+            "endpoint": "anyscale/mlabonne/NeuralHermes-2.5-Mistral-7B",
+            "context_window": 16384,
+            "cost": {"prompt": 0.15, "completion": 0.15},
+        },
         "codellama-34b-instruct": {
             "endpoint": "anyscale/codellama/CodeLlama-34b-Instruct-hf",
             "context_window": 16384,
+            "cost": {"prompt": 1, "completion": 1},
+        },
+        "codellama-70b-instruct": {
+            "endpoint": "anyscale/codellama/CodeLlama-70b-Instruct-hf",
+            "context_window": 4096,
             "cost": {"prompt": 1, "completion": 1},
         },
         "zephyr-7b-beta": {
