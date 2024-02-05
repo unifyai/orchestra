@@ -7,11 +7,11 @@ import datetime
 import logging
 import os
 from typing import Dict, List, Union
-from providers.completion import PROVIDER_CLASSES
 
 import yaml
 from aibench.runner import AIBenchRunner
 from models.llm import CompletionsModel
+from providers.completion import PROVIDER_CLASSES
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
