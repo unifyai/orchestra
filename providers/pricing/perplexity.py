@@ -23,7 +23,12 @@ class PerplexityProvider(AbstractProvider):
         self.pricing_tables = soup.find_all("table")
         # perplexity only lists pricing according to model size
         # so pulling all supported models
-        self.supported_models = set([x["endpoint"].split("/")[-1].lower() for x in Perplexity().supported_models.values()])
+        self.supported_models = set(
+            [
+                x["endpoint"].split("/")[-1].lower()
+                for x in Perplexity().supported_models.values()
+            ],
+        )
 
     def get(
         self,

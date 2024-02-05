@@ -3,10 +3,9 @@ from typing import List, Optional
 from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
+from providers.completion.octoai_provider import OctoAI
 from providers.pricing import AbstractProvider
 from providers.pricing.tools.models import QueryFilter, RawCatalogItem
-
-from providers.completion.octoai_provider import OctoAI
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +21,12 @@ class OctoAIProvider(AbstractProvider):
         html_page = urlopen(req).read()
         soup = BeautifulSoup(html_page, "html.parser")
         self.pricing_tables = soup.find_all("table")
-        self.supported_models = set([x["endpoint"].split("/")[-1].lower() for x in OctoAI().supported_models.values()])
+        self.supported_models = set(
+            [
+                x["endpoint"].split("/")[-1].lower()
+                for x in OctoAI().supported_models.values()
+            ],
+        )
 
     def get(
         self,
@@ -34,7 +38,9 @@ class OctoAIProvider(AbstractProvider):
         for row in self.pricing_tables[-2].find_all("tr")[1:]:
             cols = row.find_all("td")
             parameter_precision = "-" + cols[1].text.strip().lower()
-            model_name = cols[0].text.strip().lower().replace(" ", "-") + parameter_precision
+            model_name = (
+                cols[0].text.strip().lower().replace(" ", "-") + parameter_precision
+            )
             input_pr = cols[2].text[1:].split("/")[0].strip()
             output_pr = cols[3].text[1:].split("/")[0].strip()
 
@@ -60,9 +66,13 @@ class OctoAIProvider(AbstractProvider):
             except KeyError:
                 models_missing_in_unify.append(model_name)
         if models_missing_in_unify:
-            print(f"Found in pricing page but not in our list ({self.NAME}): {models_missing_in_unify}")
+            print(
+                f"Found in pricing page but not in our list ({self.NAME}): {models_missing_in_unify}",
+            )
         if self.supported_models != set():
-            print(f"Models not in pricing table ({self.NAME}): {list(self.supported_models)}")
+            print(
+                f"Models not in pricing table ({self.NAME}): {list(self.supported_models)}",
+            )
         return sorted(offers, key=lambda i: i.in_price)
 
 

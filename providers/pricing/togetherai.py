@@ -22,7 +22,12 @@ class TogetherAIProvider(AbstractProvider):
         html_page = urlopen(req).read()
         soup = BeautifulSoup(html_page, "html.parser")
         self.pricing_tables = soup.find_all("ul", class_="pricing-list w-list-unstyled")
-        self.supported_models = set(TogetherAI().supported_models)
+        self.supported_models = set(
+            [
+                x["endpoint"].split("/")[-1].lower()
+                for x in TogetherAI().supported_models.values()
+            ]
+        )
 
     def get(
         self,
