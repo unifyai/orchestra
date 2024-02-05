@@ -45,6 +45,11 @@ class OctoAI(BaseCompletionProvider):
             "context_window": 16384,
             "cost": {"prompt": 0.5, "completion": 1.15},
         },
+        "codellama-70b-instruct": {
+            "endpoint": "codellama-70b-instruct-fp16",
+            "context_window": 16384,
+            "cost": {"prompt": 0.6, "completion": 1.9},
+        },
         "codellama-34b-instruct-int4": {
             "endpoint": "codellama-34b-instruct-int4",
             "context_window": 4096,
