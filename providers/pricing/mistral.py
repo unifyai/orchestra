@@ -23,7 +23,7 @@ class MistralProvider(AbstractProvider):
         html_page = urlopen(req).read()
         soup = BeautifulSoup(html_page, "html.parser")
         self.pricing_tables = soup.find_all("table")
-        self.supported_models = set(Mistral().supported_models)
+        self.supported_models = set([x["endpoint"].split("/")[-1].lower() for x in Mistral().supported_models.values()])
 
     def get(
         self,
@@ -57,17 +57,17 @@ class MistralProvider(AbstractProvider):
                     )
                 offers.append(offer)
                 found_models.append(model_name)
-            # checking if any model left
-            models_missing_in_unify = []
-            for model_name in found_models:
-                try:
-                    self.supported_models.remove(model_name)
-                except KeyError:
-                    models_missing_in_unify.append(model_name)
-            if models_missing_in_unify:
-                print(f"Found in pricing page but not in our list ({self.NAME}): {models_missing_in_unify}")
-            if self.supported_models != set():
-                print(f"Models not in pricing table ({self.NAME}): {list(self.supported_models)}")
+        # checking if any model left
+        models_missing_in_unify = []
+        for model_name in found_models:
+            try:
+                self.supported_models.remove(model_name)
+            except KeyError:
+                models_missing_in_unify.append(model_name)
+        if models_missing_in_unify:
+            print(f"Found in pricing page but not in our list ({self.NAME}): {models_missing_in_unify}")
+        if self.supported_models != set():
+            print(f"Models not in pricing table ({self.NAME}): {list(self.supported_models)}")
         return sorted(offers, key=lambda i: i.in_price)
 
 
