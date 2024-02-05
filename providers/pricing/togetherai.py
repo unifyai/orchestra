@@ -107,7 +107,7 @@ class TogetherAIProvider(AbstractProvider):
                 offers.append(offer)
         # checking if any model left
         if self.supported_models != set():
-            print(f"Models not in pricing table ({self.NAME}): {self.supported_models}")
+            print(f"Models not in pricing page ({self.NAME}): {self.supported_models}")
         return sorted(offers, key=lambda i: i.in_price)
 
 

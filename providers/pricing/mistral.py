@@ -67,7 +67,7 @@ class MistralProvider(AbstractProvider):
         if models_missing_in_unify:
             print(f"Found in pricing page but not in our list ({self.NAME}): {models_missing_in_unify}")
         if self.supported_models != set():
-            print(f"Models not in pricing table ({self.NAME}): {list(self.supported_models)}")
+            print(f"Models not in pricing page ({self.NAME}): {list(self.supported_models)}")
         return sorted(offers, key=lambda i: i.in_price)
 
 

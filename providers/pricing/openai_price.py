@@ -75,7 +75,7 @@ class OpenAIProvider(AbstractProvider):
             )
         if self.supported_models != set():
             print(
-                f"Models not in pricing table ({self.NAME}): {list(self.supported_models)}",
+                f"Models not in pricing page ({self.NAME}): {list(self.supported_models)}",
             )
         return sorted(offers, key=lambda i: i.in_price)
 
