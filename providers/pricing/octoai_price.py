@@ -19,8 +19,7 @@ class OctoAIProvider(AbstractProvider):
         )
         html_page = urlopen(req).read()
         soup = BeautifulSoup(html_page, "html.parser")
-        pricing_tables = soup.find_all("table")
-        self.pricing_tables = pricing_tables
+        self.pricing_tables = soup.find_all("table")
 
     def get(
         self,
@@ -36,8 +35,8 @@ class OctoAIProvider(AbstractProvider):
             output_pr = cols[3].text[1:].split("/")[0].strip()
 
             # standardize pricing to per million
-            input_pr = float(input_pr) * 1000
             output_pr = float(output_pr) * 1000
+            input_pr = float(input_pr) * 1000 if input_pr else output_pr
             offer = RawCatalogItem(
                 model_name=model_name,
                 in_price=input_pr,
