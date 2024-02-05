@@ -3,7 +3,7 @@ from providers.completion.anthropic import Anthropic
 from providers.completion.anyscale import Anyscale
 from providers.completion.mistral import Mistral
 from providers.completion.octoai_provider import OctoAI
-from providers.completion.openai import OpenAI
+from providers.completion.openai_provider import OpenAI
 from providers.completion.perplexity import Perplexity
 from providers.completion.replicate import Replicate
 from providers.completion.togetherai import TogetherAI
