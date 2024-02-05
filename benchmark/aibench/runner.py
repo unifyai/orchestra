@@ -50,8 +50,9 @@ class AIBenchRunner:
         self.prompt_queue = asyncio.Queue()
         self.results_queue = asyncio.Queue()
 
-        # Tokenizer
         self.tokenizer = tiktoken.get_encoding("cl100k_base")
+
+        random.seed(seed)
 
     @property
     def itl(self) -> List[float]:
@@ -165,6 +166,8 @@ class AIBenchRunner:
         completions = []
         metrics_dict = {}
 
+        result = self.fn(prompt=prompt, max_tokens=max_tokens, stream=True)
+
         # Store failed queries if any
         metrics_dict["failed_queries"] = 0
         if result is None:
@@ -216,11 +219,7 @@ class AIBenchRunner:
         prompt = "2+2 is "
         completions = []
 
-        result, _ = self.fn(  # type: ignore
-            prompt=prompt,
-            max_tokens=10,
-            stream=True,
-        )
+        result, _ = self.fn(prompt=prompt, max_tokens=10, stream=True)
 
         if result is None:
             logging.warning("Run during cold start failed")
