@@ -23,7 +23,7 @@ class PerplexityProvider(AbstractProvider):
         self.pricing_tables = soup.find_all("table")
         # perplexity only lists pricing according to model size
         # so pulling all supported models
-        self.perplexity_models = set(Perplexity().supported_models)
+        self.supported_models = set(Perplexity().supported_models)
 
     def get(
         self,
@@ -45,12 +45,12 @@ class PerplexityProvider(AbstractProvider):
             output_pr = float(cols[2].text[1:].strip())
 
             relevant_models = []
-            for model_name in self.perplexity_models:
+            for model_name in self.supported_models:
                 if model_size.lower() in model_name:
                     relevant_models.append(model_name)
 
             for model_name in relevant_models:
-                self.perplexity_models.remove(model_name)
+                self.supported_models.remove(model_name)
                 if "online" in model_name:
                     input_pr = 0
                     offer = RawCatalogItem(
@@ -67,6 +67,9 @@ class PerplexityProvider(AbstractProvider):
                         request_price=None,
                     )
                 offers.append(offer)
+        # checking if any model left
+        if self.supported_models != set():
+            print(f"Models not in pricing table ({self.NAME}): {self.supported_models}")
         return sorted(offers, key=lambda i: i.in_price)
 
 

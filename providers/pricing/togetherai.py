@@ -22,7 +22,7 @@ class TogetherAIProvider(AbstractProvider):
         html_page = urlopen(req).read()
         soup = BeautifulSoup(html_page, "html.parser")
         self.pricing_tables = soup.find_all("ul", class_="pricing-list w-list-unstyled")
-        self.togetherai_models = set(TogetherAI().supported_models)
+        self.supported_models = set(TogetherAI().supported_models)
 
     def get(
         self,
@@ -60,7 +60,7 @@ class TogetherAIProvider(AbstractProvider):
                     upper_range = size_range[1]
                 else:
                     print("Error in size range")
-                for model_name in self.togetherai_models:
+                for model_name in self.supported_models:
                     if "llama" in model_name:
                         continue
                     model_size = re.findall(r"(?<!x)(\d+)b", model_name)
@@ -71,7 +71,7 @@ class TogetherAIProvider(AbstractProvider):
             # LLAMA-2 AND CODELLAMA MODELS
             elif 8 >= i >= 5:
                 llama_size = float(size[:-1])
-                for model_name in self.togetherai_models:
+                for model_name in self.supported_models:
                     if "llama" in model_name:
                         model_size = re.findall(r"(?<!x)(\d+)b", model_name)
                         if model_size:
@@ -85,14 +85,14 @@ class TogetherAIProvider(AbstractProvider):
                     print("MOE size not found in expected scrapped data")
                 else:
                     moe_size_from_chart = "".join(list(moe_size_from_chart[0])).lower()
-                    for model_name in self.togetherai_models:
+                    for model_name in self.supported_models:
                         model_size = re.findall(r"(\d+x\d+b)", model_name)
                         if model_size:
                             if moe_size_from_chart == model_size[0]:
                                 relevant_models.append(model_name)
 
             for model_name in relevant_models:
-                self.togetherai_models.remove(model_name)
+                self.supported_models.remove(model_name)
                 offer = RawCatalogItem(
                     model_name=model_name,
                     in_price=cost,
@@ -100,6 +100,9 @@ class TogetherAIProvider(AbstractProvider):
                     request_price=None,
                 )
                 offers.append(offer)
+        # checking if any model left
+        if self.supported_models != set():
+            print(f"Models not in pricing table ({self.NAME}): {self.supported_models}")
         return sorted(offers, key=lambda i: i.in_price)
 
 
