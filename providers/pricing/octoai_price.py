@@ -22,7 +22,7 @@ class OctoAIProvider(AbstractProvider):
         html_page = urlopen(req).read()
         soup = BeautifulSoup(html_page, "html.parser")
         self.pricing_tables = soup.find_all("table")
-        self.supported_models = set(OctoAI().supported_models)
+        self.supported_models = set([x["endpoint"].split("/")[-1].lower() for x in OctoAI().supported_models.values()])
 
     def get(
         self,
@@ -33,19 +33,13 @@ class OctoAIProvider(AbstractProvider):
         found_models = []
         for row in self.pricing_tables[-2].find_all("tr")[1:]:
             cols = row.find_all("td")
-            model_name = cols[0].text.strip().lower().replace(" ", "-")
-            parameter_precision = cols[1].text.strip().lower()
+            parameter_precision = "-" + cols[1].text.strip().lower()
+            model_name = cols[0].text.strip().lower().replace(" ", "-") + parameter_precision
             input_pr = cols[2].text[1:].split("/")[0].strip()
             output_pr = cols[3].text[1:].split("/")[0].strip()
 
             if "llama2" in model_name:
                 model_name = model_name.replace("llama2", "llama-2")
-            elif "mistral" in model_name:
-                model_name += "-v0.2"
-            elif "mixtral" in model_name:
-                model_name += "-v0.1"
-            if "int4" in parameter_precision:
-                model_name += "-int4"
 
             # standardize pricing to per million
             output_pr = float(output_pr) * 1000

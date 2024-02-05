@@ -22,7 +22,7 @@ class OpenAIProvider(AbstractProvider):
         html_page = urlopen(req).read()
         soup = BeautifulSoup(html_page, "html.parser")
         self.pricing_tables = soup.find_all("table")
-        self.supported_models = set(OpenAI().supported_models)
+        self.supported_models = set([x["endpoint"].split("/")[-1].lower() for x in OpenAI().supported_models.values()])
 
     def get(
         self,

@@ -32,7 +32,7 @@ class ReplicateProvider(AbstractProvider):
 
         content = driver.find_element(By.CSS_SELECTOR, "div[class*='space-y-lh'")
         self.rows = content.find_elements(By.TAG_NAME, "table")
-        self.supported_models = set(Replicate().supported_models)
+        self.supported_models = set([x["endpoint"].split("/")[-1].lower() for x in Replicate().supported_models.values()])
 
     def get(
         self,
