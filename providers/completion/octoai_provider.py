@@ -75,11 +75,6 @@ class OctoAI(BaseCompletionProvider):
             "context_window": 4096,
             "cost": {"prompt": 0.2, "completion": 0.5},
         },
-        "gte-large": {
-            "endpoint": "gte-large",
-            "context_window": 1024,
-            "cost": {"prompt": 0, "completion": 0.05},
-        },
     }
 
     def set_api_key(self, api_key: str) -> None:
