@@ -7,6 +7,8 @@ from bs4 import BeautifulSoup
 from providers.pricing import AbstractProvider
 from providers.pricing.tools.models import QueryFilter, RawCatalogItem
 
+from providers.completion.mistral import Mistral
+
 logger = logging.getLogger(__name__)
 
 
@@ -21,6 +23,7 @@ class MistralProvider(AbstractProvider):
         html_page = urlopen(req).read()
         soup = BeautifulSoup(html_page, "html.parser")
         self.pricing_tables = soup.find_all("table")
+        self.supported_models = set(Mistral().supported_models)
 
     def get(
         self,
@@ -28,6 +31,7 @@ class MistralProvider(AbstractProvider):
         balance_resources: bool = True,
     ) -> List[RawCatalogItem]:
         offers = []
+        found_models = []
         for table in self.pricing_tables:
             rows = table.find_all("tr")
             for row in rows[1:]:
@@ -52,6 +56,18 @@ class MistralProvider(AbstractProvider):
                         request_price=None,
                     )
                 offers.append(offer)
+                found_models.append(model_name)
+            # checking if any model left
+            models_missing_in_unify = []
+            for model_name in found_models:
+                try:
+                    self.supported_models.remove(model_name)
+                except KeyError:
+                    models_missing_in_unify.append(model_name)
+            if models_missing_in_unify:
+                print(f"Found in pricing page but not in our list ({self.NAME}): {models_missing_in_unify}")
+            if self.supported_models != set():
+                print(f"Models not in pricing table ({self.NAME}): {list(self.supported_models)}")
         return sorted(offers, key=lambda i: i.in_price)
 
 
