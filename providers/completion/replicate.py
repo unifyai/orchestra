@@ -78,12 +78,12 @@ class Replicate(BaseCompletionProvider):
         "llama-2-13b": {
             "endpoint": "meta/llama-2-13b",
             "context_window": 4096,
-            "cost": {"prompt": 0.10, "completion": 0.50},  # noqa: WPS339
+            "cost": {"prompt": 0.1, "completion": 0.5},
         },
         "llama-2-13b-chat": {
             "endpoint": "meta/llama-2-13b-chat",
             "context_window": 4096,
-            "cost": {"prompt": 0.10, "completion": 0.50},  # noqa: WPS339
+            "cost": {"prompt": 0.1, "completion": 0.5},
         },
         "llama-2-7b": {
             "endpoint": "meta/llama-2-7b",

@@ -8,7 +8,7 @@ from typing import Callable, Dict, List, Tuple
 import tiktoken
 
 
-class AIBenchRunner:
+class AIBenchRunner:  # noqa: WPS230, WPS338
     """
     A benchmark runner for asynchronous LLM inference endpoints.
 
@@ -36,7 +36,7 @@ class AIBenchRunner:
         """
         self.fn = fn
         self.load = load
-        assert input_policy in {"short", "long"}
+        assert input_policy in {"short", "long"}  # noqa: S101
         self.input_policy = input_policy
 
         self.ttft = []
@@ -79,7 +79,7 @@ class AIBenchRunner:
         :return: List[float]
             The output tokens per second.
         """
-        return [1000 / i for i in self.itl]
+        return [1000 / itl for itl in self.itl]
 
     def as_dict(self) -> Dict:
         """
@@ -132,7 +132,7 @@ class AIBenchRunner:
             ]
         return samples
 
-    def prepare_prompts(self) -> List[str]:
+    def prepare_prompts(self) -> List[str]:  # noqa: WPS210
         """
         Prepare the prompts for the benchmark.
 
@@ -142,10 +142,15 @@ class AIBenchRunner:
         samples_fname = f"prompts_{self.input_policy}.json"
         prompts = random.sample(self._get_samples(samples_fname), self.load)
         all_prompts = []
-        for prompt in prompts:
-            count = {random.randint(0, int((4096 - prompt[1]) / prompt[1]))}
-            preamble = f"Repeat the following line {count} times without generating the EOS token earlier than that: \n"
-            all_prompts.append(preamble + prompt[0])
+        for prompt_text, prompt_len in prompts:
+            max_length = 4096
+            max_repetitions = max_length // prompt_len
+            count = random.randint(0, max_repetitions)  # noqa: S311
+            preamble = (
+                f"Repeat the following line {count} times without "
+                "generating the EOS token earlier than that: \n"
+            )
+            all_prompts.append(preamble + prompt_text)
         return all_prompts
 
     def _max_token_sampler(self) -> int:
@@ -156,10 +161,10 @@ class AIBenchRunner:
             The maximum number of tokens to generate.
         """
         if self.input_policy == "short":
-            return int(random.normalvariate(200, 20))
+            return int(random.normalvariate(200, 20))  # noqa: WPS432
         return int(random.normalvariate(1000, 100))
 
-    async def compute_metrics(self) -> None:
+    async def compute_metrics(self) -> None:  # noqa: WPS210
         """Compute the metrics for an individual request."""
         prompt = await self.prompt_queue.get()
         max_tokens = self._max_token_sampler()
@@ -206,7 +211,7 @@ class AIBenchRunner:
         await self.results_queue.put(metrics_dict)
         self.prompt_queue.task_done()
 
-    async def check_coldstart(self, threshold: float) -> float:
+    async def check_coldstart(self, threshold: float) -> float:  # noqa: WPS210
         """
         Check if the endpoint suffers from a cold start.
 
@@ -214,16 +219,16 @@ class AIBenchRunner:
             The threshold for the cold start.
 
         :return: float
-            The cold start time.
+            The cold start time. Returns -1 if the query fails.
         """
-        prompt = "2+2 is "
+        prompt = "Are you sleeping?"
         completions = []
 
-        result, _ = self.fn(prompt=prompt, max_tokens=10, stream=True)
+        result = self.fn(prompt=prompt, max_tokens=10, stream=True)
 
         if result is None:
             logging.warning("Run during cold start failed")
-            return 0
+            return -1
 
         start_time = time.perf_counter()
         async for part in result.generator():
@@ -234,18 +239,15 @@ class AIBenchRunner:
                 },
             )
             await asyncio.sleep(0)
-        first_token_time = completions[0]["reception_time"]
-        try:
-            second_token_time = completions[1]["reception_time"]
-        except IndexError:
-            second_token_time = 0
 
-        cold_start = first_token_time - start_time
-        if (
-            cold_start > threshold
-            and (second_token_time - first_token_time) * 10 <= cold_start
-        ):
-            return cold_start
+        try:
+            ttft = completions[0]["reception_time"] - start_time
+            itl = completions[1]["reception_time"] - ttft
+        except IndexError:
+            return -1
+
+        if ttft > threshold and itl <= ttft / 10:
+            return ttft
 
         return 0
 
@@ -262,12 +264,14 @@ class AIBenchRunner:
         6. Returns the computed metrics as a dictionary.
 
         Note:
-            This method is designed to be asynchronous and should be awaited when called.
+            This method is designed to be asynchronous and should be
+            awaited when called.
 
         :return: Dict
             Computed metrics as a dictionary.
         """
-        self.cold_start = await self.check_coldstart(threshold=15)
+        cold_start_thr = 15
+        self.cold_start = await self.check_coldstart(threshold=cold_start_thr)
         concurrent_requests = []
         for prompt in self.prepare_prompts():
             await self.prompt_queue.put(prompt)

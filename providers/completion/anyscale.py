@@ -33,7 +33,7 @@ class Anyscale(BaseCompletionProvider):
         "mixtral-8x7b-instruct-v0.1": {
             "endpoint": "anyscale/mistralai/Mixtral-8x7B-Instruct-v0.1",
             "context_window": 32768,
-            "cost": {"prompt": 0.50, "completion": 0.50},
+            "cost": {"prompt": 0.5, "completion": 0.5},
         },
         "codellama-34b-instruct": {
             "endpoint": "anyscale/codellama/CodeLlama-34b-Instruct-hf",

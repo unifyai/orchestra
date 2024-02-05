@@ -109,9 +109,10 @@ async def db_loop(  # noqa: WPS210, WPS217
     """
     async with async_session() as q_session:
         metrics = await get_names(q_session, Metric)
-        regimes = await get_names(q_session, BenchmarkRegime)
-        regions = await get_names(q_session, BenchmarkRegion)
-        seq_lens = await get_names(q_session, BenchmarkSeqLen)
+        # TODO: Check and print proper errors if needed
+        regimes = await get_names(q_session, BenchmarkRegime)  # noqa: F841
+        regions = await get_names(q_session, BenchmarkRegion)  # noqa: F841
+        seq_lens = await get_names(q_session, BenchmarkSeqLen)  # noqa: F841
     while True:
         await asyncio.sleep(period)
 
@@ -132,7 +133,29 @@ async def db_loop(  # noqa: WPS210, WPS217
             break
 
 
-async def worker_loop(  # noqa: WPS210
+def get_completion_model(endpoint: Dict) -> Union[CompletionsModel, None]:
+    # noqa: DAR101, DAR201
+    """Initialize and return a CompletionsModel based on the provided endpoint.
+
+    Args:
+        endpoint (Dict): A endpoint dictionary containing 'provider' and 'model'.
+
+    Returns:
+        Union[CompletionsModel, None]: An instance of CompletionsModel if successfully
+                                       initialized, or None if an exception occurs
+                                       during the loading process.
+
+    Raises:
+        Exception: Any exception that occurs during the loading of the CompletionsModel.
+    """
+    try:
+        return CompletionsModel(provider=endpoint["provider"], model=endpoint["model"])
+    except Exception as load_exc:
+        logging.error(f"Exception raised loading CompletionsModel: {load_exc}")
+        return None
+
+
+async def worker_loop(  # noqa: WPS210, WPS213, WPS231, C901
     input_queue: asyncio.Queue,
     output_queue: asyncio.Queue,
     done_event: asyncio.Event,
@@ -158,35 +181,28 @@ async def worker_loop(  # noqa: WPS210
         endpoint = await input_queue.get()
         # Check if we need to stop
         if endpoint is None:
+            input_queue.task_done()
             break
-        print("Testing: {}".format(endpoint))
+        logging.info(f"Testing: {endpoint}")
+
         # Retrieve/fabricate a callable based on the model the provider
-        try:
-            language_model = CompletionsModel(
-                provider=endpoint["provider"],
-                model=endpoint["model"],
-            )
-        except Exception as e:
-            logging.error(f"Exception raised loading CompletionsModel: {e}")
+        lm = get_completion_model(endpoint)
+        if lm is None:
             input_queue.task_done()
             continue
 
-        def endpoint_fn(prompt, max_tokens, stream):
-            message = [
+        def _fn(prompt, max_tokens, stream, model=lm):  # noqa: WPS430
+            msg = [
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": prompt},
             ]
-            return language_model.get_completion(
-                message,
-                max_tokens=max_tokens,
-                stream=stream,
-            )
+            return model.get_completion(msg, max_tokens=max_tokens, stream=stream)
 
         # Initialise the benchmark runner(s)
         benchmark_runners = []
         for config in configs:
             benchmark_runners.append(
-                AIBenchRunner(endpoint_fn, **config),
+                AIBenchRunner(_fn, **config),
             )
 
         # Iterate over each runner
@@ -197,19 +213,19 @@ async def worker_loop(  # noqa: WPS210
                 result["region"] = region
                 result["regime"] = f"concurrent-{result['load']}"
                 result["endpoint_id"] = endpoint["id"]
-                try:
+                try:  # noqa: WPS505
                     provider = PROVIDER_CLASSES[endpoint["provider"]]()
                     cost = provider.supported_models[endpoint["model"]]["cost"]
                     result["input_cost_per_token"] = cost["prompt"]
                     result["output_cost_per_token"] = cost["completion"]
-                except Exception as e:
-                    logging.error(f"Cost not computed correctly: {e}")
+                except Exception as cost_exc:
+                    logging.error(f"Cost not computed correctly: {cost_exc}")
                 # Push the result into the db queue
                 await output_queue.put(result)
                 # Log results
                 # TODO logging.info(repr(runner))
-            except Exception as e:
-                logging.error(f"Exception raised in runner: {e}")
+            except Exception as runner_exc:
+                logging.error(f"Exception raised in runner: {runner_exc}")
 
         # Log endpoint metrics
         # TODO
@@ -237,7 +253,7 @@ async def retrieve_all_endpoints(async_session: sessionmaker) -> List[Dict]:
             select(Endpoint, Model, Provider)
             .join(Model)
             .join(Provider)
-            .where(Model.active == True)
+            .where(Model.active)
         )
         results = await session.execute(stmt)
     endpoints = []
@@ -326,7 +342,7 @@ async def add_br_datapoints(  # noqa: WPS210
             )
 
 
-async def main():  # noqa: WPS210
+async def main():  # noqa: WPS210, WPS213
     """Main benchmark orchestrator orchestrator."""  # noqa: DAR401
     # Define config file to use
     config_file = os.getenv("BENCHMARK_CONFIG_FILE", "benchmark/test.config.yml")
@@ -344,20 +360,20 @@ async def main():  # noqa: WPS210
 
     # Get list of endpoints in our db
     endpoints = await retrieve_all_endpoints(async_db_session)
-    logger.info(f"Found {len(endpoints)} endpoints where Model is active in the db.")
-    # TODO: remove this
-    """
-    endpoints = [
-        # {"id": 1240, "provider": "together-ai", "model": "llama-2-7b-chat"},
-        # {"id": 1239, "provider": "anyscale", "model": "llama-2-7b-chat"},
-        # {"id": 1241, "provider": "replicate", "model": "llama-2-7b-chat"},
-        {"id": 1250, "provider": "anyscale", "model": "llama-2-70b-chat"},
-        {"id": 1251, "provider": "perplexity-ai", "model": "llama-2-70b-chat"},
-        {"id": 1252, "provider": "together-ai", "model": "llama-2-70b-chat"},
-        {"id": 1253, "provider": "replicate", "model": "llama-2-70b-chat"},
-        {"id": 1254, "provider": "octoai", "model": "llama-2-70b-chat"},
-    ]
-    """
+    num_endpoints = len(endpoints)
+    logger.info(f"Found {num_endpoints} endpoints where Model is active in the db.")
+    if os.getenv("BENCHMARK_MODE", "PROD") == "DEBUG":
+        logger.info("Running in debug mode.")
+        endpoints = [
+            {"id": 1240, "provider": "together-ai", "model": "llama-2-7b-chat"},
+            {"id": 1239, "provider": "anyscale", "model": "llama-2-7b-chat"},
+            {"id": 1241, "provider": "replicate", "model": "llama-2-7b-chat"},
+            {"id": 1250, "provider": "anyscale", "model": "llama-2-70b-chat"},
+            {"id": 1251, "provider": "perplexity-ai", "model": "llama-2-70b-chat"},
+            {"id": 1252, "provider": "together-ai", "model": "llama-2-70b-chat"},
+            {"id": 1253, "provider": "replicate", "model": "llama-2-70b-chat"},
+            {"id": 1254, "provider": "octoai", "model": "llama-2-70b-chat"},
+        ]
     # Configure concurrent workers and tasks
     num_workers = int(os.getenv("BENCHMARK_NUM_WORKERS", "3"))
     db_commit_period = int(os.getenv("BENCHMARK_DB_COMMIT_PERIOD", "60"))

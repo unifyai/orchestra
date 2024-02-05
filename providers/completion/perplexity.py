@@ -26,8 +26,8 @@ class Perplexity(BaseCompletionProvider):
             "cost": {"prompt": 0.07, "completion": 0.28},
         },
         # "mixtral-8x7b-instruct-v0.1": {
-        #     "endpoint": "perplexity/mixtral-8x7b-instruct",
-        #     "context_window": 4096,
+        #     "endpoint": "perplexity/mixtral-8x7b-instruct", noqa: E800
+        #     "context_window": 4096, noqa: E800
         #     "cost": {"prompt": 0.13, "completion": 0.56}, This needs to be revisited
         # },
         "pplx-7b-chat": {
