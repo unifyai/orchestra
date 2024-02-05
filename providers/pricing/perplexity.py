@@ -3,9 +3,9 @@ from typing import List, Optional
 from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
+from providers.completion.perplexity import Perplexity
 from providers.pricing import AbstractProvider
 from providers.pricing.tools.models import QueryFilter, RawCatalogItem
-from providers.completion.perplexity import Perplexity
 
 logger = logging.getLogger(__name__)
 

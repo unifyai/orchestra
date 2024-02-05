@@ -1,5 +1,4 @@
 import logging
-import re
 from typing import List, Optional
 from urllib.request import Request, urlopen
 

@@ -15,7 +15,7 @@ class RawCatalogItem:
     model_name: Optional[str]
     in_price: Optional[float]
     out_price: Optional[float]
-    request_price: Optional[float] # only perplexity for now
+    request_price: Optional[float]  # only perplexity for now
 
     @staticmethod
     def from_dict(v: dict) -> "RawCatalogItem":

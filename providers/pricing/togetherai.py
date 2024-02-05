@@ -4,8 +4,8 @@ from typing import List, Optional
 from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
-from providers.pricing import AbstractProvider
 from providers.completion.togetherai import TogetherAI
+from providers.pricing import AbstractProvider
 from providers.pricing.tools.models import QueryFilter, RawCatalogItem
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ class TogetherAIProvider(AbstractProvider):
         )
         html_page = urlopen(req).read()
         soup = BeautifulSoup(html_page, "html.parser")
-        self.pricing_tables = soup.find_all('ul', class_='pricing-list w-list-unstyled')
+        self.pricing_tables = soup.find_all("ul", class_="pricing-list w-list-unstyled")
         self.togetherai_models = set(TogetherAI().supported_models)
 
     def get(
@@ -33,14 +33,14 @@ class TogetherAIProvider(AbstractProvider):
         model_size_to_pr = {}
         curr_model_size = None
         for table in self.pricing_tables:
-            if table.h3.text == 'CHat, language, and\xa0code models':
-                for div in table.find_all('div', class_='pricing_content-cell'):
+            if table.h3.text == "CHat, language, and\xa0code models":
+                for div in table.find_all("div", class_="pricing_content-cell"):
                     if curr_model_size is None:
                         model_size = div.find("p")
                         if model_size and "B" in model_size.text:
                             curr_model_size = model_size.text
                     else:
-                        price = div.find("p", class_='text-color-tgblue')
+                        price = div.find("p", class_="text-color-tgblue")
                         if price:
                             model_size_to_pr[curr_model_size] = price.text
                             curr_model_size = None
@@ -69,7 +69,7 @@ class TogetherAIProvider(AbstractProvider):
                         if lower_range <= model_size <= upper_range:
                             relevant_models.append(model_name)
             # LLAMA-2 AND CODELLAMA MODELS
-            elif 8 >= i >=5:
+            elif 8 >= i >= 5:
                 llama_size = float(size[:-1])
                 for model_name in self.togetherai_models:
                     if "llama" in model_name:
@@ -82,9 +82,9 @@ class TogetherAIProvider(AbstractProvider):
             elif i >= 9:
                 moe_size_from_chart = re.findall(r"(\d+X) (\d+B)", size)
                 if len(moe_size_from_chart) == 0:
-                    print('MOE size not found in expected scrapped data')
+                    print("MOE size not found in expected scrapped data")
                 else:
-                    moe_size_from_chart = ''.join(list(moe_size_from_chart[0])).lower()
+                    moe_size_from_chart = "".join(list(moe_size_from_chart[0])).lower()
                     for model_name in self.togetherai_models:
                         model_size = re.findall(r"(\d+x\d+b)", model_name)
                         if model_size:

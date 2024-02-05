@@ -1,5 +1,4 @@
 import logging
-import re
 from typing import List, Optional
 from urllib.request import Request, urlopen
 
@@ -37,7 +36,7 @@ class AnyscaleProvider(AbstractProvider):
                 model_name=model_name,
                 in_price=price,
                 out_price=price,
-                request_price=None
+                request_price=None,
             )
             offers.append(offer)
         return sorted(offers, key=lambda i: i.in_price)
