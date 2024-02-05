@@ -33,7 +33,12 @@ async def retrieve_all_endpoints(async_session: sessionmaker) -> List[Dict]:
         and "model".
     """
     async with async_session() as session:
-        stmt = select(Endpoint, Model, Provider).join(Model).join(Provider).where(Model.active == True)
+        stmt = (
+            select(Endpoint, Model, Provider)
+            .join(Model)
+            .join(Provider)
+            .where(Model.active == True)
+        )
         results = await session.execute(stmt)
     endpoints = []
     for result in results.all():
@@ -45,6 +50,7 @@ async def retrieve_all_endpoints(async_session: sessionmaker) -> List[Dict]:
             },
         )
     return endpoints
+
 
 def create_db_session() -> sessionmaker:  # noqa: WPS210
     # noqa: DAR201
@@ -80,6 +86,7 @@ async def main():  # noqa: WPS210
     # Get list of endpoints in our db
     endpoints = await retrieve_all_endpoints(async_db_session)
     logger.info(f"Found {len(endpoints)} endpoints where Model is active in the db.")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
