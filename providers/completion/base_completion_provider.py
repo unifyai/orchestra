@@ -62,10 +62,10 @@ class BaseCompletionProvider:
         if cost_data.get("online"):
             prompt_cost += cost_data["online"]["charge_per_1000_requests"] / 1000
         prompt_cost += (
-            response.usage["prompt_tokens"] * cost_data["prompt"] / PRICING_PER_TOKENS
+            response.usage.prompt_tokens * cost_data["prompt"] / PRICING_PER_TOKENS
         )
         completion_cost = (
-            response.usage["completion_tokens"]
+            response.usage.completion_tokens
             * cost_data["completion"]
             / PRICING_PER_TOKENS
         )
@@ -189,37 +189,50 @@ class AsyncGeneratorWrapper:  # noqa: D101
             async for part in await self._response:
                 if part.choices[0].delta.content is None:
                     continue
-                usage = part.get("usage", {})
+        #         usage = part.get("usage", {})
 
-                choices = [
-                    getattr(choice, "model_dump", lambda: None)()
-                    for choice in part.get("choices", [])
-                ]
+        #         choices = [
+        #             getattr(choice, "model_dump", lambda: None)()
+        #             for choice in part.get("choices", [])
+        #         ]
 
-                part_dict = {
-                    "model": self._model,
-                    "created": part.get("created", None),
-                    "id": part.get(
-                        "id",
-                        f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237, E501
-                    ),
-                    "choices": choices,
-                    "object": part.get("object", "chat.completion.chunk"),
-                    "usage": usage.model_dump() if isinstance(usage, Usage) else usage,
-                }
-                part_text = choices[0]["delta"]["content"]
+        #         part_dict = {
+        #             "model": self._model,
+        #             "created": part.get("created", None),
+        #             "id": part.get(
+        #                 "id",
+        #                 f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237, E501
+        #             ),
+        #             "choices": choices,
+        #             "object": part.get("object", "chat.completion.chunk"),
+        #             "usage": usage.model_dump() if isinstance(usage, Usage) else usage,
+        #         }
+        #         part_text = choices[0]["delta"]["content"]
+        #         whole += part_text if part_text else ""
+        #         yield part_dict
+        # finally:
+        #     if isinstance(usage, Usage) and usage != Usage():
+        #         self.total_cost = self._compute_cost(
+        #             self._model,
+        #             [item["content"] for item in self._messages],
+        #             ModelResponse(usage=usage),
+        #         )
+        #     else:
+        #         self.total_cost = self._compute_cost_streaming(
+        #             self._model,
+        #             whole,
+        #             self._messages,
+        #         )
+                if part.choices[0].delta.content is None:
+                    continue
+                part_dict = part.dict()
+                part_dict["model"] = f"{self._model}@octoai"
+                part_text = part_dict["choices"][0]["delta"]["content"]
                 whole += part_text if part_text else ""
                 yield part_dict
         finally:
-            if isinstance(usage, Usage) and usage != Usage():
-                self.total_cost = self._compute_cost(
-                    self._model,
-                    [item["content"] for item in self._messages],
-                    ModelResponse(usage=usage),
-                )
-            else:
-                self.total_cost = self._compute_cost_streaming(
-                    self._model,
-                    whole,
-                    self._messages,
-                )
+            self.total_cost = self._compute_cost_streaming(
+                self._model,
+                whole,
+                self._messages,
+            )

@@ -15,6 +15,7 @@ from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
 from orchestra.web.api.inference.schema import InferenceRequest, InferenceResponse
 from orchestra.web.api.users.views import get_credits
+from openai.types.chat.chat_completion import ChatCompletion
 
 router = APIRouter()
 
@@ -103,7 +104,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
                     "usage": {},
                 },
             )
-        if isinstance(response, ChatCompletionResponse):
+        if isinstance(response, Union[ChatCompletionResponse, ChatCompletion]):
             response = response.model_dump()
             response["model"] = model
             response["provider"] = provider
