@@ -11,10 +11,13 @@ from litellm.utils import Usage
 from models.imagegen import ImagegenModel
 from models.llm import CompletionsModel
 
+from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
 from orchestra.web.api.inference.schema import InferenceRequest, InferenceResponse
+from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.users.views import get_credits
+from orchestra.web.api.query.views import create_query_model
 
 router = APIRouter()
 
@@ -36,6 +39,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
     request_fastapi: Request,
     request: InferenceRequest,
     users_dao: UsersDAO = Depends(),
+    query_dao: QueryDAO = Depends(),
 ) -> Union[InferenceResponse, StreamingResponse]:
     """
     Get inference result based on the request.
@@ -77,7 +81,6 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             stream=stream,
         )
         if stream:
-
             async def stream_and_update_db():  # noqa: WPS430
                 async for part_dict in response.generator():
                     part_dict["model"] = model
@@ -103,6 +106,15 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
                     "usage": {},
                 },
             )
+
+        endpoint_id = 1
+        query_model_request = QueryModelRequest(
+            user_id=user_id,
+            endpoint_id=endpoint_id,
+            credits=cost,
+        )
+        await create_query_model(query_model_request, query_dao=query_dao)
+
         if isinstance(response, ChatCompletionResponse):
             response = response.model_dump()
             response["model"] = model
