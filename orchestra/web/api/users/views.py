@@ -39,10 +39,12 @@ async def credits_code(
     Checks if it's a valid code and adds $2.5 credits if so.
 
     :param request_fastapi: FastAPI request object.
+    :param code: Promo code to be activated.
+    :param recharge_dao: DAO for recharge models.
     :param users_dao: DAO for users models.
     :return: user instance with credits from database.
     """
-    if code not in [
+    promo_codes = [
         "HACKERNEWS",
         "DEEPDIVE",
         "DISCORD",
@@ -61,15 +63,16 @@ async def credits_code(
         "CONTRIB",
         "ALUMNI",
         "LAUNCHBF",
-    ]:
+    ]
+    if code not in promo_codes:
         return CreditsCodeResponse(msg="Invalid code.")
 
     user_id = request_fastapi.state.user_id
 
-    prev_recharges = await recharge_dao.filter(user_id=user_id, type=code)
-    prev_recharges_types = [pr.type for pr in prev_recharges]
-    if code in prev_recharges_types:
-        return CreditsCodeResponse(msg="This code is already activated!")
+    prev_recharges = await recharge_dao.filter(user_id=user_id)
+
+    if any(pr.type in promo_codes for pr in prev_recharges):
+        return CreditsCodeResponse(msg="You have already used a promo code!")
 
     # recharge 2.5
     await recharge_dao.create_recharge(
