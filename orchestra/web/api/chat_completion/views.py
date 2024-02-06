@@ -23,13 +23,12 @@ from orchestra.web.api.provider.views import get_provider
 from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.query.views import create_query_model
 from orchestra.web.api.users.views import get_credits
-from orchestra.web.api.users.views import get_credits
 
 router = APIRouter()
 
 
 @router.post("/chat/completions", response_model=ChatCompletionResponse)
-async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217
+async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
     request: ChatCompletionRequest,
     users_dao: UsersDAO = Depends(),
@@ -56,12 +55,19 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217
     user_id = request_fastapi.state.user_id
     user = await get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(user.credits if user else 0)
-    model, provider = request.model.split("@")
+    try:
+        model, provider = request.model.split("@")
+    except Exception:
+        raise HTTPException(
+            status_code=400,  # noqa: WPS432
+            detail="Invalid input format. Expected format: 'model@provider'.",
+        )
+
     try:
         model_id = int((await get_model(mdl_code=model, model_dao=model_dao))[0].id)
     except Exception:
         raise HTTPException(
-            status_code=422,  # noqa: WPS432
+            status_code=400,  # noqa: WPS432
             detail="Model not found",
         )
     try:
@@ -70,7 +76,7 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217
         )
     except Exception:
         raise HTTPException(
-            status_code=422,  # noqa: WPS432
+            status_code=400,  # noqa: WPS432
             detail="Provider not found",
         )
 
@@ -126,7 +132,6 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217
     await create_query_model(query_model_request, query_dao=query_dao)
 
     if stream:
-
 
         async def stream_and_update_db():  # noqa: WPS430
             async for part_dict in response.generator():

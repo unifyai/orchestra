@@ -41,7 +41,7 @@ def get_model_type(model_name):  # noqa: D103
 
 
 @router.post("/inference", response_model=InferenceResponse)
-async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217
+async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217, WPS238
     request_fastapi: Request,
     request: InferenceRequest,
     users_dao: UsersDAO = Depends(),
@@ -71,13 +71,21 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
     user_id = request_fastapi.state.user_id
     user = await get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(user.credits if user else 0)
-    model = request.model
-    provider = request.provider
+
+    try:
+        model = request.model
+        provider = request.provider
+    except Exception:
+        raise HTTPException(
+            status_code=400,  # noqa: WPS432
+            detail="Invalid input. Model or provider not in input.",
+        )
+
     try:
         model_id = int((await get_model(mdl_code=model, model_dao=model_dao))[0].id)
     except Exception:
         raise HTTPException(
-            status_code=422,  # noqa: WPS432
+            status_code=400,  # noqa: WPS432
             detail="Model not found",
         )
     try:
@@ -86,7 +94,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
         )
     except Exception:
         raise HTTPException(
-            status_code=422,  # noqa: WPS432
+            status_code=400,  # noqa: WPS432
             detail="Provider not found",
         )
 
