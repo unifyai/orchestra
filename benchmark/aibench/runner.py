@@ -209,15 +209,3 @@ class AIBenchRunner:
                 auth=auth,
             ) as response:
                 return await response.json()
-
-
-class PriceScrapingRunner:
-    def __init__(self, provider):
-        self.provider = provider
-        self.items = []
-
-    async def __call__(self):
-        self.items = self.provider.get()
-
-    def get_model_prices(self, model_name):
-        return [item for item in self.items if item.model_name.lower() == model_name.lower()]
