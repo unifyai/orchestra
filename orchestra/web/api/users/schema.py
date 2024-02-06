@@ -19,8 +19,7 @@ class CreditsCodeResponse(BaseModel):
     Response model for credits code models.
 
     Attributes:
-        id (str): The id of the users.
-        msg (float): Message returned to the user.
+        msg (str): Message returned to the user.
     """
 
     msg: str
