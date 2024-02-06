@@ -8,12 +8,15 @@ from fastapi.responses import StreamingResponse
 from litellm.utils import Usage
 from models.llm import CompletionsModel
 
+from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.chat_completion.schema import (
     ChatCompletionRequest,
     ChatCompletionResponse,
 )
+from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.users.views import get_credits
+from orchestra.web.api.query.views import create_query_model
 
 router = APIRouter()
 
@@ -23,6 +26,7 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
     request_fastapi: Request,
     request: ChatCompletionRequest,
     users_dao: UsersDAO = Depends(),
+    query_dao: QueryDAO = Depends(),
 ) -> Union[ChatCompletionResponse, StreamingResponse]:
     """
     Get chat completions based on the request.
@@ -67,17 +71,25 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
             _response_ms=0,
         )
 
+    # infer endpoint id here?
+    endpoint_id = 1
+    query_model_request = QueryModelRequest(
+        user_id=user_id,
+        endpoint_id=endpoint_id,
+        credits=cost,
+    )
     if stream:
-
         async def stream_and_update_db():  # noqa: WPS430
             async for part_dict in response.generator():
                 part_dict["model"] = f"{model}@{provider}"
                 yield f"data: {json.dumps(part_dict)}\n\n"
                 await asyncio.sleep(0)
             await users_dao.recharge_credit(user_id, -response.total_cost)
-
+        
+        await create_query_model(query_model_request, query_dao=query_dao)
         return StreamingResponse(stream_and_update_db())
     else:
+        await create_query_model(query_model_request, query_dao=query_dao)
         await users_dao.recharge_credit(user_id, -cost)
 
     if isinstance(response, ChatCompletionResponse):
