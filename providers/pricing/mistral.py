@@ -1,14 +1,15 @@
 import logging
+import os.path as op
 import re
+from datetime import date
 from typing import List, Optional
-from urllib.request import Request, urlopen
+from urllib.request import Request, urlopen, urlretrieve
 
 from bs4 import BeautifulSoup
+from currency_converter import ECB_URL, CurrencyConverter
 from providers.completion.mistral import Mistral
 from providers.pricing import AbstractProvider
 from providers.pricing.tools.models import QueryFilter, RawCatalogItem
-
-from forex_python.converter import CurrencyRates
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -22,7 +23,10 @@ class MistralProvider(AbstractProvider):
     NAME = "mistral-ai"
 
     def __init__(self):
-        self.currency_rates = CurrencyRates()
+        filename = f"ecb_{date.today():%Y%m%d}.zip"
+        if not op.isfile(filename):
+            urlretrieve(ECB_URL, filename)
+        self.currency_rates = CurrencyConverter(filename)
         req = Request(
             "https://docs.mistral.ai/platform/pricing/",
             headers={"User-Agent": "Mozilla/5.0"},
@@ -37,13 +41,11 @@ class MistralProvider(AbstractProvider):
             ],
         )
 
-
     def find_and_convert(self, search_str):
         match = re.findall(r"(\d+\.\d+)€", search_str)
         eur_pr = float(match[0])
-        usd_pr = self.currency_rates.convert("EUR", "USD", eur_pr)
+        usd_pr = self.currency_rates.convert(eur_pr, "EUR", "USD")
         return usd_pr
-    
 
     def get(
         self,

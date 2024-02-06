@@ -697,6 +697,17 @@ tomli = {version = "*", optional = true, markers = "python_full_version <= \"3.1
 toml = ["tomli"]
 
 [[package]]
+name = "currencyconverter"
+version = "0.17.16"
+description = "A currency converter using the European Central Bank data."
+optional = false
+python-versions = ">=3.6.1"
+files = [
+    {file = "CurrencyConverter-0.17.16-py3-none-any.whl", hash = "sha256:db8762acd6d1761d1305f7e38538f1e4031027e5fd93957aca5d85197ad0537a"},
+    {file = "CurrencyConverter-0.17.16.tar.gz", hash = "sha256:d4813346451c7712226fce2cb9fd14c01ba172e45bfae4e5bb391f6dbbf9bcd7"},
+]
+
+[[package]]
 name = "darglint"
 version = "1.8.1"
 description = "A utility for ensuring Google-style docstrings stay up to date with the source code."
@@ -4763,4 +4774,4 @@ testing = ["big-O", "jaraco.functools", "jaraco.itertools", "more-itertools", "p
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.9"
-content-hash = "12eac185ac9c0ed8be8c9fa989573aea943657d93e95b97f8e2350c9279a6f9e"
+content-hash = "3aee793a750386e78246bc3f4a1d673807e87e7cea162205463c325c3e4b58eb"
