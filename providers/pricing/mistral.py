@@ -8,6 +8,8 @@ from providers.completion.mistral import Mistral
 from providers.pricing import AbstractProvider
 from providers.pricing.tools.models import QueryFilter, RawCatalogItem
 
+from forex_python.converter import CurrencyRates
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -20,6 +22,7 @@ class MistralProvider(AbstractProvider):
     NAME = "mistral-ai"
 
     def __init__(self):
+        self.currency_rates = CurrencyRates()
         req = Request(
             "https://docs.mistral.ai/platform/pricing/",
             headers={"User-Agent": "Mozilla/5.0"},
@@ -34,6 +37,14 @@ class MistralProvider(AbstractProvider):
             ],
         )
 
+
+    def find_and_convert(self, search_str):
+        match = re.findall(r"(\d+\.\d+)€", search_str)
+        eur_pr = float(match[0])
+        usd_pr = self.currency_rates.convert("EUR", "USD", eur_pr)
+        return usd_pr
+    
+
     def get(
         self,
         query_filter: Optional[QueryFilter] = None,
@@ -45,12 +56,12 @@ class MistralProvider(AbstractProvider):
             rows = table.find_all("tr")
             for row in rows[1:]:
                 cols = row.find_all("td")
-                model_name = cols[0].find("code").text
+                model_name = cols[0].text.strip().lower()
                 input_pr = cols[1].text.strip()
-                inp_conv_pr = find_and_convert(input_pr)
+                inp_conv_pr = self.find_and_convert(input_pr)
                 if not model_name == "mistral-embed":
                     output_pr = cols[2].text.strip()
-                    out_conv_pr = find_and_convert(output_pr)
+                    out_conv_pr = self.find_and_convert(output_pr)
                     offer = RawCatalogItem(
                         model_name=model_name,
                         in_price=inp_conv_pr,
@@ -82,15 +93,6 @@ class MistralProvider(AbstractProvider):
                 f"Models not in pricing page ({self.NAME}): {list(self.supported_models)}",
             )
         return sorted(offers, key=lambda i: i.in_price)
-
-
-def find_and_convert(search_str):
-    pattern = r"(\d+\.\d+)"
-    match = re.search(pattern, search_str)
-    eur_pr = float(match.group(1))
-    # need to use API to fetch currency exchange rate
-    usd_pr = eur_pr * 1.08
-    return usd_pr
 
 
 if __name__ == "__main__":
