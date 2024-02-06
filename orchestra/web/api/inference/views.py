@@ -104,35 +104,15 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
                     "usage": {},
                 },
             )
-        if isinstance(response, Union[ChatCompletionResponse, ChatCompletion]):
-            response = response.model_dump()
-            response["model"] = model
-            response["provider"] = provider
-            return InferenceResponse(
-                response=response,
-            )
-
-        if isinstance(response["usage"], Usage):
-            usage = response["usage"].model_dump()
-        else:
-            usage = response["usage"]
-
-        choices = [
-            getattr(choice, "model_dump", lambda: None)()
-            for choice in response.get("choices", [])
-        ]
-
+        
+        response = response.model_dump()
+        response["model"] = model
+        response["provider"] = provider
+        
         return InferenceResponse(
-            response={
-                "model": model,
-                "provider": provider,
-                "created": response.get("created", None),
-                "id": response["id"],
-                "choices": choices,
-                "object": "chat.completion",
-                "usage": usage,
-            },
+            response=response,
         )
+    
     elif model_type == "image":
         image_model = ImagegenModel(
             provider=request.provider,
