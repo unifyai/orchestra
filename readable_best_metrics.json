@@ -1,0 +1,35 @@
+{
+    "llama-2-70b-chat": {
+        "perplexity-ai": [
+            "concurrent-1_Iowa_long_ttft",
+            "concurrent-20_Belgium_short_ttft",
+            "concurrent-20_Hong Kong_short_ttft",
+            "concurrent-1_Belgium_short_ttft",
+            "concurrent-1_Iowa_short_ttft",
+            "concurrent-1_Belgium_long_ttft",
+            "concurrent-20_Hong Kong_long_ttft",
+            "concurrent-20_Iowa_long_ttft",
+            "concurrent-20_Belgium_long_ttft",
+            "concurrent-1_Hong Kong_long_ttft",
+            "concurrent-20_Iowa_short_ttft",
+            "concurrent-1_Hong Kong_short_ttft"
+        ]
+    },
+    "mixtral-8x7b-instruct-v0.1": {
+        "together-ai": [
+            "concurrent-20_Iowa_short_output_cost_per_token",
+            "concurrent-1_Iowa_long_ttft",
+            "concurrent-20_Hong Kong_short_ttft",
+            "concurrent-1_Belgium_short_ttft",
+            "concurrent-1_Iowa_short_ttft",
+            "concurrent-1_Belgium_long_ttft",
+            "concurrent-20_Hong Kong_long_ttft",
+            "concurrent-1_Hong Kong_long_ttft",
+            "concurrent-1_Hong Kong_short_ttft",
+            "concurrent-20_Belgium_short_ttft",
+            "concurrent-20_Iowa_long_ttft",
+            "concurrent-20_Belgium_long_ttft",
+            "concurrent-20_Iowa_short_ttft"
+        ]
+    }
+}

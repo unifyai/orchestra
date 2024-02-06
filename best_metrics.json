@@ -1,0 +1,678 @@
+{
+    "llama-2-70b-chat": {
+        "concurrent-1_Iowa_long_output_tks_per_sec": [
+            "together-ai",
+            78.8804583819261
+        ],
+        "concurrent-20_Belgium_short_output_tks_per_sec": [
+            "octoai",
+            22.384098864752524
+        ],
+        "concurrent-20_Hong Kong_short_output_tks_per_sec": [
+            "anyscale",
+            60.941625622532925
+        ],
+        "concurrent-1_Belgium_short_output_tks_per_sec": [
+            "together-ai",
+            78.96914788140099
+        ],
+        "concurrent-1_Iowa_short_output_tks_per_sec": [
+            "together-ai",
+            79.76432532151154
+        ],
+        "concurrent-1_Belgium_long_output_tks_per_sec": [
+            "anyscale",
+            65.80707638878638
+        ],
+        "concurrent-20_Hong Kong_long_output_tks_per_sec": [
+            "together-ai",
+            44.33450070852061
+        ],
+        "concurrent-20_Iowa_long_output_tks_per_sec": [
+            "together-ai",
+            55.88552264406037
+        ],
+        "concurrent-20_Belgium_long_output_tks_per_sec": [
+            "together-ai",
+            62.8123290866215
+        ],
+        "concurrent-1_Hong Kong_long_output_tks_per_sec": [
+            "together-ai",
+            48.51201336296963
+        ],
+        "concurrent-20_Iowa_short_output_tks_per_sec": [
+            "perplexity-ai",
+            19.169589983619296
+        ],
+        "concurrent-1_Hong Kong_short_output_tks_per_sec": [
+            "together-ai",
+            57.14775353612693
+        ],
+        "concurrent-1_Iowa_long_itl": [
+            "together-ai",
+            12.677411116935525
+        ],
+        "concurrent-20_Belgium_short_itl": [
+            "octoai",
+            44.67457037435918
+        ],
+        "concurrent-20_Hong Kong_short_itl": [
+            "anyscale",
+            16.40914546969771
+        ],
+        "concurrent-1_Belgium_short_itl": [
+            "together-ai",
+            12.663173236994274
+        ],
+        "concurrent-1_Iowa_short_itl": [
+            "together-ai",
+            12.536932970588436
+        ],
+        "concurrent-1_Belgium_long_itl": [
+            "anyscale",
+            15.195934158995724
+        ],
+        "concurrent-20_Hong Kong_long_itl": [
+            "together-ai",
+            22.55579704335795
+        ],
+        "concurrent-20_Iowa_long_itl": [
+            "together-ai",
+            17.893721892324148
+        ],
+        "concurrent-20_Belgium_long_itl": [
+            "together-ai",
+            15.920441329614563
+        ],
+        "concurrent-1_Hong Kong_long_itl": [
+            "together-ai",
+            20.613450786260785
+        ],
+        "concurrent-20_Iowa_short_itl": [
+            "perplexity-ai",
+            52.16595664563066
+        ],
+        "concurrent-1_Hong Kong_short_itl": [
+            "together-ai",
+            17.49850060803935
+        ],
+        "concurrent-1_Iowa_long_e2e_latency": [
+            "anyscale",
+            2963.559653999937
+        ],
+        "concurrent-20_Belgium_short_e2e_latency": [
+            "octoai",
+            8981.35570699992
+        ],
+        "concurrent-20_Hong Kong_short_e2e_latency": [
+            "anyscale",
+            3252.3878630001946
+        ],
+        "concurrent-1_Belgium_short_e2e_latency": [
+            "together-ai",
+            2228.4236760001477
+        ],
+        "concurrent-1_Iowa_short_e2e_latency": [
+            "anyscale",
+            1378.3151019999877
+        ],
+        "concurrent-1_Belgium_long_e2e_latency": [
+            "together-ai",
+            3870.6473550000737
+        ],
+        "concurrent-20_Hong Kong_long_e2e_latency": [
+            "replicate",
+            17390.259612000136
+        ],
+        "concurrent-20_Iowa_long_e2e_latency": [
+            "together-ai",
+            16826.348922000077
+        ],
+        "concurrent-20_Belgium_long_e2e_latency": [
+            "together-ai",
+            15749.248561000059
+        ],
+        "concurrent-1_Hong Kong_long_e2e_latency": [
+            "together-ai",
+            2746.978800000079
+        ],
+        "concurrent-20_Iowa_short_e2e_latency": [
+            "octoai",
+            9901.57972299994
+        ],
+        "concurrent-1_Hong Kong_short_e2e_latency": [
+            "perplexity-ai",
+            3197.0290040001146
+        ],
+        "concurrent-1_Iowa_long_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-20_Belgium_short_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-20_Hong Kong_short_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-1_Belgium_short_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-1_Iowa_short_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-1_Belgium_long_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-20_Hong Kong_long_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-20_Iowa_long_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-20_Belgium_long_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-1_Hong Kong_long_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-20_Iowa_short_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-1_Hong Kong_short_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-1_Iowa_long_input_cost_per_token": [
+            "octoai",
+            0.6
+        ],
+        "concurrent-20_Belgium_short_input_cost_per_token": [
+            "octoai",
+            0.6
+        ],
+        "concurrent-20_Hong Kong_short_input_cost_per_token": [
+            "octoai",
+            0.6
+        ],
+        "concurrent-1_Belgium_short_input_cost_per_token": [
+            "octoai",
+            0.6
+        ],
+        "concurrent-1_Iowa_short_input_cost_per_token": [
+            "octoai",
+            0.6
+        ],
+        "concurrent-1_Belgium_long_input_cost_per_token": [
+            "octoai",
+            0.6
+        ],
+        "concurrent-20_Hong Kong_long_input_cost_per_token": [
+            "octoai",
+            0.6
+        ],
+        "concurrent-20_Iowa_long_input_cost_per_token": [
+            "octoai",
+            0.6
+        ],
+        "concurrent-20_Belgium_long_input_cost_per_token": [
+            "octoai",
+            0.6
+        ],
+        "concurrent-1_Hong Kong_long_input_cost_per_token": [
+            "octoai",
+            0.6
+        ],
+        "concurrent-20_Iowa_short_input_cost_per_token": [
+            "octoai",
+            0.6
+        ],
+        "concurrent-1_Hong Kong_short_input_cost_per_token": [
+            "octoai",
+            0.6
+        ],
+        "concurrent-1_Iowa_long_output_cost_per_token": [
+            "together-ai",
+            0.9
+        ],
+        "concurrent-20_Belgium_short_output_cost_per_token": [
+            "together-ai",
+            0.9
+        ],
+        "concurrent-20_Hong Kong_short_output_cost_per_token": [
+            "together-ai",
+            0.9
+        ],
+        "concurrent-1_Belgium_short_output_cost_per_token": [
+            "together-ai",
+            0.9
+        ],
+        "concurrent-1_Iowa_short_output_cost_per_token": [
+            "together-ai",
+            0.9
+        ],
+        "concurrent-1_Belgium_long_output_cost_per_token": [
+            "together-ai",
+            0.9
+        ],
+        "concurrent-20_Hong Kong_long_output_cost_per_token": [
+            "together-ai",
+            0.9
+        ],
+        "concurrent-20_Iowa_long_output_cost_per_token": [
+            "together-ai",
+            0.9
+        ],
+        "concurrent-20_Belgium_long_output_cost_per_token": [
+            "together-ai",
+            0.9
+        ],
+        "concurrent-1_Hong Kong_long_output_cost_per_token": [
+            "together-ai",
+            0.9
+        ],
+        "concurrent-20_Iowa_short_output_cost_per_token": [
+            "together-ai",
+            0.9
+        ],
+        "concurrent-1_Hong Kong_short_output_cost_per_token": [
+            "together-ai",
+            0.9
+        ],
+        "concurrent-1_Iowa_long_ttft": [
+            "perplexity-ai",
+            2.2191999998995016
+        ],
+        "concurrent-20_Belgium_short_ttft": [
+            "perplexity-ai",
+            2.2356010001658433
+        ],
+        "concurrent-20_Hong Kong_short_ttft": [
+            "perplexity-ai",
+            1.7712259998461377
+        ],
+        "concurrent-1_Belgium_short_ttft": [
+            "perplexity-ai",
+            2.0820689999254682
+        ],
+        "concurrent-1_Iowa_short_ttft": [
+            "perplexity-ai",
+            2.012907000107589
+        ],
+        "concurrent-1_Belgium_long_ttft": [
+            "perplexity-ai",
+            2.0614529998965736
+        ],
+        "concurrent-20_Hong Kong_long_ttft": [
+            "perplexity-ai",
+            1.7370739999478246
+        ],
+        "concurrent-20_Iowa_long_ttft": [
+            "perplexity-ai",
+            1.861627000153021
+        ],
+        "concurrent-20_Belgium_long_ttft": [
+            "perplexity-ai",
+            2.099555000086184
+        ],
+        "concurrent-1_Hong Kong_long_ttft": [
+            "perplexity-ai",
+            1.7684740000731836
+        ],
+        "concurrent-20_Iowa_short_ttft": [
+            "perplexity-ai",
+            2.0226780000029976
+        ],
+        "concurrent-1_Hong Kong_short_ttft": [
+            "perplexity-ai",
+            1.8141740001738071
+        ]
+    },
+    "mixtral-8x7b-instruct-v0.1": {
+        "concurrent-1_Iowa_long_output_tks_per_sec": [
+            "mistral-ai",
+            71.65834296070041
+        ],
+        "concurrent-20_Hong Kong_short_output_tks_per_sec": [
+            "mistral-ai",
+            22.07577236175948
+        ],
+        "concurrent-1_Belgium_short_output_tks_per_sec": [
+            "together-ai",
+            55.49469924424171
+        ],
+        "concurrent-1_Iowa_short_output_tks_per_sec": [
+            "mistral-ai",
+            94.3934342574157
+        ],
+        "concurrent-1_Belgium_long_output_tks_per_sec": [
+            "mistral-ai",
+            52.3185314427499
+        ],
+        "concurrent-20_Hong Kong_long_output_tks_per_sec": [
+            "together-ai",
+            32.03652593288789
+        ],
+        "concurrent-1_Hong Kong_long_output_tks_per_sec": [
+            "mistral-ai",
+            50.92669177548889
+        ],
+        "concurrent-1_Hong Kong_short_output_tks_per_sec": [
+            "mistral-ai",
+            61.8045040139453
+        ],
+        "concurrent-20_Belgium_short_output_tks_per_sec": [
+            "together-ai",
+            28.987795443984684
+        ],
+        "concurrent-20_Iowa_long_output_tks_per_sec": [
+            "replicate",
+            28.117620929378845
+        ],
+        "concurrent-20_Belgium_long_output_tks_per_sec": [
+            "mistral-ai",
+            35.83826253012357
+        ],
+        "concurrent-20_Iowa_short_output_tks_per_sec": [
+            "mistral-ai",
+            22.67788798037198
+        ],
+        "concurrent-1_Iowa_long_itl": [
+            "mistral-ai",
+            13.955109184542964
+        ],
+        "concurrent-20_Hong Kong_short_itl": [
+            "mistral-ai",
+            45.29852834196819
+        ],
+        "concurrent-1_Belgium_short_itl": [
+            "together-ai",
+            18.01973906730854
+        ],
+        "concurrent-1_Iowa_short_itl": [
+            "mistral-ai",
+            10.593957173683808
+        ],
+        "concurrent-1_Belgium_long_itl": [
+            "mistral-ai",
+            19.11368634446975
+        ],
+        "concurrent-20_Hong Kong_long_itl": [
+            "together-ai",
+            31.21437081208063
+        ],
+        "concurrent-1_Hong Kong_long_itl": [
+            "mistral-ai",
+            19.636068339339918
+        ],
+        "concurrent-1_Hong Kong_short_itl": [
+            "mistral-ai",
+            16.18005056353764
+        ],
+        "concurrent-20_Belgium_short_itl": [
+            "together-ai",
+            34.49727668778317
+        ],
+        "concurrent-20_Iowa_long_itl": [
+            "replicate",
+            35.56488660657434
+        ],
+        "concurrent-20_Belgium_long_itl": [
+            "mistral-ai",
+            27.90313841692124
+        ],
+        "concurrent-20_Iowa_short_itl": [
+            "mistral-ai",
+            44.095817073684884
+        ],
+        "concurrent-1_Iowa_long_e2e_latency": [
+            "mistral-ai",
+            8923.348603000704
+        ],
+        "concurrent-20_Hong Kong_short_e2e_latency": [
+            "mistral-ai",
+            8937.013733999265
+        ],
+        "concurrent-1_Belgium_short_e2e_latency": [
+            "together-ai",
+            3749.02812099981
+        ],
+        "concurrent-1_Iowa_short_e2e_latency": [
+            "mistral-ai",
+            2058.0717339998955
+        ],
+        "concurrent-1_Belgium_long_e2e_latency": [
+            "replicate",
+            2146.7376539994802
+        ],
+        "concurrent-20_Hong Kong_long_e2e_latency": [
+            "together-ai",
+            32557.33406299987
+        ],
+        "concurrent-1_Hong Kong_long_e2e_latency": [
+            "octoai",
+            7696.945947000131
+        ],
+        "concurrent-1_Hong Kong_short_e2e_latency": [
+            "together-ai",
+            2863.2162230001086
+        ],
+        "concurrent-20_Belgium_short_e2e_latency": [
+            "mistral-ai",
+            7528.904838000017
+        ],
+        "concurrent-20_Iowa_long_e2e_latency": [
+            "mistral-ai",
+            39770.63629300028
+        ],
+        "concurrent-20_Belgium_long_e2e_latency": [
+            "mistral-ai",
+            27566.23097099964
+        ],
+        "concurrent-20_Iowa_short_e2e_latency": [
+            "mistral-ai",
+            8465.092052999353
+        ],
+        "concurrent-1_Iowa_long_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-20_Hong Kong_short_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-1_Belgium_short_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-1_Iowa_short_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-1_Belgium_long_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-20_Hong Kong_long_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-1_Hong Kong_long_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-1_Hong Kong_short_cold_start": [
+            "octoai",
+            0.0
+        ],
+        "concurrent-20_Belgium_short_cold_start": [
+            "replicate",
+            0.0
+        ],
+        "concurrent-20_Iowa_long_cold_start": [
+            "replicate",
+            0.0
+        ],
+        "concurrent-20_Belgium_long_cold_start": [
+            "replicate",
+            0.0
+        ],
+        "concurrent-20_Iowa_short_cold_start": [
+            "mistral-ai",
+            0.0
+        ],
+        "concurrent-1_Iowa_long_input_cost_per_token": [
+            "octoai",
+            0.2
+        ],
+        "concurrent-20_Hong Kong_short_input_cost_per_token": [
+            "octoai",
+            0.2
+        ],
+        "concurrent-1_Belgium_short_input_cost_per_token": [
+            "octoai",
+            0.2
+        ],
+        "concurrent-1_Iowa_short_input_cost_per_token": [
+            "octoai",
+            0.2
+        ],
+        "concurrent-1_Belgium_long_input_cost_per_token": [
+            "octoai",
+            0.2
+        ],
+        "concurrent-20_Hong Kong_long_input_cost_per_token": [
+            "octoai",
+            0.2
+        ],
+        "concurrent-1_Hong Kong_long_input_cost_per_token": [
+            "octoai",
+            0.2
+        ],
+        "concurrent-1_Hong Kong_short_input_cost_per_token": [
+            "octoai",
+            0.2
+        ],
+        "concurrent-20_Belgium_short_input_cost_per_token": [
+            "replicate",
+            0.3
+        ],
+        "concurrent-20_Iowa_long_input_cost_per_token": [
+            "replicate",
+            0.3
+        ],
+        "concurrent-20_Belgium_long_input_cost_per_token": [
+            "replicate",
+            0.3
+        ],
+        "concurrent-20_Iowa_short_input_cost_per_token": [
+            "replicate",
+            0.3
+        ],
+        "concurrent-1_Iowa_long_output_cost_per_token": [
+            "octoai",
+            0.5
+        ],
+        "concurrent-20_Hong Kong_short_output_cost_per_token": [
+            "octoai",
+            0.5
+        ],
+        "concurrent-1_Belgium_short_output_cost_per_token": [
+            "octoai",
+            0.5
+        ],
+        "concurrent-1_Iowa_short_output_cost_per_token": [
+            "octoai",
+            0.5
+        ],
+        "concurrent-1_Belgium_long_output_cost_per_token": [
+            "octoai",
+            0.5
+        ],
+        "concurrent-20_Hong Kong_long_output_cost_per_token": [
+            "octoai",
+            0.5
+        ],
+        "concurrent-1_Hong Kong_long_output_cost_per_token": [
+            "octoai",
+            0.5
+        ],
+        "concurrent-1_Hong Kong_short_output_cost_per_token": [
+            "octoai",
+            0.5
+        ],
+        "concurrent-20_Belgium_short_output_cost_per_token": [
+            "anyscale",
+            0.5
+        ],
+        "concurrent-20_Iowa_long_output_cost_per_token": [
+            "together-ai",
+            0.6
+        ],
+        "concurrent-20_Belgium_long_output_cost_per_token": [
+            "anyscale",
+            0.5
+        ],
+        "concurrent-20_Iowa_short_output_cost_per_token": [
+            "together-ai",
+            0.6
+        ],
+        "concurrent-1_Iowa_long_ttft": [
+            "together-ai",
+            36.17827700009002
+        ],
+        "concurrent-20_Hong Kong_short_ttft": [
+            "together-ai",
+            0.6999829997766938
+        ],
+        "concurrent-1_Belgium_short_ttft": [
+            "together-ai",
+            0.9223949996339798
+        ],
+        "concurrent-1_Iowa_short_ttft": [
+            "together-ai",
+            0.9034360000441666
+        ],
+        "concurrent-1_Belgium_long_ttft": [
+            "together-ai",
+            0.8810630001789832
+        ],
+        "concurrent-20_Hong Kong_long_ttft": [
+            "together-ai",
+            0.7453059997715172
+        ],
+        "concurrent-1_Hong Kong_long_ttft": [
+            "together-ai",
+            0.7762290001664951
+        ],
+        "concurrent-1_Hong Kong_short_ttft": [
+            "together-ai",
+            0.7005120000940224
+        ],
+        "concurrent-20_Belgium_short_ttft": [
+            "together-ai",
+            0.8272329996543704
+        ],
+        "concurrent-20_Iowa_long_ttft": [
+            "together-ai",
+            0.8893670001270948
+        ],
+        "concurrent-20_Belgium_long_ttft": [
+            "together-ai",
+            0.9061539999493107
+        ],
+        "concurrent-20_Iowa_short_ttft": [
+            "together-ai",
+            0.9362549999423209
+        ]
+    }
+}
