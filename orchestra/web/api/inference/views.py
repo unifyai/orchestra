@@ -16,8 +16,8 @@ from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
 from orchestra.web.api.inference.schema import InferenceRequest, InferenceResponse
 from orchestra.web.api.query.schema import QueryModelRequest
-from orchestra.web.api.users.views import get_credits
 from orchestra.web.api.query.views import create_query_model
+from orchestra.web.api.users.views import get_credits
 
 router = APIRouter()
 
@@ -81,6 +81,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             stream=stream,
         )
         if stream:
+
             async def stream_and_update_db():  # noqa: WPS430
                 async for part_dict in response.generator():
                     part_dict["model"] = model

@@ -15,8 +15,8 @@ from orchestra.web.api.chat_completion.schema import (
     ChatCompletionResponse,
 )
 from orchestra.web.api.query.schema import QueryModelRequest
-from orchestra.web.api.users.views import get_credits
 from orchestra.web.api.query.views import create_query_model
+from orchestra.web.api.users.views import get_credits
 
 router = APIRouter()
 
@@ -79,13 +79,14 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
         credits=cost,
     )
     if stream:
+
         async def stream_and_update_db():  # noqa: WPS430
             async for part_dict in response.generator():
                 part_dict["model"] = f"{model}@{provider}"
                 yield f"data: {json.dumps(part_dict)}\n\n"
                 await asyncio.sleep(0)
             await users_dao.recharge_credit(user_id, -response.total_cost)
-        
+
         await create_query_model(query_model_request, query_dao=query_dao)
         return StreamingResponse(stream_and_update_db())
     else:
