@@ -39,8 +39,6 @@ async def credits_code(
     Checks if it's a valid code and adds $2.5 credits if so.
 
     :param request_fastapi: FastAPI request object.
-    :param code: Promo code to be activated.
-    :param recharge_dao: DAO for recharge models.
     :param users_dao: DAO for users models.
     :return: user instance with credits from database.
     """
@@ -64,7 +62,7 @@ async def credits_code(
         "CONTRIB",
         "ALUMNI",
         "LAUNCHBF",
-    ]
+    ] 
     if code not in promo_codes:
         return CreditsCodeResponse(msg="Invalid code.")
 
