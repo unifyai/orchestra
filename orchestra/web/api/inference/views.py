@@ -4,7 +4,7 @@ import json
 import re
 from typing import Union
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.param_functions import Depends
 from fastapi.responses import StreamingResponse
 from litellm.utils import Usage
@@ -17,13 +17,9 @@ from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
-from orchestra.web.api.endpoint.views import get_endpoint
 from orchestra.web.api.inference.schema import InferenceRequest, InferenceResponse
-from orchestra.web.api.model.views import get_model
-from orchestra.web.api.provider.views import get_provider
-from orchestra.web.api.query.schema import QueryModelRequest
-from orchestra.web.api.query.views import create_query_model
 from orchestra.web.api.users.views import get_credits
+from orchestra.web.api.utils import db_operations
 
 router = APIRouter()
 
@@ -42,6 +38,7 @@ def get_model_type(model_name):  # noqa: D103
 
 @router.post("/inference", response_model=InferenceResponse)
 async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217, WPS238
+    background_tasks: BackgroundTasks,
     request_fastapi: Request,
     request: InferenceRequest,
     users_dao: UsersDAO = Depends(),
@@ -53,6 +50,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
     """
     Get inference result based on the request.
 
+    :param background_tasks: FastAPI background tasks.
     :param request_fastapi: FastAPI request object.
     :param request: InferenceRequest object.
     :param users_dao: DAO for users models.
@@ -80,39 +78,6 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
             status_code=400,  # noqa: WPS432
             detail="Invalid input. Model or provider not in input.",
         )
-
-    try:
-        model_id = int((await get_model(mdl_code=model, model_dao=model_dao))[0].id)
-    except Exception:
-        raise HTTPException(
-            status_code=400,  # noqa: WPS432
-            detail="Model not found",
-        )
-    try:
-        provider_id = int(
-            (await get_provider(name=provider, provider_dao=provider_dao))[0].id,
-        )
-    except Exception:
-        raise HTTPException(
-            status_code=400,  # noqa: WPS432
-            detail="Provider not found",
-        )
-
-    endpoint_ids = await get_endpoint(
-        mdl_id=model_id,
-        provider_id=provider_id,
-        endpoint_dao=endpoint_dao,
-        model_dao=model_dao,
-        provider_dao=provider_dao,
-    )
-    endpoint_id = next(
-        (
-            int(endpoint.endpoint_id)
-            for endpoint in endpoint_ids
-            if endpoint.provider_id == provider_id
-        ),
-        None,
-    )
 
     model_type = get_model_type(model)
     if model_type == "chat":
@@ -158,17 +123,32 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
                     yield json.dumps(part_dict)
                     await asyncio.sleep(0)
                 await users_dao.recharge_credit(user_id, -response.total_cost)
+                background_tasks.add_task(
+                    db_operations,
+                    user_id,
+                    response.total_cost,
+                    model,
+                    provider,
+                    model_dao,
+                    provider_dao,
+                    endpoint_dao,
+                    query_dao,
+                )
 
             return StreamingResponse(stream_and_update_db())
         else:
             await users_dao.recharge_credit(user_id, -cost)
-
-        query_model_request = QueryModelRequest(
-            user_id=user_id,
-            endpoint_id=endpoint_id,
-            credits=cost,
-        )
-        await create_query_model(query_model_request, query_dao=query_dao)
+            background_tasks.add_task(
+                db_operations,
+                user_id,
+                cost,
+                model,
+                provider,
+                model_dao,
+                provider_dao,
+                endpoint_dao,
+                query_dao,
+            )
 
         if isinstance(response, ChatCompletionResponse):
             response = response.model_dump()
