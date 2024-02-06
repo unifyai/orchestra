@@ -47,6 +47,7 @@ async def credits_code(
     promo_codes = [
         "HACKERNEWS",
         "DEEPDIVE",
+        "PORT",
         "DISCORD",
         "YCW23",
         "YCS23",
