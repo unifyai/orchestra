@@ -67,7 +67,8 @@ async def credits_code(
     user_id = request_fastapi.state.user_id
 
     prev_recharges = await recharge_dao.filter(user_id=user_id, type=code)
-    if prev_recharges:
+    prev_recharges_types = [pr.type for pr in prev_recharges]
+    if code in prev_recharges_types:
         return CreditsCodeResponse(msg="This code is already activated!")
 
     # recharge 2.5
