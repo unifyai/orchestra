@@ -1,7 +1,7 @@
 import logging
+import re
 from typing import List, Optional
 from urllib.request import Request, urlopen
-import re
 
 from bs4 import BeautifulSoup
 from providers.completion.perplexity import Perplexity
@@ -9,6 +9,11 @@ from providers.pricing import AbstractProvider
 from providers.pricing.tools.models import QueryFilter, RawCatalogItem
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+handler = logging.StreamHandler()
+handler.setLevel(logging.INFO)
+logger.addHandler(handler)
 
 
 class PerplexityProvider(AbstractProvider):
@@ -33,7 +38,7 @@ class PerplexityProvider(AbstractProvider):
         self.get_models_missing_in_unify()
 
     def get_models_missing_in_unify(self):
-        '''Checks against all models in Perplexity website'''
+        """Checks against all models in Perplexity website"""
         req = Request(
             "https://docs.perplexity.ai/docs/model-cards",
             headers={"User-Agent": "Mozilla/5.0"},
@@ -52,8 +57,9 @@ class PerplexityProvider(AbstractProvider):
                 if model_name not in self.supported_models:
                     models_missing_in_unify.append(model_name)
         if models_missing_in_unify:
-            print(f"Found in pricing page but not in our list ({self.NAME}): {models_missing_in_unify}")
-
+            logger.info(
+                f"Found in pricing page but not in our list ({self.NAME}): {models_missing_in_unify}",
+            )
 
     def get(
         self,
@@ -76,7 +82,9 @@ class PerplexityProvider(AbstractProvider):
 
             relevant_models = []
             for model_name in self.supported_models:
-                supported_model_size = re.findall(r"((?:\d+x)?\d+b)", model_name)[0].lower()
+                supported_model_size = re.findall(r"((?:\d+x)?\d+b)", model_name)[
+                    0
+                ].lower()
                 # https://docs.perplexity.ai/changelog/new-model-mixtral-8x7b-instruct
                 if supported_model_size == "8x7b":
                     supported_model_size = "13b"
@@ -103,7 +111,9 @@ class PerplexityProvider(AbstractProvider):
                 offers.append(offer)
         # checking if any model left
         if self.supported_models != set():
-            print(f"Models not in pricing page ({self.NAME}): {self.supported_models}")
+            logger.info(
+                f"Models not in pricing page ({self.NAME}): {self.supported_models}",
+            )
         return sorted(offers, key=lambda i: i.in_price)
 
 

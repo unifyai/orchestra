@@ -9,6 +9,11 @@ from providers.pricing import AbstractProvider
 from providers.pricing.tools.models import QueryFilter, RawCatalogItem
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+handler = logging.StreamHandler()
+handler.setLevel(logging.INFO)
+logger.addHandler(handler)
 
 
 class TogetherAIProvider(AbstractProvider):
@@ -26,13 +31,12 @@ class TogetherAIProvider(AbstractProvider):
             [
                 "/".join(x["endpoint"].split("/")[1:]).lower()
                 for x in TogetherAI().supported_models.values()
-            ]
+            ],
         )
         self.get_models_missing_in_unify()
 
-
     def get_models_missing_in_unify(self):
-        '''Checks against all models in Perplexity website'''
+        """Checks against all models in Perplexity website"""
         req = Request(
             "https://docs.together.ai/docs/inference-models",
             headers={"User-Agent": "Mozilla/5.0"},
@@ -50,7 +54,9 @@ class TogetherAIProvider(AbstractProvider):
                 if model_name not in self.supported_models:
                     models_missing_in_unify.append(model_name)
         if models_missing_in_unify:
-            print(f"Found in pricing page but not in our list ({self.NAME}): {models_missing_in_unify}")
+            logger.info(
+                f"Found in pricing page but not in our list ({self.NAME}): {models_missing_in_unify}",
+            )
 
     def get(
         self,
@@ -72,6 +78,9 @@ class TogetherAIProvider(AbstractProvider):
                         if price:
                             model_size_to_pr[curr_model_size] = price.text
                             curr_model_size = None
+        if model_size_to_pr == {}:
+            logger.error(f"No pricing data found for {self.NAME}")
+            logger.error(f"Check if table was renamed")
         for i, (size, cost) in enumerate(model_size_to_pr.items()):
             cost = float(cost[1:])
             relevant_models = []
@@ -85,7 +94,10 @@ class TogetherAIProvider(AbstractProvider):
                     lower_range = size_range[0]
                     upper_range = size_range[1]
                 else:
-                    print("Error in size range")
+                    logger.error(f"Error in size range {self.NAME}")
+                    logger.error(
+                        f"Page possibly changed from model size only structure",
+                    )
                 for model_name in self.supported_models:
                     if "llama" in model_name:
                         continue
@@ -101,14 +113,16 @@ class TogetherAIProvider(AbstractProvider):
                     if "llama" in model_name:
                         supported_model_size = re.findall(r"(?<!x)(\d+)b", model_name)
                         if supported_model_size:
-                            supported_model_size = float(supported_model_size[0].lower())
+                            supported_model_size = float(
+                                supported_model_size[0].lower(),
+                            )
                             if supported_model_size == llama_size:
                                 relevant_models.append(model_name)
             # MIXTURE-OF-EXPERTS
             elif i >= 9:
                 moe_size_from_chart = re.findall(r"(\d+X) (\d+B)", size)
                 if len(moe_size_from_chart) == 0:
-                    print("MOE size not found in expected scrapped data")
+                    logger.info("MOE size not found in expected scrapped data")
                 else:
                     moe_size_from_chart = "".join(list(moe_size_from_chart[0])).lower()
                     for model_name in self.supported_models:
@@ -128,7 +142,9 @@ class TogetherAIProvider(AbstractProvider):
                 offers.append(offer)
         # checking if any model left
         if self.supported_models != set():
-            print(f"Models not in pricing page ({self.NAME}): {self.supported_models}")
+            logger.info(
+                f"Models not in pricing page ({self.NAME}): {self.supported_models}",
+            )
         return sorted(offers, key=lambda i: i.in_price)
 
 

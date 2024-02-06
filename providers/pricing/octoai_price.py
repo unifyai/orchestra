@@ -8,6 +8,11 @@ from providers.pricing import AbstractProvider
 from providers.pricing.tools.models import QueryFilter, RawCatalogItem
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+handler = logging.StreamHandler()
+handler.setLevel(logging.INFO)
+logger.addHandler(handler)
 
 
 class OctoAIProvider(AbstractProvider):
@@ -66,11 +71,11 @@ class OctoAIProvider(AbstractProvider):
             except KeyError:
                 models_missing_in_unify.append(model_name)
         if models_missing_in_unify:
-            print(
+            logger.info(
                 f"Found in pricing page but not in our list ({self.NAME}): {models_missing_in_unify}",
             )
         if self.supported_models != set():
-            print(
+            logger.info(
                 f"Models not in pricing page ({self.NAME}): {list(self.supported_models)}",
             )
         return sorted(offers, key=lambda i: i.in_price)
