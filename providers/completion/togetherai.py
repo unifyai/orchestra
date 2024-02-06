@@ -121,11 +121,6 @@ class TogetherAI(BaseCompletionProvider):
             "context_window": 2048,
             "cost": {"prompt": 0.3, "completion": 0.3},
         },
-        "llama-65b": {
-            "endpoint": "together_ai/huggyllama/llama-65b",
-            "context_window": 2048,
-            "cost": {"prompt": 0.9, "completion": 0.9},
-        },
         "llama-2-13b": {
             "endpoint": "together_ai/togethercomputer/llama-2-13b",
             "context_window": 4096,
