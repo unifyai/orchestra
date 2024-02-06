@@ -52,18 +52,23 @@ class TogetherAI(BaseCompletionProvider):
             "cost": {"prompt": 0.2, "completion": 0.2},
         },
         "codellama-13b-instruct": {
-            "endpoint": "together_ai/togethercomputer/CodeLlama-13b-Instruct",
-            "context_window": 8192,
+            "endpoint": "together_ai/codellama/CodeLlama-13b-Instruct-hf",
+            "context_window": 16384,
             "cost": {"prompt": 0.225, "completion": 0.225},
         },
         "codellama-34b-instruct": {
-            "endpoint": "together_ai/togethercomputer/CodeLlama-34b-Instruct",
-            "context_window": 8192,
+            "endpoint": "together_ai/codellama/CodeLlama-34b-Instruct-hf",
+            "context_window": 16384,
             "cost": {"prompt": 0.8, "completion": 0.8},
         },
+        "codellama-70b-instruct": {
+            "endpoint": "together_ai/codellama/CodeLlama-70b-Instruct-hf",
+            "context_window": 4096,
+            "cost": {"prompt": 0.9, "completion": 0.9},
+        },
         "codellama-7b-instruct": {
-            "endpoint": "together_ai/togethercomputer/CodeLlama-7b-Instruct",
-            "context_window": 8192,
+            "endpoint": "together_ai/codellama/CodeLlama-7b-Instruct-hf",
+            "context_window": 16384,
             "cost": {"prompt": 0.2, "completion": 0.2},
         },
         "codellama-13b-python": {

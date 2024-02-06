@@ -24,10 +24,33 @@ class TogetherAIProvider(AbstractProvider):
         self.pricing_tables = soup.find_all("ul", class_="pricing-list w-list-unstyled")
         self.supported_models = set(
             [
-                x["endpoint"].split("/")[-1].lower()
+                "/".join(x["endpoint"].split("/")[1:]).lower()
                 for x in TogetherAI().supported_models.values()
             ]
         )
+        self.get_models_missing_in_unify()
+
+
+    def get_models_missing_in_unify(self):
+        '''Checks against all models in Perplexity website'''
+        req = Request(
+            "https://docs.together.ai/docs/inference-models",
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        html_page = urlopen(req).read()
+        soup = BeautifulSoup(html_page, "html.parser")
+        pricing_tables = soup.find_all("table")
+        # checking if any model left
+        models_missing_in_unify = []
+        for table in pricing_tables[:3]:
+            for row in table.find_all("tr")[1:]:
+                cols = row.find_all("td")
+                model_name = cols[2].text.strip().lower()
+                context_len = int(cols[3].text.strip())
+                if model_name not in self.supported_models:
+                    models_missing_in_unify.append(model_name)
+        if models_missing_in_unify:
+            print(f"Found in pricing page but not in our list ({self.NAME}): {models_missing_in_unify}")
 
     def get(
         self,
@@ -54,9 +77,7 @@ class TogetherAIProvider(AbstractProvider):
             relevant_models = []
             # CHAT, LANGUAGE, AND CODE MODELS
             if i <= 4:
-                # print(i, size, cost)
                 size_range = [float(s[:-1]) for s in size.split(" ") if "B" in s]
-                # print(size_range)
                 if len(size_range) == 1:
                     lower_range = 0
                     upper_range = size_range[0]
@@ -68,20 +89,20 @@ class TogetherAIProvider(AbstractProvider):
                 for model_name in self.supported_models:
                     if "llama" in model_name:
                         continue
-                    model_size = re.findall(r"(?<!x)(\d+)b", model_name)
-                    if model_size:
-                        model_size = float(model_size[0])
-                        if lower_range <= model_size <= upper_range:
+                    supported_model_size = re.findall(r"(?<!x)(\d+)b", model_name)
+                    if supported_model_size:
+                        supported_model_size = float(supported_model_size[0].lower())
+                        if lower_range <= supported_model_size <= upper_range:
                             relevant_models.append(model_name)
             # LLAMA-2 AND CODELLAMA MODELS
             elif 8 >= i >= 5:
                 llama_size = float(size[:-1])
                 for model_name in self.supported_models:
                     if "llama" in model_name:
-                        model_size = re.findall(r"(?<!x)(\d+)b", model_name)
-                        if model_size:
-                            model_size = float(model_size[0])
-                            if model_size == llama_size:
+                        supported_model_size = re.findall(r"(?<!x)(\d+)b", model_name)
+                        if supported_model_size:
+                            supported_model_size = float(supported_model_size[0].lower())
+                            if supported_model_size == llama_size:
                                 relevant_models.append(model_name)
             # MIXTURE-OF-EXPERTS
             elif i >= 9:
