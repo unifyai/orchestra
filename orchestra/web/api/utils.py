@@ -1,15 +1,17 @@
+from fastapi import HTTPException
+
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.query_dao import QueryDAO
-
 from orchestra.web.api.endpoint.views import get_endpoint
 from orchestra.web.api.model.views import get_model
 from orchestra.web.api.provider.views import get_provider
 from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.query.views import create_query_model
 
-async def db_operations(
+
+async def db_operations(  # noqa: WPS211
     user_id: str,
     cost: float,
     model: str,
@@ -19,8 +21,24 @@ async def db_operations(
     endpoint_dao: EndpointDAO,
     query_dao: QueryDAO,
 ):
+    """
+    Perform database operations.
+
+    :param user_id: user id.
+    :param cost: cost of the operation.
+    :param model: model name.
+    :param provider: provider name.
+    :param model_dao: DAO for model models.
+    :param provider_dao: DAO for provider models.
+    :param endpoint_dao: DAO for endpoint models.
+    :param query_dao: DAO for query models.
+
+    :raises HTTPException: when endpoint is not found.
+    """
     model_id = int((await get_model(mdl_code=model, model_dao=model_dao))[0].id)
-    provider_id = int((await get_provider(name=provider, provider_dao=provider_dao))[0].id)
+    provider_id = int(
+        (await get_provider(name=provider, provider_dao=provider_dao))[0].id,
+    )
     endpoint_ids = await get_endpoint(
         mdl_id=model_id,
         provider_id=provider_id,
@@ -36,10 +54,14 @@ async def db_operations(
         ),
         None,
     )
-
+    if endpoint_id is None:
+        raise HTTPException(
+            status_code=500,  # noqa: WPS432
+            detail="Endpoint not found",
+        )
     query_model_request = QueryModelRequest(
         user_id=user_id,
         endpoint_id=endpoint_id,
-        credits=cost,
+        credits=cost,  # type: ignore
     )
     await create_query_model(query_model_request, query_dao=query_dao)
