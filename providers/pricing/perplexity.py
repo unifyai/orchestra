@@ -1,6 +1,7 @@
 import logging
 from typing import List, Optional
 from urllib.request import Request, urlopen
+import re
 
 from bs4 import BeautifulSoup
 from providers.completion.perplexity import Perplexity
@@ -29,6 +30,30 @@ class PerplexityProvider(AbstractProvider):
                 for x in Perplexity().supported_models.values()
             ],
         )
+        self.get_models_missing_in_unify()
+
+    def get_models_missing_in_unify(self):
+        '''Checks against all models in Perplexity website'''
+        req = Request(
+            "https://docs.perplexity.ai/docs/model-cards",
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        html_page = urlopen(req).read()
+        soup = BeautifulSoup(html_page, "html.parser")
+        pricing_tables = soup.find_all("table")
+        # checking if any model left
+        models_missing_in_unify = []
+        for row in pricing_tables[0].find_all("tr")[1:]:
+            cols = row.find_all("td")
+            model_name = cols[0].text.strip().lower().split(" ")[0]
+            context_len = int(cols[1].text.strip().split(" ")[0])
+            model_type = cols[2].text.strip().lower()
+            if model_type == "chat completion":
+                if model_name not in self.supported_models:
+                    models_missing_in_unify.append(model_name)
+        if models_missing_in_unify:
+            print(f"Found in pricing page but not in our list ({self.NAME}): {models_missing_in_unify}")
+
 
     def get(
         self,
@@ -51,7 +76,11 @@ class PerplexityProvider(AbstractProvider):
 
             relevant_models = []
             for model_name in self.supported_models:
-                if model_size.lower() in model_name:
+                supported_model_size = re.findall(r"((?:\d+x)?\d+b)", model_name)[0].lower()
+                # https://docs.perplexity.ai/changelog/new-model-mixtral-8x7b-instruct
+                if supported_model_size == "8x7b":
+                    supported_model_size = "13b"
+                if model_size.lower() == supported_model_size:
                     relevant_models.append(model_name)
 
             for model_name in relevant_models:

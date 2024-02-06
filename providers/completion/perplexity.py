@@ -15,6 +15,11 @@ class Perplexity(BaseCompletionProvider):
             "context_window": 16384,
             "cost": {"prompt": 0.35, "completion": 1.4},
         },
+        "codellama-70b-instruct": {
+            "endpoint": "perplexity/codellama-70b-instruct",
+            "context_window": 16384,
+            "cost": {"prompt": 0.7, "completion": 2.8},
+        },
         "llama-2-70b-chat": {
             "endpoint": "perplexity/llama-2-70b-chat",
             "context_window": 4096,
@@ -25,11 +30,11 @@ class Perplexity(BaseCompletionProvider):
             "context_window": 4096,
             "cost": {"prompt": 0.07, "completion": 0.28},
         },
-        # "mixtral-8x7b-instruct-v0.1": {
-        #     "endpoint": "perplexity/mixtral-8x7b-instruct",
-        #     "context_window": 4096,
-        #     "cost": {"prompt": 0.13, "completion": 0.56}, This needs to be revisited
-        # },
+        "mixtral-8x7b-instruct-v0.1": {
+            "endpoint": "perplexity/mixtral-8x7b-instruct",
+            "context_window": 4096,
+            "cost": {"prompt": 0.14, "completion": 0.56}, # This needs to be revisited
+        },
         "pplx-7b-chat": {
             "endpoint": "perplexity/pplx-7b-chat",
             "context_window": 8192,
