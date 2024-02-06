@@ -72,12 +72,14 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
         )
 
     # infer endpoint id here?
-    endpoint_id = 1
+    endpoint_id = 1235
     query_model_request = QueryModelRequest(
         user_id=user_id,
         endpoint_id=endpoint_id,
         credits=cost,
     )
+    await create_query_model(query_model_request, query_dao=query_dao)
+
     if stream:
 
         async def stream_and_update_db():  # noqa: WPS430
@@ -87,10 +89,9 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
                 await asyncio.sleep(0)
             await users_dao.recharge_credit(user_id, -response.total_cost)
 
-        await create_query_model(query_model_request, query_dao=query_dao)
+        
         return StreamingResponse(stream_and_update_db())
     else:
-        await create_query_model(query_model_request, query_dao=query_dao)
         await users_dao.recharge_credit(user_id, -cost)
 
     if isinstance(response, ChatCompletionResponse):

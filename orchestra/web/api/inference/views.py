@@ -80,19 +80,6 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             max_tokens=request.arguments.get("max_tokens", None),
             stream=stream,
         )
-        if stream:
-
-            async def stream_and_update_db():  # noqa: WPS430
-                async for part_dict in response.generator():
-                    part_dict["model"] = model
-                    part_dict["provider"] = provider
-                    yield json.dumps(part_dict)
-                    await asyncio.sleep(0)
-                await users_dao.recharge_credit(user_id, -response.total_cost)
-
-            return StreamingResponse(stream_and_update_db())
-        else:
-            await users_dao.recharge_credit(user_id, -cost)
 
         if not response:
             # TODO: Handle when response is None
@@ -107,6 +94,20 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
                     "usage": {},
                 },
             )
+
+        if stream:
+
+            async def stream_and_update_db():  # noqa: WPS430
+                async for part_dict in response.generator():
+                    part_dict["model"] = model
+                    part_dict["provider"] = provider
+                    yield json.dumps(part_dict)
+                    await asyncio.sleep(0)
+                await users_dao.recharge_credit(user_id, -response.total_cost)
+
+            return StreamingResponse(stream_and_update_db())
+        else:
+            await users_dao.recharge_credit(user_id, -cost)
 
         endpoint_id = 1
         query_model_request = QueryModelRequest(
