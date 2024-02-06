@@ -11,9 +11,12 @@ from litellm.utils import Usage
 from models.imagegen import ImagegenModel
 from models.llm import CompletionsModel
 
+from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
 from orchestra.web.api.inference.schema import InferenceRequest, InferenceResponse
+from orchestra.web.api.query.schema import QueryModelRequest
+from orchestra.web.api.query.views import create_query_model
 from orchestra.web.api.users.views import get_credits
 
 router = APIRouter()
@@ -36,6 +39,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
     request_fastapi: Request,
     request: InferenceRequest,
     users_dao: UsersDAO = Depends(),
+    query_dao: QueryDAO = Depends(),
 ) -> Union[InferenceResponse, StreamingResponse]:
     """
     Get inference result based on the request.
@@ -76,19 +80,6 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
             max_tokens=request.arguments.get("max_tokens", None),
             stream=stream,
         )
-        if stream:
-
-            async def stream_and_update_db():  # noqa: WPS430
-                async for part_dict in response.generator():
-                    part_dict["model"] = model
-                    part_dict["provider"] = provider
-                    yield json.dumps(part_dict)
-                    await asyncio.sleep(0)
-                await users_dao.recharge_credit(user_id, -response.total_cost)
-
-            return StreamingResponse(stream_and_update_db())
-        else:
-            await users_dao.recharge_credit(user_id, -cost)
 
         if not response:
             # TODO: Handle when response is None
@@ -103,6 +94,29 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501
                     "usage": {},
                 },
             )
+
+        if stream:
+
+            async def stream_and_update_db():  # noqa: WPS430
+                async for part_dict in response.generator():
+                    part_dict["model"] = model
+                    part_dict["provider"] = provider
+                    yield json.dumps(part_dict)
+                    await asyncio.sleep(0)
+                await users_dao.recharge_credit(user_id, -response.total_cost)
+
+            return StreamingResponse(stream_and_update_db())
+        else:
+            await users_dao.recharge_credit(user_id, -cost)
+
+        endpoint_id = 1
+        query_model_request = QueryModelRequest(
+            user_id=user_id,
+            endpoint_id=endpoint_id,
+            credits=cost,
+        )
+        await create_query_model(query_model_request, query_dao=query_dao)
+
         if isinstance(response, ChatCompletionResponse):
             response = response.model_dump()
             response["model"] = model

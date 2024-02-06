@@ -23,6 +23,7 @@ from orchestra.web.api.provider.views import get_provider
 from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.query.views import create_query_model
 from orchestra.web.api.users.views import get_credits
+from orchestra.web.api.users.views import get_credits
 
 router = APIRouter()
 
@@ -122,7 +123,10 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217
         endpoint_id=endpoint_id,
         credits=cost,
     )
+    await create_query_model(query_model_request, query_dao=query_dao)
+
     if stream:
+
 
         async def stream_and_update_db():  # noqa: WPS430
             async for part_dict in response.generator():
@@ -134,7 +138,6 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217
         await create_query_model(query_model_request, query_dao=query_dao)
         return StreamingResponse(stream_and_update_db())
     else:
-        await create_query_model(query_model_request, query_dao=query_dao)
         await users_dao.recharge_credit(user_id, -cost)
 
     if isinstance(response, ChatCompletionResponse):
