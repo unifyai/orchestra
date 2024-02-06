@@ -8,24 +8,33 @@ from fastapi.responses import StreamingResponse
 from litellm.utils import Usage
 from models.llm import CompletionsModel
 
+from orchestra.db.dao.endpoint_dao import EndpointDAO
+from orchestra.db.dao.model_dao import ModelDAO
+from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.chat_completion.schema import (
     ChatCompletionRequest,
     ChatCompletionResponse,
 )
+from orchestra.web.api.endpoint.views import get_endpoint
+from orchestra.web.api.model.views import get_model
+from orchestra.web.api.provider.views import get_provider
 from orchestra.web.api.query.schema import QueryModelRequest
-from orchestra.web.api.users.views import get_credits
 from orchestra.web.api.query.views import create_query_model
+from orchestra.web.api.users.views import get_credits
 
 router = APIRouter()
 
 
 @router.post("/chat/completions", response_model=ChatCompletionResponse)
-async def get_completions(  # noqa: C901, WPS210, WPS231
+async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217
     request_fastapi: Request,
     request: ChatCompletionRequest,
     users_dao: UsersDAO = Depends(),
+    model_dao: ModelDAO = Depends(),
+    provider_dao: ProviderDAO = Depends(),
+    endpoint_dao: EndpointDAO = Depends(),
     query_dao: QueryDAO = Depends(),
 ) -> Union[ChatCompletionResponse, StreamingResponse]:
     """
@@ -34,6 +43,10 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
     :param request_fastapi: FastAPI request object.
     :param request: ChatCompletionRequest object.
     :param users_dao: DAO for users models.
+    :param model_dao: DAO for model models.
+    :param provider_dao: DAO for provider models.
+    :param endpoint_dao: DAO for endpoint models.
+    :param query_dao: DAO for query models.
 
     :return: ChatCompletionResponse object.
 
@@ -43,6 +56,39 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
     user = await get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(user.credits if user else 0)
     model, provider = request.model.split("@")
+    try:
+        model_id = int((await get_model(mdl_code=model, model_dao=model_dao))[0].id)
+    except Exception:
+        raise HTTPException(
+            status_code=422,  # noqa: WPS432
+            detail="Model not found",
+        )
+    try:
+        provider_id = int(
+            (await get_provider(name=provider, provider_dao=provider_dao))[0].id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=422,  # noqa: WPS432
+            detail="Provider not found",
+        )
+
+    endpoint_ids = await get_endpoint(
+        mdl_id=model_id,
+        provider_id=provider_id,
+        endpoint_dao=endpoint_dao,
+        model_dao=model_dao,
+        provider_dao=provider_dao,
+    )
+    endpoint_id = next(
+        (
+            int(endpoint.endpoint_id)
+            for endpoint in endpoint_ids
+            if endpoint.provider_id == provider_id
+        ),
+        None,
+    )
+
     language_model = CompletionsModel(
         provider=provider,
         model=model,
@@ -71,21 +117,20 @@ async def get_completions(  # noqa: C901, WPS210, WPS231
             _response_ms=0,
         )
 
-    # infer endpoint id here?
-    endpoint_id = 1
     query_model_request = QueryModelRequest(
         user_id=user_id,
         endpoint_id=endpoint_id,
         credits=cost,
     )
     if stream:
+
         async def stream_and_update_db():  # noqa: WPS430
             async for part_dict in response.generator():
                 part_dict["model"] = f"{model}@{provider}"
-                yield f"data: {json.dumps(part_dict)}\n\n"
+                yield f"data: {json.dumps(part_dict)}\n\n"  # noqa: WPS237
                 await asyncio.sleep(0)
             await users_dao.recharge_credit(user_id, -response.total_cost)
-        
+
         await create_query_model(query_model_request, query_dao=query_dao)
         return StreamingResponse(stream_and_update_db())
     else:
