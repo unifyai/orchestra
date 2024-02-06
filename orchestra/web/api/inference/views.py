@@ -163,7 +163,6 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
         else:
             await users_dao.recharge_credit(user_id, -cost)
 
-        endpoint_id = 1
         query_model_request = QueryModelRequest(
             user_id=user_id,
             endpoint_id=endpoint_id,
