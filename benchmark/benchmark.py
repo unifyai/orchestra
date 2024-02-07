@@ -215,6 +215,9 @@ async def worker_loop(  # noqa: WPS210
         # Initialise the benchmark runner(s)
         benchmark_runners = []
         for config in configs:
+            # TODO: Parametrise this properly
+            if endpoint["model"] == "gpt-4" and config["load"] == 20:
+                continue
             benchmark_runners.append(
                 AIBenchRunner(endpoint_fn, **config),
             )
