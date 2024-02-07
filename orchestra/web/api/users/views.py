@@ -72,6 +72,9 @@ async def credits_code(
 
     prev_recharges = await recharge_dao.filter(user_id=user_id)
 
+    if any(pr.type == code for pr in prev_recharges):
+        return CreditsCodeResponse(msg="This code is already activated!")
+
     if any(pr.type in promo_codes for pr in prev_recharges):
         return CreditsCodeResponse(msg="You have already used a promo code!")
 
