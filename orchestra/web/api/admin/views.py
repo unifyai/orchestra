@@ -687,26 +687,6 @@ async def create_task_model(
     )
 
 
-@router.put("/create_benchmark_run")
-async def create_benchmark_run_model(
-    new_benchmark_run_object: BenchmarkRunModelResponse,
-    benchmark_run_dao: BenchmarkRunDAO = Depends(),
-) -> None:
-    """
-    Creates benchmark_run model in the database.
-
-    :param new_benchmark_run_object: new benchmark_run model item.
-    :param benchmark_run_dao: DAO for benchmark_run models.
-    """
-    await benchmark_run_dao.create_benchmark_run(
-        endpoint_id=new_benchmark_run_object.endpoint_id,
-        regime=new_benchmark_run_object.regime,
-        region=new_benchmark_run_object.region,
-        seq_len=new_benchmark_run_object.seq_len,
-        measured_at=new_benchmark_run_object.measured_at,
-    )
-
-
 @router.put("/update_benchmark_run")
 async def update_benchmark_run(  # noqa: WPS211
     id: int,  # noqa: WPS125
@@ -734,5 +714,36 @@ async def update_benchmark_run(  # noqa: WPS211
         regime=regime,
         region=region,
         seq_len=seq_len,
+        measured_at=measured_at,
+    )
+
+
+@router.put("/update_datapoint")
+async def update_datapoint(  # noqa: WPS211
+    id: int,  # noqa: WPS125
+    benchmark_run_id: Optional[int] = None,
+    metric_name: Optional[str] = None,
+    value: Optional[float] = None,
+    tooltip: Optional[str] = None,
+    measured_at: Optional[datetime.datetime] = None,
+    datapoint_dao: DatapointDAO = Depends(),
+) -> None:
+    """
+    Update specific datapoint model.
+
+    :param id: id of datapoint instance.
+    :param benchmark_run_id: benchmark_run_id of datapoint instance.
+    :param metric_name: metric_name of datapoint instance.
+    :param value: value of datapoint instance.
+    :param tooltip: tooltip of datapoint instance.
+    :param measured_at: measured_at of datapoint instance.
+    :param datapoint_dao: DAO for datapoint models.
+    """
+    await datapoint_dao.update_datapoint(
+        id=id,
+        benchmark_run_id=benchmark_run_id,
+        metric_name=metric_name,
+        value=value,
+        tooltip=tooltip,
         measured_at=measured_at,
     )
