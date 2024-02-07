@@ -177,6 +177,38 @@ async def get_benchmark_run_models(
     return await benchmark_run_dao.get_all_benchmark_runs(limit=limit, offset=offset)
 
 
+@router.get("/get_benchmark_run", response_model=List[BenchmarkRunModelResponse])
+async def get_benchmark_run(  # noqa: WPS211
+    id: Optional[int] = None,  # noqa: WPS125
+    endpoint_id: Optional[int] = None,
+    regime: Optional[str] = None,
+    region: Optional[str] = None,
+    seq_len: Optional[str] = None,
+    measured_at: Optional[datetime.datetime] = None,
+    benchmark_run_dao: BenchmarkRunDAO = Depends(),
+) -> List[BenchmarkRun]:
+    """
+    Retrieve specific benchmark_run object from the database.
+
+    :param id: id of benchmark_run object.
+    :param endpoint_id: endpoint_id of benchmark_run object.
+    :param regime: regime of benchmark_run object.
+    :param region: region of benchmark_run object.
+    :param seq_len: seq_len of benchmark_run object.
+    :param measured_at: measured_at of benchmark_run object.
+    :param benchmark_run_dao: DAO for benchmark_run models.
+    :return: benchmark_run object from database.
+    """
+    return await benchmark_run_dao.filter(
+        id=id,
+        endpoint_id=endpoint_id,
+        regime=regime,
+        region=region,
+        seq_len=seq_len,
+        measured_at=measured_at,
+    )
+
+
 @router.get("/get_all_datapoints", response_model=List[DatapointModelResponse])
 async def get_datapoint_models(
     limit: int = 10,
@@ -652,4 +684,66 @@ async def create_task_model(
     await task_dao.create_task(
         name=new_task_object.name,
         modality=new_task_object.modality,
+    )
+
+
+@router.put("/update_benchmark_run")
+async def update_benchmark_run(  # noqa: WPS211
+    id: int,  # noqa: WPS125
+    endpoint_id: Optional[int] = None,
+    regime: Optional[str] = None,
+    region: Optional[str] = None,
+    seq_len: Optional[str] = None,
+    measured_at: Optional[datetime.datetime] = None,
+    benchmark_run_dao: BenchmarkRunDAO = Depends(),
+) -> None:
+    """
+    Update specific benchmark_run model.
+
+    :param id: id of benchmark_run instance.
+    :param endpoint_id: endpoint_id of benchmark_run instance.
+    :param regime: regime of benchmark_run instance.
+    :param region: region of benchmark_run instance.
+    :param seq_len: seq_len of benchmark_run instance.
+    :param measured_at: measured_at of benchmark_run instance.
+    :param benchmark_run_dao: DAO for benchmark_run models.
+    """
+    await benchmark_run_dao.update_benchmark_run(
+        id=id,
+        endpoint_id=endpoint_id,
+        regime=regime,
+        region=region,
+        seq_len=seq_len,
+        measured_at=measured_at,
+    )
+
+
+@router.put("/update_datapoint")
+async def update_datapoint(  # noqa: WPS211
+    id: int,  # noqa: WPS125
+    benchmark_run_id: Optional[int] = None,
+    metric_name: Optional[str] = None,
+    value: Optional[float] = None,
+    tooltip: Optional[str] = None,
+    measured_at: Optional[datetime.datetime] = None,
+    datapoint_dao: DatapointDAO = Depends(),
+) -> None:
+    """
+    Update specific datapoint model.
+
+    :param id: id of datapoint instance.
+    :param benchmark_run_id: benchmark_run_id of datapoint instance.
+    :param metric_name: metric_name of datapoint instance.
+    :param value: value of datapoint instance.
+    :param tooltip: tooltip of datapoint instance.
+    :param measured_at: measured_at of datapoint instance.
+    :param datapoint_dao: DAO for datapoint models.
+    """
+    await datapoint_dao.update_datapoint(
+        id=id,
+        benchmark_run_id=benchmark_run_id,
+        metric_name=metric_name,
+        value=value,
+        tooltip=tooltip,
+        measured_at=measured_at,
     )

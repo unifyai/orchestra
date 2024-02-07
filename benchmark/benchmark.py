@@ -91,6 +91,33 @@ async def get_names(
     return [entry[0] for entry in query.all()]
 
 
+def filter_brs_results(brs_results: List[Dict], key: str, threshold: float):
+    """
+    Filter a list of benchmark runs results to remove runs with values > threshold.
+
+    Args:
+        brs_results (List[Dict]): List of dictionaries to filter.
+        key (str): Key within each dictionary.
+        threshold (float): Upper bound for comparison.
+
+    Returns:
+        List[Dict]: Filtered list of dictionaries.
+    """
+    brs_results_copy = brs_results[:]
+    for br_result in brs_results:
+        # Check if the key exists in the dictionary and if its value is a list
+        if key in br_result and isinstance(br_result[key], list):
+            # Check if any value within the list is greater than or equal to the threshold
+            if any(value >= threshold for value in br_result[key]):
+                brs_results_copy.remove(br_result)
+        elif key in br_result and isinstance(br_result[key], (int, float)):
+            if br_result[key] >= threshold:
+                brs_results_copy.remove(br_result)
+        else:
+            logger.error(f"{key} can not be filtered.")
+    return brs_results_copy
+
+
 async def db_loop(  # noqa: WPS210, WPS217
     output_queue: asyncio.Queue,
     done_events: List[asyncio.Event],
@@ -120,6 +147,9 @@ async def db_loop(  # noqa: WPS210, WPS217
         while not output_queue.empty():
             brs_results.append(await output_queue.get())
             output_queue.task_done()
+
+        # TODO: Parametrise this properly
+        brs_results = filter_brs_results(brs_results, "output_tks_per_sec", 500)
 
         async with async_session() as session:
             brs = await commit_benchmark_runs(brs_results, session)
@@ -185,6 +215,9 @@ async def worker_loop(  # noqa: WPS210
         # Initialise the benchmark runner(s)
         benchmark_runners = []
         for config in configs:
+            # TODO: Parametrise this properly
+            if endpoint["model"] == "gpt-4" and config["load"] == 20:
+                continue
             benchmark_runners.append(
                 AIBenchRunner(endpoint_fn, **config),
             )
