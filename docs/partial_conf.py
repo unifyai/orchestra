@@ -7,3 +7,6 @@ html_sidebars = {"**": ["custom-toc-tree"]}
 
 project = "Model Hub"
 html_title = "Model Hub Documentation"
+
+# Removing kapa.ai integration
+html_js_files = []
