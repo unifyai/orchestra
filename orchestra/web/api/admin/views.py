@@ -177,6 +177,38 @@ async def get_benchmark_run_models(
     return await benchmark_run_dao.get_all_benchmark_runs(limit=limit, offset=offset)
 
 
+@router.get("/get_benchmark_run", response_model=List[BenchmarkRunModelResponse])
+async def get_benchmark_run(  # noqa: WPS211
+    id: Optional[int] = None,  # noqa: WPS125
+    endpoint_id: Optional[int] = None,
+    regime: Optional[str] = None,
+    region: Optional[str] = None,
+    seq_len: Optional[str] = None,
+    measured_at: Optional[datetime.datetime] = None,
+    benchmark_run_dao: BenchmarkRunDAO = Depends(),
+) -> List[BenchmarkRun]:
+    """
+    Retrieve specific benchmark_run object from the database.
+
+    :param id: id of benchmark_run object.
+    :param endpoint_id: endpoint_id of benchmark_run object.
+    :param regime: regime of benchmark_run object.
+    :param region: region of benchmark_run object.
+    :param seq_len: seq_len of benchmark_run object.
+    :param measured_at: measured_at of benchmark_run object.
+    :param benchmark_run_dao: DAO for benchmark_run models.
+    :return: benchmark_run object from database.
+    """
+    return await benchmark_run_dao.filter(
+        id=id,
+        endpoint_id=endpoint_id,
+        regime=regime,
+        region=region,
+        seq_len=seq_len,
+        measured_at=measured_at,
+    )
+
+
 @router.get("/get_all_datapoints", response_model=List[DatapointModelResponse])
 async def get_datapoint_models(
     limit: int = 10,
