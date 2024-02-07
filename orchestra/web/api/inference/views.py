@@ -7,7 +7,6 @@ from typing import Union
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.param_functions import Depends
 from fastapi.responses import StreamingResponse
-from litellm.utils import Usage
 from models.imagegen import ImagegenModel
 from models.llm import CompletionsModel
 
@@ -19,7 +18,6 @@ from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
 from orchestra.web.api.inference.schema import InferenceRequest, InferenceResponse
 from orchestra.web.api.users.views import get_credits
-from openai.types.chat.chat_completion import ChatCompletion
 from orchestra.web.api.utils import db_operations
 
 router = APIRouter()
@@ -97,7 +95,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
         response, cost = language_model.get_completion(
             messages=request.arguments["messages"],
             temperature=request.arguments.get("temperature", 0.9),  # noqa: WPS432
-            max_tokens=request.arguments.get("max_tokens", 512),
+            max_tokens=request.arguments.get("max_tokens", 512),  # noqa: WPS432
             stream=stream,
         )
 
@@ -159,26 +157,12 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
                 response=response,
             )
 
-        if isinstance(response["usage"], Usage):
-            usage = response["usage"].model_dump()
-        else:
-            usage = response["usage"]
-
-        choices = [
-            getattr(choice, "model_dump", lambda: None)()
-            for choice in response.get("choices", [])
-        ]
+        response = response.model_dump()
+        response["model"] = model
+        response["provider"] = provider
 
         return InferenceResponse(
-            response={
-                "model": model,
-                "provider": provider,
-                "created": response.get("created", None),
-                "id": response["id"],
-                "choices": choices,
-                "object": "chat.completion",
-                "usage": usage,
-            },
+            response=response,
         )
     elif model_type == "image":
         image_model = ImagegenModel(

@@ -1,8 +1,14 @@
 # flake8: noqa: E501
-from providers.completion.base_completion_provider import BaseCompletionProvider, logger, AsyncGeneratorWrapper
+from typing import Any, List, Optional
+
 import openai
 from openai import AsyncOpenAI, OpenAI
-from typing import Any, List, Optional
+from providers.completion.base_completion_provider import (
+    AsyncGeneratorWrapper,
+    BaseCompletionProvider,
+    logger,
+)
+
 
 class TogetherAI(BaseCompletionProvider):
     """
@@ -341,4 +347,3 @@ class TogetherAI(BaseCompletionProvider):
     }
 
     base_url = "https://api.together.xyz/v1"
-    

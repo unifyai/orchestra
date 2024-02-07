@@ -1,17 +1,6 @@
-import datetime
 import logging
-from typing import List, Optional
 
-import openai
-from litellm.utils import ModelResponse, Usage
-from octoai.chat import ChatCompletion
-from octoai.client import Client
-from providers.completion.base_completion_provider import (
-    AsyncGeneratorWrapper,
-    BaseCompletionProvider,
-)
-
-from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
+from providers.completion.base_completion_provider import BaseCompletionProvider
 
 logger = logging.getLogger(__name__)
 

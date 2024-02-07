@@ -1,19 +1,20 @@
+import asyncio
 import time
-import uuid
 from datetime import datetime
 from typing import Any, List, Optional
 
 import requests
 from fastapi import HTTPException
 from litellm.llms.prompt_templates.factory import prompt_factory
-from litellm.utils import (
-    Choices,
-    Delta,
-    Message,
-    ModelResponse,
-    StreamingChoices,
-    Usage,
+from openai.types.chat.chat_completion import ChatCompletion
+from openai.types.chat.chat_completion import Choice as ChatCompletionChoice
+from openai.types.chat.chat_completion_chunk import (
+    ChatCompletionChunk,
+    Choice,
+    ChoiceDelta,
 )
+from openai.types.chat.chat_completion_message import ChatCompletionMessage
+from openai.types.completion_usage import CompletionUsage
 from providers.completion.base_completion_provider import (
     PRICING_PER_TOKENS,
     AsyncGeneratorWrapper,
@@ -164,8 +165,12 @@ class Replicate(BaseCompletionProvider):
 
         if stream:
             return (
-                ReplicateAsyncGeneratorWrapper(
-                    self.handle_prediction_response_streaming(prediction_url),
+                AsyncGeneratorWrapper(
+                    self.handle_prediction_response_streaming(
+                        prediction_url,
+                        model,
+                        endpoint,
+                    ),
                     model,
                     messages,
                     compute_cost_streaming=self.compute_cost_streaming,
@@ -174,7 +179,7 @@ class Replicate(BaseCompletionProvider):
                 None,
             )
 
-        response = self.handle_prediction_response(prediction_url)
+        response = self.handle_prediction_response(model, endpoint, prediction_url)
         return response, self.compute_cost(
             model,
             [item["content"] for item in messages],
@@ -201,9 +206,11 @@ class Replicate(BaseCompletionProvider):
             / PRICING_PER_TOKENS
         )
 
-    def handle_prediction_response_streaming(  # noqa: D102, E501, WPS210, WPS231
+    async def handle_prediction_response_streaming(  # noqa: D102, E501, WPS210, WPS231
         self,
         prediction_url,
+        model,
+        endpoint,
     ):
         previous_output = ""
         output_string = ""
@@ -216,7 +223,7 @@ class Replicate(BaseCompletionProvider):
         while True and (  # noqa: WPS352
             status not in ["succeeded", "failed", "canceled"]  # noqa: WPS510, E501
         ):
-            time.sleep(0.5)  # prevent being rate limited by replicate
+            await asyncio.sleep(0.5)  # prevent being rate limited by replicate
             response = requests.get(prediction_url, headers=headers)  # noqa: S113
             if response.status_code == 200:  # noqa: WPS432
                 response_data = response.json()
@@ -226,14 +233,15 @@ class Replicate(BaseCompletionProvider):
                     new_output = output_string[len(previous_output) :]
                     finish_reason = "stop" if status == "succeeded" else None
                     choices = [
-                        StreamingChoices(
+                        Choice(
                             finish_reason=finish_reason,
-                            delta=Delta(content=new_output, role="assistant"),
+                            delta=ChoiceDelta(content=new_output, role="assistant"),
+                            index=0,
                         ),
                     ]
                     created = int(time.time())
 
-                    usage = Usage()
+                    usage = None
                     if status == "succeeded":
                         prompt_tokens = response_data["metrics"][  # noqa: WPS220, E501
                             "input_token_count"
@@ -251,15 +259,22 @@ class Replicate(BaseCompletionProvider):
                         tokens_per_second = response_data["metrics"][  # noqa: WPS220
                             "tokens_per_second"
                         ]
-                        usage = Usage(  # noqa: WPS220
-                            prompt_tokens,
-                            completion_tokens,
-                            total_tokens,
+                        usage = CompletionUsage(  # noqa: WPS220
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            total_tokens=total_tokens,
                             predict_time=predict_time,
                             time_to_first_token=time_to_first_token,
                             tokens_per_second=tokens_per_second,
                         )
-                    yield {"choices": choices, "created": created, "usage": usage}
+                    yield ChatCompletionChunk(
+                        choices=choices,
+                        created=created,
+                        model=model,
+                        usage=usage,
+                        id=endpoint,
+                        object="chat.completion.chunk",
+                    )
                     previous_output = output_string
                 status = response_data["status"]
                 if status == "failed":
@@ -271,6 +286,8 @@ class Replicate(BaseCompletionProvider):
 
     def handle_prediction_response(  # noqa: D102, E501, WPS210, WPS231
         self,
+        model,
+        endpoint,
         prediction_url,
     ):
         output_string = ""
@@ -307,66 +324,31 @@ class Replicate(BaseCompletionProvider):
         predict_time = response_data["metrics"]["predict_time"]
         time_to_first_token = response_data["metrics"]["time_to_first_token"]
         tokens_per_second = response_data["metrics"]["tokens_per_second"]
-        usage = Usage(
-            prompt_tokens,
-            completion_tokens,
-            total_tokens,
+        usage = CompletionUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
             predict_time=predict_time,
             time_to_first_token=time_to_first_token,
             tokens_per_second=tokens_per_second,
         )
 
-        response = ModelResponse(
-            id=f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237
-            choices=[Choices(message=Message(), index=0, finish_reason="stop")],
-            created=created,
-            _response_ms=predict_time * 1000,
-            usage=usage,
-            object="chat.completion",
-        )
-        response["choices"][0]["message"]["content"] = output_string
-        return response
-
-
-class ReplicateAsyncGeneratorWrapper(AsyncGeneratorWrapper):
-    """A wrapper for the Replicate async generator."""
-
-    async def generator(self):  # noqa: D102, C901, WPS210, WPS231
-        whole = ""
-        usage = {}
-        try:  # noqa: WPS501
-            for part in self._response:
-                usage = part.get("usage", {})
-
-                choices = [
-                    getattr(choice, "model_dump", lambda: None)()
-                    for choice in part.get("choices", [])
-                ]
-
-                part_dict = {
-                    "model": self._model,
-                    "created": part.get("created", None),
-                    "id": part.get(
-                        "id",
-                        f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237, E501
+        return ChatCompletion(
+            id=endpoint,
+            choices=[
+                ChatCompletionChoice(
+                    finish_reason="length",
+                    index=0,
+                    message=ChatCompletionMessage(
+                        content=output_string,
+                        role="assistant",
                     ),
-                    "choices": choices,
-                    "object": part.get("object", "chat.completion.chunk"),
-                    "usage": usage.model_dump() if isinstance(usage, Usage) else usage,
-                }
-                part_text = choices[0]["delta"]["content"]
-                whole += part_text if part_text else ""
-                yield part_dict
-        finally:
-            if isinstance(usage, Usage) and usage != Usage():
-                self.total_cost = self._compute_cost(
-                    self._model,
-                    [item["content"] for item in self._messages],
-                    ModelResponse(usage=usage),
-                )
-            else:
-                self.total_cost = self._compute_cost_streaming(
-                    self._model,
-                    whole,
-                    self._messages,
-                )
+                    logprobs=None,
+                ),
+            ],
+            created=created,
+            model=model,
+            object="chat.completion",
+            usage=usage,
+            _response_ms=predict_time * 1000,
+        )

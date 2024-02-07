@@ -5,7 +5,6 @@ from typing import Union
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.param_functions import Depends
 from fastapi.responses import StreamingResponse
-from litellm.utils import Usage
 from models.llm import CompletionsModel
 
 from orchestra.db.dao.endpoint_dao import EndpointDAO
@@ -124,26 +123,5 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             query_dao,
         )
 
-    if isinstance(response, ChatCompletionResponse):
-        response.model = f"{model}@{provider}"
-        return response
-
-    if isinstance(response["usage"], Usage):
-        usage = response["usage"].model_dump()
-    else:
-        usage = response["usage"]
-
-    if response.get("choices", None):
-        choices = []
-        for choice in response.get("choices", None):
-            choices.append(choice.model_dump())
-
-    return ChatCompletionResponse(
-        model=f"{model}@{provider}",
-        created=response.get("created", None),
-        id=response.get("id", None),
-        choices=choices,
-        object=response.get("object", None),
-        usage=usage,
-        _response_ms=response.get("_response_ms", None),
-    )
+    response.model = f"{model}@{provider}"
+    return response.model_dump()

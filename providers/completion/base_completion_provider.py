@@ -1,11 +1,11 @@
+import inspect
 import logging
-import uuid
 from typing import Any, Dict, List, Optional
 
-from openai import AsyncOpenAI, OpenAI
-import openai
 import tiktoken
-from litellm.utils import ModelResponse, Usage
+from openai import APIError, APITimeoutError, AsyncOpenAI, OpenAI
+from openai.types.chat.chat_completion import ChatCompletion
+from openai.types.completion_usage import CompletionUsage
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,7 @@ class BaseCompletionProvider:
 
     # TODO: Make this a property and enforce definition with NotImplemented
     supported_models: Dict[str, Any] = {}
+    base_url: str = ""
 
     def __init__(self) -> None:
         self.model: str = ""
@@ -39,7 +40,7 @@ class BaseCompletionProvider:
         self,
         model_name: str,
         prompts: List[str],
-        response: ModelResponse,
+        response: ChatCompletion,
     ) -> float:
         """
         Compute the cost of a completion.
@@ -99,8 +100,17 @@ class BaseCompletionProvider:
 
             tokens = encoding.encode(completions)
             completion_tokens = len(tokens)
-            response = ModelResponse(usage=Usage(prompt_tokens, completion_tokens))
-
+            response = type(  # noqa: WPS317
+                "DummyClass",
+                (),
+                {
+                    "usage": CompletionUsage(
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=0,
+                    ),
+                },
+            )()
             return self.compute_cost(
                 model,
                 [item["content"] for item in messages],  # noqa: WPS441
@@ -109,70 +119,14 @@ class BaseCompletionProvider:
         except Exception:
             return 0
 
-    # def complete(  # noqa: D102, WPS211, C901, WPS231
-    #     self,
-    #     model: str,
-    #     messages: List,  # type: ignore
-    #     max_tokens: Optional[int] = 512,
-    #     temperature: Optional[float] = 0.9,
-    #     stream: Optional[bool] = False,
-    # ) -> Optional[Any]:
-    #     if model not in self.supported_models:
-    #         raise ValueError("Model not supported")
-
-    #     if isinstance(self.supported_models, dict):
-    #         provider_model_endpoint = self.supported_models[model]["endpoint"]
-    #     else:
-    #         provider_model_endpoint = model
-
-    #     try:
-    #         if stream:
-    #             return (
-    #                 AsyncGeneratorWrapper(
-    #                     litellm.acompletion(
-    #                         model=provider_model_endpoint,
-    #                         messages=messages,
-    #                         max_tokens=max_tokens,
-    #                         temperature=temperature,
-    #                         stream=True,
-    #                         api_key=self.api_key,
-    #                     ),
-    #                     model,
-    #                     messages,
-    #                     compute_cost_streaming=self.compute_cost_streaming,
-    #                 ),
-    #                 None,
-    #             )
-    #         response = litellm.completion(
-    #             model=provider_model_endpoint,
-    #             messages=messages,
-    #             max_tokens=max_tokens,
-    #             temperature=temperature,
-    #             api_key=self.api_key,
-    #         )
-
-    #         return response, self.compute_cost(
-    #             model,
-    #             [item["content"] for item in messages],
-    #             response,
-    #         )
-    #     except openai.APIError as error:
-    #         logger.error(f"Raised openai.APIError, Error: {error}")
-    #     except openai.APITimeoutError as error:
-    #         logger.error(f"Raised openai.APITimeoutError, Error: {error}")
-    #     except Exception as error:
-    #         error_type = type(error)
-    #         logger.error(f"Raised error type: {error_type}, Error: {error}")
-    #     return None, None
-
     def complete(  # noqa: D102, WPS211, C901, WPS231
-    self,
-    model: str,
-    messages: List,  # type: ignore
-    max_tokens: Optional[int] = 512,
-    temperature: Optional[float] = 0.9,
-    stream: Optional[bool] = False,
-) -> Optional[Any]:
+        self,
+        model: str,
+        messages: List,  # type: ignore
+        max_tokens: Optional[int] = 512,
+        temperature: Optional[float] = 0.9,
+        stream: Optional[bool] = False,
+    ) -> Optional[Any]:
         if model not in self.supported_models:
             raise ValueError("Model not supported")
 
@@ -188,12 +142,12 @@ class BaseCompletionProvider:
 
         try:
             response = client.chat.completions.create(
-                            model=provider_model_endpoint,
-                            messages=messages,
-                            max_tokens=max_tokens,
-                            temperature=temperature,
-                            stream=stream,
-                        )
+                model=provider_model_endpoint,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                stream=stream,
+            )
             if stream:
                 return (
                     AsyncGeneratorWrapper(
@@ -210,14 +164,15 @@ class BaseCompletionProvider:
                 [item["content"] for item in messages],
                 response,
             )
-        except openai.APIError as error:
-            logger.error(f"Raised openai.APIError, Error: {error}")
-        except openai.APITimeoutError as error:
+        except APITimeoutError as error:
             logger.error(f"Raised openai.APITimeoutError, Error: {error}")
+        except APIError as error:
+            logger.error(f"Raised openai.APIError, Error: {error}")
         except Exception as error:
             error_type = type(error)
             logger.error(f"Raised error type: {error_type}, Error: {error}")
         return None, None
+
 
 class AsyncGeneratorWrapper:  # noqa: D101
     def __init__(  # noqa: WPS211
@@ -239,53 +194,26 @@ class AsyncGeneratorWrapper:  # noqa: D101
         whole = ""
         usage = {}
         try:  # noqa: WPS501
-            async for part in await self._response:
+            if inspect.iscoroutine(self._response):
+                self._response = await self._response
+            async for part in self._response:
                 if part.choices[0].delta.content is None:
                     continue
-        #         usage = part.get("usage", {})
-
-        #         choices = [
-        #             getattr(choice, "model_dump", lambda: None)()
-        #             for choice in part.get("choices", [])
-        #         ]
-
-        #         part_dict = {
-        #             "model": self._model,
-        #             "created": part.get("created", None),
-        #             "id": part.get(
-        #                 "id",
-        #                 f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237, E501
-        #             ),
-        #             "choices": choices,
-        #             "object": part.get("object", "chat.completion.chunk"),
-        #             "usage": usage.model_dump() if isinstance(usage, Usage) else usage,
-        #         }
-        #         part_text = choices[0]["delta"]["content"]
-        #         whole += part_text if part_text else ""
-        #         yield part_dict
-        # finally:
-        #     if isinstance(usage, Usage) and usage != Usage():
-        #         self.total_cost = self._compute_cost(
-        #             self._model,
-        #             [item["content"] for item in self._messages],
-        #             ModelResponse(usage=usage),
-        #         )
-        #     else:
-        #         self.total_cost = self._compute_cost_streaming(
-        #             self._model,
-        #             whole,
-        #             self._messages,
-        #         )
-                if part.choices[0].delta.content is None:
-                    continue
+                usage = part.usage
                 part_dict = part.dict()
-                part_dict["model"] = f"{self._model}@octoai"
                 part_text = part_dict["choices"][0]["delta"]["content"]
                 whole += part_text if part_text else ""
                 yield part_dict
         finally:
-            self.total_cost = self._compute_cost_streaming(
-                self._model,
-                whole,
-                self._messages,
-            )
+            if isinstance(usage, CompletionUsage):
+                self.total_cost = self._compute_cost(
+                    self._model,
+                    [item["content"] for item in self._messages],
+                    part,  # noqa: WPS441
+                )
+            else:
+                self.total_cost = self._compute_cost_streaming(
+                    self._model,
+                    whole,
+                    self._messages,
+                )

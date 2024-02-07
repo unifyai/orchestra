@@ -1,4 +1,3 @@
-import litellm
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
@@ -99,5 +98,5 @@ class OpenAI(BaseCompletionProvider):
             "cost": {"prompt": 1.5, "completion": 2},
         },
     }
-    
+
     base_url = "https://api.openai.com/v1"
