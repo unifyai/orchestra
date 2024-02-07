@@ -92,3 +92,38 @@ class DatapointDAO:
             query = query.where(Datapoint.measured_at == measured_at)
         rows = await self.session.execute(query)
         return list(rows.scalars().fetchall())
+
+    async def update_datapoint(  # noqa: WPS211, WPS213, WPS231, C901
+        self,
+        id: int,  # noqa: WPS125
+        benchmark_run_id: Optional[int] = None,
+        metric_name: Optional[str] = None,
+        value: Optional[float] = None,
+        tooltip: Optional[str] = None,
+        measured_at: Optional[datetime.datetime] = None,
+    ) -> None:
+        """
+        Update specific datapoint model.
+
+        :param id: id of datapoint instance.
+        :param benchmark_run_id: benchmark_run_id of datapoint instance.
+        :param metric_name: metric_name of datapoint instance.
+        :param value: value of datapoint instance.
+        :param tooltip: tooltip of datapoint instance.
+        :param measured_at: measured_at of datapoint instance.
+        """
+        query = select(Datapoint)
+        query = query.where(Datapoint.id == id)
+        raw_datapoint = await self.session.execute(query)
+        datapoint = raw_datapoint.scalars().first()
+        if datapoint is not None:
+            if benchmark_run_id:
+                setattr(datapoint, "benchmark_run_id", benchmark_run_id)
+            if metric_name:
+                setattr(datapoint, "metric_name", metric_name)
+            if value:
+                setattr(datapoint, "value", value)
+            if tooltip:
+                setattr(datapoint, "tooltip", tooltip)
+            if measured_at:
+                setattr(datapoint, "measured_at", measured_at)

@@ -95,3 +95,38 @@ class BenchmarkRunDAO:
             query = query.where(BenchmarkRun.measured_at == measured_at)
         rows = await self.session.execute(query)
         return list(rows.scalars().fetchall())
+
+    async def update_benchmark_run(  # noqa: WPS211, WPS213, WPS231, C901
+        self,
+        id: int,  # noqa: WPS125
+        endpoint_id: Optional[int] = None,
+        regime: Optional[str] = None,
+        region: Optional[str] = None,
+        seq_len: Optional[str] = None,
+        measured_at: Optional[datetime.datetime] = None,
+    ) -> None:
+        """
+        Update specific benchmark_run model.
+
+        :param id: id of benchmark_run instance.
+        :param endpoint_id: endpoint_id of benchmark_run instance.
+        :param regime: regime of benchmark_run instance.
+        :param region: region of benchmark_run instance.
+        :param seq_len: seq_len of benchmark_run instance.
+        :param measured_at: measured_at of benchmark_run instance.
+        """
+        query = select(BenchmarkRun)
+        query = query.where(BenchmarkRun.id == id)
+        raw_benchmark_run = await self.session.execute(query)
+        benchmark_run = raw_benchmark_run.scalars().first()
+        if benchmark_run is not None:
+            if endpoint_id:
+                setattr(benchmark_run, "endpoint_id", endpoint_id)  # noqa: B010
+            if regime:
+                setattr(benchmark_run, "regime", regime)  # noqa: B010
+            if region:
+                setattr(benchmark_run, "region", region)  # noqa: B010
+            if seq_len:
+                setattr(benchmark_run, "seq_len", seq_len)  # noqa: B010
+            if measured_at:
+                setattr(benchmark_run, "measured_at", measured_at)  # noqa: B010
