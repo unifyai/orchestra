@@ -81,6 +81,11 @@ class TogetherAI(BaseCompletionProvider):
             "context_window": 16384,
             "cost": {"prompt": 0.2, "completion": 0.2},
         },
+        "deepseek-coder-33b-instruct": {
+            "endpoint": "together_ai/deepseek-ai/deepseek-coder-33b-instruct",
+            "context_window": 16384,
+            "cost": {"prompt": 0.8, "completion": 0.8},
+        },
         "falcon-40b": {
             "endpoint": "together_ai/togethercomputer/falcon-40b",
             "context_window": 2048,
