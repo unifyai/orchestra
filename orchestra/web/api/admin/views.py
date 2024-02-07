@@ -685,3 +685,54 @@ async def create_task_model(
         name=new_task_object.name,
         modality=new_task_object.modality,
     )
+
+
+@router.put("/create_benchmark_run")
+async def create_benchmark_run_model(
+    new_benchmark_run_object: BenchmarkRunModelResponse,
+    benchmark_run_dao: BenchmarkRunDAO = Depends(),
+) -> None:
+    """
+    Creates benchmark_run model in the database.
+
+    :param new_benchmark_run_object: new benchmark_run model item.
+    :param benchmark_run_dao: DAO for benchmark_run models.
+    """
+    await benchmark_run_dao.create_benchmark_run(
+        endpoint_id=new_benchmark_run_object.endpoint_id,
+        regime=new_benchmark_run_object.regime,
+        region=new_benchmark_run_object.region,
+        seq_len=new_benchmark_run_object.seq_len,
+        measured_at=new_benchmark_run_object.measured_at,
+    )
+
+
+@router.put("/update_benchmark_run")
+async def update_benchmark_run(  # noqa: WPS211
+    id: int,  # noqa: WPS125
+    endpoint_id: Optional[int] = None,
+    regime: Optional[str] = None,
+    region: Optional[str] = None,
+    seq_len: Optional[str] = None,
+    measured_at: Optional[datetime.datetime] = None,
+    benchmark_run_dao: BenchmarkRunDAO = Depends(),
+) -> None:
+    """
+    Update specific benchmark_run model.
+
+    :param id: id of benchmark_run instance.
+    :param endpoint_id: endpoint_id of benchmark_run instance.
+    :param regime: regime of benchmark_run instance.
+    :param region: region of benchmark_run instance.
+    :param seq_len: seq_len of benchmark_run instance.
+    :param measured_at: measured_at of benchmark_run instance.
+    :param benchmark_run_dao: DAO for benchmark_run models.
+    """
+    await benchmark_run_dao.update_benchmark_run(
+        id=id,
+        endpoint_id=endpoint_id,
+        regime=regime,
+        region=region,
+        seq_len=seq_len,
+        measured_at=measured_at,
+    )
