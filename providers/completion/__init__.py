@@ -9,6 +9,7 @@ from providers.completion.replicate import Replicate
 from providers.completion.togetherai import TogetherAI
 from providers.completion.vertexai import VertexAI
 from providers.completion.leptonai import LeptonAI
+from providers.completion.fireworksai import FireworksAI
 
 PROVIDER_CLASSES = {
     "anyscale": Anyscale,
@@ -21,4 +22,5 @@ PROVIDER_CLASSES = {
     "mistral-ai": Mistral,
     "octoai": OctoAI,
     "lepton-ai": LeptonAI,
+    "fireworks-ai": FireworksAI,
 }
