@@ -5,8 +5,8 @@ class FireworksAI(BaseCompletionProvider):
     """
     A completion provider that uses the Mistral service.
 
-    Supported models: https://www.lepton.ai/playground
-    Pricing is per million tokens: https://www.lepton.ai/pricing
+    Supported models: https://fireworks.ai/models
+    Pricing is per million tokens: https://fireworks.ai/pricing
     """
 
     supported_models = {
@@ -64,7 +64,6 @@ class FireworksAI(BaseCompletionProvider):
             "endpoint": "accounts/fireworks/models/falcon-40b",
             "context_window": 2048,
             "cost": {"prompt": 0.70, "completion": 2.80},  # noqa: WPS339
-        }
+        },
     }
     base_url = "https://api.fireworks.ai/inference/v1"
-

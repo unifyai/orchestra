@@ -31,6 +31,6 @@ class LeptonAI(BaseCompletionProvider):
             "cost": {"prompt": 0.8, "completion": 0.8},
         },
     }
+
     def get_base_url(self, endpoint):
         return "https://{}.lepton.run/api/v1/".format(endpoint)
-

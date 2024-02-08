@@ -140,9 +140,15 @@ class BaseCompletionProvider:
             provider_model_endpoint = model
 
         if stream:
-            client = AsyncOpenAI(api_key=self.api_key, base_url=self.get_base_url(provider_model_endpoint))
+            client = AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=self.get_base_url(provider_model_endpoint),
+            )
         else:
-            client = OpenAI(api_key=self.api_key, base_url=self.get_base_url(provider_model_endpoint))
+            client = OpenAI(
+                api_key=self.api_key,
+                base_url=self.get_base_url(provider_model_endpoint),
+            )
 
         try:
             response = client.chat.completions.create(
