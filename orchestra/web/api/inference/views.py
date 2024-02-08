@@ -2,11 +2,10 @@ import asyncio
 import base64
 import json
 import re
-from typing import Union
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.param_functions import Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from litellm.utils import Usage
 from models.imagegen import ImagegenModel
 from models.llm import CompletionsModel
@@ -17,7 +16,7 @@ from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
-from orchestra.web.api.inference.schema import InferenceRequest, InferenceResponse
+from orchestra.web.api.inference.schema import InferenceRequest
 from orchestra.web.api.users.views import get_credits
 from orchestra.web.api.utils import db_operations
 
@@ -36,7 +35,7 @@ def get_model_type(model_name):  # noqa: D103
         return "image"
 
 
-@router.post("/inference", response_model=InferenceResponse)
+@router.post("/inference")
 async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217, WPS238
     background_tasks: BackgroundTasks,
     request_fastapi: Request,
@@ -46,7 +45,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
     provider_dao: ProviderDAO = Depends(),
     endpoint_dao: EndpointDAO = Depends(),
     query_dao: QueryDAO = Depends(),
-) -> Union[InferenceResponse, StreamingResponse]:
+):
     """
     Get inference result based on the request.
 
@@ -59,7 +58,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
     :param endpoint_dao: DAO for endpoint models.
     :param query_dao: DAO for query models.
 
-    :return: Model-specific InferenceResponse object.
+    :return: Model-specific JSONResponse object.
 
     :raises HTTPException: when user has insufficient credits.
     """
@@ -102,8 +101,8 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
 
         if not response:
             # TODO: Handle when response is None
-            return InferenceResponse(
-                response={
+            return JSONResponse(
+                {
                     "model": model,
                     "provider": provider,
                     "created": 0,
@@ -154,8 +153,8 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
             response = response.model_dump()
             response["model"] = model
             response["provider"] = provider
-            return InferenceResponse(
-                response=response,
+            return JSONResponse(
+                response,
             )
 
         if isinstance(response["usage"], Usage):
@@ -168,8 +167,8 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
             for choice in response.get("choices", [])
         ]
 
-        return InferenceResponse(
-            response={
+        return JSONResponse(
+            {
                 "model": model,
                 "provider": provider,
                 "created": response.get("created", None),
@@ -207,8 +206,8 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
         )
         if not response:
             # TODO: Handle when response is None
-            return InferenceResponse(
-                response={
+            return JSONResponse(
+                {
                     "model": model,
                     "created": 0,
                     "images": [],
@@ -220,8 +219,8 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
             for image in response.get("images", [])  # Use empty list for default
             if image is not None
         ]
-        return InferenceResponse(
-            response={
+        return JSONResponse(
+            {
                 "model": model,
                 "created": response.get("created", None),
                 "images": base64_images,
@@ -229,8 +228,8 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
             },
         )
     # TODO: Add error 422 for incorrect arguments, model, or provider
-    return InferenceResponse(
-        response={
+    return JSONResponse(
+        {
             "Error": "Unknown model or provider",
         },
     )
