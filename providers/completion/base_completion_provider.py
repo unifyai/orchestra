@@ -1,11 +1,11 @@
+import inspect
 import logging
-import uuid
 from typing import Any, Dict, List, Optional
 
-import litellm
-import openai
 import tiktoken
-from litellm.utils import ModelResponse, Usage
+from openai import APIError, APITimeoutError, AsyncOpenAI, OpenAI
+from openai.types.chat.chat_completion import ChatCompletion
+from openai.types.completion_usage import CompletionUsage
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,7 @@ class BaseCompletionProvider:
 
     # TODO: Make this a property and enforce definition with NotImplemented
     supported_models: Dict[str, Any] = {}
+    base_url: str = ""
 
     def __init__(self) -> None:
         self.model: str = ""
@@ -35,11 +36,15 @@ class BaseCompletionProvider:
             / PRICING_PER_TOKENS
         )
 
+    def get_base_url(self, endpoint):
+        """Get the base URL."""
+        return self.base_url
+
     def compute_cost(
         self,
         model_name: str,
         prompts: List[str],
-        response: ModelResponse,
+        response: ChatCompletion,
     ) -> float:
         """
         Compute the cost of a completion.
@@ -62,10 +67,10 @@ class BaseCompletionProvider:
         if cost_data.get("online"):
             prompt_cost += cost_data["online"]["charge_per_1000_requests"] / 1000
         prompt_cost += (
-            response.usage["prompt_tokens"] * cost_data["prompt"] / PRICING_PER_TOKENS
+            response.usage.prompt_tokens * cost_data["prompt"] / PRICING_PER_TOKENS
         )
         completion_cost = (
-            response.usage["completion_tokens"]
+            response.usage.completion_tokens
             * cost_data["completion"]
             / PRICING_PER_TOKENS
         )
@@ -99,8 +104,17 @@ class BaseCompletionProvider:
 
             tokens = encoding.encode(completions)
             completion_tokens = len(tokens)
-            response = ModelResponse(usage=Usage(prompt_tokens, completion_tokens))
-
+            response = type(  # noqa: WPS317
+                "DummyClass",
+                (),
+                {
+                    "usage": CompletionUsage(
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=0,
+                    ),
+                },
+            )()
             return self.compute_cost(
                 model,
                 [item["content"] for item in messages],  # noqa: WPS441
@@ -125,41 +139,45 @@ class BaseCompletionProvider:
         else:
             provider_model_endpoint = model
 
+        if stream:
+            client = AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=self.get_base_url(provider_model_endpoint),
+            )
+        else:
+            client = OpenAI(
+                api_key=self.api_key,
+                base_url=self.get_base_url(provider_model_endpoint),
+            )
+
         try:
+            response = client.chat.completions.create(
+                model=provider_model_endpoint,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                stream=stream,
+            )
             if stream:
                 return (
                     AsyncGeneratorWrapper(
-                        litellm.acompletion(
-                            model=provider_model_endpoint,
-                            messages=messages,
-                            max_tokens=max_tokens,
-                            temperature=temperature,
-                            stream=True,
-                            api_key=self.api_key,
-                        ),
+                        response,
                         model,
                         messages,
                         compute_cost_streaming=self.compute_cost_streaming,
                     ),
                     None,
                 )
-            response = litellm.completion(
-                model=provider_model_endpoint,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                api_key=self.api_key,
-            )
 
             return response, self.compute_cost(
                 model,
                 [item["content"] for item in messages],
                 response,
             )
-        except openai.APIError as error:
-            logger.error(f"Raised openai.APIError, Error: {error}")
-        except openai.APITimeoutError as error:
+        except APITimeoutError as error:
             logger.error(f"Raised openai.APITimeoutError, Error: {error}")
+        except APIError as error:
+            logger.error(f"Raised openai.APIError, Error: {error}")
         except Exception as error:
             error_type = type(error)
             logger.error(f"Raised error type: {error_type}, Error: {error}")
@@ -186,36 +204,24 @@ class AsyncGeneratorWrapper:  # noqa: D101
         whole = ""
         usage = {}
         try:  # noqa: WPS501
-            async for part in await self._response:
-                if part.choices[0].delta.content is None:
-                    continue
-                usage = part.get("usage", {})
-
-                choices = [
-                    getattr(choice, "model_dump", lambda: None)()
-                    for choice in part.get("choices", [])
-                ]
-
-                part_dict = {
-                    "model": self._model,
-                    "created": part.get("created", None),
-                    "id": part.get(
-                        "id",
-                        f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237, E501
-                    ),
-                    "choices": choices,
-                    "object": part.get("object", "chat.completion.chunk"),
-                    "usage": usage.model_dump() if isinstance(usage, Usage) else usage,
-                }
-                part_text = choices[0]["delta"]["content"]
+            if inspect.iscoroutine(self._response):
+                self._response = await self._response
+            async for part in self._response:
+                usage = part.usage if usage in part else {}
+                part_dict = part.model_dump()
+                choices = part_dict["choices"]
+                if choices != []:
+                    if choices[0]["delta"]["content"] is None:
+                        continue
+                part_text = choices[0]["delta"]["content"] if choices else ""
                 whole += part_text if part_text else ""
                 yield part_dict
         finally:
-            if isinstance(usage, Usage) and usage != Usage():
+            if isinstance(usage, CompletionUsage):
                 self.total_cost = self._compute_cost(
                     self._model,
                     [item["content"] for item in self._messages],
-                    ModelResponse(usage=usage),
+                    part,  # noqa: WPS441
                 )
             else:
                 self.total_cost = self._compute_cost_streaming(

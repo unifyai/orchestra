@@ -1,4 +1,3 @@
-import litellm
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
@@ -100,8 +99,4 @@ class OpenAI(BaseCompletionProvider):
         },
     }
 
-    def set_organization(self, organization: str) -> None:  # noqa: D102
-        litellm.organization = organization
-
-    def set_api_version(self, api_version: str) -> None:  # noqa: D102
-        litellm.api_version = api_version
+    base_url = "https://api.openai.com/v1"

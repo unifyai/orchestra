@@ -16,7 +16,7 @@ class Perplexity(BaseCompletionProvider):
             "cost": {"prompt": 0.35, "completion": 1.4},
         },
         "llama-2-70b-chat": {
-            "endpoint": "perplexity/llama-2-70b-chat",
+            "endpoint": "llama-2-70b-chat",
             "context_window": 4096,
             "cost": {"prompt": 0.7, "completion": 2.8},
         },
@@ -59,3 +59,4 @@ class Perplexity(BaseCompletionProvider):
             },
         },
     }
+    base_url = "https://api.perplexity.ai/"

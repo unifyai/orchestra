@@ -1,6 +1,9 @@
 """providers.completion package."""
 from providers.completion.anthropic import Anthropic
 from providers.completion.anyscale import Anyscale
+from providers.completion.deepinfra import Deepinfra
+from providers.completion.fireworksai import FireworksAI
+from providers.completion.leptonai import LeptonAI
 from providers.completion.mistral import Mistral
 from providers.completion.octoai import OctoAI
 from providers.completion.openai import OpenAI
@@ -19,4 +22,7 @@ PROVIDER_CLASSES = {
     "openai": OpenAI,
     "mistral-ai": Mistral,
     "octoai": OctoAI,
+    "lepton-ai": LeptonAI,
+    "fireworks-ai": FireworksAI,
+    "deepinfra": Deepinfra,
 }

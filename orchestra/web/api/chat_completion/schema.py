@@ -44,7 +44,7 @@ class ChatCompletionResponse(BaseModel):
 
     def __init__(self, **data: Any) -> None:
         super().__init__(**data)
-        self._response_ms = data["_response_ms"]
+        # self._response_ms = data["_response_ms"]
 
     def __setattr__(self, name, value):
         self.__dict__[name] = value
