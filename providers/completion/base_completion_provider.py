@@ -36,6 +36,10 @@ class BaseCompletionProvider:
             / PRICING_PER_TOKENS
         )
 
+    def get_base_url(self, endpoint):
+        """Get the base URL."""
+        return self.base_url
+
     def compute_cost(
         self,
         model_name: str,
@@ -136,9 +140,9 @@ class BaseCompletionProvider:
             provider_model_endpoint = model
 
         if stream:
-            client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+            client = AsyncOpenAI(api_key=self.api_key, base_url=self.get_base_url(provider_model_endpoint))
         else:
-            client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+            client = OpenAI(api_key=self.api_key, base_url=self.get_base_url(provider_model_endpoint))
 
         try:
             response = client.chat.completions.create(
@@ -197,11 +201,13 @@ class AsyncGeneratorWrapper:  # noqa: D101
             if inspect.iscoroutine(self._response):
                 self._response = await self._response
             async for part in self._response:
-                if part.choices[0].delta.content is None:
-                    continue
-                usage = part.usage
-                part_dict = part.dict()
-                part_text = part_dict["choices"][0]["delta"]["content"]
+                usage = part.usage if usage in part else {}
+                part_dict = part.model_dump()
+                choices = part_dict["choices"]
+                if choices != []:
+                    if choices[0]["delta"]["content"] is None:
+                        continue
+                part_text = choices[0]["delta"]["content"] if choices else ""
                 whole += part_text if part_text else ""
                 yield part_dict
         finally:

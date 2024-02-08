@@ -8,6 +8,7 @@ from providers.completion.perplexity import Perplexity
 from providers.completion.replicate import Replicate
 from providers.completion.togetherai import TogetherAI
 from providers.completion.vertexai import VertexAI
+from providers.completion.leptonai import LeptonAI
 
 PROVIDER_CLASSES = {
     "anyscale": Anyscale,
@@ -19,4 +20,5 @@ PROVIDER_CLASSES = {
     "openai": OpenAI,
     "mistral-ai": Mistral,
     "octoai": OctoAI,
+    "lepton-ai": LeptonAI,
 }
