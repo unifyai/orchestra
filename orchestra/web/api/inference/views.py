@@ -120,7 +120,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
                 async for part_dict in response.generator():
                     part_dict["model"] = model
                     part_dict["provider"] = provider
-                    yield json.dumps(part_dict)
+                    yield f"data: {json.dumps(part_dict)}\n\n"
                     await asyncio.sleep(0)
                 await users_dao.recharge_credit(user_id, -response.total_cost)
                 background_tasks.add_task(
