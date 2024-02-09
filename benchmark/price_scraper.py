@@ -2,6 +2,7 @@
 # it won't be open sourced
 # This file will be called from each one of the instances running in
 # different regions
+import smtplib
 import asyncio
 import logging
 import os
@@ -133,6 +134,15 @@ async def main():  # noqa: WPS210
     # Initialise db engine
     async_db_session = create_db_session()
 
+    email_notif = False
+    if email_notif:
+        # Initialise email server
+        email_server = smtplib.SMTP('smtp.gmail.com', 587)
+        email_server.starttls()
+        email_addr = os.getenv("EMAIL_ADDR", "auth@unify.ai")
+        email_pass = os.getenv("EMAIL_PASS", "")
+        email_server.login(email_addr, email_pass)
+
     # Get list of endpoints in our db
     endpoints = await retrieve_all_endpoints(async_db_session)
     logger.info(f"Found {len(endpoints)} endpoints where Model is active in the db.")
@@ -148,7 +158,14 @@ async def main():  # noqa: WPS210
         async_db_session,
     )
 
-    # TODO: email all_notif_msgs
+    if email_notif:
+        # all_notif_msgs
+        subject = "Hello"
+        body = "its me"
+        message = 'Subject: {}\n\n{}'.format(subject, body)
+        recipients = ["shyngyskhan@unify.ai", "rishab@unify.ai", "guillermo@unify.ai"]
+        email_server.sendmail("auth@unify.ai", recipients[0], message)
+        email_server.quit()
 
 
 if __name__ == "__main__":
