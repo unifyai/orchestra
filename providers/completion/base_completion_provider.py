@@ -53,7 +53,7 @@ class BaseCompletionProvider:
         """
         raise NotImplementedError("This method should be implemented in a subclass")
 
-    def compute_cost(
+    async def compute_cost(
         self,
         model_name: str,
         prompts: List[str],
@@ -88,7 +88,7 @@ class BaseCompletionProvider:
         )
         return prompt_cost + completion_cost
 
-    def compute_cost_streaming(  # noqa: WPS210
+    async def compute_cost_streaming(  # noqa: WPS210
         self,
         model: str,
         completions: List[str],

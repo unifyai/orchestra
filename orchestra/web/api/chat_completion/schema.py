@@ -31,7 +31,6 @@ class ChatCompletionResponse(BaseModel):
         object (str): The type of object, defaults to "chat.completion".
         usage (dict): Usage statistics or additional information.
         choices (List[Dict]): List of completion choices.
-        _response_ms (float): Response time in milliseconds.
     """
 
     model: str

@@ -61,7 +61,7 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         )
 
     try:
-        messages= request.messages
+        messages = request.messages
     except Exception:
         raise HTTPException(
             status_code=400,  # noqa: WPS432
@@ -82,7 +82,8 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     filtered_params = filter_request_params(request)
     response, cost = language_model.get_completion(
-        messages=messages, **filtered_params,
+        messages=messages,
+        **filtered_params,
     )
     if not response:
         # TODO: Handle when response is None
@@ -93,7 +94,6 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             choices=[],
             object="chat.completion",
             usage={},
-            _response_ms=0,
         )
 
     if stream:
@@ -106,7 +106,7 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             background_tasks.add_task(
                 db_operations,
                 user_id,
-                response.total_cost,
+                await response.total_cost,
                 model,
                 provider,
                 model_dao,
@@ -121,7 +121,7 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         background_tasks.add_task(
             db_operations,
             user_id,
-            cost,
+            await cost,
             model,
             provider,
             model_dao,
