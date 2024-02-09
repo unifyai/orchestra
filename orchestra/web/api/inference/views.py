@@ -98,7 +98,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
             )
         stream = request.arguments.get("stream", False)
 
-        filtered_params = filter_request_params(request)
+        filtered_params = filter_request_params(request.arguments)
 
         response, cost = language_model.get_completion(
             messages=messages,

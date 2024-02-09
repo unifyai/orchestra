@@ -80,7 +80,7 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         )
     stream = request.stream
 
-    filtered_params = filter_request_params(request)
+    filtered_params = filter_request_params(request.model_dump())
     response, cost = language_model.get_completion(
         messages=messages,
         **filtered_params,
