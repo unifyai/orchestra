@@ -1,18 +1,11 @@
-import json
-import os
-
-from starlette import status
-
-from orchestra.tests.test_credits import test_credits
-
 # TODO: Check that answers with line breaks work properly
+# TODO: Add extra parameters to the tests payload (_partial_openai_payload)
 # TODO: Add logging to the tests to see the actual responses manually if needed
+# TODO: Test at least one model per provider
+import os
+from typing import Dict
 
-api_key = str(
-    os.getenv(
-        "AUTH_ACCOUNT_API_KEY",
-    ),
-)
+api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 
 HEADERS = {
     "accept": "application/json",
@@ -20,10 +13,34 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
+prompt = (
+    "Explain who Newton was and his entire theory of gravitation. "
+    "Give a short response with line breaks within each sentence."
+)
+
+
+async def get_credits(client):
+    response = await client.get("/v0/get_credits", headers=HEADERS)
+    return response.json()["credits"]
+
+
+def _partial_openai_payload(temperature=0.5, max_tokens=100, stream=False):
+    return {
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": stream,
+    }
+
 
 def get_inference_payload(model, provider, stream):
     """
-    Generate data for inference chat completion.
+    Generate data for inference endpoint (text_generation).
 
     :param model: model name.
     :param provider: provider name.
@@ -34,20 +51,7 @@ def get_inference_payload(model, provider, stream):
     return {
         "model": model,
         "provider": provider,
-        "arguments": {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": (
-                        "Explain who Newton was and his entire theory of gravitation. "
-                        "Give a short response with line breaks within each sentence."
-                    ),
-                },
-            ],
-            "temperature": 0.5,
-            "max_tokens": 100,
-            "stream": stream,
-        },
+        "arguments": _partial_openai_payload(stream=stream),
     }
 
 
@@ -60,17 +64,58 @@ def get_chat_completions_payload(model, provider, stream):
 
     :return: data.
     """
-    return {
-        "model": f"{model}@{provider}",
-        "messages": [
-            {
-                "role": "user",
-                "content": (
-                    "Explain who Newton was and his entire theory of gravitation. "
-                    "Give a short response with line breaks within each sentence."
-                ),
-            },
-        ],
-        "max_tokens": 100,
-        "stream": stream,
-    }
+    return {"model": f"{model}@{provider}", **_partial_openai_payload(stream=stream)}
+
+
+def check_in_dict_and_instance(dict, key, types):
+    assert key in dict
+    assert isinstance(dict.get(key), types)
+
+
+def check_text_gen_response(response: Dict, object_str: str):
+
+    assert isinstance(response.get("id"), str)
+    assert response.get("object") == object_str
+    assert isinstance(response.get("created"), int)
+    # TODO: We need to add a system_fingerprint
+    # assert isinstance(response.get("system_fingerprint"), str)
+    assert isinstance(response.get("choices"), list)
+
+    if object_str != "chat.completion.chunk":
+        assert isinstance(response.get("usage"), dict)
+
+    if "provider" in response:
+        model, provider = response.get("model"), response.get("provider")
+    else:
+        model, provider = response.get("model").split("@")
+
+    assert isinstance(model, str)
+    assert isinstance(provider, str)
+
+
+def check_text_gen_usage(usage: Dict):
+    assert isinstance(usage, dict)
+    assert isinstance(usage.get("completion_tokens"), int)
+    assert isinstance(usage.get("prompt_tokens"), int)
+    assert isinstance(usage.get("total_tokens"), int)
+
+
+# TODO: Move this to utils
+def check_text_gen_choice(choice: Dict, message: str):
+    assert message in ["message", "delta"]
+    assert isinstance(choice, dict)
+    assert isinstance(choice.get("index"), int)
+    # TODO: Test this properly with all possible cases,
+    # document the posibilities as well. We should have test
+    # cases that detect max length, check for the last token, etc.
+    check_in_dict_and_instance(choice, "finish_reason", (type(None), str))
+    # TODO: Check if we are reading `null` correctly
+    # TODO: When this is none, is the key included at all? are we not
+    # including it?
+    # check_in_dict_and_instance(choice, "logprobs", (None, bool))
+    message = choice.get(message)
+    assert isinstance(message, dict)
+    if message == "full":
+        assert isinstance(message.get("role"), str)
+    # TODO: Add option for empty message if end of stream and delta
+    assert isinstance(message.get("content"), str)
