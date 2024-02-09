@@ -13,6 +13,18 @@ from orchestra.web.api.provider.views import get_provider
 from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.query.views import create_query_model
 
+# HTTP responses
+
+insufficient_credits_error = HTTPException(
+    status_code=402,
+    detail=(
+        "Whoops! It seems like this account doesn't have enough credits. "
+        "To get a recharge, visit https://console.unify.ai/"
+    ),
+)
+
+# Background tasks
+
 
 async def db_operations(  # noqa: WPS211, WPS217, WPS210
     user_id: str,

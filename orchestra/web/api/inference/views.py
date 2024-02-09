@@ -8,6 +8,7 @@ from fastapi.param_functions import Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from models.imagegen import ImagegenModel
 from models.llm import CompletionsModel
+from starlette import status
 
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
@@ -17,25 +18,34 @@ from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
 from orchestra.web.api.inference.schema import InferenceRequest
 from orchestra.web.api.users.views import get_credits
-from orchestra.web.api.utils import db_operations, filter_request_params
+from orchestra.web.api.utils import (
+    db_operations,
+    filter_request_params,
+    insufficient_credits_error,
+)
 
 router = APIRouter()
 
 
-def get_model_type(model_name):  # noqa: D103
-    chat_models = re.compile(
-        r"(gpt|llama|zephyr|mistral|mixtral|pplx|falcon|wizard|mpt|claude|yi|chronos|alpaca|nous|hermes|platypus|pythia|qwen|redpajama)",  # noqa: WPS360, E501
-    )
+def _get_model_type(model_name):
+    # TODO: Do this properly based on the model task
     image_models = re.compile(r"diffusion|sd")  # noqa: WPS360
+    if image_models.search(model_name):
+        return "text-to-image"
+    return "text-generation"
 
-    if chat_models.search(model_name):
-        return "chat"
-    elif image_models.search(model_name):
-        return "image"
+
+def _verify_field(request, field):
+    if not hasattr(request, field) or getattr(request, field) == "":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid input. A {field} has to be specified.",
+        )
+    return getattr(request, field)
 
 
 @router.post("/inference")
-async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217, WPS238
+async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217, WPS238
     background_tasks: BackgroundTasks,
     request_fastapi: Request,
     request: InferenceRequest,
@@ -61,21 +71,18 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
 
     :raises HTTPException: when user has insufficient credits.
     """
-    # TODO: Add error 422 for incorrect arguments, model, or provider
     # TODO: Add error 500
     # TODO: Create a separate function and endpoint for updating credits
+    # TODO: check that the model exists (another error).
+    # TODO: Check that the model exists and that the provider is hosting
+    # the provider. (With different errors)
+    model = _verify_field(request, "model")
+    provider = _verify_field(request, "provider")
+
     user_id = request_fastapi.state.user_id
     user = await get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(user.credits if user else 0)
 
-    try:
-        model = request.model
-        provider = request.provider
-    except Exception:
-        raise HTTPException(
-            status_code=400,  # noqa: WPS432
-            detail="Invalid input. Model or provider not in input.",
-        )
     try:
         messages = request.arguments["messages"]
     except Exception:
@@ -83,19 +90,17 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
             status_code=400,  # noqa: WPS432
             detail="Invalid input. Messages not in input.",
         )
-    model_type = get_model_type(model)
-    if model_type == "chat":
-        language_model = CompletionsModel(
-            provider=provider,
-            model=model,
-        )
+
+    model_type = _get_model_type(model)
+
+    # TODO: Decompose this further
+    if model_type == "text-generation":
+        language_model = CompletionsModel(provider=provider, model=model)
 
         cost_max = language_model.get_cost_max()
         if available_credits < cost_max:
-            raise HTTPException(
-                status_code=402,  # noqa: WPS432
-                detail="Insufficient credits",
-            )
+            raise insufficient_credits_error
+
         stream = request.arguments.get("stream", False)
 
         filtered_params = filter_request_params(request.arguments)
@@ -170,7 +175,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
         return JSONResponse(
             response,
         )
-    elif model_type == "image":
+    elif model_type == "text-to-image":
         image_model = ImagegenModel(
             provider=provider,
             model=model,

@@ -17,7 +17,11 @@ from orchestra.web.api.chat_completion.schema import (
     ChatCompletionResponse,
 )
 from orchestra.web.api.users.views import get_credits
-from orchestra.web.api.utils import db_operations, filter_request_params
+from orchestra.web.api.utils import (
+    db_operations,
+    filter_request_params,
+    insufficient_credits_error,
+)
 
 router = APIRouter()
 
@@ -49,15 +53,16 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     :raises HTTPException: when user has insufficient credits.
     """
-    user_id = request_fastapi.state.user_id
-    user = await get_credits(request_fastapi, users_dao=users_dao)
-    available_credits = float(user.credits if user else 0)
     try:
         model, provider = request.model.split("@")
     except Exception:
         raise HTTPException(
             status_code=400,  # noqa: WPS432
-            detail="Invalid input format. Expected format: 'model@provider'.",
+            detail=(
+                "Invalid model. The expected format is <model-id>@<provider>. "
+                "See https://unify.ai/docs/hub/concepts/models.html "
+                "for more information."
+            ),
         )
 
     try:
@@ -68,16 +73,20 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             detail="Invalid input. Messages not in input.",
         )
 
+    # TODO: Add validation of the other parameters if mandatory
+
+    user_id = request_fastapi.state.user_id
+    user = await get_credits(request_fastapi, users_dao=users_dao)
+    available_credits = float(user.credits if user else 0)
+
     language_model = CompletionsModel(
         provider=provider,
         model=model,
     )
     cost_max = language_model.get_cost_max()
     if available_credits < cost_max:
-        raise HTTPException(
-            status_code=402,  # noqa: WPS432
-            detail="Insufficient credits",
-        )
+        raise insufficient_credits_error
+
     stream = request.stream
 
     filtered_params = filter_request_params(request.model_dump())
