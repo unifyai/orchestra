@@ -163,7 +163,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
         response["provider"] = provider
 
         return JSONResponse(
-            response=response,
+            response,
         )
     elif model_type == "image":
         image_model = ImagegenModel(

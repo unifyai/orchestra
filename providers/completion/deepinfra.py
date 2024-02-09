@@ -23,7 +23,7 @@ class Deepinfra(BaseCompletionProvider):
         "llama-2-70b-chat": {
             "endpoint": "meta-llama/Llama-2-70b-chat-hf",
             "context_window": 4096,
-            "cost": {"prompt": 0.70, "completion": 0.90},
+            "cost": {"prompt": 0.70, "completion": 0.90},  # noqa: WPS339
         },
         "mistral-7b-instruct-v0.1": {
             "endpoint": "mistralai/Mistral-7B-Instruct-v0.1",
@@ -36,4 +36,12 @@ class Deepinfra(BaseCompletionProvider):
             "cost": {"prompt": 0.27, "completion": 0.27},  # noqa: WPS339
         },
     }
-    base_url = "https://api.deepinfra.com/v1/openai"
+
+    def get_base_url(self, *args):
+        """Get the base URL.
+
+        :param args: The arguments.
+
+        :return: The base URL.
+        """
+        return "https://api.deepinfra.com/v1/openai"

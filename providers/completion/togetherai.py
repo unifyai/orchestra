@@ -346,4 +346,12 @@ class TogetherAI(BaseCompletionProvider):
         },
     }
 
-    base_url = "https://api.together.xyz/v1"
+    def get_base_url(self, *args):
+        """
+        Get the base URL.
+
+        :param args: The arguments.
+        
+        :return: The base URL.
+        """
+        return self.base_url

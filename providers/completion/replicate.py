@@ -98,8 +98,18 @@ class Replicate(BaseCompletionProvider):
         },
     }
 
-    def set_api_key(self, api_key: str) -> None:  # noqa: D102
-        self.api_key = api_key
+    def get_base_url(self, model, endpoint):
+        """
+        Get the base URL.
+
+        :param model: The model name.
+        :param endpoint: The endpoint.
+
+        :return: The base URL.
+        """
+        if "hardware" in self.supported_models[model]["cost"]:
+            return "https://api.replicate.com/v1/"
+        return f"https://api.replicate.com/v1/models/{endpoint}"
 
     def start_prediction(  # noqa: D102
         self,
@@ -145,10 +155,7 @@ class Replicate(BaseCompletionProvider):
     ) -> Optional[Any]:
         endpoint = self.supported_models[model]["endpoint"]
 
-        if "hardware" in self.supported_models[model]["cost"]:
-            api_base = "https://api.replicate.com/v1/"
-        else:
-            api_base = f"https://api.replicate.com/v1/models/{endpoint}"
+        api_base = self.get_base_url(model, endpoint)
 
         self.prompt = prompt_factory(model=endpoint, messages=messages)
         input_data = {
@@ -350,5 +357,4 @@ class Replicate(BaseCompletionProvider):
             model=model,
             object="chat.completion",
             usage=usage,
-            _response_ms=predict_time * 1000,
         )

@@ -61,4 +61,11 @@ class OctoAI(BaseCompletionProvider):
         },
     }
 
-    base_url = "https://text.octoai.run/v1/"
+    def get_base_url(self, *args):
+        """Get the base URL.
+
+        :param args: The arguments.
+
+        :return: The base URL.
+        """
+        return "https://text.octoai.run/v1/"

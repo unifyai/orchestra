@@ -3,7 +3,15 @@ import logging
 from typing import Any, Dict, List, Optional
 
 import tiktoken
-from openai import APIError, APITimeoutError, AsyncOpenAI, OpenAI
+from fastapi import HTTPException
+from openai import (
+    APIError,
+    APITimeoutError,
+    AsyncOpenAI,
+    BadRequestError,
+    OpenAI,
+    RateLimitError,
+)
 from openai.types.chat.chat_completion import ChatCompletion
 from openai.types.completion_usage import CompletionUsage
 
@@ -36,9 +44,14 @@ class BaseCompletionProvider:
             / PRICING_PER_TOKENS
         )
 
-    def get_base_url(self, endpoint):
-        """Get the base URL."""
-        return self.base_url
+    @property
+    def get_base_url(self) -> str:
+        """
+        Get the base URL.
+
+        :raises NotImplementedError: This method should be implemented in a subclass.
+        """
+        raise NotImplementedError("This method should be implemented in a subclass")
 
     def compute_cost(
         self,
@@ -61,8 +74,7 @@ class BaseCompletionProvider:
             cost_data = self.supported_models[model_name]["cost"]  # type: ignore
             return (
                 self.hardware_pricing_per_sec[cost_data["hardware"]]  # type: ignore
-                * response._response_ms
-                / 1000
+                * response.usage.predict_time
             )
         if cost_data.get("online"):
             prompt_cost += cost_data["online"]["charge_per_1000_requests"] / 1000
@@ -123,7 +135,7 @@ class BaseCompletionProvider:
         except Exception:
             return 0
 
-    def complete(  # noqa: D102, WPS211, C901, WPS231
+    def complete(  # noqa: D102, WPS211, C901, WPS231, WPS238
         self,
         model: str,
         messages: List,  # type: ignore
@@ -150,7 +162,7 @@ class BaseCompletionProvider:
                 base_url=self.get_base_url(provider_model_endpoint),
             )
 
-        try:
+        try:  # noqa: WPS225
             response = client.chat.completions.create(
                 model=provider_model_endpoint,
                 messages=messages,
@@ -176,8 +188,20 @@ class BaseCompletionProvider:
             )
         except APITimeoutError as error:
             logger.error(f"Raised openai.APITimeoutError, Error: {error}")
+            raise HTTPException(status_code=408, detail=str(error))  # noqa: WPS432
+        except RateLimitError as error:
+            logger.error(f"Raised openai.RateLimitError, Error: {error}")
+            raise HTTPException(status_code=429, detail=str(error))  # noqa: WPS432
+        except BadRequestError as error:
+            logger.error(f"Raised openai.BadRequestError, Error: {error}")
+            raise HTTPException(status_code=400, detail=str(error))  # noqa: WPS432
         except APIError as error:
             logger.error(f"Raised openai.APIError, Error: {error}")
+            raise HTTPException(
+                status_code=400,  # noqa: WPS432
+                detail=str(error),  # noqa: WPS432
+            )
+
         except Exception as error:
             error_type = type(error)
             logger.error(f"Raised error type: {error_type}, Error: {error}")
@@ -210,9 +234,9 @@ class AsyncGeneratorWrapper:  # noqa: D101
                 usage = part.usage if usage in part else {}
                 part_dict = part.model_dump()
                 choices = part_dict["choices"]
-                if choices != []:
+                if choices:  # noqa: WPS338
                     if choices[0]["delta"]["content"] is None:
-                        continue
+                        continue  # noqa: WPS220
                 part_text = choices[0]["delta"]["content"] if choices else ""
                 whole += part_text if part_text else ""
                 yield part_dict

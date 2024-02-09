@@ -99,4 +99,11 @@ class OpenAI(BaseCompletionProvider):
         },
     }
 
-    base_url = "https://api.openai.com/v1"
+    def get_base_url(self, *args):
+        """Get the base URL.
+
+        :param args: The arguments.
+
+        :return: The base URL.
+        """
+        return "https://api.openai.com/v1"

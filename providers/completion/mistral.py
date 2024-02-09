@@ -26,4 +26,12 @@ class Mistral(BaseCompletionProvider):
             "cost": {"prompt": 2.74, "completion": 8.21},
         },
     }
-    base_url = "https://api.mistral.ai/v1"
+
+    def get_base_url(self, *args):
+        """Get the base URL.
+
+        :param args: The arguments.
+
+        :return: The base URL.
+        """
+        return "https://api.mistral.ai/v1"

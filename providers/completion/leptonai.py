@@ -33,4 +33,10 @@ class LeptonAI(BaseCompletionProvider):
     }
 
     def get_base_url(self, endpoint):
-        return "https://{}.lepton.run/api/v1/".format(endpoint)
+        """Get the base URL.
+
+        :param endpoint: The endpoint.
+
+        :return: The base URL.
+        """
+        return "https://{0}.lepton.run/api/v1/".format(endpoint)
