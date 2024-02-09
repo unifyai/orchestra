@@ -13,16 +13,16 @@ class Mistral(BaseCompletionProvider):
         "mistral-7b-instruct-v0.2": {
             "endpoint": "mistral/mistral-tiny",
             "context_window": 32768,
-            "cost": {"prompt": 0.15, "completion": 0.46},
+            "cost": {"prompt": 0.14, "completion": 0.42, "currency": "EUR"},
         },
         "mixtral-8x7b-instruct-v0.1": {
             "endpoint": "mistral/mistral-small",
             "context_window": 32768,
-            "cost": {"prompt": 0.66, "completion": 1.97},
+            "cost": {"prompt": 0.6, "completion": 1.8, "currency": "EUR"},
         },
         "mistral-medium": {
             "endpoint": "mistral/mistral-medium",
             "context_window": 32768,
-            "cost": {"prompt": 2.74, "completion": 8.21},
+            "cost": {"prompt": 2.5, "completion": 7.5, "currency": "EUR"},
         },
     }
