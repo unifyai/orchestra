@@ -98,7 +98,8 @@ class TogetherAIProvider(AbstractProvider):
                     if "llama" in model_endpoint_name:
                         continue
                     supported_model_size = re.findall(
-                        r"(?<!x)(\d+)b", model_endpoint_name
+                        r"(?<!x)(\d+)b",
+                        model_endpoint_name,
                     )
                     if supported_model_size:
                         supported_model_size = float(supported_model_size[0].lower())
@@ -110,7 +111,8 @@ class TogetherAIProvider(AbstractProvider):
                 for model_endpoint_name in self.supported_models:
                     if "llama" in model_endpoint_name:
                         supported_model_size = re.findall(
-                            r"(?<!x)(\d+)b", model_endpoint_name
+                            r"(?<!x)(\d+)b",
+                            model_endpoint_name,
                         )
                         if supported_model_size:
                             supported_model_size = float(
@@ -123,7 +125,7 @@ class TogetherAIProvider(AbstractProvider):
                 moe_size_from_chart = re.findall(r"(\d+X) (\d+B)", size)
                 if len(moe_size_from_chart) == 0:
                     notification_msgs.append(
-                        "MOE size not found in expected scrapped data"
+                        "MOE size not found in expected scrapped data",
                     )
                 else:
                     moe_size_from_chart = "".join(list(moe_size_from_chart[0])).lower()

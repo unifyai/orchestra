@@ -7,7 +7,14 @@ import logging
 import os
 from typing import List
 
-from benchmark.utils import *
+from benchmark.utils import (
+    add_br_datapoints,
+    commit_benchmark_runs,
+    create_db_session,
+    get_names,
+    read_configs,
+    retrieve_all_endpoints,
+)
 from providers.pricing.anyscale import AnyscaleProvider
 from providers.pricing.mistral import MistralProvider
 from providers.pricing.octoai_price import OctoAIProvider
@@ -19,15 +26,7 @@ from providers.pricing.tools.models import RawCatalogItem
 from sqlalchemy.orm import sessionmaker
 
 from orchestra.db.models.orchestra_models import (  # noqa: WPS235
-    BenchmarkRegime,
-    BenchmarkRegion,
-    BenchmarkRun,
-    BenchmarkSeqLen,
-    Datapoint,
-    Endpoint,
     Metric,
-    Model,
-    Provider,
 )
 
 logger = logging.getLogger(__name__)

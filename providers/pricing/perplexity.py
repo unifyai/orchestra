@@ -92,7 +92,8 @@ class PerplexityProvider(AbstractProvider):
             relevant_model_endpoints = []
             for model_endpoint_name in self.supported_models:
                 supported_model_size = re.findall(
-                    r"((?:\d+x)?\d+b)", model_endpoint_name
+                    r"((?:\d+x)?\d+b)",
+                    model_endpoint_name,
                 )[0].lower()
                 # https://docs.perplexity.ai/changelog/new-model-mixtral-8x7b-instruct
                 if supported_model_size == "8x7b":
