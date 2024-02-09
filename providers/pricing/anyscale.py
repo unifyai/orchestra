@@ -26,9 +26,12 @@ class AnyscaleProvider(AbstractProvider):
 
     def get(
         self,
-        query_filter: Optional[QueryFilter] = None,
-        balance_resources: bool = True,
-    ) -> (List[RawCatalogItem], List[str]):
+        mdl_codes: Optional[List[str]] = None,
+    ) -> tuple[List[RawCatalogItem], List[str]]:
+        '''
+        Runs with or without mdl_codes
+        If mdl_codes is None, returns all pricing of all models found
+        '''
         offers = []
         models_missing_in_unify = []
         notification_msgs = []
@@ -44,6 +47,8 @@ class AnyscaleProvider(AbstractProvider):
                     notification_msgs.append(
                         f"Model {model_endpoint_name} has different prompt and completion costs than in supported_models dict",
                     )
+                if mdl_codes and mdl_code not in mdl_codes:
+                    continue
                 offer = RawCatalogItem(
                     model_name=mdl_code,
                     in_price=price,
