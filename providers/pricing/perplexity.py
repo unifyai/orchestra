@@ -130,7 +130,7 @@ class PerplexityProvider(AbstractProvider):
             notification_msgs.append(
                 f"Models not in pricing page ({self.NAME}): {self.supported_models.keys()}",
             )
-        return sorted(offers, key=lambda i: i.in_price), notification_msgs
+        return offers, notification_msgs
 
 
 if __name__ == "__main__":
