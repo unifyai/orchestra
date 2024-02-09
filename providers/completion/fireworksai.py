@@ -67,8 +67,10 @@ class FireworksAI(BaseCompletionProvider):
         },
     }
 
-    def get_base_url(self):
+    def get_base_url(self, *args):
         """Get the base URL.
+
+        :param args: The arguments.
 
         :return:
             str: The base URL.
