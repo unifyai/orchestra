@@ -5,9 +5,7 @@ import re
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.param_functions import Depends
-
 from fastapi.responses import JSONResponse, StreamingResponse
-
 from models.imagegen import ImagegenModel
 from models.llm import CompletionsModel
 
@@ -122,7 +120,6 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
                     part_dict["provider"] = provider
                     yield f"data: {json.dumps(part_dict)}\n\n"
                     await asyncio.sleep(0)
-                await users_dao.recharge_credit(user_id, -response.total_cost)
                 background_tasks.add_task(
                     db_operations,
                     user_id,
@@ -133,11 +130,11 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
                     provider_dao,
                     endpoint_dao,
                     query_dao,
+                    users_dao,
                 )
 
             return StreamingResponse(stream_and_update_db())
         else:
-            await users_dao.recharge_credit(user_id, -cost)
             background_tasks.add_task(
                 db_operations,
                 user_id,
@@ -148,6 +145,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
                 provider_dao,
                 endpoint_dao,
                 query_dao,
+                users_dao,
             )
 
         if isinstance(response, ChatCompletionResponse):

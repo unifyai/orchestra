@@ -41,10 +41,3 @@ class ChatCompletionResponse(BaseModel):
     usage: Dict[str, Any]
     choices: List[Dict[str, Any]]
     _response_ms: float
-
-    def __init__(self, **data: Any) -> None:
-        super().__init__(**data)
-        # self._response_ms = data["_response_ms"]
-
-    def __setattr__(self, name, value):
-        self.__dict__[name] = value

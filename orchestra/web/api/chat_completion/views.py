@@ -95,7 +95,6 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 part_dict["model"] = f"{model}@{provider}"
                 yield f"data: {json.dumps(part_dict)}\n\n"  # noqa: WPS237
                 await asyncio.sleep(0)
-            await users_dao.recharge_credit(user_id, -response.total_cost)
             background_tasks.add_task(
                 db_operations,
                 user_id,
@@ -106,11 +105,11 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 provider_dao,
                 endpoint_dao,
                 query_dao,
+                users_dao,
             )
 
         return StreamingResponse(stream_and_update_db())
     else:
-        await users_dao.recharge_credit(user_id, -cost)
         background_tasks.add_task(
             db_operations,
             user_id,
@@ -121,6 +120,7 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             provider_dao,
             endpoint_dao,
             query_dao,
+            users_dao,
         )
 
     response.model = f"{model}@{provider}"
