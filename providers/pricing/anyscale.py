@@ -64,7 +64,7 @@ class AnyscaleProvider(AbstractProvider):
             )
         if len(self.supported_models):
             notification_msgs.append(
-                f"Models not in pricing page ({self.NAME}): {self.supported_models}",
+                f"Models not in pricing page ({self.NAME}): {self.supported_models.keys()}",
             )
         return sorted(offers, key=lambda i: i.in_price), notification_msgs
 

@@ -11,12 +11,6 @@ from providers.completion.mistral import Mistral
 from providers.pricing import AbstractProvider
 from providers.pricing.tools.models import QueryFilter, RawCatalogItem
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-handler = logging.StreamHandler()
-handler.setLevel(logging.INFO)
-logger.addHandler(handler)
 
 
 class MistralProvider(AbstractProvider):
@@ -34,69 +28,71 @@ class MistralProvider(AbstractProvider):
         html_page = urlopen(req).read()
         soup = BeautifulSoup(html_page, "html.parser")
         self.pricing_tables = soup.find_all("table")
-        self.supported_models = set(
-            [
-                x["endpoint"].split("/")[-1].lower()
-                for x in Mistral().supported_models.values()
-            ],
-        )
+        self.supported_models = dict()
+        for k, v in Mistral().supported_models.items():
+            self.supported_models[v['endpoint'].split("/")[-1].lower()] = {'mdl_code': k, "cost": v['cost']}
 
     def find_and_convert(self, search_str):
         match = re.findall(r"(\d+\.\d+)€", search_str)
         eur_pr = float(match[0])
         usd_pr = self.currency_rates.convert(eur_pr, "EUR", "USD")
-        return usd_pr
+        return eur_pr, usd_pr
 
     def get(
         self,
-        query_filter: Optional[QueryFilter] = None,
-        balance_resources: bool = True,
-    ) -> List[RawCatalogItem]:
+        mdl_codes: Optional[List[str]] = None,
+    ) -> tuple[List[RawCatalogItem], List[str]]:
+        '''
+        Runs with or without mdl_codes
+        If mdl_codes is None, returns all pricing of all models found
+        '''
         offers = []
-        found_models = []
-        for table in self.pricing_tables:
+        models_missing_in_unify = []
+        notification_msgs = []
+        for table in self.pricing_tables[:1]:
             rows = table.find_all("tr")
             for row in rows[1:]:
                 cols = row.find_all("td")
-                model_name = cols[0].text.strip().lower()
-                input_pr = cols[1].text.strip()
-                inp_conv_pr = self.find_and_convert(input_pr)
-                if not model_name == "mistral-embed":
-                    output_pr = cols[2].text.strip()
-                    out_conv_pr = self.find_and_convert(output_pr)
+                model_endpoint_name = cols[0].text.strip().lower()
+                input_pr_eur, inp_pr_usd = self.find_and_convert(cols[1].text.strip())
+                out_pr_eur, out_pr_usd = self.find_and_convert(cols[2].text.strip())
+                if model_endpoint_name in self.supported_models:
+                    model_metadata = self.supported_models.pop(model_endpoint_name)
+                    mdl_code = model_metadata['mdl_code']
+                    cost_info = model_metadata['cost']
+                    if cost_info.get('currency', None) == 'EUR':
+                        if input_pr_eur != cost_info['prompt'] or out_pr_eur != cost_info['completion']:
+                            notification_msgs.append(
+                                f"Model {model_endpoint_name} has different prompt and completion costs than in supported_models dict",
+                            )
+                    else:
+                        notification_msgs.append(
+                            f"Mistral model {model_endpoint_name} isn't in EUR pricing in supported_models dict",
+                        )
+                    if mdl_codes and mdl_code not in mdl_codes:
+                        continue
                     offer = RawCatalogItem(
-                        model_name=model_name,
-                        in_price=inp_conv_pr,
-                        out_price=out_conv_pr,
+                        model_name=mdl_code,
+                        in_price=inp_pr_usd,
+                        out_price=out_pr_usd,
                         request_price=None,
                     )
+                    offers.append(offer)
                 else:
-                    offer = RawCatalogItem(
-                        model_name=model_name,
-                        in_price=inp_conv_pr,
-                        out_price=0.0,
-                        request_price=None,
-                    )
-                offers.append(offer)
-                found_models.append(model_name)
-        # checking if any model left
-        models_missing_in_unify = []
-        for model_name in found_models:
-            try:
-                self.supported_models.remove(model_name)
-            except KeyError:
-                models_missing_in_unify.append(model_name)
+                    models_missing_in_unify.append(model_endpoint_name)
         if models_missing_in_unify:
-            logger.info(
+            notification_msgs.append(
                 f"Found in pricing page but not in our list ({self.NAME}): {models_missing_in_unify}",
             )
-        if self.supported_models != set():
-            logger.info(
-                f"Models not in pricing page ({self.NAME}): {list(self.supported_models)}",
+        if len(self.supported_models):
+            notification_msgs.append(
+                f"Models not in pricing page ({self.NAME}): {self.supported_models.keys()}",
             )
-        return sorted(offers, key=lambda i: i.in_price)
+        return sorted(offers, key=lambda i: i.in_price), notification_msgs
 
 
 if __name__ == "__main__":
     provider = MistralProvider()
-    print(provider.get())
+    price_data, notification_msgs = provider.get()
+    print(price_data)
+    print(notification_msgs)
