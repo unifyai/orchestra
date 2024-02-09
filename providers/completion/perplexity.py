@@ -33,7 +33,7 @@ class Perplexity(BaseCompletionProvider):
         "mixtral-8x7b-instruct-v0.1": {
             "endpoint": "perplexity/mixtral-8x7b-instruct",
             "context_window": 4096,
-            "cost": {"prompt": 0.14, "completion": 0.56}, # This needs to be revisited
+            "cost": {"prompt": 0.14, "completion": 0.56},  # This needs to be revisited
         },
         "pplx-7b-chat": {
             "endpoint": "perplexity/pplx-7b-chat",

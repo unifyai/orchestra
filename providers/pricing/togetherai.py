@@ -1,4 +1,3 @@
-import logging
 import re
 from typing import List, Optional
 from urllib.request import Request, urlopen
@@ -6,7 +5,7 @@ from urllib.request import Request, urlopen
 from bs4 import BeautifulSoup
 from providers.completion.togetherai import TogetherAI
 from providers.pricing import AbstractProvider
-from providers.pricing.tools.models import QueryFilter, RawCatalogItem
+from providers.pricing.tools.models import RawCatalogItem
 
 
 class TogetherAIProvider(AbstractProvider):
@@ -23,7 +22,10 @@ class TogetherAIProvider(AbstractProvider):
         self.pricing_tables = soup.find_all("ul", class_="pricing-list w-list-unstyled")
         self.supported_models = dict()
         for k, v in TogetherAI().supported_models.items():
-            self.supported_models[v['endpoint'].split("/")[-1].lower()] = {'mdl_code': k, "cost": v['cost']}
+            self.supported_models[v["endpoint"].split("/")[-1].lower()] = {
+                "mdl_code": k,
+                "cost": v["cost"],
+            }
 
     def get_models_missing_in_unify(self, notification_msgs):
         """Checks against all models in Perplexity website"""
@@ -51,11 +53,11 @@ class TogetherAIProvider(AbstractProvider):
     def get(
         self,
         mdl_codes: Optional[List[str]] = None,
-    )  -> tuple[List[RawCatalogItem], List[str]]:
-        '''
+    ) -> tuple[List[RawCatalogItem], List[str]]:
+        """
         Runs with or without mdl_codes
         If mdl_codes is None, returns all pricing of all models found
-        '''
+        """
         offers = []
         model_size_to_pr = {}
         curr_model_size = None
@@ -95,7 +97,9 @@ class TogetherAIProvider(AbstractProvider):
                 for model_endpoint_name in self.supported_models:
                     if "llama" in model_endpoint_name:
                         continue
-                    supported_model_size = re.findall(r"(?<!x)(\d+)b", model_endpoint_name)
+                    supported_model_size = re.findall(
+                        r"(?<!x)(\d+)b", model_endpoint_name
+                    )
                     if supported_model_size:
                         supported_model_size = float(supported_model_size[0].lower())
                         if lower_range <= supported_model_size <= upper_range:
@@ -105,7 +109,9 @@ class TogetherAIProvider(AbstractProvider):
                 llama_size = float(size[:-1])
                 for model_endpoint_name in self.supported_models:
                     if "llama" in model_endpoint_name:
-                        supported_model_size = re.findall(r"(?<!x)(\d+)b", model_endpoint_name)
+                        supported_model_size = re.findall(
+                            r"(?<!x)(\d+)b", model_endpoint_name
+                        )
                         if supported_model_size:
                             supported_model_size = float(
                                 supported_model_size[0].lower(),
@@ -116,7 +122,9 @@ class TogetherAIProvider(AbstractProvider):
             elif i >= 9:
                 moe_size_from_chart = re.findall(r"(\d+X) (\d+B)", size)
                 if len(moe_size_from_chart) == 0:
-                    notification_msgs.append("MOE size not found in expected scrapped data")
+                    notification_msgs.append(
+                        "MOE size not found in expected scrapped data"
+                    )
                 else:
                     moe_size_from_chart = "".join(list(moe_size_from_chart[0])).lower()
                     for model_endpoint_name in self.supported_models:
@@ -127,9 +135,9 @@ class TogetherAIProvider(AbstractProvider):
 
             for model_endpoint_name in relevant_model_endpoints:
                 model_metadata = self.supported_models.pop(model_endpoint_name)
-                mdl_code = model_metadata['mdl_code']
-                cost_info = model_metadata['cost']
-                if not (cost == cost_info['prompt'] == cost_info['completion']):
+                mdl_code = model_metadata["mdl_code"]
+                cost_info = model_metadata["cost"]
+                if not (cost == cost_info["prompt"] == cost_info["completion"]):
                     notification_msgs.append(
                         f"Model {model_endpoint_name} has different prompt and completion costs than in supported_models dict",
                     )

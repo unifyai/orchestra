@@ -1,11 +1,10 @@
-import logging
 from typing import List, Optional
 from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
 from providers.completion.anyscale import Anyscale
 from providers.pricing import AbstractProvider
-from providers.pricing.tools.models import QueryFilter, RawCatalogItem
+from providers.pricing.tools.models import RawCatalogItem
 
 
 class AnyscaleProvider(AbstractProvider):
@@ -21,17 +20,19 @@ class AnyscaleProvider(AbstractProvider):
         self.pricing_tables = soup.find_all("table")
         self.supported_models = dict()
         for k, v in Anyscale().supported_models.items():
-            self.supported_models[v['endpoint'].split("/")[-1].lower()] = {'mdl_code': k, "cost": v['cost']}
-
+            self.supported_models[v["endpoint"].split("/")[-1].lower()] = {
+                "mdl_code": k,
+                "cost": v["cost"],
+            }
 
     def get(
         self,
         mdl_codes: Optional[List[str]] = None,
     ) -> tuple[List[RawCatalogItem], List[str]]:
-        '''
+        """
         Runs with or without mdl_codes
         If mdl_codes is None, returns all pricing of all models found
-        '''
+        """
         offers = []
         models_missing_in_unify = []
         notification_msgs = []
@@ -41,9 +42,9 @@ class AnyscaleProvider(AbstractProvider):
             price = float(cols[1].text.strip())
             if model_endpoint_name in self.supported_models:
                 model_metadata = self.supported_models.pop(model_endpoint_name)
-                mdl_code = model_metadata['mdl_code']
-                cost_info = model_metadata['cost']
-                if not (price == cost_info['prompt'] == cost_info['completion']):
+                mdl_code = model_metadata["mdl_code"]
+                cost_info = model_metadata["cost"]
+                if not (price == cost_info["prompt"] == cost_info["completion"]):
                     notification_msgs.append(
                         f"Model {model_endpoint_name} has different prompt and completion costs than in supported_models dict",
                     )

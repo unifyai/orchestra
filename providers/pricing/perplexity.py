@@ -6,7 +6,7 @@ from urllib.request import Request, urlopen
 from bs4 import BeautifulSoup
 from providers.completion.perplexity import Perplexity
 from providers.pricing import AbstractProvider
-from providers.pricing.tools.models import QueryFilter, RawCatalogItem
+from providers.pricing.tools.models import RawCatalogItem
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -30,7 +30,10 @@ class PerplexityProvider(AbstractProvider):
         self.pricing_tables = soup.find_all("table")
         self.supported_models = dict()
         for k, v in Perplexity().supported_models.items():
-            self.supported_models[v['endpoint'].split("/")[-1].lower()] = {'mdl_code': k, "cost": v['cost']}
+            self.supported_models[v["endpoint"].split("/")[-1].lower()] = {
+                "mdl_code": k,
+                "cost": v["cost"],
+            }
 
     def get_models_missing_in_unify(self, notification_msgs):
         """Checks against all models in Perplexity website"""
@@ -59,11 +62,11 @@ class PerplexityProvider(AbstractProvider):
     def get(
         self,
         mdl_codes: Optional[List[str]] = None,
-    )  -> tuple[List[RawCatalogItem], List[str]]:
-        '''
+    ) -> tuple[List[RawCatalogItem], List[str]]:
+        """
         Runs with or without mdl_codes
         If mdl_codes is None, returns all pricing of all models found
-        '''
+        """
         offers = []
         online_models_pr = {}
         notification_msgs = []
@@ -74,7 +77,10 @@ class PerplexityProvider(AbstractProvider):
             model_size = cols[0].text.strip()
             requests_pr = float(cols[1].text[1:].strip())
             output_pr = float(cols[2].text[1:].strip())
-            online_models_pr[model_size] = {"requests_pr": requests_pr, "output_pr": output_pr}
+            online_models_pr[model_size] = {
+                "requests_pr": requests_pr,
+                "output_pr": output_pr,
+            }
         # going through vanilla model pricing in 1st table
         for row in self.pricing_tables[0].find_all("tr")[1:]:
             cols = row.find_all("td")
@@ -85,9 +91,9 @@ class PerplexityProvider(AbstractProvider):
 
             relevant_model_endpoints = []
             for model_endpoint_name in self.supported_models:
-                supported_model_size = re.findall(r"((?:\d+x)?\d+b)", model_endpoint_name)[
-                    0
-                ].lower()
+                supported_model_size = re.findall(
+                    r"((?:\d+x)?\d+b)", model_endpoint_name
+                )[0].lower()
                 # https://docs.perplexity.ai/changelog/new-model-mixtral-8x7b-instruct
                 if supported_model_size == "8x7b":
                     supported_model_size = "13b"
@@ -96,14 +102,17 @@ class PerplexityProvider(AbstractProvider):
 
             for model_endpoint_name in relevant_model_endpoints:
                 model_metadata = self.supported_models.pop(model_endpoint_name)
-                mdl_code = model_metadata['mdl_code']
-                cost_info = model_metadata['cost']
+                mdl_code = model_metadata["mdl_code"]
+                cost_info = model_metadata["cost"]
                 if "online" in mdl_code:
                     input_pr = 0
                     output_pr = online_models_pr[model_size]["output_pr"]
-                    request_price=online_models_pr[model_size]["requests_pr"],
-                
-                if input_pr != cost_info['prompt'] or output_pr != cost_info['completion']:
+                    request_price = (online_models_pr[model_size]["requests_pr"],)
+
+                if (
+                    input_pr != cost_info["prompt"]
+                    or output_pr != cost_info["completion"]
+                ):
                     notification_msgs.append(
                         f"Model {model_endpoint_name} has different prompt and completion costs than in supported_models dict",
                     )
