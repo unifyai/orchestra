@@ -3,6 +3,7 @@
 # This file will be called from each one of the instances running in
 # different regions
 import asyncio
+import datetime
 import logging
 import os
 import smtplib
@@ -135,16 +136,16 @@ async def main():  # noqa: WPS210
 
     # Get list of endpoints in our db
     endpoints = await retrieve_all_endpoints(async_db_session)
-    endpoints = [
-        # {"id": 1240, "provider": "together-ai", "model": "llama-2-7b-chat"},
-        # {"id": 1239, "provider": "anyscale", "model": "llama-2-7b-chat"},
-        # {"id": 1241, "provider": "replicate", "model": "llama-2-7b-chat"},
-        {"id": 1250, "provider": "anyscale", "model": "llama-2-70b-chat"},
-        {"id": 1251, "provider": "perplexity-ai", "model": "llama-2-70b-chat"},
-        {"id": 1252, "provider": "together-ai", "model": "llama-2-70b-chat"},
-        {"id": 1253, "provider": "replicate", "model": "llama-2-70b-chat"},
-        {"id": 1254, "provider": "octoai", "model": "llama-2-70b-chat"},
-    ]
+    # endpoints = [
+    #     {"id": 1240, "provider": "together-ai", "model": "llama-2-7b-chat"},
+    #     {"id": 1239, "provider": "anyscale", "model": "llama-2-7b-chat"},
+    #     {"id": 1241, "provider": "replicate", "model": "llama-2-7b-chat"},
+    #     {"id": 1250, "provider": "anyscale", "model": "llama-2-70b-chat"},
+    #     {"id": 1251, "provider": "perplexity-ai", "model": "llama-2-70b-chat"},
+    #     {"id": 1252, "provider": "together-ai", "model": "llama-2-70b-chat"},
+    #     {"id": 1253, "provider": "replicate", "model": "llama-2-70b-chat"},
+    #     {"id": 1254, "provider": "octoai", "model": "llama-2-70b-chat"},
+    # ]
     logger.info(f"Found {len(endpoints)} endpoints where Model is active in the db.")
     # Run all scrappers sequentially and get results
     # Async not needed since apart of Replicate (which has intentional 10 s delay),
@@ -160,7 +161,7 @@ async def main():  # noqa: WPS210
     )
     logger.info("Done!")
 
-    email_notif = False
+    email_notif = True
     if email_notif:
         logger.info("Emailing notifications...")
         # Initialise email server
@@ -169,14 +170,27 @@ async def main():  # noqa: WPS210
         email_addr = os.getenv("EMAIL_ADDR", "auth@unify.ai")
         email_pass = os.getenv("EMAIL_PASS", "")
         email_server.login(email_addr, email_pass)
-        # all_notif_msgs
-        subject = "Hello"
-        body = "its me"
+        today_date = datetime.datetime.now().strftime("%B %d, %Y")
+        subject = "Price scrapper notif - " + today_date
+        body = ""
+        for provider, msgs in all_notif_msgs.items():
+            if msgs:
+                body += f"{provider}:\n"
+                for msg in msgs:
+                    body += f"{msg}\n"
+                body += "=" * 10 + "\n"
         message = "Subject: {}\n\n{}".format(subject, body)
-        recipients = ["shyngyskhan@unify.ai", "rishab@unify.ai", "guillermo@unify.ai"]
-        # email_server.sendmail("auth@unify.ai", recipients, message)
-        email_server.sendmail("auth@unify.ai", "rishab@unify.ai", message)
+        recipients = [
+            "model-hub@unify.ai",
+            "shyngyskhan@unify.ai",
+            "rishab@unify.ai",
+            "guillermo@unify.ai",
+        ]
+        email_server.sendmail(
+            "auth@unify.ai", recipients[2], message
+        )  # remove recipients list and keep only model-hub
         email_server.quit()
+        logger.info("Emailing done.")
     logger.info("Price scrapper finished.")
 
 

@@ -62,6 +62,9 @@ class OctoAIProvider(AbstractProvider):
                     notification_msgs.append(
                         f"Model {model_endpoint_name} has different prompt and completion costs than in supported_models dict",
                     )
+                    notification_msgs.append(
+                        f"Prompt: {input_pr} (page) vs {cost_info['prompt']} (dict), Completion: {output_pr} (page) vs {cost_info['completion']} (dict)",
+                    )
                 if mdl_codes and mdl_code not in mdl_codes:
                     continue
                 offer = RawCatalogItem(
