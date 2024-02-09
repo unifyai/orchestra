@@ -1,7 +1,6 @@
 from unittest.mock import patch
 import pytest
 import json
-from fastapi import FastAPI
 from httpx import AsyncClient
 from starlette import status
 
@@ -16,9 +15,16 @@ from orchestra.tests.utils import (
 )
 
 MODELS = [
+    # "gpt-3.5-turbo@openai",
     "llama-2-7b-chat@anyscale",
+    "llama-2-7b-chat@deepinfra",
+    "llama-2-7b-chat@fireworks-ai",
+    "llama-2-7b-chat@lepton-ai",
     "llama-2-7b-chat@replicate",
+    "llama-2-7b-chat@together-ai",
+    "mistral-7b-instruct-v0.2@mistral-ai",
     "mistral-7b-instruct-v0.1@octoai",
+    "mistral-7b-instruct-v0.2@perplexity-ai",
 ]
 
 payload_fn = {
@@ -36,13 +42,11 @@ async def test_text_generation(  # noqa: WPS218, E501
     endpoint: str,
     stream_str: str,
     client: AsyncClient,
-    fastapi_app: FastAPI,
 ) -> None:
     """
-    Checks the chat completions endpoint without streaming.
+    Checks the text-generations endpoints.
 
     :param client: client for the app.
-    :param fastapi_app: current FastAPI application.
     """
     with patch("fastapi.BackgroundTasks.add_task") as mock:
 
