@@ -69,3 +69,39 @@ async def db_operations(  # noqa: WPS211
     )
     await users_dao.recharge_credit(user_id, -cost)
     await create_query_model(query_model_request, query_dao=query_dao)
+
+
+def filter_request_params(request):
+    """
+    Filter request parameters.
+
+    :param request: request object.
+
+    :return: dictionary of filtered parameters.
+    """
+    openai_params = [
+        "frequency_penalty",
+        "logit_bias",
+        "logprobs",
+        "top_logprobs",
+        "max_tokens",
+        "n",
+        "presence_penalty",
+        "response_format",
+        "seed",
+        "stop",
+        "stream",
+        "temperature",
+        "top_p",
+        "tools",
+        "tool_choice",
+        "user",
+        "function_call",
+        "functions",
+        "stream",
+    ]
+    return {
+        param: request.arguments.get(param)
+        for param in openai_params
+        if request.arguments.get(param) is not None
+    }

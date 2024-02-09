@@ -91,7 +91,7 @@ class BaseCompletionProvider:
     def compute_cost_streaming(  # noqa: WPS210
         self,
         model: str,
-        completions: str,
+        completions: List[str],
         messages: List[Dict],
     ) -> float:
         """
@@ -114,8 +114,9 @@ class BaseCompletionProvider:
             tokens = encoding.encode(total_prompt)
             prompt_tokens = len(tokens)
 
-            tokens = encoding.encode(completions)
-            completion_tokens = len(tokens)
+            tokens = [encoding.encode(completion) for completion in completions]
+            completion_tokens = sum(len(token) for token in tokens)
+
             response = type(  # noqa: WPS317
                 "DummyClass",
                 (),
@@ -139,9 +140,7 @@ class BaseCompletionProvider:
         self,
         model: str,
         messages: List,  # type: ignore
-        max_tokens: Optional[int] = 512,
-        temperature: Optional[float] = 0.9,
-        stream: Optional[bool] = False,
+        **kwargs: Any,
     ) -> Optional[Any]:
         if model not in self.supported_models:
             raise ValueError("Model not supported")
@@ -151,6 +150,7 @@ class BaseCompletionProvider:
         else:
             provider_model_endpoint = model
 
+        stream = kwargs.get("stream", False)
         if stream:
             client = AsyncOpenAI(
                 api_key=self.api_key,
@@ -166,9 +166,7 @@ class BaseCompletionProvider:
             response = client.chat.completions.create(
                 model=provider_model_endpoint,
                 messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                stream=stream,
+                **kwargs,
             )
             if stream:
                 return (
@@ -225,7 +223,7 @@ class AsyncGeneratorWrapper:  # noqa: D101
         self.total_cost = None
 
     async def generator(self):  # noqa: D102, C901, WPS210, WPS231
-        whole = ""
+        whole = []
         usage = {}
         try:  # noqa: WPS501
             if inspect.iscoroutine(self._response):
@@ -238,7 +236,10 @@ class AsyncGeneratorWrapper:  # noqa: D101
                     if choices[0]["delta"]["content"] is None:
                         continue  # noqa: WPS220
                 part_text = choices[0]["delta"]["content"] if choices else ""
-                whole += part_text if part_text else ""
+                index = choices[0]["index"] if choices else 0
+                if len(whole) <= index:
+                    whole.extend([""] * (index - len(whole) + 1))
+                whole[index] += part_text
                 yield part_dict
         finally:
             if isinstance(usage, CompletionUsage):

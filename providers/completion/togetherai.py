@@ -351,7 +351,7 @@ class TogetherAI(BaseCompletionProvider):
         Get the base URL.
 
         :param args: The arguments.
-        
+
         :return: The base URL.
         """
         return self.base_url

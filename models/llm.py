@@ -48,15 +48,11 @@ class CompletionsModel:
     def get_completion(  # noqa: D102
         self,
         messages: List[Dict[str, str]],
-        max_tokens: int = 512,
-        temperature: float = 0.9,
-        stream: bool = False,
+        **kwargs: Any,
     ) -> Union[ModelResponse, Any]:
 
         return self.provider_obj.complete(
             self.model,
             messages,
-            max_tokens,
-            temperature,
-            stream,
+            **kwargs,
         )

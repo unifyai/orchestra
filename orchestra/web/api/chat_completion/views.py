@@ -17,7 +17,7 @@ from orchestra.web.api.chat_completion.schema import (
     ChatCompletionResponse,
 )
 from orchestra.web.api.users.views import get_credits
-from orchestra.web.api.utils import db_operations
+from orchestra.web.api.utils import db_operations, filter_request_params
 
 router = APIRouter()
 
@@ -60,6 +60,14 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             detail="Invalid input format. Expected format: 'model@provider'.",
         )
 
+    try:
+        messages= request.messages
+    except Exception:
+        raise HTTPException(
+            status_code=400,  # noqa: WPS432
+            detail="Invalid input. Messages not in input.",
+        )
+
     language_model = CompletionsModel(
         provider=provider,
         model=model,
@@ -71,10 +79,10 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             detail="Insufficient credits",
         )
     stream = request.stream
+
+    filtered_params = filter_request_params(request)
     response, cost = language_model.get_completion(
-        messages=request.messages,
-        temperature=request.temperature,
-        stream=stream,
+        messages=messages, **filtered_params,
     )
     if not response:
         # TODO: Handle when response is None

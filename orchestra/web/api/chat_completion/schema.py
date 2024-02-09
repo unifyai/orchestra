@@ -40,4 +40,3 @@ class ChatCompletionResponse(BaseModel):
     object: str = "chat.completion"
     usage: Dict[str, Any]
     choices: List[Dict[str, Any]]
-    _response_ms: float

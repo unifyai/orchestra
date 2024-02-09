@@ -17,7 +17,7 @@ from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
 from orchestra.web.api.inference.schema import InferenceRequest
 from orchestra.web.api.users.views import get_credits
-from orchestra.web.api.utils import db_operations
+from orchestra.web.api.utils import db_operations, filter_request_params
 
 router = APIRouter()
 
@@ -76,7 +76,13 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
             status_code=400,  # noqa: WPS432
             detail="Invalid input. Model or provider not in input.",
         )
-
+    try:
+        messages = request.arguments["messages"]
+    except Exception:
+        raise HTTPException(
+            status_code=400,  # noqa: WPS432
+            detail="Invalid input. Messages not in input.",
+        )
     model_type = get_model_type(model)
     if model_type == "chat":
         language_model = CompletionsModel(
@@ -91,11 +97,12 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
                 detail="Insufficient credits",
             )
         stream = request.arguments.get("stream", False)
+
+        filtered_params = filter_request_params(request)
+
         response, cost = language_model.get_completion(
-            messages=request.arguments["messages"],
-            temperature=request.arguments.get("temperature", 0.9),  # noqa: WPS432
-            max_tokens=request.arguments.get("max_tokens", 512),  # noqa: WPS432
-            stream=stream,
+            messages=messages,
+            **filtered_params,
         )
 
         if not response:

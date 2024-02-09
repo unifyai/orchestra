@@ -149,9 +149,7 @@ class Replicate(BaseCompletionProvider):
         self,
         model: str,
         messages: List,  # type: ignore
-        max_tokens: Optional[int] = 512,
-        temperature: Optional[float] = 0.9,
-        stream: Optional[bool] = False,
+        **kwargs: Any,
     ) -> Optional[Any]:
         endpoint = self.supported_models[model]["endpoint"]
 
@@ -160,8 +158,7 @@ class Replicate(BaseCompletionProvider):
         self.prompt = prompt_factory(model=endpoint, messages=messages)
         input_data = {
             "prompt": self.prompt,
-            "max_new_tokens": max_tokens,
-            "temperature": temperature,
+            **kwargs,
         }
         prediction_url = self.start_prediction(
             endpoint,
@@ -169,7 +166,7 @@ class Replicate(BaseCompletionProvider):
             self.api_key,
             api_base,
         )
-
+        stream = kwargs.get("stream", False)
         if stream:
             return (
                 AsyncGeneratorWrapper(
