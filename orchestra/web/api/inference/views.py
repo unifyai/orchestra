@@ -15,7 +15,6 @@ from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.web.api.chat_completion.schema import ChatCompletionResponse
 from orchestra.web.api.inference.schema import InferenceRequest
 from orchestra.web.api.users.views import get_credits
 from orchestra.web.api.utils import (
@@ -83,6 +82,7 @@ async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, W
     user = await get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(user.credits if user else 0)
 
+    # TODO: This will fail when it's not a llm
     try:
         messages = request.arguments["messages"]
     except Exception:
@@ -105,9 +105,19 @@ async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, W
 
         filtered_params = filter_request_params(request.arguments)
 
+        db_operations_kwargs = {
+            "user_id": user_id,
+            "model": model,
+            "provider": provider,
+            "model_dao": model_dao,
+            "provider_dao": provider_dao,
+            "endpoint_dao": endpoint_dao,
+            "query_dao": query_dao,
+            "users_dao": users_dao,
+        }
+
         response, cost = language_model.get_completion(
-            messages=messages,
-            **filtered_params,
+            messages=messages, **filtered_params
         )
 
         if not response:
@@ -134,46 +144,22 @@ async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, W
                     await asyncio.sleep(0)
                 background_tasks.add_task(
                     db_operations,
-                    user_id,
-                    response.total_cost,
-                    model,
-                    provider,
-                    model_dao,
-                    provider_dao,
-                    endpoint_dao,
-                    query_dao,
-                    users_dao,
+                    # TODO: Where is response.total_cost coming from?
+                    cost_coroutine=response.total_cost,
+                    **db_operations_kwargs,
                 )
 
             return StreamingResponse(stream_and_update_db())
+
         else:
             background_tasks.add_task(
-                db_operations,
-                user_id,
-                cost,
-                model,
-                provider,
-                model_dao,
-                provider_dao,
-                endpoint_dao,
-                query_dao,
-                users_dao,
-            )
-
-        if isinstance(response, ChatCompletionResponse):
-            response = response.model_dump()
-            response["model"] = model
-            response["provider"] = provider
-            return JSONResponse(
-                response,
+                db_operations, cost_coroutine=cost, **db_operations_kwargs
             )
 
         response["model"] = model
         response["provider"] = provider
+        return JSONResponse(response)
 
-        return JSONResponse(
-            response,
-        )
     elif model_type == "text-to-image":
         image_model = ImagegenModel(
             provider=provider,
@@ -223,6 +209,7 @@ async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, W
                 "object": "image.generation",
             },
         )
+
     # TODO: Add error 422 for incorrect arguments, model, or provider
     return JSONResponse(
         {

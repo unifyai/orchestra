@@ -79,10 +79,7 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     user = await get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(user.credits if user else 0)
 
-    language_model = CompletionsModel(
-        provider=provider,
-        model=model,
-    )
+    language_model = CompletionsModel(provider=provider, model=model)
     cost_max = language_model.get_cost_max()
     if available_credits < cost_max:
         raise insufficient_credits_error
@@ -90,6 +87,18 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     stream = request.stream
 
     filtered_params = filter_request_params(request.model_dump())
+
+    db_operations_kwargs = {
+        "user_id": user_id,
+        "model": model,
+        "provider": provider,
+        "model_dao": model_dao,
+        "provider_dao": provider_dao,
+        "endpoint_dao": endpoint_dao,
+        "query_dao": query_dao,
+        "users_dao": users_dao,
+    }
+
     response, cost = language_model.get_completion(
         messages=messages,
         **filtered_params,
@@ -114,31 +123,15 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 await asyncio.sleep(0)
             background_tasks.add_task(
                 db_operations,
-                user_id,
-                response.total_cost,
-                model,
-                provider,
-                model_dao,
-                provider_dao,
-                endpoint_dao,
-                query_dao,
-                users_dao,
+                cost_coroutine=response.total_cost,
+                **db_operations_kwargs,
             )
 
         return StreamingResponse(stream_and_update_db())
     else:
         background_tasks.add_task(
-            db_operations,
-            user_id,
-            cost,
-            model,
-            provider,
-            model_dao,
-            provider_dao,
-            endpoint_dao,
-            query_dao,
-            users_dao,
+            db_operations, cost_coroutine=cost, **db_operations_kwargs
         )
 
-    response["model"] = f"{model}@{provider}"
-    return response
+    response.model = f"{model}@{provider}"
+    return response  # TODO: Why not ChatcompletionResponse?
