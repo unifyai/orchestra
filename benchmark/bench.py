@@ -166,6 +166,7 @@ async def main():  # noqa: WPS210
             done_events,
             db_commit_period,
             async_db_session,
+            logger,
         ),
     )
 

@@ -2,10 +2,10 @@
 # it won't be open sourced
 # This file will be called from each one of the instances running in
 # different regions
-import smtplib
 import asyncio
 import logging
 import os
+import smtplib
 from typing import List
 
 from benchmark.utils import (
@@ -26,9 +26,7 @@ from providers.pricing.togetherai import TogetherAIProvider
 from providers.pricing.tools.models import RawCatalogItem
 from sqlalchemy.orm import sessionmaker
 
-from orchestra.db.models.orchestra_models import (  # noqa: WPS235
-    Metric,
-)
+from orchestra.db.models.orchestra_models import Metric  # noqa: WPS235
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -54,10 +52,8 @@ async def push_to_db(  # noqa: WPS210, WPS217
         period (int): Number of seconds to wait between sending data to the DB.
         async_session (sessionmaker): DB session maker.
     """
-    # TODO: remove this line
     async with async_session() as q_session:
         metrics = await get_names(q_session, Metric)
-    print(all_scrape_results)
 
     brs_results = []
     for endpoint_id, results in all_scrape_results.items():
@@ -67,8 +63,8 @@ async def push_to_db(  # noqa: WPS210, WPS217
                 result["region"] = region
                 result["regime"] = f"concurrent-{config['load']}"
                 result["endpoint_id"] = endpoint_id
-                result["input_policy"] = (config["input_policy"],)
-                result["load"] = (config["load"],)
+                result["input_policy"] = config["input_policy"]
+                result["load"] = config["load"]
                 result["input_cost_per_token"] = results.in_price
                 result["output_cost_per_token"] = results.out_price
                 # only relevant for online perplexity models
@@ -78,7 +74,7 @@ async def push_to_db(  # noqa: WPS210, WPS217
     async with async_session() as session:
         brs = await commit_benchmark_runs(brs_results, session)
         for br, br_result in zip(brs, brs_results):
-            await add_br_datapoints(br.id, br_result, session, metrics)
+            await add_br_datapoints(br.id, br_result, session, metrics, logger)
         await session.commit()
 
 
@@ -114,13 +110,16 @@ def run_all_scrapers(endpoints):
             all_notif_msgs[provider.NAME] = notif_msgs
             for result in results:
                 for endpoint in endpoints:
-                    if endpoint["model"] == result.model_name:
+                    if (
+                        endpoint["model"] == result.model_name
+                        and endpoint["provider"] == provider.NAME
+                    ):
                         all_results[endpoint["id"]] = result
             logger.info("Done")
         except Exception as e:
             logger.info(f"Failed to get {provider.NAME}: {e}")
         logger.info("=====================================")
-        return all_results, all_notif_msgs
+    return all_results, all_notif_msgs
 
 
 async def main():  # noqa: WPS210
@@ -134,38 +133,51 @@ async def main():  # noqa: WPS210
     # Initialise db engine
     async_db_session = create_db_session()
 
-    email_notif = False
-    if email_notif:
-        # Initialise email server
-        email_server = smtplib.SMTP('smtp.gmail.com', 587)
-        email_server.starttls()
-        email_addr = os.getenv("EMAIL_ADDR", "auth@unify.ai")
-        email_pass = os.getenv("EMAIL_PASS", "")
-        email_server.login(email_addr, email_pass)
-
     # Get list of endpoints in our db
     endpoints = await retrieve_all_endpoints(async_db_session)
+    endpoints = [
+        # {"id": 1240, "provider": "together-ai", "model": "llama-2-7b-chat"},
+        # {"id": 1239, "provider": "anyscale", "model": "llama-2-7b-chat"},
+        # {"id": 1241, "provider": "replicate", "model": "llama-2-7b-chat"},
+        {"id": 1250, "provider": "anyscale", "model": "llama-2-70b-chat"},
+        {"id": 1251, "provider": "perplexity-ai", "model": "llama-2-70b-chat"},
+        {"id": 1252, "provider": "together-ai", "model": "llama-2-70b-chat"},
+        {"id": 1253, "provider": "replicate", "model": "llama-2-70b-chat"},
+        {"id": 1254, "provider": "octoai", "model": "llama-2-70b-chat"},
+    ]
     logger.info(f"Found {len(endpoints)} endpoints where Model is active in the db.")
     # Run all scrappers sequentially and get results
     # Async not needed since apart of Replicate (which has intentional 10 s delay),
     # all others are pretty fast
     all_results, all_notif_msgs = run_all_scrapers(endpoints)
 
+    logger.info("Pushing to DB...")
     await push_to_db(
         all_results,
         configs,
         regions,
         async_db_session,
     )
+    logger.info("Done!")
 
+    email_notif = False
     if email_notif:
+        logger.info("Emailing notifications...")
+        # Initialise email server
+        email_server = smtplib.SMTP("smtp.gmail.com", 587)
+        email_server.starttls()
+        email_addr = os.getenv("EMAIL_ADDR", "auth@unify.ai")
+        email_pass = os.getenv("EMAIL_PASS", "")
+        email_server.login(email_addr, email_pass)
         # all_notif_msgs
         subject = "Hello"
         body = "its me"
-        message = 'Subject: {}\n\n{}'.format(subject, body)
+        message = "Subject: {}\n\n{}".format(subject, body)
         recipients = ["shyngyskhan@unify.ai", "rishab@unify.ai", "guillermo@unify.ai"]
-        email_server.sendmail("auth@unify.ai", recipients[0], message)
+        # email_server.sendmail("auth@unify.ai", recipients, message)
+        email_server.sendmail("auth@unify.ai", "rishab@unify.ai", message)
         email_server.quit()
+    logger.info("Price scrapper finished.")
 
 
 if __name__ == "__main__":

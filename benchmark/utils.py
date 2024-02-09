@@ -82,6 +82,7 @@ async def db_loop(  # noqa: WPS210, WPS217
     done_events: List[asyncio.Event],
     period: int,
     async_session: sessionmaker,
+    logger: logging.Logger,
 ):  # noqa: DAR101
     """Main DB loop. Consumes and stores data from output_queue periodically.
 
@@ -92,6 +93,7 @@ async def db_loop(  # noqa: WPS210, WPS217
         workers status.
         period (int): Number of seconds to wait between sending data to the DB.
         async_session (sessionmaker): DB session maker.
+        logger (logging.Logger): Logger instance.
     """
     async with async_session() as q_session:
         metrics = await get_names(q_session, Metric)
@@ -110,7 +112,7 @@ async def db_loop(  # noqa: WPS210, WPS217
         async with async_session() as session:
             brs = await commit_benchmark_runs(brs_results, session)
             for br, br_result in zip(brs, brs_results):
-                await add_br_datapoints(br.id, br_result, session, metrics)
+                await add_br_datapoints(br.id, br_result, session, metrics, logger)
             await session.commit()
 
         # Check if all worker tasks have completed
@@ -190,6 +192,7 @@ async def add_br_datapoints(  # noqa: WPS210
     br_result: Dict,
     async_session: AsyncSession,
     db_metrics: List[str],
+    logger: logging.Logger,
 ):  # noqa: DAR101
     """Adds all datapoints in a benchmark_result to a db session. These are not commited.
 
@@ -198,6 +201,7 @@ async def add_br_datapoints(  # noqa: WPS210
         br_result (Dict): BenchmarkRun result dict from an AIBenchRunner instance.
         async_session (AsyncSession): DB session.
         db_metrics (List[str]): List of metrics already defined in the DB.
+        logger (logging.Logger): Logger instance.
     """
     # TODO: rollback db session if there is any exception
     # check if the region exists, if not, raise an exception
@@ -205,9 +209,9 @@ async def add_br_datapoints(  # noqa: WPS210
     # check if the seq_length exists, if not, raise an exception
     keys_to_ignore = {"load", "input_policy", "region", "regime", "endpoint_id"}
     metrics_to_add = set(br_result.keys()).intersection(set(db_metrics))
-    logging.info(f"Adding the following metrics for br {br_id}: {metrics_to_add}")
+    logger.info(f"Adding the following metrics for br {br_id}: {metrics_to_add}")
     ignored_metrics = set(br_result.keys()) - metrics_to_add - keys_to_ignore
-    logging.warning(f"Ignoring the following metrics: {ignored_metrics}")
+    logger.warning(f"Ignoring the following metrics: {ignored_metrics}")
     for metric in metrics_to_add:
         data = br_result[metric]
         if isinstance(data, (int, float)):
