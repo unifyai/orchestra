@@ -130,7 +130,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
                 background_tasks.add_task(
                     db_operations,
                     user_id,
-                    await response.total_cost,
+                    response.total_cost,
                     model,
                     provider,
                     model_dao,
@@ -145,7 +145,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
             background_tasks.add_task(
                 db_operations,
                 user_id,
-                await cost,
+                cost,
                 model,
                 provider,
                 model_dao,

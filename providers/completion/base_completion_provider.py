@@ -128,7 +128,7 @@ class BaseCompletionProvider:
                     ),
                 },
             )()
-            return self.compute_cost(
+            return await self.compute_cost(
                 model,
                 [item["content"] for item in messages],  # noqa: WPS441
                 response,

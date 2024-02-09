@@ -1,3 +1,5 @@
+from typing import Coroutine
+
 from fastapi import HTTPException
 
 from orchestra.db.dao.endpoint_dao import EndpointDAO
@@ -12,9 +14,9 @@ from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.query.views import create_query_model
 
 
-async def db_operations(  # noqa: WPS211
+async def db_operations(  # noqa: WPS211, WPS217, WPS210
     user_id: str,
-    cost: float,
+    cost_coroutine: Coroutine,
     model: str,
     provider: str,
     model_dao: ModelDAO,
@@ -27,7 +29,7 @@ async def db_operations(  # noqa: WPS211
     Perform database operations.
 
     :param user_id: user id.
-    :param cost: cost of the operation.
+    :param cost_coroutine: cost computation coroutine of the operation.
     :param model: model name.
     :param provider: provider name.
     :param model_dao: DAO for model models.
@@ -62,6 +64,7 @@ async def db_operations(  # noqa: WPS211
             status_code=500,  # noqa: WPS432
             detail="Endpoint not found",
         )
+    cost = await cost_coroutine
     query_model_request = QueryModelRequest(
         user_id=user_id,
         endpoint_id=endpoint_id,

@@ -106,7 +106,7 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             background_tasks.add_task(
                 db_operations,
                 user_id,
-                await response.total_cost,
+                response.total_cost,
                 model,
                 provider,
                 model_dao,
@@ -121,7 +121,7 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         background_tasks.add_task(
             db_operations,
             user_id,
-            await cost,
+            cost,
             model,
             provider,
             model_dao,
