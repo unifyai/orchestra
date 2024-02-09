@@ -131,5 +131,5 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             users_dao,
         )
 
-    response.model = f"{model}@{provider}"
-    return response.model_dump()
+    response["model"] = f"{model}@{provider}"
+    return response

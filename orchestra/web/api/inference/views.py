@@ -163,7 +163,6 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
                 response,
             )
 
-        response = response.model_dump()
         response["model"] = model
         response["provider"] = provider
 

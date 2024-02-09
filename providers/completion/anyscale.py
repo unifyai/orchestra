@@ -1,3 +1,5 @@
+from typing import Dict
+
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
@@ -55,3 +57,10 @@ class Anyscale(BaseCompletionProvider):
         :return: The base URL.
         """
         return "https://api.endpoints.anyscale.com/v1"
+
+    def _modify_output(self, out: Dict) -> Dict:
+        if out["object"] == "text.completion":
+            out["object"] = "chat.completion"
+        else:
+            out["object"] = "chat.completion.chunk"
+        return out

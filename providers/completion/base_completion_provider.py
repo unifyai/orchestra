@@ -27,10 +27,18 @@ class BaseCompletionProvider:
 
     # TODO: Make this a property and enforce definition with NotImplemented
     supported_models: Dict[str, Any] = {}
-    base_url: str = ""
 
     def __init__(self) -> None:
         self.model: str = ""
+
+    @property
+    def get_base_url(self) -> str:
+        """
+        Get the base URL.
+
+        :raises NotImplementedError: This method should be implemented in a subclass.
+        """
+        raise NotImplementedError("This method should be implemented in a subclass")
 
     def set_api_key(self, api_key: str) -> None:  # noqa: D102
         self.api_key = api_key
@@ -43,15 +51,6 @@ class BaseCompletionProvider:
             * self.supported_models[model_name]["context_window"]
             / PRICING_PER_TOKENS
         )
-
-    @property
-    def get_base_url(self) -> str:
-        """
-        Get the base URL.
-
-        :raises NotImplementedError: This method should be implemented in a subclass.
-        """
-        raise NotImplementedError("This method should be implemented in a subclass")
 
     async def compute_cost(
         self,
@@ -136,7 +135,7 @@ class BaseCompletionProvider:
         except Exception:
             return 0
 
-    def complete(  # noqa: D102, WPS211, C901, WPS231, WPS238
+    def complete(  # noqa: D102, WPS211, C901, WPS231, WPS238, WPS210
         self,
         model: str,
         messages: List,  # type: ignore
@@ -171,6 +170,7 @@ class BaseCompletionProvider:
             if stream:
                 return (
                     AsyncGeneratorWrapper(
+                        self,
                         response,
                         model,
                         messages,
@@ -179,7 +179,8 @@ class BaseCompletionProvider:
                     None,
                 )
 
-            return response, self.compute_cost(
+            response_dict = self.modify_output(response.model_dump())
+            return response_dict, self.compute_cost(
                 model,
                 [item["content"] for item in messages],
                 response,
@@ -205,16 +206,21 @@ class BaseCompletionProvider:
             logger.error(f"Raised error type: {error_type}, Error: {error}")
         return None, None
 
+    def _modify_output(self, out: Dict, **kwargs) -> Dict:
+        pass  # noqa: WPS420
+
 
 class AsyncGeneratorWrapper:  # noqa: D101
     def __init__(  # noqa: WPS211
         self,
+        base_provider,
         response,
         model,
         messages,
         compute_cost_streaming,
         compute_cost=None,  # noqa: WPS211, E501
     ):
+        self.base_provider = base_provider
         self._response = response
         self._model = model
         self._messages = messages
@@ -231,6 +237,7 @@ class AsyncGeneratorWrapper:  # noqa: D101
             async for part in self._response:
                 usage = part.usage if usage in part else {}
                 part_dict = part.model_dump()
+                self.base_provider._modify_output(part_dict)
                 choices = part_dict["choices"]
                 if choices:  # noqa: WPS338
                     if choices[0]["delta"]["content"] is None:
