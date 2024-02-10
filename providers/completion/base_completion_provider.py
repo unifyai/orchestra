@@ -110,7 +110,6 @@ class BaseCompletionProvider:
 
     async def compute_cost_streaming(  # noqa: WPS210
         self,
-        model: str,
         completions: List[str],
         messages: List[Dict],
     ) -> float:
@@ -171,7 +170,7 @@ class BaseCompletionProvider:
                 )
 
             # TODO: Maybe remove this dump unless neccesary?
-            response_dict = self._modify_output(response.model_dump())
+            response_dict = self._modify_output(response.model_dump(), stream=stream)
             return response_dict, self.compute_cost(
                 response.usage.prompt_tokens, response.usage.completion_tokens
             )
@@ -228,7 +227,7 @@ class AsyncGeneratorWrapper:  # noqa: D101
             async for part in self._response:
                 usage = part.usage if usage in part else {}
                 part_dict = part.model_dump()
-                self.base_provider._modify_output(part_dict)
+                self.base_provider._modify_output(part_dict, stream=True)
                 choices = part_dict["choices"]
                 if choices:  # noqa: WPS338
                     if choices[0]["delta"]["content"] is None:
@@ -242,13 +241,11 @@ class AsyncGeneratorWrapper:  # noqa: D101
         finally:
             if isinstance(usage, CompletionUsage):
                 self.total_cost = self._compute_cost(
-                    self._model,
                     [item["content"] for item in self._messages],
                     part,  # noqa: WPS441
                 )
             else:
                 self.total_cost = self._compute_cost_streaming(
-                    self._model,
                     whole,
                     self._messages,
                 )
