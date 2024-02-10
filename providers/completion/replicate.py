@@ -190,6 +190,7 @@ class Replicate(BaseCompletionProvider):
             response,
         )
 
+    # TODO: convert to a property max_cost
     def get_cost_max(self, model_name: str) -> float:  # noqa: D102
         if model_name not in self.supported_models:
             raise ValueError("Model not supported")

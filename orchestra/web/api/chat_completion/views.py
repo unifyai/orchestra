@@ -5,7 +5,7 @@ from typing import Union
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.param_functions import Depends
 from fastapi.responses import StreamingResponse
-from models.llm import CompletionsModel
+from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
@@ -79,9 +79,8 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     user = await get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(user.credits if user else 0)
 
-    language_model = CompletionsModel(provider=provider, model=model)
-    cost_max = language_model.get_cost_max()
-    if available_credits < cost_max:
+    lm = PROVIDER_CLASSES[provider](model)
+    if available_credits < lm.max_cost:
         raise insufficient_credits_error
 
     stream = request.stream
@@ -99,12 +98,10 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         "users_dao": users_dao,
     }
 
-    response, cost = language_model.get_completion(
-        messages=messages,
-        **filtered_params,
-    )
+    response, cost = lm(messages=messages, **filtered_params)
+
+    # TODO: Handle when response is None
     if not response:
-        # TODO: Handle when response is None
         return ChatCompletionResponse(
             model=request.model,
             created=0,
@@ -133,5 +130,5 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             db_operations, cost_coroutine=cost, **db_operations_kwargs
         )
 
-    response.model = f"{model}@{provider}"
-    return response  # TODO: Why not ChatcompletionResponse?
+    response["model"] = f"{model}@{provider}"
+    return ChatCompletionResponse(**response)

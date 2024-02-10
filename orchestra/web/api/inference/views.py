@@ -1,13 +1,10 @@
 import asyncio
-import base64
 import json
 import re
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.param_functions import Depends
 from fastapi.responses import JSONResponse, StreamingResponse
-from models.imagegen import ImagegenModel
-from models.llm import CompletionsModel
 from starlette import status
 
 from orchestra.db.dao.endpoint_dao import EndpointDAO
@@ -22,6 +19,7 @@ from orchestra.web.api.utils import (
     filter_request_params,
     insufficient_credits_error,
 )
+from providers.completion import PROVIDER_CLASSES
 
 router = APIRouter()
 
@@ -95,10 +93,9 @@ async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, W
 
     # TODO: Decompose this further
     if model_type == "text-generation":
-        language_model = CompletionsModel(provider=provider, model=model)
 
-        cost_max = language_model.get_cost_max()
-        if available_credits < cost_max:
+        lm = PROVIDER_CLASSES[provider](model)
+        if available_credits < lm.max_cost:
             raise insufficient_credits_error
 
         stream = request.arguments.get("stream", False)
@@ -116,12 +113,10 @@ async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, W
             "users_dao": users_dao,
         }
 
-        response, cost = language_model.get_completion(
-            messages=messages, **filtered_params
-        )
+        response, cost = lm(messages=messages, **filtered_params)
 
+        # TODO: Handle when response is None
         if not response:
-            # TODO: Handle when response is None
             return JSONResponse(
                 {
                     "model": model,
@@ -160,6 +155,7 @@ async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, W
         response["provider"] = provider
         return JSONResponse(response)
 
+    """
     elif model_type == "text-to-image":
         image_model = ImagegenModel(
             provider=provider,
@@ -216,3 +212,4 @@ async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, W
             "Error": "Unknown model or provider",
         },
     )
+    """
