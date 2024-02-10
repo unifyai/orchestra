@@ -15,18 +15,18 @@ from orchestra.tests.utils import (
 )
 
 # TODO: Fix provider files for every provider
-# together ai is ~done
+# One # means untested, ## or uncommented means tested
 MODELS = [
-    # "gpt-3.5-turbo@openai",
-    # "llama-2-7b-chat@anyscale",
+    ## "gpt-3.5-turbo@openai",
+    "llama-2-7b-chat@anyscale",
     # "llama-2-7b-chat@deepinfra",
     # "llama-2-7b-chat@fireworks-ai",
     # "llama-2-7b-chat@lepton-ai",
-    # "llama-2-7b-chat@replicate",
+    # "llama-2-7b-chat@replicate", # TODO: Needs to be refactored
     "llama-2-7b-chat@together-ai",
-    # "mistral-7b-instruct-v0.2@mistral-ai",
-    # "mistral-7b-instruct-v0.1@octoai",
-    # "mistral-7b-instruct-v0.2@perplexity-ai",
+    "mistral-7b-instruct-v0.2@mistral-ai",
+    "mistral-7b-instruct-v0.1@octoai",
+    "mistral-7b-instruct-v0.2@perplexity-ai",
 ]
 
 payload_fn = {

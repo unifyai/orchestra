@@ -9,29 +9,33 @@ class Mistral(BaseCompletionProvider):
     Pricing is per million tokens: https://docs.mistral.ai/platform/pricing
     """
 
-    supported_models = {
-        "mistral-7b-instruct-v0.2": {
-            "endpoint": "mistral-tiny",
-            "context_window": 32768,
-            "cost": {"prompt": 0.15, "completion": 0.46},
-        },
-        "mixtral-8x7b-instruct-v0.1": {
-            "endpoint": "mistral-small",
-            "context_window": 32768,
-            "cost": {"prompt": 0.66, "completion": 1.97},
-        },
-        "mistral-medium": {
-            "endpoint": "mistral-medium",
-            "context_window": 32768,
-            "cost": {"prompt": 2.74, "completion": 8.21},
-        },
-    }
+    def __init__(self, hub_model):
+        super().__init__(hub_model)
+        self.supported_models = supported_models
 
-    def get_base_url(self, *args):
-        """Get the base URL.
+    @property
+    def api_key_var(self) -> str:
+        return "ORCHESTRA_MISTRAL_AI_API_KEY"
 
-        :param args: The arguments.
-
-        :return: The base URL.
-        """
+    @property
+    def base_url(self):
         return "https://api.mistral.ai/v1"
+
+
+supported_models = {
+    "mistral-7b-instruct-v0.2": {
+        "endpoint": "mistral-tiny",
+        "context_window": 32768,
+        "cost": {"prompt": 0.15, "completion": 0.46},
+    },
+    "mixtral-8x7b-instruct-v0.1": {
+        "endpoint": "mistral-small",
+        "context_window": 32768,
+        "cost": {"prompt": 0.66, "completion": 1.97},
+    },
+    "mistral-medium": {
+        "endpoint": "mistral-medium",
+        "context_window": 32768,
+        "cost": {"prompt": 2.74, "completion": 8.21},
+    },
+}
