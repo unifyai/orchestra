@@ -73,14 +73,9 @@ class UsersDAO:
         :param user_id: id of a user.
         :param quantity: positive number of credits to recharge.
         """
-        query = select(Users)
-        query = query.where(Users.id == user_id)
-
-        raw_users = await self.session.execute(query)
-        user = raw_users.scalars().first()
-        if user is not None:
-            setattr(  # noqa: B010
-                user,
-                "credits",
-                user.credits + decimal.Decimal(quantity),
-            )
+        async with self.session.begin():
+            query = select(Users).where(Users.id == user_id)
+            result = await self.session.execute(query)
+            user = result.scalars().first()
+            if user is not None:
+                user.credits += decimal.Decimal(quantity)
