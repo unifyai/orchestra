@@ -4,6 +4,7 @@ from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.query_dao import QueryDAO
+from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.endpoint.views import get_endpoint
 from orchestra.web.api.model.views import get_model
 from orchestra.web.api.provider.views import get_provider
@@ -20,6 +21,7 @@ async def db_operations(  # noqa: WPS211
     provider_dao: ProviderDAO,
     endpoint_dao: EndpointDAO,
     query_dao: QueryDAO,
+    users_dao: UsersDAO,
 ):
     """
     Perform database operations.
@@ -32,6 +34,7 @@ async def db_operations(  # noqa: WPS211
     :param provider_dao: DAO for provider models.
     :param endpoint_dao: DAO for endpoint models.
     :param query_dao: DAO for query models.
+    :param users_dao: DAO for users models.
 
     :raises HTTPException: when endpoint is not found.
     """
@@ -64,4 +67,5 @@ async def db_operations(  # noqa: WPS211
         endpoint_id=endpoint_id,
         credits=cost,  # type: ignore
     )
+    await users_dao.recharge_credit(user_id, -cost)
     await create_query_model(query_model_request, query_dao=query_dao)
