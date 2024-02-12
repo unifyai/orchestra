@@ -73,8 +73,8 @@ class UsersDAO:
         :param user_id: id of a user.
         :param quantity: positive number of credits to recharge.
         """
-        async with self.session.begin():
-            query = select(Users).where(Users.id == user_id)
+        async with self.session.begin_nested():
+            query = select(Users).where(Users.id == user_id).with_for_update()
             result = await self.session.execute(query)
             user = result.scalars().first()
             if user is not None:
