@@ -1,13 +1,4 @@
-# flake8: noqa: E501
-from typing import Any, List, Optional
-
-import openai
-from openai import AsyncOpenAI, OpenAI
-from providers.completion.base_completion_provider import (
-    AsyncGeneratorWrapper,
-    BaseCompletionProvider,
-    logger,
-)
+from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
 class TogetherAI(BaseCompletionProvider):
