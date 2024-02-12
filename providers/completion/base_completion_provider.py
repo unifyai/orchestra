@@ -76,15 +76,6 @@ class BaseCompletionProvider:
         return self.supported_models[self.hub_model]["context_window"]
 
     @property
-    def get_base_url(self) -> str:
-        """
-        Get the base URL.
-
-        :raises NotImplementedError: This method should be implemented in a subclass.
-        """
-        raise NotImplementedError("This method should be implemented in a subclass")
-
-    @property
     def api_key(self) -> None:  # noqa: D102
         return os.getenv(self.api_key_var)
 
@@ -92,7 +83,7 @@ class BaseCompletionProvider:
     def max_cost(self) -> float:  # noqa: D102
         return self.completion_cost * self.context_window / PRICING_PER_TOKENS
 
-    async def compute_cost(
+    def compute_cost(
         self,
         prompt_tks,
         output_tks,
@@ -108,7 +99,7 @@ class BaseCompletionProvider:
         completion_cost = output_tks * self.completion_cost / PRICING_PER_TOKENS
         return prompt_cost + completion_cost
 
-    async def compute_cost_streaming(  # noqa: WPS210
+    def compute_cost_streaming(  # noqa: WPS210
         self,
         completions: List[str],
         messages: List[Dict],
@@ -134,7 +125,7 @@ class BaseCompletionProvider:
             prompt_tokens = len(encoding.encode(total_prompt))
             tokens = [encoding.encode(completion) for completion in completions]
             completion_tokens = sum(len(token) for token in tokens)
-            return await self.compute_cost(prompt_tokens, completion_tokens)
+            return self.compute_cost(prompt_tokens, completion_tokens)
 
         except Exception:  # TODO: This need to be scoped down
             return 0
