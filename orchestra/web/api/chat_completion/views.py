@@ -117,7 +117,6 @@ async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             async for part_dict in response.generator():
                 part_dict["model"] = f"{model}@{provider}"
                 yield f"data: {json.dumps(part_dict)}\n\n"  # noqa: WPS237
-                await asyncio.sleep(0)
             background_tasks.add_task(
                 db_operations,
                 cost_deferred_fn=response.total_cost,

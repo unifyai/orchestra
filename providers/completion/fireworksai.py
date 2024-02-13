@@ -78,4 +78,24 @@ supported_models = {
         "context_window": 2048,
         "cost": {"prompt": 0.70, "completion": 2.80},  # noqa: WPS339
     },
+    "codellama-70b-instruct": {
+        "endpoint": "accounts/fireworks/models/llama-v2-70b-code-instruct",
+        "context_window": 4096,
+        "cost": {"prompt": 0.70, "completion": 2.80},  # noqa: WPS339
+    },
+    "codellama-34b-instruct": {
+        "endpoint": "accounts/fireworks/models/llama-v2-34b-code-instruct",
+        "context_window": 16384,
+        "cost": {"prompt": 0.70, "completion": 2.80},  # noqa: WPS339
+    },
+    "codellama-13b-instruct": {
+        "endpoint": "accounts/fireworks/models/llama-v2-13b-code-instruct",
+        "context_window": 4096,
+        "cost": {"prompt": 0.20, "completion": 0.80},  # noqa: WPS339
+    },
+    "zephyr-7b-beta": {
+        "endpoint": "accounts/fireworks/models/zephyr-7b-beta",
+        "context_window": 16384,
+        "cost": {"prompt": 0.20, "completion": 0.80},
+    },
 }

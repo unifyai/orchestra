@@ -48,4 +48,24 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.27, "completion": 0.27},  # noqa: WPS339
     },
+    "codellama-34b-instruct": {
+        "endpoint": "codellama/CodeLlama-34b-Instruct-hf",
+        "context_window": 16384,
+        "cost": {"prompt": 0.60, "completion": 0.60},  # noqa: WPS339
+    },
+    "phind-codellama-34b-v2": {
+        "endpoint": "Phind/Phind-CodeLlama-34B-v2",
+        "context_window": 16384,
+        "cost": {"prompt": 0.60, "completion": 0.60},  # noqa: WPS339
+    },
+    "mythomax-l2-13b": {
+        "endpoint": "Gryphe/MythoMax-L2-13b",
+        "context_window": 4096,
+        "cost": {"prompt": 0.22, "completion": 0.22},
+    },
+    "yi-34b-chat": {
+        "endpoint": "01-ai/Yi-34B-Chat",
+        "context_window": 4096,
+        "cost": {"prompt": 0.60, "completion": 0.60},  # noqa: WPS339
+    },
 }
