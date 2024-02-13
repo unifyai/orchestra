@@ -24,7 +24,7 @@ router = APIRouter()
 
 
 @router.post("/chat/completions", response_model=ChatCompletionResponse)
-async def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
+def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     background_tasks: BackgroundTasks,
     request_fastapi: Request,
     request: ChatCompletionRequest,
