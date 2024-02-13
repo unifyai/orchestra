@@ -32,7 +32,6 @@ def _get_model_type(model_name):
     return "text-generation"
 
 
-<<<<<<< Updated upstream
 def _verify_field(request, field):
     if not hasattr(request, field) or getattr(request, field) == "":
         raise HTTPException(
@@ -44,10 +43,6 @@ def _verify_field(request, field):
 
 @router.post("/inference")
 async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217, WPS238
-=======
-@router.post("/inference", response_model=InferenceResponse)
-def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217, WPS238
->>>>>>> Stashed changes
     background_tasks: BackgroundTasks,
     request_fastapi: Request,
     request: InferenceRequest,
@@ -141,7 +136,6 @@ def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217, 
                     part_dict["model"] = model
                     part_dict["provider"] = provider
                     yield f"data: {json.dumps(part_dict)}\n\n"
-                    await asyncio.sleep(0)
                 background_tasks.add_task(
                     db_operations,
                     cost_deferred_fn=response.total_cost,
