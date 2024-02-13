@@ -89,15 +89,19 @@ class BaseCompletionProvider:
         output_tks,
     ) -> float:
         """
-        Compute the cost of a completion.
+        Returns a deffered op to compute the cost of a completion.
 
         TODO: Redo docs
 
-        :return: The cost of the completion.
+        :return: Pre-loaded fn.
         """
-        prompt_cost = prompt_tks * self.prompt_cost / PRICING_PER_TOKENS
-        completion_cost = output_tks * self.completion_cost / PRICING_PER_TOKENS
-        return prompt_cost + completion_cost
+
+        def deferred_cost():
+            prompt_cost = prompt_tks * self.prompt_cost / PRICING_PER_TOKENS
+            completion_cost = output_tks * self.completion_cost / PRICING_PER_TOKENS
+            return prompt_cost + completion_cost
+
+        return deferred_cost
 
     def compute_cost_streaming(  # noqa: WPS210
         self,
@@ -105,7 +109,7 @@ class BaseCompletionProvider:
         messages: List[Dict],
     ) -> float:
         """
-        Compute the cost of a completion when streaming.
+        Returns a deffered op to compute the cost of a completion when streaming.
 
         :param model: The model to use for completion.
         :type model: str
@@ -114,20 +118,24 @@ class BaseCompletionProvider:
         :param messages: List of input prompts.
         :type messages: List[Dict]
 
-        :return: The cost of the completion.
+        :return: Pre-loaded fn.
         """
         try:
-            total_prompt = ""
-            for item in messages:  # noqa: WPS519
-                total_prompt += item["content"]
-            # TODO: We need to standarise this and check for gpt models
-            encoding = tiktoken.get_encoding("cl100k_base")
-            prompt_tokens = len(encoding.encode(total_prompt))
-            tokens = [encoding.encode(completion) for completion in completions]
-            completion_tokens = sum(len(token) for token in tokens)
-            return self.compute_cost(prompt_tokens, completion_tokens)
 
-        except Exception:  # TODO: This need to be scoped down
+            def deferred_streaming_cost():
+                total_prompt = ""
+                for item in messages:  # noqa: WPS519
+                    total_prompt += item["content"]
+                # TODO: We need to standarise this and check for gpt models
+                encoding = tiktoken.get_encoding("cl100k_base")
+                prompt_tokens = len(encoding.encode(total_prompt))
+                tokens = [encoding.encode(completion) for completion in completions]
+                completion_tokens = sum(len(token) for token in tokens)
+                return self.compute_cost(prompt_tokens, completion_tokens)()
+
+            return deferred_streaming_cost
+
+        except Exception:  # TODO: This need to be scoped down and prob moved inside
             return 0
 
     def __call__(  # noqa: D102, WPS211, C901, WPS231, WPS238, WPS210

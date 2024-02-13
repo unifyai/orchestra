@@ -139,8 +139,7 @@ async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, W
                     await asyncio.sleep(0)
                 background_tasks.add_task(
                     db_operations,
-                    # TODO: Where is response.total_cost coming from?
-                    cost_coroutine=response.total_cost,
+                    cost_deferred_fn=response.total_cost,
                     **db_operations_kwargs,
                 )
 
@@ -148,7 +147,7 @@ async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, W
 
         else:
             background_tasks.add_task(
-                db_operations, cost_coroutine=cost, **db_operations_kwargs
+                db_operations, cost_deferred_fn=cost, **db_operations_kwargs
             )
 
         response["model"] = model

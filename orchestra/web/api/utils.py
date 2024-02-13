@@ -1,4 +1,4 @@
-from typing import Coroutine
+from typing import Callable
 
 from fastapi import HTTPException
 
@@ -28,7 +28,7 @@ insufficient_credits_error = HTTPException(
 
 async def db_operations(  # noqa: WPS211, WPS217, WPS210
     user_id: str,
-    cost_coroutine: Coroutine,
+    cost_deferred_fn: Callable,
     model: str,
     provider: str,
     model_dao: ModelDAO,
@@ -41,7 +41,7 @@ async def db_operations(  # noqa: WPS211, WPS217, WPS210
     Perform database operations.
 
     :param user_id: user id.
-    :param cost_coroutine: cost computation coroutine of the operation.
+    :param cost_deferred_fn: deferred cost computation of the operation.
     :param model: model name.
     :param provider: provider name.
     :param model_dao: DAO for model models.
@@ -76,7 +76,7 @@ async def db_operations(  # noqa: WPS211, WPS217, WPS210
             status_code=500,  # noqa: WPS432
             detail="Endpoint not found",
         )
-    cost = await cost_coroutine
+    cost = cost_deferred_fn()
     query_model_request = QueryModelRequest(
         user_id=user_id,
         endpoint_id=endpoint_id,
