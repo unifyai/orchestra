@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 
-def get_db_session(request: Request) -> Generator[Session, None]:
+def get_db_session(request: Request) -> Generator[Session, None, None]:
     """
     Create and get database session.
 

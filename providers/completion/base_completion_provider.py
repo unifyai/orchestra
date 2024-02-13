@@ -129,7 +129,7 @@ class BaseCompletionProvider:
             if stream:
                 return (
                     AsyncGeneratorWrapper(
-                        litellm.acompletion(
+                        litellm.completion(
                             model=provider_model_endpoint,
                             messages=messages,
                             max_tokens=max_tokens,

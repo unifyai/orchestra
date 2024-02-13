@@ -91,8 +91,8 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     if stream:
 
-        async def stream_and_update_db():  # noqa: WPS430 # TODO: Should this be async?
-            async for part_dict in response.generator():
+        def stream_and_update_db():  # noqa: WPS430 # TODO: Should this be async?
+            for part_dict in response.generator():
                 part_dict["model"] = f"{model}@{provider}"
                 yield f"data: {json.dumps(part_dict)}\n\n"  # noqa: WPS237
             background_tasks.add_task(

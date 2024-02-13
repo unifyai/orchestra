@@ -105,6 +105,7 @@ class AIBenchRunner:
         # check by printing max_tokens value here
         # then check the `output_tokens` in processed results
         # TODO: remove the double return
+        start_time = time.perf_counter()
         result, _ = self.fn(  # type: ignore
             prompt=prompt,
             max_tokens=max_tokens,
@@ -116,8 +117,8 @@ class AIBenchRunner:
             metrics_dict["failed_queries"] = 1
             return
 
-        start_time = time.perf_counter()
-        async for part in result.generator():  # TODO: Is this a litellm dependency?
+        
+        for part in result.generator():  # TODO: Is this a litellm dependency?
             if part["choices"][0]["delta"]["content"] is None:
                 continue
             completions.append(
@@ -153,6 +154,7 @@ class AIBenchRunner:
         prompt = "2+2 is "
         completions = []
 
+        start_time = time.perf_counter()
         result, _ = self.fn(  # type: ignore
             prompt=prompt,
             max_tokens=10,
@@ -163,8 +165,7 @@ class AIBenchRunner:
             print("Run during cold start failed")
             return 0
 
-        start_time = time.perf_counter()
-        async for part in result.generator():
+        for part in result.generator():
             completions.append(
                 {
                     "content": part["choices"][0]["delta"]["content"],
