@@ -331,7 +331,7 @@ class Replicate(BaseCompletionProvider):
 class ReplicateAsyncGeneratorWrapper(AsyncGeneratorWrapper):
     """A wrapper for the Replicate async generator."""
 
-    async def generator(self):  # noqa: D102, C901, WPS210, WPS231
+    def generator(self):  # noqa: D102, C901, WPS210, WPS231
         whole = ""
         usage = {}
         try:  # noqa: WPS501

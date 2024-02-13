@@ -3,7 +3,7 @@ from typing import List, Optional
 
 from fastapi import Depends
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import BenchmarkRun
@@ -12,10 +12,10 @@ from orchestra.db.models.orchestra_models import BenchmarkRun
 class BenchmarkRunDAO:
     """Class for accessing benchmark_run table."""
 
-    def __init__(self, session: AsyncSession = Depends(get_db_session)):
+    def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    async def create_benchmark_run(  # noqa: WPS211
+    def create_benchmark_run(  # noqa: WPS211
         self,
         endpoint_id: int,
         regime: str,
@@ -42,7 +42,7 @@ class BenchmarkRunDAO:
             ),
         )
 
-    async def get_all_benchmark_runs(
+    def get_all_benchmark_runs(
         self,
         limit: int,
         offset: int,
@@ -54,13 +54,13 @@ class BenchmarkRunDAO:
         :param offset: offset of benchmark_runs.
         :return: stream of benchmark_runs.
         """
-        raw_benchmark_runs = await self.session.execute(
+        raw_benchmark_runs = self.session.execute(
             select(BenchmarkRun).limit(limit).offset(offset),
         )
 
         return list(raw_benchmark_runs.scalars().fetchall())
 
-    async def filter(  # noqa: WPS211, C901
+    def filter(  # noqa: WPS211, C901
         self,
         id: Optional[int] = None,  # noqa: WPS125
         endpoint_id: Optional[int] = None,
@@ -93,10 +93,10 @@ class BenchmarkRunDAO:
             query = query.where(BenchmarkRun.seq_len == seq_len)
         if measured_at:
             query = query.where(BenchmarkRun.measured_at == measured_at)
-        rows = await self.session.execute(query)
+        rows = self.session.execute(query)
         return list(rows.scalars().fetchall())
 
-    async def update_benchmark_run(  # noqa: WPS211, WPS213, WPS231, C901
+    def update_benchmark_run(  # noqa: WPS211, WPS213, WPS231, C901
         self,
         id: int,  # noqa: WPS125
         endpoint_id: Optional[int] = None,
@@ -117,7 +117,7 @@ class BenchmarkRunDAO:
         """
         query = select(BenchmarkRun)
         query = query.where(BenchmarkRun.id == id)
-        raw_benchmark_run = await self.session.execute(query)
+        raw_benchmark_run = self.session.execute(query)
         benchmark_run = raw_benchmark_run.scalars().first()
         if benchmark_run is not None:
             if endpoint_id:

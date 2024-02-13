@@ -163,7 +163,7 @@ class OctoAI(BaseCompletionProvider):
 class OctoAIAsyncGeneratorWrapper(AsyncGeneratorWrapper):
     """A wrapper for the OctoAI async generator."""
 
-    async def generator(self):  # noqa: D102, C901, WPS210, WPS231
+    def generator(self):  # noqa: D102, C901, WPS210, WPS231
         whole = ""
         try:  # noqa: WPS501
             for part in self._response:

@@ -1,15 +1,15 @@
 import os
-from typing import Any, AsyncGenerator
+from typing import Any, Generator
 
 import pytest
 from fastapi import FastAPI
-from httpx import AsyncClient
+from httpx import Client  # TODO
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
+from sqlalchemy.orm import (
+    Engine,
+    Session,
+    sessionmaker,
+    create_engine,
 )
 
 from orchestra.db.dependencies import get_db_session
@@ -29,7 +29,7 @@ def anyio_backend() -> str:
 
 
 @pytest.fixture(scope="session")
-async def _engine() -> AsyncGenerator[AsyncEngine, None]:
+def _engine() -> Generator[Engine, None]:
     """
     Create engine and databases.
 
@@ -40,32 +40,28 @@ async def _engine() -> AsyncGenerator[AsyncEngine, None]:
 
     load_all_models()
 
-    await create_database()
+    create_database()
 
-    engine = create_async_engine(str(settings.db_url))
-    async with engine.begin() as conn:
-        await conn.run_sync(meta.create_all)
-        user_id = str(
-            os.getenv(
-                "AUTH_ACCOUNT_USER_ID",
-            ),
-        )
+    engine = create_engine(str(settings.db_url))
+    with engine.begin() as conn:
+        conn.run_sync(meta.create_all)
+        user_id = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
         insert_user = text(
             f"INSERT INTO users VALUES ('{user_id}', 10);",  # noqa: S608
         )
-        await conn.execute(insert_user)
+        conn.execute(insert_user)
 
     try:
         yield engine
     finally:
-        await engine.dispose()
-        await drop_database()
+        engine.dispose()
+        drop_database()
 
 
 @pytest.fixture
-async def dbsession(
-    _engine: AsyncEngine,
-) -> AsyncGenerator[AsyncSession, None]:
+def dbsession(
+    _engine: Engine,
+) -> Generator[Session, None]:
     """
     Get session to database.
 
@@ -73,28 +69,25 @@ async def dbsession(
     after the test completes.
 
     :param _engine: current engine.
-    :yields: async session.
+    :yields: session.
     """
-    connection = await _engine.connect()
-    trans = await connection.begin()
+    connection = _engine.connect()
+    trans = connection.begin()
 
-    session_maker = async_sessionmaker(
-        connection,
-        expire_on_commit=False,
-    )
+    session_maker = sessionmaker(connection, expire_on_commit=False)
     session = session_maker()
 
     try:
         yield session
     finally:
-        await session.close()
-        await trans.rollback()
-        await connection.close()
+        session.close()
+        trans.rollback()
+        connection.close()
 
 
 @pytest.fixture
 def fastapi_app(
-    dbsession: AsyncSession,
+    dbsession: Session,
 ) -> FastAPI:
     """
     Fixture for creating FastAPI app.
@@ -107,15 +100,17 @@ def fastapi_app(
 
 
 @pytest.fixture
-async def client(
+def client(
     fastapi_app: FastAPI,
     anyio_backend: Any,
-) -> AsyncGenerator[AsyncClient, None]:
+) -> Generator[Client, None]:
     """
     Fixture that creates client for requesting server.
 
     :param fastapi_app: the application.
     :yield: client for the app.
     """
-    async with AsyncClient(app=fastapi_app, base_url="http://test") as ac:
+    with Client(
+        app=fastapi_app, base_url="http://test"
+    ) as ac:  # TODO: See if this needs to be asyn
         yield ac

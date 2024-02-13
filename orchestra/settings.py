@@ -76,7 +76,7 @@ class Settings(BaseSettings):
             port = None  # type: ignore
 
         return URL.build(
-            scheme="postgresql+asyncpg",
+            scheme="postgresql+psycopg2",
             host=host,
             port=port,
             user=self.db_user,

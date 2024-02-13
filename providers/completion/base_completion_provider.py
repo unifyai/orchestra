@@ -182,11 +182,11 @@ class AsyncGeneratorWrapper:  # noqa: D101
         self._compute_cost = compute_cost
         self.total_cost = None
 
-    async def generator(self):  # noqa: D102, C901, WPS210, WPS231
+    def generator(self):  # noqa: D102, C901, WPS210, WPS231
         whole = ""
         usage = {}
         try:  # noqa: WPS501
-            async for part in await self._response:
+            for part in self._response:  # TODO: I guess this will be removed
                 if part.choices[0].delta.content is None:
                     continue
                 usage = part.get("usage", {})

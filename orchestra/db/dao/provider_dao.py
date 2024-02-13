@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from fastapi import Depends
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Provider
@@ -11,10 +11,10 @@ from orchestra.db.models.orchestra_models import Provider
 class ProviderDAO:
     """Class for accessing provider table."""
 
-    def __init__(self, session: AsyncSession = Depends(get_db_session)):
+    def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    async def create_provider(
+    def create_provider(
         self,
         name: str,
         image_url: str,
@@ -35,7 +35,7 @@ class ProviderDAO:
             ),
         )
 
-    async def get_all_providers(self, limit: int, offset: int) -> List[Provider]:
+    def get_all_providers(self, limit: int, offset: int) -> List[Provider]:
         """
         Get all provider models with limit/offset pagination.
 
@@ -43,13 +43,13 @@ class ProviderDAO:
         :param offset: offset of providers.
         :return: stream of providers.
         """
-        raw_providers = await self.session.execute(
+        raw_providers = self.session.execute(
             select(Provider).limit(limit).offset(offset),
         )
 
         return list(raw_providers.scalars().fetchall())
 
-    async def filter(
+    def filter(
         self,
         id: Optional[int] = None,  # noqa: WPS125
         name: Optional[str] = None,
@@ -66,5 +66,5 @@ class ProviderDAO:
             query = query.where(Provider.id == id)
         if name:
             query = query.where(Provider.name == name)
-        raw_providers = await self.session.execute(query)
+        raw_providers = self.session.execute(query)
         return list(raw_providers.scalars().fetchall())

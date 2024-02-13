@@ -13,7 +13,7 @@ from aibench.runner import AIBenchRunner
 from models.llm import CompletionsModel
 from providers.completion import PROVIDER_CLASSES
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import Session, create_engine
 from sqlalchemy.orm import sessionmaker
 
 from orchestra.db.models.orchestra_models import (  # noqa: WPS235
@@ -66,20 +66,20 @@ def create_db_session() -> sessionmaker:  # noqa: WPS210
     host = os.getenv("ORCHESTRA_DB_HOST", "localhost")
     port = os.getenv("ORCHESTRA_DB_PORT", "5432")
     db_name = os.getenv("ORCHESTRA_DB_BASE", "orchestra")
-    db_url = f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{db_name}"  # noqa: WPS221, E501
+    db_url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{db_name}"  # noqa: WPS221, E501
     # TODO: logger.info(db_url)
-    engine = create_async_engine(db_url)
-    return sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    engine = create_engine(db_url)
+    return sessionmaker(engine, expire_on_commit=False, class_=Session)
 
 
 async def get_names(
-    async_session: AsyncSession,
+    async_session: Session,
     table_class: Union[Metric, BenchmarkRegime, BenchmarkRegion, BenchmarkSeqLen],
 ) -> List[str]:  # noqa: DAR101, DAR201
     """Returns a list of names from a given table in a DB.
 
     Args:
-        async_session (AsyncSession): DB session.
+        async_session (Session): DB session.
         table_class (Union[Metric, BenchmarkRegime, BenchmarkRegion, BenchmarkSeqLen]):
         Model class for a given table. This table must have a 'name' column.
 
@@ -287,7 +287,7 @@ async def retrieve_all_endpoints(async_session: sessionmaker) -> List[Dict]:
 
 async def commit_benchmark_runs(
     brs: List[Dict],
-    async_session: AsyncSession,
+    async_session: Session,
 ) -> List[BenchmarkRun]:  # noqa: DAR101, DAR201
     """Creates and commits a set of BenchmarkRuns to the db.
 
@@ -298,7 +298,7 @@ async def commit_benchmark_runs(
 
     Args:
         brs (List[Dict]): List of benchmark runs results.
-        async_session (AsyncSession): Async session for the database.
+        async_session (Session): Async session for the database.
 
     Returns:
         List[BenchmarkRun]: List of BenchmarkRun objects. These have been commited
@@ -324,7 +324,7 @@ async def commit_benchmark_runs(
 async def add_br_datapoints(  # noqa: WPS210
     br_id: int,
     br_result: Dict,
-    async_session: AsyncSession,
+    async_session: Session,
     db_metrics: List[str],
 ):  # noqa: DAR101
     """Adds all datapoints in a benchmark_result to a db session. These are not commited.
@@ -332,7 +332,7 @@ async def add_br_datapoints(  # noqa: WPS210
     Args:
         br_id (int): ID of the BenchmarkRun in the DB.
         br_result (Dict): BenchmarkRun result dict from an AIBenchRunner instance.
-        async_session (AsyncSession): DB session.
+        async_session (Session): DB session.
         db_metrics (List[str]): List of metrics already defined in the DB.
     """
     # TODO: rollback db session if there is any exception

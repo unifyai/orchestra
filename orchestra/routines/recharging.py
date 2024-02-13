@@ -2,8 +2,7 @@ import asyncio
 import logging
 import os
 
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, Session, create_engine
 
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.users_dao import UsersDAO
@@ -18,14 +17,14 @@ handler.setLevel(logging.INFO)
 logger.addHandler(handler)
 
 
-async def put_data_to_db(  # noqa: D103, WPS211, WPS210
+async def put_data_to_db(  # noqa: D103, WPS211, WPS210 # TODO: Understand this
     async_session,
 ):
     async with async_session() as session:
         users_dao = UsersDAO(session)
         recharge_dao = RechargeDAO(session)
 
-        all_users = await get_all_users_models(users_dao)
+        all_users = get_all_users_models(users_dao)
         recharge_quantity = 2.5
         max_recharge_grant = 10.0
         for user in all_users:
@@ -36,12 +35,12 @@ async def put_data_to_db(  # noqa: D103, WPS211, WPS210
                 quantity=recharge_quantity,
                 type="free",
             )
-            await create_recharge_model(
+            create_recharge_model(
                 new_recharge_object=recharge_obj,
                 recharge_dao=recharge_dao,
                 user_dao=users_dao,
             )
-            await session.commit()
+            session.commit()
         logger.info(
             f"Recharged all users with {recharge_quantity} credits",
         )
@@ -53,11 +52,11 @@ async def recharge_credits():  # noqa: D103, WPS210
     host = os.getenv("ORCHESTRA_DB_HOST", "localhost")
     port = os.getenv("ORCHESTRA_DB_PORT", "5432")
     db_name = os.getenv("ORCHESTRA_DB_BASE", "orchestra")
-    db_url = f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{db_name}"  # noqa: WPS221, E501
+    db_url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{db_name}"  # noqa: WPS221, E501
     logger.info(db_url)
-    engine = create_async_engine(db_url)
-    async_session = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-    await put_data_to_db(async_session)
+    engine = create_engine(db_url)
+    async_session = sessionmaker(engine, expire_on_commit=False, class_=Session)
+    put_data_to_db(async_session)
 
 
 if __name__ == "__main__":
