@@ -5,7 +5,7 @@ from starlette import status
 
 
 @pytest.mark.anyio
-def test_credits(  # noqa: WPS218, E501
+async def test_credits(  # noqa: WPS218, E501
     client: AsyncClient,
     fastapi_app: FastAPI,
 ) -> float:
@@ -21,7 +21,7 @@ def test_credits(  # noqa: WPS218, E501
 
     url = fastapi_app.url_path_for("get_credits")
 
-    response = client.get(url, headers=HEADERS)
+    response = await client.get(url, headers=HEADERS)
     assert response.status_code == status.HTTP_200_OK
     response_dict = response.json()
     assert isinstance(response_dict, dict)

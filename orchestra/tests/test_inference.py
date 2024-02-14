@@ -23,7 +23,7 @@ MODELS = [
     "model",
     MODELS,
 )
-def test_inference_text_completion_no_streaming(  # noqa: WPS218, E501
+async def test_inference_text_completion_no_streaming(  # noqa: WPS218, E501
     model: str,
     client: AsyncClient,
     fastapi_app: FastAPI,
@@ -40,7 +40,7 @@ def test_inference_text_completion_no_streaming(  # noqa: WPS218, E501
 
     data = generate_data_inference_chat_completion(model, provider, stream=False)
 
-    response = client.post(url, headers=HEADERS, json=data)
+    response = await client.post(url, headers=HEADERS, json=data)
 
     assert response.status_code == status.HTTP_200_OK
     response_json = response.json()
@@ -61,7 +61,7 @@ def test_inference_text_completion_no_streaming(  # noqa: WPS218, E501
     "model",
     MODELS,
 )
-def test_inference_text_completion_streaming(  # noqa: WPS218, E501
+async def test_inference_text_completion_streaming(  # noqa: WPS218, E501
     model: str,
     client: AsyncClient,
     fastapi_app: FastAPI,
@@ -78,7 +78,7 @@ def test_inference_text_completion_streaming(  # noqa: WPS218, E501
 
     data = generate_data_inference_chat_completion(model_name, provider, stream=True)
 
-    response = client.post(url, headers=HEADERS, json=data)
+    response = await client.post(url, headers=HEADERS, json=data)
     check_text_completion_streaming(
         model,
         response,

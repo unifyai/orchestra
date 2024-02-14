@@ -1,16 +1,12 @@
 import os
-from typing import Any, Generator
+from typing import Any, Generator, AsyncGenerator
 
 import pytest
 from fastapi import FastAPI
-from httpx import Client  # TODO
-from sqlalchemy import text
-from sqlalchemy.orm import (
-    Engine,
-    Session,
-    sessionmaker,
-    create_engine,
-)
+# from httpx import Client  # TODO
+from httpx import AsyncClient
+from sqlalchemy import create_engine, text, Engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.utils import create_database, drop_database
@@ -29,7 +25,7 @@ def anyio_backend() -> str:
 
 
 @pytest.fixture(scope="session")
-def _engine() -> Generator[Engine, None]:
+def _engine() -> Generator[Engine, None, None]:
     """
     Create engine and databases.
 
@@ -43,8 +39,8 @@ def _engine() -> Generator[Engine, None]:
     create_database()
 
     engine = create_engine(str(settings.db_url))
+    meta.create_all(engine)
     with engine.begin() as conn:
-        conn.run_sync(meta.create_all)
         user_id = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
         insert_user = text(
             f"INSERT INTO users VALUES ('{user_id}', 10);",  # noqa: S608
@@ -61,7 +57,7 @@ def _engine() -> Generator[Engine, None]:
 @pytest.fixture
 def dbsession(
     _engine: Engine,
-) -> Generator[Session, None]:
+) -> Generator[Session, None, None]:
     """
     Get session to database.
 
@@ -100,17 +96,17 @@ def fastapi_app(
 
 
 @pytest.fixture
-def client(
+async def client(
     fastapi_app: FastAPI,
     anyio_backend: Any,
-) -> Generator[Client, None]:
+) -> AsyncGenerator[AsyncClient, None]:
     """
     Fixture that creates client for requesting server.
 
     :param fastapi_app: the application.
     :yield: client for the app.
     """
-    with Client(
+    async with AsyncClient(
         app=fastapi_app, base_url="http://test"
-    ) as ac:  # TODO: See if this needs to be asyn
+    ) as ac:
         yield ac
