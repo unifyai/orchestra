@@ -23,10 +23,15 @@ def get_dataset(dataset_name, dir=None):
 # check for winogrande, everything on HF is much larger than has been mentioned on the mosaic ML website
 # check pubmed qa, seems to have only 500 rows when it should have a 1000
 # 
+# dataset_names = ["jeopardy", "lukaemon/mmlu", "tasksource/bigbench", "piqa", "openbookqa", \
+#             "lambada", "Rowan/hellaswag", "winograd_wsc", "winogrande", "math_qa", \
+#                 "lucasmccabe/logiqa", "hagara/labelled-PubMedQA", "squad", \
+#                 "google/boolq", "openai_humaneval", "codeparrot/apps", "mbpp"]
 dataset_names = ["jeopardy", "lukaemon/mmlu", "tasksource/bigbench", "piqa", "openbookqa", \
-            "lambada", "Rowan/hellaswag", "winograd_wsc", "winogrande", "math_qa", \
+                "Rowan/hellaswag", "winograd_wsc", "winogrande", "math_qa", \
                 "lucasmccabe/logiqa", "hagara/labelled-PubMedQA", "squad", \
-                "google/boolq", "openai_humaneval", "codeparrot/apps", "mbpp"]
+                "google/boolq", "openai_humaneval"]
+
 datasets_dir  = {"lukaemon/mmlu": ['abstract_algebra', 'anatomy', 'astronomy', 'business_ethics', 
                                    'clinical_knowledge', 'college_biology', 'college_chemistry', 
                                    'college_computer_science', 'college_mathematics', 'college_medicine', 
@@ -58,7 +63,8 @@ datasets_dir  = {"lukaemon/mmlu": ['abstract_algebra', 'anatomy', 'astronomy', '
                   "winogrande": ["winogrande_xs"], \
                   "codeparrot/apps": ["all"], \
                   "mbpp": ["full"]}
-tokenizers = ["meta-llama/Llama-2-13b-chat-hf", "openai"]
+# tokenizers = ["meta-llama/Llama-2-13b-chat-hf", "openai"]
+tokenizers = ["meta-llama/Llama-2-13b-chat-hf", "mistralai/Mistral-7b-v0.1", "codellama/CodeLlama-7b-hf", "mistralai/Mixtral-8x7B-Instruct-v0.1", "Phind/Phind-CodeLlama-34B-Python-v1", "Austism/chronos-hermes-13b", "Open-Orca/Mistral-7B-OpenOrca", "teknium/OpenHermes-2-Mistral-7B", "deepseek-ai/deepseek-coder-33b-instruct", "01-ai/Yi-34b", "togethercomputer/RedPajama-INCITE-7B-Instruct", "openai"]
 num_cores = os.cpu_count()
 # AutoTokenizer.from_pretrained("meta-llama/Llama-2-13b-chat-hf", token="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")
 def encode_openai(batch):
@@ -76,7 +82,10 @@ def get_tokens(dataset, tokenizer):
     if tokenizer == "openai":
         dataset = dataset.map(encode_openai, batched=True, num_proc=num_cores)
     else:
-        tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-13b-chat-hf", token="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")
+        if tokenizer == "meta-llama/Llama-2-13b-chat-hf":
+            tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-13b-chat-hf", token="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")
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer)
         dataset = dataset.map(lambda batch: encode(batch, tokenizer), batched=True, num_proc=num_cores)
 
     token_counts = dataset['knt']
@@ -101,6 +110,7 @@ for dataset_name in dataset_names:
             tokens = get_tokens(dataset, tokenizer)
             tokenizer_tokens[tokenizer] += tokens
             print(dataset_name, dir, tokenizer, tokens)
+            print('tokenizer tokens', tokenizer_tokens)
     print("Done with ", dataset_name)
 
 print('tokenizer tokens', tokenizer_tokens)
