@@ -77,7 +77,7 @@ async def run_migrations_online() -> None:
     connectable = create_async_engine(str(settings.db_url))
 
     async with connectable.connect() as connection:
-        connection.run_sync(do_run_migrations)
+        await connection.run_sync(do_run_migrations)
 
 
 loop = asyncio.get_event_loop()

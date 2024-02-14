@@ -1,17 +1,17 @@
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
-from sqlalchemy.orm import create_engine
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from orchestra.settings import settings
 
 
-def create_database() -> None:
+async def create_database() -> None:
     """Create a database."""
     db_url = make_url(str(settings.db_url.with_path("/postgres")))
-    engine = create_engine(db_url, isolation_level="AUTOCOMMIT")
+    engine = create_async_engine(db_url, isolation_level="AUTOCOMMIT")
 
-    with engine.connect() as conn:
-        database_existance = conn.execute(
+    async with engine.connect() as conn:
+        database_existance = await conn.execute(
             text(
                 f"SELECT 1 FROM pg_database WHERE datname='{settings.db_base}'",  # noqa: E501, S608
             ),
@@ -19,26 +19,26 @@ def create_database() -> None:
         database_exists = database_existance.scalar() == 1
 
     if database_exists:
-        drop_database()
+        await drop_database()
 
-    with engine.connect() as conn:  # noqa: WPS440
-        conn.execute(
+    async with engine.connect() as conn:  # noqa: WPS440
+        await conn.execute(
             text(
                 f'CREATE DATABASE "{settings.db_base}" ENCODING "utf8" TEMPLATE template1',  # noqa: E501
             ),
         )
 
 
-def drop_database() -> None:
+async def drop_database() -> None:
     """Drop current database."""
     db_url = make_url(str(settings.db_url.with_path("/postgres")))
-    engine = create_engine(db_url, isolation_level="AUTOCOMMIT")
-    with engine.connect() as conn:
+    engine = create_async_engine(db_url, isolation_level="AUTOCOMMIT")
+    async with engine.connect() as conn:
         disc_users = (
             "SELECT pg_terminate_backend(pg_stat_activity.pid) "  # noqa: S608
             "FROM pg_stat_activity "
             f"WHERE pg_stat_activity.datname = '{settings.db_base}' "
             "AND pid <> pg_backend_pid();"
         )
-        conn.execute(text(disc_users))
-        conn.execute(text(f'DROP DATABASE "{settings.db_base}"'))
+        await conn.execute(text(disc_users))
+        await conn.execute(text(f'DROP DATABASE "{settings.db_base}"'))
