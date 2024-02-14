@@ -192,9 +192,15 @@ async def worker_loop(  # noqa: WPS210
         print("Testing: {}".format(endpoint))
         # Retrieve/fabricate a callable based on the model the provider
         try:
-            language_model = CompletionsModel(
-                provider=endpoint["provider"],
-                model=endpoint["model"],
+            provider = endpoint["provider"]
+            model = endpoint["model"]
+            language_model = PROVIDER_CLASSES[endpoint["provider"]]()
+            language_model.set_api_key(
+                api_key=str(
+                    os.getenv(
+                        f"ORCHESTRA_{provider.replace('-', '_').upper()}_API_KEY",  # noqa: WPS237, E501
+                    ),
+                ),
             )
         except Exception as e:
             logging.error(f"Exception raised loading CompletionsModel: {e}")
@@ -206,12 +212,20 @@ async def worker_loop(  # noqa: WPS210
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": prompt},
             ]
-            return language_model.get_completion(
-                message,
+            
+            if hasattr(language_model, 'complete_async'):
+                return language_model.complete_async(
+                    model=model,
+                    messages=message,
+                    max_tokens=max_tokens,
+                    stream=stream,
+                )
+            return language_model.complete(
+                    model=model,
+                    messages=message,
                 max_tokens=max_tokens,
                 stream=stream,
             )
-
         # Initialise the benchmark runner(s)
         benchmark_runners = []
         for config in configs:

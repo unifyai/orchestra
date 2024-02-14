@@ -118,7 +118,7 @@ class AIBenchRunner:
             return
 
         
-        for part in result.generator():  # TODO: Is this a litellm dependency?
+        async for part in result.generator():  # TODO: Is this a litellm dependency?
             if part["choices"][0]["delta"]["content"] is None:
                 continue
             completions.append(
@@ -165,7 +165,7 @@ class AIBenchRunner:
             print("Run during cold start failed")
             return 0
 
-        for part in result.generator():
+        async for part in result.generator():
             completions.append(
                 {
                     "content": part["choices"][0]["delta"]["content"],

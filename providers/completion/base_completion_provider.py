@@ -128,7 +128,7 @@ class BaseCompletionProvider:
         try:
             if stream:
                 return (
-                    AsyncGeneratorWrapper(
+                    GeneratorWrapper(
                         litellm.completion(
                             model=provider_model_endpoint,
                             messages=messages,
@@ -164,9 +164,51 @@ class BaseCompletionProvider:
             error_type = type(error)
             logger.error(f"Raised error type: {error_type}, Error: {error}")
         return None, None
+    
+    def complete_async(  # noqa: D102, WPS211, C901, WPS231
+        self,
+        model: str,
+        messages: List,  # type: ignore
+        max_tokens: Optional[int] = 512,
+        temperature: Optional[float] = 0.9,
+        stream: Optional[bool] = False,
+    ) -> Optional[Any]:
+        if model not in self.supported_models:
+            raise ValueError("Model not supported")
+
+        if isinstance(self.supported_models, dict):
+            provider_model_endpoint = self.supported_models[model]["endpoint"]
+        else:
+            provider_model_endpoint = model
+
+        try:
+            if stream:
+                return (
+                    AsyncGeneratorWrapper(
+                        litellm.acompletion(
+                            model=provider_model_endpoint,
+                            messages=messages,
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                            stream=True,
+                            api_key=self.api_key,
+                        ),
+                        model,
+                        messages,
+                        compute_cost_streaming=self.compute_cost_streaming,
+                    ),
+                    None,
+                )
+        except openai.APIError as error:
+            logger.error(f"Raised openai.APIError, Error: {error}")
+        except openai.APITimeoutError as error:
+            logger.error(f"Raised openai.APITimeoutError, Error: {error}")
+        except Exception as error:
+            error_type = type(error)
+            logger.error(f"Raised error type: {error_type}, Error: {error}")
 
 
-class AsyncGeneratorWrapper:  # noqa: D101
+class GeneratorWrapper:  # noqa: D101
     def __init__(  # noqa: WPS211
         self,
         response,
@@ -187,6 +229,64 @@ class AsyncGeneratorWrapper:  # noqa: D101
         usage = {}
         try:  # noqa: WPS501
             for part in self._response:  # TODO: I guess this will be removed
+                if part.choices[0].delta.content is None:
+                    continue
+                usage = part.get("usage", {})
+
+                choices = [
+                    getattr(choice, "model_dump", lambda: None)()
+                    for choice in part.get("choices", [])
+                ]
+
+                part_dict = {
+                    "model": self._model,
+                    "created": part.get("created", None),
+                    "id": part.get(
+                        "id",
+                        f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237, E501
+                    ),
+                    "choices": choices,
+                    "object": part.get("object", "chat.completion.chunk"),
+                    "usage": usage.model_dump() if isinstance(usage, Usage) else usage,
+                }
+                part_text = choices[0]["delta"]["content"]
+                whole += part_text if part_text else ""
+                yield part_dict
+        finally:
+            if isinstance(usage, Usage) and usage != Usage():
+                self.total_cost = self._compute_cost(
+                    self._model,
+                    [item["content"] for item in self._messages],
+                    ModelResponse(usage=usage),
+                )
+            else:
+                self.total_cost = self._compute_cost_streaming(
+                    self._model,
+                    whole,
+                    self._messages,
+                )
+
+class AsyncGeneratorWrapper:  # noqa: D101
+    def __init__(  # noqa: WPS211
+        self,
+        response,
+        model,
+        messages,
+        compute_cost_streaming,
+        compute_cost=None,  # noqa: WPS211, E501
+    ):
+        self._response = response
+        self._model = model
+        self._messages = messages
+        self._compute_cost_streaming = compute_cost_streaming
+        self._compute_cost = compute_cost
+        self.total_cost = None
+
+    async def generator(self):  # noqa: D102, C901, WPS210, WPS231
+        whole = ""
+        usage = {}
+        try:  # noqa: WPS501
+            async for part in await self._response:
                 if part.choices[0].delta.content is None:
                     continue
                 usage = part.get("usage", {})

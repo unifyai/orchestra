@@ -16,7 +16,7 @@ from litellm.utils import (
 )
 from providers.completion.base_completion_provider import (
     PRICING_PER_TOKENS,
-    AsyncGeneratorWrapper,
+    GeneratorWrapper,
     BaseCompletionProvider,
 )
 
@@ -164,7 +164,7 @@ class Replicate(BaseCompletionProvider):
 
         if stream:
             return (
-                ReplicateAsyncGeneratorWrapper(
+                ReplicateGeneratorWrapper(
                     self.handle_prediction_response_streaming(prediction_url),
                     model,
                     messages,
@@ -328,7 +328,7 @@ class Replicate(BaseCompletionProvider):
         return response
 
 
-class ReplicateAsyncGeneratorWrapper(AsyncGeneratorWrapper):
+class ReplicateGeneratorWrapper(GeneratorWrapper):
     """A wrapper for the Replicate async generator."""
 
     def generator(self):  # noqa: D102, C901, WPS210, WPS231
