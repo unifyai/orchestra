@@ -3,7 +3,6 @@ from typing import Any, Generator, AsyncGenerator
 
 import pytest
 from fastapi import FastAPI
-# from httpx import Client  # TODO
 from httpx import AsyncClient
 from sqlalchemy import create_engine, text, Engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -106,7 +105,5 @@ async def client(
     :param fastapi_app: the application.
     :yield: client for the app.
     """
-    async with AsyncClient(
-        app=fastapi_app, base_url="http://test"
-    ) as ac:
+    async with AsyncClient(app=fastapi_app, base_url="http://test") as ac:
         yield ac

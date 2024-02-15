@@ -140,34 +140,23 @@ class BaseCompletionProvider:
     def __call__(  # noqa: D102, WPS211, C901, WPS231, WPS238, WPS210
         self,
         messages: List,  # type: ignore
+        stream: bool = False,
         **kwargs: Any,
     ) -> Optional[Any]:
 
-        stream = kwargs.get("stream", False)
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
         try:  # noqa: WPS225
             response = client.chat.completions.create(
-                model=self.provider_endpoint,
-                messages=messages,
-                **kwargs,
+                model=self.provider_endpoint, messages=messages, **kwargs
             )
             if stream:
-                return (
-                    GeneratorWrapper(
-                        self,
-                        response,
-                        self.hub_model,  # TODO: USe this directly
-                        messages,
-                        compute_cost_streaming=self.compute_cost_streaming,
-                    ),
-                    None,
-                )
+                return (SyncGeneratorWrapper(self, response, messages), None)
 
             # TODO: Maybe remove this dump unless neccesary?
             response_dict = self._modify_output(response.model_dump(), stream=stream)
             return response_dict, self.compute_cost(
-                response.usage.prompt_tokens, response.usage.completion_tokens,
+                response.usage.prompt_tokens, response.usage.completion_tokens
             )
         # TODO: These needs to be processed correctly in our endpoint
         except APITimeoutError as error:
@@ -181,46 +170,28 @@ class BaseCompletionProvider:
             raise HTTPException(status_code=400, detail=str(error))  # noqa: WPS432
         except APIError as error:
             logger.error(f"Raised openai.APIError, Error: {error}")
-            raise HTTPException(
-                status_code=400,  # noqa: WPS432
-                detail=str(error),  # noqa: WPS432
-            )
-        # except Exception as error:
-        #     error_type = type(error)
-        #     logger.error(f"Raised error type: {error_type}, Error: {error}")
-        return None, None
+            raise HTTPException(status_code=400, detail=str(error))  # noqa: WPS432
 
     def __call_async__(  # noqa: D102, WPS211, C901, WPS231, WPS238, WPS210
         self,
         messages: List,  # type: ignore
+        stream: bool = False,
         **kwargs: Any,
     ) -> Optional[Any]:
 
-        stream = kwargs.get("stream", False)
         client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
 
         try:  # noqa: WPS225
             response = client.chat.completions.create(
-                model=self.provider_endpoint,
-                messages=messages,
-                **kwargs,
+                model=self.provider_endpoint, messages=messages, **kwargs
             )
             if stream:
-                return (
-                    AsyncGeneratorWrapper(
-                        self,
-                        response,
-                        self.hub_model,  # TODO: USe this directly
-                        messages,
-                        compute_cost_streaming=self.compute_cost_streaming,
-                    ),
-                    None,
-                )
+                return (AsyncGeneratorWrapper(self, response, messages), None)
 
             # TODO: Maybe remove this dump unless neccesary?
             response_dict = self._modify_output(response.model_dump(), stream=stream)
             return response_dict, self.compute_cost(
-                response.usage.prompt_tokens, response.usage.completion_tokens,
+                response.usage.prompt_tokens, response.usage.completion_tokens
             )
         # TODO: These needs to be processed correctly in our endpoint
         except APITimeoutError as error:
@@ -234,111 +205,59 @@ class BaseCompletionProvider:
             raise HTTPException(status_code=400, detail=str(error))  # noqa: WPS432
         except APIError as error:
             logger.error(f"Raised openai.APIError, Error: {error}")
-            raise HTTPException(
-                status_code=400,  # noqa: WPS432
-                detail=str(error),  # noqa: WPS432
-            )
-        # except Exception as error:
-        #     error_type = type(error)
-        #     logger.error(f"Raised error type: {error_type}, Error: {error}")
-        return None, None
+            raise HTTPException(status_code=400, detail=str(error))  # noqa: WPS432
 
 
-class GeneratorWrapper:  # noqa: D101
-    def __init__(  # noqa: WPS211
-        self,
-        base_provider,
-        response,
-        model,
-        messages,
-        compute_cost_streaming,
-        compute_cost=None,  # noqa: WPS211, E501
-    ):
-        self.base_provider = base_provider
+class BaseGeneratorWrapper:
+    def __init__(self, provider, response, messages):
+        self.provider = provider
         self._response = response
-        self._model = model
         self._messages = messages
-        self._compute_cost_streaming = compute_cost_streaming
-        self._compute_cost = compute_cost
-        self.total_cost = None  # TODO: remove if not needed
+        self.total_cost = None
+
+    def generator_iteration(self, part, whole):
+        part_dict = part.model_dump()
+        part_dict = self.provider._modify_output(part_dict, stream=True)
+        choices = part_dict["choices"]
+        if choices:
+            if choices[0]["delta"]["content"] is None:
+                return None
+        part_text = choices[0]["delta"]["content"] if choices else ""
+        index = choices[0]["index"] if choices else 0
+        if len(whole) <= index:
+            whole.extend([""] * (index - len(whole) + 1))
+        whole[index] += part_text
+        return part_dict
+
+
+class SyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
 
     def generator(self):  # noqa: D102, C901, WPS210, WPS231
-        # TODO: Is this being used at all?
         whole = []
-        usage = {}
         try:  # noqa: WPS501
             for part in self._response:
-                usage = part.usage if usage in part else {}
-                part_dict = part.model_dump()
-                self.base_provider._modify_output(part_dict, stream=True)
-                choices = part_dict["choices"]
-                if choices:  # noqa: WPS338
-                    if choices[0]["delta"]["content"] is None:
-                        continue  # noqa: WPS220
-                part_text = choices[0]["delta"]["content"] if choices else ""
-                index = choices[0]["index"] if choices else 0
-                if len(whole) <= index:
-                    whole.extend([""] * (index - len(whole) + 1))
-                whole[index] += part_text
+                part_dict = self.generator_iteration(part, whole)
+                if part_dict is None:
+                    continue
                 yield part_dict
         finally:
-            if isinstance(usage, CompletionUsage):
-                self.total_cost = self._compute_cost(
-                    [item["content"] for item in self._messages],
-                    part,  # noqa: WPS441
-                )
-            else:
-                self.total_cost = self._compute_cost_streaming(
-                    whole,
-                    self._messages,
-                )
+            self.total_cost = self.provider.compute_cost_streaming(
+                whole, self._messages
+            )
 
 
-class AsyncGeneratorWrapper:  # noqa: D101
-    def __init__(  # noqa: WPS211
-        self,
-        base_provider,
-        response,
-        model,
-        messages,
-        compute_cost_streaming,
-        compute_cost=None,  # noqa: WPS211, E501
-    ):
-        self.base_provider = base_provider
-        self._response = response
-        self._model = model
-        self._messages = messages
-        self._compute_cost_streaming = compute_cost_streaming
-        self._compute_cost = compute_cost
-        self.total_cost = None  # TODO: remove if not needed
+# TODO: Remove code duplication here
+class AsyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
 
     async def generator(self):  # noqa: D102, C901, WPS210, WPS231
-        # TODO: Is this being used at all?
         whole = []
-        usage = {}
         try:  # noqa: WPS501
             async for part in await self._response:
-                usage = part.usage if usage in part else {}
-                part_dict = part.model_dump()
-                self.base_provider._modify_output(part_dict, stream=True)
-                choices = part_dict["choices"]
-                if choices:  # noqa: WPS338
-                    if choices[0]["delta"]["content"] is None:
-                        continue  # noqa: WPS220
-                part_text = choices[0]["delta"]["content"] if choices else ""
-                index = choices[0]["index"] if choices else 0
-                if len(whole) <= index:
-                    whole.extend([""] * (index - len(whole) + 1))
-                whole[index] += part_text
+                part_dict = self.generator_iteration(part, whole)
+                if part_dict is None:
+                    continue
                 yield part_dict
         finally:
-            if isinstance(usage, CompletionUsage):
-                self.total_cost = self._compute_cost(
-                    [item["content"] for item in self._messages],
-                    part,  # noqa: WPS441
-                )
-            else:
-                self.total_cost = self._compute_cost_streaming(
-                    whole,
-                    self._messages,
-                )
+            self.total_cost = self.provider.compute_cost_streaming(
+                whole, self._messages
+            )
