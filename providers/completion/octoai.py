@@ -1,8 +1,4 @@
-import logging
-
 from providers.completion.base_completion_provider import BaseCompletionProvider
-
-logger = logging.getLogger(__name__)
 
 
 class OctoAI(BaseCompletionProvider):
