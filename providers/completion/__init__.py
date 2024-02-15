@@ -10,7 +10,7 @@ from providers.completion.openai import OpenAI
 from providers.completion.perplexity import Perplexity
 # from providers.completion.replicate import Replicate
 from providers.completion.togetherai import TogetherAI
-from providers.completion.vertexai import VertexAI
+# from providers.completion.vertexai import VertexAI
 
 PROVIDER_CLASSES = {
     "anyscale": Anyscale,
@@ -18,7 +18,7 @@ PROVIDER_CLASSES = {
     "together-ai": TogetherAI,
     "anthropic": Anthropic,
     # "replicate": Replicate,
-    "vertex-ai": VertexAI,
+    # "vertex-ai": VertexAI,
     "openai": OpenAI,
     "mistral-ai": Mistral,
     "octoai": OctoAI,
