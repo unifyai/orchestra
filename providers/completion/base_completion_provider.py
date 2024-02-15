@@ -167,7 +167,8 @@ class BaseCompletionProvider:
             # TODO: Maybe remove this dump unless neccesary?
             response_dict = self._modify_output(response.model_dump(), stream=stream)
             return response_dict, self.compute_cost(
-                response.usage.prompt_tokens, response.usage.completion_tokens,
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
             )
         # TODO: These needs to be processed correctly in our endpoint
         except APITimeoutError as error:
@@ -220,7 +221,8 @@ class BaseCompletionProvider:
             # TODO: Maybe remove this dump unless neccesary?
             response_dict = self._modify_output(response.model_dump(), stream=stream)
             return response_dict, self.compute_cost(
-                response.usage.prompt_tokens, response.usage.completion_tokens,
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
             )
         # TODO: These needs to be processed correctly in our endpoint
         except APITimeoutError as error:
@@ -242,6 +244,56 @@ class BaseCompletionProvider:
         #     error_type = type(error)
         #     logger.error(f"Raised error type: {error_type}, Error: {error}")
         return None, None
+
+    def _set_currency_rates(self):
+        import os.path as op
+        from datetime import date
+        from urllib.request import urlretrieve
+
+        from currency_converter import ECB_URL, CurrencyConverter
+
+        filename = f"ecb_{date.today():%Y%m%d}.zip"
+        if not op.isfile(filename):
+            urlretrieve(ECB_URL, filename)
+        self.currency_rates = CurrencyConverter(filename)
+
+    def _get_driver(self):
+        from selenium import webdriver
+        from selenium.webdriver import Chrome
+
+        options = webdriver.ChromeOptions()
+        options.add_argument("--headless")
+        options.page_load_strategy = "none"
+
+        driver = Chrome(options=options)
+        driver.implicitly_wait(5)
+        return driver
+
+    def _notify_cost_discrepancy(
+        self, notification_msgs, model_endpoint_name, input_pr, output_pr, cost_info
+    ):
+        notification_msgs.append(
+            f"Model {model_endpoint_name} has different prompt and completion costs than in supported_models dict",
+        )
+        notification_msgs.append(
+            f"Prompt: {input_pr} (page) vs {cost_info['prompt']} (dict), Completion: {output_pr} (page) vs {cost_info['completion']} (dict)",
+        )
+        return notification_msgs
+
+    def _notify_missing_models(self, models):
+        return f"Found in pricing page but not in our list ({self.name}): {models}"
+
+    def _notify_missing_prices(self, models):
+        return f"Models not in pricing page ({self.NAME}): {models.keys()}"
+
+    def _reformat_models(self):
+        models = dict()
+        for k, v in self.supported_models.items():
+            models[v["endpoint"]] = {
+                "mdl_code": k,
+                "cost": v["cost"],
+            }
+        return models
 
 
 class GeneratorWrapper:  # noqa: D101

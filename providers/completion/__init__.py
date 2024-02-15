@@ -5,11 +5,13 @@ from providers.completion.deepinfra import Deepinfra
 from providers.completion.fireworksai import FireworksAI
 from providers.completion.leptonai import LeptonAI
 from providers.completion.mistral import Mistral
-from providers.completion.octoai_provider import OctoAI
+from providers.completion.octoai import OctoAI
 from providers.completion.openai_provider import OpenAI
 from providers.completion.perplexity import Perplexity
+
 # from providers.completion.replicate import Replicate
 from providers.completion.togetherai import TogetherAI
+
 # from providers.completion.vertexai import VertexAI
 
 PROVIDER_CLASSES = {

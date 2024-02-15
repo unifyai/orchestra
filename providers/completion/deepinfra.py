@@ -1,4 +1,7 @@
+from typing import List, Optional
+
 from providers.completion.base_completion_provider import BaseCompletionProvider
+from providers.pricing.tools.models import RawCatalogItem
 
 
 class Deepinfra(BaseCompletionProvider):
@@ -12,6 +15,7 @@ class Deepinfra(BaseCompletionProvider):
     def __init__(self, hub_model):
         super().__init__(hub_model)
         self.supported_models = supported_models
+        self.name = "deepinfra"
 
     @property
     def api_key_var(self) -> str:
@@ -20,6 +24,81 @@ class Deepinfra(BaseCompletionProvider):
     @property
     def base_url(self):
         return "https://api.deepinfra.com/v1/openai"
+
+    def get_prices(
+        self,
+        mdl_codes: Optional[List[str]] = None,
+    ) -> tuple[List[RawCatalogItem], List[str]]:
+        """
+        Runs with or without mdl_codes
+        If mdl_codes is None, returns all pricing of all models found
+        """
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.support.ui import WebDriverWait
+
+        self._set_currency_rates()
+        driver = self._get_driver()
+
+        driver.get("https://deepinfra.com/pricing")
+
+        self.pricing_tables = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "pricing"))
+        )
+
+        models = self._reformat_models()
+        offers = []
+        models_missing_in_unify = []
+        notification_msgs = []
+
+        rows = driver.find_elements(
+            By.XPATH, '//*[@id="pricing"]/div[1]/div/div[5]/table/tbody/tr'
+        )
+
+        for row in rows:
+            model_endpoint_name = (
+                row.find_element(By.XPATH, "./th/a")
+                .get_attribute("href")
+                .replace("https://deepinfra.com/", "")
+            )
+            input_pr = float(row.find_element(By.XPATH, "./td[2]").text.lstrip("$"))
+            output_pr = float(row.find_element(By.XPATH, "./td[3]").text.lstrip("$"))
+
+            if model_endpoint_name in models:
+                model_metadata = models.pop(model_endpoint_name)
+                mdl_code = model_metadata["mdl_code"]
+                cost_info = model_metadata["cost"]
+                if (
+                    input_pr != cost_info["prompt"]
+                    or output_pr != cost_info["completion"]
+                ):
+                    notification_msgs = self._notify_cost_discrepancy(
+                        model_endpoint_name,
+                        input_pr,
+                        output_pr,
+                        cost_info,
+                        notification_msgs,
+                    )
+                if mdl_codes and mdl_code not in mdl_codes:
+                    continue
+                offer = RawCatalogItem(
+                    model_name=model_endpoint_name,
+                    in_price=input_pr,
+                    out_price=output_pr,
+                    request_price=None,
+                )
+                offers.append(offer)
+            else:
+                models_missing_in_unify.append(model_endpoint_name)
+        if models_missing_in_unify:
+            notification_msgs.append(
+                self._notify_missing_models(models_missing_in_unify)
+            )
+
+        if len(models):
+            notification_msgs.append(self._notify_missing_prices(models))
+        driver.quit()
+        return offers, notification_msgs
 
 
 supported_models = {
