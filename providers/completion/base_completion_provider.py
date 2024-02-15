@@ -1,6 +1,6 @@
-import os
 import inspect
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 import tiktoken
@@ -32,8 +32,6 @@ class BaseCompletionProvider:
     def __init__(self, hub_model) -> None:
         self.hub_model: str = hub_model
         self.supported_models: Dict[str, Any] = {}
-        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-        
 
     @property
     def api_key_var(self) -> str:
@@ -147,11 +145,10 @@ class BaseCompletionProvider:
     ) -> Optional[Any]:
 
         stream = kwargs.get("stream", False)
-
-        
+        client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
         try:  # noqa: WPS225
-            response = self.client.chat.completions.create(
+            response = client.chat.completions.create(
                 model=self.provider_endpoint,
                 messages=messages,
                 **kwargs,
@@ -193,7 +190,7 @@ class BaseCompletionProvider:
         #     error_type = type(error)
         #     logger.error(f"Raised error type: {error_type}, Error: {error}")
         return None, None
-    
+
     def complete_async(  # noqa: D102, WPS211, C901, WPS231
         self,
         model: str,

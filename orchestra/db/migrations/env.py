@@ -80,8 +80,7 @@ def run_migrations_online() -> None:
         do_run_migrations(connection)
 
 if context.is_offline_mode():
-    task = run_migrations_offline()
+    task = run_migrations_offline
 else:
-    task = run_migrations_online()
-
+    task = run_migrations_online
 task()
