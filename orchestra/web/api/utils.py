@@ -1,3 +1,5 @@
+from typing import Callable
+
 from fastapi import HTTPException
 
 from orchestra.db.dao.endpoint_dao import EndpointDAO
@@ -11,10 +13,34 @@ from orchestra.web.api.provider.views import get_provider
 from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.query.views import create_query_model
 
+# HTTP responses
 
-def db_operations(  # noqa: WPS211
+insufficient_credits_error = HTTPException(
+    status_code=402,
+    detail=(
+        "Whoops! It seems like this account doesn't have enough credits. "
+        "To get a recharge, visit https://console.unify.ai/"
+    ),
+)
+
+# Background tasks
+
+# HTTP responses
+
+insufficient_credits_error = HTTPException(
+    status_code=402,
+    detail=(
+        "Whoops! It seems like this account doesn't have enough credits. "
+        "To get a recharge, visit https://console.unify.ai/"
+    ),
+)
+
+# Background tasks
+
+
+def db_operations(  # noqa: WPS211, WPS217, WPS210
     user_id: str,
-    cost: float,
+    cost_deferred_fn: Callable,
     model: str,
     provider: str,
     model_dao: ModelDAO,
@@ -27,7 +53,7 @@ def db_operations(  # noqa: WPS211
     Perform database operations.
 
     :param user_id: user id.
-    :param cost: cost of the operation.
+    :param cost_deferred_fn: deferred cost computation of the operation.
     :param model: model name.
     :param provider: provider name.
     :param model_dao: DAO for model models.
@@ -60,6 +86,7 @@ def db_operations(  # noqa: WPS211
             status_code=500,  # noqa: WPS432
             detail="Endpoint not found",
         )
+    cost = cost_deferred_fn()
     query_model_request = QueryModelRequest(
         user_id=user_id,
         endpoint_id=endpoint_id,
@@ -67,3 +94,39 @@ def db_operations(  # noqa: WPS211
     )
     users_dao.recharge_credit(user_id, -cost)
     create_query_model(query_model_request, query_dao=query_dao)
+
+
+def filter_request_params(arguments):
+    """
+    Filter argument parameters.
+
+    :param arguments: arguments object.
+
+    :return: dictionary of filtered parameters.
+    """
+    openai_params = [
+        "frequency_penalty",
+        "logit_bias",
+        "logprobs",
+        "top_logprobs",
+        "max_tokens",
+        "n",
+        "presence_penalty",
+        "response_format",
+        "seed",
+        "stop",
+        "stream",
+        "temperature",
+        "top_p",
+        "tools",
+        "tool_choice",
+        "user",
+        "function_call",
+        "functions",
+        "stream",
+    ]
+    return {
+        param: arguments.get(param)
+        for param in openai_params
+        if arguments.get(param) is not None
+    }

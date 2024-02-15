@@ -1,3 +1,4 @@
+# TODO: This is deprecated, see BaseCompletionProvider implementation
 import os
 
 from providers.image_gen import PROVIDER_CLASSES

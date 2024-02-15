@@ -1,19 +1,20 @@
+import asyncio
 import time
-import uuid
 from datetime import datetime
 from typing import Any, List, Optional
 
 import requests
 from fastapi import HTTPException
 from litellm.llms.prompt_templates.factory import prompt_factory
-from litellm.utils import (
-    Choices,
-    Delta,
-    Message,
-    ModelResponse,
-    StreamingChoices,
-    Usage,
+from openai.types.chat.chat_completion import ChatCompletion
+from openai.types.chat.chat_completion import Choice as ChatCompletionChoice
+from openai.types.chat.chat_completion_chunk import (
+    ChatCompletionChunk,
+    Choice,
+    ChoiceDelta,
 )
+from openai.types.chat.chat_completion_message import ChatCompletionMessage
+from openai.types.completion_usage import CompletionUsage
 from providers.completion.base_completion_provider import (
     PRICING_PER_TOKENS,
     GeneratorWrapper,
@@ -97,8 +98,18 @@ class Replicate(BaseCompletionProvider):
         },
     }
 
-    def set_api_key(self, api_key: str) -> None:  # noqa: D102
-        self.api_key = api_key
+    def get_base_url(self, model, endpoint):
+        """
+        Get the base URL.
+
+        :param model: The model name.
+        :param endpoint: The endpoint.
+
+        :return: The base URL.
+        """
+        if "hardware" in self.supported_models[model]["cost"]:
+            return "https://api.replicate.com/v1/"
+        return f"https://api.replicate.com/v1/models/{endpoint}"
 
     def start_prediction(  # noqa: D102
         self,
@@ -138,22 +149,16 @@ class Replicate(BaseCompletionProvider):
         self,
         model: str,
         messages: List,  # type: ignore
-        max_tokens: Optional[int] = 512,
-        temperature: Optional[float] = 0.9,
-        stream: Optional[bool] = False,
+        **kwargs: Any,
     ) -> Optional[Any]:
         endpoint = self.supported_models[model]["endpoint"]
 
-        if "hardware" in self.supported_models[model]["cost"]:
-            api_base = "https://api.replicate.com/v1/"
-        else:
-            api_base = f"https://api.replicate.com/v1/models/{endpoint}"
+        api_base = self.get_base_url(model, endpoint)
 
         self.prompt = prompt_factory(model=endpoint, messages=messages)
         input_data = {
             "prompt": self.prompt,
-            "max_new_tokens": max_tokens,
-            "temperature": temperature,
+            **kwargs,
         }
         prediction_url = self.start_prediction(
             endpoint,
@@ -161,7 +166,7 @@ class Replicate(BaseCompletionProvider):
             self.api_key,
             api_base,
         )
-
+        stream = kwargs.get("stream", False)
         if stream:
             return (
                 ReplicateGeneratorWrapper(
@@ -174,13 +179,14 @@ class Replicate(BaseCompletionProvider):
                 None,
             )
 
-        response = self.handle_prediction_response(prediction_url)
+        response = self.handle_prediction_response(model, endpoint, prediction_url)
         return response, self.compute_cost(
             model,
             [item["content"] for item in messages],
             response,
         )
 
+    # TODO: convert to a property max_cost
     def get_cost_max(self, model_name: str) -> float:  # noqa: D102
         if model_name not in self.supported_models:
             raise ValueError("Model not supported")
@@ -201,9 +207,11 @@ class Replicate(BaseCompletionProvider):
             / PRICING_PER_TOKENS
         )
 
-    def handle_prediction_response_streaming(  # noqa: D102, E501, WPS210, WPS231
+    async def handle_prediction_response_streaming(  # noqa: D102, E501, WPS210, WPS231
         self,
         prediction_url,
+        model,
+        endpoint,
     ):
         previous_output = ""
         output_string = ""
@@ -216,7 +224,7 @@ class Replicate(BaseCompletionProvider):
         while True and (  # noqa: WPS352
             status not in ["succeeded", "failed", "canceled"]  # noqa: WPS510, E501
         ):
-            time.sleep(0.5)  # prevent being rate limited by replicate
+            await asyncio.sleep(0.5)  # prevent being rate limited by replicate
             response = requests.get(prediction_url, headers=headers)  # noqa: S113
             if response.status_code == 200:  # noqa: WPS432
                 response_data = response.json()
@@ -226,14 +234,15 @@ class Replicate(BaseCompletionProvider):
                     new_output = output_string[len(previous_output) :]
                     finish_reason = "stop" if status == "succeeded" else None
                     choices = [
-                        StreamingChoices(
+                        Choice(
                             finish_reason=finish_reason,
-                            delta=Delta(content=new_output, role="assistant"),
+                            delta=ChoiceDelta(content=new_output, role="assistant"),
+                            index=0,
                         ),
                     ]
                     created = int(time.time())
 
-                    usage = Usage()
+                    usage = None
                     if status == "succeeded":
                         prompt_tokens = response_data["metrics"][  # noqa: WPS220, E501
                             "input_token_count"
@@ -251,15 +260,22 @@ class Replicate(BaseCompletionProvider):
                         tokens_per_second = response_data["metrics"][  # noqa: WPS220
                             "tokens_per_second"
                         ]
-                        usage = Usage(  # noqa: WPS220
-                            prompt_tokens,
-                            completion_tokens,
-                            total_tokens,
+                        usage = CompletionUsage(  # noqa: WPS220
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            total_tokens=total_tokens,
                             predict_time=predict_time,
                             time_to_first_token=time_to_first_token,
                             tokens_per_second=tokens_per_second,
                         )
-                    yield {"choices": choices, "created": created, "usage": usage}
+                    yield ChatCompletionChunk(
+                        choices=choices,
+                        created=created,
+                        model=model,
+                        usage=usage,
+                        id=endpoint,
+                        object="chat.completion.chunk",
+                    )
                     previous_output = output_string
                 status = response_data["status"]
                 if status == "failed":
@@ -271,6 +287,8 @@ class Replicate(BaseCompletionProvider):
 
     def handle_prediction_response(  # noqa: D102, E501, WPS210, WPS231
         self,
+        model,
+        endpoint,
         prediction_url,
     ):
         output_string = ""
@@ -307,21 +325,30 @@ class Replicate(BaseCompletionProvider):
         predict_time = response_data["metrics"]["predict_time"]
         time_to_first_token = response_data["metrics"]["time_to_first_token"]
         tokens_per_second = response_data["metrics"]["tokens_per_second"]
-        usage = Usage(
-            prompt_tokens,
-            completion_tokens,
-            total_tokens,
+        usage = CompletionUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
             predict_time=predict_time,
             time_to_first_token=time_to_first_token,
             tokens_per_second=tokens_per_second,
         )
 
-        response = ModelResponse(
-            id=f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237
-            choices=[Choices(message=Message(), index=0, finish_reason="stop")],
+        return ChatCompletion(
+            id=endpoint,
+            choices=[
+                ChatCompletionChoice(
+                    finish_reason="length",
+                    index=0,
+                    message=ChatCompletionMessage(
+                        content=output_string,
+                        role="assistant",
+                    ),
+                    logprobs=None,
+                ),
+            ],
             created=created,
-            _response_ms=predict_time * 1000,
-            usage=usage,
+            model=model,
             object="chat.completion",
         )
         response["choices"][0]["message"]["content"] = output_string
