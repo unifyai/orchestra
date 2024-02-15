@@ -202,7 +202,7 @@ async def worker_loop(  # noqa: WPS210
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": prompt},
             ]
-            return language_model.__call__(
+            return language_model.__call_async__(
                 message,
                 max_tokens=max_tokens,
                 stream=stream,

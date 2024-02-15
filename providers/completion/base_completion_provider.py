@@ -1,4 +1,3 @@
-import inspect
 import logging
 import os
 from typing import Any, Dict, List, Optional
@@ -13,7 +12,6 @@ from openai import (
     OpenAI,
     RateLimitError,
 )
-from openai.types.chat.chat_completion import ChatCompletion
 from openai.types.completion_usage import CompletionUsage
 
 logger = logging.getLogger(__name__)
@@ -83,6 +81,9 @@ class BaseCompletionProvider:
     def max_cost(self) -> float:  # noqa: D102
         return self.completion_cost * self.context_window / PRICING_PER_TOKENS
 
+    def _modify_output(self, out: Dict, **kwargs) -> Dict:
+        return out  # noqa: WPS420
+
     def compute_cost(
         self,
         prompt_tks,
@@ -111,8 +112,6 @@ class BaseCompletionProvider:
         """
         Returns a deffered op to compute the cost of a completion when streaming.
 
-        :param model: The model to use for completion.
-        :type model: str
         :param completions: The completed text.
         :type completions: str
         :param messages: List of input prompts.
@@ -155,7 +154,7 @@ class BaseCompletionProvider:
             )
             if stream:
                 return (
-                    AsyncGeneratorWrapper(
+                    GeneratorWrapper(
                         self,
                         response,
                         self.hub_model,  # TODO: USe this directly
@@ -168,7 +167,7 @@ class BaseCompletionProvider:
             # TODO: Maybe remove this dump unless neccesary?
             response_dict = self._modify_output(response.model_dump(), stream=stream)
             return response_dict, self.compute_cost(
-                response.usage.prompt_tokens, response.usage.completion_tokens
+                response.usage.prompt_tokens, response.usage.completion_tokens,
             )
         # TODO: These needs to be processed correctly in our endpoint
         except APITimeoutError as error:
@@ -191,106 +190,105 @@ class BaseCompletionProvider:
         #     logger.error(f"Raised error type: {error_type}, Error: {error}")
         return None, None
 
-    def complete_async(  # noqa: D102, WPS211, C901, WPS231
+    def __call_async__(  # noqa: D102, WPS211, C901, WPS231, WPS238, WPS210
         self,
-        model: str,
         messages: List,  # type: ignore
-        max_tokens: Optional[int] = 512,
-        temperature: Optional[float] = 0.9,
-        stream: Optional[bool] = False,
+        **kwargs: Any,
     ) -> Optional[Any]:
-        if model not in self.supported_models:
-            raise ValueError("Model not supported")
 
-        if isinstance(self.supported_models, dict):
-            provider_model_endpoint = self.supported_models[model]["endpoint"]
-        else:
-            provider_model_endpoint = model
+        stream = kwargs.get("stream", False)
+        client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
 
-        try:
+        try:  # noqa: WPS225
+            response = client.chat.completions.create(
+                model=self.provider_endpoint,
+                messages=messages,
+                **kwargs,
+            )
             if stream:
                 return (
                     AsyncGeneratorWrapper(
-                        litellm.acompletion(
-                            model=provider_model_endpoint,
-                            messages=messages,
-                            max_tokens=max_tokens,
-                            temperature=temperature,
-                            stream=True,
-                            api_key=self.api_key,
-                        ),
-                        model,
+                        self,
+                        response,
+                        self.hub_model,  # TODO: USe this directly
                         messages,
                         compute_cost_streaming=self.compute_cost_streaming,
                     ),
                     None,
                 )
-        except openai.APIError as error:
-            logger.error(f"Raised openai.APIError, Error: {error}")
-        except openai.APITimeoutError as error:
-            logger.error(f"Raised openai.APITimeoutError, Error: {error}")
-        except Exception as error:
-            error_type = type(error)
-            logger.error(f"Raised error type: {error_type}, Error: {error}")
 
-    def _modify_output(self, out: Dict, **kwargs) -> Dict:
-        return out  # noqa: WPS420
+            # TODO: Maybe remove this dump unless neccesary?
+            response_dict = self._modify_output(response.model_dump(), stream=stream)
+            return response_dict, self.compute_cost(
+                response.usage.prompt_tokens, response.usage.completion_tokens,
+            )
+        # TODO: These needs to be processed correctly in our endpoint
+        except APITimeoutError as error:
+            logger.error(f"Raised openai.APITimeoutError, Error: {error}")
+            raise HTTPException(status_code=408, detail=str(error))  # noqa: WPS432
+        except RateLimitError as error:
+            logger.error(f"Raised openai.RateLimitError, Error: {error}")
+            raise HTTPException(status_code=429, detail=str(error))  # noqa: WPS432
+        except BadRequestError as error:
+            logger.error(f"Raised openai.BadRequestError, Error: {error}")
+            raise HTTPException(status_code=400, detail=str(error))  # noqa: WPS432
+        except APIError as error:
+            logger.error(f"Raised openai.APIError, Error: {error}")
+            raise HTTPException(
+                status_code=400,  # noqa: WPS432
+                detail=str(error),  # noqa: WPS432
+            )
+        # except Exception as error:
+        #     error_type = type(error)
+        #     logger.error(f"Raised error type: {error_type}, Error: {error}")
+        return None, None
 
 
 class GeneratorWrapper:  # noqa: D101
     def __init__(  # noqa: WPS211
         self,
+        base_provider,
         response,
         model,
         messages,
         compute_cost_streaming,
         compute_cost=None,  # noqa: WPS211, E501
     ):
+        self.base_provider = base_provider
         self._response = response
         self._model = model
         self._messages = messages
         self._compute_cost_streaming = compute_cost_streaming
         self._compute_cost = compute_cost
-        self.total_cost = None
+        self.total_cost = None  # TODO: remove if not needed
 
     def generator(self):  # noqa: D102, C901, WPS210, WPS231
-        whole = ""
+        # TODO: Is this being used at all?
+        whole = []
         usage = {}
         try:  # noqa: WPS501
-            for part in self._response:  # TODO: I guess this will be removed
-                if part.choices[0].delta.content is None:
-                    continue
-                usage = part.get("usage", {})
-
-                choices = [
-                    getattr(choice, "model_dump", lambda: None)()
-                    for choice in part.get("choices", [])
-                ]
-
-                part_dict = {
-                    "model": self._model,
-                    "created": part.get("created", None),
-                    "id": part.get(
-                        "id",
-                        f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237, E501
-                    ),
-                    "choices": choices,
-                    "object": part.get("object", "chat.completion.chunk"),
-                    "usage": usage.model_dump() if isinstance(usage, Usage) else usage,
-                }
-                part_text = choices[0]["delta"]["content"]
-                whole += part_text if part_text else ""
+            for part in self._response:
+                usage = part.usage if usage in part else {}
+                part_dict = part.model_dump()
+                self.base_provider._modify_output(part_dict, stream=True)
+                choices = part_dict["choices"]
+                if choices:  # noqa: WPS338
+                    if choices[0]["delta"]["content"] is None:
+                        continue  # noqa: WPS220
+                part_text = choices[0]["delta"]["content"] if choices else ""
+                index = choices[0]["index"] if choices else 0
+                if len(whole) <= index:
+                    whole.extend([""] * (index - len(whole) + 1))
+                whole[index] += part_text
                 yield part_dict
         finally:
-            if isinstance(usage, Usage) and usage != Usage():
+            if isinstance(usage, CompletionUsage):
                 self.total_cost = self._compute_cost(
-                    self._model,
                     [item["content"] for item in self._messages],
-                    ModelResponse(usage=usage),
+                    part,  # noqa: WPS441
                 )
             else:
                 self.total_cost = self._compute_cost_streaming(
-                    self._model,
                     whole,
                     self._messages,
                 )
@@ -312,14 +310,14 @@ class AsyncGeneratorWrapper:  # noqa: D101
         self._messages = messages
         self._compute_cost_streaming = compute_cost_streaming
         self._compute_cost = compute_cost
-        self.total_cost = None
+        self.total_cost = None  # TODO: remove if not needed
 
-    def generator(self):  # noqa: D102, C901, WPS210, WPS231
+    async def generator(self):  # noqa: D102, C901, WPS210, WPS231
         # TODO: Is this being used at all?
         whole = []
         usage = {}
         try:  # noqa: WPS501
-            for part in self._response:
+            async for part in await self._response:
                 usage = part.usage if usage in part else {}
                 part_dict = part.model_dump()
                 self.base_provider._modify_output(part_dict, stream=True)
