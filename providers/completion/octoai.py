@@ -7,7 +7,7 @@ from litellm.utils import ModelResponse, Usage
 from octoai.chat import ChatCompletion
 from octoai.client import Client
 from providers.completion.base_completion_provider import (
-    AsyncGeneratorWrapper,
+    GeneratorWrapper,
     BaseCompletionProvider,
 )
 
@@ -114,7 +114,7 @@ class OctoAI(BaseCompletionProvider):
         try:
             if stream:
                 return (
-                    OctoAIAsyncGeneratorWrapper(
+                    OctoAIGeneratorWrapper(
                         self.client.chat.completions.create(
                             model=provider_model_endpoint,
                             messages=messages,
@@ -158,12 +158,12 @@ class OctoAI(BaseCompletionProvider):
             error_type = type(error)
             logger.error(f"Raised error type: {error_type}, Error: {error}")
         return None
+    
 
-
-class OctoAIAsyncGeneratorWrapper(AsyncGeneratorWrapper):
+class OctoAIGeneratorWrapper(GeneratorWrapper):
     """A wrapper for the OctoAI async generator."""
 
-    async def generator(self):  # noqa: D102, C901, WPS210, WPS231
+    def generator(self):  # noqa: D102, C901, WPS210, WPS231
         whole = ""
         try:  # noqa: WPS501
             for part in self._response:

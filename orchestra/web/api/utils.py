@@ -12,7 +12,7 @@ from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.query.views import create_query_model
 
 
-async def db_operations(  # noqa: WPS211
+def db_operations(  # noqa: WPS211
     user_id: str,
     cost: float,
     model: str,
@@ -38,11 +38,9 @@ async def db_operations(  # noqa: WPS211
 
     :raises HTTPException: when endpoint is not found.
     """
-    model_id = int((await get_model(mdl_code=model, model_dao=model_dao))[0].id)
-    provider_id = int(
-        (await get_provider(name=provider, provider_dao=provider_dao))[0].id,
-    )
-    endpoint_ids = await get_endpoint(
+    model_id = int(get_model(mdl_code=model, model_dao=model_dao)[0].id)
+    provider_id = int(get_provider(name=provider, provider_dao=provider_dao)[0].id)
+    endpoint_ids = get_endpoint(
         mdl_id=model_id,
         provider_id=provider_id,
         endpoint_dao=endpoint_dao,
@@ -67,5 +65,5 @@ async def db_operations(  # noqa: WPS211
         endpoint_id=endpoint_id,
         credits=cost,  # type: ignore
     )
-    await users_dao.recharge_credit(user_id, -cost)
-    await create_query_model(query_model_request, query_dao=query_dao)
+    users_dao.recharge_credit(user_id, -cost)
+    create_query_model(query_model_request, query_dao=query_dao)

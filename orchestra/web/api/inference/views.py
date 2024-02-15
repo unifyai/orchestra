@@ -37,7 +37,7 @@ def get_model_type(model_name):  # noqa: D103
 
 
 @router.post("/inference", response_model=InferenceResponse)
-async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217, WPS238
+def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217, WPS238
     background_tasks: BackgroundTasks,
     request_fastapi: Request,
     request: InferenceRequest,
@@ -67,7 +67,7 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
     # TODO: Add error 500
     # TODO: Create a separate function and endpoint for updating credits
     user_id = request_fastapi.state.user_id
-    user = await get_credits(request_fastapi, users_dao=users_dao)
+    user = get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(user.credits if user else 0)
 
     try:
@@ -116,12 +116,11 @@ async def get_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WP
 
         if stream:
 
-            async def stream_and_update_db():  # noqa: WPS430
-                async for part_dict in response.generator():
+            def stream_and_update_db():  # noqa: WPS430
+                for part_dict in response.generator():
                     part_dict["model"] = model
                     part_dict["provider"] = provider
                     yield json.dumps(part_dict)
-                    await asyncio.sleep(0)
                 background_tasks.add_task(
                     db_operations,
                     user_id,

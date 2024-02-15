@@ -51,9 +51,8 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     :raises HTTPException: when user has insufficient credits.
     """
     user_id = request_fastapi.state.user_id
-    # user = await get_credits(request_fastapi, users_dao=users_dao)
-    # TODO: DO NOT MERGE THIS INTO MAIN
-    available_credits = 5  # float(user.credits if user else 0)
+    user = get_credits(request_fastapi, users_dao=users_dao)
+    available_credits = float(user.credits if user else 0)
     try:
         model, provider = request.model.split("@")
     except Exception:
@@ -92,11 +91,10 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     if stream:
 
-        async def stream_and_update_db():  # noqa: WPS430
-            async for part_dict in response.generator():
+        def stream_and_update_db():  # noqa: WPS430 # TODO: Should this be async?
+            for part_dict in response.generator():
                 part_dict["model"] = f"{model}@{provider}"
                 yield f"data: {json.dumps(part_dict)}\n\n"  # noqa: WPS237
-                await asyncio.sleep(0)
             background_tasks.add_task(
                 db_operations,
                 user_id,

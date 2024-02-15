@@ -63,7 +63,7 @@ def assert_model(response_json):  # noqa: WPS218
     return first_choice
 
 
-async def check_text_completion_no_streaming(  # noqa: WPS218
+def check_text_completion_no_streaming(  # noqa: WPS218
     response_data,
     current_credits,
     client,
@@ -104,11 +104,11 @@ async def check_text_completion_no_streaming(  # noqa: WPS218
     assert "total_tokens" in usage_data
     assert isinstance(usage_data["total_tokens"], int)
 
-    final_credits = await test_credits(client, fastapi_app)
+    final_credits = test_credits(client, fastapi_app)
     assert final_credits < current_credits
 
 
-async def check_text_completion_streaming(  # noqa: WPS218
+def check_text_completion_streaming(  # noqa: WPS218
     model,
     response,
     current_credits,
@@ -148,7 +148,7 @@ async def check_text_completion_streaming(  # noqa: WPS218
 
         break
 
-    final_credits = await test_credits(client, fastapi_app)
+    final_credits = test_credits(client, fastapi_app)
     assert final_credits < current_credits
 
 

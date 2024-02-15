@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from fastapi import Depends
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Metric
@@ -11,10 +11,10 @@ from orchestra.db.models.orchestra_models import Metric
 class MetricDAO:
     """Class for accessing metric table."""
 
-    def __init__(self, session: AsyncSession = Depends(get_db_session)):
+    def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    async def create_metric(  # noqa: WPS211
+    def create_metric(  # noqa: WPS211
         self,
         name: str,
         units: str,
@@ -44,7 +44,7 @@ class MetricDAO:
             ),
         )
 
-    async def get_all_metrics(self, limit: int, offset: int) -> List[Metric]:
+    def get_all_metrics(self, limit: int, offset: int) -> List[Metric]:
         """
         Get all metric models with limit/offset pagination.
 
@@ -52,13 +52,13 @@ class MetricDAO:
         :param offset: offset of metrics.
         :return: stream of metrics.
         """
-        raw_metrics = await self.session.execute(
+        raw_metrics = self.session.execute(
             select(Metric).limit(limit).offset(offset),
         )
 
         return list(raw_metrics.scalars().fetchall())
 
-    async def filter(  # noqa: WPS211, C901
+    def filter(  # noqa: WPS211, C901
         self,
         name: Optional[str] = None,  # noqa: WPS125
         units: Optional[str] = None,
@@ -91,5 +91,5 @@ class MetricDAO:
             query = query.where(Metric.priority == priority)
         if plottable is not None:
             query = query.where(Metric.plottable == plottable)
-        raw_metrics = await self.session.execute(query)
+        raw_metrics = self.session.execute(query)
         return list(raw_metrics.scalars().fetchall())
