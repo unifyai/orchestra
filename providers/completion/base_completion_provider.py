@@ -236,6 +236,9 @@ class BaseCompletionProvider:
             error_type = type(error)
             logger.error(f"Raised error type: {error_type}, Error: {error}")
 
+    def _modify_output(self, out: Dict, **kwargs) -> Dict:
+        return out  # noqa: WPS420
+
 
 class GeneratorWrapper:  # noqa: D101
     def __init__(  # noqa: WPS211
@@ -294,8 +297,6 @@ class GeneratorWrapper:  # noqa: D101
                     whole,
                     self._messages,
                 )
-    def _modify_output(self, out: Dict, **kwargs) -> Dict:
-        return out  # noqa: WPS420
 
 
 class AsyncGeneratorWrapper:  # noqa: D101
@@ -316,14 +317,12 @@ class AsyncGeneratorWrapper:  # noqa: D101
         self._compute_cost = compute_cost
         self.total_cost = None
 
-    async def generator(self):  # noqa: D102, C901, WPS210, WPS231
+    def generator(self):  # noqa: D102, C901, WPS210, WPS231
         # TODO: Is this being used at all?
         whole = []
         usage = {}
         try:  # noqa: WPS501
-            if inspect.iscoroutine(self._response):
-                self._response = await self._response
-            async for part in self._response:
+            for part in self._response:
                 usage = part.usage if usage in part else {}
                 part_dict = part.model_dump()
                 self.base_provider._modify_output(part_dict, stream=True)
