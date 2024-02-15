@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 @router.get("/endpoints", response_model=List[EndpointModelResponseVerbose])
-async def get_endpoint_models(  # noqa: WPS210
+def get_endpoint_models(  # noqa: WPS210
     limit: int = 10,
     offset: int = 0,
     endpoint_dao: EndpointDAO = Depends(),
@@ -29,12 +29,12 @@ async def get_endpoint_models(  # noqa: WPS210
     :param provider_dao: DAO for provider models.
     :return: list of endpoint objects from database.
     """
-    raw_endpoints = await endpoint_dao.get_all_endpoints_raw(limit=limit, offset=offset)
+    raw_endpoints = endpoint_dao.get_all_endpoints_raw(limit=limit, offset=offset)
 
     endpoints = []
     for raw_endpoint in raw_endpoints:
-        model = await model_dao.filter(id=int(raw_endpoint.mdl_id))
-        provider = await provider_dao.filter(id=int(raw_endpoint.provider_id))
+        model = model_dao.filter(id=int(raw_endpoint.mdl_id))
+        provider = provider_dao.filter(id=int(raw_endpoint.provider_id))
 
         model_inst = model[0]
         provider_inst = provider[0]
@@ -64,7 +64,7 @@ async def get_endpoint_models(  # noqa: WPS210
 
 
 @router.get("/get_endpoint", response_model=List[EndpointModelResponseVerbose])
-async def get_endpoint(  # noqa: WPS210, WPS211, WPS217
+def get_endpoint(  # noqa: WPS210, WPS211, WPS217
     endpoint_id: Optional[int] = None,
     mdl_id: Optional[int] = None,
     provider_id: Optional[int] = None,
@@ -84,18 +84,18 @@ async def get_endpoint(  # noqa: WPS210, WPS211, WPS217
     :return: list of endpoint objects from database.
     """
     if endpoint_id:
-        raw_endpoints = await endpoint_dao.filter(id=endpoint_id)
+        raw_endpoints = endpoint_dao.filter(id=endpoint_id)
     elif mdl_id:
-        raw_endpoints = await endpoint_dao.filter(mdl_id=mdl_id)
+        raw_endpoints = endpoint_dao.filter(mdl_id=mdl_id)
     elif provider_id:
-        raw_endpoints = await endpoint_dao.filter(provider_id=provider_id)
+        raw_endpoints = endpoint_dao.filter(provider_id=provider_id)
     else:
-        raw_endpoints = await endpoint_dao.get_all_endpoints_raw(limit=10, offset=0)
+        raw_endpoints = endpoint_dao.get_all_endpoints_raw(limit=10, offset=0)
 
     endpoints = []
     for raw_endpoint in raw_endpoints:
-        model = await model_dao.filter(id=int(raw_endpoint.mdl_id))
-        provider = await provider_dao.filter(id=int(raw_endpoint.provider_id))
+        model = model_dao.filter(id=int(raw_endpoint.mdl_id))
+        provider = provider_dao.filter(id=int(raw_endpoint.provider_id))
 
         model_inst = model[0]
         provider_inst = provider[0]

@@ -26,7 +26,7 @@ async def put_data_to_db(  # noqa: D103, WPS211, WPS210
         recharge_dao = RechargeDAO(session)
 
         all_users = await get_all_users_models(users_dao)
-        recharge_quantity = 5.0
+        recharge_quantity = 2.5
         max_recharge_grant = 10.0
         for user in all_users:
             if user.credits >= max_recharge_grant:
