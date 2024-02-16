@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from fastapi import Depends
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import License
@@ -11,10 +11,10 @@ from orchestra.db.models.orchestra_models import License
 class LicenseDAO:
     """Class for accessing license table."""
 
-    def __init__(self, session: AsyncSession = Depends(get_db_session)):
+    def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    async def create_license(
+    def create_license(
         self,
         name: str,
         image_url: str,
@@ -35,7 +35,7 @@ class LicenseDAO:
             ),
         )
 
-    async def get_all_licenses(self, limit: int, offset: int) -> List[License]:
+    def get_all_licenses(self, limit: int, offset: int) -> List[License]:
         """
         Get all license models with limit/offset pagination.
 
@@ -43,13 +43,13 @@ class LicenseDAO:
         :param offset: offset of licenses.
         :return: stream of licenses.
         """
-        raw_licenses = await self.session.execute(
+        raw_licenses = self.session.execute(
             select(License).limit(limit).offset(offset),
         )
 
         return list(raw_licenses.scalars().fetchall())
 
-    async def filter(
+    def filter(
         self,
         name: Optional[str] = None,
     ) -> List[License]:
@@ -62,5 +62,5 @@ class LicenseDAO:
         query = select(License)
         if name:
             query = query.where(License.name == name)
-        rows = await self.session.execute(query)
+        rows = self.session.execute(query)
         return list(rows.scalars().fetchall())

@@ -1,11 +1,17 @@
 import logging
-import uuid
+import os
 from typing import Any, Dict, List, Optional
 
-import litellm
-import openai
 import tiktoken
-from litellm.utils import ModelResponse, Usage
+from fastapi import HTTPException
+from openai import (
+    APIError,
+    APITimeoutError,
+    AsyncOpenAI,
+    BadRequestError,
+    OpenAI,
+    RateLimitError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,206 +26,239 @@ class BaseCompletionProvider:
     # TODO: Make this a property and enforce definition with NotImplemented
     supported_models: Dict[str, Any] = {}
 
-    def __init__(self) -> None:
-        self.model: str = ""
+    def __init__(self, hub_model) -> None:
+        self.hub_model: str = hub_model
+        self.supported_models: Dict[str, Any] = {}
 
-    def set_api_key(self, api_key: str) -> None:  # noqa: D102
-        self.api_key = api_key
+    @property
+    def api_key_var(self) -> str:
+        """
+        Get the provider api key var NAME.
 
-    def get_cost_max(self, model_name: str) -> float:  # noqa: D102
-        if model_name not in self.supported_models:
-            raise ValueError("Model not supported")
-        return (
-            self.supported_models[model_name]["cost"]["completion"]
-            * self.supported_models[model_name]["context_window"]
-            / PRICING_PER_TOKENS
-        )
+        :raises NotImplementedError: This method should be implemented in a subclass.
+        """
+        raise NotImplementedError("This method should be implemented in a subclass")
+
+    @property
+    def base_url(self) -> str:
+        """
+        Get the base URL.
+
+        :raises NotImplementedError: This method should be implemented in a subclass.
+        """
+        raise NotImplementedError("This method should be implemented in a subclass")
+
+    @property
+    def provider_endpoint(self):
+        # TODO: Docs
+        # TODO: Add logic to raise an error if self.supported_models is empty
+        return self.supported_models[self.hub_model]["endpoint"]
+
+    @property
+    def prompt_cost(self):
+        # TODO: Docs
+        # TODO: Add logic to raise an error if self.supported_models is empty
+        return self.supported_models[self.hub_model]["cost"]["prompt"]
+
+    @property
+    def completion_cost(self):
+        # TODO: Docs
+        # TODO: Add logic to raise an error if self.supported_models is empty
+        return self.supported_models[self.hub_model]["cost"]["completion"]
+
+    @property
+    def context_window(self):
+        # TODO: Docs
+        # TODO: Add logic to raise an error if self.supported_models is empty
+        return self.supported_models[self.hub_model]["context_window"]
+
+    @property
+    def api_key(self) -> None:  # noqa: D102
+        return os.getenv(self.api_key_var)
+
+    @property
+    def max_cost(self) -> float:  # noqa: D102
+        return self.completion_cost * self.context_window / PRICING_PER_TOKENS
+
+    def _modify_output(self, out: Dict, **kwargs) -> Dict:
+        return out  # noqa: WPS420
 
     def compute_cost(
         self,
-        model_name: str,
-        prompts: List[str],
-        response: ModelResponse,
+        prompt_tks,
+        output_tks,
     ) -> float:
         """
-        Compute the cost of a completion.
+        Returns a deffered op to compute the cost of a completion.
 
-        :param model_name: The model to use for completion.
-        :param prompts: List of the prompt texts.
-        :param response: Model response from LiteLLM completion.
+        TODO: Redo docs
 
-        :return: The cost of the completion.
+        :return: Pre-loaded fn.
         """
-        cost_data = self.supported_models[model_name]["cost"]  # type: ignore
-        prompt_cost = 0
-        if cost_data.get("hardware"):
-            cost_data = self.supported_models[model_name]["cost"]  # type: ignore
-            return (
-                self.hardware_pricing_per_sec[cost_data["hardware"]]  # type: ignore
-                * response._response_ms
-                / 1000
-            )
-        if cost_data.get("online"):
-            prompt_cost += cost_data["online"]["charge_per_1000_requests"] / 1000
-        prompt_cost += (
-            response.usage["prompt_tokens"] * cost_data["prompt"] / PRICING_PER_TOKENS
-        )
-        completion_cost = (
-            response.usage["completion_tokens"]
-            * cost_data["completion"]
-            / PRICING_PER_TOKENS
-        )
-        return prompt_cost + completion_cost
+
+        def deferred_cost():
+            prompt_cost = prompt_tks * self.prompt_cost / PRICING_PER_TOKENS
+            completion_cost = output_tks * self.completion_cost / PRICING_PER_TOKENS
+            return prompt_cost + completion_cost
+
+        return deferred_cost
 
     def compute_cost_streaming(  # noqa: WPS210
         self,
-        model: str,
-        completions: str,
+        completions: List[str],
         messages: List[Dict],
     ) -> float:
         """
-        Compute the cost of a completion when streaming.
+        Returns a deffered op to compute the cost of a completion when streaming.
 
-        :param model: The model to use for completion.
-        :type model: str
         :param completions: The completed text.
         :type completions: str
         :param messages: List of input prompts.
         :type messages: List[Dict]
 
-        :return: The cost of the completion.
+        :return: Pre-loaded fn.
         """
         try:
-            total_prompt = ""
-            for item in messages:  # noqa: WPS519
-                total_prompt += item["content"]
-            encoding = tiktoken.get_encoding("cl100k_base")
-            tokens = encoding.encode(total_prompt)
-            prompt_tokens = len(tokens)
 
-            tokens = encoding.encode(completions)
-            completion_tokens = len(tokens)
-            response = ModelResponse(usage=Usage(prompt_tokens, completion_tokens))
+            def deferred_streaming_cost():
+                total_prompt = ""
+                for item in messages:  # noqa: WPS519
+                    total_prompt += item["content"]
+                # TODO: We need to standarise this and check for gpt models
+                encoding = tiktoken.get_encoding("cl100k_base")
+                prompt_tokens = len(encoding.encode(total_prompt))
+                tokens = [encoding.encode(completion) for completion in completions]
+                completion_tokens = sum(len(token) for token in tokens)
+                return self.compute_cost(prompt_tokens, completion_tokens)()
 
-            return self.compute_cost(
-                model,
-                [item["content"] for item in messages],  # noqa: WPS441
-                response,
-            )
-        except Exception:
+            return deferred_streaming_cost
+
+        except Exception:  # TODO: This need to be scoped down and prob moved inside
             return 0
 
-    def complete(  # noqa: D102, WPS211, C901, WPS231
+    def __call__(  # noqa: D102, WPS211, C901, WPS231, WPS238, WPS210
         self,
-        model: str,
         messages: List,  # type: ignore
-        max_tokens: Optional[int] = 512,
-        temperature: Optional[float] = 0.9,
-        stream: Optional[bool] = False,
+        stream: bool = False,
+        **kwargs: Any,
     ) -> Optional[Any]:
-        if model not in self.supported_models:
-            raise ValueError("Model not supported")
 
-        if isinstance(self.supported_models, dict):
-            provider_model_endpoint = self.supported_models[model]["endpoint"]
-        else:
-            provider_model_endpoint = model
+        client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
-        try:
+        try:  # noqa: WPS225
+            response = client.chat.completions.create(
+                model=self.provider_endpoint, messages=messages, stream=stream, **kwargs
+            )
             if stream:
-                return (
-                    AsyncGeneratorWrapper(
-                        litellm.acompletion(
-                            model=provider_model_endpoint,
-                            messages=messages,
-                            max_tokens=max_tokens,
-                            temperature=temperature,
-                            stream=True,
-                            api_key=self.api_key,
-                        ),
-                        model,
-                        messages,
-                        compute_cost_streaming=self.compute_cost_streaming,
-                    ),
-                    None,
-                )
-            response = litellm.completion(
-                model=provider_model_endpoint,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                api_key=self.api_key,
-            )
+                return (SyncGeneratorWrapper(self, response, messages), None)
 
-            return response, self.compute_cost(
-                model,
-                [item["content"] for item in messages],
-                response,
+            # TODO: Maybe remove this dump unless neccesary?
+            response_dict = self._modify_output(response.model_dump(), stream=stream)
+            return response_dict, self.compute_cost(
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
             )
-        except openai.APIError as error:
-            logger.error(f"Raised openai.APIError, Error: {error}")
-        except openai.APITimeoutError as error:
+        # TODO: These needs to be processed correctly in our endpoint
+        except APITimeoutError as error:
             logger.error(f"Raised openai.APITimeoutError, Error: {error}")
-        except Exception as error:
-            error_type = type(error)
-            logger.error(f"Raised error type: {error_type}, Error: {error}")
-        return None, None
+            raise HTTPException(status_code=408, detail=str(error))  # noqa: WPS432
+        except RateLimitError as error:
+            logger.error(f"Raised openai.RateLimitError, Error: {error}")
+            raise HTTPException(status_code=429, detail=str(error))  # noqa: WPS432
+        except BadRequestError as error:
+            logger.error(f"Raised openai.BadRequestError, Error: {error}")
+            raise HTTPException(status_code=400, detail=str(error))  # noqa: WPS432
+        except APIError as error:
+            logger.error(f"Raised openai.APIError, Error: {error}")
+            raise HTTPException(status_code=400, detail=str(error))  # noqa: WPS432
 
-
-class AsyncGeneratorWrapper:  # noqa: D101
-    def __init__(  # noqa: WPS211
+    def __call_async__(  # noqa: D102, WPS211, C901, WPS231, WPS238, WPS210
         self,
-        response,
-        model,
-        messages,
-        compute_cost_streaming,
-        compute_cost=None,  # noqa: WPS211, E501
-    ):
+        messages: List,  # type: ignore
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> Optional[Any]:
+
+        client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+
+        try:  # noqa: WPS225
+            response = client.chat.completions.create(
+                model=self.provider_endpoint, messages=messages, stream=stream, **kwargs
+            )
+            if stream:
+                return (AsyncGeneratorWrapper(self, response, messages), None)
+
+            # TODO: Maybe remove this dump unless neccesary?
+            response_dict = self._modify_output(response.model_dump(), stream=stream)
+            return response_dict, self.compute_cost(
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
+            )
+        # TODO: These needs to be processed correctly in our endpoint
+        except APITimeoutError as error:
+            logger.error(f"Raised openai.APITimeoutError, Error: {error}")
+            raise HTTPException(status_code=408, detail=str(error))  # noqa: WPS432
+        except RateLimitError as error:
+            logger.error(f"Raised openai.RateLimitError, Error: {error}")
+            raise HTTPException(status_code=429, detail=str(error))  # noqa: WPS432
+        except BadRequestError as error:
+            logger.error(f"Raised openai.BadRequestError, Error: {error}")
+            raise HTTPException(status_code=400, detail=str(error))  # noqa: WPS432
+        except APIError as error:
+            logger.error(f"Raised openai.APIError, Error: {error}")
+            raise HTTPException(status_code=400, detail=str(error))  # noqa: WPS432
+
+
+class BaseGeneratorWrapper:
+    def __init__(self, provider, response, messages):
+        self.provider = provider
         self._response = response
-        self._model = model
         self._messages = messages
-        self._compute_cost_streaming = compute_cost_streaming
-        self._compute_cost = compute_cost
         self.total_cost = None
 
-    async def generator(self):  # noqa: D102, C901, WPS210, WPS231
-        whole = ""
-        usage = {}
+    def generator_iteration(self, part, whole):
+        part_dict = part.model_dump()
+        part_dict = self.provider._modify_output(part_dict, stream=True)
+        choices = part_dict["choices"]
+        if choices:
+            if choices[0]["delta"]["content"] is None:
+                return None
+        part_text = choices[0]["delta"]["content"] if choices else ""
+        index = choices[0]["index"] if choices else 0
+        if len(whole) <= index:
+            whole.extend([""] * (index - len(whole) + 1))
+        whole[index] += part_text
+        return part_dict
+
+
+class SyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
+    def generator(self):  # noqa: D102, C901, WPS210, WPS231
+        whole = []
         try:  # noqa: WPS501
-            async for part in await self._response:
-                if part.choices[0].delta.content is None:
+            for part in self._response:
+                part_dict = self.generator_iteration(part, whole)
+                if part_dict is None:
                     continue
-                usage = part.get("usage", {})
-
-                choices = [
-                    getattr(choice, "model_dump", lambda: None)()
-                    for choice in part.get("choices", [])
-                ]
-
-                part_dict = {
-                    "model": self._model,
-                    "created": part.get("created", None),
-                    "id": part.get(
-                        "id",
-                        f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237, E501
-                    ),
-                    "choices": choices,
-                    "object": part.get("object", "chat.completion.chunk"),
-                    "usage": usage.model_dump() if isinstance(usage, Usage) else usage,
-                }
-                part_text = choices[0]["delta"]["content"]
-                whole += part_text if part_text else ""
                 yield part_dict
         finally:
-            if isinstance(usage, Usage) and usage != Usage():
-                self.total_cost = self._compute_cost(
-                    self._model,
-                    [item["content"] for item in self._messages],
-                    ModelResponse(usage=usage),
-                )
-            else:
-                self.total_cost = self._compute_cost_streaming(
-                    self._model,
-                    whole,
-                    self._messages,
-                )
+            self.total_cost = self.provider.compute_cost_streaming(
+                whole,
+                self._messages,
+            )
+
+
+# TODO: Remove code duplication here
+class AsyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
+    async def generator(self):  # noqa: D102, C901, WPS210, WPS231
+        whole = []
+        try:  # noqa: WPS501
+            async for part in await self._response:
+                part_dict = self.generator_iteration(part, whole)
+                if part_dict is None:
+                    continue
+                yield part_dict
+        finally:
+            self.total_cost = self.provider.compute_cost_streaming(
+                whole,
+                self._messages,
+            )

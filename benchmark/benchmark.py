@@ -10,7 +10,6 @@ from typing import Dict, List, Union
 
 import yaml
 from aibench.runner import AIBenchRunner
-from models.llm import CompletionsModel
 from providers.completion import PROVIDER_CLASSES
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -66,7 +65,7 @@ def create_db_session() -> sessionmaker:  # noqa: WPS210
     host = os.getenv("ORCHESTRA_DB_HOST", "localhost")
     port = os.getenv("ORCHESTRA_DB_PORT", "5432")
     db_name = os.getenv("ORCHESTRA_DB_BASE", "orchestra")
-    db_url = f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{db_name}"  # noqa: WPS221, E501
+    db_url = f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{db_name}"
     # TODO: logger.info(db_url)
     engine = create_async_engine(db_url)
     return sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
@@ -192,10 +191,7 @@ async def worker_loop(  # noqa: WPS210
         print("Testing: {}".format(endpoint))
         # Retrieve/fabricate a callable based on the model the provider
         try:
-            language_model = CompletionsModel(
-                provider=endpoint["provider"],
-                model=endpoint["model"],
-            )
+            language_model = PROVIDER_CLASSES[endpoint["provider"]](endpoint["model"])
         except Exception as e:
             logging.error(f"Exception raised loading CompletionsModel: {e}")
             input_queue.task_done()
@@ -206,12 +202,11 @@ async def worker_loop(  # noqa: WPS210
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": prompt},
             ]
-            return language_model.get_completion(
+            return language_model.__call_async__(
                 message,
                 max_tokens=max_tokens,
                 stream=stream,
             )
-
         # Initialise the benchmark runner(s)
         benchmark_runners = []
         for config in configs:
@@ -231,7 +226,7 @@ async def worker_loop(  # noqa: WPS210
                 result["regime"] = f"concurrent-{result['load']}"
                 result["endpoint_id"] = endpoint["id"]
                 try:
-                    provider = PROVIDER_CLASSES[endpoint["provider"]]()
+                    provider = PROVIDER_CLASSES[endpoint["provider"]](endpoint["model"])
                     cost = provider.supported_models[endpoint["model"]]["cost"]
                     result["input_cost_per_token"] = cost["prompt"]
                     result["output_cost_per_token"] = cost["completion"]

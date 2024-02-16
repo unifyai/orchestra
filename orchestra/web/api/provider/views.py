@@ -11,7 +11,7 @@ router = APIRouter()
 
 
 @router.get("/providers", response_model=List[ProviderModelResponse])
-async def get_provider_models(
+def get_provider_models(
     limit: int = 10,
     offset: int = 0,
     provider_dao: ProviderDAO = Depends(),
@@ -24,11 +24,11 @@ async def get_provider_models(
     :param provider_dao: DAO for provider models.
     :return: list of provider objects from database.
     """
-    return await provider_dao.get_all_providers(limit=limit, offset=offset)
+    return provider_dao.get_all_providers(limit=limit, offset=offset)
 
 
 @router.get("/get_provider", response_model=List[ProviderModelResponse])
-async def get_provider(
+def get_provider(
     name: str,
     provider_dao: ProviderDAO = Depends(),
 ) -> List[Provider]:
@@ -39,4 +39,4 @@ async def get_provider(
     :param provider_dao: DAO for provider models.
     :return: provider object from database.
     """
-    return await provider_dao.filter(name=name)
+    return provider_dao.filter(name=name)
