@@ -143,12 +143,11 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Optional[Any]:
-
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
         try:  # noqa: WPS225
             response = client.chat.completions.create(
-                model=self.provider_endpoint, messages=messages, stream=stream, **kwargs
+                model=self.provider_endpoint, messages=messages, stream=stream, **kwargs,
             )
             if stream:
                 return (SyncGeneratorWrapper(self, response, messages), None)
@@ -179,12 +178,11 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Optional[Any]:
-
         client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
 
         try:  # noqa: WPS225
             response = client.chat.completions.create(
-                model=self.provider_endpoint, messages=messages, stream=stream, **kwargs
+                model=self.provider_endpoint, messages=messages, stream=stream, **kwargs,
             )
             if stream:
                 return (AsyncGeneratorWrapper(self, response, messages), None)
@@ -222,13 +220,17 @@ class BaseGeneratorWrapper:
         part_dict = self.provider._modify_output(part_dict, stream=True)
         choices = part_dict["choices"]
         if choices:
-            content = choices[0]["delta"]["content"]
-            part_text = content if content else ""
-            index = choices[0].get("index", 0)
-            if len(whole) <= index:
-                whole.extend([""] * (index - len(whole) + 1))
-            whole[index] += part_text
-        return part_dict
+            if choices[0]["delta"]["content"] is None:
+                if not part_dict.get("usage"):
+                    return None, True
+                return part_dict, False
+
+        part_text = choices[0]["delta"]["content"] if choices else ""
+        index = choices[0]["index"] if choices else 0
+        if len(whole) <= index:
+            whole.extend([""] * (index - len(whole) + 1))
+        whole[index] += part_text
+        return part_dict, False
 
 
 class SyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
@@ -236,15 +238,15 @@ class SyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
         whole = []
         try:  # noqa: WPS501
             for part in self._response:
-                part_dict = self.generator_iteration(part, whole)
-                if part_dict is None:
+                part_dict, skip = self.generator_iteration(part, whole)
+                if skip:
                     continue
                 yield part_dict
         finally:
-            if isinstance(part.usage, CompletionUsage):
+            if part_dict.get("usage"):
                 self.total_cost = self.provider.compute_cost(
-                    part_dict["usage"].prompt_tokens,
-                    part_dict["usage"].completion_tokens,
+                    part_dict["usage"]["prompt_tokens"],
+                    part_dict["usage"]["completion_tokens"],
                 )
             else:
                 self.total_cost = self.provider.compute_cost_streaming(
@@ -259,12 +261,18 @@ class AsyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
         whole = []
         try:  # noqa: WPS501
             async for part in await self._response:
-                part_dict = self.generator_iteration(part, whole)
-                if part_dict is None:
+                part_dict, skip = self.generator_iteration(part, whole)
+                if skip:
                     continue
                 yield part_dict
         finally:
-            self.total_cost = self.provider.compute_cost_streaming(
-                whole,
-                self._messages,
-            )
+            if part_dict.get("usage"):
+                self.total_cost = self.provider.compute_cost(
+                    part_dict["usage"]["prompt_tokens"],
+                    part_dict["usage"]["completion_tokens"],
+                )
+            else:
+                self.total_cost = self.provider.compute_cost_streaming(
+                    whole,
+                    self._messages,
+                )
