@@ -14,15 +14,13 @@ from orchestra.tests.utils import (
     check_text_gen_usage,
 )
 
-# TODO: Fix provider files for every provider
-# One # means untested, ## or uncommented means tested
 MODELS = [
-    ## "gpt-3.5-turbo@openai",
+    # "gpt-3.5-turbo@openai", # OpenAI is not in the db seeding script
     "llama-2-7b-chat@anyscale",
-    # "llama-2-7b-chat@deepinfra",
-    # "llama-2-7b-chat@fireworks-ai",
-    # "llama-2-7b-chat@lepton-ai",
-    # "llama-2-7b-chat@replicate", # TODO: Needs to be refactored
+    "llama-2-7b-chat@deepinfra",
+    "llama-2-7b-chat@fireworks-ai",
+    "llama-2-7b-chat@lepton-ai",
+    "llama-2-7b-chat@replicate",
     "llama-2-7b-chat@together-ai",
     "mistral-7b-instruct-v0.2@mistral-ai",
     "mistral-7b-instruct-v0.1@octoai",
@@ -50,30 +48,26 @@ async def test_text_generation(  # noqa: WPS218, E501
 
     :param client: client for the app.
     """
-    with patch("fastapi.BackgroundTasks.add_task") as mock:
+    model, provider = model.split("@")
+    stream = stream_str == "stream"
+    data = payload_fn[endpoint](model, provider, stream=stream)
 
-        mock.side_effect = lambda *args, **kwargs: None
-        model, provider = model.split("@")
-        stream = stream_str == "stream"
-        data = payload_fn[endpoint](model, provider, stream=stream)
+    pre_credits = await get_credits(client)
+    response = await client.post(endpoint, headers=HEADERS, json=data)
+    assert response.status_code == status.HTTP_200_OK
 
-        pre_credits = await get_credits(client)
-        response = await client.post(endpoint, headers=HEADERS, json=data)
-        assert response.status_code == status.HTTP_200_OK
+    if stream:
+        for line in response.iter_lines():
+            response_dict = line.removeprefix("data: ")
+            response_json = json.loads(response_dict)
+            check_text_gen_response(response_json, "chat.completion.chunk")
+            check_text_gen_choice(response_json.get("choices")[0], "delta")
+            break  # TODO: Remove this and test corner cases properly
+    else:
+        response_json = json.loads(response.text)
+        check_text_gen_response(response_json, "chat.completion")
+        check_text_gen_choice(response_json.get("choices")[0], "message")
+        check_text_gen_usage(response_json.get("usage"))
 
-        if stream:
-            for line in response.iter_lines():
-                response_dict = line.removeprefix("data: ")
-                response_json = json.loads(response_dict)
-                check_text_gen_response(response_json, "chat.completion.chunk")
-                check_text_gen_choice(response_json.get("choices")[0], "delta")
-                break  # TODO: Remove this and test corner cases properly
-        else:
-            response_json = json.loads(response.text)
-            check_text_gen_response(response_json, "chat.completion")
-            check_text_gen_choice(response_json.get("choices")[0], "message")
-            check_text_gen_usage(response_json.get("usage"))
-
-        post_credits = await get_credits(client)
-        # TODO: Fix this
-        # assert post_credits < pre_credits
+    post_credits = await get_credits(client)
+    assert post_credits < pre_credits
