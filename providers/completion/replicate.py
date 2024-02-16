@@ -1,23 +1,12 @@
-import time
-import uuid
+import os
+import replicate
+import providers.completion.replicate_run as r8r
 from datetime import datetime
 from typing import Any, List, Optional
-
-import requests
-from fastapi import HTTPException
-from litellm.llms.prompt_templates.factory import prompt_factory
-from litellm.utils import (
-    Choices,
-    Delta,
-    Message,
-    ModelResponse,
-    StreamingChoices,
-    Usage,
-)
 from providers.completion.base_completion_provider import (
-    PRICING_PER_TOKENS,
-    AsyncGeneratorWrapper,
     BaseCompletionProvider,
+    SyncGeneratorWrapper,
+    AsyncGeneratorWrapper,
 )
 
 
@@ -30,343 +19,195 @@ class Replicate(BaseCompletionProvider):
     per million tokens: https://replicate.com/pricing
     """
 
-    hardware_pricing_per_sec = {
-        "cpu": 0.000100,  # noqa: WPS339
-        "t4": 0.000225,
-        "a40": 0.000575,
-        "a40-large": 0.000725,
-        "a100-40gb": 0.001150,  # noqa: WPS339
-        "a100-80gb": 0.001400,  # noqa: WPS339
-        "8xa40": 0.005800,  # noqa: WPS339
-    }
-    supported_models = {
-        "mistral-7b-instruct-v0.1": {
-            "endpoint": "mistralai/mistral-7b-instruct-v0.1:83b6a56e7c828e667f21fd596c338fd4f0039b46bcfa18d973e8e70e455fda70",  # noqa: E501
-            "context_window": 16384,
-            "cost": {"hardware": "a40", "per_second": True},
-        },
-        "mistral-7b-instruct-v0.2": {
-            "endpoint": "mistralai/mistral-7b-instruct-v0.2",
-            "context_window": 16384,
-            "cost": {"prompt": 0.05, "completion": 0.25},
-        },
-        "mixtral-8x7b-instruct-v0.1": {
-            "endpoint": "mistralai/mixtral-8x7b-instruct-v0.1",
-            "context_window": 16384,
-            "cost": {"prompt": 0.30, "completion": 1.00},  # noqa: WPS339
-        },
-        "mistral-7b-v0.1": {
-            "endpoint": "mistralai/mistral-7b-v0.1",
-            "context_window": 4096,
-            "cost": {"prompt": 0.05, "completion": 0.25},
-        },
-        "llama-2-70b": {
-            "endpoint": "meta/llama-2-70b",
-            "context_window": 4096,
-            "cost": {"prompt": 0.65, "completion": 2.75},
-        },
-        "llama-2-70b-chat": {
-            "endpoint": "meta/llama-2-70b-chat",
-            "context_window": 4096,
-            "cost": {"prompt": 0.65, "completion": 2.75},
-        },
-        "gpt-j-6b": {
-            "endpoint": "gpt-j-6b:b3546aeec6c9891f0dd9929c2d3bedbf013c12e02e7dd0346af09c37e008c827",  # noqa: E501
-            "context_window": 2048,
-            "cost": {"hardware": "a100-40gb", "per_second": True},
-        },
-        "llama-2-13b": {
-            "endpoint": "meta/llama-2-13b",
-            "context_window": 4096,
-            "cost": {"prompt": 0.10, "completion": 0.50},  # noqa: WPS339
-        },
-        "llama-2-13b-chat": {
-            "endpoint": "meta/llama-2-13b-chat",
-            "context_window": 4096,
-            "cost": {"prompt": 0.10, "completion": 0.50},  # noqa: WPS339
-        },
-        "llama-2-7b": {
-            "endpoint": "meta/llama-2-7b",
-            "context_window": 4096,
-            "cost": {"prompt": 0.05, "completion": 0.25},
-        },
-        "llama-2-7b-chat": {
-            "endpoint": "meta/llama-2-7b-chat",
-            "context_window": 4096,
-            "cost": {"prompt": 0.05, "completion": 0.25},
-        },
-    }
+    def __init__(self, hub_model):
+        super().__init__(hub_model)
+        self.supported_models = supported_models
+        os.environ["REPLICATE_API_TOKEN"] = self.api_key
 
-    def set_api_key(self, api_key: str) -> None:  # noqa: D102
-        self.api_key = api_key
+    @property
+    def api_key_var(self) -> str:
+        return "ORCHESTRA_REPLICATE_API_KEY"
 
-    def start_prediction(  # noqa: D102
-        self,
-        version_id,
-        input_data,
-        api_token,
-        api_base,
-    ):
-        base_url = api_base
+    @property
+    def base_url(self):
+        return f"https://api.replicate.com/v1/models/{self.provider_endpoint}"
 
-        headers = {
-            "Authorization": f"Token {api_token}",
-            "Content-Type": "application/json",
+    @staticmethod
+    def usage_from_response(response):
+        return {
+            "prompt_tokens": response.metrics["input_token_count"],
+            "completion_tokens": response.metrics["output_token_count"],
+            "total_tokens": response.metrics["input_token_count"]
+            + response.metrics["output_token_count"],
         }
 
-        initial_prediction_data = {
-            "input": input_data,
-        }
-        if version_id:
-            initial_prediction_data["version"] = version_id
+    @staticmethod
+    def str_to_ts(str):
+        parsed = datetime.strptime(str, "%Y-%m-%dT%H:%M:%S.%fZ")
+        return int(parsed.timestamp())
 
-        response = requests.post(  # noqa: S113
-            f"{base_url}/predictions",
-            json=initial_prediction_data,
-            headers=headers,
-        )
-        if response.status_code == 201:  # noqa: WPS432
-            response_data = response.json()
-            return response_data.get("urls", {}).get("get")
-
-        raise HTTPException(
-            response.status_code,
-            f"Failed to start prediction {response.text}",
-        )
-
-    def complete(  # noqa: D102, WPS211, C901, WPS231
-        self,
-        model: str,
-        messages: List,  # type: ignore
-        max_tokens: Optional[int] = 512,
-        temperature: Optional[float] = 0.9,
-        stream: Optional[bool] = False,
-    ) -> Optional[Any]:
-        endpoint = self.supported_models[model]["endpoint"]
-
-        if "hardware" in self.supported_models[model]["cost"]:
-            api_base = "https://api.replicate.com/v1/"
-        else:
-            api_base = f"https://api.replicate.com/v1/models/{endpoint}"
-
-        self.prompt = prompt_factory(model=endpoint, messages=messages)
-        input_data = {
-            "prompt": self.prompt,
-            "max_new_tokens": max_tokens,
-            "temperature": temperature,
-        }
-        prediction_url = self.start_prediction(
-            endpoint,
-            input_data,
-            self.api_key,
-            api_base,
-        )
-
-        if stream:
-            return (
-                ReplicateAsyncGeneratorWrapper(
-                    self.handle_prediction_response_streaming(prediction_url),
-                    model,
-                    messages,
-                    compute_cost_streaming=self.compute_cost_streaming,
-                    compute_cost=self.compute_cost,
-                ),
-                None,
-            )
-
-        response = self.handle_prediction_response(prediction_url)
-        return response, self.compute_cost(
-            model,
-            [item["content"] for item in messages],
-            response,
-        )
-
-    def get_cost_max(self, model_name: str) -> float:  # noqa: D102
-        if model_name not in self.supported_models:
-            raise ValueError("Model not supported")
-        cost_data = self.supported_models[model_name]["cost"]
-        # Defined constant used to approximate maximum cost.
-        # Represents the maximum time a server might take to process a request.
-        max_runtime_secs = 100
-        if "hardware" in cost_data:
-            return (
-                self.hardware_pricing_per_sec[
-                    cost_data["hardware"]  # noqa: WPS529, E501
-                ]
-                * max_runtime_secs
-            )
-        return (
-            self.supported_models[model_name]["cost"]["completion"]
-            * self.supported_models[model_name]["context_window"]
-            / PRICING_PER_TOKENS
-        )
-
-    def handle_prediction_response_streaming(  # noqa: D102, E501, WPS210, WPS231
-        self,
-        prediction_url,
-    ):
-        previous_output = ""
-        output_string = ""
-
-        headers = {
-            "Authorization": f"Token {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        status = ""
-        while True and (  # noqa: WPS352
-            status not in ["succeeded", "failed", "canceled"]  # noqa: WPS510, E501
-        ):
-            time.sleep(0.5)  # prevent being rate limited by replicate
-            response = requests.get(prediction_url, headers=headers)  # noqa: S113
-            if response.status_code == 200:  # noqa: WPS432
-                response_data = response.json()
-                status = response_data["status"]
-                if "output" in response_data:
-                    output_string = "".join(response_data["output"])  # noqa: WPS529
-                    new_output = output_string[len(previous_output) :]
-                    finish_reason = "stop" if status == "succeeded" else None
-                    choices = [
-                        StreamingChoices(
-                            finish_reason=finish_reason,
-                            delta=Delta(content=new_output, role="assistant"),
-                        ),
-                    ]
-                    created = int(time.time())
-
-                    usage = Usage()
-                    if status == "succeeded":
-                        prompt_tokens = response_data["metrics"][  # noqa: WPS220, E501
-                            "input_token_count"
-                        ]
-                        completion_tokens = response_data["metrics"][  # noqa: WPS220
-                            "output_token_count"
-                        ]
-                        total_tokens = prompt_tokens + completion_tokens  # noqa: WPS220
-                        predict_time = response_data["metrics"][  # noqa: WPS220, E501
-                            "predict_time"
-                        ]
-                        time_to_first_token = response_data["metrics"][  # noqa: WPS220
-                            "time_to_first_token"
-                        ]
-                        tokens_per_second = response_data["metrics"][  # noqa: WPS220
-                            "tokens_per_second"
-                        ]
-                        usage = Usage(  # noqa: WPS220
-                            prompt_tokens,
-                            completion_tokens,
-                            total_tokens,
-                            predict_time=predict_time,
-                            time_to_first_token=time_to_first_token,
-                            tokens_per_second=tokens_per_second,
-                        )
-                    yield {"choices": choices, "created": created, "usage": usage}
-                    previous_output = output_string
-                status = response_data["status"]
-                if status == "failed":
-                    replicate_error = response_data.get("error", "")
-                    raise HTTPException(
-                        status_code=400,  # noqa: WPS432
-                        message=f"Error: {replicate_error}",
-                    )
-
-    def handle_prediction_response(  # noqa: D102, E501, WPS210, WPS231
-        self,
-        prediction_url,
-    ):
-        output_string = ""
-        headers = {
-            "Authorization": f"Token {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        status = ""
-        while True and (  # noqa: WPS352
-            status not in ["succeeded", "failed", "canceled"]  # noqa: WPS510, E501
-        ):
-            time.sleep(0.5)
-            response = requests.get(prediction_url, headers=headers)  # noqa: S113
-            if response.status_code == 200:  # noqa: WPS432
-                response_data = response.json()
-                if "output" in response_data:
-                    output_string = "".join(response_data["output"])  # noqa: WPS529
-                status = response_data.get("status", None)
-                if status == "failed":
-                    replicate_error = response_data.get("error", "")
-                    raise HTTPException(
-                        status_code=400,  # noqa: WPS432
-                        message=f"Error: {replicate_error}",
-                    )
-        timestamp = datetime.strptime(
-            response_data["created_at"],
-            "%Y-%m-%dT%H:%M:%S.%fZ",
-        )
-        created = time.mktime(timestamp.timetuple())
-        prompt_tokens = response_data["metrics"]["input_token_count"]
-        completion_tokens = response_data["metrics"]["output_token_count"]
-        total_tokens = prompt_tokens + completion_tokens
-        predict_time = response_data["metrics"]["predict_time"]
-        time_to_first_token = response_data["metrics"]["time_to_first_token"]
-        tokens_per_second = response_data["metrics"]["tokens_per_second"]
-        usage = Usage(
-            prompt_tokens,
-            completion_tokens,
-            total_tokens,
-            predict_time=predict_time,
-            time_to_first_token=time_to_first_token,
-            tokens_per_second=tokens_per_second,
-        )
-
-        response = ModelResponse(
-            id=f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237
-            choices=[Choices(message=Message(), index=0, finish_reason="stop")],
-            created=created,
-            _response_ms=predict_time * 1000,
-            usage=usage,
-            object="chat.completion",
-        )
-        response["choices"][0]["message"]["content"] = output_string
-        return response
-
-
-class ReplicateAsyncGeneratorWrapper(AsyncGeneratorWrapper):
-    """A wrapper for the Replicate async generator."""
-
-    async def generator(self):  # noqa: D102, C901, WPS210, WPS231
-        whole = ""
-        usage = {}
-        try:  # noqa: WPS501
-            for part in self._response:
-                usage = part.get("usage", {})
-
-                choices = [
-                    getattr(choice, "model_dump", lambda: None)()
-                    for choice in part.get("choices", [])
-                ]
-
-                part_dict = {
-                    "model": self._model,
-                    "created": part.get("created", None),
-                    "id": part.get(
-                        "id",
-                        f"chatcmpl-{str(uuid.uuid4())}",  # noqa: WPS237, E501
+    def response_to_chat_completion(self, response):
+        created_at = self.str_to_ts(response.created_at)
+        return dict(
+            id=response.id,
+            choices=[
+                dict(
+                    finish_reason="length",  # TODO
+                    index=0,
+                    message=dict(
+                        content=" ".join(response.output),
+                        role="assistant",
                     ),
-                    "choices": choices,
-                    "object": part.get("object", "chat.completion.chunk"),
-                    "usage": usage.model_dump() if isinstance(usage, Usage) else usage,
-                }
-                part_text = choices[0]["delta"]["content"]
-                whole += part_text if part_text else ""
-                yield part_dict
-        finally:
-            if isinstance(usage, Usage) and usage != Usage():
-                self.total_cost = self._compute_cost(
-                    self._model,
-                    [item["content"] for item in self._messages],
-                    ModelResponse(usage=usage),
-                )
-            else:
-                self.total_cost = self._compute_cost_streaming(
-                    self._model,
-                    whole,
-                    self._messages,
-                )
+                    logprobs=None,
+                ),
+            ],
+            created=created_at,
+            model=self.hub_model,
+            object="chat.completion",
+            usage=self.usage_from_response(response),
+        )
+
+    def __call__(
+        self, messages: List, stream: bool = False, **kwargs: Any
+    ) -> Optional[Any]:
+        # TODO: Ensure that messages is only one message long
+        # TODO: system prompt is not supported in all models
+        # TODO: Deal with rate limits
+        # TODO: Get inputs and outputs from every model:
+        # TODO: Add exceptions
+        # TODO: kwargs need to be cleaned depending on the model
+        # TODO: Prompt factory needs to be model specific (family)
+        # https://replicate.com/docs/reference/http#models.get
+        _messages = messages[:]
+        r8_kwargs = {}
+        if _messages[0]["role"] == "system":
+            r8_kwargs["system_prompt"] = _messages[0]["content"]
+            _messages.pop(0)
+        prompt = self.prompt_factory(_messages)
+        if stream:
+            response = replicate.stream(
+                self.provider_endpoint,
+                input={"prompt": prompt},
+                **r8_kwargs,
+                # **kwargs, # TODO
+            )
+            return (R8SyncGeneratorWrapper(self, response, messages), None)
+        else:
+            response = r8r.run(
+                replicate.default_client,
+                self.provider_endpoint,
+                input={"prompt": prompt},
+                **r8_kwargs,
+                # **kwargs, TODO
+            )
+            return (
+                self.response_to_chat_completion(response),
+                self.compute_cost(
+                    response.metrics["input_token_count"],
+                    response.metrics["output_token_count"],
+                ),
+            )
+
+    def __call_async__(
+        self, messages: List, stream: bool = False, **kwargs: Any
+    ) -> Optional[Any]:
+        _messages = messages[:]
+        r8_kwargs = {}
+        if _messages[0]["role"] == "system":
+            r8_kwargs["system_prompt"] = _messages[0]["content"]
+            _messages.pop(0)
+        prompt = self.prompt_factory(_messages)
+        if stream:
+            response = replicate.async_stream(
+                self.provider_endpoint,
+                input={"prompt": prompt},
+                # **r8_kwargs,
+                # **kwargs, # TODO
+            )
+            return (R8AsyncGeneratorWrapper(self, response, messages), None)
+        else:
+            response = r8r.async_run(
+                replicate.default_client,
+                self.provider_endpoint,
+                input={"prompt": prompt},
+                **r8_kwargs,
+                # **kwargs, TODO
+            )
+            return (
+                self.response_to_chat_completion(response),
+                self.compute_cost(
+                    response.metrics["input_token_count"],
+                    response.metrics["output_token_count"],
+                ),
+            )
+
+    def prompt_factory(self, messages):
+        return "\n".join(
+            (
+                f"[INST] {message['content']} [/INST]"
+                if message["role"] == "user"
+                else message["content"]
+            )
+            for message in messages
+        )
+
+
+class R8SyncGeneratorWrapper(SyncGeneratorWrapper):
+    def generator_iteration(self, part, whole):
+        return sse_to_part_dict(part, whole)
+
+
+class R8AsyncGeneratorWrapper(AsyncGeneratorWrapper):
+    def generator_iteration(self, part, whole):
+        return sse_to_part_dict(part, whole)
+
+
+def sse_to_part_dict(part, whole):
+    part_dict = {
+        "id": part.id,
+        "object": "chat.completion.chunk",
+        "created": int(part.id.split(":")[0]),
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": part.data},
+                "logprobs": None,  # TODO?
+                "finish_reason": None,  # TODO
+            }
+        ],
+    }
+    if part.data == "":
+        return None
+    if not whole:
+        whole.extend([""])
+    whole[0] += part.data
+    return part_dict
+
+
+supported_models = {
+    "mistral-7b-instruct-v0.2": {
+        "endpoint": "mistralai/mistral-7b-instruct-v0.2",
+        "context_window": 16384,
+        "cost": {"prompt": 0.05, "completion": 0.25},
+    },
+    "mixtral-8x7b-instruct-v0.1": {
+        "endpoint": "mistralai/mixtral-8x7b-instruct-v0.1",
+        "context_window": 16384,
+        "cost": {"prompt": 0.30, "completion": 1.00},  # noqa: WPS339
+    },
+    "llama-2-70b-chat": {
+        "endpoint": "meta/llama-2-70b-chat",
+        "context_window": 4096,
+        "cost": {"prompt": 0.65, "completion": 2.75},
+    },
+    "llama-2-13b-chat": {
+        "endpoint": "meta/llama-2-13b-chat",
+        "context_window": 4096,
+        "cost": {"prompt": 0.10, "completion": 0.50},  # noqa: WPS339
+    },
+    "llama-2-7b-chat": {
+        "endpoint": "meta/llama-2-7b-chat",
+        "context_window": 4096,
+        "cost": {"prompt": 0.05, "completion": 0.25},
+    },
+}

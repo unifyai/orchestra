@@ -2,8 +2,8 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy.ext.asyncio.engine import create_async_engine
-from sqlalchemy.future import Connection
+from sqlalchemy import create_engine
+from sqlalchemy import Connection
 
 from orchestra.db.meta import meta
 from orchestra.db.models import load_all_models
@@ -32,7 +32,7 @@ target_metadata = meta
 # ... etc.
 
 
-async def run_migrations_offline() -> None:
+def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
 
     This configures the context with just a URL
@@ -67,23 +67,20 @@ def do_run_migrations(connection: Connection) -> None:
         context.run_migrations()
 
 
-async def run_migrations_online() -> None:
+def run_migrations_online() -> None:
     """
     Run migrations in 'online' mode.
 
     In this scenario we need to create an Engine
     and associate a connection with the context.
     """
-    connectable = create_async_engine(str(settings.db_url))
+    connectable = create_engine(str(settings.db_url))
 
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
+    with connectable.connect() as connection:
+        do_run_migrations(connection)
 
-
-loop = asyncio.get_event_loop()
 if context.is_offline_mode():
-    task = run_migrations_offline()
+    task = run_migrations_offline
 else:
-    task = run_migrations_online()
-
-loop.run_until_complete(task)
+    task = run_migrations_online
+task()

@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 @router.get("/", response_model=List[QueryModelResponse])
-async def get_query_models(
+def get_query_models(
     limit: int = 10,
     offset: int = 0,
     query_dao: QueryDAO = Depends(),
@@ -25,11 +25,11 @@ async def get_query_models(
     :param query_dao: DAO for query models.
     :return: list of query objects from database.
     """
-    return await query_dao.get_all_queries(limit=limit, offset=offset)
+    return query_dao.get_all_queries(limit=limit, offset=offset)
 
 
 @router.put("/")
-async def create_query_model(
+def create_query_model(
     new_query_object: QueryModelRequest,
     query_dao: QueryDAO = Depends(),
 ) -> None:
@@ -40,7 +40,7 @@ async def create_query_model(
     :param query_dao: DAO for query models.
     """
     at = datetime.datetime.now()
-    await query_dao.create_query(
+    query_dao.create_query(
         user_id=new_query_object.user_id,
         at=at,
         endpoint_id=new_query_object.endpoint_id,

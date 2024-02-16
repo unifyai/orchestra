@@ -7,7 +7,7 @@ from requests import request  # type: ignore
 security = HTTPBearer()
 
 
-async def auth_api_key(
+def auth_api_key(
     request_fastapi: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> None:
@@ -33,7 +33,7 @@ async def auth_api_key(
     request_fastapi.state.user_id = auth_ret.json()["user_id"]
 
 
-async def auth_admin_key(
+def auth_admin_key(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> None:
     """
