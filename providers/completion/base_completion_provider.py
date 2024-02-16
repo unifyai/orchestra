@@ -12,6 +12,7 @@ from openai import (
     OpenAI,
     RateLimitError,
 )
+from openai.types.completion_usage import CompletionUsage
 
 logger = logging.getLogger(__name__)
 
@@ -221,13 +222,12 @@ class BaseGeneratorWrapper:
         part_dict = self.provider._modify_output(part_dict, stream=True)
         choices = part_dict["choices"]
         if choices:
-            if choices[0]["delta"]["content"] is None:
-                return None
-        part_text = choices[0]["delta"]["content"] if choices else ""
-        index = choices[0]["index"] if choices else 0
-        if len(whole) <= index:
-            whole.extend([""] * (index - len(whole) + 1))
-        whole[index] += part_text
+            content = choices[0]["delta"]["content"]
+            part_text = content if content else ""
+            index = choices[0].get("index", 0)
+            if len(whole) <= index:
+                whole.extend([""] * (index - len(whole) + 1))
+            whole[index] += part_text
         return part_dict
 
 
@@ -241,10 +241,16 @@ class SyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
                     continue
                 yield part_dict
         finally:
-            self.total_cost = self.provider.compute_cost_streaming(
-                whole,
-                self._messages,
-            )
+            if isinstance(part.usage, CompletionUsage):
+                self.total_cost = self.provider.compute_cost(
+                    part_dict["usage"].prompt_tokens,
+                    part_dict["usage"].completion_tokens,
+                )
+            else:
+                self.total_cost = self.provider.compute_cost_streaming(
+                    whole,
+                    self._messages,
+                )
 
 
 # TODO: Remove code duplication here
