@@ -121,10 +121,10 @@ class Replicate(BaseCompletionProvider):
             response = replicate.async_stream(
                 self.provider_endpoint,
                 input={"prompt": prompt},
-                **r8_kwargs,
+                # **r8_kwargs,
                 # **kwargs, # TODO
             )
-            return (R8SyncGeneratorWrapper(self, response, messages), None)
+            return (R8AsyncGeneratorWrapper(self, response, messages), None)
         else:
             response = r8r.async_run(
                 replicate.default_client,
