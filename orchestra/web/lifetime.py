@@ -87,7 +87,7 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
     )
     SQLAlchemyInstrumentor().instrument(
         tracer_provider=tracer_provider,
-        engine=app.state.db_engine.sync_engine,
+        engine=app.state.db_engine,
     )
 
     set_tracer_provider(tracer_provider=tracer_provider)
