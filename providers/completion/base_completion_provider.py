@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import tiktoken
 from fastapi import HTTPException
@@ -146,7 +146,7 @@ class BaseCompletionProvider:
         messages: List,  # type: ignore
         stream: bool = False,
         **kwargs: Any,
-    ) -> Tuple[Any, Optional[Callable]]:
+    ) -> Any:
 
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
@@ -155,14 +155,11 @@ class BaseCompletionProvider:
                 model=self.provider_endpoint, messages=messages, stream=stream, **kwargs
             )
             if isinstance(response, Stream):
-                return (SyncGeneratorWrapper(self, response, messages), None)
+                return SyncGeneratorWrapper(self, response, messages)
 
             # TODO: Maybe remove this dump unless neccesary?
             response_dict = self._modify_output(response.model_dump(), stream=stream)
-            return response_dict, self.compute_cost(
-                response_dict["usage"]["prompt_tokens"],
-                response_dict["usage"]["completion_tokens"],
-            )
+            return response_dict
         # TODO: These needs to be processed correctly in our endpoint
         except APITimeoutError as error:
             logger.error(f"Raised openai.APITimeoutError, Error: {error}")
@@ -182,7 +179,7 @@ class BaseCompletionProvider:
         messages: List,  # type: ignore
         stream: bool = False,
         **kwargs: Any,
-    ) -> Tuple[Any, Optional[Callable]]:
+    ) -> Any:
 
         client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
 
@@ -191,14 +188,9 @@ class BaseCompletionProvider:
                 model=self.provider_endpoint, messages=messages, stream=stream, **kwargs
             )
             if isinstance(response, AsyncStream):
-                return (AsyncGeneratorWrapper(self, response, messages), None)
+                return AsyncGeneratorWrapper(self, response, messages)
 
-            # TODO: Maybe remove this dump unless neccesary?
-            response_dict = self._modify_output(response.model_dump(), stream=stream)
-            return response_dict, self.compute_cost(
-                response.usage.prompt_tokens,
-                response.usage.completion_tokens,
-            )
+            return response
         # TODO: These needs to be processed correctly in our endpoint
         except APITimeoutError as error:
             logger.error(f"Raised openai.APITimeoutError, Error: {error}")

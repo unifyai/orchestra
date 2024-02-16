@@ -112,7 +112,7 @@ async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, W
             "users_dao": users_dao,
         }
 
-        response, cost = lm(messages=messages, **filtered_params)
+        response = lm(messages=messages, **filtered_params)
 
         # TODO: Handle when response is None
         if not response:
@@ -144,10 +144,13 @@ async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, W
             return StreamingResponse(stream_and_update_db())
 
         else:
-            if not callable(cost):
-                raise ValueError("cost function must be a callable.")
             background_tasks.add_task(
-                db_operations, cost_deferred_fn=cost, **db_operations_kwargs
+                db_operations,
+                cost_deferred_fn=lm.compute_cost(
+                    response["usage"]["prompt_tokens"],
+                    response["usage"]["completion_tokens"],
+                ),
+                **db_operations_kwargs,
             )
 
         response["model"] = model

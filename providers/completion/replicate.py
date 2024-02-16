@@ -68,9 +68,7 @@ class Replicate(BaseCompletionProvider):
             usage=self.usage_from_response(response),
         )
 
-    def __call__(
-        self, messages: List, stream: bool = False, **kwargs: Any
-    ) -> Tuple[Any, Optional[Callable]]:
+    def __call__(self, messages: List, stream: bool = False, **kwargs: Any) -> Any:
         # TODO: Ensure that messages is only one message long
         # TODO: system prompt is not supported in all models
         # TODO: Deal with rate limits
@@ -101,17 +99,11 @@ class Replicate(BaseCompletionProvider):
                 **r8_kwargs,
                 # **kwargs, TODO
             )
-            return (
-                self.response_to_chat_completion(response),
-                self.compute_cost(
-                    response.metrics["input_token_count"],
-                    response.metrics["output_token_count"],
-                ),
-            )
+            return self.response_to_chat_completion(response)
 
     def __call_async__(
         self, messages: List, stream: bool = False, **kwargs: Any
-    ) -> Tuple[Any, Optional[Callable]]:
+    ) -> Any:
         _messages = messages[:]
         r8_kwargs = {}
         if _messages[0]["role"] == "system":
@@ -134,13 +126,7 @@ class Replicate(BaseCompletionProvider):
                 **r8_kwargs,
                 # **kwargs, TODO
             )
-            return (
-                self.response_to_chat_completion(response),
-                self.compute_cost(
-                    response.metrics["input_token_count"],
-                    response.metrics["output_token_count"],
-                ),
-            )
+            return self.response_to_chat_completion(response)
 
     def prompt_factory(self, messages):
         return "\n".join(

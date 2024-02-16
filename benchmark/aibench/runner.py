@@ -106,7 +106,7 @@ class AIBenchRunner:
         # then check the `output_tokens` in processed results
         # TODO: remove the double return
         start_time = time.perf_counter()
-        result, _ = self.fn(  # type: ignore
+        result = self.fn(  # type: ignore
             prompt=prompt,
             max_tokens=max_tokens,
             stream=True,
@@ -154,7 +154,7 @@ class AIBenchRunner:
         completions = []
 
         start_time = time.perf_counter()
-        result, _ = self.fn(  # type: ignore
+        result = self.fn(  # type: ignore
             prompt=prompt,
             max_tokens=10,
             stream=True,
