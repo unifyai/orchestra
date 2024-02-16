@@ -3,7 +3,7 @@ from typing import List, Optional
 
 from fastapi import Depends
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Recharge
@@ -12,10 +12,10 @@ from orchestra.db.models.orchestra_models import Recharge
 class RechargeDAO:
     """Class for accessing recharge table."""
 
-    def __init__(self, session: AsyncSession = Depends(get_db_session)):
+    def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    async def create_recharge(
+    def create_recharge(
         self,
         at: datetime.datetime,
         user_id: str,
@@ -39,7 +39,7 @@ class RechargeDAO:
             ),
         )
 
-    async def get_all_recharges(self, limit: int, offset: int) -> List[Recharge]:
+    def get_all_recharges(self, limit: int, offset: int) -> List[Recharge]:
         """
         Get all recharge models with limit/offset pagination.
 
@@ -47,13 +47,13 @@ class RechargeDAO:
         :param offset: offset of recharges.
         :return: stream of recharges.
         """
-        raw_recharges = await self.session.execute(
+        raw_recharges = self.session.execute(
             select(Recharge).limit(limit).offset(offset),
         )
 
         return list(raw_recharges.scalars().fetchall())
 
-    async def filter(  # noqa: WPS211
+    def filter(  # noqa: WPS211
         self,
         id: Optional[int] = None,  # noqa: WPS125
         at: Optional[datetime.datetime] = None,
@@ -83,6 +83,6 @@ class RechargeDAO:
         if type:
             query = query.where(Recharge.type == type)
 
-        raw_recharges = await self.session.execute(query)
+        raw_recharges = self.session.execute(query)
 
         return list(raw_recharges.scalars().fetchall())
