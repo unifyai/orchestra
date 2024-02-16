@@ -1,3 +1,5 @@
+from typing import Dict
+
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
@@ -9,40 +11,59 @@ class Anyscale(BaseCompletionProvider):
     Pricing is per million tokens: https://docs.endpoints.anyscale.com/pricing
     """
 
-    supported_models = {
-        "llama-2-7b-chat": {
-            "endpoint": "anyscale/meta-llama/Llama-2-7b-chat-hf",
-            "context_window": 4096,
-            "cost": {"prompt": 0.15, "completion": 0.15},
-        },
-        "llama-2-13b-chat": {
-            "endpoint": "anyscale/meta-llama/Llama-2-13b-chat-hf",
-            "context_window": 4096,
-            "cost": {"prompt": 0.25, "completion": 0.25},
-        },
-        "llama-2-70b-chat": {
-            "endpoint": "anyscale/meta-llama/Llama-2-70b-chat-hf",
-            "context_window": 4096,
-            "cost": {"prompt": 1, "completion": 1},
-        },
-        "mistral-7b-instruct-v0.1": {
-            "endpoint": "anyscale/mistralai/Mistral-7B-Instruct-v0.1",
-            "context_window": 16384,
-            "cost": {"prompt": 0.15, "completion": 0.15},
-        },
-        "mixtral-8x7b-instruct-v0.1": {
-            "endpoint": "anyscale/mistralai/Mixtral-8x7B-Instruct-v0.1",
-            "context_window": 32768,
-            "cost": {"prompt": 0.50, "completion": 0.50},
-        },
-        "codellama-34b-instruct": {
-            "endpoint": "anyscale/codellama/CodeLlama-34b-Instruct-hf",
-            "context_window": 16384,
-            "cost": {"prompt": 1, "completion": 1},
-        },
-        "zephyr-7b-beta": {
-            "endpoint": "anyscale/HuggingFaceH4/zephyr-7b-beta",
-            "context_window": 16384,
-            "cost": {"prompt": 0.15, "completion": 0.15},
-        },
-    }
+    def __init__(self, hub_model):
+        super().__init__(hub_model)
+        self.supported_models = supported_models
+
+    @property
+    def api_key_var(self) -> str:
+        return "ORCHESTRA_ANYSCALE_API_KEY"
+
+    @property
+    def base_url(self):
+        return "https://api.endpoints.anyscale.com/v1"
+
+    def _modify_output(self, out: Dict, stream: bool) -> Dict:
+        out["object"] = "chat.completion"
+        if stream:
+            out["object"] = "chat.completion.chunk"
+        return out
+
+
+supported_models = {
+    "llama-2-7b-chat": {
+        "endpoint": "meta-llama/Llama-2-7b-chat-hf",
+        "context_window": 4096,
+        "cost": {"prompt": 0.15, "completion": 0.15},
+    },
+    "llama-2-13b-chat": {
+        "endpoint": "meta-llama/Llama-2-13b-chat-hf",
+        "context_window": 4096,
+        "cost": {"prompt": 0.25, "completion": 0.25},
+    },
+    "llama-2-70b-chat": {
+        "endpoint": "meta-llama/Llama-2-70b-chat-hf",
+        "context_window": 4096,
+        "cost": {"prompt": 1, "completion": 1},
+    },
+    "mistral-7b-instruct-v0.1": {
+        "endpoint": "mistralai/Mistral-7B-Instruct-v0.1",
+        "context_window": 16384,
+        "cost": {"prompt": 0.15, "completion": 0.15},
+    },
+    "mixtral-8x7b-instruct-v0.1": {
+        "endpoint": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+        "context_window": 32768,
+        "cost": {"prompt": 0.50, "completion": 0.50},  # noqa: WPS339
+    },
+    "codellama-34b-instruct": {
+        "endpoint": "codellama/CodeLlama-34b-Instruct-hf",
+        "context_window": 16384,
+        "cost": {"prompt": 1, "completion": 1},
+    },
+    "zephyr-7b-beta": {
+        "endpoint": "HuggingFaceH4/zephyr-7b-beta",
+        "context_window": 16384,
+        "cost": {"prompt": 0.15, "completion": 0.15},
+    },
+}

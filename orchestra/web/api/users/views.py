@@ -13,7 +13,7 @@ router = APIRouter()
 
 
 @router.get("/get_credits", response_model=Union[CreditsResponse, None])
-async def get_credits(
+def get_credits(
     request_fastapi: Request,
     users_dao: UsersDAO = Depends(),
 ) -> Union[Users, None]:
@@ -24,12 +24,12 @@ async def get_credits(
     :param users_dao: DAO for users models.
     :return: user instance with credits from database.
     """
-    user = await users_dao.filter(id=request_fastapi.state.user_id)
+    user = users_dao.filter(id=request_fastapi.state.user_id)
     return user[0] if user else None
 
 
 @router.post("/promo", response_model=CreditsCodeResponse)
-async def credits_code(
+def credits_code(
     request_fastapi: Request,
     code: str,
     recharge_dao: RechargeDAO = Depends(),
@@ -70,7 +70,7 @@ async def credits_code(
 
     user_id = request_fastapi.state.user_id
 
-    prev_recharges = await recharge_dao.filter(user_id=user_id)
+    prev_recharges = recharge_dao.filter(user_id=user_id)
 
     if any(pr.type == code for pr in prev_recharges):
         return CreditsCodeResponse(msg="This code is already activated!")
@@ -79,11 +79,11 @@ async def credits_code(
         return CreditsCodeResponse(msg="You have already used a promo code!")
 
     # recharge 2.5
-    await recharge_dao.create_recharge(
+    recharge_dao.create_recharge(
         at=datetime.datetime.now(),
         user_id=user_id,
         quantity=2.5,
         type=code,
     )
-    await users_dao.recharge_credit(user_id, 2.5)
+    users_dao.recharge_credit(user_id, 2.5)
     return CreditsCodeResponse(msg=f"Code {code} activated succesfully!")

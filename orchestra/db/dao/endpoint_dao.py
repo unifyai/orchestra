@@ -3,7 +3,7 @@ from typing import List, Optional
 
 from fastapi import Depends
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Endpoint
@@ -12,10 +12,10 @@ from orchestra.db.models.orchestra_models import Endpoint
 class EndpointDAO:
     """Class for accessing endpoint table."""
 
-    def __init__(self, session: AsyncSession = Depends(get_db_session)):
+    def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    async def create_endpoint(
+    def create_endpoint(
         self,
         mdl_id: int,
         provider_id: int,
@@ -36,7 +36,7 @@ class EndpointDAO:
             ),
         )
 
-    async def get_all_endpoints_raw(self, limit: int, offset: int) -> List[Endpoint]:
+    def get_all_endpoints_raw(self, limit: int, offset: int) -> List[Endpoint]:
         """
         Get all endpoint models with limit/offset pagination.
 
@@ -44,13 +44,13 @@ class EndpointDAO:
         :param offset: offset of endpoints.
         :return: stream of endpoints.
         """
-        raw_endpoints = await self.session.execute(
+        raw_endpoints = self.session.execute(
             select(Endpoint).limit(limit).offset(offset),
         )
 
         return list(raw_endpoints.scalars().fetchall())
 
-    async def filter(
+    def filter(
         self,
         id: Optional[int] = None,  # noqa: WPS125
         mdl_id: Optional[int] = None,
@@ -75,5 +75,5 @@ class EndpointDAO:
             query = query.where(Endpoint.provider_id == provider_id)
         if created_at:
             query = query.where(Endpoint.created_at == created_at)
-        rows = await self.session.execute(query)
+        rows = self.session.execute(query)
         return list(rows.scalars().fetchall())

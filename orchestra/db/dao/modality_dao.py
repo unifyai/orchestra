@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from fastapi import Depends
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Modality
@@ -11,10 +11,10 @@ from orchestra.db.models.orchestra_models import Modality
 class ModalityDAO:
     """Class for accessing modality table."""
 
-    def __init__(self, session: AsyncSession = Depends(get_db_session)):
+    def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    async def create_modality(
+    def create_modality(
         self,
         name: str,
     ) -> None:
@@ -29,7 +29,7 @@ class ModalityDAO:
             ),
         )
 
-    async def get_all_modalities(self, limit: int, offset: int) -> List[Modality]:
+    def get_all_modalities(self, limit: int, offset: int) -> List[Modality]:
         """
         Get all modality models with limit/offset pagination.
 
@@ -37,13 +37,13 @@ class ModalityDAO:
         :param offset: offset of modalities.
         :return: stream of modalities.
         """
-        raw_modalities = await self.session.execute(
+        raw_modalities = self.session.execute(
             select(Modality).limit(limit).offset(offset),
         )
 
         return list(raw_modalities.scalars().fetchall())
 
-    async def filter(
+    def filter(
         self,
         name: Optional[str] = None,
     ) -> List[Modality]:
@@ -56,5 +56,5 @@ class ModalityDAO:
         query = select(Modality)
         if name:
             query = query.where(Modality.name == name)
-        rows = await self.session.execute(query)
+        rows = self.session.execute(query)
         return list(rows.scalars().fetchall())

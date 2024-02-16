@@ -1,4 +1,0 @@
-["Solve the quadratic equation: x^2 - 5x + 6 = 0", "x=2, x=3"]
-["Bob (a boy) has 3 sisters. Each sister has 2 brothers. How many brothers does Bob have?", "1"]
-["Write a Python function that finds largest and third largest int in a list.", ""]
-["Given the following messy and unstructured data, extract the clean names, email addresses, and phone numbers (as digits) of the individuals listed:John Doe - johndoe (at) email.com (five-five-five) one-two-three-four-five-six-sevenrandom text not a phone 123 4468888Jane Smithrandom text 2, cinque-cinque-cinque-nove-otto-sette-sei-quattro-trejanesmith en email punto comtexto aleatorio 3Bob Johnson - first name dot last name dot wild🐻@email.comtexto aleatorio 4 código de área five-five-five teléfono: eins-eins-eins-zwei-zwei-zwei-zwei", "Name: John DoeEmail: johndoe@email.com Phone: 5551234567Name: Jane Smith Email: janesmith@email.comPhone: 5559876432Name: Bob JohnsonEmail: first.name.wild🐻@email.comPhone: 5551112222"]

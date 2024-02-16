@@ -3,7 +3,7 @@ from typing import List, Optional
 
 from fastapi import Depends
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Model
@@ -12,10 +12,10 @@ from orchestra.db.models.orchestra_models import Model
 class ModelDAO:
     """Class for accessing model table."""
 
-    def __init__(self, session: AsyncSession = Depends(get_db_session)):
+    def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    async def create_model(  # noqa: WPS211
+    def create_model(  # noqa: WPS211
         self,
         mdl_code: str,
         user_id: str,
@@ -57,7 +57,7 @@ class ModelDAO:
             ),
         )
 
-    async def get_all_models(self, limit: int, offset: int) -> List[Model]:
+    def get_all_models(self, limit: int, offset: int) -> List[Model]:
         """
         Get all model models with limit/offset pagination.
 
@@ -65,13 +65,13 @@ class ModelDAO:
         :param offset: offset of models.
         :return: stream of models.
         """
-        raw_models = await self.session.execute(
+        raw_models = self.session.execute(
             select(Model).limit(limit).offset(offset),
         )
 
         return list(raw_models.scalars().fetchall())
 
-    async def filter(  # noqa: WPS211, C901
+    def filter(  # noqa: WPS211, C901
         self,
         id: Optional[int] = None,  # noqa: WPS125
         mdl_code: Optional[str] = None,
@@ -124,10 +124,10 @@ class ModelDAO:
             query = query.where(Model.output_format == output_format)
         if custom_fields:
             query = query.where(Model.custom_fields == custom_fields)
-        rows = await self.session.execute(query)
+        rows = self.session.execute(query)
         return list(rows.scalars().fetchall())
 
-    async def update_model(  # noqa: WPS211, WPS213, WPS231, C901
+    def update_model(  # noqa: WPS211, WPS213, WPS231, C901
         self,
         id: int,  # noqa: WPS125
         mdl_code: Optional[str] = None,
@@ -158,7 +158,7 @@ class ModelDAO:
         """
         query = select(Model)
         query = query.where(Model.id == id)
-        raw_model = await self.session.execute(query)
+        raw_model = self.session.execute(query)
         model = raw_model.scalars().first()
         if model is not None:
             if mdl_code:

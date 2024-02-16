@@ -3,7 +3,7 @@ from typing import List, Optional
 
 from fastapi import Depends
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Users
@@ -12,10 +12,10 @@ from orchestra.db.models.orchestra_models import Users
 class UsersDAO:
     """Class for accessing users table."""
 
-    def __init__(self, session: AsyncSession = Depends(get_db_session)):
+    def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    async def create_users(
+    def create_users(
         self,
         id: str,  # noqa: WPS125
         credits: float,
@@ -33,19 +33,16 @@ class UsersDAO:
             ),
         )
 
-    async def get_all_users(self) -> List[Users]:
+    def get_all_users(self) -> List[Users]:
         """
         Get all users models with limit/offset pagination.
 
         :return: stream of users.
         """
-        raw_users = await self.session.execute(
-            select(Users),
-        )
-
+        raw_users = self.session.execute(select(Users))
         return list(raw_users.scalars().fetchall())
 
-    async def filter(
+    def filter(
         self,
         id: Optional[str],  # noqa: WPS125
     ) -> List[Users]:
@@ -58,11 +55,11 @@ class UsersDAO:
         query = select(Users)
         query = query.where(Users.id == id)
 
-        raw_users = await self.session.execute(query)
+        raw_users = self.session.execute(query)
 
         return list(raw_users.scalars().fetchall())
 
-    async def recharge_credit(
+    def recharge_credit(
         self,
         user_id: str,
         quantity: float,
@@ -76,7 +73,7 @@ class UsersDAO:
         query = select(Users)
         query = query.where(Users.id == user_id)
 
-        raw_users = await self.session.execute(query)
+        raw_users = self.session.execute(query)
         user = raw_users.scalars().first()
         if user is not None:
             setattr(  # noqa: B010

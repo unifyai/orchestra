@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 @router.get("/models", response_model=List[ModelResponse])
-async def get_models(
+def get_models(
     limit: int = 10,
     offset: int = 0,
     model_dao: ModelDAO = Depends(),
@@ -25,11 +25,11 @@ async def get_models(
     :param model_dao: DAO for model models.
     :return: list of model objects from database.
     """
-    return await model_dao.get_all_models(limit=limit, offset=offset)
+    return model_dao.get_all_models(limit=limit, offset=offset)
 
 
 @router.get("/get_model", response_model=List[ModelResponse])
-async def get_model(  # noqa: WPS211, C901
+def get_model(  # noqa: WPS211, C901
     id: Optional[int] = None,  # noqa: WPS125
     mdl_code: Optional[str] = None,
     user_id: Optional[str] = None,
@@ -60,7 +60,7 @@ async def get_model(  # noqa: WPS211, C901
     :param model_dao: DAO for model models.
     :return: list of model objects from database.
     """
-    return await model_dao.filter(
+    return model_dao.filter(
         id=id,
         mdl_code=mdl_code,
         user_id=user_id,

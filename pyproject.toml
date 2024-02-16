@@ -32,14 +32,15 @@ opentelemetry-instrumentation = "^0.42b0"
 opentelemetry-instrumentation-fastapi = "^0.42b0"
 opentelemetry-instrumentation-sqlalchemy = "^0.42b0"
 loguru = "^0.7.0"
-litellm = "^1.10.4"
 prettytable = "^3.9.0"
-octoai-sdk = "^0.8.0"
 boto3 = "^1.34.1"
 botocore = "^1.34.1"
 google-cloud-aiplatform = "^1.38.1"
 psycopg2-binary = "^2.9.9"
 tiktoken = "^0.5.2"
+openai = "^1.12.0"
+aiohttp = "^3.9.1"
+replicate = "^0.23.1"
 
 
 [tool.poetry.dev-dependencies]

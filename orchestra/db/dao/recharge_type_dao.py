@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from fastapi import Depends
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import RechargeType
@@ -11,10 +11,10 @@ from orchestra.db.models.orchestra_models import RechargeType
 class RechargeTypeDAO:
     """Class for accessing recharge_type table."""
 
-    def __init__(self, session: AsyncSession = Depends(get_db_session)):
+    def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    async def create_recharge_type(
+    def create_recharge_type(
         self,
         type: str,  # noqa: WPS125
     ) -> None:
@@ -29,7 +29,7 @@ class RechargeTypeDAO:
             ),
         )
 
-    async def get_all_recharge_types(
+    def get_all_recharge_types(
         self,
         limit: int,
         offset: int,
@@ -41,13 +41,13 @@ class RechargeTypeDAO:
         :param offset: offset of recharge_types.
         :return: stream of recharge_types.
         """
-        raw_recharge_types = await self.session.execute(
+        raw_recharge_types = self.session.execute(
             select(RechargeType).limit(limit).offset(offset),
         )
 
         return list(raw_recharge_types.scalars().fetchall())
 
-    async def filter(
+    def filter(
         self,
         type: Optional[str] = None,  # noqa: WPS125
     ) -> List[RechargeType]:
@@ -61,6 +61,6 @@ class RechargeTypeDAO:
         if type:
             query = query.where(RechargeType.type == type)
 
-        raw_recharge_types = await self.session.execute(query)
+        raw_recharge_types = self.session.execute(query)
 
         return list(raw_recharge_types.scalars().fetchall())

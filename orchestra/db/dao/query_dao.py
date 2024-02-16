@@ -3,7 +3,7 @@ from typing import List, Optional
 
 from fastapi import Depends
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Query
@@ -12,10 +12,10 @@ from orchestra.db.models.orchestra_models import Query
 class QueryDAO:
     """Class for accessing query table."""
 
-    def __init__(self, session: AsyncSession = Depends(get_db_session)):
+    def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    async def create_query(
+    def create_query(
         self,
         user_id: str,
         at: datetime.datetime,
@@ -39,7 +39,7 @@ class QueryDAO:
             ),
         )
 
-    async def get_all_queries(self, limit: int, offset: int) -> List[Query]:
+    def get_all_queries(self, limit: int, offset: int) -> List[Query]:
         """
         Get all query models with limit/offset pagination.
 
@@ -47,13 +47,13 @@ class QueryDAO:
         :param offset: offset of queries.
         :return: stream of queries.
         """
-        raw_queries = await self.session.execute(
+        raw_queries = self.session.execute(
             select(Query).limit(limit).offset(offset),
         )
 
         return list(raw_queries.scalars().fetchall())
 
-    async def filter(
+    def filter(
         self,
         user_id: Optional[str] = None,
         at: Optional[datetime.datetime] = None,
@@ -79,6 +79,6 @@ class QueryDAO:
         if credits:
             query = query.where(Query.credits == credits)
 
-        raw_queries = await self.session.execute(query)
+        raw_queries = self.session.execute(query)
 
         return list(raw_queries.scalars().fetchall())

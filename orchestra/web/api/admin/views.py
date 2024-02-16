@@ -55,7 +55,7 @@ router = APIRouter()
 
 
 @router.get("/get_all_users", response_model=List[UsersModelResponse])
-async def get_all_users_models(
+def get_all_users_models(
     users_dao: UsersDAO = Depends(),
 ) -> List[Users]:
     """
@@ -64,11 +64,11 @@ async def get_all_users_models(
     :param users_dao: DAO for users models.
     :return: list of users objects from database.
     """
-    return await users_dao.get_all_users()
+    return users_dao.get_all_users()
 
 
 @router.get("/get_user", response_model=List[UsersModelResponse])
-async def get_user(
+def get_user(
     id: str,  # noqa: WPS125
     users_dao: UsersDAO = Depends(),
 ) -> List[Users]:
@@ -79,11 +79,11 @@ async def get_user(
     :param users_dao: DAO for users models.
     :return: list of users objects from database.
     """
-    return await users_dao.filter(id=id)
+    return users_dao.filter(id=id)
 
 
 @router.get("/get_all_recharge_types", response_model=List[RechargeTypeModelResponse])
-async def get_recharge_type_models(
+def get_recharge_type_models(
     limit: int = 10,
     offset: int = 0,
     recharge_type_dao: RechargeTypeDAO = Depends(),
@@ -96,11 +96,11 @@ async def get_recharge_type_models(
     :param recharge_type_dao: DAO for recharge_type models.
     :return: list of recharge_type objects from database.
     """
-    return await recharge_type_dao.get_all_recharge_types(limit=limit, offset=offset)
+    return recharge_type_dao.get_all_recharge_types(limit=limit, offset=offset)
 
 
 @router.get("/get_recharge_type", response_model=List[RechargeTypeModelResponse])
-async def get_recharge_type(
+def get_recharge_type(
     type: str,  # noqa: WPS125
     recharge_type_dao: RechargeTypeDAO = Depends(),
 ) -> List[RechargeType]:
@@ -111,11 +111,11 @@ async def get_recharge_type(
     :param recharge_type_dao: DAO for recharge_type models.
     :return: recharge_type object from database.
     """
-    return await recharge_type_dao.filter(type=type)
+    return recharge_type_dao.filter(type=type)
 
 
 @router.get("/get_all_recharges", response_model=List[RechargeModelResponse])
-async def get_recharge_models(
+def get_recharge_models(
     limit: int = 10,
     offset: int = 0,
     recharge_dao: RechargeDAO = Depends(),
@@ -128,11 +128,11 @@ async def get_recharge_models(
     :param recharge_dao: DAO for recharge models.
     :return: list of recharge objects from database.
     """
-    return await recharge_dao.get_all_recharges(limit=limit, offset=offset)
+    return recharge_dao.get_all_recharges(limit=limit, offset=offset)
 
 
 @router.get("/get_recharge", response_model=List[RechargeModelResponse])
-async def get_recharge(  # noqa: WPS211
+def get_recharge(  # noqa: WPS211
     id: Optional[int] = None,  # noqa: WPS125
     at: Optional[datetime.datetime] = None,
     user_id: Optional[str] = None,
@@ -151,7 +151,7 @@ async def get_recharge(  # noqa: WPS211
     :param recharge_dao: DAO for recharge models.
     :return: list of recharge objects from database.
     """
-    return await recharge_dao.filter(
+    return recharge_dao.filter(
         id=id,
         at=at,
         user_id=user_id,
@@ -161,7 +161,7 @@ async def get_recharge(  # noqa: WPS211
 
 
 @router.get("/get_all_benchmark_runs", response_model=List[BenchmarkRunModelResponse])
-async def get_benchmark_run_models(
+def get_benchmark_run_models(
     limit: int = 10,
     offset: int = 0,
     benchmark_run_dao: BenchmarkRunDAO = Depends(),
@@ -174,11 +174,11 @@ async def get_benchmark_run_models(
     :param benchmark_run_dao: DAO for benchmark_run models.
     :return: list of benchmark_run objects from database.
     """
-    return await benchmark_run_dao.get_all_benchmark_runs(limit=limit, offset=offset)
+    return benchmark_run_dao.get_all_benchmark_runs(limit=limit, offset=offset)
 
 
 @router.get("/get_benchmark_run", response_model=List[BenchmarkRunModelResponse])
-async def get_benchmark_run(  # noqa: WPS211
+def get_benchmark_run(  # noqa: WPS211
     id: Optional[int] = None,  # noqa: WPS125
     endpoint_id: Optional[int] = None,
     regime: Optional[str] = None,
@@ -199,7 +199,7 @@ async def get_benchmark_run(  # noqa: WPS211
     :param benchmark_run_dao: DAO for benchmark_run models.
     :return: benchmark_run object from database.
     """
-    return await benchmark_run_dao.filter(
+    return benchmark_run_dao.filter(
         id=id,
         endpoint_id=endpoint_id,
         regime=regime,
@@ -210,7 +210,7 @@ async def get_benchmark_run(  # noqa: WPS211
 
 
 @router.get("/get_all_datapoints", response_model=List[DatapointModelResponse])
-async def get_datapoint_models(
+def get_datapoint_models(
     limit: int = 10,
     offset: int = 0,
     datapoint_dao: DatapointDAO = Depends(),
@@ -223,11 +223,11 @@ async def get_datapoint_models(
     :param datapoint_dao: DAO for datapoint models.
     :return: list of datapoint objects from database.
     """
-    return await datapoint_dao.get_all_datapoints(limit=limit, offset=offset)
+    return datapoint_dao.get_all_datapoints(limit=limit, offset=offset)
 
 
 @router.get("/get_datapoint", response_model=List[DatapointModelResponse])
-async def get_datapoint(  # noqa: WPS211
+def get_datapoint(  # noqa: WPS211
     id: Optional[int] = None,  # noqa: WPS125
     benchmark_run_id: Optional[int] = None,
     metric_name: Optional[str] = None,
@@ -246,7 +246,7 @@ async def get_datapoint(  # noqa: WPS211
     :param datapoint_dao: DAO for datapoint models.
     :return: datapoint object from database.
     """
-    return await datapoint_dao.filter(
+    return datapoint_dao.filter(
         id=id,
         benchmark_run_id=benchmark_run_id,
         metric_name=metric_name,
@@ -256,7 +256,7 @@ async def get_datapoint(  # noqa: WPS211
 
 
 @router.get("/get_all_endpoints_raw", response_model=List[EndpointModelResponse])
-async def get_endpoint_models(
+def get_endpoint_models(
     limit: int = 10,
     offset: int = 0,
     endpoint_dao: EndpointDAO = Depends(),
@@ -269,11 +269,11 @@ async def get_endpoint_models(
     :param endpoint_dao: DAO for endpoint models.
     :return: list of endpoint objects from database.
     """
-    return await endpoint_dao.get_all_endpoints_raw(limit=limit, offset=offset)
+    return endpoint_dao.get_all_endpoints_raw(limit=limit, offset=offset)
 
 
 @router.get("/get_endpoint", response_model=List[EndpointModelResponse])
-async def get_endpoint(
+def get_endpoint(
     id: Optional[int] = None,  # noqa: WPS125
     mdl_id: Optional[int] = None,
     provider_id: Optional[int] = None,
@@ -290,7 +290,7 @@ async def get_endpoint(
     :param endpoint_dao: DAO for endpoint models.
     :return: endpoint object from database.
     """
-    return await endpoint_dao.filter(
+    return endpoint_dao.filter(
         id=id,
         mdl_id=mdl_id,
         provider_id=provider_id,
@@ -299,7 +299,7 @@ async def get_endpoint(
 
 
 @router.get("/get_all_licenses", response_model=List[LicenseModelResponse])
-async def get_license_models(
+def get_license_models(
     limit: int = 10,
     offset: int = 0,
     license_dao: LicenseDAO = Depends(),
@@ -312,11 +312,11 @@ async def get_license_models(
     :param license_dao: DAO for license models.
     :return: list of license objects from database.
     """
-    return await license_dao.get_all_licenses(limit=limit, offset=offset)
+    return license_dao.get_all_licenses(limit=limit, offset=offset)
 
 
 @router.get("/get_license", response_model=List[LicenseModelResponse])
-async def get_license(
+def get_license(
     name: str,
     license_dao: LicenseDAO = Depends(),
 ) -> List[License]:
@@ -327,11 +327,11 @@ async def get_license(
     :param license_dao: DAO for license models.
     :return: list of license objects from database.
     """
-    return await license_dao.filter(name=name)
+    return license_dao.filter(name=name)
 
 
 @router.get("/get_all_metrics", response_model=List[MetricModelResponse])
-async def get_metric_models(
+def get_metric_models(
     limit: int = 10,
     offset: int = 0,
     metric_dao: MetricDAO = Depends(),
@@ -344,11 +344,11 @@ async def get_metric_models(
     :param metric_dao: DAO for metric models.
     :return: list of metric objects from database.
     """
-    return await metric_dao.get_all_metrics(limit=limit, offset=offset)
+    return metric_dao.get_all_metrics(limit=limit, offset=offset)
 
 
 @router.get("/get_metric", response_model=List[MetricModelResponse])
-async def get_metric(  # noqa: WPS211
+def get_metric(  # noqa: WPS211
     name: str,
     units: str,
     display_name: str,
@@ -369,7 +369,7 @@ async def get_metric(  # noqa: WPS211
     :param metric_dao: DAO for metric models.
     :return: list of metric objects from database.
     """
-    return await metric_dao.filter(
+    return metric_dao.filter(
         name=name,
         units=units,
         display_name=display_name,
@@ -380,7 +380,7 @@ async def get_metric(  # noqa: WPS211
 
 
 @router.get("/get_all_modalities", response_model=List[ModalityModelResponse])
-async def get_modality_models(
+def get_modality_models(
     limit: int = 10,
     offset: int = 0,
     modality_dao: ModalityDAO = Depends(),
@@ -393,11 +393,11 @@ async def get_modality_models(
     :param modality_dao: DAO for modality models.
     :return: list of modality objects from database.
     """
-    return await modality_dao.get_all_modalities(limit=limit, offset=offset)
+    return modality_dao.get_all_modalities(limit=limit, offset=offset)
 
 
 @router.get("/get_modality", response_model=List[ModalityModelResponse])
-async def get_modality(
+def get_modality(
     name: str,
     modality_dao: ModalityDAO = Depends(),
 ) -> List[Modality]:
@@ -408,11 +408,11 @@ async def get_modality(
     :param modality_dao: DAO for modality models.
     :return: modality object from database.
     """
-    return await modality_dao.filter(name=name)
+    return modality_dao.filter(name=name)
 
 
 @router.get("/get_all_tasks", response_model=List[TaskModelResponse])
-async def get_task_models(
+def get_task_models(
     limit: int = 10,
     offset: int = 0,
     task_dao: TaskDAO = Depends(),
@@ -425,11 +425,11 @@ async def get_task_models(
     :param task_dao: DAO for task models.
     :return: list of task objects from database.
     """
-    return await task_dao.get_all_tasks(limit=limit, offset=offset)
+    return task_dao.get_all_tasks(limit=limit, offset=offset)
 
 
 @router.get("/get_task", response_model=List[TaskModelResponse])
-async def get_task(
+def get_task(
     name: str,
     task_dao: TaskDAO = Depends(),
 ) -> List[Task]:
@@ -440,11 +440,11 @@ async def get_task(
     :param task_dao: DAO for task models.
     :return: task object from database.
     """
-    return await task_dao.filter(name=name)
+    return task_dao.filter(name=name)
 
 
 @router.put("/create_datapoint")
-async def create_datapoint_model(
+def create_datapoint_model(
     new_datapoint_object: DatapointModelRequest,
     datapoint_dao: DatapointDAO = Depends(),
 ) -> None:
@@ -454,7 +454,7 @@ async def create_datapoint_model(
     :param new_datapoint_object: new datapoint model item.
     :param datapoint_dao: DAO for datapoint models.
     """
-    await datapoint_dao.create_datapoint(
+    datapoint_dao.create_datapoint(
         benchmark_run_id=new_datapoint_object.benchmark_run_id,
         measured_at=new_datapoint_object.measured_at,
         metric_name=new_datapoint_object.metric_name,
@@ -464,7 +464,7 @@ async def create_datapoint_model(
 
 
 @router.put("/create_endpoint")
-async def create_endpoint_model(
+def create_endpoint_model(
     new_endpoint_object: EndpointModelRequest,
     endpoint_dao: EndpointDAO = Depends(),
 ) -> None:
@@ -475,7 +475,7 @@ async def create_endpoint_model(
     :param endpoint_dao: DAO for endpoint models.
     """
     created_at = datetime.datetime.now()
-    await endpoint_dao.create_endpoint(
+    endpoint_dao.create_endpoint(
         mdl_id=new_endpoint_object.mdl_id,
         provider_id=new_endpoint_object.provider_id,
         created_at=created_at,
@@ -483,7 +483,7 @@ async def create_endpoint_model(
 
 
 @router.put("/create_license")
-async def create_license_model(
+def create_license_model(
     new_license_object: LicenseModelRequest,
     license_dao: LicenseDAO = Depends(),
 ) -> None:
@@ -493,7 +493,7 @@ async def create_license_model(
     :param new_license_object: new license model item.
     :param license_dao: DAO for license models.
     """
-    await license_dao.create_license(
+    license_dao.create_license(
         name=new_license_object.name,
         image_url=new_license_object.image_url,
         description=new_license_object.description,
@@ -501,7 +501,7 @@ async def create_license_model(
 
 
 @router.put("/create_metric")
-async def create_metric_model(
+def create_metric_model(
     new_metric_object: MetricModelRequest,
     metric_dao: MetricDAO = Depends(),
 ) -> None:
@@ -511,7 +511,7 @@ async def create_metric_model(
     :param new_metric_object: new metric model item.
     :param metric_dao: DAO for metric models.
     """
-    await metric_dao.create_metric(
+    metric_dao.create_metric(
         name=new_metric_object.name,
         units=new_metric_object.units,
         display_name=new_metric_object.display_name,
@@ -522,7 +522,7 @@ async def create_metric_model(
 
 
 @router.put("/create_modality")
-async def create_modality_model(
+def create_modality_model(
     new_modality_object: ModalityModelRequest,
     modality_dao: ModalityDAO = Depends(),
 ) -> None:
@@ -532,13 +532,13 @@ async def create_modality_model(
     :param new_modality_object: new modality model item.
     :param modality_dao: DAO for modality models.
     """
-    await modality_dao.create_modality(
+    modality_dao.create_modality(
         name=new_modality_object.name,
     )
 
 
 @router.put("/create_model")
-async def create_model(
+def create_model(
     new_model_object: ModelRequest,
     model_dao: ModelDAO = Depends(),
 ) -> None:
@@ -549,7 +549,7 @@ async def create_model(
     :param model_dao: DAO for model models.
     """
     uploaded_at = datetime.datetime.now()
-    await model_dao.create_model(
+    model_dao.create_model(
         mdl_code=new_model_object.mdl_code,
         user_id=new_model_object.user_id,
         uploaded_at=uploaded_at,
@@ -564,7 +564,7 @@ async def create_model(
 
 
 @router.put("/update_model")
-async def update_model(  # noqa: WPS211
+def update_model(  # noqa: WPS211
     id: int,  # noqa: WPS125
     mdl_code: Optional[str] = None,
     user_id: Optional[str] = None,
@@ -594,7 +594,7 @@ async def update_model(  # noqa: WPS211
     :param custom_fields: custom_fields of model instance.
     :param model_dao: DAO for model models.
     """
-    await model_dao.update_model(
+    model_dao.update_model(
         id=id,
         mdl_code=mdl_code,
         user_id=user_id,
@@ -610,7 +610,7 @@ async def update_model(  # noqa: WPS211
 
 
 @router.put("/create_provider")
-async def create_provider_model(
+def create_provider_model(
     new_provider_object: ProviderModelRequest,
     provider_dao: ProviderDAO = Depends(),
 ) -> None:
@@ -620,7 +620,7 @@ async def create_provider_model(
     :param new_provider_object: new provider model item.
     :param provider_dao: DAO for provider models.
     """
-    await provider_dao.create_provider(
+    provider_dao.create_provider(
         name=new_provider_object.name,
         image_url=new_provider_object.image_url,
         description=new_provider_object.description,
@@ -628,7 +628,7 @@ async def create_provider_model(
 
 
 @router.put("/create_recharge")
-async def create_recharge_model(
+def create_recharge_model(
     new_recharge_object: RechargeModelRequest,
     recharge_dao: RechargeDAO = Depends(),
     user_dao: UsersDAO = Depends(),
@@ -641,12 +641,12 @@ async def create_recharge_model(
     :param user_dao: DAO for user models.
     """
     at = datetime.datetime.now()
-    await user_dao.recharge_credit(
+    user_dao.recharge_credit(
         user_id=new_recharge_object.user_id,
         quantity=new_recharge_object.quantity,
     )
 
-    await recharge_dao.create_recharge(
+    recharge_dao.create_recharge(
         at=at,
         user_id=new_recharge_object.user_id,
         quantity=new_recharge_object.quantity,
@@ -655,7 +655,7 @@ async def create_recharge_model(
 
 
 @router.put("/create_recharge_type")
-async def create_recharge_type_model(
+def create_recharge_type_model(
     new_recharge_type_object: RechargeTypeModelRequest,
     recharge_type_dao: RechargeTypeDAO = Depends(),
 ) -> None:
@@ -665,13 +665,13 @@ async def create_recharge_type_model(
     :param new_recharge_type_object: new recharge_type model item.
     :param recharge_type_dao: DAO for recharge_type models.
     """
-    await recharge_type_dao.create_recharge_type(
+    recharge_type_dao.create_recharge_type(
         type=new_recharge_type_object.type,
     )
 
 
 @router.put("/create_task")
-async def create_task_model(
+def create_task_model(
     new_task_object: TaskModelRequest,
     task_dao: TaskDAO = Depends(),
 ) -> None:
@@ -681,14 +681,14 @@ async def create_task_model(
     :param new_task_object: new task model item.
     :param task_dao: DAO for task models.
     """
-    await task_dao.create_task(
+    task_dao.create_task(
         name=new_task_object.name,
         modality=new_task_object.modality,
     )
 
 
 @router.put("/update_benchmark_run")
-async def update_benchmark_run(  # noqa: WPS211
+def update_benchmark_run(  # noqa: WPS211
     id: int,  # noqa: WPS125
     endpoint_id: Optional[int] = None,
     regime: Optional[str] = None,
@@ -708,7 +708,7 @@ async def update_benchmark_run(  # noqa: WPS211
     :param measured_at: measured_at of benchmark_run instance.
     :param benchmark_run_dao: DAO for benchmark_run models.
     """
-    await benchmark_run_dao.update_benchmark_run(
+    benchmark_run_dao.update_benchmark_run(
         id=id,
         endpoint_id=endpoint_id,
         regime=regime,
@@ -719,7 +719,7 @@ async def update_benchmark_run(  # noqa: WPS211
 
 
 @router.put("/update_datapoint")
-async def update_datapoint(  # noqa: WPS211
+def update_datapoint(  # noqa: WPS211
     id: int,  # noqa: WPS125
     benchmark_run_id: Optional[int] = None,
     metric_name: Optional[str] = None,
@@ -739,7 +739,7 @@ async def update_datapoint(  # noqa: WPS211
     :param measured_at: measured_at of datapoint instance.
     :param datapoint_dao: DAO for datapoint models.
     """
-    await datapoint_dao.update_datapoint(
+    datapoint_dao.update_datapoint(
         id=id,
         benchmark_run_id=benchmark_run_id,
         metric_name=metric_name,
