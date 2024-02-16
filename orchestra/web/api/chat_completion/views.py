@@ -124,6 +124,8 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
         return StreamingResponse(stream_and_update_db())
     else:
+        if not callable(cost):
+            raise ValueError("cost function must be a callable.")
         background_tasks.add_task(
             db_operations, cost_deferred_fn=cost, **db_operations_kwargs
         )

@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional, Tuple
 
 import providers.completion.replicate_run as r8r
 import replicate
@@ -70,7 +70,7 @@ class Replicate(BaseCompletionProvider):
 
     def __call__(
         self, messages: List, stream: bool = False, **kwargs: Any
-    ) -> Optional[Any]:
+    ) -> Tuple[Any, Optional[Callable]]:
         # TODO: Ensure that messages is only one message long
         # TODO: system prompt is not supported in all models
         # TODO: Deal with rate limits
@@ -94,7 +94,7 @@ class Replicate(BaseCompletionProvider):
             )
             return (R8SyncGeneratorWrapper(self, response, messages), None)
         else:
-            response = r8r.run(
+            response = r8r.run(  # type: ignore
                 replicate.default_client,
                 self.provider_endpoint,
                 input={"prompt": prompt},
@@ -111,7 +111,7 @@ class Replicate(BaseCompletionProvider):
 
     def __call_async__(
         self, messages: List, stream: bool = False, **kwargs: Any
-    ) -> Optional[Any]:
+    ) -> Tuple[Any, Optional[Callable]]:
         _messages = messages[:]
         r8_kwargs = {}
         if _messages[0]["role"] == "system":
@@ -127,7 +127,7 @@ class Replicate(BaseCompletionProvider):
             )
             return (R8AsyncGeneratorWrapper(self, response, messages), None)
         else:
-            response = r8r.async_run(
+            response = r8r.async_run(  # type: ignore
                 replicate.default_client,
                 self.provider_endpoint,
                 input={"prompt": prompt},

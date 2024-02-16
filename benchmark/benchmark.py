@@ -11,8 +11,8 @@ from typing import Dict, List, Union
 import yaml
 from aibench.runner import AIBenchRunner
 from providers.completion import PROVIDER_CLASSES
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy import Column, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from orchestra.db.models.orchestra_models import (  # noqa: WPS235
@@ -50,7 +50,7 @@ def read_configs(config_file: str) -> List[Dict]:
     return list(data.values())
 
 
-def create_db_session() -> sessionmaker:  # noqa: WPS210
+def create_db_session() -> async_sessionmaker:  # noqa: WPS210
     # noqa: DAR201
     """Creates an async db session.
 
@@ -58,7 +58,7 @@ def create_db_session() -> sessionmaker:  # noqa: WPS210
     orchestra:orchestra@localhost:5432/orchestra.
 
     Returns:
-        sessionmaker: Async SQLAlchemy session maker.
+        async_sessionmaker: Async SQLAlchemy session maker.
     """
     user = os.getenv("ORCHESTRA_DB_USER", "orchestra")
     password = os.getenv("ORCHESTRA_DB_PASS", "orchestra")
@@ -68,12 +68,17 @@ def create_db_session() -> sessionmaker:  # noqa: WPS210
     db_url = f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{db_name}"
     # TODO: logger.info(db_url)
     engine = create_async_engine(db_url)
-    return sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    return async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 
 async def get_names(
     async_session: AsyncSession,
-    table_class: Union[Metric, BenchmarkRegime, BenchmarkRegion, BenchmarkSeqLen],
+    table_class: Union[
+        type[Metric],
+        type[BenchmarkRegime],
+        type[BenchmarkRegion],
+        type[BenchmarkSeqLen],
+    ],
 ) -> List[str]:  # noqa: DAR101, DAR201
     """Returns a list of names from a given table in a DB.
 
@@ -318,7 +323,7 @@ async def commit_benchmark_runs(
 
 
 async def add_br_datapoints(  # noqa: WPS210
-    br_id: int,
+    br_id: Column[int],
     br_result: Dict,
     async_session: AsyncSession,
     db_metrics: List[str],
