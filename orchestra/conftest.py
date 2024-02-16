@@ -41,10 +41,8 @@ def _engine() -> Generator[Engine, None, None]:
     meta.create_all(engine)
     with engine.begin() as conn:
         user_id = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
-        insert_user = text(
-            f"INSERT INTO users VALUES ('{user_id}', 10);",  # noqa: S608
-        )
-        conn.execute(insert_user)
+        with open("orchestra/tests/seeding.sql") as file:
+            conn.execute(text(file.read()), {"user_id":user_id})
 
     try:
         yield engine
