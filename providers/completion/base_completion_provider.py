@@ -239,11 +239,11 @@ class SyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
         try:  # noqa: WPS501
             for part in self._response:
                 part_dict, skip = self.generator_iteration(part, whole)
-                if skip:
+                if skip or not part_dict:
                     continue
                 yield part_dict
         finally:
-            if part_dict.get("usage"):
+            if part_dict and part_dict.get("usage"):
                 self.total_cost = self.provider.compute_cost(
                     part_dict["usage"]["prompt_tokens"],
                     part_dict["usage"]["completion_tokens"],
