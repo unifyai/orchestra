@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import tiktoken
 from fastapi import HTTPException
@@ -141,7 +141,7 @@ class BaseCompletionProvider:
         messages: List,  # type: ignore
         stream: bool = False,
         **kwargs: Any,
-    ) -> Optional[Any]:
+    ) -> Tuple[Any, Callable]:
 
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
@@ -177,7 +177,7 @@ class BaseCompletionProvider:
         messages: List,  # type: ignore
         stream: bool = False,
         **kwargs: Any,
-    ) -> Optional[Any]:
+    ) -> Tuple[Any, Callable]:
 
         client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
 
