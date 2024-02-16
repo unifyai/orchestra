@@ -33,7 +33,10 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
     :param app: fastAPI application.
     """
     engine = create_engine(
-        str(settings.db_url), echo=settings.db_echo, pool_size=25, max_overflow=50,  # noqa: WPS432, E501
+        str(settings.db_url),
+        echo=settings.db_echo,
+        pool_size=25,
+        max_overflow=50,  # noqa: WPS432, E501
     )
     session_factory = sessionmaker(
         engine,

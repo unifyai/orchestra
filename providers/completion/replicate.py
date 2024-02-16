@@ -1,12 +1,13 @@
 import os
-import replicate
-import providers.completion.replicate_run as r8r
 from datetime import datetime
 from typing import Any, List, Optional
+
+import providers.completion.replicate_run as r8r
+import replicate
 from providers.completion.base_completion_provider import (
+    AsyncGeneratorWrapper,
     BaseCompletionProvider,
     SyncGeneratorWrapper,
-    AsyncGeneratorWrapper,
 )
 
 
@@ -173,7 +174,7 @@ def sse_to_part_dict(part, whole):
                 "delta": {"content": part.data},
                 "logprobs": None,  # TODO?
                 "finish_reason": None,  # TODO
-            }
+            },
         ],
     }
     if part.data == "":
