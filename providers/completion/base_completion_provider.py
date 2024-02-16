@@ -12,7 +12,6 @@ from openai import (
     OpenAI,
     RateLimitError,
 )
-from openai.types.completion_usage import CompletionUsage
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +147,7 @@ class BaseCompletionProvider:
 
         try:  # noqa: WPS225
             response = client.chat.completions.create(
-                model=self.provider_endpoint, messages=messages, **kwargs
+                model=self.provider_endpoint, messages=messages, stream=stream, **kwargs
             )
             if stream:
                 return (SyncGeneratorWrapper(self, response, messages), None)
@@ -156,7 +155,8 @@ class BaseCompletionProvider:
             # TODO: Maybe remove this dump unless neccesary?
             response_dict = self._modify_output(response.model_dump(), stream=stream)
             return response_dict, self.compute_cost(
-                response.usage.prompt_tokens, response.usage.completion_tokens
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
             )
         # TODO: These needs to be processed correctly in our endpoint
         except APITimeoutError as error:
@@ -183,7 +183,7 @@ class BaseCompletionProvider:
 
         try:  # noqa: WPS225
             response = client.chat.completions.create(
-                model=self.provider_endpoint, messages=messages, **kwargs
+                model=self.provider_endpoint, messages=messages, stream=stream, **kwargs
             )
             if stream:
                 return (AsyncGeneratorWrapper(self, response, messages), None)
@@ -191,7 +191,8 @@ class BaseCompletionProvider:
             # TODO: Maybe remove this dump unless neccesary?
             response_dict = self._modify_output(response.model_dump(), stream=stream)
             return response_dict, self.compute_cost(
-                response.usage.prompt_tokens, response.usage.completion_tokens
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
             )
         # TODO: These needs to be processed correctly in our endpoint
         except APITimeoutError as error:
@@ -231,7 +232,6 @@ class BaseGeneratorWrapper:
 
 
 class SyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
-
     def generator(self):  # noqa: D102, C901, WPS210, WPS231
         whole = []
         try:  # noqa: WPS501
@@ -242,13 +242,13 @@ class SyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
                 yield part_dict
         finally:
             self.total_cost = self.provider.compute_cost_streaming(
-                whole, self._messages
+                whole,
+                self._messages,
             )
 
 
 # TODO: Remove code duplication here
 class AsyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
-
     async def generator(self):  # noqa: D102, C901, WPS210, WPS231
         whole = []
         try:  # noqa: WPS501
@@ -259,5 +259,6 @@ class AsyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
                 yield part_dict
         finally:
             self.total_cost = self.provider.compute_cost_streaming(
-                whole, self._messages
+                whole,
+                self._messages,
             )
