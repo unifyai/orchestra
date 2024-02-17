@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, List
 
 import providers.completion.replicate_run as r8r
 import replicate
@@ -90,7 +90,7 @@ class Replicate(BaseCompletionProvider):
                 **r8_kwargs,
                 # **kwargs, # TODO
             )
-            return (R8SyncGeneratorWrapper(self, response, messages), None)
+            return R8SyncGeneratorWrapper(self, response, messages)
         else:
             response = r8r.run(  # type: ignore
                 replicate.default_client,
@@ -117,7 +117,7 @@ class Replicate(BaseCompletionProvider):
                 # **r8_kwargs,
                 # **kwargs, # TODO
             )
-            return (R8AsyncGeneratorWrapper(self, response, messages), None)
+            return R8AsyncGeneratorWrapper(self, response, messages)
         else:
             response = r8r.async_run(  # type: ignore
                 replicate.default_client,

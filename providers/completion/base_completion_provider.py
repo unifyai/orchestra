@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List
 
 import tiktoken
 from fastapi import HTTPException
@@ -154,7 +154,7 @@ class BaseCompletionProvider:
             response = client.chat.completions.create(
                 model=self.provider_endpoint, messages=messages, stream=stream, **kwargs
             )
-            if isinstance(response, Stream):
+            if isinstance(response, Stream) or stream:
                 return SyncGeneratorWrapper(self, response, messages)
 
             # TODO: Maybe remove this dump unless neccesary?
@@ -187,7 +187,7 @@ class BaseCompletionProvider:
             response = client.chat.completions.create(
                 model=self.provider_endpoint, messages=messages, stream=stream, **kwargs
             )
-            if isinstance(response, AsyncStream):
+            if isinstance(response, AsyncStream) or stream:
                 return AsyncGeneratorWrapper(self, response, messages)
 
             return response
