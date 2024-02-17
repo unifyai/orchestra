@@ -44,7 +44,7 @@ jobs:
       env:
         POETRY_VIRTUALENVS_CREATE: false
     - name: Install missing type packages
-      run: poetry run mypy --install-types --non-interactive
+      run: poetry run mypy --install-types --non-interactive .
     - name: Run mypy check
       run: poetry run mypy .
   pytest:
