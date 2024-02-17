@@ -232,10 +232,22 @@ class BaseGeneratorWrapper:
         whole[index] += part_text
         return part_dict, False
 
+    def compute_cost(self, part_dict, whole):
+        if part_dict and part_dict.get("usage"):
+                self.total_cost = self.provider.compute_cost(
+                    part_dict["usage"]["prompt_tokens"],
+                    part_dict["usage"]["completion_tokens"],
+                )
+        else:
+            self.total_cost = self.provider.compute_cost_streaming(
+                whole,
+                self._messages,
+            )
 
 class SyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
     def generator(self):  # noqa: D102, C901, WPS210, WPS231
         whole = []
+        part_dict = None
         try:  # noqa: WPS501
             for part in self._response:
                 part_dict, skip = self.generator_iteration(part, whole)
@@ -243,36 +255,19 @@ class SyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
                     continue
                 yield part_dict
         finally:
-            if part_dict and part_dict.get("usage"):
-                self.total_cost = self.provider.compute_cost(
-                    part_dict["usage"]["prompt_tokens"],
-                    part_dict["usage"]["completion_tokens"],
-                )
-            else:
-                self.total_cost = self.provider.compute_cost_streaming(
-                    whole,
-                    self._messages,
-                )
+            self.compute_cost(part_dict, whole)
 
 
 # TODO: Remove code duplication here
 class AsyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
     async def generator(self):  # noqa: D102, C901, WPS210, WPS231
         whole = []
+        part_dict = None
         try:  # noqa: WPS501
             async for part in await self._response:
                 part_dict, skip = self.generator_iteration(part, whole)
-                if skip:
+                if skip or not part_dict:
                     continue
                 yield part_dict
         finally:
-            if part_dict.get("usage"):
-                self.total_cost = self.provider.compute_cost(
-                    part_dict["usage"]["prompt_tokens"],
-                    part_dict["usage"]["completion_tokens"],
-                )
-            else:
-                self.total_cost = self.provider.compute_cost_streaming(
-                    whole,
-                    self._messages,
-                )
+            self.compute_cost(part_dict, whole)

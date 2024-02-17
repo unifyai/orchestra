@@ -96,6 +96,20 @@ class AIBenchRunner:
         else:
             return int(random.normalvariate(1000, 100))
 
+    async def stream_output(self, result, completions):
+        async for part in result.generator():
+            choices = part.get("choices")
+            if choices:
+                content = choices[0].get("delta", {}).get("content", "")
+                if content:
+                    completions.append(
+                        {
+                            "content": content,
+                            "reception_time": time.perf_counter(),
+                        },
+                    )
+            await asyncio.sleep(0)
+
     async def compute_metrics(self):
         prompt = await self.prompt_queue.get()
         max_tokens = self._max_token_sampler()
@@ -117,16 +131,7 @@ class AIBenchRunner:
             return
 
         start_time = time.perf_counter()
-        async for part in result.generator():  # TODO: Is this a litellm dependency?
-            if part["choices"][0]["delta"]["content"] is None:
-                continue
-            completions.append(
-                {
-                    "content": part["choices"][0]["delta"]["content"],
-                    "reception_time": time.perf_counter(),
-                },
-            )
-            await asyncio.sleep(0)
+        await self.stream_output(result, completions)
         end_time = time.perf_counter()
         # TODO: remove?
         # these artifacts sort of give away we're using litellm
@@ -164,14 +169,7 @@ class AIBenchRunner:
             print("Run during cold start failed")
             return 0
 
-        async for part in result.generator():
-            completions.append(
-                {
-                    "content": part["choices"][0]["delta"]["content"],
-                    "reception_time": time.perf_counter(),
-                },
-            )
-            await asyncio.sleep(0)
+        await self.stream_output(result, completions)
         first_token_time = completions[0]["reception_time"]
         try:
             second_token_time = completions[1]["reception_time"]
