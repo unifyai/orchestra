@@ -1,5 +1,12 @@
 -- Users
 INSERT INTO users VALUES (:user_id, 10);
+INSERT INTO users VALUES ('recharge_simple', 1);
+INSERT INTO users VALUES ('recharge_limited', 9.99);
+INSERT INTO users VALUES ('recharge_not_needed_a', 10);
+INSERT INTO users VALUES ('recharge_not_needed_b', 20);
+
+-- Recharge
+INSERT INTO recharge_type VALUES ('free');
 
 -- Provider
 INSERT INTO provider VALUES (1, 'openai', '', '');

@@ -117,7 +117,6 @@ class AIBenchRunner:
             metrics_dict["failed_queries"] = 1
             return
 
-        
         async for part in result.generator():  # TODO: Is this a litellm dependency?
             if part["choices"][0]["delta"]["content"] is None:
                 continue

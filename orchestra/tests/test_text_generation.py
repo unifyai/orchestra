@@ -1,17 +1,17 @@
-from unittest.mock import patch
-import pytest
 import json
+
+import pytest
 from httpx import AsyncClient
 from starlette import status
 
 from orchestra.tests.utils import (
     HEADERS,
-    get_chat_completions_payload,
-    get_inference_payload,
-    get_credits,
     check_text_gen_choice,
     check_text_gen_response,
     check_text_gen_usage,
+    get_chat_completions_payload,
+    get_credits,
+    get_inference_payload,
 )
 
 MODELS = [

@@ -1,10 +1,10 @@
 import os
-from typing import Any, Generator, AsyncGenerator
+from typing import Any, AsyncGenerator, Generator
 
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
-from sqlalchemy import create_engine, text, Engine
+from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.dependencies import get_db_session
@@ -42,7 +42,7 @@ def _engine() -> Generator[Engine, None, None]:
     with engine.begin() as conn:
         user_id = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
         with open("orchestra/tests/seeding.sql") as file:
-            conn.execute(text(file.read()), {"user_id":user_id})
+            conn.execute(text(file.read()), {"user_id": user_id})
 
     try:
         yield engine

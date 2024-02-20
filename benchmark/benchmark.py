@@ -207,6 +207,7 @@ async def worker_loop(  # noqa: WPS210
                 max_tokens=max_tokens,
                 stream=stream,
             )
+
         # Initialise the benchmark runner(s)
         benchmark_runners = []
         for config in configs:

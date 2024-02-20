@@ -19,7 +19,7 @@ current credit balance.
 Top-up Code
 -----------
 
-You may have received a code to increase your number of free weekly credits, if that's the case, you can 
+You may have received a code to increase your number of free weekly credits, if that's the case, you can
 activate it doing a request to this endpoint:
 
 .. code-block:: bash
@@ -29,5 +29,5 @@ activate it doing a request to this endpoint:
     -H 'accept: application/json' \
     -H 'Authorization: Bearer <YOUR_UNIFY_KEY>'
 
-Simply replace :code:`<CODE>` with your top up code and :code:`<YOUR_UNIFY_KEY>` with your API Key and 
+Simply replace :code:`<CODE>` with your top up code and :code:`<YOUR_UNIFY_KEY>` with your API Key and
 do the request 🚀
