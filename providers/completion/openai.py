@@ -36,7 +36,7 @@ supported_models = {
     "gpt-3.5-turbo": {
         "endpoint": "gpt-3.5-turbo",  # redirects to latest: gpt-3.5-turbo-1106
         "context_window": 16385,
-        "cost": {"prompt": 1, "completion": 2},
+        "cost": {"prompt": 0.5, "completion": 1.5},
     },
     "gpt-3.5-turbo-0301": {
         "endpoint": "gpt-3.5-turbo-0301",
