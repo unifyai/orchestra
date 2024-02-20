@@ -1,10 +1,10 @@
-import asyncio
 import json
 import re
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.param_functions import Depends
 from fastapi.responses import JSONResponse, StreamingResponse
+from providers.completion import PROVIDER_CLASSES
 from starlette import status
 
 from orchestra.db.dao.endpoint_dao import EndpointDAO
@@ -19,7 +19,6 @@ from orchestra.web.api.utils import (
     filter_request_params,
     insufficient_credits_error,
 )
-from providers.completion import PROVIDER_CLASSES
 
 router = APIRouter()
 
