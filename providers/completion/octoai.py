@@ -41,7 +41,7 @@ supported_models = {
     "codellama-34b-instruct": {
         "endpoint": "codellama-34b-instruct-fp16",
         "context_window": 16384,
-        "cost": {"prompt": 0.5, "completion": 1.15},
+        "cost": {"prompt": 0.5, "completion": 1},
     },
     "codellama-34b-instruct-int4": {
         "endpoint": "codellama-34b-instruct-int4",
@@ -66,6 +66,6 @@ supported_models = {
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "mixtral-8x7b-instruct-fp16",
         "context_window": 4096,
-        "cost": {"prompt": 0.2, "completion": 0.5},
+        "cost": {"prompt": 0.3, "completion": 0.5},
     },
 }
