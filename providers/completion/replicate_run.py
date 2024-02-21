@@ -1,15 +1,4 @@
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncIterator,
-    Dict,
-    Iterator,
-    List,
-    Optional,
-    Union,
-)
-
-from typing_extensions import Unpack
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, Optional, Union
 
 from replicate import identifier
 from replicate.exceptions import ModelError
@@ -17,6 +6,7 @@ from replicate.model import Model
 from replicate.prediction import Prediction
 from replicate.schema import make_schema_backwards_compatible
 from replicate.version import Version, Versions
+from typing_extensions import Unpack
 
 if TYPE_CHECKING:
     from replicate.client import Client
@@ -46,7 +36,7 @@ def run(
         )
     else:
         raise ValueError(
-            f"Invalid argument: {ref}. Expected model, version, or reference in the format owner/name or owner/name:version"
+            f"Invalid argument: {ref}. Expected model, version, or reference in the format owner/name or owner/name:version",
         )
 
     if not version and (owner and name and version_id):
@@ -85,7 +75,7 @@ async def async_run(
         )
     else:
         raise ValueError(
-            f"Invalid argument: {ref}. Expected model, version, or reference in the format owner/name or owner/name:version"
+            f"Invalid argument: {ref}. Expected model, version, or reference in the format owner/name or owner/name:version",
         )
 
     if not version and (owner and name and version_id):
@@ -104,7 +94,8 @@ async def async_run(
 
 def _has_output_iterator_array_type(version: Version) -> bool:
     schema = make_schema_backwards_compatible(
-        version.openapi_schema, version.cog_version
+        version.openapi_schema,
+        version.cog_version,
     )
     output = schema.get("components", {}).get("schemas", {}).get("Output", {})
     return (
@@ -113,7 +104,8 @@ def _has_output_iterator_array_type(version: Version) -> bool:
 
 
 def _make_output_iterator(
-    version: Version, prediction: Prediction
+    version: Version,
+    prediction: Prediction,
 ) -> Optional[Iterator[Any]]:
     if _has_output_iterator_array_type(version):
         return prediction.output_iterator()
@@ -122,7 +114,8 @@ def _make_output_iterator(
 
 
 def _make_async_output_iterator(
-    version: Version, prediction: Prediction
+    version: Version,
+    prediction: Prediction,
 ) -> Optional[AsyncIterator[Any]]:
     if _has_output_iterator_array_type(version):
         return prediction.async_output_iterator()
