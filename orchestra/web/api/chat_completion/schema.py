@@ -14,10 +14,12 @@ class ChatCompletionRequest(BaseModel):
         stream (bool): Whether to stream the response.
     """
 
+    # TODO: This removes all other params if not specified
     model: str
     messages: List[Dict[str, str]]
     temperature: float = 0.9
     stream: bool = False
+    max_tokens: Optional[int] = None
 
 
 class ChatCompletionResponse(BaseModel):

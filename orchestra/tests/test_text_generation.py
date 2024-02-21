@@ -48,6 +48,7 @@ async def test_text_generation(  # noqa: WPS218, E501
 
     :param client: client for the app.
     """
+    # TODO: Test max tokens and rest of parameters
     model, provider = model.split("@")
     stream = stream_str == "stream"
     data = payload_fn[endpoint](model, provider, stream=stream)

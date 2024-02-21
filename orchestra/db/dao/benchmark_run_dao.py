@@ -2,11 +2,11 @@ import datetime
 from typing import List, Optional
 
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import BenchmarkRun
+from orchestra.db.models.orchestra_models import BenchmarkRun, Endpoint, Provider
 
 
 class BenchmarkRunDAO:
@@ -95,6 +95,33 @@ class BenchmarkRunDAO:
             query = query.where(BenchmarkRun.measured_at == measured_at)
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())
+
+    def get_model_benchmark_runs(self, model_id):
+        """
+        Gets the latest benchmark run for each provider for a given model.
+        """
+        subquery = (
+            select(
+                BenchmarkRun.endpoint_id,
+                func.max(BenchmarkRun.id).label("latest_benchmark_id"),
+            )
+            .join(Endpoint, BenchmarkRun.endpoint_id == Endpoint.id)
+            .where(Endpoint.mdl_id == model_id)
+            .where(BenchmarkRun.regime == "concurrent-1")
+            .where(BenchmarkRun.region == "Belgium")
+            .where(BenchmarkRun.seq_len == "short")
+            .group_by(BenchmarkRun.endpoint_id)
+            .alias("latest_benchmark_runs")
+        )
+
+        # Main query to select benchmark runs for the latest benchmark run IDs
+        query = (
+            select(BenchmarkRun, Provider)
+            .join(subquery, BenchmarkRun.id == subquery.c.latest_benchmark_id)
+            .join(Endpoint, BenchmarkRun.endpoint_id == Endpoint.id)
+            .join(Provider, Endpoint.provider_id == Provider.id)
+        )
+        return self.session.execute(query).all()
 
     def update_benchmark_run(  # noqa: WPS211, WPS213, WPS231, C901
         self,
