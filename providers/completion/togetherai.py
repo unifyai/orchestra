@@ -94,7 +94,7 @@ supported_models = {
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
     "deepseek-coder-33b-instruct": {
-        "endpoint": "together_ai/deepseek-ai/deepseek-coder-33b-instruct",
+        "endpoint": "deepseek-ai/deepseek-coder-33b-instruct",
         "context_window": 16384,
         "cost": {"prompt": 0.8, "completion": 0.8},
     },

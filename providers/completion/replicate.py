@@ -1,12 +1,13 @@
 import os
-import replicate
-import providers.completion.replicate_run as r8r
 from datetime import datetime
 from typing import Any, List, Optional
+
+import providers.completion.replicate_run as r8r
+import replicate
 from providers.completion.base_completion_provider import (
+    AsyncGeneratorWrapper,
     BaseCompletionProvider,
     SyncGeneratorWrapper,
-    AsyncGeneratorWrapper,
 )
 
 
@@ -46,6 +47,13 @@ class Replicate(BaseCompletionProvider):
         parsed = datetime.strptime(str, "%Y-%m-%dT%H:%M:%S.%fZ")
         return int(parsed.timestamp())
 
+    @staticmethod
+    def transform_kwargs(kwargs):
+        if "max_tokens" in kwargs:
+            kwargs["max_new_tokens"] = kwargs["max_tokens"]
+            del kwargs["max_tokens"]
+        return kwargs
+
     def response_to_chat_completion(self, response):
         created_at = self.str_to_ts(response.created_at)
         return dict(
@@ -79,6 +87,7 @@ class Replicate(BaseCompletionProvider):
         # TODO: Prompt factory needs to be model specific (family)
         # https://replicate.com/docs/reference/http#models.get
         _messages = messages[:]
+        kwargs = self.transform_kwargs(kwargs)
         r8_kwargs = {}
         if _messages[0]["role"] == "system":
             r8_kwargs["system_prompt"] = _messages[0]["content"]
@@ -87,18 +96,14 @@ class Replicate(BaseCompletionProvider):
         if stream:
             response = replicate.stream(
                 self.provider_endpoint,
-                input={"prompt": prompt},
-                **r8_kwargs,
-                # **kwargs, # TODO
+                input={"prompt": prompt, **kwargs, **r8_kwargs},
             )
             return (R8SyncGeneratorWrapper(self, response, messages), None)
         else:
             response = r8r.run(
                 replicate.default_client,
                 self.provider_endpoint,
-                input={"prompt": prompt},
-                **r8_kwargs,
-                # **kwargs, TODO
+                input={"prompt": prompt, **kwargs, **r8_kwargs},
             )
             return (
                 self.response_to_chat_completion(response),
@@ -112,6 +117,7 @@ class Replicate(BaseCompletionProvider):
         self, messages: List, stream: bool = False, **kwargs: Any
     ) -> Optional[Any]:
         _messages = messages[:]
+        # TODO: kwargs = self.transform_kwargs(kwargs)
         r8_kwargs = {}
         if _messages[0]["role"] == "system":
             r8_kwargs["system_prompt"] = _messages[0]["content"]
@@ -173,7 +179,7 @@ def sse_to_part_dict(part, whole):
                 "delta": {"content": part.data},
                 "logprobs": None,  # TODO?
                 "finish_reason": None,  # TODO
-            }
+            },
         ],
     }
     if part.data == "":
