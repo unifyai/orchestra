@@ -101,7 +101,7 @@ def performance_based_routing(
     if provider not in performance_rules:
         raise HTTPException(
             status_code=400,  # noqa: WPS432
-            detail=f"Invalid input. Provider has to be one of {performance_rules}",
+            detail=f"Invalid input. Provider has to be one of {performance_rules} when doing performance routing.",
         )
     update_performance_lut(model, model_dao, benchmark_run_dao, datapoint_dao)
     provider = _aliases(provider)
