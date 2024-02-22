@@ -74,7 +74,7 @@ def update_performance_lut(model, model_dao, benchmark_run_dao, datapoint_dao):
 
 performance_rules = [
     "lowest-input-cost",
-    "lowest-outut-cost",
+    "lowest-output-cost",
     "lowest-input-cost-per-token",
     "lowest-output-cost-per-token",
     "lowest-itl",
