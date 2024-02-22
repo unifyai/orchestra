@@ -46,7 +46,7 @@ The example assumes that your API key is stored in the environment variable :cod
             response = requests.get(self._base_url + "get_credits", headers=self._headers)
             return eval(response.content.decode())["credits"]
 
-        def _process_input(self, inp: str, show_credits: bool):
+        def _process_input(self, inp: str, show_credits: bool, show_provider: bool):
             pre_credits = self._get_credits()
             self._update_message_history(inp)
             response = self._oai_client.chat.completions.create(
@@ -55,8 +55,10 @@ The example assumes that your API key is stored in the environment variable :cod
                 stream=True
             )
             words = ''
+            model = ''
             for tok in response:
                 delta = tok.choices[0].delta
+                model = tok.model
                 if not delta:
                     self._message_history.append({
                         'role': 'assistant',
@@ -70,6 +72,8 @@ The example assumes that your API key is stored in the environment variable :cod
                     continue
             if show_credits:
                 sys.stdout.write("\n(spent {:.6f} credits)".format(pre_credits - self._get_credits()))
+            if show_provider:
+                sys.stdout.write("\n(provider: {})".format(model))
 
         def _update_message_history(self, inp):
             self._message_history.append({
@@ -94,7 +98,7 @@ The example assumes that your API key is stored in the environment variable :cod
         def clear_chat_history(self):
             self._message_history.clear()
 
-        def run(self, show_credits: bool = False):
+        def run(self, show_credits: bool = False, show_provider: bool = False):
             if not self._paused:
                 sys.stdout.write("Let's have a chat. (Enter `pause` to pause and `quit` to exit)\n")
                 self.clear_chat_history()
@@ -110,7 +114,7 @@ The example assumes that your API key is stored in the environment variable :cod
                 elif inp == 'pause':
                     self._paused = True
                     break
-                for word in self._process_input(inp, show_credits):
+                for word in self._process_input(inp, show_credits, show_provider):
                     sys.stdout.write(word)
                     sys.stdout.flush()
                 sys.stdout.write('\n')
@@ -221,3 +225,18 @@ and then move to a larger model for a more complex task, such as creative writin
 
 Switching between providers mid-conversation makes it much easier to maximize quality,
 maximize runtime performance based on the latest metrics, and also save on costs!
+
+In fact, optimizing for metrics can be done automatically with our
+`dynamic routing modes <https://unify.ai/docs/hub/concepts/runtime_routing.html#available-modes>`_.
+
+For example, you can optimize for speed as follows:
+
+.. code-block:: python
+
+    agent.model = "llama-2-70b-chat@highest-tks-per-sec"
+    agent.run(show_provider=True)
+
+The flag :code:`show_provider` ensures that the specific provider is printed at the end
+of each response. For example, sometimes :code:`anyscale` might be the fastest,
+and at other times it might be :code:`together-ai` or :code:`fireworks-ai`.
+This flag enables you to keep track of what provider is being used under the hood.
