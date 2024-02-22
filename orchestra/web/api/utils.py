@@ -206,8 +206,6 @@ def filter_request_params(arguments):
         "tools",
         "tool_choice",
         "user",
-        "function_call",
-        "functions",
         "stream",
     ]
     return {
