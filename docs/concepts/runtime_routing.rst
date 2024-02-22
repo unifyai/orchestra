@@ -52,5 +52,5 @@ Currently, we support a set of predefined configurations for the routing:
 - :code:`lowest-ttft`
 - :code:`highest-tks-per-sec`
 
-That's about it! We will be making these modes much flexible in the comming weeks, allowing you to 
+That's about it! We will be making these modes much flexible in the coming weeks, allowing you to 
 define more specific and fine-grained rules 🔎
