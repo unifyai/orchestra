@@ -72,6 +72,24 @@ def update_performance_lut(model, model_dao, benchmark_run_dao, datapoint_dao):
         _performance_lut[model]["metrics"],
     )
 
+performance_rules = [
+    "lowest-input-cost",
+    "lowest-outut-cost",
+    "lowest-input-cost-per-token",
+    "lowest-output-cost-per-token",
+    "lowest-itl",
+    "highest-tks-per-sec",
+    "highest-output-tks-per-sec",
+    "lowest-ttft",
+]
+
+def _aliases(metric):
+    return {
+        "lowest-input-cost": "lowest-input-cost-per-token",
+        "lowest-output-cost": "lowest-output-cost-per-token",
+        "highest-tks-per-sec": "lowest-itl",
+        "highest-output-tks-per-sec": "lowest-itl",
+    }.get(metric, metric)
 
 def performance_based_routing(
     model,
@@ -80,9 +98,14 @@ def performance_based_routing(
     benchmark_run_dao,
     datapoint_dao,
 ):
+    if provider not in performance_rules:
+        raise HTTPException(
+            status_code=400,  # noqa: WPS432
+            detail=f"Invalid input. Provider has to be one of {performance_rules}",
+        )
     update_performance_lut(model, model_dao, benchmark_run_dao, datapoint_dao)
+    provider = _aliases(provider)
     criterium, metric = provider.split("-", 1)
-    # TODO: check that the metric is a valid one
     metric = metric.replace("-", "_")
     if metric == "highest_output_tks_per_sec":
         metric = "lowest_itl"
