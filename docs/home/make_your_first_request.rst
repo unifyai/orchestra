@@ -161,7 +161,7 @@ To use it, you only need to change the provider name to one of the supported con
 like :code:`lowest-input-cost`, :code:`highest-tks-per-sec` or :code:`lowest-ttft`. You can check out the full list 
 `here <https://unify.ai/docs/hub/concepts/runtime_routing.html#available-modes>`_.
 
-This will look something like:
+If you are using the :code:`chat/completions` endpoint, this will look like:
 
 .. code-block:: python
     :emphasize-lines: 9
@@ -193,8 +193,6 @@ This will look something like:
                 print(chunk.decode("utf-8"))
     else:
         print(response.text)
-
-If you are using the :code:`chat/completions` endpoint.
 
 Compatible Tools
 ----------------
