@@ -3,6 +3,7 @@ import os
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from requests import request  # type: ignore
+from orchestra.settings import settings
 
 security = HTTPBearer()
 
@@ -21,7 +22,7 @@ def auth_api_key(
     apikey = credentials.credentials
     auth_ret = request(
         "GET",
-        f"https://cloud-db-gateway-94jg94af.ew.gateway.dev/apikey/{apikey}",
+        f"{settings.cloud_db_gateway}/apikey/{apikey}",
         headers={},
     )
 
