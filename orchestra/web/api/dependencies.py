@@ -22,7 +22,7 @@ def auth_api_key(
     apikey = credentials.credentials
     auth_ret = request(
         "GET",
-        f"{settings.cloud_db_gateway}/apikey/{apikey}",
+        f"{settings.cloud_db_gateway}/hubapikey/{apikey}",
         headers={},
     )
 
