@@ -23,6 +23,11 @@ class Deepinfra(BaseCompletionProvider):
 
 
 supported_models = {
+    "gemma-7b-it": {
+        "endpoint": "google/gemma-7b-it",
+        "context_window": 8192,
+        "cost": {"prompt": 0.13, "completion": 0.13},
+    },
     "llama-2-7b-chat": {
         "endpoint": "meta-llama/Llama-2-7b-chat-hf",
         "context_window": 4096,
