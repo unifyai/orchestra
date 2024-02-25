@@ -31,6 +31,11 @@ class Anyscale(BaseCompletionProvider):
 
 
 supported_models = {
+    "gemma-7b-it": {
+        "endpoint": "google/gemma-7b-it",
+        "context_window": 8192,
+        "cost": {"prompt": 0.15, "completion": 0.15},
+    },
     "llama-2-7b-chat": {
         "endpoint": "meta-llama/Llama-2-7b-chat-hf",
         "context_window": 4096,

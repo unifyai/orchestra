@@ -33,6 +33,11 @@ class LeptonAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "gemma-7b-it": {
+        "endpoint": "gemma-7b",
+        "context_window": 8192,
+        "cost": {"prompt": 0.1, "completion": 0.1},
+    },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "mixtral-8x7b",
         "context_window": 32768,
