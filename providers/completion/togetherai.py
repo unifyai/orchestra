@@ -23,6 +23,16 @@ class TogetherAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "gemma-2b-it": {
+        "endpoint": "google/gemma-2b-it",
+        "context_window": 8192,
+        "cost": {"prompt": 0.1, "completion": 0.1},
+    },
+    "gemma-7b-it": {
+        "endpoint": "google/gemma-7b-it",
+        "context_window": 8192,
+        "cost": {"prompt": 0.2, "completion": 0.2},
+    },
     "yi-34b": {
         "endpoint": "zero-one-ai/Yi-34B",
         "context_window": 4096,
