@@ -85,10 +85,6 @@ substitutions:
   _AR_HOSTNAME: europe-west3-docker.pkg.dev
   _PLATFORM: managed
   _JOB_NAME: orchestra-migrator
-  _BENCHMARK_JOB_US: bench-us-central1
-  _BENCHMARK_JOB_EU: bench-europe-west1
-  _BENCHMARK_JOB_AS: bench-asia-east2
-  _RECHARGING_JOB_NAME: orchestra-recharging
 tags:
 - gcp-cloud-build-deploy-cloud-run
 - gcp-cloud-build-deploy-cloud-run-managed
