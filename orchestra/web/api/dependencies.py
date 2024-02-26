@@ -28,8 +28,8 @@ def auth_api_key(
 
     if auth_ret.status_code != 200:  # noqa: WPS432
         raise HTTPException(
-            status_code=404,  # noqa: WPS432
-            detail="Invalid API key",
+            status_code=401,  # noqa: WPS432
+            detail="Invalid API key. You can generate one at https://console.unify.ai/login",
         )
     request_fastapi.state.user_id = auth_ret.json()["user_id"]
 
