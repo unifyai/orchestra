@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     opentelemetry_endpoint: Optional[str] = None
     opentelemetry_secure: bool = False
 
+    cloud_db_gateway: str = "https://cloud-db-gateway-94jg94af.ew.gateway.dev"
+    cors_allow_origins: list[str] = []
+
     @property
     def db_url(self) -> URL:
         """

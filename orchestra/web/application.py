@@ -12,7 +12,7 @@ from orchestra.logging import configure_logging
 from orchestra.settings import settings
 from orchestra.web.api.router import api_router
 from orchestra.web.lifetime import register_shutdown_event, register_startup_event
-
+from fastapi.middleware.cors import CORSMiddleware
 
 def get_app() -> FastAPI:
     """
@@ -47,6 +47,14 @@ def get_app() -> FastAPI:
         redoc_url="/v0/redoc",
         openapi_url="/v0/openapi.json",
         default_response_class=UJSONResponse,
+    )
+    
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allow_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     # Adds startup and shutdown events.
