@@ -242,7 +242,8 @@ async def worker_loop(  # noqa: WPS210
                 # Log results
                 # TODO logging.info(repr(runner))
             except Exception as e:
-                logging.error(f"Exception raised in runner: {e}")
+                name = f"{endpoint['model']}@{endpoint['provider']}"
+                logging.error(f"Exception raised in runner ({name}): {e}")
 
         # Log endpoint metrics
         # TODO
