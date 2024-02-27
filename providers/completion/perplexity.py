@@ -23,7 +23,8 @@ class Perplexity(BaseCompletionProvider):
     def base_url(self):
         return "https://api.perplexity.ai/"
 
-    def _modify_output(self, out: Dict, stream: bool) -> Dict:
+    def _modify_output(self, out: Dict, **kwargs) -> Dict:
+        stream = kwargs.get("stream", False)
         if stream:
             out["object"] = "chat.completion.chunk"
         return out
