@@ -1,5 +1,38 @@
 # orchestra
 
+This repo includes the code for orchestra, the server in charge of the model hub api and the benchmarks.
+
+## Docs and other READMEs
+
+- [API Endpoints README](./orchestra/web/api/README.md): How to add new endpoints to the orchestra API, How to secure the endpoints.
+- [Database README](./orchestra/db/README.md): Migrations, Google Cloud Infrastructure, Syncying staging DB.
+- TODO: Setting up local env
+- TODO: Debugging configurations, tests (unit, integration, load testing, manual), running orchestra locally in debug mode
+- TODO: Telemetry
+- TODO: GCP services in use and flows
+- TODO: CI/CD
+
+## Project structure
+
+```bash
+$ tree "orchestra"
+orchestra
+├── conftest.py  # Fixtures for all tests.
+├── db  # module contains db configurations
+│   ├── dao  # Data Access Objects. Contains different classes to interact with database.
+│   └── models  # Package contains different models for ORMs.
+├── __main__.py  # Startup script. Starts uvicorn.
+├── services  # Package for different external services such as rabbit or redis etc.
+├── settings.py  # Main configuration settings for project.
+├── static  # Static content.
+├── tests  # Tests for project.
+└── web  # Package contains web server. Handlers, startup config.
+    ├── api  # Package with all handlers.
+    │   └── dependencies.py  # Contains utilities and helpers for v0/router.
+    │   └── router.py  # Main router.
+    ├── application.py  # FastAPI application configuration.
+    └── lifetime.py  # Contains actions to perform on startup and shutdown.
+```
 
 ## Poetry
 
@@ -52,27 +85,6 @@ docker volume prune
 ```
 It is recommended to use the poetry commands for local development as docker does not play well with the database.
 
-## Project structure
-
-```bash
-$ tree "orchestra"
-orchestra
-├── conftest.py  # Fixtures for all tests.
-├── db  # module contains db configurations
-│   ├── dao  # Data Access Objects. Contains different classes to interact with database.
-│   └── models  # Package contains different models for ORMs.
-├── __main__.py  # Startup script. Starts uvicorn.
-├── services  # Package for different external services such as rabbit or redis etc.
-├── settings.py  # Main configuration settings for project.
-├── static  # Static content.
-├── tests  # Tests for project.
-└── web  # Package contains web server. Handlers, startup config.
-    ├── api  # Package with all handlers.
-    │   └── dependencies.py  # Contains utilities and helpers for v0/router.
-    │   └── router.py  # Main router.
-    ├── application.py  # FastAPI application configuration.
-    └── lifetime.py  # Contains actions to perform on startup and shutdown.
-```
 
 ## Configuration
 
@@ -96,6 +108,7 @@ ORCHESTRA_ENVIRONMENT="dev"
 ```
 
 You can read more about BaseSettings class here: https://pydantic-docs.helpmanual.io/usage/settings/
+
 ## OpenTelemetry
 
 If you want to start your project with OpenTelemetry collector
@@ -128,90 +141,6 @@ Run tests before pushing them
 pre-commit run -a
 poetry run mypy .
 ```
-
-## Migrations
-
-If you want to migrate your database, you should run following commands:
-```bash
-# To run all migrations until the migration with revision_id.
-alembic upgrade "<revision_id>"
-
-# To perform all pending migrations.
-alembic upgrade "head"
-```
-
-### Reverting migrations
-
-If you want to revert migrations, you should run:
-```bash
-# revert all migrations up to: revision_id.
-alembic downgrade <revision_id>
-
-# Revert everything.
-alembic downgrade base
-```
-
-### Migration generation
-
-To generate migrations you should run:
-```bash
-# For automatic change detection.
-alembic revision --autogenerate
-
-# For empty file generation.
-alembic revision
-```
-
-
-## Endpoint Protection
-
-### User-Facing
-
-To enable user API key authentication on endpoints, you should add the following
-in the `orchestra/web/api/router.py` file:
-
-```python
-api_router.include_router(
-    ...,
-    dependencies=API_KEY_AUTH,
-)
-```
-
-For example, this will protect all endpoints in the `/dummy` router:
-```python
-api_router.include_router(
-    dummy.router,
-    prefix="/dummy",
-    tags=["dummy"],
-    dependencies=API_KEY_AUTH,
-)
-```
-
-### Admin Authentication
-
-To enable admin-only API key authentication on endpoints, you should add the following
-in the `orchestra/web/api/router.py` file:
-
-```python
-api_router.include_router(
-    ...,
-    dependencies=ADMIN_AUTH,
-)
-```
-
-For example, this will protect all endpoints in the `/dummy` router
-to allow admin-only access:
-```python
-api_router.include_router(
-    dummy.router,
-    prefix="/dummy",
-    tags=["dummy"],
-    dependencies=ADMIN_AUTH,
-)
-```
-
-For testing purposes, an example is to add `ORCHESTRA_ADMIN_KEY="testing-123"` to the `.env` file for verifying the behaviour of the admin key authentication.
-
 
 ## Running tests
 
