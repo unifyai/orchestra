@@ -23,7 +23,8 @@ class Anyscale(BaseCompletionProvider):
     def base_url(self):
         return "https://api.endpoints.anyscale.com/v1"
 
-    def _modify_output(self, out: Dict, stream: bool) -> Dict:
+    def _modify_output(self, out: Dict, **kwargs) -> Dict:
+        stream = kwargs.get("stream", False)
         out["object"] = "chat.completion"
         if stream:
             out["object"] = "chat.completion.chunk"

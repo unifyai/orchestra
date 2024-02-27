@@ -1,3 +1,4 @@
+# type: ignore
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, Optional, Union
 
 from replicate import identifier

@@ -12,8 +12,7 @@ import yaml
 from aibench.runner import AIBenchRunner
 from providers.completion import PROVIDER_CLASSES
 from sqlalchemy import Column, select
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     BenchmarkRegime,
@@ -50,7 +49,7 @@ def read_configs(config_file: str) -> List[Dict]:
     return list(data.values())
 
 
-def create_db_session() -> sessionmaker:  # noqa: WPS210
+def create_db_session() -> async_sessionmaker:  # noqa: WPS210
     # noqa: DAR201
     """Creates an async db session.
 
@@ -58,7 +57,7 @@ def create_db_session() -> sessionmaker:  # noqa: WPS210
     orchestra:orchestra@localhost:5432/orchestra.
 
     Returns:
-        sessionmaker: Async SQLAlchemy session maker.
+        async_sessionmaker: Async SQLAlchemy session maker.
     """
     user = os.getenv("ORCHESTRA_DB_USER", "orchestra")
     password = os.getenv("ORCHESTRA_DB_PASS", "orchestra")
@@ -68,7 +67,7 @@ def create_db_session() -> sessionmaker:  # noqa: WPS210
     db_url = f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{db_name}"
     # TODO: logger.info(db_url)
     engine = create_async_engine(db_url)
-    return sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    return async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 
 async def get_names(
@@ -126,7 +125,7 @@ async def db_loop(  # noqa: WPS210, WPS217
     output_queue: asyncio.Queue,
     done_events: List[asyncio.Event],
     period: int,
-    async_session: sessionmaker,
+    async_session: async_sessionmaker,
 ):  # noqa: DAR101
     """Main DB loop. Consumes and stores data from output_queue periodically.
 
@@ -136,7 +135,7 @@ async def db_loop(  # noqa: WPS210, WPS217
         done_events (List[asyncio.Event]): List of events representing the
         workers status.
         period (int): Number of seconds to wait between sending data to the DB.
-        async_session (sessionmaker): DB session maker.
+        async_session (async_sessionmaker): DB session maker.
     """
     async with async_session() as q_session:
         metrics = await get_names(q_session, Metric)
@@ -255,12 +254,12 @@ async def worker_loop(  # noqa: WPS210
     done_event.set()
 
 
-async def retrieve_all_endpoints(async_session: sessionmaker) -> List[Dict]:
+async def retrieve_all_endpoints(async_session: async_sessionmaker) -> List[Dict]:
     # noqa: DAR101, DAR201
     """Retrieves a list of all the endpoints in the db.
 
     Args:
-        async_session (sessionmaker): Async SQLAlchemy session maker.
+        async_session (async_sessionmaker): Async SQLAlchemy session maker.
 
     Returns:
         List[Dict]: List of endpoints dictionaries with keys "id", "provider"
