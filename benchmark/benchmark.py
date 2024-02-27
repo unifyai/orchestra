@@ -11,7 +11,7 @@ from typing import Dict, List, Union
 import yaml
 from aibench.runner import AIBenchRunner
 from providers.completion import PROVIDER_CLASSES
-from sqlalchemy import select
+from sqlalchemy import Column, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -73,7 +73,12 @@ def create_db_session() -> sessionmaker:  # noqa: WPS210
 
 async def get_names(
     async_session: AsyncSession,
-    table_class: Union[Metric, BenchmarkRegime, BenchmarkRegion, BenchmarkSeqLen],
+    table_class: Union[
+        type[Metric],
+        type[BenchmarkRegime],
+        type[BenchmarkRegion],
+        type[BenchmarkSeqLen],
+    ],
 ) -> List[str]:  # noqa: DAR101, DAR201
     """Returns a list of names from a given table in a DB.
 
@@ -318,7 +323,7 @@ async def commit_benchmark_runs(
 
 
 async def add_br_datapoints(  # noqa: WPS210
-    br_id: int,
+    br_id: Column[int],
     br_result: Dict,
     async_session: AsyncSession,
     db_metrics: List[str],

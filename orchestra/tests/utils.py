@@ -1,7 +1,5 @@
-# TODO: Check that answers with line breaks work properly
 # TODO: Add extra parameters to the tests payload (_partial_openai_payload)
 # TODO: Add logging to the tests to see the actual responses manually if needed
-# TODO: Test at least one model per provider
 import os
 from typing import Dict
 
@@ -85,9 +83,9 @@ def check_text_gen_response(response: Dict, object_str: str):
         assert isinstance(response.get("usage"), dict)
 
     if "provider" in response:
-        model, provider = response.get("model"), response.get("provider")
+        model, provider = response["model"], response["provider"]
     else:
-        model, provider = response.get("model").split("@")
+        model, provider = response["model"].split("@")
 
     assert isinstance(model, str)
     assert isinstance(provider, str)
@@ -100,7 +98,6 @@ def check_text_gen_usage(usage: Dict):
     assert isinstance(usage.get("total_tokens"), int)
 
 
-# TODO: Move this to utils
 def check_text_gen_choice(choice: Dict, message: str):
     assert message in ["message", "delta"]
     assert isinstance(choice, dict)
@@ -113,9 +110,9 @@ def check_text_gen_choice(choice: Dict, message: str):
     # TODO: When this is none, is the key included at all? are we not
     # including it?
     # check_in_dict_and_instance(choice, "logprobs", (None, bool))
-    message = choice.get(message)
-    assert isinstance(message, dict)
-    if message == "full":
-        assert isinstance(message.get("role"), str)
+    message_dict = choice.get(message)
+    assert isinstance(message_dict, dict)
+    if message == "message":
+        assert isinstance(message_dict.get("role"), str)
     # TODO: Add option for empty message if end of stream and delta
-    assert isinstance(message.get("content"), str)
+    assert isinstance(message_dict.get("content"), str)
