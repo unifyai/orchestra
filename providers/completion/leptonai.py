@@ -24,7 +24,8 @@ class LeptonAI(BaseCompletionProvider):
     def base_url(self):
         return "https://{0}.lepton.run/api/v1/".format(self.provider_endpoint)
 
-    def _modify_output(self, out: Dict, stream: bool) -> Dict:
+    def _modify_output(self, out: Dict, **kwargs) -> Dict:
+        stream = kwargs.get("stream", False)
         out["created"] = int(time.time())
         out["object"] = "chat.completion"
         if stream:
