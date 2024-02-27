@@ -149,6 +149,51 @@ Or using **Python**:
 
 Or any other language!
 
+Runtime Dynamic Routing
+-----------------------
+
+When making requests, you can also leverage the information from the `benchmarks <https://unify.ai/docs/hub/concepts/benchmarks.html>`_
+to automatically route to the best performing provider for the metric you choose. The results of the 
+benchmarks change over time, so using this routing ensures that you always get the best option without having to monitor the data yourself.
+
+You can learn more about about this in the corresponding `page of the docs <https://unify.ai/docs/hub/concepts/runtime_routing.html>`_. 
+To use it, you only need to change the provider name to one of the supported configurations. This includes modes 
+like :code:`lowest-input-cost`, :code:`highest-tks-per-sec` or :code:`lowest-ttft`. You can check out the full list 
+`here <https://unify.ai/docs/hub/concepts/runtime_routing.html#available-modes>`_.
+
+If you are using the :code:`chat/completions` endpoint, this will look like:
+
+.. code-block:: python
+    :emphasize-lines: 9
+
+    import requests
+
+    url = "https://api.unify.ai/v0/chat/completions"
+    headers = {
+        "Authorization": "Bearer YOUR_UNIFY_KEY",
+    }
+
+    payload = {
+        "model": "llama-2-70b-chat@lowest-input-cost",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Explain who Newton was and his entire theory of gravitation. Give a long detailed response please and explain all of his achievements"
+            }],
+        "stream": True
+    }
+
+    response = requests.post(url, json=payload, headers=headers, stream=True)
+
+    print(response.status_code)
+
+    if response.status_code == 200:
+        for chunk in response.iter_content(chunk_size=1024):
+            if chunk:
+                print(chunk.decode("utf-8"))
+    else:
+        print(response.text)
+
 Compatible Tools
 ----------------
 

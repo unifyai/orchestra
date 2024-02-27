@@ -6,6 +6,8 @@ from fastapi.param_functions import Depends
 from fastapi.responses import StreamingResponse
 from providers.completion import PROVIDER_CLASSES
 
+from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
+from orchestra.db.dao.datapoint_dao import DatapointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
@@ -20,6 +22,7 @@ from orchestra.web.api.utils import (
     db_operations,
     filter_request_params,
     insufficient_credits_error,
+    performance_based_routing,
 )
 
 router = APIRouter()
@@ -35,6 +38,8 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     provider_dao: ProviderDAO = Depends(),
     endpoint_dao: EndpointDAO = Depends(),
     query_dao: QueryDAO = Depends(),
+    benchmark_run_dao: BenchmarkRunDAO = Depends(),
+    datapoint_dao: DatapointDAO = Depends(),
 ) -> Union[ChatCompletionResponse, StreamingResponse]:
     """
     Get chat completions based on the request.
@@ -77,6 +82,15 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     user_id = request_fastapi.state.user_id
     user = get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(user.credits if user else 0)
+
+    if provider.split("-")[0] in ["lowest", "highest"]:
+        provider = performance_based_routing(
+            model,
+            provider,
+            model_dao,
+            benchmark_run_dao,
+            datapoint_dao,
+        )
 
     lm = PROVIDER_CLASSES[provider](model)
     if available_credits < lm.max_cost:

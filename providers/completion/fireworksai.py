@@ -23,6 +23,11 @@ class FireworksAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "gemma-7b-it": {
+        "endpoint": "accounts/fireworks/models/gemma-7b-it",
+        "context_window": 8192,
+        "cost": {"prompt": 0.2, "completion": 0.6},
+    },
     "llama-2-7b": {
         "endpoint": "accounts/fireworks/models/llama-v2-7b",
         "context_window": 4096,

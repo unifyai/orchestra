@@ -1,3 +1,5 @@
+import logging
+import time
 from typing import Callable
 
 from fastapi import HTTPException
@@ -23,9 +25,92 @@ insufficient_credits_error = HTTPException(
     ),
 )
 
-# Background tasks
+# Performance based dynamic routing
 
-# HTTP responses
+_performance_lut = {}
+
+
+def _lt_hours(ts, n=3):
+    return (time.time() - ts) < (n * 3600)
+
+
+def _get_metrics(model_id, benchmark_run_dao, datapoint_dao):
+    brs = benchmark_run_dao.get_model_benchmark_runs(model_id)
+    providers = {}
+    # Generate lists of the metrics for each provider
+    for br in brs:
+        metrics = datapoint_dao.filter(benchmark_run_id=br.BenchmarkRun.id)
+        providers[br.Provider.name] = {}
+        for metric in metrics:
+            providers[br.Provider.name][metric.metric_name] = metric.value
+    return providers
+
+
+def _compute_lowest(metrics_dict):
+    lowest_metrics = {}  # Dictionary to store the lowest metrics by provider
+    # Iterate over each provider and their metrics
+    for provider, metrics in metrics_dict.items():
+        # Iterate over each metric for the current provider
+        for metric, value in metrics.items():
+            # If the metric is not yet in the lowest_metrics dictionary or its value is lower than the stored value
+            if metric not in lowest_metrics or value < lowest_metrics[metric]["value"]:
+                # Update the lowest_metrics dictionary with the new lowest value
+                lowest_metrics[metric] = {"provider": provider, "value": value}
+    return lowest_metrics
+
+
+def update_performance_lut(model, model_dao, benchmark_run_dao, datapoint_dao):
+    logging.info("Updating performance LUT.")
+    if model in _performance_lut and _lt_hours(_performance_lut[model]["ts"]):
+        return
+    model_id = model_dao.filter(mdl_code=model)[0].id
+    _performance_lut[model] = {
+        "ts": time.time(),
+        "metrics": _get_metrics(model_id, benchmark_run_dao, datapoint_dao),
+    }
+    _performance_lut[model]["lowest"] = _compute_lowest(
+        _performance_lut[model]["metrics"],
+    )
+
+performance_rules = [
+    "lowest-input-cost",
+    "lowest-output-cost",
+    "lowest-input-cost-per-token",
+    "lowest-output-cost-per-token",
+    "lowest-itl",
+    "highest-tks-per-sec",
+    "highest-output-tks-per-sec",
+    "lowest-ttft",
+]
+
+def _aliases(metric):
+    return {
+        "lowest-input-cost": "lowest-input-cost-per-token",
+        "lowest-output-cost": "lowest-output-cost-per-token",
+        "highest-tks-per-sec": "lowest-itl",
+        "highest-output-tks-per-sec": "lowest-itl",
+    }.get(metric, metric)
+
+def performance_based_routing(
+    model,
+    provider,
+    model_dao,
+    benchmark_run_dao,
+    datapoint_dao,
+):
+    if provider not in performance_rules:
+        raise HTTPException(
+            status_code=400,  # noqa: WPS432
+            detail=f"Invalid input. Provider has to be one of {performance_rules} when doing performance routing.",
+        )
+    update_performance_lut(model, model_dao, benchmark_run_dao, datapoint_dao)
+    provider = _aliases(provider)
+    criterium, metric = provider.split("-", 1)
+    metric = metric.replace("-", "_")
+    if metric == "highest_output_tks_per_sec":
+        metric = "lowest_itl"
+    return _performance_lut[model][criterium][metric]["provider"]
+
 
 insufficient_credits_error = HTTPException(
     status_code=402,
@@ -121,8 +206,6 @@ def filter_request_params(arguments):
         "tools",
         "tool_choice",
         "user",
-        "function_call",
-        "functions",
         "stream",
     ]
     return {
