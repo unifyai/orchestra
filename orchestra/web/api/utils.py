@@ -72,6 +72,7 @@ def update_performance_lut(model, model_dao, benchmark_run_dao, datapoint_dao):
         _performance_lut[model]["metrics"],
     )
 
+
 performance_rules = [
     "lowest-input-cost",
     "lowest-output-cost",
@@ -83,6 +84,7 @@ performance_rules = [
     "lowest-ttft",
 ]
 
+
 def _aliases(metric):
     return {
         "lowest-input-cost": "lowest-input-cost-per-token",
@@ -90,6 +92,7 @@ def _aliases(metric):
         "highest-tks-per-sec": "lowest-itl",
         "highest-output-tks-per-sec": "lowest-itl",
     }.get(metric, metric)
+
 
 def performance_based_routing(
     model,
