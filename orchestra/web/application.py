@@ -3,6 +3,7 @@ from importlib import metadata
 
 import sentry_sdk
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import UJSONResponse
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.logging import LoggingIntegration
@@ -12,7 +13,7 @@ from orchestra.logging import configure_logging
 from orchestra.settings import settings
 from orchestra.web.api.router import api_router
 from orchestra.web.lifetime import register_shutdown_event, register_startup_event
-from fastapi.middleware.cors import CORSMiddleware
+
 
 def get_app() -> FastAPI:
     """
@@ -48,7 +49,7 @@ def get_app() -> FastAPI:
         openapi_url="/v0/openapi.json",
         default_response_class=UJSONResponse,
     )
-    
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allow_origins,
