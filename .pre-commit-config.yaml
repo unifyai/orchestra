@@ -59,4 +59,4 @@ repos:
     types: [python]
     pass_filenames: false
     args:
-    - "orchestra"
+    - "."

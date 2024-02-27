@@ -3,6 +3,7 @@ import os
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from requests import request  # type: ignore
+
 from orchestra.settings import settings
 
 security = HTTPBearer()
