@@ -203,7 +203,7 @@ async def worker_loop(  # noqa: WPS210
 
         def endpoint_fn(prompt, max_tokens, stream):
             message = [
-                {"role": "system", "content": "You are a helpful assistant."},
+                # {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": prompt},
             ]
             return language_model.__call_async__(
