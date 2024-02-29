@@ -82,7 +82,7 @@ explanation. You can detect this and change your policy doing something like:
 
     payload = {
         # This won't work since no provider has this price! (yet?)
-        "model": "llama-2-70b-chat@lowest-itl<0.001ic"
+        "model": "llama-2-70b-chat@lowest-itl<0.001ic",
         "messages": [{
             "role": "user",
             "content": "Hello!"
