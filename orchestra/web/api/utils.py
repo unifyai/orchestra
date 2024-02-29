@@ -47,8 +47,8 @@ def server_error_with_digest(text: str):
 This LUT acts as a cache for performance based routing. The structure is:
 {
     "<model-id>": {
+        "ts": timestamp of the last update of the metrics, time.time()
         "metrics": {
-            "ts": timestamp of the last update of the metrics, time.time()
             "<provider>": {
                 "<metric-name>": metric.value
             }
@@ -56,7 +56,6 @@ This LUT acts as a cache for performance based routing. The structure is:
         "lowest": {
             "<metric-name>": {
                 "[float]ic": {
-                    "ts": timestamp of the last update
                     "provider": "<provider>"
                     "value": "<value>"
                 }
@@ -85,11 +84,11 @@ def _get_metrics(model_id, benchmark_run_dao, datapoint_dao):
         providers[br.Provider.name] = {}
         for metric in metrics:
             providers[br.Provider.name][metric.metric_name] = metric.value
+    logger.info("Refreshed metric in performance LUT.")
     return providers
 
 
 def update_performance_lut(model, model_dao, benchmark_run_dao, datapoint_dao):
-    logger.info("Updating performance LUT.")
     if model in _performance_lut and _lt_hours(_performance_lut[model]["ts"]):
         return
     try:
@@ -99,6 +98,7 @@ def update_performance_lut(model, model_dao, benchmark_run_dao, datapoint_dao):
             status_code=400,
             detail=f"Invalid input. model-id doesn't match any entry in the model hub.",
         )
+    # This removes all the cached price breakpoints (on purpose)
     _performance_lut[model] = {
         "ts": time.time(),
         "metrics": _get_metrics(model_id, benchmark_run_dao, datapoint_dao),
@@ -148,7 +148,6 @@ def valid_price_breakpoint(price_breakpoint):
 
 
 def _compute_lowest(model, criterium, metric, price_breakpoint):
-    # TODO: Deal with expired measurements
     metrics_dict = _performance_lut[model]["metrics"]
     # TODO: Add support for this
     comparation_fn = {
@@ -171,7 +170,21 @@ def _compute_lowest(model, criterium, metric, price_breakpoint):
         if not optimal_metric or value < optimal_metric["value"]:
             optimal_metric = {"provider": provider, "value": value}
     if not optimal_metric:
-        return -1
+        if brkp_metric:
+            raise HTTPException(
+                status_code=404,
+                detail="No providers found within the specified price limits.",
+            )
+        else:
+            debug_info = {
+                "model": model,
+                "metric": metric,
+                "price_breakpoint": price_breakpoint,
+            }
+            server_error, digest = server_error_with_digest(str(debug_info))
+            logger.error(f"Digest {digest}: {str(debug_info)}")
+            raise server_error
+    logger.info(f"Added ({model}, {metric}, {price_breakpoint}) to performance LUT.")
     return optimal_metric["provider"]
 
 
@@ -217,17 +230,7 @@ def performance_based_routing(
     provider = _aliases(provider)
     criterium, metric = provider.split("-", 1)
     metric = metric.replace("-", "_")
-    try:
-        ret = _get_provider_from_lut(model, criterium, metric, price_breakpoint)
-        if ret == -1:
-            raise HTTPException(
-                status_code=404,
-                detail="No providers found within the specified price limits.",
-            )
-    except KeyError as e:  # TODO: Prob move this inside the other function
-        server_error, digest = server_error_with_digest(str(e))
-        logger.error(f"Digest {digest}: {str(e)}")
-        raise server_error
+    ret = _get_provider_from_lut(model, criterium, metric, price_breakpoint)
     return ret
 
 
