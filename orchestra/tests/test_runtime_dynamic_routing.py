@@ -7,7 +7,6 @@ from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.web.api.utils import performance_based_routing
 
 # TODO: Add test for same value in metric
-# TODO: Test response when no result is found (price breakpoints) + add this in the docs
 
 TEST_VALID_CONFIGS = [
     "lowest-input-cost",
