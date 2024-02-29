@@ -20,6 +20,7 @@ def get_db_session(request: Request) -> Generator[Session, None, None]:
 
     try:  # noqa: WPS501
         yield session
+    # TODO: Fix this, it catches all exceptions instead of just the db ones
     # except Exception as e:
     #     digest = hashlib.shake_256(str(e).encode()).digest(4).hex()
     #     logger.error(f"Digest {digest}: {e}")
