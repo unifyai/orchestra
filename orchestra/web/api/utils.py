@@ -1,6 +1,7 @@
+import hashlib
 import logging
 import time
-from typing import Callable
+from typing import Any, Callable, Dict
 
 from fastapi import HTTPException
 
@@ -15,6 +16,8 @@ from orchestra.web.api.provider.views import get_provider
 from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.query.views import create_query_model
 
+logger = logging.getLogger(__name__)
+
 # HTTP responses
 
 insufficient_credits_error = HTTPException(
@@ -25,9 +28,48 @@ insufficient_credits_error = HTTPException(
     ),
 )
 
+
+# TODO: Test this
+def server_error_with_digest(text: str):
+    digest = hashlib.shake_256(text.encode()).digest(4).hex()
+    return (
+        HTTPException(
+            status_code=500,
+            detail=f"Internal Server Error. Digest: {digest}",
+        ),
+        digest,
+    )
+
+
 # Performance based dynamic routing
 
-_performance_lut = {}
+"""
+This LUT acts as a cache for performance based routing. The structure is:
+{
+    "<model-id>": {
+        "metrics": {
+            "ts": timestamp of the last update of the metrics, time.time()
+            "<provider>": {
+                "<metric-name>": metric.value
+            }
+        }
+        "lowest": {
+            "<metric-name>": {
+                "[float]ic": {
+                    "ts": timestamp of the last update
+                    "provider": "<provider>"
+                    "value": "<value>"
+                }
+                "[float]oc": {
+                    ...
+                }
+            }
+        }
+    }
+}
+# TODO: Move this into a class
+"""
+_performance_lut: Dict[str, Any] = {}
 
 
 def _lt_hours(ts, n=3):
@@ -46,31 +88,21 @@ def _get_metrics(model_id, benchmark_run_dao, datapoint_dao):
     return providers
 
 
-def _compute_lowest(metrics_dict):
-    lowest_metrics = {}  # Dictionary to store the lowest metrics by provider
-    # Iterate over each provider and their metrics
-    for provider, metrics in metrics_dict.items():
-        # Iterate over each metric for the current provider
-        for metric, value in metrics.items():
-            # If the metric is not yet in the lowest_metrics dictionary or its value is lower than the stored value
-            if metric not in lowest_metrics or value < lowest_metrics[metric]["value"]:
-                # Update the lowest_metrics dictionary with the new lowest value
-                lowest_metrics[metric] = {"provider": provider, "value": value}
-    return lowest_metrics
-
-
 def update_performance_lut(model, model_dao, benchmark_run_dao, datapoint_dao):
-    logging.info("Updating performance LUT.")
+    logger.info("Updating performance LUT.")
     if model in _performance_lut and _lt_hours(_performance_lut[model]["ts"]):
         return
-    model_id = model_dao.filter(mdl_code=model)[0].id
+    try:
+        model_id = model_dao.filter(mdl_code=model)[0].id
+    except IndexError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid input. model-id doesn't match any entry in the model hub.",
+        )
     _performance_lut[model] = {
         "ts": time.time(),
         "metrics": _get_metrics(model_id, benchmark_run_dao, datapoint_dao),
     }
-    _performance_lut[model]["lowest"] = _compute_lowest(
-        _performance_lut[model]["metrics"],
-    )
 
 
 performance_rules = [
@@ -94,25 +126,109 @@ def _aliases(metric):
     }.get(metric, metric)
 
 
+invalid_price_breakpoint = HTTPException(
+    status_code=400,
+    detail=(
+        "Invalid price breakpoint. Format needs to be config<[float][ic|oc]. "
+        "See https://unify.ai/docs/hub/concepts/runtime_routing.html#price-breakpoints for more details."
+    ),
+)
+
+
+def valid_price_breakpoint(price_breakpoint):
+    if price_breakpoint == "inf<>":
+        return True
+    if price_breakpoint[-2:] not in ["ic", "oc"]:
+        return False
+    try:
+        float(price_breakpoint[:-2])
+    except ValueError:
+        return False
+    return True
+
+
+def _compute_lowest(model, criterium, metric, price_breakpoint):
+    # TODO: Deal with expired measurements
+    metrics_dict = _performance_lut[model]["metrics"]
+    # TODO: Add support for this
+    comparation_fn = {
+        "highest": max,
+        "lowest": min,
+    }[criterium]
+    brkp_value = float(price_breakpoint[:-2])
+    brkp_metric = {
+        "<>": None,
+        "ic": "input_cost_per_token",
+        "oc": "output_cost_per_token",
+    }[price_breakpoint[-2:]]
+
+    optimal_metric = {}
+    # Iterate over each provider
+    for provider, provider_metrics in metrics_dict.items():
+        value = provider_metrics[metric]
+        if brkp_metric and provider_metrics[brkp_metric] >= brkp_value:
+            continue
+        if not optimal_metric or value < optimal_metric["value"]:
+            optimal_metric = {"provider": provider, "value": value}
+    if not optimal_metric:
+        return -1
+    return optimal_metric["provider"]
+
+
+def _get_provider_from_lut(model, criterium, metric, price_breakpoint):
+    if criterium not in _performance_lut[model]:
+        _performance_lut[model][criterium] = {}
+    if metric not in _performance_lut[model][criterium]:
+        _performance_lut[model][criterium][metric] = {}
+    if price_breakpoint not in _performance_lut[model][criterium][metric]:
+        _performance_lut[model][criterium][metric][price_breakpoint] = _compute_lowest(
+            model,
+            criterium,
+            metric,
+            price_breakpoint,
+        )
+    return _performance_lut[model][criterium][metric][price_breakpoint]
+
+
 def performance_based_routing(
     model,
-    provider,
+    provider: str,
     model_dao,
     benchmark_run_dao,
     datapoint_dao,
 ):
+    price_breakpoint = "inf<>"
+    if ">" in provider:
+        raise invalid_price_breakpoint
+    if "<" in provider:
+        provider, price_breakpoint = provider.split("<", 1)
+    if not valid_price_breakpoint(price_breakpoint):
+        raise invalid_price_breakpoint
     if provider not in performance_rules:
+        # TODO: Move this to exception file
         raise HTTPException(
-            status_code=400,  # noqa: WPS432
+            status_code=400,
             detail=f"Invalid input. Provider has to be one of {performance_rules} when doing performance routing.",
         )
+
+    # refresh metrics if needed
     update_performance_lut(model, model_dao, benchmark_run_dao, datapoint_dao)
+
     provider = _aliases(provider)
     criterium, metric = provider.split("-", 1)
     metric = metric.replace("-", "_")
-    if metric == "highest_output_tks_per_sec":
-        metric = "lowest_itl"
-    return _performance_lut[model][criterium][metric]["provider"]
+    try:
+        ret = _get_provider_from_lut(model, criterium, metric, price_breakpoint)
+        if ret == -1:
+            raise HTTPException(
+                status_code=404,
+                detail="No providers found within the specified price limits.",
+            )
+    except KeyError as e:  # TODO: Prob move this inside the other function
+        server_error, digest = server_error_with_digest(str(e))
+        logger.error(f"Digest {digest}: {str(e)}")
+        raise server_error
+    return ret
 
 
 insufficient_credits_error = HTTPException(
