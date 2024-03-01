@@ -24,18 +24,18 @@ class Mistral(BaseCompletionProvider):
 
 supported_models = {
     "mistral-7b-instruct-v0.2": {
-        "endpoint": "mistral-tiny",
+        "endpoint": "open-mistral-7b",
         "context_window": 32768,
-        "cost": {"prompt": 0.15, "completion": 0.46},
+        "cost": {"prompt": 0.25, "completion": 0.25},
     },
     "mixtral-8x7b-instruct-v0.1": {
-        "endpoint": "mistral-small",
+        "endpoint": "open-mixtral-8x7b",
         "context_window": 32768,
-        "cost": {"prompt": 0.66, "completion": 1.97},
+        "cost": {"prompt": 0.7, "completion": 0.7},
     },
     "mistral-medium": {
-        "endpoint": "mistral-medium",
+        "endpoint": "mistral-medium-latest",
         "context_window": 32768,
-        "cost": {"prompt": 2.74, "completion": 8.21},
+        "cost": {"prompt": 2.7, "completion": 8.1},
     },
 }
