@@ -28,7 +28,7 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.25, "completion": 0.25},
     },
-    "mixtral-8x7b-instruct-v0.2": {
+    "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "open-mixtral-8x7b",
         "context_window": 32768,
         "cost": {"prompt": 0.7, "completion": 0.7},
