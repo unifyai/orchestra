@@ -1,3 +1,5 @@
+from typing import List
+
 # Retrieve html_theme_options from docs/conf.py
 from docs.conf import html_theme_options
 
@@ -9,4 +11,4 @@ project = "Model Hub"
 html_title = "Model Hub Documentation"
 
 # Removing kapa.ai integration
-html_js_files = []
+html_js_files: List[str] = []

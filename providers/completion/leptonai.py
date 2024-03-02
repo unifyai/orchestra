@@ -24,7 +24,8 @@ class LeptonAI(BaseCompletionProvider):
     def base_url(self):
         return "https://{0}.lepton.run/api/v1/".format(self.provider_endpoint)
 
-    def _modify_output(self, out: Dict, stream: bool) -> Dict:
+    def _modify_output(self, out: Dict, **kwargs) -> Dict:
+        stream = kwargs.get("stream", False)
         out["created"] = int(time.time())
         out["object"] = "chat.completion"
         if stream:
@@ -33,6 +34,11 @@ class LeptonAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "gemma-7b-it": {
+        "endpoint": "gemma-7b",
+        "context_window": 8192,
+        "cost": {"prompt": 0.1, "completion": 0.1},
+    },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "mixtral-8x7b",
         "context_window": 32768,

@@ -1,10 +1,15 @@
+import hashlib
+import logging
 import os
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from requests import request  # type: ignore
 
+from orchestra.settings import settings
+
 security = HTTPBearer()
+logger = logging.getLogger(__name__)
 
 
 def auth_api_key(
@@ -21,14 +26,24 @@ def auth_api_key(
     apikey = credentials.credentials
     auth_ret = request(
         "GET",
-        f"https://cloud-db-gateway-94jg94af.ew.gateway.dev/apikey/{apikey}",
+        f"{settings.cloud_db_gateway}/hubapikey/{apikey}",
         headers={},
     )
 
-    if auth_ret.status_code != 200:  # noqa: WPS432
+    # TODO: This may be missleading and should have a different http code
+    # (db-connector issue)
+    # TODO: Move this to utils file with other shared HTTP responses.
+    if auth_ret.status_code == 404:
         raise HTTPException(
-            status_code=404,  # noqa: WPS432
-            detail="Invalid API key",
+            status_code=401,  # noqa: WPS432
+            detail="Invalid API key. You can generate one at https://console.unify.ai/login",
+        )
+    elif auth_ret.status_code != 200:  # noqa: WPS432
+        digest = hashlib.shake_256(auth_ret.text.encode()).digest(4).hex()
+        logger.error(f"Digest {digest}: {auth_ret.text}")
+        raise HTTPException(
+            status_code=500,  # noqa: WPS432
+            detail=f"Internal Server Error. Digest: {digest}",
         )
     request_fastapi.state.user_id = auth_ret.json()["user_id"]
 

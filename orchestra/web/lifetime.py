@@ -1,4 +1,4 @@
-from typing import Awaitable, Callable
+from typing import Callable
 
 from fastapi import FastAPI
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -33,7 +33,10 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
     :param app: fastAPI application.
     """
     engine = create_engine(
-        str(settings.db_url), echo=settings.db_echo, pool_size=25, max_overflow=50,  # noqa: WPS432, E501
+        str(settings.db_url),
+        echo=settings.db_echo,
+        pool_size=25,
+        max_overflow=50,  # noqa: WPS432, E501
     )
     session_factory = sessionmaker(
         engine,
@@ -119,7 +122,7 @@ def setup_prometheus(app: FastAPI) -> None:  # pragma: no cover
 
 def register_startup_event(
     app: FastAPI,
-) -> Callable[[], Awaitable[None]]:  # pragma: no cover
+) -> Callable[[], None]:  # pragma: no cover
     """
     Actions to run on application startup.
 
@@ -144,7 +147,7 @@ def register_startup_event(
 
 def register_shutdown_event(
     app: FastAPI,
-) -> Callable[[], Awaitable[None]]:  # pragma: no cover
+) -> Callable[[], None]:  # pragma: no cover
     """
     Actions to run on application's shutdown.
 

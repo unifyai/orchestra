@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
 import tiktoken
 from fastapi import HTTPException
@@ -8,9 +8,11 @@ from openai import (
     APIError,
     APITimeoutError,
     AsyncOpenAI,
+    AsyncStream,
     BadRequestError,
     OpenAI,
     RateLimitError,
+    Stream,
 )
 from openai.types.completion_usage import CompletionUsage
 
@@ -74,8 +76,11 @@ class BaseCompletionProvider:
         return self.supported_models[self.hub_model]["context_window"]
 
     @property
-    def api_key(self) -> None:  # noqa: D102
-        return os.getenv(self.api_key_var)
+    def api_key(self) -> str:  # noqa: D102
+        key = os.getenv(self.api_key_var)
+        if key is None:
+            raise ValueError("ENV VAR {self.api_key_var} not found.")
+        return key
 
     @property
     def max_cost(self) -> float:  # noqa: D102
@@ -88,7 +93,7 @@ class BaseCompletionProvider:
         self,
         prompt_tks,
         output_tks,
-    ) -> float:
+    ) -> Callable:
         """
         Returns a deffered op to compute the cost of a completion.
 
@@ -108,7 +113,7 @@ class BaseCompletionProvider:
         self,
         completions: List[str],
         messages: List[Dict],
-    ) -> float:
+    ) -> Callable:
         """
         Returns a deffered op to compute the cost of a completion when streaming.
 
@@ -135,21 +140,22 @@ class BaseCompletionProvider:
             return deferred_streaming_cost
 
         except Exception:  # TODO: This need to be scoped down and prob moved inside
-            return 0
+            return lambda *args, **kwargs: 0
 
     def __call__(  # noqa: D102, WPS211, C901, WPS231, WPS238, WPS210
         self,
         messages: List,  # type: ignore
         stream: bool = False,
         **kwargs: Any,
-    ) -> Optional[Any]:
+    ) -> Any:
+
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
         try:  # noqa: WPS225
             response = client.chat.completions.create(
                 model=self.provider_endpoint, messages=messages, stream=stream, **kwargs,
             )
-            if stream:
+            if isinstance(response, Stream) or stream:
                 return (SyncGeneratorWrapper(self, response, messages), None)
 
             # TODO: Maybe remove this dump unless neccesary?
@@ -177,14 +183,15 @@ class BaseCompletionProvider:
         messages: List,  # type: ignore
         stream: bool = False,
         **kwargs: Any,
-    ) -> Optional[Any]:
+    ) -> Any:
+
         client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
 
         try:  # noqa: WPS225
             response = client.chat.completions.create(
                 model=self.provider_endpoint, messages=messages, stream=stream, **kwargs,
             )
-            if stream:
+            if isinstance(response, AsyncStream) or stream:
                 return (AsyncGeneratorWrapper(self, response, messages), None)
 
             # TODO: Maybe remove this dump unless neccesary?

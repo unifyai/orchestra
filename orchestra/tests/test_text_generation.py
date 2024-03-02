@@ -1,17 +1,17 @@
-from unittest.mock import patch
-import pytest
 import json
+
+import pytest
 from httpx import AsyncClient
 from starlette import status
 
 from orchestra.tests.utils import (
     HEADERS,
-    get_chat_completions_payload,
-    get_inference_payload,
-    get_credits,
     check_text_gen_choice,
     check_text_gen_response,
     check_text_gen_usage,
+    get_chat_completions_payload,
+    get_credits,
+    get_inference_payload,
 )
 
 MODELS = [
@@ -48,6 +48,7 @@ async def test_text_generation(  # noqa: WPS218, E501
 
     :param client: client for the app.
     """
+    # TODO: Test max tokens and rest of parameters
     model, provider = model.split("@")
     stream = stream_str == "stream"
     data = payload_fn[endpoint](model, provider, stream=stream)
