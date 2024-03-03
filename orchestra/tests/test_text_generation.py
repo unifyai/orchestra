@@ -59,16 +59,22 @@ async def test_text_generation(  # noqa: WPS218, E501
 
     if stream:
         for line in response.iter_lines():
+            if not line:
+                continue
             response_dict = line.removeprefix("data: ")
             response_json = json.loads(response_dict)
             check_text_gen_response(response_json, "chat.completion.chunk")
+            if response_json["usage"] != {}:
+                continue
             check_text_gen_choice(response_json.get("choices")[0], "delta")
-            break  # TODO: Remove this and test corner cases properly
     else:
         response_json = json.loads(response.text)
         check_text_gen_response(response_json, "chat.completion")
         check_text_gen_choice(response_json.get("choices")[0], "message")
         check_text_gen_usage(response_json.get("usage"))
+
+    usage_keys = ["cost", "prompt_tokens", "completion_tokens", "total_tokens"]
+    assert all(k in response_json["usage"] for k in usage_keys)
 
     post_credits = await get_credits(client)
     assert post_credits < pre_credits

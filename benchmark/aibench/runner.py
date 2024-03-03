@@ -118,7 +118,7 @@ class AIBenchRunner:
         # TODO: max_tokens seem to be not respected?
         # check by printing max_tokens value here
         # then check the `output_tokens` in processed results
-        # TODO: remove the double return        
+        # TODO: remove the double return
         result, _ = self.fn(  # type: ignore
             prompt=prompt,
             max_tokens=max_tokens,

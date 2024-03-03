@@ -247,7 +247,7 @@ insufficient_credits_error = HTTPException(
 
 def db_operations(  # noqa: WPS211, WPS217, WPS210
     user_id: str,
-    cost_deferred_fn: Callable,
+    cost: float,
     model: str,
     provider: str,
     model_dao: ModelDAO,
@@ -260,7 +260,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     Perform database operations.
 
     :param user_id: user id.
-    :param cost_deferred_fn: deferred cost computation of the operation.
+    :param cost: cost of the operation.
     :param model: model name.
     :param provider: provider name.
     :param model_dao: DAO for model models.
@@ -293,7 +293,6 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
             status_code=500,  # noqa: WPS432
             detail="Endpoint not found",
         )
-    cost = cost_deferred_fn()
     query_model_request = QueryModelRequest(
         user_id=user_id,
         endpoint_id=endpoint_id,

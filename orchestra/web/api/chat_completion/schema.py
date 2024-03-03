@@ -52,5 +52,5 @@ class ChatCompletionResponse(BaseModel):
     created: int
     id: Optional[str] = None
     object: str = "chat.completion"
-    usage: Dict[str, Any]
+    usage: Dict[Any, Any]
     choices: List[Dict[str, Any]]

@@ -129,18 +129,18 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         def stream_and_update_db():  # noqa: WPS430 # TODO: Should this be async?
             for part_dict in response.generator():
                 part_dict["model"] = f"{model}@{provider}"
-                yield f"data: {json.dumps(part_dict)}\n\n"  # noqa: WPS237
+                chat_response = ChatCompletionResponse(**part_dict)
+                yield f"data: {json.dumps(chat_response.model_dump())}\n\n"  # noqa: WPS237, E501
             background_tasks.add_task(
                 db_operations,
-                cost_deferred_fn=response.total_cost,
+                cost=response.total_cost,
                 **db_operations_kwargs,
             )
 
         return StreamingResponse(stream_and_update_db())
     else:
-        background_tasks.add_task(
-            db_operations, cost_deferred_fn=cost, **db_operations_kwargs
-        )
+        background_tasks.add_task(db_operations, cost=cost, **db_operations_kwargs)
 
     response["model"] = f"{model}@{provider}"
+    response["usage"]["cost"] = cost
     return ChatCompletionResponse(**response)
