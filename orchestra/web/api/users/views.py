@@ -36,7 +36,7 @@ def credits_code(
     users_dao: UsersDAO = Depends(),
 ) -> Union[CreditsCodeResponse, None]:
     """
-    Checks if it's a valid code and adds $2.5 credits if so.
+    Checks if it's a valid code.
 
     :param request_fastapi: FastAPI request object.
     :param code: Promo code to be activated.
@@ -64,6 +64,7 @@ def credits_code(
         "CONTRIB",
         "ALUMNI",
         "LAUNCHBF",
+        "AIFurnace",
     ]
     if code not in promo_codes:
         return CreditsCodeResponse(msg="Invalid code.")
@@ -82,8 +83,8 @@ def credits_code(
     recharge_dao.create_recharge(
         at=datetime.datetime.now(),
         user_id=user_id,
-        quantity=2.5,
+        quantity=10,
         type=code,
     )
-    users_dao.recharge_credit(user_id, 2.5)
+    users_dao.recharge_credit(user_id, 10)
     return CreditsCodeResponse(msg=f"Code {code} activated succesfully!")
