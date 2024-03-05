@@ -2,6 +2,7 @@
 
 from providers.completion.anthropic import Anthropic
 from providers.completion.anyscale import Anyscale
+from providers.completion.bedrock import AWSBedrock
 from providers.completion.deepinfra import Deepinfra
 from providers.completion.fireworksai import FireworksAI
 from providers.completion.leptonai import LeptonAI
@@ -27,4 +28,5 @@ PROVIDER_CLASSES = {
     "lepton-ai": LeptonAI,
     "fireworks-ai": FireworksAI,
     "deepinfra": Deepinfra,
+    "aws-bedrock": AWSBedrock,
 }
