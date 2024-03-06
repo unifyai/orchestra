@@ -1,47 +1,16 @@
-import hashlib
-import logging
 import time
-from typing import Any, Callable, Dict
+import logging
+from typing import Any, Dict
 
-from fastapi import HTTPException
-
-from orchestra.db.dao.endpoint_dao import EndpointDAO
-from orchestra.db.dao.model_dao import ModelDAO
-from orchestra.db.dao.provider_dao import ProviderDAO
-from orchestra.db.dao.query_dao import QueryDAO
-from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.web.api.endpoint.views import get_endpoint
-from orchestra.web.api.model.views import get_model
-from orchestra.web.api.provider.views import get_provider
-from orchestra.web.api.query.schema import QueryModelRequest
-from orchestra.web.api.query.views import create_query_model
-
-logger = logging.getLogger(__name__)
-
-# HTTP responses
-
-insufficient_credits_error = HTTPException(
-    status_code=402,
-    detail=(
-        "Whoops! It seems like this account doesn't have enough credits. "
-        "To get a recharge, visit https://console.unify.ai/"
-    ),
+from orchestra.web.api.utils.http_responses import (
+    invalid_model_id,
+    invalid_price_threshold,
+    provider_not_found_under_conditions,
+    server_error_with_digest,
+    invalid_optimisation_goal,
 )
 
-
-# TODO: Test this
-def server_error_with_digest(text: str):
-    digest = hashlib.shake_256(text.encode()).digest(4).hex()
-    return (
-        HTTPException(
-            status_code=500,
-            detail=f"Internal Server Error. Digest: {digest}",
-        ),
-        digest,
-    )
-
-
-# Performance based dynamic routing
+logger = logging.getLogger(__name__)
 
 """
 This LUT acts as a cache for performance based routing. The structure is:
@@ -94,10 +63,7 @@ def update_performance_lut(model, model_dao, benchmark_run_dao, datapoint_dao):
     try:
         model_id = model_dao.filter(mdl_code=model)[0].id
     except IndexError:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid input. model-id doesn't match any entry in the model hub.",
-        )
+        raise invalid_model_id
     # This removes all the cached price thresholds (on purpose)
     _performance_lut[model] = {
         "ts": time.time(),
@@ -124,15 +90,6 @@ def _aliases(metric):
         "highest-tks-per-sec": "lowest-itl",
         "highest-output-tks-per-sec": "lowest-itl",
     }.get(metric, metric)
-
-
-invalid_price_threshold = HTTPException(
-    status_code=400,
-    detail=(
-        "Invalid price threshold. Format needs to be config<[float][ic|oc]. "
-        "See https://unify.ai/docs/hub/concepts/runtime_routing.html#price-thresholds for more details."
-    ),
-)
 
 
 def valid_price_threshold(price_threshold):
@@ -171,10 +128,7 @@ def _compute_lowest(model, criterium, metric, price_threshold):
             optimal_metric = {"provider": provider, "value": value}
     if not optimal_metric:
         if brkp_metric:
-            raise HTTPException(
-                status_code=404,
-                detail="No providers found within the specified price limits.",
-            )
+            raise provider_not_found_under_conditions
         else:
             debug_info = {
                 "model": model,
@@ -218,11 +172,7 @@ def performance_based_routing(
     if not valid_price_threshold(price_threshold):
         raise invalid_price_threshold
     if provider not in performance_rules:
-        # TODO: Move this to exception file
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid input. Provider has to be one of {performance_rules} when doing performance routing.",
-        )
+        raise invalid_optimisation_goal(performance_rules)
 
     # refresh metrics if needed
     update_performance_lut(model, model_dao, benchmark_run_dao, datapoint_dao)
@@ -232,106 +182,3 @@ def performance_based_routing(
     metric = metric.replace("-", "_")
     ret = _get_provider_from_lut(model, criterium, metric, price_threshold)
     return ret
-
-
-insufficient_credits_error = HTTPException(
-    status_code=402,
-    detail=(
-        "Whoops! It seems like this account doesn't have enough credits. "
-        "To get a recharge, visit https://console.unify.ai/"
-    ),
-)
-
-# Background tasks
-
-
-def db_operations(  # noqa: WPS211, WPS217, WPS210
-    user_id: str,
-    cost_deferred_fn: Callable,
-    model: str,
-    provider: str,
-    model_dao: ModelDAO,
-    provider_dao: ProviderDAO,
-    endpoint_dao: EndpointDAO,
-    query_dao: QueryDAO,
-    users_dao: UsersDAO,
-):
-    """
-    Perform database operations.
-
-    :param user_id: user id.
-    :param cost_deferred_fn: deferred cost computation of the operation.
-    :param model: model name.
-    :param provider: provider name.
-    :param model_dao: DAO for model models.
-    :param provider_dao: DAO for provider models.
-    :param endpoint_dao: DAO for endpoint models.
-    :param query_dao: DAO for query models.
-    :param users_dao: DAO for users models.
-
-    :raises HTTPException: when endpoint is not found.
-    """
-    model_id = int(get_model(mdl_code=model, model_dao=model_dao)[0].id)
-    provider_id = int(get_provider(name=provider, provider_dao=provider_dao)[0].id)
-    endpoint_ids = get_endpoint(
-        mdl_id=model_id,
-        provider_id=provider_id,
-        endpoint_dao=endpoint_dao,
-        model_dao=model_dao,
-        provider_dao=provider_dao,
-    )
-    endpoint_id = next(
-        (
-            int(endpoint.endpoint_id)
-            for endpoint in endpoint_ids
-            if endpoint.provider_id == provider_id
-        ),
-        None,
-    )
-    if endpoint_id is None:
-        raise HTTPException(
-            status_code=500,  # noqa: WPS432
-            detail="Endpoint not found",
-        )
-    cost = cost_deferred_fn()
-    query_model_request = QueryModelRequest(
-        user_id=user_id,
-        endpoint_id=endpoint_id,
-        credits=cost,  # type: ignore
-    )
-    users_dao.recharge_credit(user_id, -cost)
-    create_query_model(query_model_request, query_dao=query_dao)
-
-
-def filter_request_params(arguments):
-    """
-    Filter argument parameters.
-
-    :param arguments: arguments object.
-
-    :return: dictionary of filtered parameters.
-    """
-    openai_params = [
-        "frequency_penalty",
-        "logit_bias",
-        "logprobs",
-        "top_logprobs",
-        "max_tokens",
-        "n",
-        "presence_penalty",
-        "response_format",
-        "seed",
-        "stop",
-        "stream",
-        "temperature",
-        "top_p",
-        "tools",
-        "tool_choice",
-        "user",
-        "stream",
-    ]
-    return {
-        param: arguments.get(param)
-        for param in openai_params
-        if arguments.get(param) is not None
-    }

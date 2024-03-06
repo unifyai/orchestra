@@ -5,6 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.param_functions import Depends
 from fastapi.responses import StreamingResponse
 from providers.completion import PROVIDER_CLASSES
+from starlette import status
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.datapoint_dao import DatapointDAO
@@ -18,12 +19,10 @@ from orchestra.web.api.chat_completion.schema import (
     ChatCompletionResponse,
 )
 from orchestra.web.api.users.views import get_credits
-from orchestra.web.api.utils import (
-    db_operations,
-    filter_request_params,
-    insufficient_credits_error,
-    performance_based_routing,
-)
+from orchestra.web.api.utils.bg_tasks import db_operations
+from orchestra.web.api.utils.http_responses import insufficient_credits_error
+from orchestra.web.api.utils.helpers import filter_request_params
+from orchestra.web.api.utils.dynamic_routing import performance_based_routing
 
 router = APIRouter()
 
@@ -60,8 +59,8 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     try:
         model, provider = request.model.split("@")
     except Exception:
-        raise HTTPException(
-            status_code=400,  # noqa: WPS432
+        raise HTTPException(  # TODO: Move to utils file
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 "Invalid model. The expected format is <model-id>@<provider>. "
                 "See https://unify.ai/docs/hub/concepts/models.html "
@@ -72,8 +71,8 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     try:
         messages = request.messages
     except Exception:
-        raise HTTPException(
-            status_code=400,  # noqa: WPS432
+        raise HTTPException(  # TODO: Move to utils file
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid input. Messages not in input.",
         )
 

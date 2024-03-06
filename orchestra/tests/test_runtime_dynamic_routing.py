@@ -4,7 +4,11 @@ from fastapi import HTTPException
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.datapoint_dao import DatapointDAO
 from orchestra.db.dao.model_dao import ModelDAO
-from orchestra.web.api.utils import performance_based_routing
+from orchestra.web.api.utils.dynamic_routing import performance_based_routing
+from orchestra.web.api.utils.http_responses import (
+    invalid_model_id,
+    provider_not_found_under_conditions,
+)
 
 # TODO: Add test for same value in metric
 
@@ -83,12 +87,6 @@ def test_incorrect_model_id(dbsession) -> str:  # type: ignore[return]
     benchmark_run_dao = BenchmarkRunDAO(dbsession)
     datapoint_dao = DatapointDAO(dbsession)
 
-    # TODO: Move this to a shared exceptions file
-    e = HTTPException(
-        status_code=400,  # noqa: WPS432
-        detail=f"Invalid input. model-id doesn't match any entry in the model hub.",
-    )
-
     with pytest.raises(HTTPException) as err:
         performance_based_routing(
             "pbr-model2",
@@ -97,20 +95,14 @@ def test_incorrect_model_id(dbsession) -> str:  # type: ignore[return]
             benchmark_run_dao,
             datapoint_dao,
         )
-    assert err.value.status_code == e.status_code
-    assert err.value.detail == e.detail
+    assert err.value.status_code == invalid_model_id.status_code
+    assert err.value.detail == invalid_model_id.detail
 
 
 def test_no_models_within_threshold(dbsession) -> str:  # type: ignore[return]
     model_dao = ModelDAO(dbsession)
     benchmark_run_dao = BenchmarkRunDAO(dbsession)
     datapoint_dao = DatapointDAO(dbsession)
-
-    # TODO: Move this to a shared exceptions file
-    e = HTTPException(
-        status_code=404,
-        detail="No providers found within the specified price limits.",
-    )
 
     with pytest.raises(HTTPException) as err:
         performance_based_routing(
@@ -120,5 +112,5 @@ def test_no_models_within_threshold(dbsession) -> str:  # type: ignore[return]
             benchmark_run_dao,
             datapoint_dao,
         )
-    assert err.value.status_code == e.status_code
-    assert err.value.detail == e.detail
+    assert err.value.status_code == provider_not_found_under_conditions.status_code
+    assert err.value.detail == provider_not_found_under_conditions.detail
