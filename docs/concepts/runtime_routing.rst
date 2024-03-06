@@ -52,10 +52,10 @@ Currently, we support a set of predefined configurations for the routing:
 - :code:`lowest-ttft`
 - :code:`highest-tks-per-sec`
 
-Price Breakpoints
+Price Threshold
 -----------------
 
-Additionally, you have the option to include input or output price breakpoints in each configuration.
+Additionally, you have the option to include input or output price thresholds in each configuration.
 This feature enables you to get, for example, the highest tokens per second (:code:`highest-tks-per-sec`)
 for any provider whose price falls below a specific threshold. To set this up, just append :code:`<[float][ic|oc]`
 to your preferred mode when specifying a provider. Let's illustrate this with a few examples:

@@ -19,7 +19,7 @@ TEST_VALID_CONFIGS = [
     "lowest-ttft",
 ]
 
-TEST_VALID_PRICE_BREAKPOINTS = [
+TEST_VALID_PRICE_THRESHOLDS = [
     "",
     "<0.1ic",
     "<10ic",
@@ -28,25 +28,25 @@ TEST_VALID_PRICE_BREAKPOINTS = [
 ]
 
 
-@pytest.mark.parametrize("price_breakpoint", TEST_VALID_PRICE_BREAKPOINTS)
+@pytest.mark.parametrize("price_threshold", TEST_VALID_PRICE_THRESHOLDS)
 @pytest.mark.parametrize("provider", TEST_VALID_CONFIGS)
 def test_valid_performance_based_routing(  # type: ignore[return]
     dbsession,
     provider: str,
-    price_breakpoint: str,
+    price_threshold: str,
 ) -> str:
     model_dao = ModelDAO(dbsession)
     benchmark_run_dao = BenchmarkRunDAO(dbsession)
     datapoint_dao = DatapointDAO(dbsession)
 
-    if "input-cost" in provider and "ic" in price_breakpoint:
+    if "input-cost" in provider and "ic" in price_threshold:
         pytest.skip()
-    if "output-cost" in provider and "oc" in price_breakpoint:
+    if "output-cost" in provider and "oc" in price_threshold:
         pytest.skip()
 
     selected_provider = performance_based_routing(
         "pbr-model",
-        provider + price_breakpoint,
+        provider + price_threshold,
         model_dao,
         benchmark_run_dao,
         datapoint_dao,
@@ -59,7 +59,7 @@ def test_valid_performance_based_routing(  # type: ignore[return]
         "highest-output-tks-per-sec": "lowest-itl",
     }.get(provider, provider)
 
-    assert selected_provider == f"{expected_provider + price_breakpoint}-provider"
+    assert selected_provider == f"{expected_provider + price_threshold}-provider"
 
 
 def test_empty_lut(dbsession) -> str:  # type: ignore[return]
@@ -101,7 +101,7 @@ def test_incorrect_model_id(dbsession) -> str:  # type: ignore[return]
     assert err.value.detail == e.detail
 
 
-def test_no_models_within_breakpoint(dbsession) -> str:  # type: ignore[return]
+def test_no_models_within_threshold(dbsession) -> str:  # type: ignore[return]
     model_dao = ModelDAO(dbsession)
     benchmark_run_dao = BenchmarkRunDAO(dbsession)
     datapoint_dao = DatapointDAO(dbsession)
