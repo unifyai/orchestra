@@ -297,9 +297,10 @@ class AsyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
         part_dict = None
         try:  # noqa: WPS501
             async for part in await self._response:
-                part_dict, skip = self.generator_iteration(part, whole)
-                if skip or not part_dict:
+                part_dict = self.generator_iteration(part, whole)
+                if not part_dict or part_dict.get("usage") != {}:
                     continue
                 yield part_dict
         finally:
-            self.compute_cost(part_dict, whole)
+            for val in self.compute_cost(part_dict, whole):
+                yield val
