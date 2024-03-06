@@ -22,14 +22,6 @@ class AWSBedrock(BaseCompletionProvider):
         super().__init__(hub_model)
         self.supported_models = supported_models
 
-    @property
-    def api_key_var(self) -> str:
-        return "junk"
-
-    @property
-    def base_url(self):
-        return "more junk"
-
     # TODO Same as replicate, move to utils
     @staticmethod
     def str_to_ts(str):
