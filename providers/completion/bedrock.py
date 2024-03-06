@@ -162,8 +162,8 @@ def sse_to_part_dict(part, whole, endpoint):
         }
     # TODO This returns usage in every stream, but with llama 13b, stop reason is not returend as well. have to handle this in the refactor
     elif "llama" in endpoint:
-        prompt_tokens = int(part["prompt_token_count"])
-        completion_tokens = int(part["generation_token_count"])
+        prompt_tokens = part["prompt_token_count"]
+        completion_tokens = part["generation_token_count"]
         prompt_tokens = 0 if prompt_tokens is None else prompt_tokens
         usage = {
             "prompt_tokens": prompt_tokens,
