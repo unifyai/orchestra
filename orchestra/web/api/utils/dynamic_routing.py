@@ -1,13 +1,13 @@
-import time
 import logging
+import time
 from typing import Any, Dict
 
 from orchestra.web.api.utils.http_responses import (
     invalid_model_id,
+    invalid_optimisation_goal,
     invalid_price_threshold,
     provider_not_found_under_conditions,
     server_error_with_digest,
-    invalid_optimisation_goal,
 )
 
 logger = logging.getLogger(__name__)

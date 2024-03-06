@@ -7,8 +7,8 @@ from requests import request  # type: ignore
 
 from orchestra.settings import settings
 from orchestra.web.api.utils.http_responses import (
-    invalid_api_key,
     admin_not_authorized,
+    invalid_api_key,
     server_error_with_digest,
 )
 

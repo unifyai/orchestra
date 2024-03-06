@@ -1,7 +1,8 @@
 import hashlib
 from typing import List
-from starlette import status
+
 from fastapi import HTTPException
+from starlette import status
 
 invalid_model_id = HTTPException(
     status_code=status.HTTP_400_BAD_REQUEST,

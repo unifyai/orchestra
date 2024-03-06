@@ -17,9 +17,9 @@ from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.inference.schema import InferenceRequest
 from orchestra.web.api.users.views import get_credits
 from orchestra.web.api.utils.bg_tasks import db_operations
-from orchestra.web.api.utils.http_responses import insufficient_credits_error
-from orchestra.web.api.utils.helpers import filter_request_params
 from orchestra.web.api.utils.dynamic_routing import performance_based_routing
+from orchestra.web.api.utils.helpers import filter_request_params
+from orchestra.web.api.utils.http_responses import insufficient_credits_error
 
 router = APIRouter()
 
