@@ -1,5 +1,6 @@
 # TODO: lru cache needs to be changed to a bg task
 import logging
+import math
 import re
 import time
 from collections import namedtuple
@@ -110,7 +111,12 @@ def get_value_of(
         endpoint,
         ttl_hash=get_ttl_hash(),
     )
-    return model_metrics[endpoint.provider][metric]
+    try:
+        value = model_metrics[endpoint.provider][metric]
+    except KeyError:
+        logger.warning(f"{endpoint} has no metrics. Skipping.")
+        return None
+    return value
 
 
 def find_best(
@@ -124,7 +130,12 @@ def find_best(
             endpoint,
             ttl_hash=get_ttl_hash(),
         )
-        return model_metrics[endpoint.provider][metric]
+        try:
+            value = model_metrics[endpoint.provider][metric]
+        except KeyError:
+            logger.warning(f"{endpoint} has no metrics. Skipping.")
+            return math.inf
+        return value
 
     selected_endpoint = min(endpoints, key=_get_metric_value)
     return selected_endpoint.model, selected_endpoint.provider
@@ -139,7 +150,8 @@ def threshold_endpoints(
     for endpoint in endpoints:
         is_valid = True
         for metric, threshold in metrics_thresholds.items():
-            if get_value_of(benchmark_run_dao, endpoint, metric) >= threshold:
+            value = get_value_of(benchmark_run_dao, endpoint, metric)
+            if not value or value >= threshold:
                 is_valid = False
         if is_valid:
             valid_endpoints.append(endpoint)
