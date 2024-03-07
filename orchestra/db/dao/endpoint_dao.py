@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Endpoint
+from orchestra.db.models.orchestra_models import Endpoint, Model, Provider
 
 
 class EndpointDAO:
@@ -49,6 +49,22 @@ class EndpointDAO:
         )
 
         return list(raw_endpoints.scalars().fetchall())
+
+    def get_endpoints_of(
+        self,
+        models: List[str],
+        only_from: Optional[List[str]] = None,
+    ):
+        query = (
+            select(Endpoint, Model, Provider)
+            .join(Model)
+            .join(Provider)
+            .where(Model.mdl_code.in_(models))
+        )
+        if only_from:
+            query = query.where(Provider.name.in_(only_from))
+        rows = self.session.execute(query)
+        return list(rows.fetchall())
 
     def filter(
         self,
