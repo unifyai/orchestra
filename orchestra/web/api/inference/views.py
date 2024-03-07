@@ -81,6 +81,16 @@ async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, W
     model = _verify_field(request, "model")
     provider = _verify_field(request, "provider")
 
+    if provider == "replicate" and "bark" in model:
+        mdl = PROVIDER_CLASSES[provider](model)
+        output_link = mdl.custom_model_run(model, request.arguments)
+        return JSONResponse(
+                {
+                    "get": output_link,
+                },
+            )
+
+
     user_id = request_fastapi.state.user_id
     user = get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(user.credits if user else 0)
