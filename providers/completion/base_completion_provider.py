@@ -114,7 +114,7 @@ class BaseCompletionProvider:
         completion_cost = output_tks * self.completion_cost / PRICING_PER_TOKENS
         return prompt_cost + completion_cost
 
-    def compute_cost_streaming(  # noqa: WPS210
+    def get_usage_info(  # noqa: WPS210
         self,
         completions: List[str],
         messages: List[Dict],
@@ -251,9 +251,9 @@ class BaseGeneratorWrapper:
         whole[index] += part_text
         return part_dict
 
-    def compute_cost(self, part_dict, whole):
+    def get_final_chunk(self, part_dict, whole):
         """
-        Compute the cost of a completion when streaming.
+        Get the final chunk of a streaming response.
 
         :param part_dict: The part dict.
         :type part_dict: Dict
@@ -268,7 +268,7 @@ class BaseGeneratorWrapper:
                 part_dict["usage"]["completion_tokens"],
             )
         else:
-            part_dict["usage"] = self.provider.compute_cost_streaming(
+            part_dict["usage"] = self.provider.get_usage_info(
                 whole,
                 self._messages,
             )
@@ -287,7 +287,7 @@ class SyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
                     continue
                 yield part_dict
         finally:
-            yield from self.compute_cost(part_dict, whole)
+            yield from self.get_final_chunk(part_dict, whole)
 
 
 # TODO: Remove code duplication here
@@ -302,5 +302,5 @@ class AsyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
                     continue
                 yield part_dict
         finally:
-            for val in self.compute_cost(part_dict, whole):
+            for val in self.get_final_chunk(part_dict, whole):
                 yield val

@@ -1,8 +1,7 @@
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import create_engine
-from sqlalchemy import Connection
+from sqlalchemy import Connection, create_engine
 
 from orchestra.db.meta import meta
 from orchestra.db.models import load_all_models
@@ -77,6 +76,7 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         do_run_migrations(connection)
+
 
 if context.is_offline_mode():
     task = run_migrations_offline
