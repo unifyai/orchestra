@@ -230,8 +230,10 @@ def dynamic_routing(
             endpoints,
             metrics_thresholds,
         )
-    if not thresholded_endpoints:
-        raise provider_not_found_under_conditions
+        if not thresholded_endpoints:
+            raise provider_not_found_under_conditions
+    else:
+        thresholded_endpoints = endpoints
     # Extract models from thresholded_endpoints
     thresholded_models = set([endpoint.model for endpoint in thresholded_endpoints])
     # Pass this to the router to get scores for each model
