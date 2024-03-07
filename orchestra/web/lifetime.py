@@ -56,12 +56,12 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
         return
 
     tracer_provider = TracerProvider(
-        resource=Resource(
-            attributes={
+        resource=Resource.create(
+            {
                 SERVICE_NAME: "orchestra",
                 TELEMETRY_SDK_LANGUAGE: "python",
                 DEPLOYMENT_ENVIRONMENT: settings.environment,
-            },
+            }
         ),
     )
 
