@@ -1,5 +1,6 @@
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.engine import make_url
+from sqlalchemy import create_engine
 
 from orchestra.settings import settings
 

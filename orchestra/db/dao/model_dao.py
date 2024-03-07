@@ -66,7 +66,7 @@ class ModelDAO:
         :return: stream of models.
         """
         raw_models = self.session.execute(
-            select(Model).where(Model.active).limit(limit).offset(offset),
+            select(Model).limit(limit).offset(offset),
         )
 
         return list(raw_models.scalars().fetchall())
