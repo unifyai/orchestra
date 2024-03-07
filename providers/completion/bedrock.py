@@ -1,8 +1,9 @@
 import json
 import time
 from datetime import datetime
-from typing import Any, List
+from typing import Any, Dict, List
 
+import aioboto3
 import boto3
 from providers.completion.base_completion_provider import (
     BaseCompletionProvider,
@@ -10,7 +11,7 @@ from providers.completion.base_completion_provider import (
 )
 
 
-class AWSBedrock(BaseCompletionProvider):
+class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
     """
     A completion provider that uses the AWS Bedrock service.
 
@@ -22,17 +23,9 @@ class AWSBedrock(BaseCompletionProvider):
         super().__init__(hub_model)
         self.supported_models = supported_models
 
-    @property
-    def api_key_var(self) -> str:
-        return "junk"
-
-    @property
-    def base_url(self):
-        return "more junk"
-
     # TODO Same as replicate, move to utils
     @staticmethod
-    def str_to_ts(str):
+    def str_to_ts(str):  # noqa: D102, WPS125
         parsed = datetime.strptime(str, "%a, %d %b %Y %H:%M:%S %Z")
         return int(parsed.timestamp())
 
@@ -49,7 +42,7 @@ class AWSBedrock(BaseCompletionProvider):
     def client(self):
         return boto3.client(service_name="bedrock-runtime", region_name="us-west-2")
 
-    def __call__(self, messages: List, stream: bool = False, **kwargs: Any) -> Any:  # noqa: WPS210
+    def process_kwargs(self, messages, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         _messages = messages[:]
         if "mistral" in self.provider_endpoint:
             allowed_args = ["max_tokens", "stop", "temperature", "top_p", "top_k"]
@@ -57,8 +50,19 @@ class AWSBedrock(BaseCompletionProvider):
             allowed_args = ["temperature", "top_p", "max_tokens"]
             if "max_tokens" in kwargs:
                 kwargs["max_gen_tokens"] = kwargs.pop("max_tokens")
+
         kwargs_bedrock = {k: v for k, v in kwargs.items() if k in allowed_args}
         kwargs_bedrock["prompt"] = self.prompt_factory(_messages)
+
+        return kwargs_bedrock
+
+    def __call__(
+        self,
+        messages: List,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> Any:  # noqa: WPS210
+        kwargs_bedrock = self.process_kwargs(messages, kwargs)
         client = self.client()
         if stream:
             response = client.invoke_model_with_response_stream(
@@ -66,25 +70,38 @@ class AWSBedrock(BaseCompletionProvider):
                 body=json.dumps(kwargs_bedrock),
             )
             return (BedrockSyncGeneratorWrapper(self, response, messages), None)
-        else:
-            response = client.invoke_model(
-                modelId=self.provider_endpoint, body=json.dumps(kwargs_bedrock),
-            )
-            return (
-                self.response_to_chat_completion(response),
-                self.compute_cost(
-                    int(
-                        response["ResponseMetadata"]["HTTPHeaders"][
-                            "x-amzn-bedrock-input-token-count"
-                        ],
-                    ),
-                    int(
-                        response["ResponseMetadata"]["HTTPHeaders"][
-                            "x-amzn-bedrock-output-token-count"
-                        ],
-                    ),
+
+        response = client.invoke_model(
+            modelId=self.provider_endpoint,
+            body=json.dumps(kwargs_bedrock),
+        )
+        return (
+            self.response_to_chat_completion(response),
+            self.compute_cost(
+                int(
+                    response["ResponseMetadata"]["HTTPHeaders"][
+                        "x-amzn-bedrock-input-token-count"
+                    ],
                 ),
-            )
+                int(
+                    response["ResponseMetadata"]["HTTPHeaders"][
+                        "x-amzn-bedrock-output-token-count"
+                    ],
+                ),
+            ),
+        )
+
+    def __call_async__(
+        self,
+        messages: List,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        kwargs_bedrock = self.process_kwargs(messages, kwargs)
+        return (
+            BedrockAsyncGeneratorWrapper(self, None, messages, kwargs_bedrock),
+            None,
+        )
 
     def response_to_chat_completion(self, response):
         metadata = response["ResponseMetadata"]["HTTPHeaders"]
@@ -150,6 +167,43 @@ class BedrockSyncGeneratorWrapper(SyncGeneratorWrapper):
             )
 
 
+class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
+    def __init__(self, provider, response, messages, body):
+        super().__init__(provider, response, messages)
+        self._body = body
+
+    def generator_iteration(self, part, whole):
+        return sse_to_part_dict(part, whole, self.provider.provider_endpoint)
+
+    async def generator(self):  # noqa: D102, C901, WPS210, WPS231
+        whole = []
+
+        session = aioboto3.Session()
+        async with session.client(
+            service_name="bedrock-runtime",
+            region_name="us-west-2",
+        ) as client:
+            self._response = await client.invoke_model_with_response_stream(
+                modelId=self.provider.provider_endpoint,
+                body=json.dumps(self._body),
+            )
+            try:  # noqa: WPS501
+                async for part in self._response["body"]:
+                    chunk = json.loads(part.get("chunk").get("bytes").decode())
+                    chunk["id"] = self._response["ResponseMetadata"]["HTTPHeaders"][
+                        "x-amzn-requestid"
+                    ]
+                    part_dict = self.generator_iteration(chunk, whole)
+                    if part_dict is None:
+                        continue
+                    yield part_dict
+            finally:
+                self.total_cost = self.provider.compute_cost_streaming(
+                    whole,
+                    self._messages,
+                )
+
+
 def sse_to_part_dict(part, whole, endpoint):
     if "mistral" in endpoint:
         finish_reason = part["outputs"][0]["stop_reason"]
@@ -170,8 +224,8 @@ def sse_to_part_dict(part, whole, endpoint):
         }
     # TODO This returns usage in every stream, but with llama 13b, stop reason is not returend as well. have to handle this in the refactor
     elif "llama" in endpoint:
-        prompt_tokens = int(part["prompt_token_count"])
-        completion_tokens = int(part["generation_token_count"])
+        prompt_tokens = part["prompt_token_count"]
+        completion_tokens = part["generation_token_count"]
         prompt_tokens = 0 if prompt_tokens is None else prompt_tokens
         usage = {
             "prompt_tokens": prompt_tokens,
