@@ -58,6 +58,7 @@ def get_endpoints_of(
 ) -> List[Endpoint]:
     del ttl_hash
     # TODO: Ensure that the DAO is not messing up the lru cache
+    logger.info(f"Getting endpoints of {models}")
     query_result = endpoint_dao.get_endpoints_of(models, only_from)
     if not query_result:
         error_str = f"No Endpoints found for {models} (only_from: {only_from})"
@@ -83,6 +84,7 @@ def get_model_metrics(
     ttl_hash: int,
 ):
     del ttl_hash
+    logger.info(f"Getting metrics for {endpoint}")
     brs = benchmark_run_dao.get_model_benchmark_datapoints(endpoint.model_id)
     if not brs:
         # TODO: test this
