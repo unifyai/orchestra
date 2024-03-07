@@ -19,6 +19,7 @@ INSERT INTO provider VALUES (7, 'together-ai', '', '');
 INSERT INTO provider VALUES (8, 'mistral-ai', '', '');
 INSERT INTO provider VALUES (9, 'octoai', '', '');
 INSERT INTO provider VALUES (10, 'perplexity-ai', '', '');
+INSERT INTO provider VALUES (11, 'aws-bedrock', '', '');
 
 INSERT INTO provider VALUES (13, 'lowest-input-cost-per-token-provider', '', '');
 INSERT INTO provider VALUES (14, 'lowest-output-cost-per-token-provider', '', '');
@@ -50,6 +51,7 @@ INSERT INTO task VALUES ('dummy_task', 'dummy_modality');
 INSERT INTO model VALUES (1, 'llama-2-7b-chat', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
 INSERT INTO model VALUES (2, 'mistral-7b-instruct-v0.1', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
 INSERT INTO model VALUES (3, 'mistral-7b-instruct-v0.2', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
+INSERT INTO model VALUES (6, 'llama-2-13b-chat', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
 INSERT INTO endpoint VALUES (1, 1, 2, NOW());
 INSERT INTO endpoint VALUES (2, 1, 3, NOW());
 INSERT INTO endpoint VALUES (3, 1, 4, NOW());
@@ -59,6 +61,8 @@ INSERT INTO endpoint VALUES (6, 1, 7, NOW());
 INSERT INTO endpoint VALUES (7, 3, 8, NOW());
 INSERT INTO endpoint VALUES (8, 2, 9, NOW());
 INSERT INTO endpoint VALUES (9, 3, 10, NOW());
+INSERT INTO endpoint VALUES (10, 6, 11, NOW());
+INSERT INTO endpoint VALUES (11, 3, 11, NOW());
 
 -- Runtime Dynamic routing
 INSERT INTO model VALUES (4, 'pbr-model', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
