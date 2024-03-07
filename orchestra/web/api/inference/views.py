@@ -17,9 +17,12 @@ from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.inference.schema import InferenceRequest
 from orchestra.web.api.users.views import get_credits
 from orchestra.web.api.utils.bg_tasks import db_operations
-from orchestra.web.api.utils.dynamic_routing import performance_based_routing
+from orchestra.web.api.utils.dynamic_routing import dynamic_routing, parse_endpoint
 from orchestra.web.api.utils.helpers import filter_request_params
-from orchestra.web.api.utils.http_responses import insufficient_credits_error
+from orchestra.web.api.utils.http_responses import (
+    insufficient_credits_error,
+    invalid_messages,
+)
 
 router = APIRouter()
 
@@ -82,23 +85,22 @@ async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, W
     user = get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(user.credits if user else 0)
 
-    if provider.split("-")[0] in ["lowest", "highest"]:
-        provider = performance_based_routing(
-            model,
-            provider,
-            model_dao,
+    if provider not in PROVIDER_CLASSES:
+        # Dynamic routing
+        target_metric, metrics_thresholds = parse_endpoint(provider)
+        provider = dynamic_routing(
+            endpoint_dao,
             benchmark_run_dao,
-            datapoint_dao,
+            target_metric,
+            models=(model,),
+            metrics_thresholds=metrics_thresholds,
         )
 
     # TODO: This will fail when it's not a llm
     try:
         messages = request.arguments["messages"]
     except Exception:
-        raise HTTPException(  # TODO: Move to utils file
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid input. Messages not in input.",
-        )
+        raise invalid_messages
 
     model_type = _get_model_type(model)
 

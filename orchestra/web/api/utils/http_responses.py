@@ -9,6 +9,20 @@ invalid_model_id = HTTPException(
     detail=f"Invalid input. model-id doesn't match any entry in the model hub.",
 )
 
+invalid_model_str = HTTPException(
+    status_code=status.HTTP_400_BAD_REQUEST,
+    detail=(
+        "Invalid model. The expected format is <model-id>@<provider>. "
+        "See https://unify.ai/docs/hub/concepts/models.html "
+        "for more information."
+    ),
+)
+
+invalid_messages = HTTPException(
+    status_code=status.HTTP_400_BAD_REQUEST,
+    detail="Invalid input. Messages not in input.",
+)
+
 invalid_price_threshold = HTTPException(
     status_code=status.HTTP_400_BAD_REQUEST,
     detail=(
