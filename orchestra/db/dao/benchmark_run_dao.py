@@ -6,7 +6,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import BenchmarkRun, Endpoint, Provider
+from orchestra.db.models.orchestra_models import (
+    BenchmarkRun,
+    Datapoint,
+    Endpoint,
+    Provider,
+)
 
 
 class BenchmarkRunDAO:
@@ -96,7 +101,7 @@ class BenchmarkRunDAO:
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())
 
-    def get_model_benchmark_runs(self, model_id):
+    def get_model_benchmark_datapoints(self, model_id):
         """
         Gets the latest benchmark run for each provider for a given model.
         """
@@ -116,10 +121,11 @@ class BenchmarkRunDAO:
 
         # Main query to select benchmark runs for the latest benchmark run IDs
         query = (
-            select(BenchmarkRun, Provider)
+            select(BenchmarkRun, Provider, Datapoint)
             .join(subquery, BenchmarkRun.id == subquery.c.latest_benchmark_id)
             .join(Endpoint, BenchmarkRun.endpoint_id == Endpoint.id)
             .join(Provider, Endpoint.provider_id == Provider.id)
+            .join(Datapoint, Datapoint.benchmark_run_id == BenchmarkRun.id)
         )
         return self.session.execute(query).all()
 
