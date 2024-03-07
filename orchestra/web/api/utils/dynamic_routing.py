@@ -273,9 +273,4 @@ def dynamic_routing(
     return selected_model, selected_provider
 
 
-# TODO: Change previous dynamic routing to use the new function
-# TODO: Parse multiple thresholds
-# TODO: Deal with aliases of metrics
-# TODO: Connect new function with chat completions
-# TODO: Connect new funciton with inference
 # TODO: Check lru cache with daos
