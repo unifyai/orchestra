@@ -85,11 +85,10 @@ async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, W
         mdl = PROVIDER_CLASSES[provider](model)
         output_link = mdl.custom_model_run(model, request.arguments)
         return JSONResponse(
-                {
-                    "get": output_link,
-                },
-            )
-
+            {
+                "get": output_link,
+            },
+        )
 
     user_id = request_fastapi.state.user_id
     user = get_credits(request_fastapi, users_dao=users_dao)
