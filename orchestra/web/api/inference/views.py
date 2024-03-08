@@ -45,7 +45,7 @@ def _verify_field(request, field):
 
 
 @router.post("/inference")
-async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217, WPS238
+def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217, WPS238
     background_tasks: BackgroundTasks,
     request_fastapi: Request,
     request: InferenceRequest,
