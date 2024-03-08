@@ -157,14 +157,11 @@ class BedrockSyncGeneratorWrapper(SyncGeneratorWrapper):
                     "x-amzn-requestid"
                 ]
                 part_dict = self.generator_iteration(chunk, whole)
-                if part_dict is None:
+                if not part_dict or part_dict.get("usage") != {}:
                     continue
                 yield part_dict
         finally:
-            self.total_cost = self.provider.compute_cost_streaming(
-                whole,
-                self._messages,
-            )
+            yield from self.get_final_chunk(part_dict, whole)
 
 
 class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
@@ -194,14 +191,12 @@ class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
                         "x-amzn-requestid"
                     ]
                     part_dict = self.generator_iteration(chunk, whole)
-                    if part_dict is None:
+                    if not part_dict or part_dict.get("usage") != {}:
                         continue
                     yield part_dict
             finally:
-                self.total_cost = self.provider.compute_cost_streaming(
-                    whole,
-                    self._messages,
-                )
+                for val in self.get_final_chunk(part_dict, whole):
+                    yield val
 
 
 def sse_to_part_dict(part, whole, endpoint):
@@ -246,10 +241,9 @@ def sse_to_part_dict(part, whole, endpoint):
                 "finish_reason": finish_reason,  # TODO: check if the str of the reaosn provided is OAI
             },
         ],
-        # "usage": usage,
+        "usage": {}, # TODO: fix this
     }
-    if data == "":
-        return None
+
     if not whole:
         whole.extend([""])
     whole[0] += data
