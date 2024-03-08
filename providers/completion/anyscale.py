@@ -25,10 +25,11 @@ class Anyscale(BaseCompletionProvider):
 
     def _modify_output(self, out: Dict, **kwargs) -> Dict:
         stream = kwargs.get("stream", False)
-        out["object"] = "chat.completion"
+        output = super()._modify_output(out, **kwargs)
+        output["object"] = "chat.completion"
         if stream:
-            out["object"] = "chat.completion.chunk"
-        return out
+            output["object"] = "chat.completion.chunk"
+        return output
 
 
 supported_models = {
