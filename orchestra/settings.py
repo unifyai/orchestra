@@ -92,6 +92,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_prefix="ORCHESTRA_",
         env_file_encoding="utf-8",
+        extra="allow",
     )
 
 

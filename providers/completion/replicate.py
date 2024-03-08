@@ -145,6 +145,21 @@ class Replicate(BaseCompletionProvider):
                 ),
             )
 
+    def custom_model_run(self, model, kwargs):
+        if model == "bark":
+            endpoint = "nfy-rtr/original-bark:6f7ecf22e9d8054b09df4615af9f42e920e78ba8a7aa3ae1b5fe2c98d607c93b"
+            output = replicate.run(
+                endpoint,
+                input=kwargs,
+            )
+        elif model == "optimised-bark":
+            endpoint = "nfy-rtr/optimised-bark:97fa01036c9e7435cf9cfad9ee966376f1b2cd7d366d85f000ed1512392e30fa"
+            output = replicate.run(
+                endpoint,
+                input=kwargs,
+            )
+        return output
+
     def prompt_factory(self, messages):
         return "\n".join(
             (
