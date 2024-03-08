@@ -185,7 +185,7 @@ def parse_endpoint(endpoint: str):
     main_metric = endpoint.split("<", 1)[0].split(">")[0]
 
     # Regular expression pattern to match the thresholds
-    pattern = r"(?P<operator>[<>])(?P<value>\d+\.*\d*)(?P<unit>\w*)"
+    pattern = r"(?P<operator>[<>])(?P<value>\d+\.*\d*)(?P<unit>[\w'-]*)"
 
     # Search for matches using the pattern
     matches = re.findall(pattern, endpoint.removeprefix(main_metric))
