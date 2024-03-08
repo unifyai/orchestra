@@ -22,9 +22,15 @@ api_router.include_router(
     tags=["users"],
     dependencies=API_KEY_AUTH,
 )
-api_router.include_router(model.router, tags=["model"])
-api_router.include_router(endpoint.router, tags=["endpoint"])
-api_router.include_router(provider.router, tags=["provider"])
+api_router.include_router(
+    model.router, prefix="/admin", tags=["model"], dependencies=ADMIN_AUTH
+)
+api_router.include_router(
+    endpoint.router, prefix="/admin", tags=["endpoint"], dependencies=ADMIN_AUTH
+)
+api_router.include_router(
+    provider.router, prefix="/admin", tags=["provider"], dependencies=ADMIN_AUTH
+)
 api_router.include_router(
     inference.router,
     tags=["inference"],
