@@ -26,11 +26,12 @@ class LeptonAI(BaseCompletionProvider):
 
     def _modify_output(self, out: Dict, **kwargs) -> Dict:
         stream = kwargs.get("stream", False)
-        out["created"] = int(time.time())
-        out["object"] = "chat.completion"
+        output = super()._modify_output(out, **kwargs)
+        output["created"] = int(time.time())
+        output["object"] = "chat.completion"
         if stream:
-            out["object"] = "chat.completion.chunk"
-        return out
+            output["object"] = "chat.completion.chunk"
+        return output
 
 
 supported_models = {

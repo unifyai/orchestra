@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any, Callable, Dict, List
+from typing import Any, Dict, List
 
 import tiktoken
 from fastapi import HTTPException
@@ -86,60 +86,67 @@ class BaseCompletionProvider:
         return self.completion_cost * self.context_window / PRICING_PER_TOKENS
 
     def _modify_output(self, out: Dict, **kwargs) -> Dict:
-        return out  # noqa: WPS420
+        output = {}
+        output["model"] = out.get("model")
+        output["created"] = out.get("created")
+        output["id"] = out.get("id")
+        output["object"] = out.get("object", "chat.completion.chunk")
+        output["usage"] = out.get("usage") if out.get("usage") else {}
+        output["choices"] = out.get("choices") if out.get("choices") else []
+        return output  # noqa: WPS420
 
     def compute_cost(
         self,
         prompt_tks,
         output_tks,
-    ) -> Callable:
+    ) -> float:
         """
         Returns a deffered op to compute the cost of a completion.
 
-        TODO: Redo docs
+        :param prompt_tks: The number of tokens in the prompt.
+        :type prompt_tks: int
+        :param output_tks: The number of tokens in the completion.
+        :type output_tks: int
 
-        :return: Pre-loaded fn.
+        :return: cost.
         """
+        prompt_cost = prompt_tks * self.prompt_cost / PRICING_PER_TOKENS
+        completion_cost = output_tks * self.completion_cost / PRICING_PER_TOKENS
+        return prompt_cost + completion_cost
 
-        def deferred_cost():
-            prompt_cost = prompt_tks * self.prompt_cost / PRICING_PER_TOKENS
-            completion_cost = output_tks * self.completion_cost / PRICING_PER_TOKENS
-            return prompt_cost + completion_cost
-
-        return deferred_cost
-
-    def compute_cost_streaming(  # noqa: WPS210
+    def get_usage_info(  # noqa: WPS210
         self,
         completions: List[str],
         messages: List[Dict],
-    ) -> Callable:
+    ) -> Dict:
         """
-        Returns a deffered op to compute the cost of a completion when streaming.
+        Returns a usage dict with cost and token data when streaming.
 
         :param completions: The completed text.
         :type completions: str
         :param messages: List of input prompts.
         :type messages: List[Dict]
 
-        :return: Pre-loaded fn.
+        :return: a loaded usage dict
         """
         try:
-
-            def deferred_streaming_cost():
-                total_prompt = ""
-                for item in messages:  # noqa: WPS519
-                    total_prompt += item["content"]
-                # TODO: We need to standarise this and check for gpt models
-                encoding = tiktoken.get_encoding("cl100k_base")
-                prompt_tokens = len(encoding.encode(total_prompt))
-                tokens = [encoding.encode(completion) for completion in completions]
-                completion_tokens = sum(len(token) for token in tokens)
-                return self.compute_cost(prompt_tokens, completion_tokens)()
-
-            return deferred_streaming_cost
+            total_prompt = ""
+            for item in messages:  # noqa: WPS519
+                total_prompt += item["content"]
+            # TODO: We need to standarise this and check for gpt models
+            encoding = tiktoken.get_encoding("cl100k_base")
+            prompt_tokens = len(encoding.encode(total_prompt))
+            tokens = [encoding.encode(completion) for completion in completions]
+            completion_tokens = sum(len(token) for token in tokens)
+            return {
+                "cost": self.compute_cost(prompt_tokens, completion_tokens),
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            }
 
         except Exception:  # TODO: This need to be scoped down and prob moved inside
-            return lambda *args, **kwargs: 0
+            return {"cost": 0, "prompt_tokens": 0, "completion_tokens": 0}
 
     def __call__(  # noqa: D102, WPS211, C901, WPS231, WPS238, WPS210
         self,
@@ -152,7 +159,10 @@ class BaseCompletionProvider:
 
         try:  # noqa: WPS225
             response = client.chat.completions.create(
-                model=self.provider_endpoint, messages=messages, stream=stream, **kwargs
+                model=self.provider_endpoint,
+                messages=messages,
+                stream=stream,
+                **kwargs,
             )
             if isinstance(response, Stream) or stream:
                 return (SyncGeneratorWrapper(self, response, messages), None)
@@ -188,7 +198,10 @@ class BaseCompletionProvider:
 
         try:  # noqa: WPS225
             response = client.chat.completions.create(
-                model=self.provider_endpoint, messages=messages, stream=stream, **kwargs
+                model=self.provider_endpoint,
+                messages=messages,
+                stream=stream,
+                **kwargs,
             )
             if isinstance(response, AsyncStream) or stream:
                 return (AsyncGeneratorWrapper(self, response, messages), None)
@@ -227,7 +240,10 @@ class BaseGeneratorWrapper:
         choices = part_dict["choices"]
         if choices:
             if choices[0]["delta"]["content"] is None:
-                return None
+                if not part_dict.get("usage"):
+                    return None
+                return part_dict
+
         part_text = choices[0]["delta"]["content"] if choices else ""
         index = choices[0]["index"] if choices else 0
         if len(whole) <= index:
@@ -235,35 +251,56 @@ class BaseGeneratorWrapper:
         whole[index] += part_text
         return part_dict
 
+    def get_final_chunk(self, part_dict, whole):
+        """
+        Get the final chunk of a streaming response.
+
+        :param part_dict: The part dict.
+        :type part_dict: Dict
+        :param whole: The whole text.
+        :type whole: List
+
+        :yield: part_dict.
+        """
+        if part_dict and part_dict.get("usage"):
+            part_dict["usage"]["cost"] = self.provider.compute_cost(
+                part_dict["usage"]["prompt_tokens"],
+                part_dict["usage"]["completion_tokens"],
+            )
+        else:
+            part_dict["usage"] = self.provider.get_usage_info(
+                whole,
+                self._messages,
+            )
+        self.total_cost = part_dict["usage"]["cost"]
+        yield part_dict
+
 
 class SyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
     def generator(self):  # noqa: D102, C901, WPS210, WPS231
         whole = []
+        part_dict = None
         try:  # noqa: WPS501
             for part in self._response:
                 part_dict = self.generator_iteration(part, whole)
-                if part_dict is None:
+                if not part_dict or part_dict.get("usage") != {}:
                     continue
                 yield part_dict
         finally:
-            self.total_cost = self.provider.compute_cost_streaming(
-                whole,
-                self._messages,
-            )
+            yield from self.get_final_chunk(part_dict, whole)
 
 
 # TODO: Remove code duplication here
 class AsyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
     async def generator(self):  # noqa: D102, C901, WPS210, WPS231
         whole = []
+        part_dict = None
         try:  # noqa: WPS501
             async for part in await self._response:
                 part_dict = self.generator_iteration(part, whole)
-                if part_dict is None:
+                if not part_dict or part_dict.get("usage") != {}:
                     continue
                 yield part_dict
         finally:
-            self.total_cost = self.provider.compute_cost_streaming(
-                whole,
-                self._messages,
-            )
+            for val in self.get_final_chunk(part_dict, whole):
+                yield val

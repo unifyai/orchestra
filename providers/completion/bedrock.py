@@ -150,6 +150,8 @@ class BedrockSyncGeneratorWrapper(SyncGeneratorWrapper):
 
     def generator(self):  # noqa: D102, C901, WPS210, WPS231
         whole = []
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
         try:  # noqa: WPS501
             for part in self._response["body"]:
                 chunk = json.loads(part.get("chunk").get("bytes").decode())
@@ -157,14 +159,24 @@ class BedrockSyncGeneratorWrapper(SyncGeneratorWrapper):
                     "x-amzn-requestid"
                 ]
                 part_dict = self.generator_iteration(chunk, whole)
-                if part_dict is None:
+                usage = part_dict.get("usage")
+                if not part_dict:
                     continue
+                if usage:
+                    self.prompt_tokens += usage["prompt_tokens"]
+                    self.completion_tokens = usage["completion_tokens"]
+                    part_dict["usage"] = {}
+                    if part_dict["choices"][0]["finish_reason"]:
+                        continue
+
                 yield part_dict
         finally:
-            self.total_cost = self.provider.compute_cost_streaming(
-                whole,
-                self._messages,
-            )
+            part_dict["usage"] = {
+                "prompt_tokens": self.prompt_tokens,
+                "completion_tokens": self.completion_tokens,
+                "total_tokens": self.prompt_tokens + self.completion_tokens,
+            }
+            yield from self.get_final_chunk(part_dict, whole)
 
 
 class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
@@ -194,14 +206,25 @@ class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
                         "x-amzn-requestid"
                     ]
                     part_dict = self.generator_iteration(chunk, whole)
-                    if part_dict is None:
+                    usage = part_dict.get("usage")
+                    if not part_dict:
                         continue
+                    if usage:
+                        self.prompt_tokens += usage["prompt_tokens"]
+                        self.completion_tokens = usage["completion_tokens"]
+                        part_dict["usage"] = {}
+                        if part_dict["choices"][0]["finish_reason"]:
+                            continue
+
                     yield part_dict
             finally:
-                self.total_cost = self.provider.compute_cost_streaming(
-                    whole,
-                    self._messages,
-                )
+                part_dict["usage"] = {
+                    "prompt_tokens": self.prompt_tokens,
+                    "completion_tokens": self.completion_tokens,
+                    "total_tokens": self.prompt_tokens + self.completion_tokens,
+                }
+                for val in self.get_final_chunk(part_dict, whole):
+                    yield val
 
 
 def sse_to_part_dict(part, whole, endpoint):
@@ -246,10 +269,9 @@ def sse_to_part_dict(part, whole, endpoint):
                 "finish_reason": finish_reason,  # TODO: check if the str of the reaosn provided is OAI
             },
         ],
-        # "usage": usage,
+        "usage": usage,
     }
-    if data == "":
-        return None
+
     if not whole:
         whole.extend([""])
     whole[0] += data

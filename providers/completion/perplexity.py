@@ -25,9 +25,10 @@ class Perplexity(BaseCompletionProvider):
 
     def _modify_output(self, out: Dict, **kwargs) -> Dict:
         stream = kwargs.get("stream", False)
+        output = super()._modify_output(out, **kwargs)
         if stream:
-            out["object"] = "chat.completion.chunk"
-        return out
+            output["object"] = "chat.completion.chunk"
+        return output
 
 
 supported_models = {
