@@ -27,7 +27,7 @@ invalid_price_threshold = HTTPException(
     status_code=status.HTTP_400_BAD_REQUEST,
     detail=(
         "Invalid price threshold. Format needs to be config<[float][ic|oc]. "
-        "See https://unify.ai/docs/hub/concepts/runtime_routing.html#price-thresholds for more details."
+        "See https://unify.ai/docs/hub/concepts/runtime_routing.html#thresholds for more details."
     ),
 )
 
