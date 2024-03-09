@@ -46,25 +46,32 @@ Available Modes
 
 Currently, we support a set of predefined configurations for the routing:
 
-- :code:`lowest-input-cost`
-- :code:`lowest-output-cost`
-- :code:`lowest-itl`
-- :code:`lowest-ttft`
-- :code:`highest-tks-per-sec`
+- :code:`lowest-input-cost` / :code:`input-cost`
+- :code:`lowest-output-cost` / :code:`output-cost`
+- :code:`lowest-itl` / :code:`itl`
+- :code:`lowest-ttft` / :code:`ttft`
+- :code:`highest-tks-per-sec` / :code:`tks-per-sec`
 
-Price Threshold
------------------
+For example, you can query the endpoint :code:`llama-2-7b-chat@itl` to get the provider with the
+lowest Inter-Token-Latency.
 
-Additionally, you have the option to include input or output price thresholds in each configuration.
+Thresholds
+----------
+
+Additionally, you have the option to include multiple thresholds for other metrics in each configuration.
 This feature enables you to get, for example, the highest tokens per second (:code:`highest-tks-per-sec`)
-for any provider whose price falls below a specific threshold. To set this up, just append :code:`<[float][ic|oc]`
-to your preferred mode when specifying a provider. Let's illustrate this with a few examples:
+for any provider whose :code:`ttft` is lower than a specific threshold. To set this up, just
+append :code:`<[float][metric]` to your preferred mode when specifying a provider. To keep things simple,
+we have added aliases for :code:`output-cost` (:code:`oc`), :code:`input-cost` (:code:`ic`) and
+:code:`output-tks-per-sec` (:code:`ots`). Let's illustrate this with some examples:
 
-- :code:`lowest-itl<0.5ic` - In this case, the request will be routed to the provider with the lowest
-  Inter-Token-Latency that has an Input Cost (ic) smaller than 0.5 credits per million tokens.
-- :code:`highest-tks-per-sec<1oc` - Likewise, in this scenario, the request will be directed to the provider
+- :code:`lowest-itl<0.5input-cost` - In this case, the request will be routed to the provider with the lowest
+  Inter-Token-Latency that has an Input Cost smaller than 0.5 credits per million tokens.
+- :code:`highest-tks-per-sec<1output-cost` - Likewise, in this scenario, the request will be directed to the provider
   offering the highest Output Tokens per Second, provided their cost is below 1 credit per million tokens.
-  Here, (oc) denotes Output Cost.
+- :code:`ttft<0.5ic<15itl` - Now we have something similar to the first example, but we are using :code:`ic` as
+  an alias to :code:`input-cost`, and we have also added :code:`<15itl` to only consider endpoints
+  that have an Inter-Token-Latency of less than 15 ms.
 
 Depending on the specified threshold, there might be scenarios where no providers meet the criteria,
 rendering the request unfulfillable. In such cases, the API response will be a 404 error with the corresponding
@@ -96,5 +103,5 @@ explanation. You can detect this and change your policy doing something like:
       response = requests.post(url, json=payload, headers=headers)
 
 
-That's about it! We will be making these modes much flexible in the coming weeks, allowing you to
+That's about it! We will be making these modes more flexible in the coming weeks, allowing you to
 define more specific and fine-grained rules 🔎
