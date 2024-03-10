@@ -4,6 +4,7 @@ import logging
 import sys
 from typing import Any, Union
 
+from google.cloud import logging as cloud_logging
 from loguru import logger
 from opentelemetry.trace import INVALID_SPAN, INVALID_SPAN_CONTEXT, get_current_span
 
