@@ -1,14 +1,18 @@
+import logging
 import os
 from datetime import datetime
 from typing import Any, List
 
 import providers.completion.replicate_run as r8r
 import replicate
+from fastapi import HTTPException
 from providers.completion.base_completion_provider import (
     AsyncGeneratorWrapper,
     BaseCompletionProvider,
     SyncGeneratorWrapper,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class Replicate(BaseCompletionProvider):
@@ -91,25 +95,29 @@ class Replicate(BaseCompletionProvider):
             r8_kwargs["system_prompt"] = _messages[0]["content"]
             _messages.pop(0)
         prompt = self.prompt_factory(_messages)
-        if stream:
-            response = replicate.stream(
-                self.provider_endpoint,
-                input={"prompt": prompt, **kwargs, **r8_kwargs},
-            )
-            return (R8SyncGeneratorWrapper(self, response, messages), None)
-        else:
-            response = r8r.run(  # type: ignore
-                replicate.default_client,
-                self.provider_endpoint,
-                input={"prompt": prompt, **kwargs, **r8_kwargs},
-            )
-            return (
-                self.response_to_chat_completion(response),
-                self.compute_cost(
-                    response.metrics["input_token_count"],
-                    response.metrics["output_token_count"],
-                ),
-            )
+        try:
+            if stream:
+                response = replicate.stream(
+                    self.provider_endpoint,
+                    input={"prompt": prompt, **kwargs, **r8_kwargs},
+                )
+                return (R8SyncGeneratorWrapper(self, response, messages), None)
+            else:
+                response = r8r.run(  # type: ignore
+                    replicate.default_client,
+                    self.provider_endpoint,
+                    input={"prompt": prompt, **kwargs, **r8_kwargs},
+                )
+                return (
+                    self.response_to_chat_completion(response),
+                    self.compute_cost(
+                        response.metrics["input_token_count"],
+                        response.metrics["output_token_count"],
+                    ),
+                )
+        except Exception as error:
+            logger.error(f"Raised error type: {type(error)}, Error: {error}")
+            raise HTTPException(status_code=500, detail=str(error))
 
     def __call_async__(
         self, messages: List, stream: bool = False, **kwargs: Any

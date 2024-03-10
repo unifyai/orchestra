@@ -186,6 +186,9 @@ class BaseCompletionProvider:
         except APIError as error:
             logger.error(f"Raised openai.APIError, Error: {error}")
             raise HTTPException(status_code=400, detail=str(error))  # noqa: WPS432
+        except Exception as error:
+            logger.error(f"Raised error type: {type(error)}, Error: {error}")
+            raise HTTPException(status_code=500, detail=str(error))
 
     def __call_async__(  # noqa: D102, WPS211, C901, WPS231, WPS238, WPS210
         self,
