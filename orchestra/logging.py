@@ -1,3 +1,5 @@
+from google.cloud import logging as cloud_logging
+
 import logging
 import sys
 from typing import Any, Union
@@ -79,16 +81,21 @@ def record_formatter(record: dict[str, Any]) -> str:  # pragma: no cover
 def configure_logging() -> None:  # pragma: no cover
     """Configures logging."""
     intercept_handler = InterceptHandler()
+    handlers = [intercept_handler]
 
-    logging.basicConfig(handlers=[intercept_handler], level=logging.NOTSET)
+    if settings.db_host != "localhost":
+        client = cloud_logging.Client()
+        cloud_handler = client.get_default_handler()
+        handlers.append(cloud_handler)
+    logging.basicConfig(handlers=handlers, level=logging.NOTSET)
 
     for logger_name in logging.root.manager.loggerDict:
         if logger_name.startswith("uvicorn."):
             logging.getLogger(logger_name).handlers = []
 
     # change handler for default uvicorn logger
-    logging.getLogger("uvicorn").handlers = [intercept_handler]
-    logging.getLogger("uvicorn.access").handlers = [intercept_handler]
+    logging.getLogger("uvicorn").handlers = handlers
+    logging.getLogger("uvicorn.access").handlers = handlers
 
     # set logs output, level and format
     logger.remove()
