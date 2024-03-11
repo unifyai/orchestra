@@ -68,6 +68,11 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 30, "completion": 60},
     },
+    "gpt-4-turbo": {
+        "endpoint": "gpt-4-turbo-preview",
+        "context_window": 128000,
+        "cost": {"prompt": 10, "completion": 30},
+    },
     "gpt-4-0314": {
         "endpoint": "gpt-4-0314",
         "context_window": 8192,
