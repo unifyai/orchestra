@@ -2,8 +2,10 @@
 # it won't be open sourced
 # This file will be called from each one of the instances running in
 # different regions
+import argparse
 import asyncio
 import datetime
+import json
 import logging
 import os
 from typing import Dict, List, Union
@@ -360,7 +362,7 @@ async def add_br_datapoints(  # noqa: WPS210
             )
 
 
-async def main():  # noqa: WPS210
+async def main(endpoints=None):  # noqa: WPS210
     """Main benchmark orchestrator orchestrator."""  # noqa: DAR401
     # Define config file to use
     config_file = os.getenv("BENCHMARK_CONFIG_FILE", "benchmark/test.config.yml")
@@ -377,7 +379,25 @@ async def main():  # noqa: WPS210
     async_db_session = create_db_session()
 
     # Get list of endpoints in our db
-    endpoints = await retrieve_all_endpoints(async_db_session)
+    endpoints_all = await retrieve_all_endpoints(async_db_session)
+    if endpoints is None:
+        endpoints = endpoints_all
+    else:
+        endpoints = [
+            {
+                **ep,
+                "id": next(
+                    (
+                        ep_all["id"]
+                        for ep_all in endpoints_all
+                        if ep_all["provider"] == ep["provider"]
+                        and ep_all["model"] == ep["model"]
+                    ),
+                    None,
+                ),
+            }
+            for ep in endpoints
+        ]
     logger.info(f"Found {len(endpoints)} endpoints where Model is active in the db.")
     # TODO: remove this
     """
@@ -437,4 +457,39 @@ async def main():  # noqa: WPS210
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(
+        description="Run benchmark with specified endpoints."
+    )
+    parser.add_argument(
+        "--endpoints", type=str, help="JSON string of endpoints to test."
+    )
+    parser.add_argument(
+        "--minimal", type=bool, help="Boolean flag for a minimal test of benchmarks"
+    )
+
+    args = parser.parse_args()
+    endpoints = json.loads(args.endpoints) if args.endpoints else None
+    if endpoints:
+        endpoints = [
+            {
+                "id": idx,
+                "provider": endpoint["provider"],
+                "model": endpoint["model"],
+            }
+            for idx, endpoint in enumerate(endpoints)
+        ]
+    minimal = args.minimal if args.minimal else False
+    if not endpoints and minimal:
+        endpoints = [
+            {"provider": "anyscale", "model": "llama-2-7b-chat"},
+            {"provider": "deepinfra", "model": "llama-2-7b-chat"},
+            {"provider": "fireworks-ai", "model": "llama-2-7b-chat"},
+            {"provider": "lepton-ai", "model": "llama-2-7b-chat"},
+            {"provider": "replicate", "model": "llama-2-7b-chat"},
+            {"provider": "together-ai", "model": "llama-2-7b-chat"},
+            {"provider": "mistral-ai", "model": "mistral-7b-instruct-v0.2"},
+            {"provider": "octoai", "model": "mistral-7b-instruct-v0.1"},
+            {"provider": "perplexity-ai", "model": "mistral-7b-instruct-v0.2"},
+            {"provider": "aws-bedrock", "model": "mistral-7b-instruct-v0.2"},
+        ]
+    asyncio.run(main(endpoints))

@@ -15,6 +15,8 @@ from openai import (
     Stream,
 )
 
+from orchestra.web.api.utils.http_responses import server_error_with_digest
+
 logger = logging.getLogger(__name__)
 
 # Pricing info of providers with pay-per-token model is
@@ -186,6 +188,10 @@ class BaseCompletionProvider:
         except APIError as error:
             logger.error(f"Raised openai.APIError, Error: {error}")
             raise HTTPException(status_code=400, detail=str(error))  # noqa: WPS432
+        except Exception as e:
+            error, digest = server_error_with_digest(str(e))
+            logger.error(f"Digest {digest}: {e}")
+            raise error
 
     def __call_async__(  # noqa: D102, WPS211, C901, WPS231, WPS238, WPS210
         self,
