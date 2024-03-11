@@ -87,7 +87,7 @@ def configure_logging() -> None:  # pragma: no cover
     if settings.db_host != "localhost":
         client = cloud_logging.Client()
         cloud_handler = client.get_default_handler()
-        handlers = [cloud_handler]
+        handlers.append(cloud_handler)
     logging.basicConfig(handlers=handlers, level=logging.NOTSET)
 
     for logger_name in logging.root.manager.loggerDict:
