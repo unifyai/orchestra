@@ -12,6 +12,8 @@ from providers.completion.base_completion_provider import (
     SyncGeneratorWrapper,
 )
 
+from orchestra.web.api.utils.http_responses import server_error_with_digest
+
 logger = logging.getLogger(__name__)
 
 
@@ -115,9 +117,10 @@ class Replicate(BaseCompletionProvider):
                         response.metrics["output_token_count"],
                     ),
                 )
-        except Exception as error:
-            logger.error(f"Raised error type: {type(error)}, Error: {error}")
-            raise HTTPException(status_code=500, detail=str(error))
+        except Exception as e:
+            error, digest = server_error_with_digest(str(e))
+            logger.error(f"Digest {digest}: {e}")
+            raise error
 
     def __call_async__(
         self, messages: List, stream: bool = False, **kwargs: Any
