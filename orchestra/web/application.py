@@ -9,6 +9,7 @@ from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.logging import LoggingIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 
+from orchestra.logging import configure_logging
 from orchestra.settings import settings
 from orchestra.web.api.router import api_router
 from orchestra.web.lifetime import register_shutdown_event, register_startup_event
@@ -22,6 +23,7 @@ def get_app() -> FastAPI:
 
     :return: application.
     """
+    configure_logging()
     if settings.sentry_dsn:
         # Enables sentry integration.
         sentry_sdk.init(

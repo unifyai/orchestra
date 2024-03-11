@@ -3,7 +3,6 @@ import shutil
 
 import uvicorn
 
-from orchestra.logging import configure_logging
 from orchestra.settings import settings
 
 
@@ -35,7 +34,6 @@ def set_multiproc_dir() -> None:
 def main() -> None:
     """Entrypoint of the application."""
     set_multiproc_dir()
-    configure_logging()
     uvicorn.run(
         "orchestra.web.application:get_app",
         workers=settings.workers_count,

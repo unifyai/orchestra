@@ -1,5 +1,3 @@
-from google.cloud import logging as cloud_logging
-
 import logging
 import sys
 from typing import Any, Union
@@ -87,7 +85,7 @@ def configure_logging() -> None:  # pragma: no cover
     if settings.db_host != "localhost":
         client = cloud_logging.Client()
         cloud_handler = client.get_default_handler()
-        handlers.append(cloud_handler)
+        handlers = [cloud_handler]
     logging.basicConfig(handlers=handlers, level=logging.NOTSET)
 
     for logger_name in logging.root.manager.loggerDict:
