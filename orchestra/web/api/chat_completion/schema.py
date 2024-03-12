@@ -30,8 +30,8 @@ class ChatCompletionRequest(BaseModel):
     seed: Optional[int] = None
     stop: Optional[str] = None
     top_p: Optional[float] = None
-    tools: Optional[List[str]] = None
-    tool_choice: Optional[str] = None
+    tools: Optional[List[Any]] = None
+    tool_choice: Optional[Any] = None
     user: Optional[str] = None
 
 
