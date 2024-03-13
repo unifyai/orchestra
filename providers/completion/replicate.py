@@ -184,12 +184,12 @@ class Replicate(BaseCompletionProvider):
 
 class R8SyncGeneratorWrapper(SyncGeneratorWrapper):
     def generator_iteration(self, part, whole):
-        return sse_to_part_dict(part, whole)
+        return self.provider._modify_output(sse_to_part_dict(part, whole))
 
 
 class R8AsyncGeneratorWrapper(AsyncGeneratorWrapper):
     def generator_iteration(self, part, whole):
-        return sse_to_part_dict(part, whole)
+        return self.provider._modify_output(sse_to_part_dict(part, whole))
 
 
 def sse_to_part_dict(part, whole):

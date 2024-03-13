@@ -246,7 +246,7 @@ class BaseGeneratorWrapper:
         choices = part_dict["choices"]
         if choices:
             if choices[0]["delta"]["content"] is None:
-                if not part_dict.get("usage"):
+                if not part_dict.get("usage") and not choices[0]["finish_reason"]:
                     return None
                 return part_dict
 
@@ -281,6 +281,14 @@ class BaseGeneratorWrapper:
         self.total_cost = part_dict["usage"]["cost"]
         yield part_dict
 
+    def is_final_chunk(self, part_dict):
+        if part_dict:
+            if part_dict.get("usage"):
+                return True
+            if "finish_reason" in part_dict.get("choices", [{}])[0]:
+                if part_dict["choices"][0]["finish_reason"]:
+                    return True
+        return False
 
 class SyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
     def generator(self):  # noqa: D102, C901, WPS210, WPS231
@@ -289,7 +297,7 @@ class SyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
         try:  # noqa: WPS501
             for part in self._response:
                 part_dict = self.generator_iteration(part, whole)
-                if not part_dict or part_dict.get("usage") != {}:
+                if not part_dict or self.is_final_chunk(part_dict):
                     continue
                 yield part_dict
         finally:
@@ -304,7 +312,7 @@ class AsyncGeneratorWrapper(BaseGeneratorWrapper):  # noqa: D101
         try:  # noqa: WPS501
             async for part in await self._response:
                 part_dict = self.generator_iteration(part, whole)
-                if not part_dict or part_dict.get("usage") != {}:
+                if not part_dict or self.is_final_chunk(part_dict):
                     continue
                 yield part_dict
         finally:
