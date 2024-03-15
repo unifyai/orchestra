@@ -1,5 +1,5 @@
 import datetime
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from fastapi import Depends
 from sqlalchemy import select
@@ -52,8 +52,8 @@ class EndpointDAO:
 
     def get_endpoints_of(
         self,
-        models: List[str],
-        only_from: Optional[List[str]] = None,
+        models: Tuple[str, ...],
+        only_from: Optional[Tuple[str, ...]] = None,
     ):
         query = (
             select(Endpoint, Model, Provider)

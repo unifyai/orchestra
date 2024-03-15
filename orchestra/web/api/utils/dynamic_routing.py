@@ -4,8 +4,7 @@ import math
 import re
 import time
 from collections import namedtuple
-from functools import lru_cache
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
@@ -50,15 +49,22 @@ def get_ttl_hash(seconds=3600):
     return round(time.time() / seconds)
 
 
-@lru_cache()
+_cached_endpoints: Dict[str, Dict[str, Union[int, List[Endpoint]]]] = {}
+
+
 def get_endpoints_of(
     endpoint_dao: EndpointDAO,
-    models: List[str],
+    models: Tuple[str, ...],
     ttl_hash: int,
-    only_from: Optional[List[str]] = None,
+    only_from: Optional[Tuple[str, ...]] = None,
 ) -> List[Endpoint]:
-    del ttl_hash
-    # TODO: Ensure that the DAO is not messing up the lru cache
+    full_hash = str(hash(models)) + str(hash(only_from))
+
+    if (
+        full_hash in _cached_endpoints
+        and _cached_endpoints[full_hash].get("ttl_hash", 0) == ttl_hash
+    ):
+        return _cached_endpoints[full_hash]["endpoints"]  # type: ignore[return-value]
     logger.info(f"Getting endpoints of {models}")
     query_result = endpoint_dao.get_endpoints_of(models, only_from)
     if not query_result:
@@ -66,7 +72,7 @@ def get_endpoints_of(
         error, digest = server_error_with_digest(error_str)
         logger.error(f"Digest {digest}: {error_str}")
         raise error
-    return [
+    endpoints = [
         Endpoint(
             q.Endpoint.id,
             q.Model.mdl_code,
@@ -76,15 +82,25 @@ def get_endpoints_of(
         )
         for q in query_result
     ]
+    _cached_endpoints[full_hash] = {}
+    _cached_endpoints[full_hash]["endpoints"] = endpoints
+    _cached_endpoints[full_hash]["ttl_hash"] = ttl_hash
+    return endpoints
 
 
-@lru_cache()
+_cached_metrics: Dict[Endpoint, Dict[str, Union[int, Dict[str, Dict[str, float]]]]] = {}
+
+
 def get_model_metrics(
     benchmark_run_dao: BenchmarkRunDAO,
     endpoint: Endpoint,
     ttl_hash: int,
 ):
-    del ttl_hash
+    if (
+        endpoint in _cached_metrics
+        and _cached_metrics[endpoint].get("ttl_hash", 0) == ttl_hash
+    ):
+        return _cached_metrics[endpoint]["metrics"]
     logger.info(f"Getting metrics for {endpoint}")
     brs = benchmark_run_dao.get_model_benchmark_datapoints(endpoint.model_id)
     if not brs:
@@ -98,6 +114,9 @@ def get_model_metrics(
         if br.Provider.name not in metrics:
             metrics[br.Provider.name] = {}
         metrics[br.Provider.name][br.Datapoint.metric_name] = br.Datapoint.value
+    _cached_metrics[endpoint] = {}
+    _cached_metrics[endpoint]["metrics"] = metrics
+    _cached_metrics[endpoint]["ttl_hash"] = ttl_hash
     return metrics
 
 
@@ -105,7 +124,7 @@ def get_value_of(
     benchmark_run_dao: BenchmarkRunDAO,
     endpoint: Endpoint,
     metric: str,
-) -> float:
+) -> Optional[float]:
     model_metrics = get_model_metrics(
         benchmark_run_dao,
         endpoint,
@@ -271,6 +290,3 @@ def dynamic_routing(
         target_metric,
     )
     return selected_model, selected_provider
-
-
-# TODO: Check lru cache with daos
