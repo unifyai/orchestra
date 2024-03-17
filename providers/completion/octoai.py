@@ -58,7 +58,7 @@ supported_models = {
         "context_window": 4096,
         "cost": {"prompt": 0.1, "completion": 0.25},
     },
-    "mistral-7b-instruct-v0.1": {  # TODO: Ask which version this is
+    "mistral-7b-instruct-v0.2": {
         "endpoint": "mistral-7b-instruct-fp16",
         "context_window": 4096,
         "cost": {"prompt": 0.1, "completion": 0.25},
