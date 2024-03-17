@@ -19,7 +19,7 @@ def get_models(
 ) -> List[Model]:
     """
     Retrieve all model objects from the database.
-
+    \f
     :param limit: limit of model objects, defaults to 10.
     :param offset: offset of model objects, defaults to 0.
     :param model_dao: DAO for model models.
@@ -45,7 +45,7 @@ def get_model(  # noqa: WPS211, C901
 ) -> List[Model]:
     """
     Retrieve specific model object from the database.
-
+    \f
     :param id: id of model instance.
     :param mdl_code: mdl_code of model instance.
     :param user_id: user_id of model instance.

@@ -19,7 +19,7 @@ def get_query_models(
 ) -> List[Query]:
     """
     Retrieve all query objects from the database.
-
+    \f
     :param limit: limit of query objects, defaults to 10.
     :param offset: offset of query objects, defaults to 0.
     :param query_dao: DAO for query models.
@@ -35,7 +35,7 @@ def create_query_model(
 ) -> None:
     """
     Creates query model in the database.
-
+    \f
     :param new_query_object: new query model item.
     :param query_dao: DAO for query models.
     """
