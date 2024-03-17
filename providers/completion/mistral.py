@@ -33,9 +33,19 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.7, "completion": 0.7},
     },
+    "mistral-small": {
+        "endpoint": "mistral-small-latest",
+        "context_window": 32768,
+        "cost": {"prompt": 2, "completion": 6},
+    },
     "mistral-medium": {
         "endpoint": "mistral-medium-latest",
         "context_window": 32768,
         "cost": {"prompt": 2.7, "completion": 8.1},
+    },
+    "mistral-large": {
+        "endpoint": "mistral-large-latest",
+        "context_window": 32768,
+        "cost": {"prompt": 8, "completion": 24},
     },
 }
