@@ -21,7 +21,7 @@ def get_endpoint_models(  # noqa: WPS210
 ) -> List[EndpointModelResponseVerbose]:
     """
     Retrieve all endpoint objects from the database.
-
+    \f
     :param limit: limit of endpoint objects, defaults to 10.
     :param offset: offset of endpoint objects, defaults to 0.
     :param endpoint_dao: DAO for endpoint models.
@@ -74,7 +74,7 @@ def get_endpoint(  # noqa: WPS210, WPS211, WPS217
 ) -> List[EndpointModelResponseVerbose]:
     """
     Retrieve specific endpoint object from the database.
-
+    \f
     :param endpoint_id: endpoint_id of endpoint instance.
     :param mdl_id: mdl_id of endpoint instance.
     :param provider_id: provider_id of endpoint instance.
