@@ -4,9 +4,3 @@ runner1:
 runner2:
   load: 1
   input_policy: long
-runner3:
-  load: 20
-  input_policy: short
-runner4:
-  load: 20
-  input_policy: long
