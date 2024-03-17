@@ -59,7 +59,7 @@ def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217,
 ):
     """
     Get inference result based on the request.
-
+    \f
     :param background_tasks: FastAPI background tasks.
     :param request_fastapi: FastAPI request object.
     :param request: InferenceRequest object.

@@ -18,7 +18,7 @@ def get_provider_models(
 ) -> List[Provider]:
     """
     Retrieve all provider objects from the database.
-
+    \f
     :param limit: limit of provider objects, defaults to 10.
     :param offset: offset of provider objects, defaults to 0.
     :param provider_dao: DAO for provider models.
@@ -34,7 +34,7 @@ def get_provider(
 ) -> List[Provider]:
     """
     Retrieve specific provider object from the database.
-
+    \f
     :param name: name of provider object.
     :param provider_dao: DAO for provider models.
     :return: provider object from database.

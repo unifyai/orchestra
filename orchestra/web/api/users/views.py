@@ -18,8 +18,8 @@ def get_credits(
     users_dao: UsersDAO = Depends(),
 ) -> Union[Users, None]:
     """
-    Retrieve all credits based on user id from the database.
-
+    Retrieves credits for the user doing the request.
+    \f
     :param request_fastapi: FastAPI request object.
     :param users_dao: DAO for users models.
     :return: user instance with credits from database.
@@ -36,8 +36,8 @@ def credits_code(
     users_dao: UsersDAO = Depends(),
 ) -> Union[CreditsCodeResponse, None]:
     """
-    Checks if it's a valid code.
-
+    Checks if it's a valid promo code.
+    \f
     :param request_fastapi: FastAPI request object.
     :param code: Promo code to be activated.
     :param recharge_dao: DAO for recharge models.

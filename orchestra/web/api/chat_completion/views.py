@@ -45,7 +45,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 ) -> Union[ChatCompletionResponse, StreamingResponse]:
     """
     Get chat completions based on the request.
-
+    \f
     :param background_tasks: FastAPI background tasks.
     :param request_fastapi: FastAPI request object.
     :param request: ChatCompletionRequest object.

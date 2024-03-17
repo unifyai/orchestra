@@ -23,13 +23,25 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    model.router, prefix="/admin", tags=["model"], dependencies=ADMIN_AUTH
+    model.router,
+    prefix="/admin",
+    tags=["model"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
 )
 api_router.include_router(
-    endpoint.router, prefix="/admin", tags=["endpoint"], dependencies=ADMIN_AUTH
+    endpoint.router,
+    prefix="/admin",
+    tags=["endpoint"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
 )
 api_router.include_router(
-    provider.router, prefix="/admin", tags=["provider"], dependencies=ADMIN_AUTH
+    provider.router,
+    prefix="/admin",
+    tags=["provider"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
 )
 api_router.include_router(
     inference.router,
@@ -45,6 +57,7 @@ api_router.include_router(
     admin.router,
     prefix="/admin",
     tags=["admin"],
+    include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )
 api_router.include_router(monitoring.router)
