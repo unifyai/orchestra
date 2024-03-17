@@ -1,7 +1,7 @@
 import json
 from typing import Union
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.param_functions import Depends
 from fastapi.responses import StreamingResponse
 from providers.completion import PROVIDER_CLASSES
@@ -18,11 +18,13 @@ from orchestra.web.api.chat_completion.schema import (
     ChatCompletionResponse,
 )
 from orchestra.web.api.users.views import get_credits
-from orchestra.web.api.utils import (
-    db_operations,
-    filter_request_params,
+from orchestra.web.api.utils.bg_tasks import db_operations
+from orchestra.web.api.utils.dynamic_routing import dynamic_routing, parse_endpoint
+from orchestra.web.api.utils.helpers import filter_request_params
+from orchestra.web.api.utils.http_responses import (
     insufficient_credits_error,
-    performance_based_routing,
+    invalid_messages,
+    invalid_model_str,
 )
 
 router = APIRouter()
@@ -58,24 +60,15 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     :raises HTTPException: when user has insufficient credits.
     """
     try:
+        # TODO: Check that model exists
         model, provider = request.model.split("@")
     except Exception:
-        raise HTTPException(
-            status_code=400,  # noqa: WPS432
-            detail=(
-                "Invalid model. The expected format is <model-id>@<provider>. "
-                "See https://unify.ai/docs/hub/concepts/models.html "
-                "for more information."
-            ),
-        )
+        raise invalid_model_str
 
     try:
         messages = request.messages
     except Exception:
-        raise HTTPException(
-            status_code=400,  # noqa: WPS432
-            detail="Invalid input. Messages not in input.",
-        )
+        raise invalid_messages
 
     # TODO: Add validation of the other parameters if mandatory
 
@@ -83,13 +76,15 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     user = get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(user.credits if user else 0)
 
-    if provider.split("-")[0] in ["lowest", "highest"]:
-        provider = performance_based_routing(
-            model,
-            provider,
-            model_dao,
+    if provider not in PROVIDER_CLASSES:
+        # Dynamic routing
+        target_metric, metrics_thresholds = parse_endpoint(provider)
+        model, provider = dynamic_routing(
+            endpoint_dao,
             benchmark_run_dao,
-            datapoint_dao,
+            target_metric,
+            models=(model,),
+            metrics_thresholds=metrics_thresholds,
         )
 
     lm = PROVIDER_CLASSES[provider](model)
@@ -129,18 +124,18 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         def stream_and_update_db():  # noqa: WPS430 # TODO: Should this be async?
             for part_dict in response.generator():
                 part_dict["model"] = f"{model}@{provider}"
-                yield f"data: {json.dumps(part_dict)}\n\n"  # noqa: WPS237
+                chat_response = ChatCompletionResponse(**part_dict)
+                yield f"data: {json.dumps(chat_response.model_dump())}\n\n"  # noqa: WPS237, E501
             background_tasks.add_task(
                 db_operations,
-                cost_deferred_fn=response.total_cost,
+                cost=response.total_cost,
                 **db_operations_kwargs,
             )
 
         return StreamingResponse(stream_and_update_db())
     else:
-        background_tasks.add_task(
-            db_operations, cost_deferred_fn=cost, **db_operations_kwargs
-        )
+        background_tasks.add_task(db_operations, cost=cost, **db_operations_kwargs)
 
     response["model"] = f"{model}@{provider}"
+    response["usage"]["cost"] = cost
     return ChatCompletionResponse(**response)

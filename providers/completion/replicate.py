@@ -1,14 +1,20 @@
+import logging
 import os
 from datetime import datetime
 from typing import Any, List
 
 import providers.completion.replicate_run as r8r
 import replicate
+from fastapi import HTTPException
 from providers.completion.base_completion_provider import (
     AsyncGeneratorWrapper,
     BaseCompletionProvider,
     SyncGeneratorWrapper,
 )
+
+from orchestra.web.api.utils.http_responses import server_error_with_digest
+
+logger = logging.getLogger(__name__)
 
 
 class Replicate(BaseCompletionProvider):
@@ -91,25 +97,30 @@ class Replicate(BaseCompletionProvider):
             r8_kwargs["system_prompt"] = _messages[0]["content"]
             _messages.pop(0)
         prompt = self.prompt_factory(_messages)
-        if stream:
-            response = replicate.stream(
-                self.provider_endpoint,
-                input={"prompt": prompt, **kwargs, **r8_kwargs},
-            )
-            return (R8SyncGeneratorWrapper(self, response, messages), None)
-        else:
-            response = r8r.run(  # type: ignore
-                replicate.default_client,
-                self.provider_endpoint,
-                input={"prompt": prompt, **kwargs, **r8_kwargs},
-            )
-            return (
-                self.response_to_chat_completion(response),
-                self.compute_cost(
-                    response.metrics["input_token_count"],
-                    response.metrics["output_token_count"],
-                ),
-            )
+        try:
+            if stream:
+                response = replicate.stream(
+                    self.provider_endpoint,
+                    input={"prompt": prompt, **kwargs, **r8_kwargs},
+                )
+                return (R8SyncGeneratorWrapper(self, response, messages), None)
+            else:
+                response = r8r.run(  # type: ignore
+                    replicate.default_client,
+                    self.provider_endpoint,
+                    input={"prompt": prompt, **kwargs, **r8_kwargs},
+                )
+                return (
+                    self.response_to_chat_completion(response),
+                    self.compute_cost(
+                        response.metrics["input_token_count"],
+                        response.metrics["output_token_count"],
+                    ),
+                )
+        except Exception as e:
+            error, digest = server_error_with_digest(str(e))
+            logger.error(f"Digest {digest}: {e}")
+            raise error
 
     def __call_async__(
         self, messages: List, stream: bool = False, **kwargs: Any
@@ -144,6 +155,21 @@ class Replicate(BaseCompletionProvider):
                     response.metrics["output_token_count"],
                 ),
             )
+
+    def custom_model_run(self, model, kwargs):
+        if model == "bark":
+            endpoint = "nfy-rtr/original-bark:6f7ecf22e9d8054b09df4615af9f42e920e78ba8a7aa3ae1b5fe2c98d607c93b"
+            output = replicate.run(
+                endpoint,
+                input=kwargs,
+            )
+        elif model == "optimised-bark":
+            endpoint = "nfy-rtr/optimised-bark:97fa01036c9e7435cf9cfad9ee966376f1b2cd7d366d85f000ed1512392e30fa"
+            output = replicate.run(
+                endpoint,
+                input=kwargs,
+            )
+        return output
 
     def prompt_factory(self, messages):
         return "\n".join(

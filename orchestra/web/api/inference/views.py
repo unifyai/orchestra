@@ -16,11 +16,12 @@ from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.inference.schema import InferenceRequest
 from orchestra.web.api.users.views import get_credits
-from orchestra.web.api.utils import (
-    db_operations,
-    filter_request_params,
+from orchestra.web.api.utils.bg_tasks import db_operations
+from orchestra.web.api.utils.dynamic_routing import dynamic_routing, parse_endpoint
+from orchestra.web.api.utils.helpers import filter_request_params
+from orchestra.web.api.utils.http_responses import (
     insufficient_credits_error,
-    performance_based_routing,
+    invalid_messages,
 )
 
 router = APIRouter()
@@ -36,7 +37,7 @@ def _get_model_type(model_name):
 
 def _verify_field(request, field):
     if not hasattr(request, field) or getattr(request, field) == "":
-        raise HTTPException(
+        raise HTTPException(  # TODO: Move to utils file
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid input. A {field} has to be specified.",
         )
@@ -44,7 +45,7 @@ def _verify_field(request, field):
 
 
 @router.post("/inference")
-async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217, WPS238
+def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217, WPS238
     background_tasks: BackgroundTasks,
     request_fastapi: Request,
     request: InferenceRequest,
@@ -80,27 +81,35 @@ async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, W
     model = _verify_field(request, "model")
     provider = _verify_field(request, "provider")
 
+    if provider == "replicate" and "bark" in model:
+        mdl = PROVIDER_CLASSES[provider](model)
+        output_link = mdl.custom_model_run(model, request.arguments)
+        return JSONResponse(
+            {
+                "get": output_link,
+            },
+        )
+
     user_id = request_fastapi.state.user_id
     user = get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(user.credits if user else 0)
 
-    if provider.split("-")[0] in ["lowest", "highest"]:
-        provider = performance_based_routing(
-            model,
-            provider,
-            model_dao,
+    if provider not in PROVIDER_CLASSES:
+        # Dynamic routing
+        target_metric, metrics_thresholds = parse_endpoint(provider)
+        provider = dynamic_routing(
+            endpoint_dao,
             benchmark_run_dao,
-            datapoint_dao,
+            target_metric,
+            models=(model,),
+            metrics_thresholds=metrics_thresholds,
         )
 
     # TODO: This will fail when it's not a llm
     try:
         messages = request.arguments["messages"]
     except Exception:
-        raise HTTPException(
-            status_code=400,  # noqa: WPS432
-            detail="Invalid input. Messages not in input.",
-        )
+        raise invalid_messages
 
     model_type = _get_model_type(model)
 
@@ -148,22 +157,21 @@ async def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, W
                 for part_dict in response.generator():
                     part_dict["model"] = model
                     part_dict["provider"] = provider
-                    yield f"data: {json.dumps(part_dict)}\n\n"
+                    yield f"data: {json.dumps(part_dict)}\n\n"  # noqa: WPS237
                 background_tasks.add_task(
                     db_operations,
-                    cost_deferred_fn=response.total_cost,
+                    cost=response.total_cost,
                     **db_operations_kwargs,
                 )
 
             return StreamingResponse(stream_and_update_db())
 
         else:
-            background_tasks.add_task(
-                db_operations, cost_deferred_fn=cost, **db_operations_kwargs
-            )
+            background_tasks.add_task(db_operations, cost=cost, **db_operations_kwargs)
 
         response["model"] = model
         response["provider"] = provider
+        response["usage"]["cost"] = cost
         return JSONResponse(response)
 
     """

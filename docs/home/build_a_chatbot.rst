@@ -47,7 +47,6 @@ The example assumes that your API key is stored in the environment variable :cod
             return eval(response.content.decode())["credits"]
 
         def _process_input(self, inp: str, show_credits: bool, show_provider: bool):
-            pre_credits = self._get_credits()
             self._update_message_history(inp)
             response = self._oai_client.chat.completions.create(
                 model=self._model,
@@ -71,7 +70,7 @@ The example assumes that your API key is stored in the environment variable :cod
                 else:
                     continue
             if show_credits:
-                sys.stdout.write("\n(spent {:.6f} credits)".format(pre_credits - self._get_credits()))
+                sys.stdout.write("\n(spent {:.6f} credits)".format(tok.usage['cost']))
             if show_provider:
                 sys.stdout.write("\n(provider: {})".format(model))
 
