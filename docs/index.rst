@@ -6,8 +6,7 @@
   :hidden:
   :maxdepth: -1
 
-  Welcome to the Hub! <self>
-  home/getting_access.rst
+  Welcome to Unify! <self>
   home/make_your_first_request.rst
   home/build_a_chatbot.rst
   home/pricing.rst
@@ -17,8 +16,7 @@
   :maxdepth: -1
   :caption: Concepts
 
-  concepts/models.rst
-  concepts/providers.rst
+  concepts/endpoints.rst
   concepts/benchmarks.rst
   concepts/runtime_routing.rst
 ..  concepts/on_prem_images.rst
