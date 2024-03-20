@@ -15,7 +15,7 @@ from orchestra.tests.utils import (
 )
 
 MODELS = [
-    # "gpt-3.5-turbo@openai", # OpenAI is not in the db seeding script
+    # "gpt-3.5-turbo@openai",
     "llama-2-7b-chat@anyscale",
     "llama-2-7b-chat@deepinfra",
     "llama-2-7b-chat@fireworks-ai",
