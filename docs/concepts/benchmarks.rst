@@ -46,8 +46,6 @@ Computation
 
 To execute the benchmarks, we run three processes periodically from three different regions: **Hong Kong, Belgium and Iowa**. Each one of these processes is triggered every three hours and benchmarks every available endpoint.
 
-To evaluate how endpoints respond to higher-volume traffic, we conduct the benchmarks under two different load scenarios: **1 single request and 20 concurrent requests**.
-
 Accounting for the different input policies, we run a total of 4 benchmarks for each endpoint every time a region benchmark is triggered.
 
 

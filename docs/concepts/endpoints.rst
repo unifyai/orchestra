@@ -1,19 +1,19 @@
-Endpoints
+Model Endpoints
 =========
 
 Unify lets you query model endpoints across providers. In this section, we explain what an endpoint is and how it relates to the concepts of models and providers.
 
-What is an Endpoint?
---------------------
+What is a Model Endpoint?
+-------------------------
 
-An endpoint is an API that acts as an interface to interact with a model. Endpoints, particularly LLM endpoints, play a critical role in integrating models into AI applications and deploying them at scale.  
+A model endpoint is a model instance hosted by a provider that lets you interact with the model through an API. Model endpoints, particularly LLM endpoints, play a critical role in integrating models into AI applications and deploying them at scale.  
 
-A model can be offered by different endpoint providers who compete to deliver the best performance. There's loads of ways to categorize providers, and the boundaries can sometimes be blurry as services overlap; but you can think of a provider as an end-to-end deployment stack that comes with unique sets of features, performance, pricing, and so on. This makes switching between providers difficult as deployment needs evolve. 
+A model can be offered by different providers through one or multiple endpoints. There's loads of ways to categorize providers, and the boundaries can sometimes be blurry as services overlap; but you can think of a provider as an end-to-end deployment stack that comes with unique sets of features, performance, pricing, and so on. While positive, this diversity also makes it difficult to find the most suitable endpoint as offerings change. 
 
 .. note::
   Check out our blog post on `cloud serving <https://unify.ai/blog/cloud-model-serving>`_ if you'd like to learn more about providers.
 
-Unify exposes an HTTP endpoint for every individual provider, allowing you to query any of them using a **consistent request format, and the same API key**. This lets you use the same model across multiple endpoints, and optimize the performance metrics you care about.
+Unify exposes a common HTTP endpoint for all providers, allowing you to query any of them using a **consistent request format, and the same API key**. This lets you use the same model across multiple endpoints, and optimize the performance metrics you care about.
 
 Available Endpoints
 -------------------

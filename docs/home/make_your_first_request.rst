@@ -90,7 +90,7 @@ name should have the format :code:`<uploaded_by>/<model_name>@<provider_name>`.
 For example, if :code:`john_doe` uploads a :code:`llama-2-70b-chat` model and we want to query the endpoint that has been deployed in replicate, we would have to use :code:`john_doe/llama-2-70b-chat@replicate` as the model id in the OpenAI API. In this case, there is no username, so we will
 simply use :code:`llama-2-70b-chat@replicate`.
 
-This is again just an HTTP endpoint, so you can query it using any language, like **cURL**:
+This is again just an HTTP endpoint, so you can query it using any language or tool. For example, **cURL**:
 
 .. code-block:: bash
 

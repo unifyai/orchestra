@@ -2,8 +2,7 @@ Endpoints
 =========
 
 Welcome to the Endpoints API reference!
-This page is your go-to resource when it comes to learning about the different endpoints that allow you to
-interact with the API.
+This page is your go-to resource when it comes to learning about the different Unify API endpoints you can interact with.
 
 .. note::
   To use the endpoints you will need an API Key. If you don't have one yet, you can go through the instructions in
