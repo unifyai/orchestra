@@ -51,6 +51,7 @@ INSERT INTO task VALUES ('dummy_task', 'dummy_modality');
 INSERT INTO model VALUES (1, 'llama-2-7b-chat', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
 INSERT INTO model VALUES (3, 'mistral-7b-instruct-v0.2', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
 INSERT INTO model VALUES (6, 'llama-2-13b-chat', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
+INSERT INTO model VALUES (7, 'gpt-3.5-turbo', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
 INSERT INTO endpoint VALUES (1, 1, 2, NOW());
 INSERT INTO endpoint VALUES (2, 1, 3, NOW());
 INSERT INTO endpoint VALUES (3, 1, 4, NOW());
@@ -62,6 +63,7 @@ INSERT INTO endpoint VALUES (8, 3, 9, NOW());
 INSERT INTO endpoint VALUES (9, 3, 10, NOW());
 INSERT INTO endpoint VALUES (10, 6, 11, NOW());
 INSERT INTO endpoint VALUES (11, 3, 11, NOW());
+INSERT INTO endpoint VALUES (15, 7, 1, NOW());
 
 -- Runtime Dynamic routing
 INSERT INTO model VALUES (4, 'pbr-model', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
