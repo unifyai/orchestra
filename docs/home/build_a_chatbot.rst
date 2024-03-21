@@ -125,11 +125,8 @@ The example assumes that your API key is stored in the environment variable :cod
 Let's Chat!
 -----------
 
-Provided our environment variable :code:`UNIFY_KEY` is set correctly,
-we can now simply instantiate this agent and chat with it, using the format
-:code:`<uploaded_by>/<model_name>@<provider_name>` as per the `OpenAI API Format
-<https://unify.ai/docs/hub/home/make_your_first_request.html#using-the-openai-api-format>`_,
-like so:
+Provided our environment variable :code:`UNIFY_KEY` is set correctly, we can now simply instantiate this agent and chat with it, using the format
+:code:`<model_name>@<provider_name>`, like so:
 
 .. code-block:: python
 
@@ -148,9 +145,7 @@ This will start an interactive session, where you can converse with the model:
     > Your memory is astounding
      Thank you! I'm glad to hear that.
 
-We also included an option to print the credits spent after each interaction in the
-simple model above. This option is set in the constructor,
-but it can be overwritten during the run command, as follows:
+You can also see how many credits your prompt used. This option is set in the constructor, but it can be overwritten during the run command, as follows:
 
 .. code-block:: python
 
@@ -165,9 +160,9 @@ Each response from the chatbot will then be appended with the credits spent:
      The capital of Spain is Madrid.
     (spent 0.000014 credits)
 
-You can also switch the provider half-way through the conversation easily.
-We can start with a small model for answering simple questions, such as fact recall,
-and then move to a larger model for a more complex task, such as creative writing.
+Finally, you can switch providers half-way through the conversation easily. This can be useful to handle prompt of varying complexity.
+
+For examplen we can start with a small model for answering simple questions, such as recalling facts, and then move to a larger model for a more complex task, such as creative writing.
 
 .. code-block:: python
 
@@ -187,7 +182,7 @@ and then move to a larger model for a more complex task, such as creative writin
 
 .. code-block:: python
 
-    agent.model = "llama-2-70b-chat@anyscale"
+    agent.model = "gpt-4-turbo@openai"
     agent.run(show_credits=True)
 
 .. code-block::
@@ -222,11 +217,9 @@ and then move to a larger model for a more complex task, such as creative writin
     In Lisbon, a city that would forever bear your name.
     (spent 0.000260 credits)
 
-Switching between providers mid-conversation makes it much easier to maximize quality,
-maximize runtime performance based on the latest metrics, and also save on costs!
+Switching between providers mid-conversation makes it much easier to maximize quality and runtime performance based on the latest metrics, and also save on costs!
 
-In fact, optimizing for metrics can be done automatically with our
-`dynamic routing modes <https://unify.ai/docs/hub/concepts/runtime_routing.html#available-modes>`_.
+In fact, you can automatically optimize for a metric of your choice with our `dynamic routing modes <https://unify.ai/docs/hub/concepts/runtime_routing.html#available-modes>`_.
 
 For example, you can optimize for speed as follows:
 
@@ -235,7 +228,4 @@ For example, you can optimize for speed as follows:
     agent.model = "llama-2-70b-chat@highest-tks-per-sec"
     agent.run(show_provider=True)
 
-The flag :code:`show_provider` ensures that the specific provider is printed at the end
-of each response. For example, sometimes :code:`anyscale` might be the fastest,
-and at other times it might be :code:`together-ai` or :code:`fireworks-ai`.
-This flag enables you to keep track of what provider is being used under the hood.
+The flag :code:`show_provider` ensures that the specific provider is printed at the end of each response. For example, sometimes :code:`anyscale` might be the fastest, and at other times it might be :code:`together-ai` or :code:`fireworks-ai`. This flag enables you to keep track of what provider is being used under the hood.
