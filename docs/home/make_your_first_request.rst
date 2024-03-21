@@ -1,30 +1,23 @@
 Make your First Request
 =======================
 
-Before starting to make requests, you will need two things:
+To make a request, you will need a:
 
-#. **A Unify API Key**. If you don't have one yet, you can follow the instructions in
-   `Getting Access <https://unify.ai/docs/hub/home/getting_access.html>`_ to generate it.
+#. **Unify API Key**. If you don't have one yet, you can follow `here <https://unify.ai/docs/hub/home/getting_access.html>`_ to get yours.
 
-#. **A model ID**. You can find the model you want to query using the
-   `Hub web interface. <https://unify.ai/hub>`_ For this example, we will use the :code:`llama-2-70b-chat`
-   model, hosted in :code:`anyscale`. We (Unify) are managing this model, so we can refer to it using only its
-   name (as explained `here! <https://unify.ai/docs/hub/concepts/models.html>`_)
+#. **Model and Provider ID**. Used to identify an endpoint. You can find both in the `benchmark interface. <https://unify.ai/hub>`_ 
+
+For this example, we'll use the :code:`llama-2-70b-chat` model, hosted on :code:`anyscale`. We grabbed both IDs from the corresponding `model page <https://unify.ai/hub/llama-2-70b-chat>`_
 
 Using the :code:`inference` Endpoint
 ------------------------------------
 
-All models, independently of the task, can be queried through the :code:`inference` endpoint. The API reference for this is
-`here. <https://unify.ai/docs/hub/reference/endpoints.html#post-query>`_
-
-In this case, you will have to specify the :code:`model` and the :code:`provider` that you want to use. In our case,
-this are :code:`llama-2-70b-chat` and :code:`anyscale`. Additionaly, you'll have to pass the model :code:`arguments`.
-For each model, the available :code:`arguments` may vary, you can always double check them in the corresponding model page.
+All models can be queried through the :code:`inference` endpoint, which requires a :code:`model`, :code:`provider`, and model :code:`arguments` that may vary across models. 
 
 In the header, you will need to include the **Unify API Key** that is associated with your account.
 
 .. note::
-    This is just an HTTP POST request, you can interact with the Hub using your preferred language!
+    Like any HTTP POST request, you can interact with the API using your preferred language!
 
 Using **cURL**, the request would look like this:
 
@@ -84,20 +77,20 @@ If you are using **Python**, you can use the :code:`requests` library to query t
     else:
         print(response.text)
 
+Check out the API reference `here. <https://unify.ai/docs/hub/reference/endpoints.html#post-query>`_ to learn more.
 
 Using the OpenAI API Format
 ---------------------------
 
 We also support the OpenAI API format for :code:`text-generation` models. More specifically, the :code:`/chat/completions` endpoint.
-The docs for this endpoint are available `here. <https://unify.ai/docs/hub/reference/endpoints.html#post-chat-completions>`_
 
 This API format wouldn't normally allow you to choose between providers for a given model. To bypass this limitation, the model
-name should have the format :code:`<uploaded_by>/<model_name>@<provider_name>`. For example, if :code:`john_doe` uploads a
-:code:`llama-2-70b-chat` model and we want to query the endpoint that has been deployed in replicate, we would have to use
-:code:`john_doe/llama-2-70b-chat@replicate` as the model id in the OpenAI API. In this case, there is no username, so we will
+name should have the format :code:`<uploaded_by>/<model_name>@<provider_name>`. 
+
+For example, if :code:`john_doe` uploads a :code:`llama-2-70b-chat` model and we want to query the endpoint that has been deployed in replicate, we would have to use :code:`john_doe/llama-2-70b-chat@replicate` as the model id in the OpenAI API. In this case, there is no username, so we will
 simply use :code:`llama-2-70b-chat@replicate`.
 
-This is again just an HTTP endpoint, so you can query it using **cURL**:
+This is again just an HTTP endpoint, so you can query it using any language or tool. For example, **cURL**:
 
 .. code-block:: bash
 
@@ -115,7 +108,7 @@ This is again just an HTTP endpoint, so you can query it using **cURL**:
             "stream": true
         }'
 
-Or using **Python**:
+Or **Python**:
 
 .. code-block:: python
 
@@ -147,19 +140,17 @@ Or using **Python**:
     else:
         print(response.text)
 
-Or any other language!
+The docs for this endpoint are available `here. <https://unify.ai/docs/hub/reference/endpoints.html#post-chat-completions>`_
 
 Runtime Dynamic Routing
 -----------------------
 
 When making requests, you can also leverage the information from the `benchmarks <https://unify.ai/docs/hub/concepts/benchmarks.html>`_
-to automatically route to the best performing provider for the metric you choose. The results of the 
-benchmarks change over time, so using this routing ensures that you always get the best option without having to monitor the data yourself.
+to automatically route to the best performing provider for the metric you choose. 
 
-You can learn more about about this in the corresponding `page of the docs <https://unify.ai/docs/hub/concepts/runtime_routing.html>`_. 
-To use it, you only need to change the provider name to one of the supported configurations. This includes modes 
-like :code:`lowest-input-cost`, :code:`highest-tks-per-sec` or :code:`lowest-ttft`. You can check out the full list 
-`here <https://unify.ai/docs/hub/concepts/runtime_routing.html#available-modes>`_.
+Benchmark values change over time, so dynamically routing ensures you always get the best option without having to monitor the data yourself.
+
+To use the router, you only need to change the provier name to one of the supported configurations, including :code:`lowest-input-cost`, :code:`highest-tks-per-sec` or :code:`lowest-ttft`. You can check out the full list `here <https://unify.ai/docs/hub/concepts/runtime_routing.html#available-modes>`_.
 
 If you are using the :code:`chat/completions` endpoint, this will look like:
 
@@ -194,6 +185,8 @@ If you are using the :code:`chat/completions` endpoint, this will look like:
     else:
         print(response.text)
 
+You can learn more about about dynamic routing in the corresponding `page of the docs <https://unify.ai/docs/hub/concepts/runtime_routing.html>`_.
+
 Compatible Tools
 ----------------
 
@@ -202,8 +195,7 @@ Thanks to the OpenAI-compatible endpoint, you can easily integrate with lots of 
 OpenAI SDK
 **********
 
-If your code is using the `OpenAI SDK <https://github.com/openai/openai-python>`_, you can switch to the Hub
-endpoints by simply configuring the OpenAI Client like this:
+If your code is using the `OpenAI SDK <https://github.com/openai/openai-python>`_, you can switch to the Unify endpoints by simply configuring the OpenAI Client like this:
 
 .. code-block:: python
 
