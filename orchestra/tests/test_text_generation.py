@@ -17,6 +17,17 @@ from orchestra.tests.utils import (
 MODELS = [
     # "gpt-3.5-turbo@openai",
     "claude-3-haiku@anthropic",
+    "llama-2-7b-chat@anyscale",
+    "llama-2-7b-chat@deepinfra",
+    "llama-2-7b-chat@fireworks-ai",
+    "llama-2-7b-chat@lepton-ai",
+    "llama-2-7b-chat@replicate",
+    "llama-2-7b-chat@together-ai",
+    "llama-2-13b-chat@aws-bedrock",
+    "mistral-7b-instruct-v0.2@aws-bedrock",
+    "mistral-7b-instruct-v0.2@mistral-ai",
+    "mistral-7b-instruct-v0.2@octoai",
+    "mistral-7b-instruct-v0.2@perplexity-ai",
 ]
 
 payload_fn = {
