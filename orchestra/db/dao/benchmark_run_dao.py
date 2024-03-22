@@ -101,7 +101,12 @@ class BenchmarkRunDAO:
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())
 
-    def get_model_benchmark_datapoints(self, model_id):
+    def get_model_benchmark_datapoints(
+        self,
+        model_id,
+        region="Belgium",
+        seq_len="short",
+    ):
         """
         Gets the latest benchmark run for each provider for a given model.
         """
@@ -113,8 +118,8 @@ class BenchmarkRunDAO:
             .join(Endpoint, BenchmarkRun.endpoint_id == Endpoint.id)
             .where(Endpoint.mdl_id == model_id)
             .where(BenchmarkRun.regime == "concurrent-1")
-            .where(BenchmarkRun.region == "Belgium")
-            .where(BenchmarkRun.seq_len == "short")
+            .where(BenchmarkRun.region == region)
+            .where(BenchmarkRun.seq_len == seq_len)
             .group_by(BenchmarkRun.endpoint_id)
             .alias("latest_benchmark_runs")
         )

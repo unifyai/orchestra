@@ -10,6 +10,7 @@ from orchestra.web.api import (  # noqa: WPS235
     monitoring,
     provider,
     users,
+    benchmarks,
 )
 from orchestra.web.api.dependencies import auth_admin_key, auth_api_key
 
@@ -30,6 +31,9 @@ api_router.include_router(
 )
 api_router.include_router(
     provider.router, prefix="/admin", tags=["provider"], dependencies=ADMIN_AUTH
+)
+api_router.include_router(
+    benchmarks.router, tags=["benchmarks"], dependencies=API_KEY_AUTH
 )
 api_router.include_router(
     inference.router,
