@@ -1,13 +1,14 @@
 import logging
 import time
-from typing import Dict, List, Any
+from typing import Any, List
+
 import anthropic
-from orchestra.web.api.utils.http_responses import server_error_with_digest
 from providers.completion.base_completion_provider import (
-    AsyncGeneratorWrapper,
     BaseCompletionProvider,
     SyncGeneratorWrapper,
 )
+
+from orchestra.web.api.utils.http_responses import server_error_with_digest
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +61,12 @@ class Anthropic(BaseCompletionProvider):
 
     def __call__(self, messages: List, stream: bool = False, **kwargs: Any) -> Any:
         try:
+            max_tokens = kwargs.pop("max_tokens", 1024)
             response = self.client.messages.create(
                 messages=messages,
                 model=self.provider_endpoint,
                 stream=stream,
+                max_tokens=max_tokens,
                 **kwargs,
             )
             if stream:
