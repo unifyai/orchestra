@@ -15,12 +15,5 @@ Getting Started
 To start querying our endpoints, generate a Unify API key by :code:`Signing Up` through the `console <https://console.unify.ai/>`_ . Grab your key through the dashboard, and let's see how you can `make your first request! <https://unify.ai/docs/hub/home/make_your_first_request.html>`_
 
 .. note::
-    If you encounter any issue creating an account or getting a key, please get in touch with us on
-    `Discord <https://discord.com/invite/sXyFF8tDtm>`_ or via :code:`hub@unify.ai` and we'll look into it asap 🏃‍♂️
-
-Feedback and Feature Requests
------------------------------
-
-We'd love to hear from you! If you have any suggestion, feature you'd like to see, or anything you think can be improved, please feel free to 
-.. raw:: html 
-  <button style="color: green;" onclick="appzi && appzi.openSurvey('8df9109d-8109-422c-8c8b-eb967bd2e6c8')">leave your feedback</button>.
+    If you encounter any issue, have any suggestion, feature you'd like to see, or anything you think can be improved please get in touch with us on
+    `Discord <https://discord.com/invite/sXyFF8tDtm>`_ or via :code:`hub@unify.ai`
