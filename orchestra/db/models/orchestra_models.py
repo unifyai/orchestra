@@ -193,6 +193,7 @@ class Recharge(Base):
     user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
     quantity = sa.Column(sa.Numeric(), nullable=False)
     type = sa.Column(sa.String(), sa.ForeignKey("recharge_type.type"), nullable=False)
+    transaction_id = sa.Column(sa.String(), nullable=True)
 
 
 class RechargeType(Base):

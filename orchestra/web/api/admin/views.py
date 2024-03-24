@@ -1,7 +1,7 @@
 import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
@@ -627,7 +627,7 @@ def create_provider_model(
     )
 
 
-@router.put("/create_recharge")
+@router.post("/create_recharge")
 def create_recharge_model(
     new_recharge_object: RechargeModelRequest,
     recharge_dao: RechargeDAO = Depends(),
@@ -640,6 +640,16 @@ def create_recharge_model(
     :param recharge_dao: DAO for recharge models.
     :param user_dao: DAO for user models.
     """
+
+    if (
+        new_recharge_object.type == "payment"
+        and new_recharge_object.transaction_id is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Transaction id must be specified when adding a payment.",
+        )
+
     at = datetime.datetime.now()
     user_dao.recharge_credit(
         user_id=new_recharge_object.user_id,
@@ -651,6 +661,7 @@ def create_recharge_model(
         user_id=new_recharge_object.user_id,
         quantity=new_recharge_object.quantity,
         type=new_recharge_object.type,
+        transaction_id=new_recharge_object.transaction_id,
     )
 
 
