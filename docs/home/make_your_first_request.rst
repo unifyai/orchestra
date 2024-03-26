@@ -3,7 +3,7 @@ Make your First Request
 
 To make a request, you will need a:
 
-#. **Unify API Key**. If you don't have one yet, you can follow `here <https://unify.ai/docs/hub/home/getting_access.html>`_ to get yours.
+#. **Unify API Key**. If you don't have one yet, log in to the `console <https://console.unify.ai/>`_ to get yours.
 
 #. **Model and Provider ID**. Used to identify an endpoint. You can find both in the `benchmark interface. <https://unify.ai/hub>`_ 
 
