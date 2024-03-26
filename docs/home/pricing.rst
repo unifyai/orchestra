@@ -3,14 +3,14 @@ Pricing and Credits
 
 Credits are consumed when using the API. Each credit corresponds to 1 USD and there are **no charges on top of provider costs**; as a result, consumed credits directly reflect the cost of a request.
 
-We’re currently integrating a payment system to purchase additional credits. Meanwhile, we’re granting each user an equivalent of up to $5 in free credits per week.
+We’re currently integrating a payment system to purchase additional credits. Meanwhile, we’re granting each user the equivalent to $50 in free credits when creating an account.
 
 You will soon be able to check this out properly in a dashboard. In the meantime, you can query the `Get Credits Endpoint <https://unify.ai/docs/hub/reference/endpoints.html#get-credits>`_ of the API to get your current credit balance.
 
 Top-up Code
 -----------
 
-You may have received a code to increase your number of free weekly credits, if that's the case, you can
+You may have received a code to increase your number credits, if that's the case, you can
 activate it doing a request to this endpoint:
 
 .. code-block:: bash
