@@ -44,6 +44,7 @@ def credits_code(
     :param users_dao: DAO for users models.
     :return: user instance with credits from database.
     """
+    qty = 50
     promo_codes = [
         "HACKERNEWS",
         "DEEPDIVE",
@@ -79,12 +80,11 @@ def credits_code(
     if any(pr.type in promo_codes for pr in prev_recharges):
         return CreditsCodeResponse(msg="You have already used a promo code!")
 
-    # recharge 2.5
     recharge_dao.create_recharge(
         at=datetime.datetime.now(),
         user_id=user_id,
-        quantity=10,
+        quantity=qty,
         type=code,
     )
-    users_dao.recharge_credit(user_id, 10)
+    users_dao.recharge_credit(user_id, qty)
     return CreditsCodeResponse(msg=f"Code {code} activated succesfully!")

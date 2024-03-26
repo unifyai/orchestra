@@ -28,12 +28,11 @@ def recharge_credits():  # noqa: D103, WPS210
         recharge_quantity = 2.5  # TODO: add this to the user table
         max_recharge = 10.0  # TODO: add this to the user table
         for user in all_users:
-            if user.credits >= max_recharge:
+            recharge_qty = min(recharge_quantity, max_recharge - float(user.credits))
+
+            if user.credits >= max_recharge or recharge_qty <= 0:
                 continue
-            recharge_qty = min(
-                recharge_quantity,
-                max_recharge - float(user.credits),
-            )
+
             recharge_obj = RechargeModelRequest(
                 user_id=user.id,
                 quantity=recharge_qty,
