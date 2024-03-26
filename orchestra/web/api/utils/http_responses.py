@@ -13,7 +13,7 @@ invalid_model_str = HTTPException(
     status_code=status.HTTP_400_BAD_REQUEST,
     detail=(
         "Invalid model. The expected format is <model-id>@<provider>. "
-        "See https://unify.ai/docs/hub/concepts/models.html "
+        "See https://unify.ai/docs/hub/reference/endpoints.html#post-chat-completions "
         "for more information."
     ),
 )

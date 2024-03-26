@@ -6,7 +6,7 @@ This page is your go-to resource when it comes to learning about the different U
 
 .. note::
   To use the endpoints you will need an API Key. If you don't have one yet, you can go through the instructions in
-  `this page <https://unify.ai/docs/hub/home/home.html>`_.
+  `this page <https://unify.ai/docs/hub/index.html>`_.
 
 -----
 
