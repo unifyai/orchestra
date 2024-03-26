@@ -11,6 +11,7 @@ This directory holds the DAOs and the models of the orchestra/model hub database
 - [Google Cloud Infrastructure (GCP)](#google-cloud-infrastructure-gcp)
 - [Sync staging DB (GCP)](#sync-staging-db-gcp)
 - [Initial Credit Grant](#initial-credit-grant)
+- [Recurring Credit Grant](#recurring-credit-grant)
 
 <!-- /TOC -->
 
