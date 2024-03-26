@@ -10,6 +10,8 @@ This directory holds the DAOs and the models of the orchestra/model hub database
     - [Reverting migrations](#reverting-migrations)
 - [Google Cloud Infrastructure (GCP)](#google-cloud-infrastructure-gcp)
 - [Sync staging DB (GCP)](#sync-staging-db-gcp)
+- [Initial Credit Grant](#initial-credit-grant)
+- [Recurring Credit Grant](#recurring-credit-grant)
 
 <!-- /TOC -->
 
@@ -67,3 +69,27 @@ Both databases (orchestra and orchestra-staging) live in GCP within the [dev](ht
 ## Sync staging DB (GCP)
 
 The staging db is synced with the production database once per week. If you need to sync the latests updates, you can run [this Cloud Run Job](https://console.cloud.google.com/run/jobs/details/europe-west1/orchestra-staging-sync/executions?project=saas-368716) manually.
+
+## Initial Credit Grant
+
+When a user is added to the `users` database, a function `update_orchestra_users` is triggered to copy this user to the `orchestra` database, adding a new entry in the `users` table, with a certain number of credits.
+
+To change the amount, you need to connect to the `user` database. To do this, connect to the db as `postgres` and then connect to the `user` database.
+
+```bash
+
+gcloud sql connect dev --user=postgres
+\c user
+
+```
+
+Once there, you can run `\df` to list active functions. you should see `update_orchestra_users` there. To modify it:
+- Use `\ef update_orchestra_users`
+- Select your preferred text editor
+- Change the number
+- Save the file
+- Execute `\g` in the psql terminal
+
+## Recurring credit grant
+
+Recurring credit grants is controlled through a Job in Cloud run called `orchestra-recharging`. If active, there will be a trigger associated with the job. The script that is executed is `recharging.py`.
