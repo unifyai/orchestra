@@ -71,7 +71,7 @@ def credits_code(
         "DECODINGDATASCIENCE",
     ]
     if code not in promo_codes:
-        return CreditsCodeResponse(msg="Invalid code.")
+        raise HTTPException(status_code=404, detail="Invalid code.")
 
     user_id = request_fastapi.state.user_id
     if user is not None:
@@ -83,10 +83,10 @@ def credits_code(
     prev_recharges = recharge_dao.filter(user_id=user_id)
 
     if any(pr.type == code for pr in prev_recharges):
-        return CreditsCodeResponse(msg="This code is already activated!")
+        raise HTTPException(status_code=400, detail="This code has already been activated.")
 
     if any(pr.type in promo_codes for pr in prev_recharges):
-        return CreditsCodeResponse(msg="You have already used a promo code!")
+        raise HTTPException(status_code=400, detail="You have already used a promo code!")
 
     recharge_dao.create_recharge(
         at=datetime.datetime.now(),
