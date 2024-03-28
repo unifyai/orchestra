@@ -18,6 +18,17 @@ invalid_model_str = HTTPException(
     ),
 )
 
+invalid_provider_str = HTTPException(
+    status_code=status.HTTP_400_BAD_REQUEST,
+    detail=(
+        "Invalid provider. It must be a valid provider name or a valid metric "
+        "configuration for dynamic routing."
+        "See https://unify.ai/docs/hub/concepts/endpoints.html and "
+        "https://unify.ai/docs/hub/concepts/runtime_routing.html "
+        "for more information."
+    ),
+)
+
 invalid_messages = HTTPException(
     status_code=status.HTTP_400_BAD_REQUEST,
     detail="Invalid input. Messages not in input.",

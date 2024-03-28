@@ -13,6 +13,7 @@ from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.web.api.utils.http_responses import (  # invalid_optimisation_goal,; invalid_price_threshold,
     provider_not_found_under_conditions,
     server_error_with_digest,
+    invalid_provider_str,
 )
 
 logger = logging.getLogger(__name__)
@@ -22,10 +23,12 @@ def metric_aliases(metric):
     return {
         "ic": "input_cost_per_token",
         "input-cost": "input_cost_per_token",
+        "input-cost-per-token": "input_cost_per_token",
         "lowest-input-cost": "input_cost_per_token",
         "lowest-input-cost-per-token": "input_cost_per_token",
         "oc": "output_cost_per_token",
         "output-cost": "output_cost_per_token",
+        "output-cost-per-token": "output_cost_per_token",
         "lowest-output-cost": "output_cost_per_token",
         "lowest-output-cost-per-token": "output_cost_per_token",
         "ots": "itl",
@@ -34,8 +37,10 @@ def metric_aliases(metric):
         "output-tks-per-sec": "itl",
         "highest-output-tks-per-sec": "itl",
         "lowest-itl": "itl",
+        "itl": "itl",
         "lowest-ttft": "ttft",
-    }.get(metric, metric)
+        "ttft": "ttft",
+    }.get(metric, None)
 
 
 Endpoint = namedtuple(
@@ -220,6 +225,8 @@ def parse_endpoint(endpoint: str):
         thresholds[metric] = value
 
     main_metric = metric_aliases(main_metric)
+    if main_metric is None:
+        raise invalid_provider_str
     thresholds = standarise_thresholds(thresholds)
 
     return main_metric, thresholds
