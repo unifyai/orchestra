@@ -62,6 +62,8 @@ def test_valid_performance_based_routing(  # type: ignore[return]
         "lowest-output-cost": "lowest-output-cost-per-token",
         "highest-tks-per-sec": "lowest-itl",
         "highest-output-tks-per-sec": "lowest-itl",
+        "itl": "lowest-itl",
+        "ttft": "lowest-ttft",
     }.get(provider, provider)
 
     assert selected_provider == f"{expected_provider + price_threshold}-provider"
