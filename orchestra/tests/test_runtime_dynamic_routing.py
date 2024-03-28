@@ -4,7 +4,10 @@ from fastapi import HTTPException
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.web.api.utils.dynamic_routing import dynamic_routing, parse_endpoint
-from orchestra.web.api.utils.http_responses import provider_not_found_under_conditions
+from orchestra.web.api.utils.http_responses import (
+    provider_not_found_under_conditions,
+    invalid_provider_str,
+)
 
 # TODO: Add test for same value in metric
 
@@ -14,9 +17,11 @@ TEST_VALID_CONFIGS = [
     "lowest-input-cost-per-token",
     "lowest-output-cost-per-token",
     "lowest-itl",
+    "itl",
     "highest-tks-per-sec",
     "highest-output-tks-per-sec",
     "lowest-ttft",
+    "ttft",
 ]
 
 TEST_VALID_PRICE_THRESHOLDS = [
@@ -57,6 +62,8 @@ def test_valid_performance_based_routing(  # type: ignore[return]
         "lowest-output-cost": "lowest-output-cost-per-token",
         "highest-tks-per-sec": "lowest-itl",
         "highest-output-tks-per-sec": "lowest-itl",
+        "itl": "lowest-itl",
+        "ttft": "lowest-ttft",
     }.get(provider, provider)
 
     assert selected_provider == f"{expected_provider + price_threshold}-provider"
@@ -134,3 +141,13 @@ def test_no_models_within_threshold(dbsession) -> str:  # type: ignore[return]
         )
     assert err.value.status_code == provider_not_found_under_conditions.status_code
     assert err.value.detail == provider_not_found_under_conditions.detail
+
+
+def test_invalid_provider(dbsession) -> str:  # type: ignore[return]
+    endpoint_dao = EndpointDAO(dbsession)
+    benchmark_run_dao = BenchmarkRunDAO(dbsession)
+
+    with pytest.raises(HTTPException) as err:
+        target_metric, metrics_thresholds = parse_endpoint("dog")
+    assert err.value.status_code == invalid_provider_str.status_code
+    assert err.value.detail == invalid_provider_str.detail

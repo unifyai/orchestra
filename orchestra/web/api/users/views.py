@@ -78,15 +78,21 @@ def credits_code(
         if len(users_dao.filter(id=user)) > 0:
             user_id = user
         else:
-            raise HTTPException(status_code=404, detail="The specified user id doesn't exist.")
+            raise HTTPException(
+                status_code=404, detail="The specified user id doesn't exist."
+            )
 
     prev_recharges = recharge_dao.filter(user_id=user_id)
 
     if any(pr.type == code for pr in prev_recharges):
-        raise HTTPException(status_code=400, detail="This code has already been activated.")
+        raise HTTPException(
+            status_code=400, detail="This code has already been activated."
+        )
 
     if any(pr.type in promo_codes for pr in prev_recharges):
-        raise HTTPException(status_code=400, detail="You have already used a promo code!")
+        raise HTTPException(
+            status_code=400, detail="You have already used a promo code!"
+        )
 
     recharge_dao.create_recharge(
         at=datetime.datetime.now(),
