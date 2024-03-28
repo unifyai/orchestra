@@ -1,7 +1,7 @@
 import datetime
-from typing import Union
+from typing import Optional, Union
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.recharge_dao import RechargeDAO
@@ -32,6 +32,7 @@ def get_credits(
 def credits_code(
     request_fastapi: Request,
     code: str,
+    user: Optional[str] = None,
     recharge_dao: RechargeDAO = Depends(),
     users_dao: UsersDAO = Depends(),
 ) -> Union[CreditsCodeResponse, None]:
@@ -66,11 +67,18 @@ def credits_code(
         "ALUMNI",
         "LAUNCHBF",
         "AIFurnace",
+        "E2E",
+        "DECODINGDATASCIENCE",
     ]
     if code not in promo_codes:
         return CreditsCodeResponse(msg="Invalid code.")
 
     user_id = request_fastapi.state.user_id
+    if user is not None:
+        if len(users_dao.filter(id=user)) > 0:
+            user_id = user
+        else:
+            raise HTTPException(status_code=404, detail="The specified user id doesn't exist.")
 
     prev_recharges = recharge_dao.filter(user_id=user_id)
 
