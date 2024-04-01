@@ -758,3 +758,67 @@ def update_datapoint(  # noqa: WPS211
         tooltip=tooltip,
         measured_at=measured_at,
     )
+
+
+@router.put("/stripe_customer_id")
+def update_user_stripe_customer_id(  # noqa: WPS211
+    id: str,  # noqa: WPS125
+    stripe_customer_id: str,
+    users_dao: UsersDAO = Depends(),
+) -> None:
+    """
+    Update the stripe customer id of a user.
+
+    :param id: id of the user to be updated.
+    :param stripe_customer_id: stripe customer id.
+    :param users_dao: DAO for users models.
+    """
+    users_dao.set_stripe_customer_id(user_id=id, stripe_id=stripe_customer_id)
+
+
+@router.put("/enable_autorecharge")
+def update_user_autorecharge(  # noqa: WPS211
+    id: str,  # noqa: WPS125
+    enable: bool,
+    users_dao: UsersDAO = Depends(),
+) -> None:
+    """
+    Update the autorecharge status of a user.
+
+    :param id: id of the user to be updated.
+    :param enable: whether to enable or disable autorecharge.
+    :param users_dao: DAO for users models.
+    """
+    users_dao.enable_autorecharge(user_id=id, enable=enable)
+
+
+@router.put("/autorecharge_threshold")
+def update_user_autorecharge_threshold(  # noqa: WPS211
+    id: str,  # noqa: WPS125
+    threshold: float,
+    users_dao: UsersDAO = Depends(),
+) -> None:
+    """
+    Update the autorecharge threshold of a user.
+
+    :param id: id of the user to be updated.
+    :param threshold: new autorecharge threshold.
+    :param users_dao: DAO for users models.
+    """
+    users_dao.set_autorecharge_threshold(user_id=id, threshold=threshold)
+
+
+@router.put("/autorecharge_qty")
+def update_user_autorecharge_qty(  # noqa: WPS211
+    id: str,  # noqa: WPS125
+    qty: float,
+    users_dao: UsersDAO = Depends(),
+) -> None:
+    """
+    Update the autorecharge quantity of a user.
+
+    :param id: id of the user to be updated.
+    :param qty: new autorecharge quantity.
+    :param users_dao: DAO for users models.
+    """
+    users_dao.set_autorecharge_qty(user_id=id, qty=qty)
