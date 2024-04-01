@@ -30,6 +30,10 @@ class UsersDAO:
             Users(
                 id=id,
                 credits=credits,
+                stripe_customer_id=None,
+                autorecharge=False,
+                autorecharge_threhsold=-1,
+                autoreharge_qty=0,
             ),
         )
 
@@ -81,3 +85,81 @@ class UsersDAO:
                 "credits",
                 user.credits + decimal.Decimal(quantity),
             )
+
+    def set_stripe_customer_id(
+        self,
+        user_id: str,
+        stripe_id: str,
+    ) -> None:
+        """
+        Modify the stripe customer id of a user.
+
+        :param user_id: id of a user.
+        :param stripe_id: stripe customer id of a user.
+        """
+        query = select(Users)
+        query = query.where(Users.id == user_id)
+
+        raw_users = self.session.execute(query)
+        user = raw_users.scalars().first()
+        if user is not None:
+            setattr(user, "stripe_customer_id", stripe_id)  # noqa: B010
+
+    def enable_autorecharge(
+        self,
+        user_id: str,
+        enable: bool,
+    ) -> None:
+        """
+        Enable/disable autorecharge for a user.
+
+        :param user_id: id of a user.
+        :param enable: whether to enable (true) or disable (false) autorecharge.
+        """
+        query = select(Users)
+        query = query.where(Users.id == user_id)
+
+        raw_users = self.session.execute(query)
+        user = raw_users.scalars().first()
+        if user is not None:
+            setattr(user, "autorecharge", enable)  # noqa: B010
+
+    def set_autorecharge_threshold(
+        self,
+        user_id: str,
+        threshold: float,
+    ) -> None:
+        """
+        Modify the autorecharge threshold for a user.
+
+        :param user_id: id of a user.
+        :param threshold: limit quantity of credits before triggering autorecharge.
+        """
+        query = select(Users)
+        query = query.where(Users.id == user_id)
+
+        raw_users = self.session.execute(query)
+        user = raw_users.scalars().first()
+        if user is not None:
+            setattr(
+                user, "autorecharge_threshold", decimal.Decimal(threshold)
+            )  # noqa: B010
+
+    def set_autorecharge_qty(
+        self,
+        user_id: str,
+        qty: float,
+    ) -> None:
+        """
+        Modify the autorecharge quantity for a user.
+
+        :param user_id: id of a user.
+        :param threshold: quantity of credits to be added during autorecharge.
+        """
+        query = select(Users)
+        query = query.where(Users.id == user_id)
+
+        raw_users = self.session.execute(query)
+        user = raw_users.scalars().first()
+        if user is not None:
+            setattr(user, "autorecharge_qty", decimal.Decimal(qty))  # noqa: B010

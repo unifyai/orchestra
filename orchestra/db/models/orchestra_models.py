@@ -181,6 +181,10 @@ class Users(Base):
 
     id = sa.Column(sa.String(), primary_key=True)
     credits = sa.Column(sa.Numeric(), nullable=False)
+    stripe_customer_id = sa.Column(sa.String(), nullable=True)
+    autorecharge = sa.Column(sa.Boolean, nullable=False)
+    autorecharge_threshold = sa.Column(sa.Numeric, nullable=False)
+    autorecharge_qty = sa.Column(sa.Numeric, nullable=False)
 
 
 class Recharge(Base):
