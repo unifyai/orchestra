@@ -179,6 +179,7 @@ class Users(Base):
 
     __tablename__ = "users"
 
+    # IMPORTANT: If any change happens here the DB trigger must be updated as well!
     id = sa.Column(sa.String(), primary_key=True)
     credits = sa.Column(sa.Numeric(), nullable=False)
     stripe_customer_id = sa.Column(sa.String(), nullable=True)

@@ -774,6 +774,7 @@ def update_user_stripe_customer_id(  # noqa: WPS211
     :param users_dao: DAO for users models.
     """
     users_dao.set_stripe_customer_id(user_id=id, stripe_id=stripe_customer_id)
+    users_dao.session.commit()
 
 
 @router.put("/enable_autorecharge")
@@ -790,6 +791,7 @@ def update_user_autorecharge(  # noqa: WPS211
     :param users_dao: DAO for users models.
     """
     users_dao.enable_autorecharge(user_id=id, enable=enable)
+    users_dao.session.commit()
 
 
 @router.put("/autorecharge_threshold")
@@ -806,6 +808,7 @@ def update_user_autorecharge_threshold(  # noqa: WPS211
     :param users_dao: DAO for users models.
     """
     users_dao.set_autorecharge_threshold(user_id=id, threshold=threshold)
+    users_dao.session.commit()
 
 
 @router.put("/autorecharge_qty")
@@ -822,3 +825,4 @@ def update_user_autorecharge_qty(  # noqa: WPS211
     :param users_dao: DAO for users models.
     """
     users_dao.set_autorecharge_qty(user_id=id, qty=qty)
+    users_dao.session.commit()
