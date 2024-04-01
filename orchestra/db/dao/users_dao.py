@@ -104,7 +104,7 @@ class UsersDAO:
         :param user_id: id of a user.
         :param stripe_id: stripe customer id of a user.
         """
-        user = self.get_user_with_id(id)
+        user = self.get_user_with_id(user_id)
         if user is not None:
             setattr(user, "stripe_customer_id", stripe_id)  # noqa: B010
 
