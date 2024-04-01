@@ -66,7 +66,7 @@ class UsersDAO:
 
     def get_user_with_id(self, id: str) -> Users:
         try:
-            return filter(id=id)[0]
+            return self.filter(id=id)[0]
         except IndexError:
             raise user_id_not_found
 
