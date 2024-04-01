@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Users
+from orchestra.web.api.utils.http_responses import user_id_not_found
 
 
 class UsersDAO:
@@ -63,6 +64,12 @@ class UsersDAO:
 
         return list(raw_users.scalars().fetchall())
 
+    def get_user_with_id(self, id: str) -> Users:
+        try:
+            return filter(id=id)[0]
+        except IndexError:
+            raise user_id_not_found
+
     def recharge_credit(
         self,
         user_id: str,
@@ -97,11 +104,7 @@ class UsersDAO:
         :param user_id: id of a user.
         :param stripe_id: stripe customer id of a user.
         """
-        query = select(Users)
-        query = query.where(Users.id == user_id)
-
-        raw_users = self.session.execute(query)
-        user = raw_users.scalars().first()
+        user = self.get_user_with_id(id)
         if user is not None:
             setattr(user, "stripe_customer_id", stripe_id)  # noqa: B010
 
@@ -116,11 +119,7 @@ class UsersDAO:
         :param user_id: id of a user.
         :param enable: whether to enable (true) or disable (false) autorecharge.
         """
-        query = select(Users)
-        query = query.where(Users.id == user_id)
-
-        raw_users = self.session.execute(query)
-        user = raw_users.scalars().first()
+        user = self.get_user_with_id(user_id)
         if user is not None:
             setattr(user, "autorecharge", enable)  # noqa: B010
 
@@ -135,11 +134,7 @@ class UsersDAO:
         :param user_id: id of a user.
         :param threshold: limit quantity of credits before triggering autorecharge.
         """
-        query = select(Users)
-        query = query.where(Users.id == user_id)
-
-        raw_users = self.session.execute(query)
-        user = raw_users.scalars().first()
+        user = self.get_user_with_id(user_id)
         if user is not None:
             setattr(
                 user, "autorecharge_threshold", decimal.Decimal(threshold)
@@ -156,10 +151,6 @@ class UsersDAO:
         :param user_id: id of a user.
         :param threshold: quantity of credits to be added during autorecharge.
         """
-        query = select(Users)
-        query = query.where(Users.id == user_id)
-
-        raw_users = self.session.execute(query)
-        user = raw_users.scalars().first()
+        user = self.get_user_with_id(user_id)
         if user is not None:
             setattr(user, "autorecharge_qty", decimal.Decimal(qty))  # noqa: B010
