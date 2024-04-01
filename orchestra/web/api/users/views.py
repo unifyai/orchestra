@@ -1,7 +1,7 @@
 import datetime
-from typing import Union
+from typing import Optional, Union
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.recharge_dao import RechargeDAO
@@ -32,6 +32,7 @@ def get_credits(
 def credits_code(
     request_fastapi: Request,
     code: str,
+    user: Optional[str] = None,
     recharge_dao: RechargeDAO = Depends(),
     users_dao: UsersDAO = Depends(),
 ) -> Union[CreditsCodeResponse, None]:
@@ -44,6 +45,7 @@ def credits_code(
     :param users_dao: DAO for users models.
     :return: user instance with credits from database.
     """
+    qty = 50
     promo_codes = [
         "HACKERNEWS",
         "DEEPDIVE",
@@ -65,26 +67,38 @@ def credits_code(
         "ALUMNI",
         "LAUNCHBF",
         "AIFurnace",
+        "E2E",
+        "DECODINGDATASCIENCE",
     ]
     if code not in promo_codes:
-        return CreditsCodeResponse(msg="Invalid code.")
+        raise HTTPException(status_code=404, detail="Invalid code.")
 
     user_id = request_fastapi.state.user_id
+    if user is not None:
+        if len(users_dao.filter(id=user)) > 0:
+            user_id = user
+        else:
+            raise HTTPException(
+                status_code=404, detail="The specified user id doesn't exist."
+            )
 
     prev_recharges = recharge_dao.filter(user_id=user_id)
 
     if any(pr.type == code for pr in prev_recharges):
-        return CreditsCodeResponse(msg="This code is already activated!")
+        raise HTTPException(
+            status_code=400, detail="This code has already been activated."
+        )
 
     if any(pr.type in promo_codes for pr in prev_recharges):
-        return CreditsCodeResponse(msg="You have already used a promo code!")
+        raise HTTPException(
+            status_code=400, detail="You have already used a promo code!"
+        )
 
-    # recharge 2.5
     recharge_dao.create_recharge(
         at=datetime.datetime.now(),
         user_id=user_id,
-        quantity=10,
+        quantity=qty,
         type=code,
     )
-    users_dao.recharge_credit(user_id, 10)
+    users_dao.recharge_credit(user_id, qty)
     return CreditsCodeResponse(msg=f"Code {code} activated succesfully!")

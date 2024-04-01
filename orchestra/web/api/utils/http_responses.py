@@ -13,7 +13,18 @@ invalid_model_str = HTTPException(
     status_code=status.HTTP_400_BAD_REQUEST,
     detail=(
         "Invalid model. The expected format is <model-id>@<provider>. "
-        "See https://unify.ai/docs/hub/concepts/models.html "
+        "See https://unify.ai/docs/hub/reference/endpoints.html#post-chat-completions "
+        "for more information."
+    ),
+)
+
+invalid_provider_str = HTTPException(
+    status_code=status.HTTP_400_BAD_REQUEST,
+    detail=(
+        "Invalid provider. It must be a valid provider name or a valid metric "
+        "configuration for dynamic routing."
+        "See https://unify.ai/docs/hub/concepts/endpoints.html and "
+        "https://unify.ai/docs/hub/concepts/runtime_routing.html "
         "for more information."
     ),
 )
