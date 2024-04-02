@@ -1,4 +1,5 @@
 import datetime
+from typing import Optional
 
 from pydantic import BaseModel, PositiveFloat
 
@@ -137,6 +138,7 @@ class RechargeModelRequest(BaseModel):
     user_id: str
     quantity: PositiveFloat
     type: str
+    transaction_id: Optional[str] = None
 
 
 class RechargeTypeModelRequest(BaseModel):

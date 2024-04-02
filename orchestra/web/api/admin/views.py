@@ -1,7 +1,7 @@
 import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
@@ -627,7 +627,7 @@ def create_provider_model(
     )
 
 
-@router.put("/create_recharge")
+@router.post("/create_recharge")
 def create_recharge_model(
     new_recharge_object: RechargeModelRequest,
     recharge_dao: RechargeDAO = Depends(),
@@ -640,6 +640,16 @@ def create_recharge_model(
     :param recharge_dao: DAO for recharge models.
     :param user_dao: DAO for user models.
     """
+
+    if (
+        new_recharge_object.type == "payment"
+        and new_recharge_object.transaction_id is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Transaction id must be specified when adding a payment.",
+        )
+
     at = datetime.datetime.now()
     user_dao.recharge_credit(
         user_id=new_recharge_object.user_id,
@@ -651,6 +661,7 @@ def create_recharge_model(
         user_id=new_recharge_object.user_id,
         quantity=new_recharge_object.quantity,
         type=new_recharge_object.type,
+        transaction_id=new_recharge_object.transaction_id,
     )
 
 
@@ -747,3 +758,71 @@ def update_datapoint(  # noqa: WPS211
         tooltip=tooltip,
         measured_at=measured_at,
     )
+
+
+@router.put("/stripe_customer_id")
+def update_user_stripe_customer_id(  # noqa: WPS211
+    id: str,  # noqa: WPS125
+    stripe_customer_id: str,
+    users_dao: UsersDAO = Depends(),
+) -> None:
+    """
+    Update the stripe customer id of a user.
+
+    :param id: id of the user to be updated.
+    :param stripe_customer_id: stripe customer id.
+    :param users_dao: DAO for users models.
+    """
+    users_dao.set_stripe_customer_id(user_id=id, stripe_id=stripe_customer_id)
+    users_dao.session.commit()
+
+
+@router.put("/enable_autorecharge")
+def update_user_autorecharge(  # noqa: WPS211
+    id: str,  # noqa: WPS125
+    enable: bool,
+    users_dao: UsersDAO = Depends(),
+) -> None:
+    """
+    Update the autorecharge status of a user.
+
+    :param id: id of the user to be updated.
+    :param enable: whether to enable or disable autorecharge.
+    :param users_dao: DAO for users models.
+    """
+    users_dao.enable_autorecharge(user_id=id, enable=enable)
+    users_dao.session.commit()
+
+
+@router.put("/autorecharge_threshold")
+def update_user_autorecharge_threshold(  # noqa: WPS211
+    id: str,  # noqa: WPS125
+    threshold: float,
+    users_dao: UsersDAO = Depends(),
+) -> None:
+    """
+    Update the autorecharge threshold of a user.
+
+    :param id: id of the user to be updated.
+    :param threshold: new autorecharge threshold.
+    :param users_dao: DAO for users models.
+    """
+    users_dao.set_autorecharge_threshold(user_id=id, threshold=threshold)
+    users_dao.session.commit()
+
+
+@router.put("/autorecharge_qty")
+def update_user_autorecharge_qty(  # noqa: WPS211
+    id: str,  # noqa: WPS125
+    qty: float,
+    users_dao: UsersDAO = Depends(),
+) -> None:
+    """
+    Update the autorecharge quantity of a user.
+
+    :param id: id of the user to be updated.
+    :param qty: new autorecharge quantity.
+    :param users_dao: DAO for users models.
+    """
+    users_dao.set_autorecharge_qty(user_id=id, qty=qty)
+    users_dao.session.commit()
