@@ -179,8 +179,13 @@ class Users(Base):
 
     __tablename__ = "users"
 
+    # IMPORTANT: If any change happens here the DB trigger must be updated as well!
     id = sa.Column(sa.String(), primary_key=True)
     credits = sa.Column(sa.Numeric(), nullable=False)
+    stripe_customer_id = sa.Column(sa.String(), nullable=True)
+    autorecharge = sa.Column(sa.Boolean, nullable=False)
+    autorecharge_threshold = sa.Column(sa.Numeric, nullable=False)
+    autorecharge_qty = sa.Column(sa.Numeric, nullable=False)
 
 
 class Recharge(Base):
@@ -193,6 +198,7 @@ class Recharge(Base):
     user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
     quantity = sa.Column(sa.Numeric(), nullable=False)
     type = sa.Column(sa.String(), sa.ForeignKey("recharge_type.type"), nullable=False)
+    transaction_id = sa.Column(sa.String(), nullable=True)
 
 
 class RechargeType(Base):

@@ -39,6 +39,8 @@ alembic revision --autogenerate
 # For empty file generation.
 alembic revision
 ```
+Relevant links:
+- [Migrate non-nullable column](https://stackoverflow.com/a/41026374)
 
 ### Migrate the db
 

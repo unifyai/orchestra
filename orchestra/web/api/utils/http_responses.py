@@ -68,6 +68,10 @@ admin_not_authorized = HTTPException(
     detail="Admin access unauthorized, this incident will be reported.",
 )
 
+user_id_not_found = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND, detail="Specified user-id not found."
+)
+
 provider_not_found_under_conditions = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
     detail="No providers found within the specified thresholds.",
