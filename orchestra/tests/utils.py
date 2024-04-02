@@ -4,10 +4,17 @@ import os
 from typing import Dict
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
+admin_api_key = str(os.getenv("ORCHESTRA_ADMIN_KEY"))
 
 HEADERS = {
     "accept": "application/json",
     "Authorization": f"Bearer {api_key}",
+    "Content-Type": "application/json",
+}
+
+ADMIN_HEADERS = {
+    "accept": "application/json",
+    "Authorization": f"Bearer {admin_api_key}",
     "Content-Type": "application/json",
 }
 

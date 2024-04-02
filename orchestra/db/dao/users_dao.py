@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Users
+from orchestra.web.api.utils.http_responses import user_id_not_found
 
 
 class UsersDAO:
@@ -30,6 +31,10 @@ class UsersDAO:
             Users(
                 id=id,
                 credits=credits,
+                stripe_customer_id=None,
+                autorecharge=False,
+                autorecharge_threhsold=-1,
+                autorecharge_qty=0,
             ),
         )
 
@@ -59,6 +64,12 @@ class UsersDAO:
 
         return list(raw_users.scalars().fetchall())
 
+    def get_user_with_id(self, id: str) -> Users:
+        try:
+            return self.filter(id=id)[0]
+        except IndexError:
+            raise user_id_not_found
+
     def recharge_credit(
         self,
         user_id: str,
@@ -81,3 +92,65 @@ class UsersDAO:
                 "credits",
                 user.credits + decimal.Decimal(quantity),
             )
+
+    def set_stripe_customer_id(
+        self,
+        user_id: str,
+        stripe_id: str,
+    ) -> None:
+        """
+        Modify the stripe customer id of a user.
+
+        :param user_id: id of a user.
+        :param stripe_id: stripe customer id of a user.
+        """
+        user = self.get_user_with_id(user_id)
+        if user is not None:
+            setattr(user, "stripe_customer_id", stripe_id)  # noqa: B010
+
+    def enable_autorecharge(
+        self,
+        user_id: str,
+        enable: bool,
+    ) -> None:
+        """
+        Enable/disable autorecharge for a user.
+
+        :param user_id: id of a user.
+        :param enable: whether to enable (true) or disable (false) autorecharge.
+        """
+        user = self.get_user_with_id(user_id)
+        if user is not None:
+            setattr(user, "autorecharge", enable)  # noqa: B010
+
+    def set_autorecharge_threshold(
+        self,
+        user_id: str,
+        threshold: float,
+    ) -> None:
+        """
+        Modify the autorecharge threshold for a user.
+
+        :param user_id: id of a user.
+        :param threshold: limit quantity of credits before triggering autorecharge.
+        """
+        user = self.get_user_with_id(user_id)
+        if user is not None:
+            setattr(
+                user, "autorecharge_threshold", decimal.Decimal(threshold)
+            )  # noqa: B010
+
+    def set_autorecharge_qty(
+        self,
+        user_id: str,
+        qty: float,
+    ) -> None:
+        """
+        Modify the autorecharge quantity for a user.
+
+        :param user_id: id of a user.
+        :param threshold: quantity of credits to be added during autorecharge.
+        """
+        user = self.get_user_with_id(user_id)
+        if user is not None:
+            setattr(user, "autorecharge_qty", decimal.Decimal(qty))  # noqa: B010

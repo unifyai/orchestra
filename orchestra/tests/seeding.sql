@@ -1,9 +1,10 @@
 -- Users
-INSERT INTO users VALUES (:user_id, 10);
-INSERT INTO users VALUES ('recharge_simple', 1);
-INSERT INTO users VALUES ('recharge_limited', 9.99);
-INSERT INTO users VALUES ('recharge_not_needed_a', 10);
-INSERT INTO users VALUES ('recharge_not_needed_b', 20);
+INSERT INTO users VALUES (:user_id, 10, null, False, -1, 0);
+INSERT INTO users VALUES ('stripe_autorecharge', 10, null, False, -1, 0);
+INSERT INTO users VALUES ('recharge_simple', 1, null, False, -1, 0);
+INSERT INTO users VALUES ('recharge_limited', 9.99, null, False, -1, 0);
+INSERT INTO users VALUES ('recharge_not_needed_a', 10, null, False, -1, 0);
+INSERT INTO users VALUES ('recharge_not_needed_b', 20, null, False, -1, 0);
 
 -- Recharge
 INSERT INTO recharge_type VALUES ('free');

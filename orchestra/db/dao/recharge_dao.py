@@ -21,6 +21,7 @@ class RechargeDAO:
         user_id: str,
         quantity: float,
         type: str,  # noqa: WPS125
+        transaction_id: str = None,
     ) -> None:
         """
         Add single recharge to session.
@@ -36,6 +37,7 @@ class RechargeDAO:
                 user_id=user_id,
                 quantity=quantity,
                 type=type,
+                transaction_id=transaction_id,
             ),
         )
 
