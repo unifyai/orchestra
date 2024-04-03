@@ -176,6 +176,10 @@ class UsersModelResponse(BaseModel):
 
     id: str
     credits: float
+    stripe_customer_id: Optional[str]
+    autorecharge: bool
+    autorecharge_threshold: float
+    autorecharge_qty: float
 
 
 class RechargeTypeModelResponse(BaseModel):
