@@ -1,16 +1,13 @@
 Dynamic Routing
 ===============
 
-Video Tutorial
---------------
-
 .. raw:: html
 
     <iframe width="420" height="315" allow="fullscreen;"
     src="https://www.youtube.com/watch?v=6T3jMwKfM7k" class="video">
     </iframe>
 
-You can see more videos at the bottom of this page!
+You can see more `Videos`_ at the bottom of this page!
 
 Introduction
 ------------
