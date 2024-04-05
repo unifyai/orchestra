@@ -1,6 +1,17 @@
 Dynamic Routing
 ===============
 
+.. raw:: html
+
+    <iframe width="420" height="315" allow="fullscreen;"
+    src="https://www.youtube.com/watch?v=6T3jMwKfM7k" class="video">
+    </iframe>
+
+You can see more `Videos`_ at the bottom of this page!
+
+Introduction
+------------
+
 When querying models, we usually care for one metric over the rest. This can be cost if prototyping an application, TTFT if building a bot where responsiveness is key, or output tokens per second if we want to generate responses as fast as possible. Being able to compare these metrics among providers mitigates this issue (and that's why we run our `benchmarks! <https://unify.ai/hub>`_).
 
 However, these providers are inherently transient (You can read more about this `here <https://unify.ai/blog/llm-benchmarks#transient-systems>`_), which means that they are affected by things like traffic, available devices, changes in the software or hardware stack, and so on.
@@ -92,3 +103,17 @@ explanation. You can detect this and change your policy doing something like:
 
 That's about it! We will be making these modes more flexible in the coming weeks, allowing you to
 define more specific and fine-grained rules 🔎
+
+Videos
+-------
+
+.. raw:: html
+
+    <iframe width="420" height="315" allow="fullscreen;"
+    src="https://www.youtube.com/watch?v=pul7fklQTZQ" class="video">
+    </iframe>
+
+    <iframe width="420" height="315" allow="fullscreen;"
+    src="https://www.youtube.com/watch?v=SBwr32iSU8Q" class="video">
+    </iframe>
+
