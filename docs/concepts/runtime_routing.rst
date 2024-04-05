@@ -10,10 +10,10 @@ Video Tutorial
     src="https://www.youtube.com/watch?v=6T3jMwKfM7k" class="video">
     </iframe>
 
+You can see more videos at the bottom of this page!
+
 Introduction
 ------------
-
-You can see more videos at the bottom of this page!
 
 When querying models, we usually care for one metric over the rest. This can be cost if prototyping an application, TTFT if building a bot where responsiveness is key, or output tokens per second if we want to generate responses as fast as possible. Being able to compare these metrics among providers mitigates this issue (and that's why we run our `benchmarks! <https://unify.ai/hub>`_).
 
@@ -107,7 +107,8 @@ explanation. You can detect this and change your policy doing something like:
 That's about it! We will be making these modes more flexible in the coming weeks, allowing you to
 define more specific and fine-grained rules 🔎
 
-**Videos**
+Videos
+-------
 
 .. raw:: html
 
