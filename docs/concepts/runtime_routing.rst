@@ -4,7 +4,7 @@ Dynamic Routing
 .. raw:: html
 
     <iframe width="420" height="315" allow="fullscreen;"
-    src="https://www.youtube.com/watch?v=6T3jMwKfM7k" class="video">
+    src="https://www.youtube.com/embed/6T3jMwKfM7k?si=8bcLPXN1yUXjS4ND" class="video">
     </iframe>
 
 You can see more `Videos`_ at the bottom of this page!
@@ -110,10 +110,10 @@ Videos
 .. raw:: html
 
     <iframe width="420" height="315" allow="fullscreen;"
-    src="https://www.youtube.com/watch?v=pul7fklQTZQ" class="video">
+    src="https://www.youtube.com/embed/pul7fklQTZQ?si=HQwOm8C31ASuIC8o" class="video">
     </iframe>
 
     <iframe width="420" height="315" allow="fullscreen;"
-    src="https://www.youtube.com/watch?v=SBwr32iSU8Q" class="video">
-    </iframe>
+    src="https://www.youtube.com/embed/SBwr32iSU8Q?si=Rj3xknJEg0765Psb" class="video">
+
 
