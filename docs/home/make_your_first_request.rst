@@ -33,7 +33,7 @@ To specify the endpoint, you will need a :code:`model` and a :code:`provider`.
 
     response = unify.generate(messages="Explain who Newton was and his entire theory of gravitation. Give a long detailed response please and explain all of his achievements", model="llama-2-70-chat", provider="anyscale")
 
-The method returns a string containing the model's response.
+This will return a string containing the model's response.
 
 The Python package supports both synchronous and asynchronous clients, as well as streaming responses.
 Check out the `package repo <https://github.com/unifyai/unify-llm-python?tab=readme-ov-file#unify-python-api-library>`_ for more information!
