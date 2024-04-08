@@ -11,8 +11,7 @@ For this example, we'll use the :code:`llama-2-70b-chat` model, hosted on :code:
 
 Using the Python Package
 ------------------------------------
-If you're using python, the easiest way to query these endpoints is using our python package `unifyai <https://pypi.org/project/unifyai/>`_ which you
-can install using pip as shown below:
+The easiest way to query these endpoints is using the `unifyai <https://pypi.org/project/unifyai/>`_ Python package.  You can install it doing:
 
 
 .. code-block:: bash
