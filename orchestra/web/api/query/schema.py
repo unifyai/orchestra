@@ -1,4 +1,5 @@
 import datetime
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -17,6 +18,7 @@ class QueryModelRequest(BaseModel):
     user_id: str
     endpoint_id: int
     credits: float
+    prompt: Optional[str]
 
 
 class QueryModelResponse(BaseModel):
@@ -36,3 +38,4 @@ class QueryModelResponse(BaseModel):
     at: datetime.datetime
     endpoint_id: int
     credits: float
+    prompt: str
