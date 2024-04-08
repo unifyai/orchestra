@@ -117,7 +117,7 @@ def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217,
     if model_type == "text-generation":
 
         lm = PROVIDER_CLASSES[provider](model)
-        if available_credits < lm.max_cost:
+        if available_credits <= 0:
             raise insufficient_credits_error
 
         stream = request.arguments.get("stream", False)
