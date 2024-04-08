@@ -36,7 +36,7 @@ To specify the endpoint, you will need a :code:`model` and a :code:`provider`.
 The method returns a string containing the model's response.
 
 The Python package supports both synchronous and asynchronous clients, as well as streaming responses.
-Refer to the `package documentation <https://github.com/unifyai/unify-llm-python?tab=readme-ov-file#unify-python-api-library>`_ for details.
+Check out the `package repo <https://github.com/unifyai/unify-llm-python?tab=readme-ov-file#unify-python-api-library>`_ for more information!
 
 
 
