@@ -172,6 +172,7 @@ class Query(Base):
     at = sa.Column(sa.TIMESTAMP(), nullable=False)
     endpoint_id = sa.Column(sa.Integer(), sa.ForeignKey("endpoint.id"), nullable=False)
     credits = sa.Column(sa.Numeric(), nullable=False)
+    prompt = sa.Column(sa.String(), nullable=True)
 
 
 class Users(Base):

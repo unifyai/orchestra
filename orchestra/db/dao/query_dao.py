@@ -21,6 +21,7 @@ class QueryDAO:
         at: datetime.datetime,
         endpoint_id: int,
         credits: float,
+        prompt: Optional[str] = None,
     ) -> None:
         """
         Add single query to session.
@@ -36,6 +37,7 @@ class QueryDAO:
                 at=at,
                 endpoint_id=endpoint_id,
                 credits=credits,
+                prompt=prompt,
             ),
         )
 

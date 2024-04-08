@@ -1,4 +1,5 @@
-from typing import Callable
+import json
+from typing import Callable, Dict, List
 
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
@@ -18,6 +19,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     cost: float,
     model: str,
     provider: str,
+    prompt: List[Dict[str, str]],
     model_dao: ModelDAO,
     provider_dao: ProviderDAO,
     endpoint_dao: EndpointDAO,
@@ -62,6 +64,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         user_id=user_id,
         endpoint_id=endpoint_id,
         credits=cost,  # type: ignore
+        prompt=json.dumps(prompt),
     )
     users_dao.recharge_credit(user_id, -cost)
     create_query_model(query_model_request, query_dao=query_dao)

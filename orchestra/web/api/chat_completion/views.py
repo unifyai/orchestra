@@ -99,6 +99,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         "user_id": user_id,
         "model": model,
         "provider": provider,
+        "prompt": messages,
         "model_dao": model_dao,
         "provider_dao": provider_dao,
         "endpoint_dao": endpoint_dao,
