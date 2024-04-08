@@ -9,6 +9,38 @@ To make a request, you will need a:
 
 For this example, we'll use the :code:`llama-2-70b-chat` model, hosted on :code:`anyscale`. We grabbed both IDs from the corresponding `model page <https://unify.ai/hub/llama-2-70b-chat>`_
 
+Using the Python Package
+------------------------------------
+The easiest way to query these endpoints is using the `unifyai <https://pypi.org/project/unifyai/>`_ Python package.  You can install it doing:
+
+
+.. code-block:: bash
+
+    pip install unifyai
+
+To use it in your script, import the package and initialize a :code:`Unify` client with your :code:`UNIFY API KEY`.
+You can then query any endpoint through the :code:`.generate` method.
+To specify the endpoint, you will need a :code:`model` and a :code:`provider`. 
+
+.. code-block:: python
+
+    import os
+    from unifyai import Unify
+
+    unify = Unify(
+        api_key=os.environ.get("UNIFY_KEY"),
+        endpoint="llama-2-7b-chat@anyscale",
+    )
+
+    response = unify.generate(user_prompt="Explain who Newton was and his entire theory of gravitation. Give a long detailed response please and explain all of his achievements")
+
+This will return a string containing the model's response.
+
+The Python package supports both synchronous and asynchronous clients, as well as streaming responses.
+Check out the `package repo <https://github.com/unifyai/unify-llm-python?tab=readme-ov-file#unify-python-api-library>`_ for more information!
+
+
+
 Using the :code:`inference` Endpoint
 ------------------------------------
 
