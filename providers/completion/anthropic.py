@@ -6,6 +6,7 @@ import anthropic
 from providers.completion.base_completion_provider import (
     BaseCompletionProvider,
     SyncGeneratorWrapper,
+    AsyncGeneratorWrapper,
 )
 
 from orchestra.web.api.utils.http_responses import server_error_with_digest
@@ -24,6 +25,7 @@ class Anthropic(BaseCompletionProvider):
     def __init__(self, hub_model):
         super().__init__(hub_model)
         self.client = anthropic.Anthropic(api_key=self.api_key)
+        self.async_client = anthropic.AsyncAnthropic(api_key=self.api_key)
         self.supported_models = supported_models
 
     @property
@@ -84,8 +86,40 @@ class Anthropic(BaseCompletionProvider):
             logger.error(f"Digest {digest}: {e}")
             raise error
 
+    def __call_async__(
+        self, messages: List, stream: bool = False, **kwargs: Any
+    ) -> Any:
+        try:
+            max_tokens = kwargs.pop("max_tokens", 1024)
+            response = self.async_client.messages.create(
+                messages=messages,
+                model=self.provider_endpoint,
+                stream=stream,
+                max_tokens=max_tokens,
+                **kwargs,
+            )
+            if stream:
+                return (AnthropicAsyncGeneratorWrapper(self, response, messages), None)
+            else:  # TODO: This is not working (in most (all?) providers tbh)
+                return (
+                    self.response_to_chat_completion(response),
+                    self.compute_cost(
+                        response.usage.input_tokens,
+                        response.usage.output_tokens,
+                    ),
+                )
+        except Exception as e:
+            error, digest = server_error_with_digest(str(e))
+            logger.error(f"Digest {digest}: {e}")
+            raise error
+
 
 class AnthropicSyncGeneratorWrapper(SyncGeneratorWrapper):
+    def generator_iteration(self, part, whole):
+        return sse_to_part_dict(part, whole)
+
+
+class AnthropicAsyncGeneratorWrapper(AsyncGeneratorWrapper):
     def generator_iteration(self, part, whole):
         return sse_to_part_dict(part, whole)
 
