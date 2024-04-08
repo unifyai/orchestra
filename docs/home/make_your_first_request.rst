@@ -18,8 +18,9 @@ The easiest way to query these endpoints is using the `unifyai <https://pypi.org
 
     pip install unifyai
 
-Once installed, you can start using the package in your Python scripts. Begin by importing the package and initializing the :code:`Unify` class with your **UNIFY API KEY**.
-You can then use the :code:`.generate` method to query an endpoint using a model and provider id along with your prompt. 
+To use it in your script, import the package and initialize a :code:`Unify` client with your :code:`UNIFY API KEY`.
+You can then query any endpoint through the :code:`.generate` method.
+To specify the endpoint, you will need a :code:`model` and a :code:`provider`. 
 
 .. code-block:: python
 
