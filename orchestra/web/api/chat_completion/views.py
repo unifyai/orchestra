@@ -88,7 +88,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         )
 
     lm = PROVIDER_CLASSES[provider](model)
-    if available_credits < lm.max_cost:
+    if available_credits <= 0:
         raise insufficient_credits_error
 
     stream = request.stream
