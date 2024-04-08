@@ -28,10 +28,11 @@ To specify the endpoint, you will need a :code:`model` and a :code:`provider`.
     from unifyai import Unify
 
     unify = Unify(
-        api_key=os.environ.get("UNIFY_KEY")
+        api_key=os.environ.get("UNIFY_KEY"),
+        endpoint="llama-2-7b-chat@anyscale",
     )
 
-    response = unify.generate(messages="Explain who Newton was and his entire theory of gravitation. Give a long detailed response please and explain all of his achievements", model="llama-2-70-chat", provider="anyscale")
+    response = unify.generate(user_prompt="Explain who Newton was and his entire theory of gravitation. Give a long detailed response please and explain all of his achievements")
 
 This will return a string containing the model's response.
 
