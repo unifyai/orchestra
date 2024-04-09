@@ -4,9 +4,9 @@ from typing import Any, List
 
 import anthropic
 from providers.completion.base_completion_provider import (
+    AsyncGeneratorWrapper,
     BaseCompletionProvider,
     SyncGeneratorWrapper,
-    AsyncGeneratorWrapper,
 )
 
 from orchestra.web.api.utils.http_responses import server_error_with_digest
@@ -64,6 +64,10 @@ class Anthropic(BaseCompletionProvider):
     def __call__(self, messages: List, stream: bool = False, **kwargs: Any) -> Any:
         try:
             max_tokens = kwargs.pop("max_tokens", 1024)
+            # any messages with the system role is removed and passed explicitely
+            messages, system_prompt = _pop_system_prompts(messages)
+            if system_prompt:
+                kwargs["system"] = system_prompt
             response = self.client.messages.create(
                 messages=messages,
                 model=self.provider_endpoint,
@@ -122,6 +126,18 @@ class AnthropicSyncGeneratorWrapper(SyncGeneratorWrapper):
 class AnthropicAsyncGeneratorWrapper(AsyncGeneratorWrapper):
     def generator_iteration(self, part, whole):
         return sse_to_part_dict(part, whole)
+
+
+def _pop_system_prompts(messages):
+    # return a clean list of dicts and a string concatenating all system prompts.
+    system_prompts = []
+    clean_messages = []
+    for msg in messages:
+        if msg.get("role") == "system":
+            system_prompts.append(msg.get("content"))
+        else:
+            clean_messages.append(msg)
+    return clean_messages, ". ".join(system_prompts)
 
 
 _sse_types_to_ignore = {
