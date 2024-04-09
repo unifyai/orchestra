@@ -13,15 +13,12 @@ from providers.completion.perplexity import Perplexity
 from providers.completion.replicate import Replicate
 from providers.completion.togetherai import TogetherAI
 
-# from providers.completion.vertexai import VertexAI
-
 PROVIDER_CLASSES = {
     "anyscale": Anyscale,
     "perplexity-ai": Perplexity,
     "together-ai": TogetherAI,
     "anthropic": Anthropic,
     "replicate": Replicate,
-    # "vertex-ai": VertexAI,
     "openai": OpenAI,
     "mistral-ai": Mistral,
     "octoai": OctoAI,
