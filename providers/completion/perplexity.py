@@ -62,22 +62,4 @@ supported_models = {
         "context_window": 4096,
         "cost": {"prompt": 0.7, "completion": 2.8},
     },
-    "pplx-7b-online": {
-        "endpoint": "pplx-7b-online",
-        "context_window": 4096,
-        "cost": {
-            "prompt": 0,
-            "completion": 0.28,
-            "online": {"charge_per_1000_requests": 5},
-        },
-    },
-    "pplx-70b-online": {
-        "endpoint": "pplx-70b-online",
-        "context_window": 4096,
-        "cost": {
-            "prompt": 0,
-            "completion": 2.8,
-            "online": {"charge_per_1000_requests": 5},
-        },
-    },
 }

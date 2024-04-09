@@ -8,7 +8,7 @@ This repo includes the code for orchestra, the server in charge of the model hub
 - [Database README](./orchestra/db/README.md): Migrations, Google Cloud Infrastructure, Syncying staging DB.
 - TODO: Setting up local env
 - TODO: Debugging configurations, tests (unit, integration, load testing, manual), running orchestra locally in debug mode
-- TODO: Telemetry
+- TODO: [Telemetry](./Telemetry.md)
 - TODO: GCP services in use and flows
 - TODO: CI/CD
 
