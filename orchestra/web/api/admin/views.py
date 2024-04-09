@@ -1,5 +1,6 @@
 import datetime
 from typing import List, Optional
+import stripe
 
 from fastapi import APIRouter, HTTPException
 from fastapi.param_functions import Depends
@@ -758,6 +759,23 @@ def update_datapoint(  # noqa: WPS211
         tooltip=tooltip,
         measured_at=measured_at,
     )
+
+
+@router.put("/create_stripe_customer")
+def create_user_stripe_customer_id(  # noqa: WPS211
+    id: str,  # noqa: WPS125
+    users_dao: UsersDAO = Depends(),
+) -> None:
+    """
+    Create a stripe account for a user.
+
+    :param id: id of the user to be updated.
+    :param users_dao: DAO for users models.
+    """
+    user = users_dao.get_user_with_id(id)
+    customer = stripe.Customer.create(email=user.email)
+    users_dao.set_stripe_customer_id(user_id=id, stripe_id=customer.id)
+    users_dao.session.commit()
 
 
 @router.put("/stripe_customer_id")
