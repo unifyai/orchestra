@@ -68,7 +68,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     )
     users_dao.recharge_credit(user_id, -cost)
     create_query_model(query_model_request, query_dao=query_dao)
-    
+
     user = users_dao.get_user_with_id(user_id)
     if user.autorecharge and user.credits < user.autorecharge_threshold:
         users_dao.recharge_credit(user_id, user.autorecharge_qty)
