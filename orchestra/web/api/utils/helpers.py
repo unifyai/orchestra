@@ -60,10 +60,10 @@ def recharge_and_generate_invoice(user, users_dao):
         finalized_invoice = stripe.Invoice.finalize_invoice(invoice.id)
 
         # pay the invoice
-        stripe.Invoice.pay(invoice.id)
+        pay_invoice = stripe.Invoice.pay(invoice.id)
 
-        # Check the status of the invoice
-        if finalized_invoice.status == "paid":
+        # Check the status of the payment
+        if pay_invoice.status == 'paid':
             logging.info(f"Invoice {finalized_invoice.number} has been paid.")
             users_dao.recharge_credit(user.id, user.autorecharge_qty)
         else:
