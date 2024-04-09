@@ -1,5 +1,6 @@
 import json
 from typing import Callable, Dict, List
+import stripe
 
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
@@ -71,4 +72,42 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
 
     user = users_dao.get_user_with_id(user_id)
     if user.autorecharge and user.credits < user.autorecharge_threshold:
-        users_dao.recharge_credit(user_id, user.autorecharge_qty)
+        try:
+            customer_id = user.stripe_customer_id
+            customer = stripe.Customer.retrieve(customer_id)
+            if not customer.invoice_settings.default_payment_method:
+                print("Customer does not have a default payment method set.")
+                return
+
+            # Create an invoice (not finalized yet)
+            invoice = stripe.Invoice.create(customer=customer_id, auto_advance=False)
+
+            # Add an invoice item
+            stripe.InvoiceItem.create(
+                customer=customer_id,
+                amount=user.autorecharge_qty,
+                currency="usd",
+                description="Unify Credits",
+                invoice=invoice.id,
+            )
+
+            # Finalize the invoice, which will automatically create a PaymentIntent if needed
+            finalized_invoice = stripe.Invoice.finalize_invoice(invoice.id)
+
+            # pay the invoice
+            stripe.Invoice.pay(invoice.id)
+
+            # Check the status of the invoice
+            if finalized_invoice.status == "paid":
+                print(f"Invoice {finalized_invoice.number} has been paid.")
+                users_dao.recharge_credit(user_id, user.autorecharge_qty)
+                return finalized_invoice.number
+            else:
+                print(
+                    f"Invoice {finalized_invoice.number} is not paid as expected. Status: {finalized_invoice.status}"
+                )
+                return
+
+        except Exception as e:
+            print(f"An error occurred: {str(e)}")
+            return None
