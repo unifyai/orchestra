@@ -28,21 +28,6 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
-    "llama-2-7b": {
-        "endpoint": "accounts/fireworks/models/llama-v2-7b",
-        "context_window": 4096,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
-    "llama-2-13b": {
-        "endpoint": "accounts/fireworks/models/llama-v2-13b",
-        "context_window": 4096,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
-    "llama-2-70b": {
-        "endpoint": "accounts/fireworks/models/llama-v2-70b",
-        "context_window": 4096,
-        "cost": {"prompt": 0.9, "completion": 0.9},
-    },
     "llama-2-7b-chat": {
         "endpoint": "accounts/fireworks/models/llama-v2-7b-chat",
         "context_window": 4096,
@@ -57,11 +42,6 @@ supported_models = {
         "endpoint": "accounts/fireworks/models/llama-v2-70b-chat",
         "context_window": 4096,
         "cost": {"prompt": 0.9, "completion": 0.9},
-    },
-    "mistral-7b-v0.1": {
-        "endpoint": "accounts/fireworks/models/mistral-7b",
-        "context_window": 16384,
-        "cost": {"prompt": 0.2, "completion": 0.2},
     },
     "mistral-7b-instruct-v0.1": {
         "endpoint": "accounts/fireworks/models/mistral-7b-instruct-4k",
@@ -78,16 +58,6 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.5, "completion": 0.5},
     },
-    "falcon-7b": {
-        "endpoint": "accounts/fireworks/models/falcon-7b",
-        "context_window": 2048,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
-    "falcon-40b": {
-        "endpoint": "accounts/fireworks/models/falcon-40b",
-        "context_window": 2048,
-        "cost": {"prompt": 0.9, "completion": 0.9},
-    },
     "codellama-70b-instruct": {
         "endpoint": "accounts/fireworks/models/llama-v2-70b-code-instruct",
         "context_window": 4096,
@@ -101,11 +71,6 @@ supported_models = {
     "codellama-13b-instruct": {
         "endpoint": "accounts/fireworks/models/llama-v2-13b-code-instruct",
         "context_window": 4096,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
-    "zephyr-7b-beta": {
-        "endpoint": "accounts/fireworks/models/zephyr-7b-beta",
-        "context_window": 16384,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
 }
