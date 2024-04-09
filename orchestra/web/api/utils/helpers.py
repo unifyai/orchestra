@@ -1,4 +1,5 @@
 import logging
+
 import stripe
 
 
@@ -63,12 +64,12 @@ def recharge_and_generate_invoice(user, users_dao):
         pay_invoice = stripe.Invoice.pay(invoice.id)
 
         # Check the status of the payment
-        if pay_invoice.status == 'paid':
+        if pay_invoice.status == "paid":
             logging.info(f"Invoice {finalized_invoice.number} has been paid.")
             users_dao.recharge_credit(user.id, user.autorecharge_qty)
         else:
             logging.warning(
-                f"Invoice {finalized_invoice.number} is not paid as expected. Status: {finalized_invoice.status}"
+                f"Invoice {finalized_invoice.number} is not paid as expected. Status: {finalized_invoice.status}",
             )
             return
 
