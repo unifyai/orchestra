@@ -764,6 +764,7 @@ def update_datapoint(  # noqa: WPS211
 @router.put("/create_stripe_customer")
 def create_user_stripe_customer_id(  # noqa: WPS211
     id: str,  # noqa: WPS125
+    email: str,
     users_dao: UsersDAO = Depends(),
 ) -> None:
     """
@@ -772,8 +773,7 @@ def create_user_stripe_customer_id(  # noqa: WPS211
     :param id: id of the user to be updated.
     :param users_dao: DAO for users models.
     """
-    user = users_dao.get_user_with_id(id)
-    customer = stripe.Customer.create(email=user.email)
+    customer = stripe.Customer.create(email=email)
     users_dao.set_stripe_customer_id(user_id=id, stripe_id=customer.id)
     users_dao.session.commit()
 

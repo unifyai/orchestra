@@ -1,3 +1,4 @@
+import logging
 import stripe
 
 
@@ -40,7 +41,7 @@ def recharge_and_generate_invoice(user, users_dao):
         customer_id = user.stripe_customer_id
         customer = stripe.Customer.retrieve(customer_id)
         if not customer.invoice_settings.default_payment_method:
-            print("Customer does not have a default payment method set.")
+            logging.warning("Customer does not have a default payment method set.")
             return
 
         # Create an invoice (not finalized yet)
@@ -63,15 +64,14 @@ def recharge_and_generate_invoice(user, users_dao):
 
         # Check the status of the invoice
         if finalized_invoice.status == "paid":
-            print(f"Invoice {finalized_invoice.number} has been paid.")
+            logging.info(f"Invoice {finalized_invoice.number} has been paid.")
             users_dao.recharge_credit(user.id, user.autorecharge_qty)
-            return finalized_invoice.number
         else:
-            print(
+            logging.warning(
                 f"Invoice {finalized_invoice.number} is not paid as expected. Status: {finalized_invoice.status}"
             )
             return
 
     except Exception as e:
-        print(f"An error occurred: {str(e)}")
+        logging.error(f"An error occurred while generating the invoice: {str(e)}")
         return None
