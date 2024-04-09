@@ -760,7 +760,6 @@ def update_datapoint(  # noqa: WPS211
     )
 
 
-
 @router.put("/stripe_customer_id")
 def update_user_stripe_customer_id(  # noqa: WPS211
     id: str,  # noqa: WPS125
