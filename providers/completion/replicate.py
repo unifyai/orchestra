@@ -223,7 +223,7 @@ supported_models = {
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "mistralai/mixtral-8x7b-instruct-v0.1",
         "context_window": 16384,
-        "cost": {"prompt": 0.30, "completion": 1.00},  # noqa: WPS339
+        "cost": {"prompt": 0.3, "completion": 1},
     },
     "llama-2-70b-chat": {
         "endpoint": "meta/llama-2-70b-chat",
@@ -233,7 +233,7 @@ supported_models = {
     "llama-2-13b-chat": {
         "endpoint": "meta/llama-2-13b-chat",
         "context_window": 4096,
-        "cost": {"prompt": 0.10, "completion": 0.50},  # noqa: WPS339
+        "cost": {"prompt": 0.1, "completion": 0.5},
     },
     "llama-2-7b-chat": {
         "endpoint": "meta/llama-2-7b-chat",

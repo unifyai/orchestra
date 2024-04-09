@@ -297,6 +297,6 @@ supported_models = {
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "mistral.mixtral-8x7b-instruct-v0:1",
         "context_window": 32768,
-        "cost": {"prompt": 0.45, "completion": 0.70},  # noqa: WPS339
+        "cost": {"prompt": 0.45, "completion": 0.7},
     },
 }
