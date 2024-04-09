@@ -1,3 +1,8 @@
+import logging
+
+import stripe
+
+
 def filter_request_params(arguments):
     """
     Filter argument parameters.
@@ -30,3 +35,44 @@ def filter_request_params(arguments):
         for param in openai_params
         if arguments.get(param) is not None
     }
+
+
+def recharge_and_generate_invoice(user, users_dao):
+    try:
+        customer_id = user.stripe_customer_id
+        customer = stripe.Customer.retrieve(customer_id)
+        if not customer.invoice_settings.default_payment_method:
+            logging.warning("Customer does not have a default payment method set.")
+            return
+
+        # Create an invoice (not finalized yet)
+        invoice = stripe.Invoice.create(customer=customer_id, auto_advance=False)
+
+        # Add an invoice item
+        stripe.InvoiceItem.create(
+            customer=customer_id,
+            amount=user.autorecharge_qty,
+            currency="usd",
+            description="Unify Credits",
+            invoice=invoice.id,
+        )
+
+        # Finalize the invoice, which will automatically create a PaymentIntent if needed
+        finalized_invoice = stripe.Invoice.finalize_invoice(invoice.id)
+
+        # pay the invoice
+        pay_invoice = stripe.Invoice.pay(invoice.id)
+
+        # Check the status of the payment
+        if pay_invoice.status == "paid":
+            logging.info(f"Invoice {finalized_invoice.number} has been paid.")
+            users_dao.recharge_credit(user.id, user.autorecharge_qty)
+        else:
+            logging.warning(
+                f"Invoice {finalized_invoice.number} is not paid as expected. Status: {finalized_invoice.status}",
+            )
+            return
+
+    except Exception as e:
+        logging.error(f"An error occurred while generating the invoice: {str(e)}")
+        return None

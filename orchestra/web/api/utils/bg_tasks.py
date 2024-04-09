@@ -11,6 +11,7 @@ from orchestra.web.api.model.views import get_model
 from orchestra.web.api.provider.views import get_provider
 from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.query.views import create_query_model
+from orchestra.web.api.utils.helpers import recharge_and_generate_invoice
 from orchestra.web.api.utils.http_responses import internal_endpoint_not_found
 
 
@@ -68,3 +69,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     )
     users_dao.recharge_credit(user_id, -cost)
     create_query_model(query_model_request, query_dao=query_dao)
+
+    user = users_dao.get_user_with_id(user_id)
+    if user.autorecharge and user.credits < user.autorecharge_threshold:
+        recharge_and_generate_invoice(user, users_dao)
