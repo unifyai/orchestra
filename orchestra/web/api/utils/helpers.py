@@ -1,5 +1,5 @@
 import logging
-
+import os
 import stripe
 
 
@@ -41,6 +41,7 @@ def recharge_and_generate_invoice(user, users_dao):
     try:
         stripe.api_key = os.environ.get("STRIPE_SECRET_KEY_LIVE")
         customer_id = user.stripe_customer_id
+        logging.info
         customer = stripe.Customer.retrieve(customer_id)
         if not customer.invoice_settings.default_payment_method:
             logging.warning("Customer does not have a default payment method set.")
