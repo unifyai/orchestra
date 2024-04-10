@@ -53,7 +53,7 @@ def recharge_and_generate_invoice(user, users_dao):
         # Add an invoice item
         stripe.InvoiceItem.create(
             customer=customer_id,
-            amount=user.autorecharge_qty,
+            amount=user.autorecharge_qty * 100,
             currency="usd",
             description="Unify Credits",
             invoice=invoice.id,
@@ -61,6 +61,7 @@ def recharge_and_generate_invoice(user, users_dao):
 
         # Finalize the invoice, which will automatically create a PaymentIntent if needed
         finalized_invoice = stripe.Invoice.finalize_invoice(invoice.id)
+        logging.info(f"Finalized invoice: {finalized_invoice}")
 
         # pay the invoice
         pay_invoice = stripe.Invoice.pay(invoice.id)
