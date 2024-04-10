@@ -72,9 +72,5 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     create_query_model(query_model_request, query_dao=query_dao)
 
     user = users_dao.get_user_with_id(user_id)
-    logging.info(
-        f"User: {user.id}, Credits: {user.credits}, Autorecharge: {user.autorecharge}, Autorecharge Threshold: {user.autorecharge_threshold}, Autorecharge Qty: {user.autorecharge_qty}"
-    )
     if user.autorecharge and user.credits <= user.autorecharge_threshold:
-        logging.info("Recharging user")
         recharge_and_generate_invoice(user, users_dao)
