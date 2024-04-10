@@ -76,4 +76,5 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         f"User: {user.id}, Credits: {user.credits}, Autorecharge: {user.autorecharge}, Autorecharge Threshold: {user.autorecharge_threshold}, Autorecharge Qty: {user.autorecharge_qty}"
     )
     if user.autorecharge and user.credits <= user.autorecharge_threshold:
+        logging.info("Recharging user")
         recharge_and_generate_invoice(user, users_dao)
