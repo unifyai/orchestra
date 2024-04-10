@@ -53,7 +53,7 @@ def recharge_and_generate_invoice(user, users_dao):
         # Add an invoice item
         stripe.InvoiceItem.create(
             customer=customer_id,
-            amount=user.autorecharge_qty * 100,
+            amount=user.autorecharge_qty * 100,  # stripe takes amount in cents
             currency="usd",
             description="Unify Credits",
             invoice=invoice.id,
