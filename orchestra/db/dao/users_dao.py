@@ -33,7 +33,7 @@ class UsersDAO:
                 credits=credits,
                 stripe_customer_id=None,
                 autorecharge=False,
-                autorecharge_threhsold=-1,
+                autorecharge_threhsold=0,
                 autorecharge_qty=0,
             ),
         )
