@@ -165,6 +165,18 @@ class TaskModelRequest(BaseModel):
     modality: str
 
 
+class DatasetEvaluationModelRequest(BaseModel):
+    """
+    Request model for creating new dataset evaluation model.
+    """
+
+    mdl_name: str
+    dataset_name: str
+    prompt: str
+    score: float
+    metric: str
+
+
 class UsersModelResponse(BaseModel):
     """
     Response model for users models.
@@ -328,3 +340,15 @@ class TaskModelResponse(BaseModel):
 
     name: str
     modality: str
+
+
+class DatasetEvaluationModelResponse(BaseModel):
+    """
+    Response model for dataset evaluation models.
+    """
+
+    mdl_name: str
+    dataset_name: str
+    prompt: str
+    score: float
+    metric: str
