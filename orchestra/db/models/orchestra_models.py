@@ -209,3 +209,15 @@ class RechargeType(Base):
     __tablename__ = "recharge_type"
 
     type = sa.Column(sa.String(), primary_key=True)
+
+
+class DatasetEvaluation(Base):
+    """Model class for the dataset evaluation table."""
+
+    __tablename__ = "dataset_evaluation"
+
+    mdl_name = sa.Column(sa.String(), nullable=False, primary_key=True)
+    dataset_name = sa.Column(sa.String(), nullable=False, primary_key=True)
+    prompt = sa.Column(sa.String(), nullable=False, primary_key=True)
+    score = sa.Column(sa.Numeric(), nullable=False)
+    metric = sa.Column(sa.String(), nullable=True)
