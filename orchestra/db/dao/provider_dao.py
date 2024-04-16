@@ -17,6 +17,7 @@ class ProviderDAO:
     def create_provider(
         self,
         name: str,
+        display_name: str,
         image_url: str,
         description: str,
     ) -> None:
@@ -30,6 +31,7 @@ class ProviderDAO:
         self.session.add(
             Provider(
                 name=name,
+                display_name=display_name,
                 image_url=image_url,
                 description=description,
             ),
