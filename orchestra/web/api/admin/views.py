@@ -6,6 +6,7 @@ from fastapi.param_functions import Depends
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.datapoint_dao import DatapointDAO
+from orchestra.db.dao.dataset_evaluation_dao import DatasetEvaluationDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.license_dao import LicenseDAO
 from orchestra.db.dao.metric_dao import MetricDAO
@@ -19,6 +20,7 @@ from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     BenchmarkRun,
     Datapoint,
+    DatasetEvaluation,
     Endpoint,
     License,
     Metric,
@@ -32,6 +34,8 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     BenchmarkRunModelResponse,
     DatapointModelRequest,
     DatapointModelResponse,
+    DatasetEvaluationModelRequest,
+    DatasetEvaluationModelResponse,
     EndpointModelRequest,
     EndpointModelResponse,
     LicenseModelRequest,
@@ -443,6 +447,29 @@ def get_task(
     return task_dao.filter(name=name)
 
 
+@router.get(
+    "/get_dataset_evaluation", response_model=List[DatasetEvaluationModelResponse]
+)
+def get_dataset_evaluation(
+    mdl_name: Optional[str] = None,
+    dataset_name: Optional[str] = None,
+    prompt: Optional[str] = None,
+    score: Optional[float] = None,
+    metric: Optional[str] = None,
+    dataset_evaluation_dao: DatasetEvaluationDAO = Depends(),
+) -> List[DatasetEvaluation]:
+    """
+    Retrieve specific dataset evaluation object from the database.
+    """
+    return dataset_evaluation_dao.filter(
+        mdl_name=mdl_name,
+        dataset_name=dataset_name,
+        prompt=prompt,
+        score=score,
+        metric=metric,
+    )
+
+
 @router.put("/create_datapoint")
 def create_datapoint_model(
     new_datapoint_object: DatapointModelRequest,
@@ -695,6 +722,23 @@ def create_task_model(
     task_dao.create_task(
         name=new_task_object.name,
         modality=new_task_object.modality,
+    )
+
+
+@router.put("/create_dataset_evaluation")
+def create_dataset_evaluation_model(
+    new_dataset_evaluation_object: DatasetEvaluationModelRequest,
+    dataset_evaluation_dao: DatasetEvaluationDAO = Depends(),
+) -> None:
+    """
+    Creates database evaluation model in the database.
+    """
+    dataset_evaluation_dao.create_dataset_evaluation(
+        mdl_name=new_dataset_evaluation_object.mdl_name,
+        dataset_name=new_dataset_evaluation_object.dataset_name,
+        prompt=new_dataset_evaluation_object.prompt,
+        score=new_dataset_evaluation_object.score,
+        metric=new_dataset_evaluation_object.metric,
     )
 
 
