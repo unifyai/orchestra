@@ -6,17 +6,173 @@ import time
 from collections import namedtuple
 from typing import Dict, List, Optional, Tuple, Union
 
+from google.cloud import aiplatform
+
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
+from orchestra.settings import settings
 
 # TODO: Add errors back to the refactored function
 from orchestra.web.api.utils.http_responses import (  # invalid_optimisation_goal,; invalid_price_threshold,
+    invalid_provider_str,
     provider_not_found_under_conditions,
     server_error_with_digest,
-    invalid_provider_str,
 )
 
 logger = logging.getLogger(__name__)
+
+### Arbitrary function
+
+
+class RouterConfig:
+    def __init__(
+        self,
+        endpoint_str: str,
+        endpoint_dao: EndpointDAO,
+        benchmark_run_dao: BenchmarkRunDAO,
+    ):
+        assert "router" in endpoint_str
+
+        self.endpoint_str = endpoint_str
+        self.endpoint_dao = endpoint_dao
+        self.benchmark_run_dao = benchmark_run_dao
+
+        self.info_segments = self.endpoint_str_to_dict()
+
+        self.default_models = {
+            "claude-3-haiku",
+            "claude-3-sonnet",
+            "deepseek-coder-33b-instruct",
+            "gemma-7b-it",
+            "gpt-3.5-turbo",
+            "gpt-4",
+            "mistral-large",
+            "mistral-small",
+            "mixtral-8x7b-instruct-v0.1",
+        }
+        self.models = self.extract_list("models")
+
+        self.default_providers = {
+            "anthropic",
+            "together-ai",
+            "mistral-ai",
+            "openai",
+            "anyscale",
+            "fireworks-ai",
+            "deepinfra",
+            "octoai",
+            "aws-bedrock",
+        }
+        self.providers = self.extract_list("providers")
+
+        self.q = self.extract_factor("q")
+        self.c = self.extract_factor("c")
+        self.i = self.extract_factor("i")
+        self.t = self.extract_factor("t")
+
+        self.thresholds = {}
+        self.thresholds["quality"] = self.extract_thrs("quality")
+        self.thresholds["cost"] = self.extract_thrs("cost")
+        self.thresholds["itl"] = self.extract_thrs("itl")
+        self.thresholds["ttft"] = self.extract_thrs("ttft")
+
+    def endpoint_str_to_dict(self):
+        provider_substr = self.endpoint_str.split("@")[1]
+        pairs = provider_substr.split("|")
+        dict_out = {}
+        for p in pairs:
+            items = p.split(":")
+            dict_out[items[0]] = items[1]
+        return dict_out
+
+    def extract_list(self, attr):
+        out = getattr(self, f"default_{attr}")
+        if attr in self.info_segments:
+            specified = set(self.info_segments[attr].split(","))
+            out = out.intersection(specified)
+        return out
+
+    def extract_factor(self, attr, default=0):
+        out = default
+        if attr in self.info_segments:
+            out = float(self.info_segments[attr])
+        return out
+
+    def extract_thrs(self, attr):
+        full_attr = f"{attr}_thrs"
+        if full_attr in self.info_segments:
+            items = self.info_segments[full_attr].split(",")
+            return (float(items[0]), float(items[1]))
+        return (None, None)
+
+    def cost_fn(self, quality, cost, itl, ttft, **kwargs):
+        return -self.q * quality + self.c * cost + self.i * itl + self.t * ttft
+
+    def __call__(self, prompt):
+        # Get full list of endpoints
+        endpoints = get_endpoints_of(
+            self.endpoint_dao,
+            tuple(self.models),
+            only_from=tuple(self.providers),
+            ttl_hash=get_ttl_hash(),
+        )
+        # Get quality from the neural router scoring function
+        model_scores = neural_scoring(prompt)
+
+        endpoint_metrics = {}
+        thresholded_endpoints = []
+        for endpoint in endpoints:
+            name = f"{endpoint.model}@{endpoint.provider}"
+            endpoint_metrics[name] = {}
+            endpoint_metrics[name]["quality"] = model_scores[endpoint.model]
+            for metric in [
+                "input_cost_per_token",
+                "output_cost_per_token",
+                "ttft",
+                "itl",
+            ]:
+                endpoint_metrics[name][metric] = float(
+                    get_value_of(self.benchmark_run_dao, endpoint, metric),
+                )
+            endpoint_metrics[name]["cost"] = (
+                endpoint_metrics[name]["input_cost_per_token"] * 3
+                + endpoint_metrics[name]["output_cost_per_token"]
+            ) / 4
+
+            valid = True
+            for metric, threshold in self.thresholds.items():
+                if (
+                    threshold[0] is not None
+                    and endpoint_metrics[name][metric] < threshold[0]
+                ):
+                    valid = False
+                if (
+                    threshold[1] is not None
+                    and endpoint_metrics[name][metric] > threshold[1]
+                ):
+                    valid = False
+            if valid:
+                thresholded_endpoints.append(endpoint)
+
+        if not thresholded_endpoints:
+            raise provider_not_found_under_conditions
+
+        endpoint_scores = {}
+        for endpoint in thresholded_endpoints:
+            name = f"{endpoint.model}@{endpoint.provider}"
+            endpoint_scores[name] = self.cost_fn(**endpoint_metrics[name])
+
+        return min(endpoint_scores, key=lambda k: endpoint_scores[k]).split("@")
+
+
+def neural_scoring(prompt):
+    # TODO: Initialise the VertexAI acc outside
+
+    endpoint = aiplatform.Endpoint(settings.vertexai_router_endpoint_id)
+    prediction = endpoint.predict(instances=[{"prompt": prompt}])
+    out = prediction.predictions[0]["scores"]
+    out["gpt-4"] = out.pop("gpt-4-0125-preview")
+    return out
 
 
 def metric_aliases(metric):
@@ -109,7 +265,7 @@ def get_model_metrics(
     logger.info(f"Getting metrics for {endpoint}")
     brs = benchmark_run_dao.get_model_benchmark_datapoints(endpoint.model_id)
     if not brs:
-        # TODO: test this
+        # TODO: add test for this
         error_str = f"No BenchmarkRuns found for {endpoint}"
         error, digest = server_error_with_digest(error_str)
         logger.error(f"Digest {digest}: {error_str}")
