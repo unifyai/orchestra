@@ -103,7 +103,7 @@ class RouterConfig:
         if full_attr in self.info_segments:
             items = self.info_segments[full_attr].split(",")
             return (float(items[0]), float(items[1]))
-        return (None, None)
+        return (float("-inf"), float("inf"))
 
     def cost_fn(self, quality, cost, itl, ttft, **kwargs):
         return -self.q * quality + self.c * cost + self.i * itl + self.t * ttft
@@ -121,10 +121,12 @@ class RouterConfig:
 
         endpoint_metrics = {}
         thresholded_endpoints = []
+        # Iterate over each endpoint
         for endpoint in endpoints:
             name = f"{endpoint.model}@{endpoint.provider}"
             endpoint_metrics[name] = {}
             endpoint_metrics[name]["quality"] = model_scores[endpoint.model]
+            # Fetch the metrics values
             for metric in [
                 "input_cost_per_token",
                 "output_cost_per_token",
@@ -139,17 +141,12 @@ class RouterConfig:
                 + endpoint_metrics[name]["output_cost_per_token"]
             ) / 4
 
+            # Remove endpoints outside of the thresholds
             valid = True
             for metric, threshold in self.thresholds.items():
-                if (
-                    threshold[0] is not None
-                    and endpoint_metrics[name][metric] < threshold[0]
-                ):
-                    valid = False
-                if (
-                    threshold[1] is not None
-                    and endpoint_metrics[name][metric] > threshold[1]
-                ):
+                if threshold[0] < endpoint_metrics[name][metric] < threshold[1]:
+                    pass
+                else:
                     valid = False
             if valid:
                 thresholded_endpoints.append(endpoint)
@@ -157,17 +154,17 @@ class RouterConfig:
         if not thresholded_endpoints:
             raise provider_not_found_under_conditions
 
+        # Compute the cost function for each endpoint
         endpoint_scores = {}
         for endpoint in thresholded_endpoints:
             name = f"{endpoint.model}@{endpoint.provider}"
             endpoint_scores[name] = self.cost_fn(**endpoint_metrics[name])
 
+        # Return the endpoint with the lowest cost
         return min(endpoint_scores, key=lambda k: endpoint_scores[k]).split("@")
 
 
 def neural_scoring(prompt):
-    # TODO: Initialise the VertexAI acc outside
-
     endpoint = aiplatform.Endpoint(settings.vertexai_router_endpoint_id)
     prediction = endpoint.predict(instances=[{"prompt": prompt}])
     out = prediction.predictions[0]["scores"]
