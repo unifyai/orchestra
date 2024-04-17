@@ -1,8 +1,23 @@
-=====================
 Python Package Examples
 =====================
 
 This page contains various demos built using the Unify Python Package.
+
+.. raw:: html
+
+   <style>
+       /* Default styles for light theme */
+       html[data-theme="light"] .card {
+           background-color: white;
+           color: black;
+       }
+
+       /* Custom styles for dark theme */
+       html[data-theme="dark"] .card {
+           background-color: #15191e; 
+           color: white;
+       }
+   </style>
 
 .. raw:: html
 
