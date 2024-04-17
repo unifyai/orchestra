@@ -19,7 +19,11 @@ from orchestra.web.api.chat_completion.schema import (
 )
 from orchestra.web.api.users.views import get_credits
 from orchestra.web.api.utils.bg_tasks import db_operations
-from orchestra.web.api.utils.dynamic_routing import dynamic_routing, parse_endpoint
+from orchestra.web.api.utils.dynamic_routing import (
+    RouterConfig,
+    dynamic_routing,
+    parse_endpoint,
+)
 from orchestra.web.api.utils.helpers import filter_request_params
 from orchestra.web.api.utils.http_responses import (
     insufficient_credits_error,
@@ -78,14 +82,18 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     if provider not in PROVIDER_CLASSES:
         # Dynamic routing
-        target_metric, metrics_thresholds = parse_endpoint(provider)
-        model, provider = dynamic_routing(
-            endpoint_dao,
-            benchmark_run_dao,
-            target_metric,
-            models=(model,),
-            metrics_thresholds=metrics_thresholds,
-        )
+        if model == "router":
+            rc = RouterConfig(request.model, endpoint_dao, benchmark_run_dao)
+            model, provider = rc(messages[-1]["content"])
+        else:  # Non model routing, TODO: clean up to simplify
+            target_metric, metrics_thresholds = parse_endpoint(provider)
+            model, provider = dynamic_routing(
+                endpoint_dao,
+                benchmark_run_dao,
+                target_metric,
+                models=(model,),
+                metrics_thresholds=metrics_thresholds,
+            )
 
     lm = PROVIDER_CLASSES[provider](model)
     if available_credits <= 0:
