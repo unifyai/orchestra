@@ -454,6 +454,7 @@ def get_dataset_evaluation(
     mdl_name: Optional[str] = None,
     dataset_name: Optional[str] = None,
     prompt: Optional[str] = None,
+    gt_score: Optional[float] = None,
     score: Optional[float] = None,
     metric: Optional[str] = None,
     dataset_evaluation_dao: DatasetEvaluationDAO = Depends(),
@@ -465,6 +466,7 @@ def get_dataset_evaluation(
         mdl_name=mdl_name,
         dataset_name=dataset_name,
         prompt=prompt,
+        gt_score=gt_score,
         score=score,
         metric=metric,
     )
@@ -737,6 +739,7 @@ def create_dataset_evaluation_model(
         mdl_name=new_dataset_evaluation_object.mdl_name,
         dataset_name=new_dataset_evaluation_object.dataset_name,
         prompt=new_dataset_evaluation_object.prompt,
+        gt_score=new_dataset_evaluation_object.gt_score,
         score=new_dataset_evaluation_object.score,
         metric=new_dataset_evaluation_object.metric,
     )
