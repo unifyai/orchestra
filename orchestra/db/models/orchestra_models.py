@@ -219,5 +219,6 @@ class DatasetEvaluation(Base):
     mdl_name = sa.Column(sa.String(), nullable=False, primary_key=True)
     dataset_name = sa.Column(sa.String(), nullable=False, primary_key=True)
     prompt = sa.Column(sa.String(), nullable=False, primary_key=True)
+    gt_score = sa.Column(sa.Numeric(), nullable=False)
     score = sa.Column(sa.Numeric(), nullable=False)
     metric = sa.Column(sa.String(), nullable=True)

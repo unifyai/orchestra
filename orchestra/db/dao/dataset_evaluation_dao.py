@@ -19,6 +19,7 @@ class DatasetEvaluationDAO:
         mdl_name: str,
         dataset_name: str,
         prompt: str,
+        gt_score: float,
         score: float,
         metric: str,
     ) -> None:
@@ -30,6 +31,7 @@ class DatasetEvaluationDAO:
                 mdl_name=mdl_name,
                 dataset_name=dataset_name,
                 prompt=prompt,
+                gt_score=gt_score,
                 score=score,
                 metric=metric,
             ),
@@ -58,7 +60,8 @@ class DatasetEvaluationDAO:
         mdl_name: Optional[str] = None,
         dataset_name: Optional[str] = None,
         prompt: Optional[str] = None,
-        score: Optional[str] = None,
+        gt_score: Optional[float] = None,
+        score: Optional[float] = None,
         metric: Optional[str] = None,
     ) -> List[DatasetEvaluation]:
         """
@@ -71,6 +74,8 @@ class DatasetEvaluationDAO:
             query = query.where(DatasetEvaluation.dataset_name == dataset_name)
         if prompt:
             query = query.where(DatasetEvaluation.prompt == prompt)
+        if gt_score:
+            query = query.where(DatasetEvaluation.gt_score == gt_score)
         if score:
             query = query.where(DatasetEvaluation.score == score)
         if metric:
