@@ -144,6 +144,7 @@ cython_debug/
 # Cloud SDKs
 google-cloud-sdk/
 google-cloud-cli-*.tar.gz
+application_default_credentials.json
 
 # SQL Dump files
 *.dump.sql
