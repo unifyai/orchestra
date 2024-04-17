@@ -173,6 +173,7 @@ class DatasetEvaluationModelRequest(BaseModel):
     mdl_name: str
     dataset_name: str
     prompt: str
+    gt_score: float
     score: float
     metric: str
 
@@ -350,5 +351,6 @@ class DatasetEvaluationModelResponse(BaseModel):
     mdl_name: str
     dataset_name: str
     prompt: str
+    gt_score: float
     score: float
     metric: str
