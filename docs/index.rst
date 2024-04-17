@@ -29,6 +29,13 @@
   reference/endpoints.rst
 ..  reference/images.rst
 
+.. toctree::
+  :hidden:
+  :maxdepth: -1
+  :caption: Demos
+
+  demos/demos.rst
+
 ..
   .. toctree::
     :hidden:
@@ -37,3 +44,4 @@
 
     tools/openapi.rst
     tools/python_library.rst
+
