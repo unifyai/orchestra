@@ -23,6 +23,11 @@ class Deepinfra(BaseCompletionProvider):
 
 
 supported_models = {
+    "mixtral-8x22b-instruct-v0.1": {
+        "endpoint": "mistralai/Mixtral-8x22B-Instruct-v0.1",
+        "context_window": 65536,
+        "cost": {"prompt": 0.65, "completion": 0.65},
+    },
     "gemma-7b-it": {
         "endpoint": "google/gemma-7b-it",
         "context_window": 8192,
