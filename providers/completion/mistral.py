@@ -23,6 +23,11 @@ class Mistral(BaseCompletionProvider):
 
 
 supported_models = {
+    "mixtral-8x22b-instruct-v0.1": {
+        "endpoint": "open-mixtral-8x22b",
+        "context_window": 65536,
+        "cost": {"prompt": 2, "completion": 6},
+    },
     "mistral-7b-instruct-v0.2": {
         "endpoint": "open-mistral-7b",
         "context_window": 32768,
