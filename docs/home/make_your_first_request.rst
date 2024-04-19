@@ -25,7 +25,7 @@ To specify the endpoint, you will need a :code:`model` and a :code:`provider`.
 .. code-block:: python
 
     import os
-    from unifyai import Unify
+    from unify import Unify
 
     unify = Unify(
         api_key=os.environ.get("UNIFY_KEY"),
