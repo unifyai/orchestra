@@ -108,7 +108,7 @@ class RouterConfig:
     def cost_fn(self, quality, cost, itl, ttft, **kwargs):
         return -self.q * quality + self.c * cost + self.i * itl + self.t * ttft
 
-    def __call__(self, prompt):
+    def __call__(self, prompt, debug=False):
         # Get full list of endpoints
         endpoints = get_endpoints_of(
             self.endpoint_dao,
@@ -118,6 +118,8 @@ class RouterConfig:
         )
         # Get quality from the neural router scoring function
         model_scores = neural_scoring(prompt)
+        if debug:
+            return model_scores
 
         endpoint_metrics = {}
         thresholded_endpoints = []
