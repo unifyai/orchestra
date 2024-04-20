@@ -54,3 +54,6 @@ class ChatCompletionResponse(BaseModel):
     object: str = "chat.completion"
     usage: Dict[str, Any]
     choices: List[Dict[str, Any]]
+
+class RouterScoresResponse(BaseModel):
+    scores: Dict[str, float]
