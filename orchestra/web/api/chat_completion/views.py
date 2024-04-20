@@ -16,6 +16,7 @@ from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.chat_completion.schema import (
     ChatCompletionRequest,
     ChatCompletionResponse,
+    RouterScoresResponse,
 )
 from orchestra.web.api.users.views import get_credits
 from orchestra.web.api.utils.bg_tasks import db_operations
@@ -148,3 +149,13 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     response["model"] = f"{model}@{provider}"
     response["usage"]["cost"] = cost
     return ChatCompletionResponse(**response)
+
+@router.post("/router/scores", response_model=RouterScoresResponse)
+def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
+    request: ChatCompletionRequest,
+    endpoint_dao: EndpointDAO = Depends(),
+    benchmark_run_dao: BenchmarkRunDAO = Depends(),
+) -> RouterScoresResponse:
+        rc = RouterConfig(request.model, endpoint_dao, benchmark_run_dao)
+        scores = rc(request.messages[-1]["content"], debug=True)
+        return RouterScoresResponse(scores=scores)
