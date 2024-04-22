@@ -70,6 +70,11 @@ class RouterConfig:
         self.i = self.extract_factor("i")
         self.t = self.extract_factor("t")
 
+        self.q0 = self.extract_factor("q0")
+        self.c0 = self.extract_factor("c0")
+        self.i0 = self.extract_factor("i0")
+        self.t0 = self.extract_factor("t0")
+
         self.thresholds = {}
         self.thresholds["quality"] = self.extract_thrs("quality")
         self.thresholds["cost"] = self.extract_thrs("cost")
@@ -106,7 +111,12 @@ class RouterConfig:
         return (float("-inf"), float("inf"))
 
     def cost_fn(self, quality, cost, itl, ttft, **kwargs):
-        return -self.q * quality + self.c * cost + self.i * itl + self.t * ttft
+        return (
+            -self.q * (quality - self.q0)
+            + self.c * (cost - self.c0)
+            + self.i * (itl - self.i0)
+            + self.t * (ttft - self.t0)
+        )
 
     def __call__(self, prompt, debug=False):
         # Get full list of endpoints
