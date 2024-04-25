@@ -33,7 +33,6 @@ def upgrade() -> None:
     op.create_unique_constraint(
         "uq_dataset_eval_user_id", "dataset_evaluation_task", ["user_id", "name"]
     )
-    op.drop_table("userstemp")
     # ### end Alembic commands ###
 
 
