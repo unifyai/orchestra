@@ -1,4 +1,4 @@
-"""empty message
+"""add dataset evaluation task table
 
 Revision ID: 1cb1c01ac935
 Revises: fd70de5e6d04
