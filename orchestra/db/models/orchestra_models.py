@@ -211,6 +211,18 @@ class RechargeType(Base):
     type = sa.Column(sa.String(), primary_key=True)
 
 
+class DatasetEvaluationTask(Base):
+    """Model class for the dataset evaluation task table."""
+
+    __tablename__ = "dataset_evaluation_task"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=True)
+    name = sa.Column(sa.String(), nullable=False)
+    status = sa.Column(sa.String(), nullable=False)
+    sa.UniqueConstraint("user_id", "name", name="user_id_dataset_name")
+
+
 class DatasetEvaluation(Base):
     """Model class for the dataset evaluation table."""
 
