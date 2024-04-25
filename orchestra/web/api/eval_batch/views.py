@@ -52,9 +52,9 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     subprocess.Popen(
         [
             "python",
-            "/workspaces/orchestra/batch_eval/run.py",
-            f"/workspaces/orchestra/batch_eval/{eval_unique_id}/run",
-            f"/workspaces/orchestra/batch_eval/{eval_unique_id}/prompts.jsonl",
+            "batch_eval/run.py",
+            f"batch_eval/{eval_unique_id}/run",
+            f"batch_eval/{eval_unique_id}/prompts.jsonl",
             request_fastapi.headers["authorization"].removeprefix("Bearer "),
             name,
         ]
