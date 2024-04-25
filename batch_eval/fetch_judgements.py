@@ -36,12 +36,10 @@ def generate_judgements(
     asst_model_tag,
     judge_model_tag,
     batch_size,
+    api_key,
 ):
-
-    # use openai directly for gpt4...
-    OPENAI_TOKEN = os.environ["OPENAI_KEY"]
-    url = "https://api.openai.com/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {OPENAI_TOKEN}"}
+    url = "https://api.unify.ai/v0/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}"}
 
     api_fnc = partial(request_handling.call_api, url=url, headers=headers)
 

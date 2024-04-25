@@ -19,18 +19,11 @@ def create_request(model_tag: str, api_fn, prompt_data: dict):
     )
 
 
-def generate_queries(prompt_file, response_file, model_tag, batch_size):
+def generate_queries(prompt_file, response_file, model_tag, batch_size, api_key):
     model_name = model_tag.split("@")[0]
 
-    if model_tag.startswith("gpt"):
-        OPENAI_TOKEN = os.environ["OPENAI_KEY"]
-        url = "https://api.openai.com/v1/chat/completions"
-        headers = {"Authorization": f"Bearer {OPENAI_TOKEN}"}
-        model_tag = model_name
-    else:
-        UNIFY_TOKEN = os.environ["UNIFY_TOKEN"]
-        url = "https://api.unify.ai/v0/chat/completions"
-        headers = {"Authorization": f"Bearer {UNIFY_TOKEN}"}
+    url = "https://api.unify.ai/v0/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}"}
 
     api_fnc = partial(request_handling.call_api, url=url, headers=headers)
 
