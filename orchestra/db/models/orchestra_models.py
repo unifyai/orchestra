@@ -220,7 +220,7 @@ class DatasetEvaluationTask(Base):
     user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=True)
     name = sa.Column(sa.String(), nullable=False)
     status = sa.Column(sa.String(), nullable=False)
-    sa.UniqueConstraint("user_id", "name", name="user_id_dataset_name")
+    sa.UniqueConstraint("user_id", "name", name="uq_dataset_eval_user_id")
 
 
 class DatasetEvaluation(Base):
