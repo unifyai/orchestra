@@ -7,6 +7,7 @@ from fastapi.param_functions import Depends
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.datapoint_dao import DatapointDAO
 from orchestra.db.dao.dataset_evaluation_dao import DatasetEvaluationDAO
+from orchestra.db.dao.dataset_evaluation_task_dao import DatasetEvaluationTaskDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.license_dao import LicenseDAO
 from orchestra.db.dao.metric_dao import MetricDAO
@@ -21,6 +22,7 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     BenchmarkRun,
     Datapoint,
     DatasetEvaluation,
+    DatasetEvaluationTask,
     Endpoint,
     License,
     Metric,
@@ -873,3 +875,16 @@ def update_user_autorecharge_qty(  # noqa: WPS211
     """
     users_dao.set_autorecharge_qty(user_id=id, qty=qty)
     users_dao.session.commit()
+
+
+@router.put("/dataset_evaluation_task")
+def update_dataset_evaluation_task_status(  # noqa: WPS211
+    id: str,  # noqa: WPS125
+    status: str,
+    dataset_evaluation_task: DatasetEvaluationTaskDAO = Depends(),
+) -> None:
+    """
+    Update the status of a dataset evaluation task.
+    """
+    dataset_evaluation_task.update_dataset_evaluation_task(user_id=id, status=status)
+    dataset_evaluation_task.session.commit()
