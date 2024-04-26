@@ -22,7 +22,7 @@ def create_request(model_tag: str, api_fn, prompt_data: dict):
 def generate_queries(prompt_file, response_file, model_tag, batch_size, api_key):
     model_name = model_tag.split("@")[0]
 
-    url = f"{os.getenv("ORCHESTRA_BASE_URL")}/v0/chat/completions"
+    url = f'{os.getenv("ORCHESTRA_BASE_URL")}/v0/chat/completions'
     headers = {"Authorization": f"Bearer {api_key}"}
 
     api_fnc = partial(request_handling.call_api, url=url, headers=headers)
