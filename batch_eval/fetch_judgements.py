@@ -29,7 +29,7 @@ def create_request(model_tag: str, api_fn, prompt_data: dict, model_name):
     )
 
 
-def generate_judgements(
+async def generate_judgements(
     prompt_file,
     asst_response_file,
     judge_response_file,
