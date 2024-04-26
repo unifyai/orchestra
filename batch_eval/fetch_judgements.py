@@ -38,7 +38,7 @@ def generate_judgements(
     batch_size,
     api_key,
 ):
-    url = "https://api.unify.ai/v0/chat/completions"
+    url = f"{os.getenv("ORCHESTRA_BASE_URL")}/v0/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}"}
 
     api_fnc = partial(request_handling.call_api, url=url, headers=headers)

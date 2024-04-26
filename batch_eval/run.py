@@ -111,7 +111,7 @@ if __name__ == "__main__":
 
     # TODO: If anything goes wrong, set the dataset evaluation status to failed
 
-    url = "http://127.0.0.1:8000/v0/admin/create_dataset_evaluation"
+    url = f"{os.getenv("ORCHESTRA_BASE_URL")}/v0/admin/create_dataset_evaluation"
     headers = {"Authorization": f'Bearer {os.getenv("ORCHESTRA_ADMIN_KEY")}'}
     for prompt_id, model_scores in id_to_model_to_scores.items():
         for model_name, score in model_scores.items():

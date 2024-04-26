@@ -1,17 +1,27 @@
 import json
 import os
 import subprocess
-from typing import Annotated
+from typing import Annotated, List
 
 from fastapi import APIRouter, File, Request
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.dataset_evaluation_task_dao import DatasetEvaluationTaskDAO
-from orchestra.web.api.eval_batch.schema import (
-    EvalBatchResponse,
-)
+from orchestra.db.models.orchestra_models import DatasetEvaluationTask
+from orchestra.web.api.eval_batch.schema import EvalBatchResponse, EvalBatchTaskResponse
 
 router = APIRouter()
+
+
+@router.get("/eval/batch/tasks", response_model=List[EvalBatchTaskResponse])
+def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
+    request_fastapi: Request,
+    dataset_evaluation_task_dao: DatasetEvaluationTaskDAO = Depends(),
+) -> List[DatasetEvaluationTask]:
+    """
+    Get eval batch tasks available to the user making the request.
+    """
+    return dataset_evaluation_task_dao.get_user_datasets(request_fastapi.state.user_id)
 
 
 @router.post("/eval/batch")
