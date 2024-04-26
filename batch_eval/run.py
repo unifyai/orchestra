@@ -29,7 +29,7 @@ if __name__ == "__main__":
         "mistral-large@mistral-ai",
         "gpt-4@openai",
     ]
-    judge_model = "gpt-4-turbo"
+    judge_model = "gpt-4-turbo@openai"
 
     # Get router scores
     aiplatform.init(
@@ -54,7 +54,7 @@ if __name__ == "__main__":
         os.mkdir(f"{root_dir}/model_judgements")
 
     ## get the model_responses
-    with ThreadPoolExecutor() as executor:
+    with ThreadPoolExecutor(max_workers=1) as executor:
         tasks = []
         for model_tag in model_list:
             model_name = model_tag.split("@")[0]
@@ -73,7 +73,7 @@ if __name__ == "__main__":
             running_task.result()
 
     ## get the model_judgements
-    with ThreadPoolExecutor() as executor:
+    with ThreadPoolExecutor(max_workers=1) as executor:
         tasks = []
         for model_tag in model_list:
             model_name = model_tag.split("@")[0]
