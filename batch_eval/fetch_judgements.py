@@ -46,6 +46,8 @@ def generate_judgements(
     asst_model_name = asst_model_tag.split("@")[0]
     judge_model_name = judge_model_tag.split("@")[0]
 
+    print(f"Generating judgements for: {asst_model_tag}")
+
     completed = set()
     if os.path.isfile(judge_response_file):
         with open(judge_response_file) as f:
