@@ -29,7 +29,7 @@ if __name__ == "__main__":
         "mistral-large@mistral-ai",
         "gpt-4@openai",
     ]
-    judge_model = "gpt-4-turbo"
+    judge_model = "gpt-4-turbo@openai"
 
     # Get router scores
     aiplatform.init(
