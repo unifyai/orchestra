@@ -2,8 +2,7 @@
 import sys
 import os
 import json
-
-from concurrent.futures import ThreadPoolExecutor
+import asyncio
 
 import requests
 from google.cloud import aiplatform
@@ -12,7 +11,8 @@ from fetch_queries import generate_queries
 from fetch_judgements import generate_judgements
 from extract_score import ratings_from_sample
 
-if __name__ == "__main__":
+
+async def main():
     root_dir = sys.argv[1]
     prompt_file = sys.argv[2]
     api_key = sys.argv[3]
@@ -53,45 +53,49 @@ if __name__ == "__main__":
         os.mkdir(f"{root_dir}/model_responses")
         os.mkdir(f"{root_dir}/model_judgements")
 
-    ## get the model_responses
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        tasks = []
-        for model_tag in model_list:
-            model_name = model_tag.split("@")[0]
-            tasks.append(
-                executor.submit(
-                    lambda: generate_queries(
-                        prompt_file=prompt_file,
-                        response_file=f"{root_dir}/model_responses/{model_name}.jsonl",
-                        model_tag=model_tag,
-                        batch_size=5,
-                        api_key=api_key,
-                    )
-                )
-            )
-        for running_task in tasks:
-            running_task.result()
+    async def process_queries(model_tag, prompt_file, root_dir, api_key):
+        model_name = model_tag.split("@")[0]
+        await generate_queries(
+            prompt_file=prompt_file,
+            response_file=f"{root_dir}/model_responses/{model_name}.jsonl",
+            model_tag=model_tag,
+            batch_size=5,
+            api_key=api_key,
+        )
+
+    # Create tasks for each model
+    tasks = [
+        process_queries(model_tag, prompt_file, root_dir, api_key)
+        for model_tag in model_list
+    ]
+
+    # Run tasks in parallel
+    await asyncio.gather(*tasks)
+
+    async def process_judgements(model_tag, prompt_file, root_dir, api_key):
+        model_name = model_tag.split("@")[0]
+        await generate_judgements(
+            prompt_file=prompt_file,
+            asst_response_file=f"{root_dir}/model_responses/{model_name}.jsonl",
+            judge_response_file=f"{root_dir}/model_judgements/{model_name}.jsonl",
+            asst_model_tag=model_tag,
+            judge_model_tag=judge_model,
+            batch_size=2,
+            api_key=api_key,
+        )
+
+    # Create tasks for each model
+    tasks = [
+        process_judgements(model_tag, prompt_file, root_dir, api_key)
+        for model_tag in model_list
+    ]
+
+    # Run tasks in parallel
+    await asyncio.gather(*tasks)
 
     ## get the model_judgements
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        tasks = []
-        for model_tag in model_list:
-            model_name = model_tag.split("@")[0]
-            tasks.append(
-                executor.submit(
-                    lambda: generate_judgements(
-                        prompt_file=prompt_file,
-                        asst_response_file=f"{root_dir}/model_responses/{model_name}.jsonl",
-                        judge_response_file=f"{root_dir}/model_judgements/{model_name}.jsonl",
-                        asst_model_tag=model_tag,
-                        judge_model_tag=judge_model,
-                        batch_size=2,
-                        api_key=api_key,
-                    )
-                )
-            )
-        for running_task in tasks:
-            running_task.result()
+    for model_tag in model_list:
+        model_name = model_tag.split("@")[0]
 
     ## creates the final table
     id_to_model_to_scores = {}
@@ -128,3 +132,8 @@ if __name__ == "__main__":
     # TODO: If succesful, mark the dataset as completed
 
     # TODO: Enable someone to fetch only if user_id is empty or is the same as the user doing the request
+
+
+if __name__ == "__main__":
+    # Run the main coroutine
+    asyncio.run(main())
