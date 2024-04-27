@@ -1,6 +1,5 @@
-import json
 import os
-import subprocess
+import requests
 from typing import Annotated, List
 
 from fastapi import APIRouter, File, Request
@@ -34,41 +33,29 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     """
     Compute batch evaluation based on the request.
     """
-    # transform file to have the expected format
-    lines = file.decode().split("\n")
-    parsed_data = [json.loads(line) for line in lines if line.strip()]
-    data_with_ids = [{"id_": i, **d} for i, d in enumerate(parsed_data)]
-
-    # TODO: If not parsed properly, return error
-
-    # TODO: If the name exists for the user, return error
-
     # Create CustomEvaluation and set status to pending
     dataset_evaluation_task_dao.create_dataset_evaluation_task(
         name, "pending", request_fastapi.state.user_id
     )
     dataset_evaluation_task_dao.session.commit()
 
-    # store received file in a common directory
-    eval_unique_id = f"{request_fastapi.state.user_id}_{name}"
-    if not os.path.isdir(f"batch_eval/{eval_unique_id}"):
-        os.mkdir(f"batch_eval/{eval_unique_id}")
-    with open(f"batch_eval/{eval_unique_id}/prompts.jsonl", "w") as file:
-        for item in data_with_ids:
-            json_line = json.dumps(item)
-            file.write(json_line + "\n")
+    # Define the URL of your server's endpoint
+    url = f'{os.getenv("EVAL_SERVER_URL")}/evaluate_prompts'
+    # Define the authentication token
+    headers = {"Authorization": os.getenv("EVAL_SERVER_PASSWORD")}
+    # Define the parameters to send
+    data = {
+        "name": name,
+        "api_key": request_fastapi.headers["authorization"].removeprefix("Bearer "),
+        "eval_unique_id": f"{request_fastapi.state.user_id}_{name}",
+    }
+    # Define the file to upload
+    files = {"file": file}
+    # Make a POST request to the server
+    response = requests.post(url, headers=headers, data=data, files=files, verify=False)
 
-    # send the root directory and the file name
-    subprocess.Popen(
-        [
-            "python",
-            "batch_eval/run.py",
-            f"batch_eval/{eval_unique_id}/run",
-            f"batch_eval/{eval_unique_id}/prompts.jsonl",
-            request_fastapi.headers["authorization"].removeprefix("Bearer "),
-            name,
-        ]
-    )
+    # TODO: Deal with the response code
+
     return EvalBatchResponse(
-        info="List of prompts updated succesfully. Your will receive an email soon!"
+        info="List of prompts uploaded succesfully. Your will receive an email soon!"
     )
