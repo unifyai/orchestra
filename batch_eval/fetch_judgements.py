@@ -29,7 +29,7 @@ def create_request(model_tag: str, api_fn, prompt_data: dict, model_name):
     )
 
 
-def generate_judgements(
+async def generate_judgements(
     prompt_file,
     asst_response_file,
     judge_response_file,
@@ -45,6 +45,8 @@ def generate_judgements(
 
     asst_model_name = asst_model_tag.split("@")[0]
     judge_model_name = judge_model_tag.split("@")[0]
+
+    print(f"Generating judgements for: {asst_model_tag}")
 
     completed = set()
     if os.path.isfile(judge_response_file):
