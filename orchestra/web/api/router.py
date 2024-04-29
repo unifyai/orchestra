@@ -24,6 +24,12 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
+    model.public_router,
+    tags=["model"],
+    include_in_schema=True,
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
     model.router,
     prefix="/admin",
     tags=["model"],
