@@ -71,6 +71,18 @@ class ModelDAO:
 
         return list(raw_models.scalars().fetchall())
 
+    def get_active_models(self) -> List[str]:
+        """
+        Get active model models.
+
+        :return: names of models.
+        """
+        raw_models = self.session.execute(
+            select(Model.mdl_code).where(Model.active == True),
+        )
+
+        return list(raw_models.scalars().fetchall())
+
     def filter(  # noqa: WPS211, C901
         self,
         id: Optional[int] = None,  # noqa: WPS125
