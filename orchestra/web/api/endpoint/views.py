@@ -1,4 +1,5 @@
 from typing import List, Optional
+import time
 
 from fastapi import APIRouter
 from fastapi.param_functions import Depends
@@ -9,6 +10,40 @@ from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.web.api.endpoint.schema import EndpointModelResponseVerbose
 
 router = APIRouter()
+public_router = APIRouter()
+
+_endpoint_list_cache = {}
+
+
+@public_router.get("/endpoints_of", response_model=List[str])
+def get_endpoints_of(model: str, endpoint_dao: EndpointDAO = Depends()):
+    if (
+        model not in _endpoint_list_cache
+        or time.time() - _endpoint_list_cache[model].get("ts", 0) > 3600
+    ):
+        _endpoint_list_cache[model] = {}
+        _endpoint_list_cache[model]["ts"] = time.time()
+        res = endpoint_dao.get_endpoints_of((model,))
+        _endpoint_list_cache[model]["strings"] = [
+            f"{r.Model.mdl_code}@{r.Provider.name}" for r in res
+        ]
+    return _endpoint_list_cache[model]["strings"]
+
+
+_provider_list_cache = {}
+
+
+@public_router.get("/providers_of", response_model=List[str])
+def get_providers_of(model: str, endpoint_dao: EndpointDAO = Depends()):
+    if (
+        model not in _provider_list_cache
+        or time.time() - _provider_list_cache[model].get("ts", 0) > 3600
+    ):
+        _provider_list_cache[model] = {}
+        _provider_list_cache[model]["ts"] = time.time()
+        res = endpoint_dao.get_endpoints_of((model,))
+        _provider_list_cache[model]["strings"] = [r.Provider.name for r in res]
+    return _provider_list_cache[model]["strings"]
 
 
 @router.get("/endpoints", response_model=List[EndpointModelResponseVerbose])
