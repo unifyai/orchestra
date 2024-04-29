@@ -1,4 +1,5 @@
 import datetime
+import time
 from typing import List, Optional
 
 from fastapi import APIRouter
@@ -11,6 +12,8 @@ from orchestra.web.api.model.schema import ModelResponse
 router = APIRouter()
 public_router = APIRouter()
 
+_model_list_cache = {}
+
 
 @public_router.get("/models", response_model=List[str])
 def list_models(
@@ -21,7 +24,10 @@ def list_models(
     \f
     :return: list of active model names from database.
     """
-    return model_dao.get_active_models()
+    if time.time() - _model_list_cache.get("ts", 0) > 3600:
+        _model_list_cache["models"] = model_dao.get_active_models()
+        _model_list_cache["ts"] = time.time()
+    return _model_list_cache["models"]
 
 
 @router.get("/get_model", response_model=List[ModelResponse])
