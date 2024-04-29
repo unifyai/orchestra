@@ -9,23 +9,19 @@ from orchestra.db.models.orchestra_models import Model
 from orchestra.web.api.model.schema import ModelResponse
 
 router = APIRouter()
+public_router = APIRouter()
 
 
-@router.get("/models", response_model=List[ModelResponse])
-def get_models(
-    limit: int = 10,
-    offset: int = 0,
+@public_router.get("/models", response_model=List[str])
+def list_models(
     model_dao: ModelDAO = Depends(),
 ) -> List[Model]:
     """
     Retrieve all model objects from the database.
     \f
-    :param limit: limit of model objects, defaults to 10.
-    :param offset: offset of model objects, defaults to 0.
-    :param model_dao: DAO for model models.
-    :return: list of model objects from database.
+    :return: list of active model names from database.
     """
-    return model_dao.get_all_models(limit=limit, offset=offset)
+    return model_dao.get_active_models()
 
 
 @router.get("/get_model", response_model=List[ModelResponse])
