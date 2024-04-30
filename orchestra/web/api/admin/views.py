@@ -737,6 +737,16 @@ def create_dataset_evaluation_model(
     """
     Creates database evaluation model in the database.
     """
+    existing = dataset_evaluation_dao.filter(
+        mdl_name=new_dataset_evaluation_object.mdl_name,
+        dataset_name=new_dataset_evaluation_object.dataset_name,
+        prompt=new_dataset_evaluation_object.prompt,
+    )
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="Dataset evaluation already exists for this model, dataset and prompt.",
+        )
     dataset_evaluation_dao.create_dataset_evaluation(
         mdl_name=new_dataset_evaluation_object.mdl_name,
         dataset_name=new_dataset_evaluation_object.dataset_name,
@@ -898,6 +908,16 @@ def update_dataset_evaluation(
     """
     Updates database evaluation model in the database.
     """
+    existing = dataset_evaluation_dao.filter(
+        mdl_name=dataset_evaluation_object.mdl_name,
+        dataset_name=dataset_evaluation_object.dataset_name,
+        prompt=dataset_evaluation_object.prompt,
+    )
+    if not existing:
+        raise HTTPException(
+            status_code=400,
+            detail="Dataset evaluation doesn't exist for this model, dataset and prompt.",
+        )
     dataset_evaluation_dao.update_dataset_evaluation(
         mdl_name=dataset_evaluation_object.mdl_name,
         dataset_name=dataset_evaluation_object.dataset_name,
