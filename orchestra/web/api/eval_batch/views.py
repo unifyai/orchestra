@@ -2,7 +2,7 @@ import os
 import requests
 from typing import Annotated, List
 
-from fastapi import APIRouter, File, Request
+from fastapi import APIRouter, Form, Request, UploadFile
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.dataset_evaluation_task_dao import DatasetEvaluationTaskDAO
@@ -26,8 +26,8 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 @router.post("/eval/batch")
 def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
-    file: Annotated[bytes, File()],
-    name: str,
+    file: Annotated[UploadFile, Form()],
+    name: Annotated[str, Form()],
     dataset_evaluation_task_dao: DatasetEvaluationTaskDAO = Depends(),
 ) -> EvalBatchResponse:
     """
@@ -50,7 +50,8 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         "eval_unique_id": f"{request_fastapi.state.user_id}_{name}",
     }
     # Define the file to upload
-    files = {"file": file}
+    file_content = file.file.read()
+    files = {"file": file_content}
     # Make a POST request to the server
     response = requests.post(url, headers=headers, data=data, files=files, verify=False)
 
