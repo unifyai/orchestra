@@ -888,3 +888,21 @@ def update_dataset_evaluation_task_status(  # noqa: WPS211
     """
     dataset_evaluation_task.update_dataset_evaluation_task(user_id=id, status=status)
     dataset_evaluation_task.session.commit()
+
+
+@router.put("/update_dataset_evaluation")
+def update_dataset_evaluation(
+    dataset_evaluation_object: DatasetEvaluationModelRequest,
+    dataset_evaluation_dao: DatasetEvaluationDAO = Depends(),
+) -> None:
+    """
+    Updates database evaluation model in the database.
+    """
+    dataset_evaluation_dao.update_dataset_evaluation(
+        mdl_name=dataset_evaluation_object.mdl_name,
+        dataset_name=dataset_evaluation_object.dataset_name,
+        prompt=dataset_evaluation_object.prompt,
+        gt_score=dataset_evaluation_object.gt_score,
+        score=dataset_evaluation_object.score,
+        metric=dataset_evaluation_object.metric,
+    )

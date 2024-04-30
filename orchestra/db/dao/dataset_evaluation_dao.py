@@ -82,3 +82,31 @@ class DatasetEvaluationDAO:
             query = query.where(DatasetEvaluation.metric == metric)
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())
+
+    def update_dataset_evaluation(  # noqa: WPS211, WPS213, WPS231, C901
+        self,
+        mdl_name: str,
+        dataset_name: str,
+        prompt: str,
+        gt_score: Optional[float] = None,
+        score: Optional[float] = None,
+        metric: Optional[str] = None,
+    ) -> None:
+        """
+        Update specific dataset evaluation model.
+        """
+        query = select(DatasetEvaluation)
+        query = (
+            query.where(DatasetEvaluation.mdl_name == mdl_name)
+            .where(DatasetEvaluation.dataset_name == dataset_name)
+            .where(DatasetEvaluation.prompt == prompt)
+        )
+        raw_dataset_evaluation = self.session.execute(query)
+        dataset_evaluation = raw_dataset_evaluation.scalars().first()
+        if dataset_evaluation is not None:
+            if gt_score:
+                setattr(dataset_evaluation, "gt_score", gt_score)
+            if score:
+                setattr(dataset_evaluation, "score", score)
+            if metric:
+                setattr(dataset_evaluation, "metric", metric)
