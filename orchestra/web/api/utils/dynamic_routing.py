@@ -41,13 +41,17 @@ class RouterConfig:
 
         self.default_models = {
             "claude-3-haiku",
+            "claude-3-opus",
             "claude-3-sonnet",
             "deepseek-coder-33b-instruct",
             "gemma-7b-it",
             "gpt-3.5-turbo",
             "gpt-4",
+            "llama-3-70b-chat",
+            "llama-3-8b-chat",
             "mistral-large",
             "mistral-small",
+            "mixtral-8x22b-instruct-v0.1",
             "mixtral-8x7b-instruct-v0.1",
         }
         self.models = self.extract_list("models")
