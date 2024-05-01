@@ -46,6 +46,7 @@ google-cloud-logging = "^3.9.0"
 anthropic = "^0.21.3"
 stripe = "^8.10.0"
 python-multipart = "^0.0.9"
+scipy = "^1.13.0"
 
 
 [tool.poetry.dev-dependencies]
