@@ -4,21 +4,29 @@ from statistics import mean
 import numpy as np
 import scipy
 
+from orchestra.web.api.utils.dynamic_routing import (
+    get_endpoints_of,
+    get_value_of,
+    get_ttl_hash,
+    default_models,
+    default_providers,
+)
+
 
 def reorganize_data(raw_responses):
     datasets = dict()
     for response in raw_responses:
         relevant_info = {
-            "prompt": response["prompt"],
-            "mdl_name": response["mdl_name"],
-            "score": response["gt_score"],
-            "pred": response["score"],
+            "prompt": response.prompt,
+            "mdl_name": response.mdl_name,
+            "score": float(response.gt_score),
+            "pred": float(response.score),
         }
         if relevant_info["pred"] and relevant_info["pred"] != "null":
-            if response["dataset_name"] in datasets:
-                datasets[response["dataset_name"]].append(relevant_info)
+            if response.dataset_name in datasets:
+                datasets[response.dataset_name].append(relevant_info)
             else:
-                datasets[response["dataset_name"]] = [relevant_info]
+                datasets[response.dataset_name] = [relevant_info]
 
     final_results = dict()
     for dataset in datasets:
@@ -44,18 +52,33 @@ def reorganize_data(raw_responses):
     return final_results
 
 
-def generate_router_points(data):
+def generate_router_points(data, endpoint_dao, benchmark_run_dao):
     final_scores = dict()
     endpoint_to_model = lambda endpoint: (
         endpoint.split("@")[0].replace("gpt-4-turbo", "gpt-4-0125-preview") + "_pred"
     )
-    with open("metrics.json") as f:
-        metrics = json.load(f)
-    endpoints = metrics.keys()
-    print(f"endpoints: {endpoints}")
-    endpoint_costs = {endpoint: metrics[endpoint]["cost"] for endpoint in endpoints}
-    endpoint_ttft = {endpoint: metrics[endpoint]["ttft"] for endpoint in endpoints}
-    endpoint_itl = {endpoint: metrics[endpoint]["itl"] for endpoint in endpoints}
+    endpoints = get_endpoints_of(
+        endpoint_dao,
+        tuple(default_models),
+        get_ttl_hash(),
+        only_from=tuple(default_providers),
+    )
+    endpoint_costs = {
+        f"{e.model}@{e.provider}": (
+            3 * float(get_value_of(benchmark_run_dao, e, "input_cost_per_token"))
+            + float(get_value_of(benchmark_run_dao, e, "output_cost_per_token"))
+        )
+        / 4
+        for e in endpoints
+    }
+    endpoint_ttft = {
+        f"{e.model}@{e.provider}": float(get_value_of(benchmark_run_dao, e, "ttft"))
+        for e in endpoints
+    }
+    endpoint_itl = {
+        f"{e.model}@{e.provider}": float(get_value_of(benchmark_run_dao, e, "itl"))
+        for e in endpoints
+    }
 
     def get_mean(endpoint):
         scores = [
@@ -69,7 +92,10 @@ def generate_router_points(data):
 
     for dataset in data:
         prompt_list = data[dataset]
-        endpoint_scores = {endpoint: get_mean(endpoint) for endpoint in endpoints}
+        endpoint_scores = {
+            f"{e.model}@{e.provider}": get_mean(f"{e.model}@{e.provider}")
+            for e in endpoints
+        }
         endpoint_scores = {
             endpoint: score
             for endpoint, score in endpoint_scores.items()
@@ -129,8 +155,6 @@ def generate_router_points(data):
             for b_idx, b in enumerate(b_values):
                 for c_idx, c in enumerate(c_values):
                     a, b, c = round(a, 7), round(b, 7), round(c, 7)
-                    print(f"{a_idx}_{b_idx}_{c_idx}")
-                    print(f"{a} {b} {c}")
                     prompt_scores = []
                     for i in range(len(prompt_list)):
                         endpoint_scores = {}
@@ -297,7 +321,6 @@ def get_point_solutions(data):
 def prune_router_points(router_points):
     final_pruned_points = dict()
     for dataset in router_points:
-        print(dataset)
         points = [
             [point["quality"], point["cost"], point["ttft"], point["itl"]]
             for point in router_points[dataset]
@@ -342,11 +365,9 @@ def prune_router_points(router_points):
                         ):
                             deleted.append(j)
 
-            print(len(deleted), num)
             pruned_points = [
                 point for i, point in enumerate(convex_points) if i not in deleted
             ]
-            print(len(pruned_points))
         else:
             pruned_points = points
         final_pruned_points[dataset] = pruned_points
@@ -354,10 +375,12 @@ def prune_router_points(router_points):
     return final_pruned_points
 
 
-def generate_and_prune_points(raw_responses):
+def generate_and_prune_points(raw_responses, endpoint_dao, benchmark_run_dao):
     organized_responses = reorganize_data(raw_responses)
     point_solutions = get_point_solutions(organized_responses)
-    router_points = generate_router_points(organized_responses)
+    router_points = generate_router_points(
+        organized_responses, endpoint_dao, benchmark_run_dao
+    )
     pruned_router_points = prune_router_points(router_points)
     final_points = {}
     for dataset in pruned_router_points:
@@ -366,8 +389,3 @@ def generate_and_prune_points(raw_responses):
             "router": pruned_router_points[dataset],
         }
     return final_points
-
-
-# raw_responses = json.load(open("temp_data.json"))
-# final_points = generate_and_prune_points(raw_responses)
-# json.dump(final_points, open("final_temp_results.json", "w"))
