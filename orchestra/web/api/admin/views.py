@@ -1,5 +1,5 @@
 import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.param_functions import Depends
@@ -56,6 +56,7 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     TaskModelResponse,
     UsersModelResponse,
 )
+from orchestra.web.api.utils.generate_points import generate_and_prune_points
 
 router = APIRouter()
 
@@ -449,29 +450,21 @@ def get_task(
     return task_dao.filter(name=name)
 
 
-@router.get(
-    "/get_dataset_evaluation", response_model=List[DatasetEvaluationModelResponse]
-)
+@router.get("/get_dataset_evaluation")
 def get_dataset_evaluation(
-    mdl_name: Optional[str] = None,
-    dataset_name: Optional[str] = None,
-    prompt: Optional[str] = None,
-    gt_score: Optional[float] = None,
-    score: Optional[float] = None,
-    metric: Optional[str] = None,
+    dataset_name: str,
     dataset_evaluation_dao: DatasetEvaluationDAO = Depends(),
-) -> List[DatasetEvaluation]:
+    endpoint_dao: EndpointDAO = Depends(),
+    benchmark_run_dao: BenchmarkRunDAO = Depends(),
+) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
     """
     Retrieve specific dataset evaluation object from the database.
     """
-    return dataset_evaluation_dao.filter(
-        mdl_name=mdl_name,
-        dataset_name=dataset_name,
-        prompt=prompt,
-        gt_score=gt_score,
-        score=score,
-        metric=metric,
+    raw_data = dataset_evaluation_dao.filter(dataset_name=dataset_name)
+    final_points = generate_and_prune_points(
+        raw_data, endpoint_dao=endpoint_dao, benchmark_run_dao=benchmark_run_dao
     )
+    return final_points
 
 
 @router.put("/create_datapoint")
