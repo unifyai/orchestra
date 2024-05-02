@@ -3,7 +3,6 @@ import math
 from statistics import mean
 import numpy as np
 import scipy
-
 from orchestra.web.api.utils.dynamic_routing import (
     get_endpoints_of,
     get_value_of,
@@ -17,28 +16,28 @@ def reorganize_data(raw_responses):
     datasets = dict()
     for response in raw_responses:
         relevant_info = {
-            "prompt": response.prompt,
-            "mdl_name": response.mdl_name,
-            "score": float(response.gt_score),
-            "pred": float(response.score),
+            "prompt": response["prompt"],
+            "mdl_name": response["mdl_name"],
+            "score": response["gt_score"],
+            "pred": response["score"],
         }
         if relevant_info["pred"] and relevant_info["pred"] != "null":
-            if response.dataset_name in datasets:
-                datasets[response.dataset_name].append(relevant_info)
+            if response["dataset_name"] in datasets:
+                datasets[response["dataset_name"]].append(relevant_info)
             else:
-                datasets[response.dataset_name] = [relevant_info]
+                datasets[response["dataset_name"]] = [relevant_info]
 
     final_results = dict()
     for dataset in datasets:
         prompts = dict()
         for benchmark in datasets[dataset]:
             if benchmark["prompt"] in prompts:
-                prompts[benchmark["prompt"]][f"{benchmark['mdl_name']}_score"] = (
-                    benchmark["score"]
-                )
-                prompts[benchmark["prompt"]][f"{benchmark['mdl_name']}_pred"] = (
-                    benchmark["pred"]
-                )
+                prompts[benchmark["prompt"]][
+                    f"{benchmark['mdl_name']}_score"
+                ] = benchmark["score"]
+                prompts[benchmark["prompt"]][
+                    f"{benchmark['mdl_name']}_pred"
+                ] = benchmark["pred"]
             else:
                 prompts[benchmark["prompt"]] = {
                     f"{benchmark['mdl_name']}_score": benchmark["score"],
@@ -79,6 +78,13 @@ def generate_router_points(data, endpoint_dao, benchmark_run_dao):
         f"{e.model}@{e.provider}": float(get_value_of(benchmark_run_dao, e, "itl"))
         for e in endpoints
     }
+    with open("metrics.json") as f:
+        metrics = json.load(f)
+    endpoints = metrics.keys()
+    print(f"endpoints: {endpoints}")
+    endpoint_costs = {endpoint: metrics[endpoint]["cost"] for endpoint in endpoints}
+    endpoint_ttft = {endpoint: metrics[endpoint]["ttft"] for endpoint in endpoints}
+    endpoint_itl = {endpoint: metrics[endpoint]["itl"] for endpoint in endpoints}
 
     def get_mean(endpoint):
         scores = [
@@ -93,7 +99,7 @@ def generate_router_points(data, endpoint_dao, benchmark_run_dao):
     for dataset in data:
         prompt_list = data[dataset]
         endpoint_scores = {
-            f"{e.model}@{e.provider}": get_mean(f"{e.model}@{e.provider}")
+            f"{e}": get_mean(f"{e}")
             for e in endpoints
         }
         endpoint_scores = {
@@ -149,135 +155,124 @@ def generate_router_points(data, endpoint_dao, benchmark_run_dao):
         a_values = [value[0] for value in values]
         b_values = [value[1] for value in values]
         c_values = [value[2] for value in values]
-
+        av, bv, cv = np.meshgrid(a_values, b_values, c_values)
+        points = np.column_stack((av.ravel(), bv.ravel(), cv.ravel()))
         router_points = []
-        for a_idx, a in enumerate(a_values):
-            for b_idx, b in enumerate(b_values):
-                for c_idx, c in enumerate(c_values):
-                    a, b, c = round(a, 7), round(b, 7), round(c, 7)
-                    prompt_scores = []
-                    for i in range(len(prompt_list)):
-                        endpoint_scores = {}
-                        for endpoint in current_endpoints:
-                            model = endpoint_to_model(endpoint)
-                            if model in prompt_list[i]:
-                                endpoint_scores[endpoint] = (
-                                    prompt_list[i][model]
-                                    - a * endpoint_costs[endpoint]
-                                    - b * endpoint_ttft[endpoint]
-                                    - c * endpoint_itl[endpoint]
-                                )
-                        prompt_scores.append(endpoint_scores)
 
-                    prompt_max = []
-                    for i, score in enumerate(prompt_scores):
-                        max_endpoint, max_objective = None, None
-                        for endpoint, objective in score.items():
-                            if max_endpoint == None or objective > max_objective:
-                                max_endpoint, max_objective = endpoint, objective
-                        prompt_max.append(
-                            {
-                                "endpoint": max_endpoint,
-                                "score": prompt_list[i][
-                                    endpoint_to_model(max_endpoint).replace("_pred", "")
-                                    + "_score"
-                                ],
-                            }
+        for point in points:
+            a, b, c = round(point[0], 7), round(point[1], 7), round(point[2], 7)
+            prompt_scores = []
+            for i in range(len(prompt_list)):
+                endpoint_scores = {}
+                for endpoint in current_endpoints:
+                    model = endpoint_to_model(endpoint)
+                    if model in prompt_list[i]:
+                        endpoint_scores[endpoint] = (
+                            prompt_list[i][model]
+                            - a * endpoint_costs[endpoint]
+                            - b * endpoint_ttft[endpoint]
+                            - c * endpoint_itl[endpoint]
                         )
+                prompt_scores.append(endpoint_scores)
 
-                    router_scores = {}
-                    router_counts = {}
-                    router_cost = {}
-                    router_ttft = {}
-                    router_itl = {}
-                    for prompt in prompt_max:
-                        if prompt["endpoint"] not in router_counts:
-                            router_counts[prompt["endpoint"]] = 1
-                            router_scores[prompt["endpoint"]] = prompt["score"]
-                            router_cost[prompt["endpoint"]] = endpoint_costs[
-                                prompt["endpoint"]
-                            ]
-                            router_ttft[prompt["endpoint"]] = endpoint_ttft[
-                                prompt["endpoint"]
-                            ]
-                            router_itl[prompt["endpoint"]] = endpoint_itl[
-                                prompt["endpoint"]
-                            ]
-                        else:
-                            router_counts[prompt["endpoint"]] += 1
-                            router_scores[prompt["endpoint"]] += prompt["score"]
-                            router_cost[prompt["endpoint"]] += endpoint_costs[
-                                prompt["endpoint"]
-                            ]
-                            router_ttft[prompt["endpoint"]] += endpoint_ttft[
-                                prompt["endpoint"]
-                            ]
-                            router_itl[prompt["endpoint"]] += endpoint_itl[
-                                prompt["endpoint"]
-                            ]
+            prompt_max = []
+            for i, score in enumerate(prompt_scores):
+                max_endpoint, max_objective = None, None
+                for endpoint, objective in score.items():
+                    if max_endpoint == None or objective > max_objective:
+                        max_endpoint, max_objective = endpoint, objective
+                prompt_max.append(
+                    {
+                        "endpoint": max_endpoint,
+                        "score": prompt_list[i][
+                            endpoint_to_model(max_endpoint).replace("_pred", "")
+                            + "_score"
+                        ],
+                    }
+                )
 
-                    router_scores = {
-                        endpoint: router_scores[endpoint] / router_counts[endpoint]
+            router_scores = {}
+            router_counts = {}
+            router_cost = {}
+            router_ttft = {}
+            router_itl = {}
+            for prompt in prompt_max:
+                if prompt["endpoint"] not in router_counts:
+                    router_counts[prompt["endpoint"]] = 1
+                    router_scores[prompt["endpoint"]] = prompt["score"]
+                    router_cost[prompt["endpoint"]] = endpoint_costs[prompt["endpoint"]]
+                    router_ttft[prompt["endpoint"]] = endpoint_ttft[prompt["endpoint"]]
+                    router_itl[prompt["endpoint"]] = endpoint_itl[prompt["endpoint"]]
+                else:
+                    router_counts[prompt["endpoint"]] += 1
+                    router_scores[prompt["endpoint"]] += prompt["score"]
+                    router_cost[prompt["endpoint"]] += endpoint_costs[
+                        prompt["endpoint"]
+                    ]
+                    router_ttft[prompt["endpoint"]] += endpoint_ttft[prompt["endpoint"]]
+                    router_itl[prompt["endpoint"]] += endpoint_itl[prompt["endpoint"]]
+
+            router_scores = {
+                endpoint: router_scores[endpoint] / router_counts[endpoint]
+                for endpoint in router_scores
+            }
+            router_cost = {
+                endpoint: router_cost[endpoint] / router_counts[endpoint]
+                for endpoint in router_cost
+            }
+            router_ttft = {
+                endpoint: router_ttft[endpoint] / router_counts[endpoint]
+                for endpoint in router_ttft
+            }
+            router_itl = {
+                endpoint: router_itl[endpoint] / router_counts[endpoint]
+                for endpoint in router_itl
+            }
+            total_weight = sum(router_counts.values())
+            final_score = (
+                sum(
+                    [
+                        router_scores[endpoint] * router_counts[endpoint]
                         for endpoint in router_scores
-                    }
-                    router_cost = {
-                        endpoint: router_cost[endpoint] / router_counts[endpoint]
+                    ]
+                )
+                / total_weight
+            )
+            final_cost = (
+                sum(
+                    [
+                        router_cost[endpoint] * router_counts[endpoint]
                         for endpoint in router_cost
-                    }
-                    router_ttft = {
-                        endpoint: router_ttft[endpoint] / router_counts[endpoint]
+                    ]
+                )
+                / total_weight
+            )
+            final_ttft = (
+                sum(
+                    [
+                        router_ttft[endpoint] * router_counts[endpoint]
                         for endpoint in router_ttft
-                    }
-                    router_itl = {
-                        endpoint: router_itl[endpoint] / router_counts[endpoint]
+                    ]
+                )
+                / total_weight
+            )
+            final_itl = (
+                sum(
+                    [
+                        router_itl[endpoint] * router_counts[endpoint]
                         for endpoint in router_itl
-                    }
-                    total_weight = sum(router_counts.values())
-                    final_score = (
-                        sum(
-                            [
-                                router_scores[endpoint] * router_counts[endpoint]
-                                for endpoint in router_scores
-                            ]
-                        )
-                        / total_weight
-                    )
-                    final_cost = (
-                        sum(
-                            [
-                                router_cost[endpoint] * router_counts[endpoint]
-                                for endpoint in router_cost
-                            ]
-                        )
-                        / total_weight
-                    )
-                    final_ttft = (
-                        sum(
-                            [
-                                router_ttft[endpoint] * router_counts[endpoint]
-                                for endpoint in router_ttft
-                            ]
-                        )
-                        / total_weight
-                    )
-                    final_itl = (
-                        sum(
-                            [
-                                router_itl[endpoint] * router_counts[endpoint]
-                                for endpoint in router_itl
-                            ]
-                        )
-                        / total_weight
-                    )
-                    router_points.append(
-                        {
-                            "model": f"router_{abs(round(a, 3))}_{abs(round(b, 3))}_{abs(round(c, 3))}",
-                            "quality": final_score,
-                            "cost": final_cost,
-                            "ttft": final_ttft,
-                            "itl": final_itl,
-                        }
-                    )
+                    ]
+                )
+                / total_weight
+            )
+            router_points.append({
+                "model": f"router_{abs(round(a, 3))}_{abs(round(b, 3))}_{abs(round(c, 3))}",
+                "quality": final_score,
+                "cost": final_cost,
+                "ttft": final_ttft,
+                "itl": final_itl,
+            })
+
         final_scores[dataset] = router_points
     return final_scores
 
