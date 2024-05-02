@@ -1,4 +1,5 @@
 import datetime
+import time
 from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, HTTPException
@@ -450,6 +451,9 @@ def get_task(
     return task_dao.filter(name=name)
 
 
+_dataset_evaluation_cache = {}
+
+
 @router.get("/get_dataset_evaluation")
 def get_dataset_evaluation(
     dataset_name: str,
@@ -460,11 +464,15 @@ def get_dataset_evaluation(
     """
     Retrieve specific dataset evaluation object from the database.
     """
-    raw_data = dataset_evaluation_dao.filter(dataset_name=dataset_name)
-    final_points = generate_and_prune_points(
-        raw_data, endpoint_dao=endpoint_dao, benchmark_run_dao=benchmark_run_dao
-    )
-    return final_points
+    if dataset_name not in _dataset_evaluation_cache:
+        _dataset_evaluation_cache[dataset_name] = {}
+    if time.time() - _dataset_evaluation_cache[dataset_name].get("ts", 0) > 3600 * 3:
+        _dataset_evaluation_cache[dataset_name]["ts"] = time.time()
+        raw_data = dataset_evaluation_dao.filter(dataset_name=dataset_name)
+        _dataset_evaluation_cache[dataset_name]["points"] = generate_and_prune_points(
+            raw_data, endpoint_dao=endpoint_dao, benchmark_run_dao=benchmark_run_dao
+        )
+    return _dataset_evaluation_cache[dataset_name]["points"]
 
 
 @router.put("/create_datapoint")
