@@ -16,16 +16,16 @@ def reorganize_data(raw_responses):
     datasets = dict()
     for response in raw_responses:
         relevant_info = {
-            "prompt": response["prompt"],
-            "mdl_name": response["mdl_name"],
-            "score": response["gt_score"],
-            "pred": response["score"],
+            "prompt": response.prompt,
+            "mdl_name": response.mdl_name,
+            "score": float(response.gt_score),
+            "pred": float(response.score),
         }
         if relevant_info["pred"] and relevant_info["pred"] != "null":
-            if response["dataset_name"] in datasets:
-                datasets[response["dataset_name"]].append(relevant_info)
+            if response.dataset_name in datasets:
+                datasets[response.dataset_name].append(relevant_info)
             else:
-                datasets[response["dataset_name"]] = [relevant_info]
+                datasets[response.dataset_name] = [relevant_info]
 
     final_results = dict()
     for dataset in datasets:
@@ -78,13 +78,6 @@ def generate_router_points(data, endpoint_dao, benchmark_run_dao):
         f"{e.model}@{e.provider}": float(get_value_of(benchmark_run_dao, e, "itl"))
         for e in endpoints
     }
-    with open("metrics.json") as f:
-        metrics = json.load(f)
-    endpoints = metrics.keys()
-    print(f"endpoints: {endpoints}")
-    endpoint_costs = {endpoint: metrics[endpoint]["cost"] for endpoint in endpoints}
-    endpoint_ttft = {endpoint: metrics[endpoint]["ttft"] for endpoint in endpoints}
-    endpoint_itl = {endpoint: metrics[endpoint]["itl"] for endpoint in endpoints}
 
     def get_mean(endpoint):
         scores = [
@@ -99,7 +92,7 @@ def generate_router_points(data, endpoint_dao, benchmark_run_dao):
     for dataset in data:
         prompt_list = data[dataset]
         endpoint_scores = {
-            f"{e}": get_mean(f"{e}")
+            f"{e.model}@{e.provider}": get_mean(f"{e.model}@{e.provider}")
             for e in endpoints
         }
         endpoint_scores = {
