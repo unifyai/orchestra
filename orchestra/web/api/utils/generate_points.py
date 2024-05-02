@@ -57,28 +57,10 @@ def generate_router_points(data, endpoint_dao, benchmark_run_dao):
     endpoint_to_model = lambda endpoint: (
         endpoint.split("@")[0].replace("gpt-4-turbo", "gpt-4-0125-preview") + "_pred"
     )
-    endpoints = get_endpoints_of(
-        endpoint_dao,
-        tuple(default_models),
-        get_ttl_hash(),
-        only_from=tuple(default_providers),
-    )
-    endpoint_costs = {
-        f"{e.model}@{e.provider}": (
-            3 * float(get_value_of(benchmark_run_dao, e, "input_cost_per_token"))
-            + float(get_value_of(benchmark_run_dao, e, "output_cost_per_token"))
-        )
-        / 4
-        for e in endpoints
-    }
-    endpoint_ttft = {
-        f"{e.model}@{e.provider}": float(get_value_of(benchmark_run_dao, e, "ttft"))
-        for e in endpoints
-    }
-    endpoint_itl = {
-        f"{e.model}@{e.provider}": float(get_value_of(benchmark_run_dao, e, "itl"))
-        for e in endpoints
-    }
+    endpoints = metrics.keys()
+    endpoint_costs = {e: metrics[e]["cost"] for e in endpoints}
+    endpoint_ttft = {e: metrics[e]["ttft"] for e in endpoints}
+    endpoint_itl = {e: metrics[e]["itl"] for e in endpoints}
 
     def get_mean(endpoint):
         scores = [
@@ -92,10 +74,7 @@ def generate_router_points(data, endpoint_dao, benchmark_run_dao):
 
     for dataset in data:
         prompt_list = data[dataset]
-        endpoint_scores = {
-            f"{e.model}@{e.provider}": get_mean(f"{e.model}@{e.provider}")
-            for e in endpoints
-        }
+        endpoint_scores = {e: get_mean(e) for e in endpoints}
         endpoint_scores = {
             endpoint: score
             for endpoint, score in endpoint_scores.items()
@@ -389,3 +368,121 @@ def generate_and_prune_points(raw_responses, endpoint_dao, benchmark_run_dao):
             "router": pruned_router_points[dataset],
         }
     return final_points
+
+
+metrics = {
+    "claude-3-haiku@anthropic": {
+        "cost": 1.25,
+        "ttft": 641.8530669999427,
+        "itl": 7.320965663317298,
+    },
+    "claude-3-opus@anthropic": {
+        "cost": 75,
+        "ttft": 2591.2904499998604,
+        "itl": 34.60999395530718,
+    },
+    "claude-3-sonnet@anthropic": {
+        "cost": 15,
+        "ttft": 1151.3890589999392,
+        "itl": 12.03211326126186,
+    },
+    "deepseek-coder-33b-instruct@together-ai": {
+        "cost": 0.8,
+        "ttft": 350.50168700001905,
+        "itl": 27.84690674999979,
+    },
+    "gemma-7b-it@anyscale": {
+        "cost": 0.15,
+        "ttft": 1176.8055530000083,
+        "itl": 23.80950663414629,
+    },
+    "gemma-7b-it@together-ai": {
+        "cost": 0.2,
+        "ttft": 355.0849639999569,
+        "itl": 10.75794840476246,
+    },
+    "gemma-7b-it@fireworks-ai": {
+        "cost": 0.2,
+        "ttft": 596.3048590000426,
+        "itl": 4.905699351647504,
+    },
+    "gemma-7b-it@lepton-ai": {
+        "cost": 0.1,
+        "ttft": 1013.7901719999718,
+        "itl": 10.638872657407488,
+    },
+    "gemma-7b-it@deepinfra": {
+        "cost": 0.13,
+        "ttft": 1106.7886140000383,
+        "itl": 18.87030848101254,
+    },
+    "gpt-3.5-turbo@openai": {
+        "cost": 1.5,
+        "ttft": 400.21933599996373,
+        "itl": 27.26199600000041,
+    },
+    "gpt-4-turbo@openai": {
+        "cost": 30,
+        "ttft": 635.7509760000539,
+        "itl": 42.31438732535859,
+    },
+    "llama-3-70b-chat@fireworks-ai": {"cost": 0.9, "ttft": 469.78, "itl": 6.58},
+    "llama-3-70b-chat@together-ai": {"cost": 0.9, "ttft": 466.28, "itl": 5.38},
+    "llama-3-8b-chat@fireworks-ai": {"cost": 0.2, "ttft": 355.48, "itl": 3.06},
+    "llama-3-8b-chat@together-ai": {"cost": 0.2, "ttft": 1035.13, "itl": 3.98},
+    "mistral-large@mistral-ai": {
+        "cost": 24,
+        "ttft": 439.49507400009225,
+        "itl": 54.14005861235942,
+    },
+    "mistral-small@mistral-ai": {
+        "cost": 6,
+        "ttft": 371.52690400000665,
+        "itl": 18.000006300000376,
+    },
+    "mixtral-8x7b-instruct-v0.1@together-ai": {
+        "cost": 0.6,
+        "ttft": 405.11531099997455,
+        "itl": 4.174361656626742,
+    },
+    "mixtral-8x7b-instruct-v0.1@octoai": {
+        "cost": 0.5,
+        "ttft": 1164.472783000008,
+        "itl": 24.274311994623353,
+    },
+    "mixtral-8x7b-instruct-v0.1@replicate": {
+        "cost": 1,
+        "ttft": 887.903352999956,
+        "itl": 15.394309863636439,
+    },
+    "mixtral-8x7b-instruct-v0.1@mistral-ai": {
+        "cost": 0.7,
+        "ttft": 352.0689869999387,
+        "itl": 12.773902387097081,
+    },
+    "mixtral-8x7b-instruct-v0.1@anyscale": {
+        "cost": 0.5,
+        "ttft": 1749.3290439999782,
+        "itl": 34.07672297029734,
+    },
+    "mixtral-8x7b-instruct-v0.1@fireworks-ai": {
+        "cost": 0.5,
+        "ttft": 324.21352400001524,
+        "itl": 3.380061226190194,
+    },
+    "mixtral-8x7b-instruct-v0.1@lepton-ai": {
+        "cost": 0.5,
+        "ttft": 872.5847029999159,
+        "itl": 12.631626471590804,
+    },
+    "mixtral-8x7b-instruct-v0.1@deepinfra": {
+        "cost": 0.27,
+        "ttft": 1130.8457239999825,
+        "itl": 15.669842747059405,
+    },
+    "mixtral-8x7b-instruct-v0.1@aws-bedrock": {
+        "cost": 0.7,
+        "ttft": 713.9613250001275,
+        "itl": 15.034942066296473,
+    },
+}
