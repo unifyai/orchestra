@@ -2,7 +2,7 @@ import os
 import requests
 from typing import Annotated, List
 
-from fastapi import APIRouter, Form, Request, UploadFile
+from fastapi import APIRouter, Form, HTTPException, Request, UploadFile
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.dataset_evaluation_task_dao import DatasetEvaluationTaskDAO
@@ -33,6 +33,13 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     """
     Compute batch evaluation based on the request.
     """
+
+    if dataset_evaluation_task_dao.filter(name=name):
+        raise HTTPException(
+            status_code=400,
+            detail="A dataset with this name already exists. Please, choose a different one.",
+        )
+
     # Create CustomEvaluation and set status to pending
     dataset_evaluation_task_dao.create_dataset_evaluation_task(
         name, "pending", request_fastapi.state.user_id
