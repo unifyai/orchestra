@@ -70,25 +70,21 @@ class DatasetEvaluationTaskDAO:
 
     def update_dataset_evaluation_task(  # noqa: WPS211, WPS213, WPS231, C901
         self,
-        id: int,  # noqa: WPS125
-        user_id: Optional[int] = None,
-        name: Optional[str] = None,
-        status: Optional[float] = None,
+        user_id: str,
+        name: str,
+        status: str,
     ) -> None:
         """
         Update specific datapoint model.
         """
         query = select(DatasetEvaluationTask)
-        query = query.where(DatasetEvaluationTask.id == id)
+        query = query.where(DatasetEvaluationTask.user_id == user_id).where(
+            DatasetEvaluationTask.name == name
+        )
         raw_dataset_evaluation_task = self.session.execute(query)
         dataset_evaluation_task = raw_dataset_evaluation_task.scalars().first()
         if dataset_evaluation_task is not None:
-            if user_id:
-                setattr(dataset_evaluation_task, "user_id", user_id)
-            if name:
-                setattr(dataset_evaluation_task, "name", name)
-            if status:
-                setattr(dataset_evaluation_task, "status", status)
+            setattr(dataset_evaluation_task, "status", status)
 
     def get_user_datasets(  # noqa: WPS211, C901
         self,

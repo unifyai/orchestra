@@ -893,16 +893,19 @@ def update_user_autorecharge_qty(  # noqa: WPS211
     users_dao.session.commit()
 
 
-@router.put("/dataset_evaluation_task")
+@router.put("/update_dataset_evaluation_task")
 def update_dataset_evaluation_task_status(  # noqa: WPS211
-    id: str,  # noqa: WPS125
+    user_id: str,  # noqa: WPS125
+    name: str,
     status: str,
     dataset_evaluation_task: DatasetEvaluationTaskDAO = Depends(),
 ) -> None:
     """
     Update the status of a dataset evaluation task.
     """
-    dataset_evaluation_task.update_dataset_evaluation_task(user_id=id, status=status)
+    dataset_evaluation_task.update_dataset_evaluation_task(
+        user_id=user_id, name=name, status=status
+    )
     dataset_evaluation_task.session.commit()
 
 
