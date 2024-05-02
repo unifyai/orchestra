@@ -469,11 +469,14 @@ def get_dataset_evaluation(
     if (time.time() - _dataset_evaluation_cache[dataset_name].get("ts", 0)) > (
         3600 * 12
     ):
-        _dataset_evaluation_cache[dataset_name]["ts"] = time.time()
         raw_data = dataset_evaluation_dao.filter(dataset_name=dataset_name)
         _dataset_evaluation_cache[dataset_name]["points"] = generate_and_prune_points(
             raw_data, endpoint_dao=endpoint_dao, benchmark_run_dao=benchmark_run_dao
         )
+        _dataset_evaluation_cache[dataset_name]["ts"] = time.time()
+    print(_dataset_evaluation_cache.keys())
+    for k, v in _dataset_evaluation_cache.items():
+        print(k, v)
     return _dataset_evaluation_cache[dataset_name]["points"]
 
 
