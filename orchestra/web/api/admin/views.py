@@ -466,7 +466,9 @@ def get_dataset_evaluation(
     """
     if dataset_name not in _dataset_evaluation_cache:
         _dataset_evaluation_cache[dataset_name] = {}
-    if time.time() - _dataset_evaluation_cache[dataset_name].get("ts", 0) > 3600 * 3:
+    if (time.time() - _dataset_evaluation_cache[dataset_name].get("ts", 0)) > (
+        3600 * 12
+    ):
         _dataset_evaluation_cache[dataset_name]["ts"] = time.time()
         raw_data = dataset_evaluation_dao.filter(dataset_name=dataset_name)
         _dataset_evaluation_cache[dataset_name]["points"] = generate_and_prune_points(
