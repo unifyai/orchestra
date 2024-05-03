@@ -248,9 +248,11 @@ def generate_router_points(data, endpoint_dao, benchmark_run_dao):
                         )
                         / total_weight
                     )
+                    to_label = lambda value: "{:.{}e}".format(abs(value), 2)
+                    a_label, b_label, c_label = to_label(a), to_label(b), to_label(c)
                     router_points.append(
                         {
-                            "model": f"router_{abs(round(a, 3))}_{abs(round(b, 3))}_{abs(round(c, 3))}",
+                            "model": f"router_{a_label}_{b_label}_{c_label}",
                             "quality": final_score,
                             "cost": final_cost,
                             "ttft": final_ttft,
