@@ -100,6 +100,12 @@ def get_dataset_evaluation(
         raise HTTPException(
             status_code=404, detail="Dataset not found in this user account."
         )
+
+    raw_data = dataset_evaluation_dao.filter(dataset_name=dataset_name)
+    return generate_and_prune_points(
+        raw_data, endpoint_dao=endpoint_dao, benchmark_run_dao=benchmark_run_dao
+    )
+
     if dataset_name not in _dataset_evaluation_cache:
         _dataset_evaluation_cache[dataset_name] = {}
     if (time.time() - _dataset_evaluation_cache[dataset_name].get("ts", 0)) > (
