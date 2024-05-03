@@ -57,7 +57,6 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     TaskModelResponse,
     UsersModelResponse,
 )
-from orchestra.web.api.utils.generate_points import generate_and_prune_points
 
 router = APIRouter()
 
@@ -449,35 +448,6 @@ def get_task(
     :return: task object from database.
     """
     return task_dao.filter(name=name)
-
-
-_dataset_evaluation_cache = {}
-
-
-@router.get("/get_dataset_evaluation")
-def get_dataset_evaluation(
-    dataset_name: str,
-    dataset_evaluation_dao: DatasetEvaluationDAO = Depends(),
-    endpoint_dao: EndpointDAO = Depends(),
-    benchmark_run_dao: BenchmarkRunDAO = Depends(),
-) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
-    """
-    Retrieve specific dataset evaluation object from the database.
-    """
-    if dataset_name not in _dataset_evaluation_cache:
-        _dataset_evaluation_cache[dataset_name] = {}
-    if (time.time() - _dataset_evaluation_cache[dataset_name].get("ts", 0)) > (
-        3600 * 12
-    ):
-        raw_data = dataset_evaluation_dao.filter(dataset_name=dataset_name)
-        _dataset_evaluation_cache[dataset_name]["points"] = generate_and_prune_points(
-            raw_data, endpoint_dao=endpoint_dao, benchmark_run_dao=benchmark_run_dao
-        )
-        _dataset_evaluation_cache[dataset_name]["ts"] = time.time()
-    print(_dataset_evaluation_cache.keys())
-    for k, v in _dataset_evaluation_cache.items():
-        print(k, v)
-    return _dataset_evaluation_cache[dataset_name]["points"]
 
 
 @router.put("/create_datapoint")
