@@ -1,7 +1,11 @@
+import json
 import os
 import time
 import requests
 from typing import Annotated, Any, Dict, List
+
+from google.cloud import storage
+from google.cloud.exceptions import NotFound
 
 from fastapi import APIRouter, Form, HTTPException, Request, UploadFile
 from fastapi.param_functions import Depends
@@ -78,8 +82,28 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     )
 
 
-_dataset_evaluation_cache = {}
+def check_file_exists(bucket_name, blob_name):
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+    try:
+        blob.reload()
+        return True
+    except NotFound:
+        return False
 
+def read_json_from_bucket(bucket_name, blob_name):
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+    json_data = blob.download_as_string()
+    return json.loads(json_data.decode('utf-8'))
+
+def upload_json_to_bucket(json_data, bucket_name, destination_blob_name):
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(destination_blob_name)
+    blob.upload_from_string(json_data, content_type='application/json')
 
 @router.get("/get_dataset_evaluation")
 def get_dataset_evaluation(
@@ -101,19 +125,18 @@ def get_dataset_evaluation(
             status_code=404, detail="Dataset not found in this user account."
         )
 
-    raw_data = dataset_evaluation_dao.filter(dataset_name=dataset_name)
-    return generate_and_prune_points(
-        raw_data, endpoint_dao=endpoint_dao, benchmark_run_dao=benchmark_run_dao
-    )
+    bucket_name = "plot-points-temp-storage"
+    blob_name = f"{dataset_name}.json"
 
-    if dataset_name not in _dataset_evaluation_cache:
-        _dataset_evaluation_cache[dataset_name] = {}
-    if (time.time() - _dataset_evaluation_cache[dataset_name].get("ts", 0)) > (
-        3600 * 12
-    ):
+    exists = check_file_exists(bucket_name, blob_name)
+    if exists:
+        points = read_json_from_bucket(bucket_name, blob_name)
+    else:
         raw_data = dataset_evaluation_dao.filter(dataset_name=dataset_name)
-        _dataset_evaluation_cache[dataset_name]["points"] = generate_and_prune_points(
+        points = generate_and_prune_points(
             raw_data, endpoint_dao=endpoint_dao, benchmark_run_dao=benchmark_run_dao
         )
-        _dataset_evaluation_cache[dataset_name]["ts"] = time.time()
-    return _dataset_evaluation_cache[dataset_name]["points"]
+        json_str = json.dumps(points)
+        upload_json_to_bucket(json_str, bucket_name, blob_name)
+
+    return points
