@@ -128,10 +128,17 @@ def get_dataset_evaluation(
     bucket_name = "plot-points-temp-storage"
     blob_name = f"{dataset_name}.json"
 
+    generate_points = False
     exists = check_file_exists(bucket_name, blob_name)
     if exists:
         points = read_json_from_bucket(bucket_name, blob_name)
+        # If stored points is empty, try to regenerate
+        if points == {}:
+            generate_points = True
     else:
+        generate_points = True
+    
+    if generate_points:
         raw_data = dataset_evaluation_dao.filter(dataset_name=dataset_name)
         points = generate_and_prune_points(
             raw_data, endpoint_dao=endpoint_dao, benchmark_run_dao=benchmark_run_dao
