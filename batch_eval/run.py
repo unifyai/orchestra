@@ -17,13 +17,18 @@ async def main():
     prompt_file = sys.argv[2]
     api_key = sys.argv[3]
     name = sys.argv[4]
+    user_id = sys.argv[5]
 
     model_list = [
         "mixtral-8x7b-instruct-v0.1@together-ai",
+        "mixtral-8x22b-instruct-v0.1@together-ai",
         "gpt-3.5-turbo@openai",
         "claude-3-haiku@anthropic",
         "claude-3-sonnet@anthropic",
+        "claude-3-opus@anthropic",
         "deepseek-coder-33b-instruct@together-ai",
+        "llama-3-70b-chat@together-ai",
+        "llama-3-8b-chat@together-ai",
         "mistral-small@mistral-ai",
         "gemma-7b-it@together-ai",
         "mistral-large@mistral-ai",
