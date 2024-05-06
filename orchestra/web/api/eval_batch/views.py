@@ -81,6 +81,32 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         info="List of prompts uploaded succesfully. Your will receive an email soon!"
     )
 
+@router.post("/training")
+def training(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
+    request_fastapi: Request,
+    file: Annotated[UploadFile, Form()],
+    name: Annotated[str, Form()],
+) -> EvalBatchResponse:
+    """
+    Store the file uploaded by a user.
+    """
+
+    bucket_name = "training-jobs-temp-storage"
+    blob_name = f"{request_fastapi.state.user_id}_{name}.json"
+
+    exists = check_file_exists(bucket_name, blob_name)
+    if exists:
+        raise HTTPException(
+            status_code=400,
+            detail="A training dataset with this name already exists. Please, choose a different one.",
+        )
+    else:
+        file_content = file.file.read()
+        upload_json_to_bucket(file_content, bucket_name, blob_name)
+
+    return EvalBatchResponse(
+        info="Training data uploaded succesfully. Your will receive an email soon!"
+    )
 
 def check_file_exists(bucket_name, blob_name):
     client = storage.Client()
