@@ -84,7 +84,8 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 @router.post("/training")
 def training(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
-    file: Annotated[UploadFile, Form()],
+    train_file: Annotated[UploadFile, Form()],
+    test_file: Annotated[UploadFile, Form()],
     name: Annotated[str, Form()],
 ) -> EvalBatchResponse:
     """
@@ -92,17 +93,20 @@ def training(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     """
 
     bucket_name = "training-jobs-temp-storage"
-    blob_name = f"{request_fastapi.state.user_id}_{name}.json"
+    train_blob_name = f"{request_fastapi.state.user_id}_{name}_train.json"
+    test_blob_name = f"{request_fastapi.state.user_id}_{name}_train.json"
 
-    exists = check_file_exists(bucket_name, blob_name)
+    exists = check_file_exists(bucket_name, train_blob_name)
     if exists:
         raise HTTPException(
             status_code=400,
             detail="A training dataset with this name already exists. Please, choose a different one.",
         )
     else:
-        file_content = file.file.read()
-        upload_json_to_bucket(file_content, bucket_name, blob_name)
+        train_file_content = train_file.file.read()
+        upload_json_to_bucket(train_file_content, bucket_name, train_blob_name)
+        test_file_content = test_file.file.read()
+        upload_json_to_bucket(test_file_content, bucket_name, test_blob_name)
 
     return EvalBatchResponse(
         info="Training data uploaded succesfully. Your will receive an email soon!"
