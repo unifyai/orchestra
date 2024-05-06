@@ -1,15 +1,14 @@
 # run.py
-import sys
-import os
-import json
 import asyncio
+import json
+import os
+import sys
 
 import requests
-from google.cloud import aiplatform
-
-from fetch_queries import generate_queries
-from fetch_judgements import generate_judgements
 from extract_score import ratings_from_sample
+from fetch_judgements import generate_judgements
+from fetch_queries import generate_queries
+from google.cloud import aiplatform
 
 
 async def main():
@@ -17,13 +16,18 @@ async def main():
     prompt_file = sys.argv[2]
     api_key = sys.argv[3]
     name = sys.argv[4]
+    user_id = sys.argv[5]
 
     model_list = [
         "mixtral-8x7b-instruct-v0.1@together-ai",
+        "mixtral-8x22b-instruct-v0.1@together-ai",
         "gpt-3.5-turbo@openai",
         "claude-3-haiku@anthropic",
         "claude-3-sonnet@anthropic",
+        "claude-3-opus@anthropic",
         "deepseek-coder-33b-instruct@together-ai",
+        "llama-3-70b-chat@together-ai",
+        "llama-3-8b-chat@together-ai",
         "mistral-small@mistral-ai",
         "gemma-7b-it@together-ai",
         "mistral-large@mistral-ai",
@@ -129,9 +133,33 @@ async def main():
             }
             response = requests.put(url, json=payload, headers=headers)
 
-    # TODO: If succesful, mark the dataset as completed
+    print("Populating cache...")
 
-    # TODO: Enable someone to fetch only if user_id is empty or is the same as the user doing the request
+    # send a request to populate the cache first
+    url = f'{os.getenv("ORCHESTRA_BASE_URL")}/v0/get_dataset_evaluation'
+    headers = {"Authorization": f"Bearer {api_key}"}
+    payload = {"dataset_name": name}
+    retry = 5
+    while retry > 0:
+        response = requests.get(url, params=payload, headers=headers)
+        if response.text != "{}":
+            break
+        retry = retry - 1
+        print("Retrying cache population...")
+
+    print("Marking task as complete")
+
+    # mark the dataset as completed if success
+    url = f'{os.getenv("ORCHESTRA_BASE_URL")}/v0/admin/update_dataset_evaluation_task'
+    headers = {"Authorization": f'Bearer {os.getenv("ORCHESTRA_ADMIN_KEY")}'}
+    payload = {
+        "user_id": user_id,
+        "name": name,
+        "status": "completed",
+    }
+    response = requests.put(url, params=payload, headers=headers)
+
+    print("Task completed!")
 
 
 if __name__ == "__main__":
