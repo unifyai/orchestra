@@ -1,15 +1,14 @@
 # run.py
-import sys
-import os
-import json
 import asyncio
+import json
+import os
+import sys
 
 import requests
-from google.cloud import aiplatform
-
-from fetch_queries import generate_queries
-from fetch_judgements import generate_judgements
 from extract_score import ratings_from_sample
+from fetch_judgements import generate_judgements
+from fetch_queries import generate_queries
+from google.cloud import aiplatform
 
 
 async def main():
@@ -143,11 +142,10 @@ async def main():
     retry = 5
     while retry > 0:
         response = requests.get(url, params=payload, headers=headers)
-        if response.text != '{}':
+        if response.text != "{}":
             break
         retry = retry - 1
         print("Retrying cache population...")
-            
 
     print("Marking task as complete")
 
