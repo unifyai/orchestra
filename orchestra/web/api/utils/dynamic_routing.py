@@ -11,6 +11,7 @@ from google.cloud import aiplatform
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.settings import settings
+from orchestra.web.api.utils.generate_points import metrics
 
 # TODO: Add errors back to the refactored function
 from orchestra.web.api.utils.http_responses import (  # invalid_optimisation_goal,; invalid_price_threshold,
@@ -240,7 +241,7 @@ def get_endpoints_of(
 
     if (
         full_hash in _cached_endpoints
-        and _cached_endpoints[full_hash].get("ttl_hash", 0) == ttl_hash
+        # and _cached_endpoints[full_hash].get("ttl_hash", 0) == ttl_hash
     ):
         return _cached_endpoints[full_hash]["endpoints"]  # type: ignore[return-value]
     logger.info(f"Getting endpoints of {models}")
@@ -262,7 +263,7 @@ def get_endpoints_of(
     ]
     _cached_endpoints[full_hash] = {}
     _cached_endpoints[full_hash]["endpoints"] = endpoints
-    _cached_endpoints[full_hash]["ttl_hash"] = ttl_hash
+    # _cached_endpoints[full_hash]["ttl_hash"] = ttl_hash
     return endpoints
 
 
@@ -303,6 +304,8 @@ def get_value_of(
     endpoint: Endpoint,
     metric: str,
 ) -> Optional[float]:
+    if f"{endpoint.model}@{endpoint.provider}" in metrics:
+        return metrics[f"{endpoint.model}@{endpoint.provider}"][metric]
     model_metrics = get_model_metrics(
         benchmark_run_dao,
         endpoint,
