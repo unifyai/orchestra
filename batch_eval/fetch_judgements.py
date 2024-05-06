@@ -4,14 +4,16 @@ from functools import partial
 
 from generic_mp import process_requests
 import request_handling
-
-from judge_configs import format_no_ref
+from judge_configs import format_no_ref, format_with_ref
 
 
 def create_judge_prompt(prompt_data):
     prompt = prompt_data["prompt"]
     model_response = prompt_data["model_response"]
-    judge_prompt = format_no_ref(prompt=prompt, model_resp=model_response)
+    if "ref_answer" in prompt_data:
+        judge_prompt = format_with_ref(prompt=prompt, ref_ans=prompt_data["ref_answer"], model_resp=model_response)
+    else:
+        judge_prompt = format_no_ref(prompt=prompt, model_resp=model_response)
     return judge_prompt
 
 
@@ -79,7 +81,6 @@ async def generate_judgements(
 
     print(f"{len(no_resp)=}")
     print(f"{len(unprocessed_prompts)=}")
-    # assert False
     process_requests(
         unprocessed_prompts,
         response_filename=judge_response_file,
