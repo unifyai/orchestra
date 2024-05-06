@@ -1,5 +1,6 @@
 import datetime
-from typing import List, Optional
+import time
+from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.param_functions import Depends
@@ -449,31 +450,6 @@ def get_task(
     return task_dao.filter(name=name)
 
 
-@router.get(
-    "/get_dataset_evaluation", response_model=List[DatasetEvaluationModelResponse]
-)
-def get_dataset_evaluation(
-    mdl_name: Optional[str] = None,
-    dataset_name: Optional[str] = None,
-    prompt: Optional[str] = None,
-    gt_score: Optional[float] = None,
-    score: Optional[float] = None,
-    metric: Optional[str] = None,
-    dataset_evaluation_dao: DatasetEvaluationDAO = Depends(),
-) -> List[DatasetEvaluation]:
-    """
-    Retrieve specific dataset evaluation object from the database.
-    """
-    return dataset_evaluation_dao.filter(
-        mdl_name=mdl_name,
-        dataset_name=dataset_name,
-        prompt=prompt,
-        gt_score=gt_score,
-        score=score,
-        metric=metric,
-    )
-
-
 @router.put("/create_datapoint")
 def create_datapoint_model(
     new_datapoint_object: DatapointModelRequest,
@@ -887,16 +863,19 @@ def update_user_autorecharge_qty(  # noqa: WPS211
     users_dao.session.commit()
 
 
-@router.put("/dataset_evaluation_task")
+@router.put("/update_dataset_evaluation_task")
 def update_dataset_evaluation_task_status(  # noqa: WPS211
-    id: str,  # noqa: WPS125
+    user_id: str,  # noqa: WPS125
+    name: str,
     status: str,
     dataset_evaluation_task: DatasetEvaluationTaskDAO = Depends(),
 ) -> None:
     """
     Update the status of a dataset evaluation task.
     """
-    dataset_evaluation_task.update_dataset_evaluation_task(user_id=id, status=status)
+    dataset_evaluation_task.update_dataset_evaluation_task(
+        user_id=user_id, name=name, status=status
+    )
     dataset_evaluation_task.session.commit()
 
 
