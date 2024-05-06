@@ -13,7 +13,7 @@ from orchestra.web.api.utils.dynamic_routing import (
 )
 
 
-ROUTER_POINT = "router_0.00e+00_0.00e+00_0.00e+00"
+ROUTER_POINT = "router_2.12e-01_5.00e-04_2.78e-04"
 
 
 def reorganize_data(raw_responses):
