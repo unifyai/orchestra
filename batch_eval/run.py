@@ -129,9 +129,34 @@ async def main():
             }
             response = requests.put(url, json=payload, headers=headers)
 
-    # TODO: If succesful, mark the dataset as completed
+    print("Populating cache...")
 
-    # TODO: Enable someone to fetch only if user_id is empty or is the same as the user doing the request
+    # send a request to populate the cache first
+    url = f'{os.getenv("ORCHESTRA_BASE_URL")}/v0/get_dataset_evaluation'
+    headers = {"Authorization": f"Bearer {api_key}"}
+    payload = {"dataset_name": name}
+    retry = 5
+    while retry > 0:
+        response = requests.get(url, params=payload, headers=headers)
+        if response.text != '{}':
+            break
+        retry = retry - 1
+        print("Retrying cache population...")
+            
+
+    print("Marking task as complete")
+
+    # mark the dataset as completed if success
+    url = f'{os.getenv("ORCHESTRA_BASE_URL")}/v0/admin/update_dataset_evaluation_task'
+    headers = {"Authorization": f'Bearer {os.getenv("ORCHESTRA_ADMIN_KEY")}'}
+    payload = {
+        "user_id": user_id,
+        "name": name,
+        "status": "completed",
+    }
+    response = requests.put(url, params=payload, headers=headers)
+
+    print("Task completed!")
 
 
 if __name__ == "__main__":
