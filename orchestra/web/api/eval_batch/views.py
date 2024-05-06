@@ -94,7 +94,7 @@ def training(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     bucket_name = "training-jobs-temp-storage"
     train_blob_name = f"{request_fastapi.state.user_id}_{name}_train.json"
-    test_blob_name = f"{request_fastapi.state.user_id}_{name}_train.json"
+    test_blob_name = f"{request_fastapi.state.user_id}_{name}_test.json"
 
     exists = check_file_exists(bucket_name, train_blob_name)
     if exists:
