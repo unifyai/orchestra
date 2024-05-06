@@ -304,6 +304,8 @@ def get_value_of(
     metric: str,
 ) -> Optional[float]:
     if f"{endpoint.model}@{endpoint.provider}" in metrics:
+        if metric in ["input_cost_per_token", "output_cost_per_token"]:
+            metric = "cost"
         return metrics[f"{endpoint.model}@{endpoint.provider}"][metric]
     model_metrics = get_model_metrics(
         benchmark_run_dao,
