@@ -23,6 +23,34 @@ logger = logging.getLogger(__name__)
 
 ### Arbitrary function
 
+default_models = {
+    "claude-3-haiku",
+    "claude-3-opus",
+    "claude-3-sonnet",
+    "deepseek-coder-33b-instruct",
+    "gemma-7b-it",
+    "gpt-3.5-turbo",
+    "gpt-4",
+    "llama-3-70b-chat",
+    "llama-3-8b-chat",
+    "mistral-large",
+    "mistral-small",
+    "mixtral-8x22b-instruct-v0.1",
+    "mixtral-8x7b-instruct-v0.1",
+}
+
+default_providers = {
+    "anthropic",
+    "together-ai",
+    "mistral-ai",
+    "openai",
+    "anyscale",
+    "fireworks-ai",
+    "deepinfra",
+    "octoai",
+    "aws-bedrock",
+}
+
 
 class RouterConfig:
     def __init__(
@@ -39,34 +67,10 @@ class RouterConfig:
 
         self.info_segments = self.endpoint_str_to_dict()
 
-        self.default_models = {
-            "claude-3-haiku",
-            "claude-3-opus",
-            "claude-3-sonnet",
-            "deepseek-coder-33b-instruct",
-            "gemma-7b-it",
-            "gpt-3.5-turbo",
-            "gpt-4",
-            "llama-3-70b-chat",
-            "llama-3-8b-chat",
-            "mistral-large",
-            "mistral-small",
-            "mixtral-8x22b-instruct-v0.1",
-            "mixtral-8x7b-instruct-v0.1",
-        }
+        self.default_models = default_models
         self.models = self.extract_list("models")
 
-        self.default_providers = {
-            "anthropic",
-            "together-ai",
-            "mistral-ai",
-            "openai",
-            "anyscale",
-            "fireworks-ai",
-            "deepinfra",
-            "octoai",
-            "aws-bedrock",
-        }
+        self.default_providers = default_providers
         self.providers = self.extract_list("providers")
 
         self.q = self.extract_factor("q")
