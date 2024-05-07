@@ -502,4 +502,24 @@ metrics = {
         "ttft": 713.9613250001275,
         "itl": 15.034942066296473,
     },
+    "mixtral-8x22b-instruct-v0.1@mistral-ai": {
+        "cost": 3,
+        "ttft": 135,
+        "itl": 12.25,
+    },
+    "mixtral-8x22b-instruct-v0.1@fireworks-ai": {
+        "cost": 0.9,
+        "ttft": 314,
+        "itl": 11.63,
+    },
+    "mixtral-8x22b-instruct-v0.1@together-ai": {
+        "cost": 1.2,
+        "ttft": 840,
+        "itl": 21.88,
+    },
+    "mixtral-8x22b-instruct-v0.1@deepinfra": {
+        "cost": 0.65,
+        "ttft": 950,
+        "itl": 19.91,
+    },
 }

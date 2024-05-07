@@ -128,12 +128,13 @@ class RouterConfig:
 
     def __call__(self, prompt, debug=False):
         # Get full list of endpoints
-        endpoints = get_endpoints_of(
-            self.endpoint_dao,
-            tuple(self.models),
-            only_from=tuple(self.providers),
-            ttl_hash=get_ttl_hash(),
-        )
+        # endpoints = get_endpoints_of(
+        #     self.endpoint_dao,
+        #     tuple(self.models),
+        #     only_from=tuple(self.providers),
+        #     ttl_hash=get_ttl_hash(),
+        # )
+        endpoints = baked_router_endpoints
         # Get quality from the neural router scoring function
         model_scores = neural_scoring(prompt)
         if debug:
@@ -260,7 +261,6 @@ def get_endpoints_of(
         )
         for q in query_result
     ]
-    logger.info(endpoints)
     _cached_endpoints[full_hash] = {}
     _cached_endpoints[full_hash]["endpoints"] = endpoints
     # _cached_endpoints[full_hash]["ttl_hash"] = ttl_hash
@@ -476,6 +476,7 @@ def dynamic_routing(
     )
     return selected_model, selected_provider
 
+
 metrics = {
     "claude-3-haiku@anthropic": {
         "cost": 1.25,
@@ -591,4 +592,198 @@ metrics = {
         "ttft": 713.9613250001275,
         "itl": 15.034942066296473,
     },
+    "mixtral-8x22b-instruct-v0.1@mistral-ai": {
+        "cost": 3,
+        "ttft": 135,
+        "itl": 12.25,
+    },
+    "mixtral-8x22b-instruct-v0.1@fireworks-ai": {
+        "cost": 0.9,
+        "ttft": 314,
+        "itl": 11.63,
+    },
+    "mixtral-8x22b-instruct-v0.1@together-ai": {
+        "cost": 1.2,
+        "ttft": 840,
+        "itl": 21.88,
+    },
+    "mixtral-8x22b-instruct-v0.1@deepinfra": {
+        "cost": 0.65,
+        "ttft": 950,
+        "itl": 19.91,
+    },
 }
+
+baked_router_endpoints = [
+    Endpoint(
+        id=1299,
+        model="mixtral-8x7b-instruct-v0.1",
+        model_id=29,
+        provider="together-ai",
+        provider_id=8,
+    ),
+    Endpoint(
+        id=1300,
+        model="mixtral-8x7b-instruct-v0.1",
+        model_id=29,
+        provider="octoai",
+        provider_id=4,
+    ),
+    Endpoint(id=1351, model="gpt-4", model_id=91, provider="openai", provider_id=5),
+    Endpoint(
+        id=1355, model="gpt-3.5-turbo", model_id=114, provider="openai", provider_id=5
+    ),
+    Endpoint(
+        id=1278,
+        model="mixtral-8x7b-instruct-v0.1",
+        model_id=29,
+        provider="mistral-ai",
+        provider_id=3,
+    ),
+    Endpoint(
+        id=1377,
+        model="mixtral-8x7b-instruct-v0.1",
+        model_id=29,
+        provider="anyscale",
+        provider_id=2,
+    ),
+    Endpoint(
+        id=1378,
+        model="deepseek-coder-33b-instruct",
+        model_id=132,
+        provider="together-ai",
+        provider_id=8,
+    ),
+    Endpoint(
+        id=1387,
+        model="mixtral-8x7b-instruct-v0.1",
+        model_id=29,
+        provider="fireworks-ai",
+        provider_id=10,
+    ),
+    Endpoint(
+        id=1401,
+        model="mixtral-8x7b-instruct-v0.1",
+        model_id=29,
+        provider="deepinfra",
+        provider_id=12,
+    ),
+    Endpoint(
+        id=1407, model="gemma-7b-it", model_id=134, provider="anyscale", provider_id=2
+    ),
+    Endpoint(
+        id=1408,
+        model="gemma-7b-it",
+        model_id=134,
+        provider="together-ai",
+        provider_id=8,
+    ),
+    Endpoint(
+        id=1409,
+        model="gemma-7b-it",
+        model_id=134,
+        provider="fireworks-ai",
+        provider_id=10,
+    ),
+    Endpoint(
+        id=1411, model="gemma-7b-it", model_id=134, provider="deepinfra", provider_id=12
+    ),
+    Endpoint(
+        id=1415,
+        model="mixtral-8x7b-instruct-v0.1",
+        model_id=29,
+        provider="aws-bedrock",
+        provider_id=13,
+    ),
+    Endpoint(
+        id=1418,
+        model="mistral-small",
+        model_id=136,
+        provider="mistral-ai",
+        provider_id=3,
+    ),
+    Endpoint(
+        id=1419,
+        model="mistral-large",
+        model_id=137,
+        provider="mistral-ai",
+        provider_id=3,
+    ),
+    Endpoint(
+        id=1420,
+        model="claude-3-haiku",
+        model_id=138,
+        provider="anthropic",
+        provider_id=1,
+    ),
+    Endpoint(
+        id=1421,
+        model="claude-3-opus",
+        model_id=139,
+        provider="anthropic",
+        provider_id=1,
+    ),
+    Endpoint(
+        id=1422,
+        model="claude-3-sonnet",
+        model_id=140,
+        provider="anthropic",
+        provider_id=1,
+    ),
+    Endpoint(
+        id=1423,
+        model="mixtral-8x22b-instruct-v0.1",
+        model_id=141,
+        provider="mistral-ai",
+        provider_id=3,
+    ),
+    Endpoint(
+        id=1424,
+        model="mixtral-8x22b-instruct-v0.1",
+        model_id=141,
+        provider="together-ai",
+        provider_id=8,
+    ),
+    Endpoint(
+        id=1425,
+        model="mixtral-8x22b-instruct-v0.1",
+        model_id=141,
+        provider="fireworks-ai",
+        provider_id=10,
+    ),
+    Endpoint(
+        id=1426,
+        model="mixtral-8x22b-instruct-v0.1",
+        model_id=141,
+        provider="deepinfra",
+        provider_id=12,
+    ),
+    Endpoint(
+        id=1427,
+        model="llama-3-8b-chat",
+        model_id=142,
+        provider="together-ai",
+        provider_id=8,
+    ),
+    Endpoint(
+        id=1428,
+        model="llama-3-8b-chat",
+        model_id=142,
+        provider="fireworks-ai",
+        provider_id=10,
+    ),
+    Endpoint(
+        id=1429,
+        model="llama-3-70b-chat",
+        model_id=143,
+        provider="together-ai",
+        provider_id=8,
+    ),
+    Endpoint(
+        id=1430,
+        model="llama-3-70b-chat",
+        model_id=143,
+        provider="fireworks-ai",
+        provider_id=10,
+    ),
+]
