@@ -1,16 +1,7 @@
-import json
 import math
 from statistics import mean
 import numpy as np
 import scipy
-
-from orchestra.web.api.utils.dynamic_routing import (
-    get_endpoints_of,
-    get_value_of,
-    get_ttl_hash,
-    default_models,
-    default_providers,
-)
 
 
 ROUTER_POINT = "router_2.12e-01_5.00e-04_2.78e-04"
@@ -25,7 +16,7 @@ def reorganize_data(raw_responses):
             "score": float(response.gt_score),
             "pred": float(response.score),
         }
-        if relevant_info["pred"] and relevant_info["pred"] != "null":
+        if "pred" in relevant_info and relevant_info["pred"] != "null":
             if response.dataset_name in datasets:
                 datasets[response.dataset_name].append(relevant_info)
             else:
@@ -55,7 +46,7 @@ def reorganize_data(raw_responses):
     return final_results
 
 
-def generate_router_points(data, endpoint_dao, benchmark_run_dao):
+def generate_router_points(data):
     final_scores = dict()
     endpoint_to_model = lambda endpoint: (
         endpoint.split("@")[0].replace("gpt-4-turbo", "gpt-4-0125-preview") + "_pred"
@@ -359,12 +350,10 @@ def prune_router_points(router_points):
     return final_pruned_points
 
 
-def generate_and_prune_points(dataset_name, raw_responses, endpoint_dao, benchmark_run_dao):
+def generate_and_prune_points(dataset_name, raw_responses):
     organized_responses = reorganize_data(raw_responses)
     point_solutions = get_point_solutions(organized_responses)
-    router_points = generate_router_points(
-        organized_responses, endpoint_dao, benchmark_run_dao
-    )
+    router_points = generate_router_points(organized_responses)
     chosen_point = None
     if dataset_name == "hermes":
         get_list = lambda p1, p2: (p1.split("_")[1:], p2.split("_")[1:])
