@@ -260,6 +260,7 @@ def get_endpoints_of(
         )
         for q in query_result
     ]
+    logger.info(endpoints)
     _cached_endpoints[full_hash] = {}
     _cached_endpoints[full_hash]["endpoints"] = endpoints
     # _cached_endpoints[full_hash]["ttl_hash"] = ttl_hash
