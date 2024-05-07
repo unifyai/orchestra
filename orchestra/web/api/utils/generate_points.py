@@ -359,20 +359,23 @@ def prune_router_points(router_points):
     return final_pruned_points
 
 
-def generate_and_prune_points(raw_responses, endpoint_dao, benchmark_run_dao):
+def generate_and_prune_points(dataset_name, raw_responses, endpoint_dao, benchmark_run_dao):
     organized_responses = reorganize_data(raw_responses)
     point_solutions = get_point_solutions(organized_responses)
     router_points = generate_router_points(
         organized_responses, endpoint_dao, benchmark_run_dao
     )
-    get_list = lambda p1, p2: (p1.split("_")[1:], p2.split("_")[1:])
-    get_dist = lambda p1, p2: sum(abs(float(p1_i) - float(p2_i)) for p1_i, p2_i in zip(p1, p2))
-    dist = [get_dist(*get_list(point["model"], ROUTER_POINT)) for point in router_points["hermes"]]
-    min_idx = np.argmin(dist)
-    chosen_point = router_points["hermes"][min_idx]
-    chosen_point["model"] = ROUTER_POINT
+    chosen_point = None
+    if dataset_name == "hermes":
+        get_list = lambda p1, p2: (p1.split("_")[1:], p2.split("_")[1:])
+        get_dist = lambda p1, p2: sum(abs(float(p1_i) - float(p2_i)) for p1_i, p2_i in zip(p1, p2))
+        dist = [get_dist(*get_list(point["model"], ROUTER_POINT)) for point in router_points["hermes"]]
+        min_idx = np.argmin(dist)
+        chosen_point = router_points["hermes"][min_idx]
+        chosen_point["model"] = ROUTER_POINT
     pruned_router_points = prune_router_points(router_points)
-    pruned_router_points["hermes"].append(chosen_point)
+    if chosen_point:
+        pruned_router_points["hermes"].append(chosen_point)
     for dataset in pruned_router_points:
         pruned_router_points[dataset] = pruned_router_points[dataset]
     final_points = {}

@@ -171,7 +171,7 @@ def get_dataset_evaluation(
     if generate_points:
         raw_data = dataset_evaluation_dao.filter(dataset_name=dataset_name)
         points = generate_and_prune_points(
-            raw_data, endpoint_dao=endpoint_dao, benchmark_run_dao=benchmark_run_dao
+            dataset_name, raw_data, endpoint_dao=endpoint_dao, benchmark_run_dao=benchmark_run_dao
         )
         json_str = json.dumps(points)
         upload_json_to_bucket(json_str, bucket_name, blob_name)
