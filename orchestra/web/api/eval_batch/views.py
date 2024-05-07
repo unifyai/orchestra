@@ -69,6 +69,7 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         "name": name,
         "api_key": request_fastapi.headers["authorization"].removeprefix("Bearer "),
         "eval_unique_id": f"{request_fastapi.state.user_id}_{name}",
+        "user_email": email,
     }
     # Define the file to upload
     file_content = file.file.read()
