@@ -443,6 +443,11 @@ metrics = {
         "ttft": 635.7509760000539,
         "itl": 42.31438732535859,
     },
+    "gpt-4@openai": {
+        "cost": 45,
+        "ttft": 760,
+        "itl": 46.05,
+    },
     "llama-3-70b-chat@fireworks-ai": {"cost": 0.9, "ttft": 469.78, "itl": 6.58},
     "llama-3-70b-chat@together-ai": {"cost": 0.9, "ttft": 466.28, "itl": 5.38},
     "llama-3-8b-chat@fireworks-ai": {"cost": 0.2, "ttft": 355.48, "itl": 3.06},
