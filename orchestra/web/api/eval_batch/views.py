@@ -41,6 +41,7 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
     file: Annotated[UploadFile, Form()],
     name: Annotated[str, Form()],
+    email: Annotated[str, Form()],
     dataset_evaluation_task_dao: DatasetEvaluationTaskDAO = Depends(),
 ) -> EvalBatchResponse:
     """
@@ -87,6 +88,7 @@ def training(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     train_file: Annotated[UploadFile, Form()],
     test_file: Annotated[UploadFile, Form()],
     name: Annotated[str, Form()],
+    email: Annotated[str, Form()],
 ) -> EvalBatchResponse:
     """
     Store the file uploaded by a user.
