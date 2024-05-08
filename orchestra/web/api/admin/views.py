@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
+from orchestra.db.dao.beta_list_dao import BetaListDAO
 from orchestra.db.dao.datapoint_dao import DatapointDAO
 from orchestra.db.dao.dataset_evaluation_dao import DatasetEvaluationDAO
 from orchestra.db.dao.dataset_evaluation_task_dao import DatasetEvaluationTaskDAO
@@ -705,6 +706,21 @@ def create_task_model(
     )
 
 
+@router.put("/create_beta_list")
+def create_beta_list(
+    email: str,
+    type: str,
+    beta_list_dao: BetaListDAO = Depends(),
+) -> None:
+    """
+    Creates beta list model in the database.
+
+    :param new_beta_list_object: new beta list model item.
+    :param beta_list_dao: DAO for beta_list models.
+    """
+    beta_list_dao.create_beta_list(email=email, type=type)
+
+
 @router.put("/create_dataset_evaluation")
 def create_dataset_evaluation_model(
     new_dataset_evaluation_object: DatasetEvaluationModelRequest,
@@ -729,7 +745,8 @@ def create_dataset_evaluation_model(
         prompt=new_dataset_evaluation_object.prompt,
         gt_score=new_dataset_evaluation_object.gt_score,
         score=new_dataset_evaluation_object.score,
-        metric=new_dataset_evaluation_object.metric,
+        input_tokens=new_dataset_evaluation_object.input_tokens,
+        output_tokens=new_dataset_evaluation_object.output_tokens,
     )
 
 
@@ -903,5 +920,6 @@ def update_dataset_evaluation(
         prompt=dataset_evaluation_object.prompt,
         gt_score=dataset_evaluation_object.gt_score,
         score=dataset_evaluation_object.score,
-        metric=dataset_evaluation_object.metric,
+        input_tokens=dataset_evaluation_object.input_tokens,
+        output_tokens=dataset_evaluation_object.output_tokens,
     )
