@@ -745,7 +745,8 @@ def create_dataset_evaluation_model(
         prompt=new_dataset_evaluation_object.prompt,
         gt_score=new_dataset_evaluation_object.gt_score,
         score=new_dataset_evaluation_object.score,
-        metric=new_dataset_evaluation_object.metric,
+        input_tokens=new_dataset_evaluation_object.input_tokens,
+        output_tokens=new_dataset_evaluation_object.output_tokens,
     )
 
 
@@ -919,5 +920,6 @@ def update_dataset_evaluation(
         prompt=dataset_evaluation_object.prompt,
         gt_score=dataset_evaluation_object.gt_score,
         score=dataset_evaluation_object.score,
-        metric=dataset_evaluation_object.metric,
+        input_tokens=dataset_evaluation_object.input_tokens,
+        output_tokens=dataset_evaluation_object.output_tokens,
     )

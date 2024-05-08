@@ -83,6 +83,7 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         info="List of prompts uploaded succesfully. Your will receive an email soon!"
     )
 
+
 @router.post("/training")
 def training(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
@@ -115,6 +116,7 @@ def training(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         info="Training data uploaded succesfully. Your will receive an email soon!"
     )
 
+
 def check_file_exists(bucket_name, blob_name):
     client = storage.Client()
     bucket = client.bucket(bucket_name)
@@ -125,18 +127,21 @@ def check_file_exists(bucket_name, blob_name):
     except NotFound:
         return False
 
+
 def read_json_from_bucket(bucket_name, blob_name):
     client = storage.Client()
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(blob_name)
     json_data = blob.download_as_string()
-    return json.loads(json_data.decode('utf-8'))
+    return json.loads(json_data.decode("utf-8"))
+
 
 def upload_json_to_bucket(json_data, bucket_name, destination_blob_name):
     client = storage.Client()
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(destination_blob_name)
-    blob.upload_from_string(json_data, content_type='application/json')
+    blob.upload_from_string(json_data, content_type="application/json")
+
 
 @router.get("/get_dataset_evaluation")
 def get_dataset_evaluation(
@@ -170,7 +175,7 @@ def get_dataset_evaluation(
             generate_points = True
     else:
         generate_points = True
-    
+
     if generate_points:
         raw_data = dataset_evaluation_dao.filter(dataset_name=dataset_name)
         points = generate_and_prune_points(dataset_name, raw_data)

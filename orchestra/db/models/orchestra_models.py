@@ -233,7 +233,9 @@ class DatasetEvaluation(Base):
     prompt = sa.Column(sa.String(), nullable=False, primary_key=True)
     gt_score = sa.Column(sa.Numeric(), nullable=False)
     score = sa.Column(sa.Numeric(), nullable=False)
-    metric = sa.Column(sa.String(), nullable=True)
+    input_tokens = sa.Column(sa.Numeric(), nullable=True)
+    output_tokens = sa.Column(sa.Numeric(), nullable=True)
+
 
 class BetaList(Base):
     """Model class for the beta list table."""
