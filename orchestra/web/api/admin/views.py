@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
+from orchestra.db.dao.beta_list_dao import BetaListDAO
 from orchestra.db.dao.datapoint_dao import DatapointDAO
 from orchestra.db.dao.dataset_evaluation_dao import DatasetEvaluationDAO
 from orchestra.db.dao.dataset_evaluation_task_dao import DatasetEvaluationTaskDAO
@@ -703,6 +704,21 @@ def create_task_model(
         name=new_task_object.name,
         modality=new_task_object.modality,
     )
+
+
+@router.put("/create_beta_list")
+def create_beta_list(
+    email: str,
+    type: str,
+    beta_list_dao: BetaListDAO = Depends(),
+) -> None:
+    """
+    Creates beta list model in the database.
+
+    :param new_beta_list_object: new beta list model item.
+    :param beta_list_dao: DAO for beta_list models.
+    """
+    beta_list_dao.create_beta_list(email=email, type=type)
 
 
 @router.put("/create_dataset_evaluation")

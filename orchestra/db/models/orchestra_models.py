@@ -234,3 +234,12 @@ class DatasetEvaluation(Base):
     gt_score = sa.Column(sa.Numeric(), nullable=False)
     score = sa.Column(sa.Numeric(), nullable=False)
     metric = sa.Column(sa.String(), nullable=True)
+
+class BetaList(Base):
+    """Model class for the beta list table."""
+
+    __tablename__ = "beta_list"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    email = sa.Column(sa.String(), nullable=False)
+    type = sa.Column(sa.String(), nullable=False)
