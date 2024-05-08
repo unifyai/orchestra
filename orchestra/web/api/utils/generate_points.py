@@ -1,4 +1,5 @@
 import math
+import copy
 from statistics import mean
 import numpy as np
 import scipy
@@ -9,13 +10,26 @@ ROUTER_POINT = "router_2.12e-01_5.00e-04_2.78e-04"
 
 def reorganize_data(raw_responses):
     datasets = dict()
+    _metrics = copy.deepcopy(metrics)
     for response in raw_responses:
         relevant_info = {
             "prompt": response.prompt,
             "mdl_name": response.mdl_name,
             "score": float(response.gt_score),
             "pred": float(response.score),
+            "input_tokens": float(response.input_tokens),
+            "output_tokens": float(response.output_tokens),
         }
+        for endpoint in _metrics.keys():
+            if response.mdl_name in endpoint:
+                _metrics[endpoint]["input_tokens"] = (
+                    _metrics[endpoint].get("input_tokens", 0)
+                    + relevant_info["input_tokens"]
+                )
+                _metrics[endpoint]["output_tokens"] = (
+                    _metrics[endpoint].get("output_tokens", 0)
+                    + relevant_info["output_tokens"]
+                )
         if "pred" in relevant_info and relevant_info["pred"] != "null":
             if response.dataset_name in datasets:
                 datasets[response.dataset_name].append(relevant_info)
@@ -43,18 +57,32 @@ def reorganize_data(raw_responses):
             dataset_results.append({"prompt": prompt, **prompts[prompt]})
         final_results[dataset] = dataset_results
 
-    return final_results
+    return _metrics, final_results
 
 
-def generate_router_points(data):
+def generate_router_points(data, _metrics):
     final_scores = dict()
     endpoint_to_model = lambda endpoint: (
         endpoint.split("@")[0].replace("gpt-4-turbo", "gpt-4-0125-preview") + "_pred"
     )
-    endpoints = metrics.keys()
-    endpoint_costs = {e: metrics[e]["cost"] for e in endpoints}
-    endpoint_ttft = {e: metrics[e]["ttft"] for e in endpoints}
-    endpoint_itl = {e: metrics[e]["itl"] for e in endpoints}
+    endpoints = _metrics.keys()
+
+    def compute_cost(endpoint_metrics):
+        input_cost = endpoint_metrics["input_cost"] * endpoint_metrics.get(
+            "input_tokens", 1
+        )
+        output_cost = endpoint_metrics["output_cost"] * endpoint_metrics.get(
+            "output_tokens", 1
+        )
+        total_tokens = endpoint_metrics.get("input_tokens", 1) + endpoint_metrics.get(
+            "output_tokens", 1
+        )
+        weighted_cost = (input_cost + output_cost) / total_tokens
+        return weighted_cost
+
+    endpoint_costs = {e: compute_cost(_metrics[e]) for e in endpoints}
+    endpoint_ttft = {e: _metrics[e]["ttft"] for e in endpoints}
+    endpoint_itl = {e: _metrics[e]["itl"] for e in endpoints}
 
     def get_mean(endpoint):
         scores = [
@@ -351,14 +379,19 @@ def prune_router_points(router_points):
 
 
 def generate_and_prune_points(dataset_name, raw_responses):
-    organized_responses = reorganize_data(raw_responses)
+    _metrics, organized_responses = reorganize_data(raw_responses)
     point_solutions = get_point_solutions(organized_responses)
-    router_points = generate_router_points(organized_responses)
+    router_points = generate_router_points(organized_responses, _metrics)
     chosen_point = None
     if dataset_name == "hermes":
         get_list = lambda p1, p2: (p1.split("_")[1:], p2.split("_")[1:])
-        get_dist = lambda p1, p2: sum(abs(float(p1_i) - float(p2_i)) for p1_i, p2_i in zip(p1, p2))
-        dist = [get_dist(*get_list(point["model"], ROUTER_POINT)) for point in router_points["hermes"]]
+        get_dist = lambda p1, p2: sum(
+            abs(float(p1_i) - float(p2_i)) for p1_i, p2_i in zip(p1, p2)
+        )
+        dist = [
+            get_dist(*get_list(point["model"], ROUTER_POINT))
+            for point in router_points["hermes"]
+        ]
         min_idx = np.argmin(dist)
         chosen_point = router_points["hermes"][min_idx]
         chosen_point["model"] = ROUTER_POINT
@@ -381,139 +414,217 @@ metrics = {
         "cost": 1.25,
         "ttft": 641.8530669999427,
         "itl": 7.320965663317298,
+        "input_cost": 0.25,
+        "output_cost": 1.25,
     },
     "claude-3-opus@anthropic": {
         "cost": 75,
         "ttft": 2591.2904499998604,
         "itl": 34.60999395530718,
+        "input_cost": 15,
+        "output_cost": 75,
     },
     "claude-3-sonnet@anthropic": {
         "cost": 15,
         "ttft": 1151.3890589999392,
         "itl": 12.03211326126186,
+        "input_cost": 3,
+        "output_cost": 15,
     },
     "deepseek-coder-33b-instruct@together-ai": {
         "cost": 0.8,
         "ttft": 350.50168700001905,
         "itl": 27.84690674999979,
+        "input_cost": 0.8,
+        "output_cost": 0.8,
     },
     "gemma-7b-it@anyscale": {
         "cost": 0.15,
         "ttft": 1176.8055530000083,
         "itl": 23.80950663414629,
+        "input_cost": 0.15,
+        "output_cost": 0.15,
     },
     "gemma-7b-it@together-ai": {
         "cost": 0.2,
         "ttft": 355.0849639999569,
         "itl": 10.75794840476246,
+        "input_cost": 0.2,
+        "output_cost": 0.2,
     },
     "gemma-7b-it@fireworks-ai": {
         "cost": 0.2,
         "ttft": 596.3048590000426,
         "itl": 4.905699351647504,
+        "input_cost": 0.2,
+        "output_cost": 0.2,
     },
     "gemma-7b-it@lepton-ai": {
         "cost": 0.1,
         "ttft": 1013.7901719999718,
         "itl": 10.638872657407488,
+        "input_cost": 0.1,
+        "output_cost": 0.1,
     },
     "gemma-7b-it@deepinfra": {
         "cost": 0.13,
         "ttft": 1106.7886140000383,
         "itl": 18.87030848101254,
+        "input_cost": 0.13,
+        "output_cost": 0.13,
     },
     "gpt-3.5-turbo@openai": {
         "cost": 1.5,
         "ttft": 400.21933599996373,
         "itl": 27.26199600000041,
+        "input_cost": 0.5,
+        "output_cost": 1.5,
     },
     "gpt-4-turbo@openai": {
         "cost": 30,
         "ttft": 635.7509760000539,
         "itl": 42.31438732535859,
+        "input_cost": 10,
+        "output_cost": 30,
     },
     "gpt-4@openai": {
         "cost": 45,
         "ttft": 760,
         "itl": 46.05,
+        "input_cost": 30,
+        "output_cost": 60,
     },
-    "llama-3-70b-chat@fireworks-ai": {"cost": 0.9, "ttft": 469.78, "itl": 6.58},
-    "llama-3-70b-chat@together-ai": {"cost": 0.9, "ttft": 466.28, "itl": 5.38},
-    "llama-3-8b-chat@fireworks-ai": {"cost": 0.2, "ttft": 355.48, "itl": 3.06},
-    "llama-3-8b-chat@together-ai": {"cost": 0.2, "ttft": 1035.13, "itl": 3.98},
+    "llama-3-70b-chat@fireworks-ai": {
+        "cost": 0.9,
+        "ttft": 469.78,
+        "itl": 6.58,
+        "input_cost": 0.9,
+        "output_cost": 0.9,
+    },
+    "llama-3-70b-chat@together-ai": {
+        "cost": 0.9,
+        "ttft": 466.28,
+        "itl": 5.38,
+        "input_cost": 0.9,
+        "output_cost": 0.9,
+    },
+    "llama-3-8b-chat@fireworks-ai": {
+        "cost": 0.2,
+        "ttft": 355.48,
+        "itl": 3.06,
+        "input_cost": 0.2,
+        "output_cost": 0.2,
+    },
+    "llama-3-8b-chat@together-ai": {
+        "cost": 0.2,
+        "ttft": 1035.13,
+        "itl": 3.98,
+        "input_cost": 0.2,
+        "output_cost": 0.2,
+    },
     "mistral-large@mistral-ai": {
         "cost": 24,
         "ttft": 439.49507400009225,
         "itl": 54.14005861235942,
+        "input_cost": 8,
+        "output_cost": 24,
     },
     "mistral-small@mistral-ai": {
         "cost": 6,
         "ttft": 371.52690400000665,
         "itl": 18.000006300000376,
+        "input_cost": 2,
+        "output_cost": 6,
     },
     "mixtral-8x7b-instruct-v0.1@together-ai": {
         "cost": 0.6,
         "ttft": 405.11531099997455,
         "itl": 4.174361656626742,
+        "input_cost": 0.6,
+        "output_cost": 0.6,
     },
     "mixtral-8x7b-instruct-v0.1@octoai": {
         "cost": 0.5,
         "ttft": 1164.472783000008,
         "itl": 24.274311994623353,
+        "input_cost": 0.3,
+        "output_cost": 0.5,
     },
     "mixtral-8x7b-instruct-v0.1@replicate": {
         "cost": 1,
         "ttft": 887.903352999956,
         "itl": 15.394309863636439,
+        "input_cost": 0.3,
+        "output_cost": 1,
     },
     "mixtral-8x7b-instruct-v0.1@mistral-ai": {
         "cost": 0.7,
         "ttft": 352.0689869999387,
         "itl": 12.773902387097081,
+        "input_cost": 0.7,
+        "output_cost": 0.7,
     },
     "mixtral-8x7b-instruct-v0.1@anyscale": {
         "cost": 0.5,
         "ttft": 1749.3290439999782,
         "itl": 34.07672297029734,
+        "input_cost": 0.5,
+        "output_cost": 0.5,
     },
     "mixtral-8x7b-instruct-v0.1@fireworks-ai": {
         "cost": 0.5,
         "ttft": 324.21352400001524,
         "itl": 3.380061226190194,
+        "input_cost": 0.5,
+        "output_cost": 0.5,
     },
     "mixtral-8x7b-instruct-v0.1@lepton-ai": {
         "cost": 0.5,
         "ttft": 872.5847029999159,
         "itl": 12.631626471590804,
+        "input_cost": 0.5,
+        "output_cost": 0.5,
     },
     "mixtral-8x7b-instruct-v0.1@deepinfra": {
         "cost": 0.27,
         "ttft": 1130.8457239999825,
         "itl": 15.669842747059405,
+        "input_cost": 0.27,
+        "output_cost": 0.27,
     },
     "mixtral-8x7b-instruct-v0.1@aws-bedrock": {
         "cost": 0.7,
         "ttft": 713.9613250001275,
         "itl": 15.034942066296473,
+        "input_cost": 0.45,
+        "output_cost": 0.7,
     },
     "mixtral-8x22b-instruct-v0.1@mistral-ai": {
         "cost": 3,
         "ttft": 135,
         "itl": 12.25,
+        "input_cost": 2,
+        "output_cost": 6,
     },
     "mixtral-8x22b-instruct-v0.1@fireworks-ai": {
         "cost": 0.9,
         "ttft": 314,
         "itl": 11.63,
+        "input_cost": 0.9,
+        "output_cost": 0.9,
     },
     "mixtral-8x22b-instruct-v0.1@together-ai": {
         "cost": 1.2,
         "ttft": 840,
         "itl": 21.88,
+        "input_cost": 1.2,
+        "output_cost": 1.2,
     },
     "mixtral-8x22b-instruct-v0.1@deepinfra": {
         "cost": 0.65,
         "ttft": 950,
         "itl": 19.91,
+        "input_cost": 0.65,
+        "output_cost": 0.65,
     },
 }
