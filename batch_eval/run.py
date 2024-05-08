@@ -8,6 +8,7 @@ import requests
 from extract_score import ratings_from_sample
 from fetch_judgements import generate_judgements
 from fetch_queries import generate_queries
+from token_counts import count_tokens
 from google.cloud import aiplatform
 
 
@@ -101,6 +102,10 @@ async def main():
     for model_tag in model_list:
         model_name = model_tag.split("@")[0]
 
+    ## Do token counts
+
+    id_model_to_tokens = count_tokens(root_dir=root_dir)
+
     ## creates the final table
     id_to_model_to_scores = {}
 
@@ -129,7 +134,8 @@ async def main():
                 "prompt": str(prompt_id),
                 "gt_score": score,
                 "score": router_scores[prompt_id][model_name],
-                "metric": "some metric",
+                "input_tokens": id_model_to_tokens[prompt_id, model_name]["num_toks_in"],
+                "output_tokens": id_model_to_tokens[prompt_id, model_name]["num_toks_out"],
             }
             response = requests.put(url, json=payload, headers=headers)
 
