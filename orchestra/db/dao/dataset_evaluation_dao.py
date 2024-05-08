@@ -21,7 +21,8 @@ class DatasetEvaluationDAO:
         prompt: str,
         gt_score: float,
         score: float,
-        metric: str,
+        input_tokens: int,
+        output_tokens: int,
     ) -> None:
         """
         Add single dataset evaluation to session.
@@ -33,7 +34,8 @@ class DatasetEvaluationDAO:
                 prompt=prompt,
                 gt_score=gt_score,
                 score=score,
-                metric=metric,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
             ),
         )
 
@@ -62,7 +64,8 @@ class DatasetEvaluationDAO:
         prompt: Optional[str] = None,
         gt_score: Optional[float] = None,
         score: Optional[float] = None,
-        metric: Optional[str] = None,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
     ) -> List[DatasetEvaluation]:
         """
         Filter dataset_evaluation models by given parameters.
@@ -78,8 +81,10 @@ class DatasetEvaluationDAO:
             query = query.where(DatasetEvaluation.gt_score == gt_score)
         if score:
             query = query.where(DatasetEvaluation.score == score)
-        if metric:
-            query = query.where(DatasetEvaluation.metric == metric)
+        if input_tokens:
+            query = query.where(DatasetEvaluation.input_tokens == input_tokens)
+        if output_tokens:
+            query = query.where(DatasetEvaluation.output_tokens == output_tokens)
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())
 
@@ -90,7 +95,8 @@ class DatasetEvaluationDAO:
         prompt: str,
         gt_score: Optional[float] = None,
         score: Optional[float] = None,
-        metric: Optional[str] = None,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
     ) -> None:
         """
         Update specific dataset evaluation model.
@@ -108,5 +114,7 @@ class DatasetEvaluationDAO:
                 setattr(dataset_evaluation, "gt_score", gt_score)
             if score:
                 setattr(dataset_evaluation, "score", score)
-            if metric:
-                setattr(dataset_evaluation, "metric", metric)
+            if input_tokens:
+                setattr(dataset_evaluation, "input_tokens", input_tokens)
+            if output_tokens:
+                setattr(dataset_evaluation, "output_tokens", output_tokens)
