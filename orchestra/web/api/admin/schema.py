@@ -175,7 +175,8 @@ class DatasetEvaluationModelRequest(BaseModel):
     prompt: str
     gt_score: float
     score: float
-    metric: str
+    input_tokens: int
+    output_tokens: int
 
 
 class UsersModelResponse(BaseModel):
@@ -353,4 +354,5 @@ class DatasetEvaluationModelResponse(BaseModel):
     prompt: str
     gt_score: float
     score: float
-    metric: str
+    input_tokens: int
+    output_tokens: int
