@@ -17,14 +17,15 @@ def create_judge_prompt(prompt_data):
     return judge_prompt
 
 
-def create_request(model_tag: str, api_fn, prompt_data: dict, model_name):
+def create_request(model_tag: str, url, headers, prompt_data: dict, model_name):
 
     prompt = create_judge_prompt(prompt_data)
     payload = request_handling.create_payload(model_tag=model_tag, prompt=prompt)
     return request_handling.Request(
         id_=prompt_data["id"],
         payload=payload,
-        api_fn=api_fn,
+        url=url,
+        headers=headers,
         prompt=prompt_data["prompt"],
         response_type="judge_response",
         model_name=model_name,
@@ -42,8 +43,6 @@ async def generate_judgements(
 ):
     url = f'{os.getenv("ORCHESTRA_BASE_URL")}/v0/chat/completions'
     headers = {"Authorization": f"Bearer {api_key}"}
-
-    api_fnc = partial(request_handling.call_api, url=url, headers=headers)
 
     asst_model_name = asst_model_tag.split("@")[0]
     judge_model_name = judge_model_tag.split("@")[0]
@@ -76,12 +75,12 @@ async def generate_judgements(
                 continue
             data["model_response"] = id_to_response[data["row_id"]]
             data["id"] = data["row_id"]
-            req = create_request(judge_model_tag, api_fnc, data, asst_model_name)
+            req = create_request(judge_model_tag, url, headers, data, asst_model_name)
             unprocessed_prompts.append(req)
 
     print(f"{len(no_resp)=}")
     print(f"{len(unprocessed_prompts)=}")
-    process_requests(
+    await process_requests(
         unprocessed_prompts,
         response_filename=judge_response_file,
         batch_size=batch_size,

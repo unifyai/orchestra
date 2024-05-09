@@ -4,6 +4,7 @@ import json
 import tiktoken
 
 def count_tokens(root_dir):
+    enc = tiktoken.encoding_for_model("gpt-4")   
     lines = []
     id_model_to_tokens = {}
     model_response_dir = f'{root_dir}/model_responses'
