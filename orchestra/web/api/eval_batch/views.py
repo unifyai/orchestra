@@ -80,7 +80,7 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     # TODO: Deal with the response code
 
     return EvalBatchResponse(
-        info="List of prompts uploaded succesfully. Your will receive an email soon!"
+        info="List of prompts uploaded succesfully. You will receive an email soon!"
     )
 
 
@@ -113,7 +113,7 @@ def training(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         upload_json_to_bucket(test_file_content, bucket_name, test_blob_name)
 
     return EvalBatchResponse(
-        info="Training data uploaded succesfully. Your will receive an email soon!"
+        info="Training data uploaded succesfully. You will receive an email soon!"
     )
 
 
