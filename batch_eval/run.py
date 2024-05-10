@@ -155,13 +155,16 @@ async def main():
 
     print("Marking task as complete")
 
+    # very naive check that checks we got any model responses
+    status = "completed" if id_to_model_to_scores else "failed"
+
     # mark the dataset as completed if success
     url = f'{os.getenv("ORCHESTRA_BASE_URL")}/v0/admin/update_dataset_evaluation_task'
     headers = {"Authorization": f'Bearer {os.getenv("ORCHESTRA_ADMIN_KEY")}'}
     payload = {
         "user_id": user_id,
         "name": name,
-        "status": "completed",
+        "status": status,
     }
     response = requests.put(url, params=payload, headers=headers)
 
