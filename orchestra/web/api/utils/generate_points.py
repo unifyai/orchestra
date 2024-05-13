@@ -1,3 +1,4 @@
+from functools import cmp_to_key
 import math
 import copy
 from statistics import mean
@@ -272,6 +273,18 @@ def generate_router_points(data, _metrics):
                     )
                     to_label = lambda value: "{:.{}e}".format(abs(value), 2)
                     a_label, b_label, c_label = to_label(a), to_label(b), to_label(c)
+                    breakdown = {
+                        val[0]: val[1]
+                        for val in sorted(
+                            list(
+                                {
+                                    endpoint: router_counts[endpoint] / total_weight
+                                    for endpoint in router_counts
+                                }.items()
+                            ),
+                            key=cmp_to_key(lambda x, y: x[1] > y[1]),
+                        )[:10]
+                    }
                     router_points.append(
                         {
                             "model": f"router_{a_label}_{b_label}_{c_label}",
@@ -279,6 +292,7 @@ def generate_router_points(data, _metrics):
                             "cost": final_cost,
                             "ttft": final_ttft,
                             "itl": final_itl,
+                            "breakdown": breakdown,
                         }
                     )
         final_scores[dataset] = router_points
