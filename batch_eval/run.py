@@ -23,16 +23,16 @@ async def main():
         "mixtral-8x7b-instruct-v0.1@together-ai",
         "mixtral-8x22b-instruct-v0.1@together-ai",
         "gpt-3.5-turbo@openai",
+        "gpt-4-turbo@openai",
         "claude-3-haiku@anthropic",
         "claude-3-sonnet@anthropic",
         "claude-3-opus@anthropic",
         "deepseek-coder-33b-instruct@together-ai",
-        "llama-3-70b-chat@together-ai",
         "llama-3-8b-chat@together-ai",
+        "llama-3-70b-chat@together-ai",
         "mistral-small@mistral-ai",
-        "gemma-7b-it@together-ai",
         "mistral-large@mistral-ai",
-        "gpt-4@openai",
+        "gemma-7b-it@together-ai",
     ]
     judge_model = "gpt-4-turbo@openai"
 
