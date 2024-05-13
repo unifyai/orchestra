@@ -278,7 +278,7 @@ def generate_router_points(data, _metrics):
                         for val in sorted(
                             list(
                                 {
-                                    endpoint: router_counts[endpoint] / total_weight
+                                    endpoint: round(router_counts[endpoint] / total_weight, 2)
                                     for endpoint in router_counts
                                 }.items()
                             ),
