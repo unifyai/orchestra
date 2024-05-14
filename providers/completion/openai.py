@@ -43,4 +43,9 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 10, "completion": 30},
     },
+    "gpt-4o": {
+        "endpoint": "gpt-4o",
+        "context_window": 128000,
+        "cost": {"prompt": 5, "completion": 15},
+    },
 }
