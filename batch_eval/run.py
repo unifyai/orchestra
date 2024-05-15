@@ -24,6 +24,7 @@ async def main():
         "mixtral-8x22b-instruct-v0.1@together-ai",
         "gpt-3.5-turbo@openai",
         "gpt-4-turbo@openai",
+        "gpt-4o@openai",
         "claude-3-haiku@anthropic",
         "claude-3-sonnet@anthropic",
         "claude-3-opus@anthropic",
