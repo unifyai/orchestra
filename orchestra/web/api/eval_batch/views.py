@@ -11,8 +11,6 @@ from fastapi.param_functions import Depends
 
 from orchestra.db.dao.dataset_evaluation_task_dao import DatasetEvaluationTaskDAO
 from orchestra.db.dao.dataset_evaluation_dao import DatasetEvaluationDAO
-from orchestra.db.dao.endpoint_dao import EndpointDAO
-from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 
 from orchestra.db.models.orchestra_models import DatasetEvaluationTask
 from orchestra.web.api.eval_batch.schema import EvalBatchResponse, EvalBatchTaskResponse
@@ -53,6 +51,9 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             detail="A dataset with this name already exists. Please, choose a different one.",
         )
 
+    file_content = file.file.read()
+    check_file_content(file_content)
+
     # Create CustomEvaluation and set status to pending
     dataset_evaluation_task_dao.create_dataset_evaluation_task(
         name, "pending", request_fastapi.state.user_id
@@ -71,7 +72,6 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         "user_email": email,
     }
     # Define the file to upload
-    file_content = file.file.read()
     files = {"file": file_content}
     # Make a POST request to the server
     response = requests.post(url, headers=headers, data=data, files=files, verify=False)
@@ -95,6 +95,11 @@ def training(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     Store the file uploaded by a user.
     """
 
+    train_file_content = train_file.file.read()
+    check_file_content(train_file_content)
+    test_file_content = test_file.file.read()
+    check_file_content(test_file_content)
+
     bucket_name = "training-jobs-temp-storage"
     train_blob_name = f"{request_fastapi.state.user_id}_{name}_train.json"
     test_blob_name = f"{request_fastapi.state.user_id}_{name}_test.json"
@@ -106,9 +111,7 @@ def training(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             detail="A training dataset with this name already exists. Please, choose a different one.",
         )
     else:
-        train_file_content = train_file.file.read()
         upload_json_to_bucket(train_file_content, bucket_name, train_blob_name)
-        test_file_content = test_file.file.read()
         upload_json_to_bucket(test_file_content, bucket_name, test_blob_name)
 
     return EvalBatchResponse(
@@ -126,7 +129,8 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     Upload a dataset.
     """
 
-    # TODO: Check if format is valid
+    file_content = file.file.read()
+    check_file_content(file_content)
 
     bucket_name = "uploaded_datasets"
     blob_name = f"{request_fastapi.state.user_id}/{name}.jsonl"
@@ -138,7 +142,6 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             detail="A dataset with this name already exists. Please, choose a different one.",
         )
     else:
-        file_content = file.file.read()
         upload_json_to_bucket(file_content, bucket_name, blob_name)
 
     return EvalBatchResponse(info="Dataset uploaded succesfully!")
@@ -195,6 +198,35 @@ def upload_json_to_bucket(json_data, bucket_name, destination_blob_name):
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(destination_blob_name)
     blob.upload_from_string(json_data, content_type="application/json")
+
+
+def check_file_content(file_content: str):
+    valid = True
+    info = (
+        "The uploaded dataset has the wrong format."
+        " It must be a jsonl file where each line has a `prompt` key"
+        " and optionally a `ref_answer` one."
+    )
+    try:
+        dicts = file_content.decode().split("\n")
+        dicts = [json.loads(d) for d in dicts]
+        if not isinstance(dicts, List):
+            raise ValueError
+        for i, dict in enumerate(dicts):
+            prompt_present = False
+            for kw in dict.keys():
+                if kw == "prompt":
+                    prompt_present = True
+                if kw not in ["prompt", "ref_answer"]:
+                    info += f" Unknown keyword `{kw}` in line {i+1}."
+                    raise ValueError
+            if not prompt_present:
+                info += f" Key `prompt` not found in line {i+1}."
+                raise ValueError
+    except:
+        valid = False
+    if not valid:
+        raise HTTPException(status_code=400, detail=info)
 
 
 @router.get("/get_dataset_evaluation")
