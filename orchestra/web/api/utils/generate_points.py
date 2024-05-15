@@ -13,13 +13,15 @@ def reorganize_data(raw_responses):
     datasets = dict()
     _metrics = copy.deepcopy(metrics)
     for response in raw_responses:
+        it = response.input_tokens if response.input_tokens is not None else 1
+        ot = response.output_tokens if response.output_tokens is not None else 1
         relevant_info = {
             "prompt": response.prompt,
             "mdl_name": response.mdl_name,
             "score": float(response.gt_score),
             "pred": float(response.score),
-            "input_tokens": float(response.input_tokens),
-            "output_tokens": float(response.output_tokens),
+            "input_tokens": float(it),
+            "output_tokens": float(ot),
         }
         for endpoint in _metrics.keys():
             if response.mdl_name in endpoint:
