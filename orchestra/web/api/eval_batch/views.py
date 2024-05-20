@@ -213,7 +213,7 @@ def check_file_content(file_content: str):
     )
     try:
         dicts = file_content.decode().split("\n")
-        dicts = [json.loads(d) for d in dicts]
+        dicts = [json.loads(d) for d in dicts if d != ""]
         if not isinstance(dicts, List):
             raise ValueError
         for i, dict in enumerate(dicts):
