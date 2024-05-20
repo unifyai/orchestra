@@ -85,7 +85,12 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         # Dynamic routing
         if model == "router":
             rc = RouterConfig(request.model, endpoint_dao, benchmark_run_dao)
-            model, provider = rc(messages[-1]["content"])
+            num_tokens_est = 0
+            for msg in messages:
+                if msg["content"] is not None:
+                    num_tokens_est += len(msg["content"])
+            # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
+            model, provider = rc(messages[-1]["content"], num_tokens_est * 1.25)
         else:  # Non model routing, TODO: clean up to simplify
             target_metric, metrics_thresholds = parse_endpoint(provider)
             model, provider = dynamic_routing(
@@ -150,12 +155,13 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     response["usage"]["cost"] = cost
     return ChatCompletionResponse(**response)
 
+
 @router.post("/router/scores", response_model=RouterScoresResponse)
 def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request: ChatCompletionRequest,
     endpoint_dao: EndpointDAO = Depends(),
     benchmark_run_dao: BenchmarkRunDAO = Depends(),
 ) -> RouterScoresResponse:
-        rc = RouterConfig(request.model, endpoint_dao, benchmark_run_dao)
-        scores = rc(request.messages[-1]["content"], debug=True)
-        return RouterScoresResponse(scores=scores)
+    rc = RouterConfig(request.model, endpoint_dao, benchmark_run_dao)
+    scores = rc(request.messages[-1]["content"], debug=True)
+    return RouterScoresResponse(scores=scores)
