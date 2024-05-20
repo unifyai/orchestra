@@ -7,6 +7,7 @@ from collections import namedtuple
 from typing import Dict, List, Optional, Tuple, Union
 
 from google.cloud import aiplatform
+from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
@@ -126,7 +127,7 @@ class RouterConfig:
             + self.t * (ttft - self.t0)
         )
 
-    def __call__(self, prompt, debug=False):
+    def __call__(self, prompt, input_tokens, debug=False):
         # Get full list of endpoints
         # endpoints = get_endpoints_of(
         #     self.endpoint_dao,
@@ -153,6 +154,7 @@ class RouterConfig:
                 "output_cost_per_token",
                 "ttft",
                 "itl",
+                "context_window",
             ]:
                 endpoint_metrics[name][metric] = float(
                     get_value_of(self.benchmark_run_dao, endpoint, metric),
@@ -169,6 +171,8 @@ class RouterConfig:
                     pass
                 else:
                     valid = False
+            if endpoint_metrics[name]["context_window"] <= input_tokens:
+                valid = False
             if valid:
                 thresholded_endpoints.append(endpoint)
 
@@ -240,7 +244,8 @@ def get_endpoints_of(
     full_hash = str(hash(models)) + str(hash(only_from))
 
     if (
-        full_hash in _cached_endpoints
+        full_hash
+        in _cached_endpoints
         # and _cached_endpoints[full_hash].get("ttl_hash", 0) == ttl_hash
     ):
         return _cached_endpoints[full_hash]["endpoints"]  # type: ignore[return-value]
@@ -619,6 +624,12 @@ metrics = {
     },
 }
 
+for endpoint in metrics:
+    model, provider = endpoint.split("@")
+    metrics[endpoint]["context_window"] = PROVIDER_CLASSES[provider](
+        "",
+    ).supported_models[model]["context_window"]
+
 baked_router_endpoints = [
     Endpoint(
         id=1299,
@@ -636,7 +647,11 @@ baked_router_endpoints = [
     ),
     Endpoint(id=1351, model="gpt-4", model_id=91, provider="openai", provider_id=5),
     Endpoint(
-        id=1355, model="gpt-3.5-turbo", model_id=114, provider="openai", provider_id=5
+        id=1355,
+        model="gpt-3.5-turbo",
+        model_id=114,
+        provider="openai",
+        provider_id=5,
     ),
     Endpoint(
         id=1278,
@@ -674,7 +689,11 @@ baked_router_endpoints = [
         provider_id=12,
     ),
     Endpoint(
-        id=1407, model="gemma-7b-it", model_id=134, provider="anyscale", provider_id=2
+        id=1407,
+        model="gemma-7b-it",
+        model_id=134,
+        provider="anyscale",
+        provider_id=2,
     ),
     Endpoint(
         id=1408,
@@ -691,7 +710,11 @@ baked_router_endpoints = [
         provider_id=10,
     ),
     Endpoint(
-        id=1411, model="gemma-7b-it", model_id=134, provider="deepinfra", provider_id=12
+        id=1411,
+        model="gemma-7b-it",
+        model_id=134,
+        provider="deepinfra",
+        provider_id=12,
     ),
     Endpoint(
         id=1415,
