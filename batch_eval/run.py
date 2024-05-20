@@ -28,6 +28,7 @@ async def main():
         "mixtral-8x7b-instruct-v0.1@together-ai",
         "mixtral-8x22b-instruct-v0.1@together-ai",
         "gpt-3.5-turbo@openai",
+        "gpt-4@openai",
         "gpt-4-turbo@openai",
         "gpt-4o@openai",
         "claude-3-haiku@anthropic",
@@ -40,7 +41,7 @@ async def main():
         "mistral-large@mistral-ai",
         "gemma-7b-it@together-ai",
     ]
-    judge_model = "gpt-4-turbo@openai"
+    judge_model = "gpt-4o@openai"
 
     # Get router scores
     aiplatform.init(
