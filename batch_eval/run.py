@@ -109,7 +109,6 @@ async def main():
         model_name = model_tag.split("@")[0]
 
     ## Do token counts
-
     id_model_to_tokens = count_tokens(root_dir=root_dir)
 
     ## creates the final table
@@ -140,8 +139,12 @@ async def main():
                 "prompt": str(prompt_id),
                 "gt_score": score,
                 "score": router_scores[prompt_id][model_name],
-                "input_tokens": id_model_to_tokens[prompt_id, model_name]["num_toks_in"],
-                "output_tokens": id_model_to_tokens[prompt_id, model_name]["num_toks_out"],
+                "input_tokens": id_model_to_tokens[prompt_id, model_name][
+                    "num_toks_in"
+                ],
+                "output_tokens": id_model_to_tokens[prompt_id, model_name][
+                    "num_toks_out"
+                ],
             }
             response = requests.put(url, json=payload, headers=headers)
 

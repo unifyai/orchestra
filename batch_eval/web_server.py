@@ -6,13 +6,18 @@ from flask import Flask, request
 
 app = Flask(__name__)
 
-@app.route('/evaluate_prompts', methods=['POST'])
-def endpoint():
-    auth_header = request.headers.get('Authorization')
-    # TODO: Deal with this properly
-    if auth_header != '46zSZ,M.7$^pZO0jZY@NxX[b,3f4;y=%SRY':
-        return 'Unauthorized', 401
 
+@app.route("/evaluate_prompts", methods=["POST"])
+def endpoint():
+    auth_header = request.headers.get("Authorization")
+    # TODO: Deal with this properly
+    if auth_header != "46zSZ,M.7$^pZO0jZY@NxX[b,3f4;y=%SRY":
+        return "Unauthorized", 401
+
+    name = request.form.get("name")
+    api_key = request.form.get("api_key")
+    eval_unique_id = request.form.get("eval_unique_id")
+    file = request.files["file"]
     user_email = request.form.get("user_email")
 
     # Process the parameters and file as needed
@@ -43,8 +48,10 @@ def endpoint():
         ]
     )
 
-    return 'Parameters received successfully'
+    return "Parameters received successfully"
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     import uvicorn
-    uvicorn.run('web_server:app', host='0.0.0.0', port=443, workers=2, access_log=True)
+
+    uvicorn.run("web_server:app", host="0.0.0.0", port=443, workers=2, access_log=True)
