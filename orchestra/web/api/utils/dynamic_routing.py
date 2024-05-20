@@ -31,7 +31,8 @@ default_models = {
     "deepseek-coder-33b-instruct",
     "gemma-7b-it",
     "gpt-3.5-turbo",
-    "gpt-4",
+    "gpt-4",  # TODO: Check if this needs to be here
+    "gpt-4o",
     "llama-3-70b-chat",
     "llama-3-8b-chat",
     "mistral-large",
@@ -543,6 +544,11 @@ metrics = {
         "ttft": 760,
         "itl": 46.05,
     },
+    "gpt-4o@openai": {
+        "cost": 7.5,
+        "ttft": 589,
+        "itl": 20.05,
+    },
     "llama-3-70b-chat@fireworks-ai": {"cost": 0.9, "ttft": 469.78, "itl": 6.58},
     "llama-3-70b-chat@together-ai": {"cost": 0.9, "ttft": 466.28, "itl": 5.38},
     "llama-3-8b-chat@fireworks-ai": {"cost": 0.2, "ttft": 355.48, "itl": 3.06},
@@ -646,6 +652,7 @@ baked_router_endpoints = [
         provider_id=4,
     ),
     Endpoint(id=1351, model="gpt-4", model_id=91, provider="openai", provider_id=5),
+    Endpoint(id=1431, model="gpt-4o", model_id=144, provider="openai", provider_id=5),
     Endpoint(
         id=1355,
         model="gpt-3.5-turbo",
