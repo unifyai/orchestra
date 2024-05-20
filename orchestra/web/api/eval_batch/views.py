@@ -45,6 +45,8 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     Compute batch evaluation based on the request.
     """
 
+    _upload_dataset(request_fastapi, file, name)
+
     if dataset_evaluation_task_dao.filter(name=name):
         raise HTTPException(
             status_code=400,
@@ -119,6 +121,23 @@ def training(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     )
 
 
+def _upload_dataset(request, file, name):
+    file_content = file.file.read()
+    check_file_content(file_content)
+
+    bucket_name = "uploaded_datasets"
+    blob_name = f"{request.state.user_id}/{name}.jsonl"
+
+    exists = check_file_exists(bucket_name, blob_name)
+    if exists:
+        raise HTTPException(
+            status_code=400,
+            detail="A dataset with this name already exists. Please, choose a different one.",
+        )
+    else:
+        upload_json_to_bucket(file_content, bucket_name, blob_name)
+
+
 @router.post("/upload_dataset")
 def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
@@ -129,20 +148,7 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     Upload a dataset.
     """
 
-    file_content = file.file.read()
-    check_file_content(file_content)
-
-    bucket_name = "uploaded_datasets"
-    blob_name = f"{request_fastapi.state.user_id}/{name}.jsonl"
-
-    exists = check_file_exists(bucket_name, blob_name)
-    if exists:
-        raise HTTPException(
-            status_code=400,
-            detail="A dataset with this name already exists. Please, choose a different one.",
-        )
-    else:
-        upload_json_to_bucket(file_content, bucket_name, blob_name)
+    _upload_dataset(request_fastapi, file, name)
 
     return EvalBatchResponse(info="Dataset uploaded succesfully!")
 
