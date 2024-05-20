@@ -63,25 +63,26 @@ def reorganize_data(raw_responses):
     return _metrics, final_results
 
 
+def compute_cost(endpoint_metrics):
+    input_cost = endpoint_metrics["input_cost"] * endpoint_metrics.get(
+        "input_tokens", 1
+    )
+    output_cost = endpoint_metrics["output_cost"] * endpoint_metrics.get(
+        "output_tokens", 1
+    )
+    total_tokens = endpoint_metrics.get("input_tokens", 1) + endpoint_metrics.get(
+        "output_tokens", 1
+    )
+    weighted_cost = (input_cost + output_cost) / total_tokens
+    return weighted_cost
+
+
 def generate_router_points(data, _metrics):
     final_scores = dict()
     endpoint_to_model = lambda endpoint: (
         endpoint.split("@")[0].replace("gpt-4-turbo", "gpt-4-0125-preview") + "_pred"
     )
     endpoints = _metrics.keys()
-
-    def compute_cost(endpoint_metrics):
-        input_cost = endpoint_metrics["input_cost"] * endpoint_metrics.get(
-            "input_tokens", 1
-        )
-        output_cost = endpoint_metrics["output_cost"] * endpoint_metrics.get(
-            "output_tokens", 1
-        )
-        total_tokens = endpoint_metrics.get("input_tokens", 1) + endpoint_metrics.get(
-            "output_tokens", 1
-        )
-        weighted_cost = (input_cost + output_cost) / total_tokens
-        return weighted_cost
 
     endpoint_costs = {e: compute_cost(_metrics[e]) for e in endpoints}
     endpoint_ttft = {e: _metrics[e]["ttft"] for e in endpoints}
@@ -280,7 +281,9 @@ def generate_router_points(data, _metrics):
                         for val in sorted(
                             list(
                                 {
-                                    endpoint: round(router_counts[endpoint] / total_weight, 2)
+                                    endpoint: round(
+                                        router_counts[endpoint] / total_weight, 2
+                                    )
                                     for endpoint in router_counts
                                 }.items()
                             ),
@@ -329,6 +332,50 @@ def get_point_solutions(data):
                 {
                     "model": model,
                     "quality": round(model_scores[model] / model_counts[model], 2),
+                }
+            )
+
+        final_scores[dataset] = dataset_scores
+
+    return final_scores
+
+
+def get_point_solutions_full(data, _metrics):
+    final_scores = dict()
+    endpoints = _metrics.keys()
+    endpoint_costs = {e: compute_cost(_metrics[e]) for e in endpoints}
+    endpoint_ttft = {e: _metrics[e]["ttft"] for e in endpoints}
+    endpoint_itl = {e: _metrics[e]["itl"] for e in endpoints}
+
+    for dataset in data:
+        prompt_list = data[dataset]
+        models = [
+            key.replace("_score", "")
+            for key in prompt_list[0].keys()
+            if key != "prompt" and "pred" not in key
+        ]
+        model_scores = dict()
+        model_counts = dict()
+
+        for model in models:
+            model_scores[model] = 0
+            model_counts[model] = 0
+        for prompt in prompt_list:
+            for model in models:
+                if model + "_score" in prompt:
+                    model_scores[model] += prompt[model + "_score"]
+                    model_counts[model] += 1
+
+        dataset_scores = []
+        for endpoint in endpoints:
+            model = endpoint.split("@")[0]
+            dataset_scores.append(
+                {
+                    "endpoint": endpoint,
+                    "quality": round(model_scores[model] / model_counts[model], 2),
+                    "cost": endpoint_costs[endpoint],
+                    "ttft": endpoint_ttft[endpoint],
+                    "itl": endpoint_itl[endpoint],
                 }
             )
 
@@ -397,6 +444,7 @@ def prune_router_points(router_points):
 def generate_and_prune_points(dataset_name, raw_responses):
     _metrics, organized_responses = reorganize_data(raw_responses)
     point_solutions = get_point_solutions(organized_responses)
+    point_solutions_full = get_point_solutions_full(organized_responses, _metrics)
     router_points = generate_router_points(organized_responses, _metrics)
     chosen_point = None
     if dataset_name == "hermes":
@@ -420,6 +468,7 @@ def generate_and_prune_points(dataset_name, raw_responses):
     for dataset in pruned_router_points:
         final_points[dataset] = {
             "point_solutions": point_solutions[dataset],
+            "point_solutions_full": point_solutions_full[dataset],
             "router": pruned_router_points[dataset],
         }
     return final_points
