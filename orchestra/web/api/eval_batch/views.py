@@ -44,8 +44,8 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     """
     Compute batch evaluation based on the request.
     """
-
-    _upload_dataset(request_fastapi, file, name)
+    file_content = file.file.read()
+    _upload_dataset(request_fastapi, file_content, name)
 
     if dataset_evaluation_task_dao.filter(name=name):
         raise HTTPException(
@@ -53,7 +53,6 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             detail="A dataset with this name already exists. Please, choose a different one.",
         )
 
-    file_content = file.file.read()
     check_file_content(file_content)
 
     # Create CustomEvaluation and set status to pending
@@ -121,8 +120,7 @@ def training(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     )
 
 
-def _upload_dataset(request, file, name):
-    file_content = file.file.read()
+def _upload_dataset(request, file_content, name):
     check_file_content(file_content)
 
     bucket_name = "uploaded_datasets"
@@ -147,8 +145,8 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     """
     Upload a dataset.
     """
-
-    _upload_dataset(request_fastapi, file, name)
+    file_content = file.file.read()
+    _upload_dataset(request_fastapi, file_content, name)
 
     return EvalBatchResponse(info="Dataset uploaded succesfully!")
 
