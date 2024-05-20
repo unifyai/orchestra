@@ -1,12 +1,11 @@
 import json
 import os
-from functools import partial
 
 from generic_mp import process_requests
 import request_handling
 
 
-def create_request(model_tag, url, headers, prompt_data):
+def create_request(model_tag: str, url, headers, prompt_data):
     payload = request_handling.create_payload(
         model_tag=model_tag, prompt=prompt_data["prompt"]
     )
@@ -14,7 +13,7 @@ def create_request(model_tag, url, headers, prompt_data):
         id_=prompt_data["id"],
         payload=payload,
         url=url,
-        headers=headers, 
+        headers=headers,
         prompt=prompt_data["prompt"],
         response_type="model_response",
     )
@@ -27,7 +26,6 @@ async def generate_queries(prompt_file, response_file, model_tag, batch_size, ap
 
     url = f'{os.getenv("ORCHESTRA_BASE_URL")}/v0/chat/completions'
     headers = {"Authorization": f"Bearer {api_key}"}
-
 
     completed = set()
     if os.path.isfile(response_file):
