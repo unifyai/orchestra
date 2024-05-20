@@ -13,10 +13,7 @@ def endpoint():
     if auth_header != '46zSZ,M.7$^pZO0jZY@NxX[b,3f4;y=%SRY':
         return 'Unauthorized', 401
 
-    name = request.form.get('name')
-    api_key = request.form.get('api_key')
-    eval_unique_id = request.form.get('eval_unique_id')
-    file = request.files['file']
+    user_email = request.form.get("user_email")
 
     # Process the parameters and file as needed
     lines = file.read().decode().split("\n")
@@ -41,7 +38,8 @@ def endpoint():
             f"batch_eval/{eval_unique_id}/prompts.jsonl",
             api_key,
             name,
-            eval_unique_id.removesuffix(f'_{name}')
+            eval_unique_id.removesuffix(f"_{name}"),
+            user_email,
         ]
     )
 

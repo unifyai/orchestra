@@ -1,15 +1,19 @@
 # run.py
-import asyncio
-import json
-import os
 import sys
+import os
+import json
+import asyncio
+
+import smtplib
+from email.message import EmailMessage
 
 import requests
-from extract_score import ratings_from_sample
-from fetch_judgements import generate_judgements
+from google.cloud import aiplatform
+
 from fetch_queries import generate_queries
 from token_counts import count_tokens
-from google.cloud import aiplatform
+from fetch_judgements import generate_judgements
+from extract_score import ratings_from_sample
 
 
 async def main():
@@ -18,6 +22,7 @@ async def main():
     api_key = sys.argv[3]
     name = sys.argv[4]
     user_id = sys.argv[5]
+    user_email = sys.argv[6]
 
     model_list = [
         "mixtral-8x7b-instruct-v0.1@together-ai",
@@ -170,6 +175,108 @@ async def main():
     response = requests.put(url, params=payload, headers=headers)
 
     print("Task completed!")
+
+    # Initialise email server
+    email_server = smtplib.SMTP("smtp.gmail.com", 587)
+    email_server.starttls()
+    email_addr = os.getenv("EMAIL_ADDR", "auth@unify.ai")
+    email_pass = os.getenv("EMAIL_PASS", "")
+    email_server.login(email_addr, email_pass)
+    body = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dataset Evaluation Completed</title>
+    <style>
+        /* Styling for the email */
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            background-color: #ffffff;
+            text-align: center;
+        }
+        .header {
+            background-color: #00a824;
+            padding: 20px 0;
+        }
+        .subheader {
+            background-color: #00a824;
+            height: 10px;
+        }
+        .content {
+            padding: 20px;
+        }
+        .button {
+            display: inline-block;
+            background-color: #00a824; /* White background */
+            color: #ffffff; /* Green text */
+            font-weight: bold; /* Bold text */
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+        .footer {
+            background-color: #f3f3f5;
+            padding: 20px;
+            text-align: center;
+        }
+        .footer a {
+            margin: 0 10px;
+        }
+        .footer img {
+            width: 36px;
+            height: 36px;
+        }
+    </style>
+</head>
+<body>
+    <div class="subheader">
+        <!-- Green bar at the top -->
+    </div>
+    <div class="content">
+        <h2>Hello! The Dataset Evaluation has finished 🚀</h2>
+        <p>Your dataset evaluation is ready, you can check out the results in <a href="https://console.unify.ai">your console</a>.</p>
+    </div>
+    <div class="subheader">
+        <!-- Green bar at the top -->
+    </div>
+    <div class="footer">
+        <a href="https://github.com/unifyai/" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/github.png" alt="Github" />
+        </a>
+        <a href="https://www.youtube.com/@unifyai" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/youtube.png" alt="Youtube" />
+        </a>
+        <a href="https://discord.gg/sXyFF8tDtm" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/discord.png" alt="Discord" />
+        </a>
+        <a href="https://twitter.com/letsunifyai" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/twitter.png" alt="Twitter" />
+        </a>
+        <a href="https://unifyai.substack.com/" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/substack.png" alt="Substack" />
+        </a>
+    </div>
+</body>
+</html>
+
+"""
+
+    msg = EmailMessage()
+    msg["From"] = f"Unify <auth@unify.ai>"
+    msg["To"] = user_email
+    msg["Bcc"] = "guillermo@unify.ai"
+    msg["Subject"] = "Your dataset evaluation is ready!"
+    msg.set_content(body, subtype="html")
+
+    email_server.send_message(msg)
+    email_server.quit()
+
+    print("Mail sent!")
 
 
 if __name__ == "__main__":
