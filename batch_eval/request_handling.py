@@ -2,6 +2,7 @@ import json
 import requests
 from dataclasses import dataclass
 from typing import Callable
+import aiohttp
 
 
 class Request:
@@ -9,27 +10,30 @@ class Request:
         self,
         id_: int,
         payload: dict,
-        api_fn: Callable[[dict], dict],
+        url,
+        headers,
         prompt: str,
         response_type,
         model_name="",
     ):
         self.id_ = id_
         self.payload = payload
-        self.api_fn = api_fn
+        self.url = url
+        self.headers = headers
         self.prompt = prompt
         self.response_type = response_type
         self.model_name = model_name
 
-    def execute(self):
-        return self.api_fn(self.payload)
+    async def execute(self):
+        ret = await post_data(self.payload, self.url, self.headers)
+        return ret
 
 
-def generic_call(request: Request):
-    response = request.execute()
-    if response.status_code == 200:
+async def generic_call(request: Request):
+    response = await request.execute()
+    if True:
         try:
-            resp_json = json.loads(response.text)
+            resp_json = json.loads(response)
             model_response = resp_json["choices"][0]["message"]["content"]
             model_provider = resp_json["model"]
             if request.response_type == "judge_response":
@@ -53,13 +57,13 @@ def generic_call(request: Request):
                         request.response_type: model_response,
                     },
                 )
-        except:
-            pass
+        except Exception as e:
+            print(e)
 
     # if something went wrong
     try:
-        print(response.text)
-        return (False, response.text)
+        print(response)
+        return (False, response)
     except:
         return (False, 0)
 
@@ -76,6 +80,7 @@ def create_payload(model_tag, prompt):
     return payload
 
 
-def call_api(payload, url, headers):
-    response = requests.post(url, json=payload, headers=headers)
-    return response
+async def post_data(payload, url, headers):
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload, headers=headers) as response:
+            return await response.text()
