@@ -1,10 +1,14 @@
 import json
-import multiprocessing.dummy as mp
+import asyncio
 
 import request_handling as request_handling
 
 
-def process_requests(
+async def call_model(payload):
+    ret = await request_handling.generic_call(payload)
+    return ret
+
+async def process_requests(
     unprocessed_prompts: list,
     response_filename,
     batch_size=5,
@@ -21,8 +25,7 @@ def process_requests(
         unprocessed_prompts = unprocessed_prompts[num_new_prompts:]
         in_progress += new_prompts
 
-        with mp.Pool(batch_size) as p:
-            results = p.map(request_handling.generic_call, in_progress)
+        results = await asyncio.gather(*[call_model(p) for p in in_progress])
 
         complete_results = []
         cur_incomplete = []
