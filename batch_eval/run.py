@@ -4,10 +4,14 @@ import json
 import os
 import sys
 
+import smtplib
+from email.message import EmailMessage
+
 import requests
-from extract_score import ratings_from_sample
-from fetch_judgements import generate_judgements
 from fetch_queries import generate_queries
+from fetch_judgements import generate_judgements
+from extract_score import ratings_from_sample
+from token_counts import count_tokens
 from google.cloud import aiplatform
 
 
@@ -17,23 +21,26 @@ async def main():
     api_key = sys.argv[3]
     name = sys.argv[4]
     user_id = sys.argv[5]
+    user_email = sys.argv[6]
 
     model_list = [
         "mixtral-8x7b-instruct-v0.1@together-ai",
         "mixtral-8x22b-instruct-v0.1@together-ai",
         "gpt-3.5-turbo@openai",
+        "gpt-4@openai",
+        "gpt-4-turbo@openai",
+        "gpt-4o@openai",
         "claude-3-haiku@anthropic",
         "claude-3-sonnet@anthropic",
         "claude-3-opus@anthropic",
         "deepseek-coder-33b-instruct@together-ai",
-        "llama-3-70b-chat@together-ai",
         "llama-3-8b-chat@together-ai",
+        "llama-3-70b-chat@together-ai",
         "mistral-small@mistral-ai",
-        "gemma-7b-it@together-ai",
         "mistral-large@mistral-ai",
-        "gpt-4@openai",
+        "gemma-7b-it@together-ai",
     ]
-    judge_model = "gpt-4-turbo@openai"
+    judge_model = "gpt-4o@openai"
 
     # Get router scores
     aiplatform.init(
@@ -101,6 +108,9 @@ async def main():
     for model_tag in model_list:
         model_name = model_tag.split("@")[0]
 
+    ## Do token counts
+    id_model_to_tokens = count_tokens(root_dir=root_dir)
+
     ## creates the final table
     id_to_model_to_scores = {}
 
@@ -129,7 +139,12 @@ async def main():
                 "prompt": str(prompt_id),
                 "gt_score": score,
                 "score": router_scores[prompt_id][model_name],
-                "metric": "some metric",
+                "input_tokens": id_model_to_tokens[prompt_id, model_name][
+                    "num_toks_in"
+                ],
+                "output_tokens": id_model_to_tokens[prompt_id, model_name][
+                    "num_toks_out"
+                ],
             }
             response = requests.put(url, json=payload, headers=headers)
 
@@ -149,17 +164,122 @@ async def main():
 
     print("Marking task as complete")
 
+    # very naive check that checks we got any model responses
+    status = "completed" if id_to_model_to_scores else "failed"
+
     # mark the dataset as completed if success
     url = f'{os.getenv("ORCHESTRA_BASE_URL")}/v0/admin/update_dataset_evaluation_task'
     headers = {"Authorization": f'Bearer {os.getenv("ORCHESTRA_ADMIN_KEY")}'}
     payload = {
         "user_id": user_id,
         "name": name,
-        "status": "completed",
+        "status": status,
     }
     response = requests.put(url, params=payload, headers=headers)
 
     print("Task completed!")
+
+    # Initialise email server
+    email_server = smtplib.SMTP("smtp.gmail.com", 587)
+    email_server.starttls()
+    email_addr = os.getenv("EMAIL_ADDR", "auth@unify.ai")
+    email_pass = os.getenv("EMAIL_PASS", "")
+    email_server.login(email_addr, email_pass)
+    body = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dataset Evaluation Completed</title>
+    <style>
+        /* Styling for the email */
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            background-color: #ffffff;
+            text-align: center;
+        }
+        .header {
+            background-color: #00a824;
+            padding: 20px 0;
+        }
+        .subheader {
+            background-color: #00a824;
+            height: 10px;
+        }
+        .content {
+            padding: 20px;
+        }
+        .button {
+            display: inline-block;
+            background-color: #00a824; /* White background */
+            color: #ffffff; /* Green text */
+            font-weight: bold; /* Bold text */
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+        .footer {
+            background-color: #f3f3f5;
+            padding: 20px;
+            text-align: center;
+        }
+        .footer a {
+            margin: 0 10px;
+        }
+        .footer img {
+            width: 36px;
+            height: 36px;
+        }
+    </style>
+</head>
+<body>
+    <div class="subheader">
+        <!-- Green bar at the top -->
+    </div>
+    <div class="content">
+        <h2>Hello! The Dataset Evaluation has finished 🚀</h2>
+        <p>Your dataset evaluation is ready, you can check out the results in <a href="https://console.unify.ai">your console</a>.</p>
+    </div>
+    <div class="subheader">
+        <!-- Green bar at the top -->
+    </div>
+    <div class="footer">
+        <a href="https://github.com/unifyai/" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/github.png" alt="Github" />
+        </a>
+        <a href="https://www.youtube.com/@unifyai" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/youtube.png" alt="Youtube" />
+        </a>
+        <a href="https://discord.gg/sXyFF8tDtm" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/discord.png" alt="Discord" />
+        </a>
+        <a href="https://twitter.com/letsunifyai" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/twitter.png" alt="Twitter" />
+        </a>
+        <a href="https://unifyai.substack.com/" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/substack.png" alt="Substack" />
+        </a>
+    </div>
+</body>
+</html>
+
+"""
+
+    msg = EmailMessage()
+    msg["From"] = f"Unify <auth@unify.ai>"
+    msg["To"] = user_email
+    msg["Bcc"] = "guillermo@unify.ai"
+    msg["Subject"] = "Your dataset evaluation is ready!"
+    msg.set_content(body, subtype="html")
+
+    email_server.send_message(msg)
+    email_server.quit()
+
+    print("Mail sent!")
 
 
 if __name__ == "__main__":
