@@ -1,19 +1,19 @@
 import json
 import os
-from functools import partial
 
 from generic_mp import process_requests
 import request_handling
 
 
-def create_request(model_tag: str, api_fn, prompt_data: dict):
+def create_request(model_tag: str, url, headers, prompt_data):
     payload = request_handling.create_payload(
         model_tag=model_tag, prompt=prompt_data["prompt"]
     )
     return request_handling.Request(
         id_=prompt_data["id"],
         payload=payload,
-        api_fn=api_fn,
+        url=url,
+        headers=headers,
         prompt=prompt_data["prompt"],
         response_type="model_response",
     )
@@ -26,8 +26,6 @@ async def generate_queries(prompt_file, response_file, model_tag, batch_size, ap
 
     url = f'{os.getenv("ORCHESTRA_BASE_URL")}/v0/chat/completions'
     headers = {"Authorization": f"Bearer {api_key}"}
-
-    api_fnc = partial(request_handling.call_api, url=url, headers=headers)
 
     completed = set()
     if os.path.isfile(response_file):
@@ -43,11 +41,11 @@ async def generate_queries(prompt_file, response_file, model_tag, batch_size, ap
             data["id"] = data["id_"]
             if data["id"] in completed:
                 continue
-            req = create_request(model_tag, api_fnc, data)
+            req = create_request(model_tag, url, headers, data)
             unprocessed_prompts.append(req)
 
     print(len(unprocessed_prompts))
-    process_requests(
+    await process_requests(
         unprocessed_prompts,
         response_filename=response_file,
         batch_size=batch_size,
