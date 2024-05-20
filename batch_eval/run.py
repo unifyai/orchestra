@@ -1,19 +1,18 @@
 # run.py
-import sys
-import os
-import json
 import asyncio
+import json
+import os
+import sys
 
 import smtplib
 from email.message import EmailMessage
 
 import requests
-from google.cloud import aiplatform
-
 from fetch_queries import generate_queries
-from token_counts import count_tokens
 from fetch_judgements import generate_judgements
 from extract_score import ratings_from_sample
+from token_counts import count_tokens
+from google.cloud import aiplatform
 
 
 async def main():
