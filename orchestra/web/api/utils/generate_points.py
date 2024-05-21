@@ -559,6 +559,13 @@ metrics = {
         "input_cost": 30,
         "output_cost": 60,
     },
+    "gpt-4o@openai": {
+        "cost": 7.5,
+        "ttft": 589,
+        "itl": 20.05,
+        "input_cost": 5,
+        "output_cost": 15,
+    },
     "llama-3-70b-chat@fireworks-ai": {
         "cost": 0.9,
         "ttft": 469.78,
