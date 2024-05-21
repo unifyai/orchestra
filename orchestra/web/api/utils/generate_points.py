@@ -368,10 +368,11 @@ def get_point_solutions_full(data, _metrics):
 
         dataset_scores = []
         for endpoint in endpoints:
-            model = endpoint.split("@")[0].replace("gpt-4-turbo", "gpt-4-0125-preview")
+            model, provider = endpoint.split("@")
             dataset_scores.append(
                 {
-                    "endpoint": endpoint,
+                    "model": model,
+                    "provider": provider,
                     "quality": round(model_scores[model] / model_counts[model], 2),
                     "cost": endpoint_costs[endpoint],
                     "ttft": endpoint_ttft[endpoint],
