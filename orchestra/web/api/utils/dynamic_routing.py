@@ -651,7 +651,6 @@ baked_router_endpoints = [
         provider="octoai",
         provider_id=4,
     ),
-    Endpoint(id=1351, model="gpt-4", model_id=91, provider="openai", provider_id=5),
     Endpoint(
         id=1416, model="gpt-4-turbo", model_id=135, provider="openai", provider_id=5
     ),
