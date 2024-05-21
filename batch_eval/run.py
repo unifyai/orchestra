@@ -27,7 +27,6 @@ async def main():
         "mixtral-8x7b-instruct-v0.1@together-ai",
         "mixtral-8x22b-instruct-v0.1@together-ai",
         "gpt-3.5-turbo@openai",
-        "gpt-4@openai",
         "gpt-4-turbo@openai",
         "gpt-4o@openai",
         "claude-3-haiku@anthropic",
@@ -55,7 +54,7 @@ async def main():
 
             prediction = endpoint.predict(instances=[{"prompt": data["prompt"]}])
             out = prediction.predictions[0]["scores"]
-            out["gpt-4"] = out.pop("gpt-4-0125-preview")
+            out["gpt-4-turbo"] = out.pop("gpt-4-0125-preview")
 
             router_scores[ix] = out
 
