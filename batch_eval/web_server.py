@@ -38,7 +38,7 @@ def endpoint():
     subprocess.Popen(
         [
             "env/bin/python3",
-            "run.py",
+            "orchestra/batch_eval/run.py",
             f"batch_eval/{eval_unique_id}/run",
             f"batch_eval/{eval_unique_id}/prompts.jsonl",
             api_key,

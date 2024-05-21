@@ -27,6 +27,7 @@ async def main():
         "mixtral-8x7b-instruct-v0.1@together-ai",
         "mixtral-8x22b-instruct-v0.1@together-ai",
         "gpt-3.5-turbo@openai",
+        "gpt-4@openai",
         "gpt-4-turbo@openai",
         "gpt-4o@openai",
         "claude-3-haiku@anthropic",
@@ -132,12 +133,15 @@ async def main():
     headers = {"Authorization": f'Bearer {os.getenv("ORCHESTRA_ADMIN_KEY")}'}
     for prompt_id, model_scores in id_to_model_to_scores.items():
         for model_name, score in model_scores.items():
+            router_score = 0
+            if model_name in router_scores[prompt_id]:
+                router_score = router_scores[prompt_id][model_name]
             payload = {
                 "mdl_name": model_name,
                 "dataset_name": name,
                 "prompt": str(prompt_id),
                 "gt_score": score,
-                "score": router_scores[prompt_id][model_name],
+                "score": router_score,
                 "input_tokens": id_model_to_tokens[prompt_id, model_name][
                     "num_toks_in"
                 ],
