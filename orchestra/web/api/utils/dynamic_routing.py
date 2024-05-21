@@ -31,7 +31,7 @@ default_models = {
     "deepseek-coder-33b-instruct",
     "gemma-7b-it",
     "gpt-3.5-turbo",
-    "gpt-4",  # TODO: Check if this needs to be here
+    "gpt-4-turbo",
     "gpt-4o",
     "llama-3-70b-chat",
     "llama-3-8b-chat",
@@ -194,7 +194,7 @@ def neural_scoring(prompt):
     endpoint = aiplatform.Endpoint(settings.vertexai_router_endpoint_id)
     prediction = endpoint.predict(instances=[{"prompt": prompt}])
     out = prediction.predictions[0]["scores"]
-    out["gpt-4"] = out.pop("gpt-4-0125-preview")
+    out["gpt-4-turbo"] = out.pop("gpt-4-0125-preview")
     return out
 
 
@@ -652,6 +652,9 @@ baked_router_endpoints = [
         provider_id=4,
     ),
     Endpoint(id=1351, model="gpt-4", model_id=91, provider="openai", provider_id=5),
+    Endpoint(
+        id=1416, model="gpt-4-turbo", model_id=135, provider="openai", provider_id=5
+    ),
     Endpoint(id=1431, model="gpt-4o", model_id=144, provider="openai", provider_id=5),
     Endpoint(
         id=1355,
