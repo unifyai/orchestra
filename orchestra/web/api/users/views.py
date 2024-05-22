@@ -69,6 +69,7 @@ def credits_code(
         "AIFurnace",
         "E2E",
         "DECODINGDATASCIENCE",
+        "PRODUCTHUNT",
     ]
     if code not in promo_codes:
         raise HTTPException(status_code=404, detail="Invalid code.")
