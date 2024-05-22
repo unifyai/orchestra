@@ -369,16 +369,17 @@ def get_point_solutions_full(data, _metrics):
         dataset_scores = []
         for endpoint in endpoints:
             model, provider = endpoint.split("@")
-            dataset_scores.append(
-                {
-                    "model": model,
-                    "provider": provider,
-                    "quality": round(model_scores[model] / model_counts[model], 2),
-                    "cost": endpoint_costs[endpoint],
-                    "ttft": endpoint_ttft[endpoint],
-                    "itl": endpoint_itl[endpoint],
-                }
-            )
+            if model in model_scores:
+                dataset_scores.append(
+                    {
+                        "model": model,
+                        "provider": provider,
+                        "quality": round(model_scores[model] / model_counts[model], 2),
+                        "cost": endpoint_costs[endpoint],
+                        "ttft": endpoint_ttft[endpoint],
+                        "itl": endpoint_itl[endpoint],
+                    }
+                )
 
         final_scores[dataset] = dataset_scores
 
@@ -699,5 +700,306 @@ metrics = {
         "itl": 19.91,
         "input_cost": 0.65,
         "output_cost": 0.65,
+    },
+    "pplx-70b-chat@perplexity-ai": {
+        "cost": 1.225,
+        "ttft": 982,
+        "itl": 24.68,
+        "input_cost": 0.7,
+        "output_cost": 2.8,
+    },
+    "pplx-7b-chat@perplexity-ai": {
+        "cost": 0.1225,
+        "ttft": 959.25,
+        "itl": 7.78,
+        "input_cost": 0.07,
+        "output_cost": 0.28,
+    },
+    "mistral-medium@mistral-ai": {
+        "cost": 0.7,  #
+        "ttft": 532.12,
+        "itl": 41.92,
+        "input_cost": 2.7,
+        "output_cost": 8.1,
+    },
+    "gemma-2b-it@together-ai": {
+        "cost": 0.1,
+        "ttft": 934.97,
+        "itl": 11.03,
+        "input_cost": 0.1,
+        "output_cost": 0.1,
+    },
+    "gemma-2b-it@together-ai": {
+        "cost": 0.1,
+        "ttft": 934.97,
+        "itl": 11.03,
+        "input_cost": 0.1,
+        "output_cost": 0.1,
+    },
+    "yi-34b-chat@together-ai": {
+        "cost": 0.8,
+        "ttft": 409.41,
+        "itl": 14.49,
+        "input_cost": 0.8,
+        "output_cost": 0.8,
+    },
+    "yi-34b-chat@deepinfra": {
+        "cost": 0.6,
+        "ttft": 820.06,
+        "itl": 42.03,
+        "input_cost": 0.6,
+        "output_cost": 0.6,
+    },
+    "codellama-34b-instruct@deepinfra": {
+        "cost": 0.6,
+        "ttft": 826.18,
+        "itl": 32.75,
+        "input_cost": 0.6,
+        "output_cost": 0.6,
+    },
+    "codellama-34b-instruct@fireworks-ai": {
+        "cost": 0.9,
+        "ttft": 473.06,
+        "itl": 10.09,
+        "input_cost": 0.9,
+        "output_cost": 0.9,
+    },
+    "codellama-34b-instruct@octoai": {
+        "cost": 0.65,  #
+        "ttft": 628.3,
+        "itl": 8.03,
+        "input_cost": 0.5,
+        "output_cost": 1,
+    },
+    "codellama-34b-instruct@together-ai": {
+        "cost": 0.8,  #
+        "ttft": 1178.87,
+        "itl": 23.67,
+        "input_cost": 0.8,
+        "output_cost": 0.8,
+    },
+    "codellama-34b-instruct@perplexity-ai": {
+        "cost": 0.5,  #
+        "ttft": 1005.11,
+        "itl": 13.94,
+        "input_cost": 0.35,
+        "output_cost": 1.4,
+    },
+    "codellama-34b-instruct@anyscale": {
+        "cost": 1,
+        "ttft": 1447.77,
+        "itl": 31.31,
+        "input_cost": 1,
+        "output_cost": 1,
+    },
+    "codellama-13b-instruct@octoai": {
+        "cost": 0.65,  #
+        "ttft": 630.77,
+        "itl": 7.89,
+        "input_cost": 0.2,
+        "output_cost": 0.5,
+    },
+    "codellama-13b-instruct@together-ai": {
+        "cost": 0.23,
+        "ttft": 507.27,
+        "itl": 14.39,
+        "input_cost": 0.23,
+        "output_cost": 0.23,
+    },
+    "codellama-7b-instruct@octoai": {
+        "cost": 0.65,  #
+        "ttft": 635.72,
+        "itl": 7.69,
+        "input_cost": 0.1,
+        "output_cost": 0.25,
+    },
+    "codellama-7b-instruct@together-ai": {
+        "cost": 0.2,
+        "ttft": 365.82,
+        "itl": 13.22,
+        "input_cost": 0.2,
+        "output_cost": 0.2,
+    },
+    "mistral-7b-instruct-v0.1@anyscale": {
+        "cost": 0.15,
+        "ttft": 2103.77,
+        "itl": 33.54,
+        "input_cost": 0.15,
+        "output_cost": 0.15,
+    },
+    "mistral-7b-instruct-v0.1@together-ai": {
+        "cost": 0.2,
+        "ttft": 560.2,
+        "itl": 6.64,
+        "input_cost": 0.2,
+        "output_cost": 0.2,
+    },
+    "mistral-7b-instruct-v0.1@fireworks-ai": {
+        "cost": 0.2,
+        "ttft": 509.19,
+        "itl": 8.7,
+        "input_cost": 0.2,
+        "output_cost": 0.2,
+    },
+    "mistral-7b-instruct-v0.2@together-ai": {
+        "cost": 0.2,
+        "ttft": 936.34,
+        "itl": 8.92,
+        "input_cost": 0.2,
+        "output_cost": 0.2,
+    },
+    "mistral-7b-instruct-v0.2@mistral-ai": {
+        "cost": 0.25,
+        "ttft": 698.41,
+        "itl": 16.51,
+        "input_cost": 0.25,
+        "output_cost": 0.25,
+    },
+    "mistral-7b-instruct-v0.2@replicate": {
+        "cost": 0.1,
+        "ttft": 889.15,
+        "itl": 6.7,
+        "input_cost": 0.05,
+        "output_cost": 0.25,
+    },
+    "mistral-7b-instruct-v0.2@octoai": {
+        "cost": 0.2,
+        "ttft": 804.27,
+        "itl": 12.48,
+        "input_cost": 0.1,
+        "output_cost": 0.25,
+    },
+    "mistral-7b-instruct-v0.2@fireworks-ai": {
+        "cost": 0.2,
+        "ttft": 848.85,
+        "itl": 4.02,
+        "input_cost": 0.2,
+        "output_cost": 0.2,
+    },
+    "llama-2-7b-chat@anyscale": {
+        "cost": 0.15,
+        "ttft": 1782.82,
+        "itl": 51.56,
+        "input_cost": 0.15,
+        "output_cost": 0.15,
+    },
+    "llama-2-7b-chat@together-ai": {
+        "cost": 0.2,
+        "ttft": 390.79,
+        "itl": 12.98,
+        "input_cost": 0.2,
+        "output_cost": 0.2,
+    },
+    "llama-2-7b-chat@replicate": {
+        "cost": 0.1,
+        "ttft": 870.3,
+        "itl": 2.43,
+        "input_cost": 0.05,
+        "output_cost": 0.25,
+    },
+    "llama-2-7b-chat@fireworks-ai": {
+        "cost": 0.2,
+        "ttft": 436.99,
+        "itl": 4.35,
+        "input_cost": 0.2,
+        "output_cost": 0.2,
+    },
+    "llama-2-7b-chat@lepton-ai": {
+        "cost": 0.1,
+        "ttft": 1386.99,
+        "itl": 6.31,
+        "input_cost": 0.1,
+        "output_cost": 0.1,
+    },
+    "llama-2-7b-chat@deepinfra": {
+        "cost": 0.13,
+        "ttft": 1194.73,
+        "itl": 11.45,
+        "input_cost": 0.13,
+        "output_cost": 0.13,
+    },
+    "llama-2-13b-chat@anyscale": {
+        "cost": 0.25,
+        "ttft": 1828.87,
+        "itl": 69.31,
+        "input_cost": 0.25,
+        "output_cost": 0.25,
+    },
+    "llama-2-13b-chat@together-ai": {
+        "cost": 0.23,
+        "ttft": 1031.49,
+        "itl": 9.84,
+        "input_cost": 0.23,
+        "output_cost": 0.23,
+    },
+    "llama-2-13b-chat@replicate": {
+        "cost": 0.2,
+        "ttft": 1009.7,
+        "itl": 11.77,
+        "input_cost": 0.1,
+        "output_cost": 0.5,
+    },
+    "llama-2-13b-chat@fireworks-ai": {
+        "cost": 0.2,
+        "ttft": 508.26,
+        "itl": 5.55,
+        "input_cost": 0.2,
+        "output_cost": 0.2,
+    },
+    "llama-2-13b-chat@lepton-ai": {
+        "cost": 0.3,
+        "ttft": 1164.06,
+        "itl": 10.06,
+        "input_cost": 0.3,
+        "output_cost": 0.3,
+    },
+    "llama-2-13b-chat@deepinfra": {
+        "cost": 0.22,
+        "ttft": 675.47,
+        "itl": 14.35,
+        "input_cost": 0.22,
+        "output_cost": 0.22,
+    },
+    "llama-2-70b-chat@anyscale": {
+        "cost": 1,
+        "ttft": 931.48,
+        "itl": 33.1,
+        "input_cost": 1,
+        "output_cost": 1,
+    },
+    "llama-2-70b-chat@together-ai": {
+        "cost": 0.9,
+        "ttft": 1078.69,
+        "itl": 17.94,
+        "input_cost": 0.9,
+        "output_cost": 0.9,
+    },
+    "llama-2-70b-chat@replicate": {
+        "cost": 1.2,
+        "ttft": 876.12,
+        "itl": 14.71,
+        "input_cost": 0.65,
+        "output_cost": 2.75,
+    },
+    "llama-2-70b-chat@fireworks-ai": {
+        "cost": 0.9,
+        "ttft": 545.15,
+        "itl": 8.3,
+        "input_cost": 0.9,
+        "output_cost": 0.9,
+    },
+    "llama-2-70b-chat@lepton-ai": {
+        "cost": 0.8,
+        "ttft": 1077.08,
+        "itl": 30.35,
+        "input_cost": 0.8,
+        "output_cost": 0.8,
+    },
+    "llama-2-70b-chat@deepinfra": {
+        "cost": 0.7,
+        "ttft": 603.45,
+        "itl": 24.7,
+        "input_cost": 0.7,
+        "output_cost": 0.7,
     },
 }
