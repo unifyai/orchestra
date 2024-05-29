@@ -28,7 +28,7 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: Optional[float] = None
     response_format: Optional[str] = None
     seed: Optional[int] = None
-    stop: Optional[str] = None
+    stop: Optional[str | List[str]] = None
     top_p: Optional[float] = None
     tools: Optional[List[Any]] = None
     tool_choice: Optional[Any] = None
