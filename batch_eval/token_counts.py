@@ -3,7 +3,7 @@ import json
 
 import tiktoken
 
-def count_tokens(root_dir):
+def count_tokens(root_dir, save=False):
     enc = tiktoken.encoding_for_model("gpt-4")   
     lines = []
     id_model_to_tokens = {}
@@ -21,8 +21,8 @@ def count_tokens(root_dir):
                 prompt = entry["prompt"]
                 response = entry["model_response"]
 
-                num_prompt_toks = len(enc.encode(prompt))
-                num_response_toks = len(enc.encode(response))
+                num_prompt_toks = len(enc.encode(prompt, disallowed_special=()))
+                num_response_toks = len(enc.encode(response, disallowed_special=()))
 
                 data = {
                     "id_": id_,
@@ -36,13 +36,21 @@ def count_tokens(root_dir):
                     "num_toks_out": num_response_toks,
                 }
 
-    token_counts_dir = f'{root_dir}/token_counts'
-    if not os.path.exists(token_counts_dir):
-        os.makedirs(token_counts_dir)
+    if save:
+        token_counts_dir = f'{root_dir}/token_counts'
+        if not os.path.exists(token_counts_dir):
+            os.makedirs(token_counts_dir)
 
-    save_path = f'{token_counts_dir}/tok_counts.jsonl'
-    with open(save_path, 'w') as f:
-        for line in lines:
-            f.write(json.dumps(line)+"\n")
-    
+        save_path = f'{token_counts_dir}/tok_counts.jsonl'
+        with open(save_path, 'w') as f:
+            for line in lines:
+                f.write(json.dumps(line)+"\n")
+        
     return id_model_to_tokens
+
+
+if __name__ == "__main__":
+    import sys
+    root_path = sys.argv[1]
+    input(f'Do you want to count tokens of {root_path}?')
+    count_tokens(root_path, save=True)
