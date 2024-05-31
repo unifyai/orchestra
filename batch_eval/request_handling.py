@@ -87,6 +87,8 @@ def create_payload(model_tag, prompt):
 
 
 async def post_data(payload, url, headers):
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5*60)) as session:
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=5 * 60)
+    ) as session:
         async with session.post(url, json=payload, headers=headers) as response:
             return await response.text()
