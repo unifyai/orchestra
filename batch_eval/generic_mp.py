@@ -8,6 +8,7 @@ async def call_model(payload):
     ret = await request_handling.generic_call(payload)
     return ret
 
+
 async def process_requests(
     unprocessed_prompts: list,
     response_filename,

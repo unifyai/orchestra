@@ -35,6 +35,7 @@ def send_email(user_email):
     email_server.send_message(msg)
     email_server.quit()
 
+
 def mark_status(api_key, name, user_id, status):
     # send a request to populate the cache first
     url = f'{os.getenv("ORCHESTRA_BASE_URL")}/v0/get_dataset_evaluation'
@@ -58,6 +59,7 @@ def mark_status(api_key, name, user_id, status):
     }
     response = requests.put(url, params=payload, headers=headers)
 
+
 async def main():
     root_dir = sys.argv[1]
     prompt_file = sys.argv[2]
@@ -67,8 +69,8 @@ async def main():
     user_email = sys.argv[6]
 
     def log_msg(msg):
-        time_string = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())
-        print(f'[[{time_string}]] [[{name}]] {msg}')
+        time_string = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        print(f"[[{time_string}]] [[{name}]] {msg}")
 
     DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
@@ -91,22 +93,26 @@ async def main():
     try:
         if not DEBUG:
             # Get router scores
-            log_msg('Getting router scores...')
+            log_msg("Getting router scores...")
             aiplatform.init(
                 project=os.getenv("ORCHESTRA_VERTEXAI_PROJECT"),
                 location=os.getenv("ORCHESTRA_VERTEXAI_LOCATION"),
             )
-            endpoint = aiplatform.Endpoint(os.getenv("ORCHESTRA_VERTEXAI_ROUTER_ENDPOINT_ID"))
+            endpoint = aiplatform.Endpoint(
+                os.getenv("ORCHESTRA_VERTEXAI_ROUTER_ENDPOINT_ID")
+            )
             router_scores = {}
             with open(prompt_file, "r") as pf:
                 for ix, line in enumerate(pf):
                     data = json.loads(line)
-                    prediction = endpoint.predict(instances=[{"prompt": data["prompt"]}])
+                    prediction = endpoint.predict(
+                        instances=[{"prompt": data["prompt"]}]
+                    )
                     out = prediction.predictions[0]["scores"]
                     out["gpt-4-turbo"] = out.pop("gpt-4-0125-preview")
                     router_scores[ix] = out
 
-            log_msg('Obtained all router scores')
+            log_msg("Obtained all router scores")
 
         if not os.path.isdir(root_dir):
             os.mkdir(root_dir)
@@ -129,9 +135,9 @@ async def main():
         ]
 
         # Run tasks in parallel
-        log_msg('Beginning getting queries')
+        log_msg("Beginning getting queries")
         await asyncio.gather(*tasks)
-        log_msg('Ended getting queries')
+        log_msg("Ended getting queries")
 
         async def process_judgements(model_tag, prompt_file, root_dir, api_key):
             model_name = model_tag.split("@")[0]
@@ -179,11 +185,12 @@ async def main():
                         id_to_model_to_scores[data["id_"]] = {}
                     id_to_model_to_scores[data["id_"]][model_name] = score
 
-
         if not DEBUG:
-            url = f'{os.getenv("ORCHESTRA_BASE_URL")}/v0/admin/create_dataset_evaluation'
+            url = (
+                f'{os.getenv("ORCHESTRA_BASE_URL")}/v0/admin/create_dataset_evaluation'
+            )
             headers = {"Authorization": f'Bearer {os.getenv("ORCHESTRA_ADMIN_KEY")}'}
-            log_msg('Beginning uploading dataset')
+            log_msg("Beginning uploading dataset")
             for prompt_id, model_scores in id_to_model_to_scores.items():
                 for model_name, score in model_scores.items():
                     router_score = 0
@@ -213,7 +220,6 @@ async def main():
             log_msg("Sending email")
             send_email(user_email)
             log_msg("email sent")
-
 
         log_msg("Benchmark complete")
 
