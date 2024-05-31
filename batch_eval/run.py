@@ -80,6 +80,7 @@ async def main():
         "mixtral-8x7b-instruct-v0.1@together-ai",
         "mixtral-8x22b-instruct-v0.1@together-ai",
         "gpt-3.5-turbo@openai",
+        "gpt-4@openai",
         "gpt-4-turbo@openai",
         "gpt-4o@openai",
         "claude-3-haiku@anthropic",
@@ -87,6 +88,10 @@ async def main():
         "claude-3-opus@anthropic",
         "llama-3-8b-chat@together-ai",
         "llama-3-70b-chat@together-ai",
+        "mistral-small@mistral-ai",
+        "mistral-large@mistral-ai",
+        "deepseek-coder-33b-instruct@together-ai",
+        "gemma-7b-it@together-ai",
     ]
     judge_model = "gpt-4o@openai"
 
