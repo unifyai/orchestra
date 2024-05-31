@@ -219,7 +219,7 @@ async def main():
         send_email(user_email)
         log_msg("email sent")
 
-    log_msg("Task complete")
+    log_msg("Benchmark complete")
 
 
 if __name__ == "__main__":

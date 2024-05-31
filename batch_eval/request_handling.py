@@ -31,34 +31,33 @@ class Request:
 
 async def generic_call(request: Request):
     response = await request.execute()
-    if True:
-        try:
-            resp_json = json.loads(response)
-            model_response = resp_json["choices"][0]["message"]["content"]
-            model_provider = resp_json["model"]
-            if request.response_type == "judge_response":
-                return (
-                    True,
-                    {
-                        "id_": request.id_,
-                        "prompt": request.prompt,
-                        "model_provider": request.model_name,
-                        "judge_model": model_provider,
-                        request.response_type: model_response,
-                    },
-                )
-            else:
-                return (
-                    True,
-                    {
-                        "id_": request.id_,
-                        "prompt": request.prompt,
-                        "model_provider": model_provider,
-                        request.response_type: model_response,
-                    },
-                )
-        except Exception as e:
-            print(e)
+    try:
+        resp_json = json.loads(response)
+        model_response = resp_json["choices"][0]["message"]["content"]
+        model_provider = resp_json["model"]
+        if request.response_type == "judge_response":
+            return (
+                True,
+                {
+                    "id_": request.id_,
+                    "prompt": request.prompt,
+                    "model_provider": request.model_name,
+                    "judge_model": model_provider,
+                    request.response_type: model_response,
+                },
+            )
+        else:
+            return (
+                True,
+                {
+                    "id_": request.id_,
+                    "prompt": request.prompt,
+                    "model_provider": model_provider,
+                    request.response_type: model_response,
+                },
+            )
+    except Exception as e:
+        print(e)
 
     # if something went wrong
     try:
@@ -75,7 +74,7 @@ def create_payload(model_tag, prompt):
     payload = {
         "model": f"{model_tag}",
         "messages": messages,
-        "max_tokens": 4096,  # might have to edit this for some models
+        "max_tokens": 512,  # might have to edit this for some models
     }
     return payload
 
