@@ -1,8 +1,8 @@
+import asyncio
 import json
-import requests
-from dataclasses import dataclass
-from typing import Callable
+
 import aiohttp
+import requests
 
 
 class Request:
@@ -30,9 +30,9 @@ class Request:
 
 
 async def generic_call(request: Request):
-    response = await request.execute()
-    if True:
+    for tries in range(5):
         try:
+            response = await request.execute()
             resp_json = json.loads(response)
             model_response = resp_json["choices"][0]["message"]["content"]
             model_provider = resp_json["model"]
@@ -59,6 +59,12 @@ async def generic_call(request: Request):
                 )
         except Exception as e:
             print(e)
+            print(f"Error with {request.payload}")
+            if tries < 2:
+                await asyncio.sleep(2)
+            else:
+                print("waiting for 60s")
+                await asyncio.sleep(60)
 
     # if something went wrong
     try:
@@ -75,12 +81,14 @@ def create_payload(model_tag, prompt):
     payload = {
         "model": f"{model_tag}",
         "messages": messages,
-        "max_tokens": 4096,  # might have to edit this for some models
+        "max_tokens": 512,  # might have to edit this for some models
     }
     return payload
 
 
 async def post_data(payload, url, headers):
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=5 * 60)
+    ) as session:
         async with session.post(url, json=payload, headers=headers) as response:
             return await response.text()
