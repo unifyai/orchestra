@@ -15,15 +15,96 @@ from extract_score import ratings_from_sample
 from token_counts import count_tokens
 from google.cloud import aiplatform
 
+body = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dataset Evaluation Completed</title>
+    <style>
+        /* Styling for the email */
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            background-color: #ffffff;
+            text-align: center;
+        }
+        .header {
+            background-color: #00a824;
+            padding: 20px 0;
+        }
+        .subheader {
+            background-color: #00a824;
+            height: 10px;
+        }
+        .content {
+            padding: 20px;
+        }
+        .button {
+            display: inline-block;
+            background-color: #00a824; /* White background */
+            color: #ffffff; /* Green text */
+            font-weight: bold; /* Bold text */
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+        .footer {
+            background-color: #f3f3f5;
+            padding: 20px;
+            text-align: center;
+        }
+        .footer a {
+            margin: 0 10px;
+        }
+        .footer img {
+            width: 36px;
+            height: 36px;
+        }
+    </style>
+</head>
+<body>
+    <div class="subheader">
+        <!-- Green bar at the top -->
+    </div>
+    <div class="content">
+        <h2>Hello! The Dataset Evaluation has finished 🚀</h2>
+        <p>Your dataset evaluation is ready, you can check out the results in <a href="https://console.unify.ai">your console</a>.</p>
+    </div>
+    <div class="subheader">
+        <!-- Green bar at the top -->
+    </div>
+    <div class="footer">
+        <a href="https://github.com/unifyai/" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/github.png" alt="Github" />
+        </a>
+        <a href="https://www.youtube.com/@unifyai" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/youtube.png" alt="Youtube" />
+        </a>
+        <a href="https://discord.gg/sXyFF8tDtm" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/discord.png" alt="Discord" />
+        </a>
+        <a href="https://twitter.com/letsunifyai" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/twitter.png" alt="Twitter" />
+        </a>
+        <a href="https://unifyai.substack.com/" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/substack.png" alt="Substack" />
+        </a>
+    </div>
+</body>
+</html>
+
+"""
+
 def send_email(user_email):
     email_server = smtplib.SMTP("smtp.gmail.com", 587)
     email_server.starttls()
     email_addr = os.getenv("EMAIL_ADDR", "auth@unify.ai")
     email_pass = os.getenv("EMAIL_PASS", "")
     email_server.login(email_addr, email_pass)
-
-    with open("data/email_body.txt") as f:
-        body = f.read()
 
     msg = EmailMessage()
     msg["From"] = f"Unify <auth@unify.ai>"
