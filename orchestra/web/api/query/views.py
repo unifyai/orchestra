@@ -46,4 +46,5 @@ def create_query_model(
         endpoint_id=new_query_object.endpoint_id,
         credits=new_query_object.credits,
         prompt=new_query_object.prompt,
+        signature=new_query_object.signature,
     )

@@ -19,6 +19,7 @@ class QueryModelRequest(BaseModel):
     endpoint_id: int
     credits: float
     prompt: Optional[str]
+    signature: Optional[str]
 
 
 class QueryModelResponse(BaseModel):

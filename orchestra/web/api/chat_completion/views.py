@@ -114,6 +114,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         "model": model,
         "provider": provider,
         "prompt": messages,
+        "signature": request.signature,
         "model_dao": model_dao,
         "provider_dao": provider_dao,
         "endpoint_dao": endpoint_dao,
