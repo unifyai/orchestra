@@ -22,6 +22,7 @@ class QueryDAO:
         endpoint_id: int,
         credits: float,
         prompt: Optional[str] = None,
+        signature: Optional[str] = None,
     ) -> None:
         """
         Add single query to session.
@@ -38,6 +39,7 @@ class QueryDAO:
                 endpoint_id=endpoint_id,
                 credits=credits,
                 prompt=prompt,
+                signature=signature,
             ),
         )
 
@@ -61,6 +63,7 @@ class QueryDAO:
         at: Optional[datetime.datetime] = None,
         endpoint_id: Optional[int] = None,
         credits: Optional[float] = None,
+        signature: Optional[str] = None,
     ) -> List[Query]:
         """
         Get specific query model.
@@ -80,6 +83,8 @@ class QueryDAO:
             query = query.where(Query.endpoint_id == endpoint_id)
         if credits:
             query = query.where(Query.credits == credits)
+        if signature:
+            query = query.where(Query.signature == signature)
 
         raw_queries = self.session.execute(query)
 

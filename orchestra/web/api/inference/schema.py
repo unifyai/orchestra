@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel
 
@@ -16,3 +16,4 @@ class InferenceRequest(BaseModel):
     model: str
     provider: str
     arguments: Dict[str, Any]
+    signature: Optional[str] = None

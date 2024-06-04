@@ -1,5 +1,5 @@
 import json
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 import logging
 
 from orchestra.db.dao.endpoint_dao import EndpointDAO
@@ -27,6 +27,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     endpoint_dao: EndpointDAO,
     query_dao: QueryDAO,
     users_dao: UsersDAO,
+    signature: Optional[str],
 ):
     """
     Perform database operations.
@@ -67,10 +68,15 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         endpoint_id=endpoint_id,
         credits=cost,  # type: ignore
         prompt=json.dumps(prompt),
+        signature=signature,
     )
     users_dao.recharge_credit(user_id, -cost)
     create_query_model(query_model_request, query_dao=query_dao)
 
     user = users_dao.get_user_with_id(user_id)
-    if user.autorecharge and user.credits <= user.autorecharge_threshold and user.autorecharge_qty >0:
+    if (
+        user.autorecharge
+        and user.credits <= user.autorecharge_threshold
+        and user.autorecharge_qty > 0
+    ):
         recharge_and_generate_invoice(user, users_dao)
