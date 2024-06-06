@@ -33,6 +33,7 @@ class ChatCompletionRequest(BaseModel):
     tools: Optional[List[Any]] = None
     tool_choice: Optional[Any] = None
     user: Optional[str] = None
+    signature: Optional[str] = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -54,6 +55,7 @@ class ChatCompletionResponse(BaseModel):
     object: str = "chat.completion"
     usage: Dict[str, Any]
     choices: List[Dict[str, Any]]
+
 
 class RouterScoresResponse(BaseModel):
     scores: Dict[str, float]
