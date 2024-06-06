@@ -186,8 +186,9 @@ class RouterConfig:
             name = f"{endpoint.model}@{endpoint.provider}"
             endpoint_scores[name] = self.cost_fn(**endpoint_metrics[name])
 
-        # Return the endpoint with the lowest cost
-        return min(endpoint_scores, key=lambda k: endpoint_scores[k]).split("@")
+        # Return a list of endpoints ordered by lowest cost
+        ordered_keys = sorted(endpoint_scores, key=lambda k: endpoint_scores[k])
+        return [key.split("@") for key in ordered_keys]
 
 
 def neural_scoring(prompt):
