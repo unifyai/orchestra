@@ -1,7 +1,7 @@
 import json
 from typing import Union
 
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.param_functions import Depends
 from fastapi.responses import StreamingResponse
 from providers.completion import PROVIDER_CLASSES
@@ -81,33 +81,54 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     user = get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(user.credits if user else 0)
 
-    if provider not in PROVIDER_CLASSES:
-        # Dynamic routing
-        if model == "router":
-            rc = RouterConfig(request.model, endpoint_dao, benchmark_run_dao)
-            num_tokens_est = 0
-            for msg in messages:
-                if msg["content"] is not None:
-                    num_tokens_est += len(msg["content"])
-            # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
-            model, provider = rc(messages[-1]["content"], num_tokens_est * 1.25)
-        else:  # Non model routing, TODO: clean up to simplify
-            target_metric, metrics_thresholds = parse_endpoint(provider)
-            model, provider = dynamic_routing(
-                endpoint_dao,
-                benchmark_run_dao,
-                target_metric,
-                models=(model,),
-                metrics_thresholds=metrics_thresholds,
-            )
+    try_provider = 0
+    router_choices = None
+    using_router = False
+    if model == "router":
+        using_router = True
+    num_tries = 5
+    while try_provider >= 0 and try_provider < num_tries:
 
-    lm = PROVIDER_CLASSES[provider](model)
-    if available_credits <= 0:
-        raise insufficient_credits_error
+        if provider not in PROVIDER_CLASSES or using_router:
+            # Dynamic routing
+            if using_router:
+                if router_choices is None:
+                    rc = RouterConfig(request.model, endpoint_dao, benchmark_run_dao)
+                    num_tokens_est = 0
+                    for msg in messages:
+                        if msg["content"] is not None:
+                            num_tokens_est += len(msg["content"])
+                    # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
+                    router_choices = rc(messages[-1]["content"], num_tokens_est * 1.25)
+                model, provider = router_choices[try_provider]
+            else:  # Non model routing, TODO: clean up to simplify
+                target_metric, metrics_thresholds = parse_endpoint(provider)
+                model, provider = dynamic_routing(
+                    endpoint_dao,
+                    benchmark_run_dao,
+                    target_metric,
+                    models=(model,),
+                    metrics_thresholds=metrics_thresholds,
+                )
 
-    stream = request.stream
+        lm = PROVIDER_CLASSES[provider](model)
+        if available_credits <= 0:
+            raise insufficient_credits_error
 
-    filtered_params = filter_request_params(request.model_dump())
+        stream = request.stream
+
+        filtered_params = filter_request_params(request.model_dump())
+
+        try:
+            response, cost = lm(messages=messages, **filtered_params)
+            try_provider = -1
+        except HTTPException as e:
+            if e.status_code == 429:
+                try_provider += 1
+                if try_provider >= num_tries:
+                    raise e
+            else:
+                raise e
 
     db_operations_kwargs = {
         "user_id": user_id,
@@ -121,8 +142,6 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         "query_dao": query_dao,
         "users_dao": users_dao,
     }
-
-    response, cost = lm(messages=messages, **filtered_params)
 
     # TODO: Handle when response is None
     if not response:
