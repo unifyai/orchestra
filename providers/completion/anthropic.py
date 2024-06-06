@@ -3,6 +3,7 @@ import time
 from typing import Any, List
 
 import anthropic
+from fastapi import HTTPException
 from providers.completion.base_completion_provider import (
     AsyncGeneratorWrapper,
     BaseCompletionProvider,
@@ -85,6 +86,8 @@ class Anthropic(BaseCompletionProvider):
                         response.usage.output_tokens,
                     ),
                 )
+        except anthropic.RateLimitError as e:
+            raise HTTPException(status_code=429)
         except Exception as e:
             error, digest = server_error_with_digest(str(e))
             logger.error(f"Digest {digest}: {e}")
@@ -112,6 +115,8 @@ class Anthropic(BaseCompletionProvider):
                         response.usage.output_tokens,
                     ),
                 )
+        except anthropic.RateLimitError as e:
+            raise HTTPException(status_code=429)
         except Exception as e:
             error, digest = server_error_with_digest(str(e))
             logger.error(f"Digest {digest}: {e}")
