@@ -64,9 +64,14 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     :raises HTTPException: when user has insufficient credits.
     """
+    
     try:
         # TODO: Check that model exists
-        model, provider = request.model.split("@")
+        model_priority_list = []
+        for model_tag in request.model.split("->"):
+            model_provider = model_tag.split("@")
+            assert len(model_provider) == 2
+            model_priority_list.append(model_provider)
     except Exception:
         raise invalid_model_str
 
@@ -81,11 +86,10 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     user = get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(user.credits if user else 0)
 
+    model, provider = model_priority_list[0]
     try_provider = 0
     router_choices = None
-    using_router = False
-    if model == "router":
-        using_router = True
+    using_router = (model == "router")
     num_tries = 5
     while try_provider >= 0 and try_provider < num_tries:
 
@@ -100,7 +104,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                             num_tokens_est += len(msg["content"])
                     # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
                     router_choices = rc(messages[-1]["content"], num_tokens_est * 1.25)
-                model, provider = router_choices[try_provider]
+                    model_priority_list = router_choices
             else:  # Non model routing, TODO: clean up to simplify
                 target_metric, metrics_thresholds = parse_endpoint(provider)
                 model, provider = dynamic_routing(
@@ -110,7 +114,9 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     models=(model,),
                     metrics_thresholds=metrics_thresholds,
                 )
-
+        if try_provider >= len(model_priority_list):
+            break 
+        model, provider = model_priority_list[try_provider]
         lm = PROVIDER_CLASSES[provider](model)
         if available_credits <= 0:
             raise insufficient_credits_error
@@ -123,7 +129,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             response, cost = lm(messages=messages, **filtered_params)
             try_provider = -1
         except HTTPException as e:
-            if e.status_code == 429:
+            if e.status_code == 429 or e.status_code >= 500:
                 try_provider += 1
                 if try_provider >= num_tries:
                     raise e
