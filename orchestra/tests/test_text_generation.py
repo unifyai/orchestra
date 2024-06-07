@@ -98,6 +98,7 @@ async def test_fallback_parse(
     check_text_gen_choice(response_json.get("choices")[0], "message")
     check_text_gen_usage(response_json.get("usage"))
 
+
 @pytest.mark.anyio
 async def test_fallback_after_fail(
     client: AsyncClient,

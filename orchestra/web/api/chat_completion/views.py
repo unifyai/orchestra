@@ -64,7 +64,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     :raises HTTPException: when user has insufficient credits.
     """
-    
+
     try:
         # TODO: Check that model exists
         model_priority_list = []
@@ -89,7 +89,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     model, provider = model_priority_list[0]
     try_provider = 0
     router_choices = None
-    using_router = (model == "router")
+    using_router = model == "router"
     num_tries = 5
     while try_provider >= 0 and try_provider < num_tries:
 
@@ -115,7 +115,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     metrics_thresholds=metrics_thresholds,
                 )
         if try_provider >= len(model_priority_list):
-            break 
+            break
         model, provider = model_priority_list[try_provider]
         lm = PROVIDER_CLASSES[provider](model)
         if available_credits <= 0:
