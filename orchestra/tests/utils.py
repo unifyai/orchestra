@@ -76,6 +76,10 @@ def get_chat_completions_payload(model, provider, stream):
     return {"model": f"{model}@{provider}", **_partial_openai_payload(stream=stream)}
 
 
+def get_chat_completions_payload_fallback(model_str, stream):
+    return {"model": model_str, **_partial_openai_payload(stream=stream)}
+
+
 def check_in_dict_and_instance(dict, key, types):
     assert key in dict
     assert isinstance(dict.get(key), types)
