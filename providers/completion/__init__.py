@@ -12,6 +12,7 @@ from providers.completion.openai import OpenAI
 from providers.completion.perplexity import Perplexity
 from providers.completion.replicate import Replicate
 from providers.completion.togetherai import TogetherAI
+from providers.completion.custom_provider import CustomProvider
 
 PROVIDER_CLASSES = {
     "anyscale": Anyscale,
@@ -26,4 +27,5 @@ PROVIDER_CLASSES = {
     "fireworks-ai": FireworksAI,
     "deepinfra": Deepinfra,
     "aws-bedrock": AWSBedrock,
+    "custom": CustomProvider,
 }

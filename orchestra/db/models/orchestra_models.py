@@ -246,3 +246,26 @@ class BetaList(Base):
     id = sa.Column(sa.Integer(), primary_key=True)
     email = sa.Column(sa.String(), nullable=False)
     type = sa.Column(sa.String(), nullable=False)
+
+
+class CustomApiKey(Base):
+    """Model class for the custom api keys table."""
+
+    __tablename__ = "custom_api_key"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
+    key = sa.Column(sa.String(), nullable=False)
+    value = sa.Column(sa.String(), nullable=False)
+
+
+class CustomEndpoint(Base):
+    """Model class for the custom endpoints table."""
+
+    __tablename__ = "custom_endpoint"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
+    name = sa.Column(sa.String(), nullable=False)
+    url = sa.Column(sa.String(), nullable=False)
+    key_id = sa.Column(sa.Integer(), sa.ForeignKey("custom_api_key.id"), nullable=False)

@@ -4,6 +4,8 @@ from typing import Union
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.param_functions import Depends
 from fastapi.responses import StreamingResponse
+from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
+from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
@@ -46,7 +48,8 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     endpoint_dao: EndpointDAO = Depends(),
     query_dao: QueryDAO = Depends(),
     benchmark_run_dao: BenchmarkRunDAO = Depends(),
-    datapoint_dao: DatapointDAO = Depends(),
+    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+    custom_api_key_dao: CustomApiKeyDAO = Depends(),
 ) -> Union[ChatCompletionResponse, StreamingResponse]:
     """
     Get chat completions based on the request.
@@ -111,7 +114,10 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     metrics_thresholds=metrics_thresholds,
                 )
 
-        lm = PROVIDER_CLASSES[provider](model)
+        extra_args = tuple()
+        if provider == "custom":
+            extra_args = (custom_endpoint_dao, custom_api_key_dao, user_id, model)
+        lm = PROVIDER_CLASSES[provider](model, *extra_args)
         if available_credits <= 0:
             raise insufficient_credits_error
 
