@@ -175,6 +175,7 @@ class Query(Base):
     credits = sa.Column(sa.Numeric(), nullable=False)
     prompt = sa.Column(sa.String(), nullable=True)
     signature = sa.Column(sa.String(), nullable=True)
+    used_router = sa.Column(sa.Boolean(), nullable=True)
 
 
 class Users(Base):

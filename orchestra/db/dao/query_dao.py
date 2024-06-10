@@ -23,6 +23,7 @@ class QueryDAO:
         credits: float,
         prompt: Optional[str] = None,
         signature: Optional[str] = None,
+        used_router: Optional[bool] = None,
     ) -> None:
         """
         Add single query to session.
@@ -40,6 +41,7 @@ class QueryDAO:
                 credits=credits,
                 prompt=prompt,
                 signature=signature,
+                used_router=used_router,
             ),
         )
 
@@ -64,6 +66,7 @@ class QueryDAO:
         endpoint_id: Optional[int] = None,
         credits: Optional[float] = None,
         signature: Optional[str] = None,
+        used_router: Optional[str] = None,
     ) -> List[Query]:
         """
         Get specific query model.
@@ -85,6 +88,8 @@ class QueryDAO:
             query = query.where(Query.credits == credits)
         if signature:
             query = query.where(Query.signature == signature)
+        if used_router:
+            query = query.where(Query.used_router == used_router)
 
         raw_queries = self.session.execute(query)
 
