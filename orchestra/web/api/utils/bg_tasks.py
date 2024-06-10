@@ -28,7 +28,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     query_dao: QueryDAO,
     users_dao: UsersDAO,
     signature: Optional[str],
-    used_router: Optional[bool],
+    used_router: Optional[bool] = None,
 ):
     """
     Perform database operations.
