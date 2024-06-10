@@ -118,9 +118,9 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     metrics_thresholds=metrics_thresholds,
                 )
         if try_provider >= len(model_priority_list):
-            break 
+            break
         model, provider = model_priority_list[try_provider]
-        
+
         extra_args = tuple()
         if provider == "custom":
             extra_args = (custom_endpoint_dao, custom_api_key_dao, user_id, model)
