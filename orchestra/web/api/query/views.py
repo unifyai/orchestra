@@ -47,4 +47,5 @@ def create_query_model(
         credits=new_query_object.credits,
         prompt=new_query_object.prompt,
         signature=new_query_object.signature,
+        used_router=new_query_object.used_router,
     )
