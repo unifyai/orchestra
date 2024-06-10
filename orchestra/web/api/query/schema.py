@@ -20,6 +20,7 @@ class QueryModelRequest(BaseModel):
     credits: float
     prompt: Optional[str]
     signature: Optional[str]
+    used_router: Optional[bool]
 
 
 class QueryModelResponse(BaseModel):
@@ -40,3 +41,5 @@ class QueryModelResponse(BaseModel):
     endpoint_id: int
     credits: float
     prompt: str
+    signature: Optional[str]
+    used_router: Optional[bool]
