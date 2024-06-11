@@ -356,3 +356,19 @@ class DatasetEvaluationModelResponse(BaseModel):
     score: float
     input_tokens: int
     output_tokens: int
+
+
+class CustomApiKeyModelResponse(BaseModel):
+    """
+    Response model for custom api keys models.
+    """
+
+    user_id: str
+    key: str
+    value: str
+
+
+class CustomEndpointModelResponse(BaseModel):
+    name: str
+    url: str
+    key: str

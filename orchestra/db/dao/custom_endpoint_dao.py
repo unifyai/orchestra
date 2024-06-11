@@ -1,10 +1,10 @@
-from typing import List
+from typing import Any, List, Tuple
 from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import CustomEndpoint
+from orchestra.db.models.orchestra_models import CustomApiKey, CustomEndpoint
 
 
 class CustomEndpointDAO:
@@ -13,8 +13,12 @@ class CustomEndpointDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    def create_custom_endpoint(self, user_id: str, key: str, value: str) -> None:
-        self.session.add(CustomEndpoint(user_id=user_id, key=key, value=value))
+    def create_custom_endpoint(
+        self, user_id: str, name: str, url: str, key_id: int
+    ) -> None:
+        self.session.add(
+            CustomEndpoint(user_id=user_id, name=name, url=url, key_id=key_id)
+        )
 
     def filter(self, user_id: str, name: str) -> List[CustomEndpoint]:
         query = (
@@ -26,3 +30,15 @@ class CustomEndpointDAO:
         raw_custom_endpoints = self.session.execute(query)
 
         return list(raw_custom_endpoints.scalars().fetchall())
+
+    def get_user_endpoints(self, user_id: str) -> List[Tuple[str, str, str]]:
+
+        query = (
+            select(CustomEndpoint.name, CustomEndpoint.url, CustomApiKey.key)
+            .join(CustomApiKey, CustomEndpoint.key_id == CustomApiKey.id)
+            .where(CustomEndpoint.user_id == user_id)
+        )
+
+        raw_custom_endpoints = self.session.execute(query)
+
+        return list(raw_custom_endpoints.fetchall())
