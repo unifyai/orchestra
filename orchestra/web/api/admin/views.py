@@ -7,6 +7,8 @@ from fastapi.param_functions import Depends
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.beta_list_dao import BetaListDAO
+from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
+from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.datapoint_dao import DatapointDAO
 from orchestra.db.dao.dataset_evaluation_dao import DatasetEvaluationDAO
 from orchestra.db.dao.dataset_evaluation_task_dao import DatasetEvaluationTaskDAO
@@ -22,6 +24,8 @@ from orchestra.db.dao.task_dao import TaskDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     BenchmarkRun,
+    CustomApiKey,
+    CustomEndpoint,
     Datapoint,
     DatasetEvaluation,
     DatasetEvaluationTask,
@@ -57,6 +61,8 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     TaskModelRequest,
     TaskModelResponse,
     UsersModelResponse,
+    CustomApiKeyModelResponse,
+    CustomEndpointModelResponse,
 )
 
 router = APIRouter()
@@ -449,6 +455,67 @@ def get_task(
     :return: task object from database.
     """
     return task_dao.filter(name=name)
+
+
+@router.get("/get_custom_api_keys", response_model=List[CustomApiKeyModelResponse])
+def get_custom_api_keys(
+    user_id: str,
+    custom_api_key_dao: CustomApiKeyDAO = Depends(),
+) -> List[CustomApiKey]:
+    return custom_api_key_dao.get_user_keys(user_id=user_id)
+
+
+@router.get("/get_custom_endpoints", response_model=List[CustomEndpointModelResponse])
+def get_custom_endpoints(
+    user_id: str,
+    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+) -> List[CustomApiKey]:
+    return custom_endpoint_dao.get_user_endpoints(user_id=user_id)
+
+
+@router.put("/create_custom_api_key")
+def create_custom_api_key_model(
+    user_id: str,
+    key: str,
+    value: str,
+    custom_api_key_dao: CustomApiKeyDAO = Depends(),
+) -> None:
+    """
+    Creates custom api key model in the database.
+
+    """
+    custom_api_key_dao.create_custom_api_key(
+        user_id=user_id,
+        key=key,
+        value=value,
+    )
+
+
+@router.put("/create_custom_endpoint")
+def create_custom_endpoint_model(
+    user_id: str,
+    name: str,
+    url: str,
+    key_name: str,
+    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+    custom_api_key_dao: CustomApiKeyDAO = Depends(),
+) -> None:
+    """
+    Creates custom endpoint model in the database.
+
+    """
+
+    try:
+        key_id = custom_api_key_dao.filter(user_id=user_id, key=key_name)[0].id
+    except Exception:
+        raise HTTPException(status_code=404, detail="Custom API Key not found.")
+
+    custom_endpoint_dao.create_custom_endpoint(
+        user_id=user_id,
+        name=name,
+        url=url,
+        key_id=key_id,
+    )
 
 
 @router.put("/create_datapoint")
