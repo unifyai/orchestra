@@ -5,7 +5,6 @@ from typing import Any, List
 
 import providers.completion.replicate_run as r8r
 import replicate
-from fastapi import HTTPException
 from providers.completion.base_completion_provider import (
     AsyncGeneratorWrapper,
     BaseCompletionProvider,
@@ -205,6 +204,7 @@ def sse_to_part_dict(part, whole):
                 "finish_reason": None,  # TODO
             },
         ],
+        "usage": dict(),
     }
     if part.data == "":
         return None
