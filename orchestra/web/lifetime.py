@@ -140,9 +140,9 @@ def register_startup_event(
         _setup_db(app)
         setup_opentelemetry(app)
         setup_prometheus(app)
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = (
-            settings.vertexai_service_acc_json
-        )
+        os.environ[
+            "GOOGLE_APPLICATION_CREDENTIALS"
+        ] = settings.vertexai_service_acc_json
         aiplatform.init(
             project=settings.vertexai_project, location=settings.vertexai_location
         )
