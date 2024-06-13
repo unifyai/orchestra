@@ -27,7 +27,7 @@ supported_models = {
         "endpoint": "meta-llama/Llama-3-70b-chat-hf",
         "context_window": 8000,
         "cost": {"prompt": 0.9, "completion": 0.9},
-    },   
+    },
     "llama-3-8b-chat": {
         "endpoint": "meta-llama/Llama-3-8b-chat-hf",
         "context_window": 8000,
@@ -37,7 +37,7 @@ supported_models = {
         "endpoint": "mistralai/Mixtral-8x22B-Instruct-v0.1",
         "context_window": 65536,
         "cost": {"prompt": 1.2, "completion": 1.2},
-    }, 
+    },
     "gemma-2b-it": {
         "endpoint": "google/gemma-2b-it",
         "context_window": 8192,

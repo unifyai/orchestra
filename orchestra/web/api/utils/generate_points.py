@@ -44,12 +44,12 @@ def reorganize_data(raw_responses):
         prompts = dict()
         for benchmark in datasets[dataset]:
             if benchmark["prompt"] in prompts:
-                prompts[benchmark["prompt"]][f"{benchmark['mdl_name']}_score"] = (
-                    benchmark["score"]
-                )
-                prompts[benchmark["prompt"]][f"{benchmark['mdl_name']}_pred"] = (
-                    benchmark["pred"]
-                )
+                prompts[benchmark["prompt"]][
+                    f"{benchmark['mdl_name']}_score"
+                ] = benchmark["score"]
+                prompts[benchmark["prompt"]][
+                    f"{benchmark['mdl_name']}_pred"
+                ] = benchmark["pred"]
             else:
                 prompts[benchmark["prompt"]] = {
                     f"{benchmark['mdl_name']}_score": benchmark["score"],
