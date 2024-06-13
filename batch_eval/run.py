@@ -99,6 +99,7 @@ body = """
 
 """
 
+
 def send_email(user_email):
     email_server = smtplib.SMTP("smtp.gmail.com", 587)
     email_server.starttls()
