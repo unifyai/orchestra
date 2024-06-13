@@ -21,6 +21,7 @@ class QueryModelRequest(BaseModel):
     prompt: Optional[str]
     signature: Optional[str]
     used_router: Optional[bool]
+    router: Optional[str]
 
 
 class QueryModelResponse(BaseModel):
@@ -43,3 +44,4 @@ class QueryModelResponse(BaseModel):
     prompt: str
     signature: Optional[str]
     used_router: Optional[bool]
+    router: Optional[str]
