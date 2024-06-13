@@ -6,7 +6,6 @@ from orchestra.web.api import (  # noqa: WPS235
     chat_completion,
     eval_batch,
     endpoint,
-    inference,
     model,
     monitoring,
     provider,
@@ -57,11 +56,6 @@ api_router.include_router(
 api_router.include_router(
     eval_batch.router,
     include_in_schema=False,
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    inference.router,
-    tags=["inference"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(

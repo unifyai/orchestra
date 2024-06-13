@@ -47,23 +47,6 @@ def _partial_openai_payload(temperature=0.5, max_tokens=100, stream=False):
     }
 
 
-def get_inference_payload(model, provider, stream):
-    """
-    Generate data for inference endpoint (text_generation).
-
-    :param model: model name.
-    :param provider: provider name.
-    :param stream: stream.
-
-    :return: data.
-    """
-    return {
-        "model": model,
-        "provider": provider,
-        "arguments": _partial_openai_payload(stream=stream),
-    }
-
-
 def get_chat_completions_payload(model, provider, stream):
     """
     Generate data for chat completions.
