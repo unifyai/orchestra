@@ -93,6 +93,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     try_provider = 0
     router_choices = None
     using_router = model == "router"
+    router_str = provider if using_router else None
     num_tries = 5
     while try_provider >= 0 and try_provider < num_tries:
 
@@ -150,6 +151,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         "prompt": messages,
         "signature": request.signature,
         "used_router": using_router,
+        "router": router_str,
         "model_dao": model_dao,
         "provider_dao": provider_dao,
         "endpoint_dao": endpoint_dao,
