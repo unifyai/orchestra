@@ -1,15 +1,15 @@
 import json
+import time
 from typing import Union
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.param_functions import Depends
 from fastapi.responses import StreamingResponse
-from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
-from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
-from orchestra.db.dao.datapoint_dao import DatapointDAO
+from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
+from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
@@ -42,6 +42,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     background_tasks: BackgroundTasks,
     request_fastapi: Request,
     request: ChatCompletionRequest,
+    response_fastapi: Response,
     users_dao: UsersDAO = Depends(),
     model_dao: ModelDAO = Depends(),
     provider_dao: ProviderDAO = Depends(),
@@ -95,6 +96,9 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     using_router = model == "router"
     router_str = provider if using_router else None
     num_tries = 5
+
+    t0 = time.time()
+
     while try_provider >= 0 and try_provider < num_tries:
 
         if provider not in PROVIDER_CLASSES or using_router:
@@ -189,6 +193,9 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     response["model"] = f"{model}@{provider}"
     response["usage"]["cost"] = cost
+    response_fastapi.headers[
+        "openai-processing-ms"
+    ] = f"{(time.time() - t0) * 1000:.0f}"
     return ChatCompletionResponse(**response)
 
 
