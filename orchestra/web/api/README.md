@@ -53,6 +53,7 @@ api_router.include_router(
 
 For example, this will protect all endpoints in the `/dummy` router
 to allow admin-only access:
+
 ```python
 api_router.include_router(
     dummy.router,
