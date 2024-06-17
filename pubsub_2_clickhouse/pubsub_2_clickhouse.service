@@ -3,14 +3,11 @@ Description=GCP Pub/Sub to ClickHouse Service
 After=network.target
 
 [Service]
-# Environment="GOOGLE_APPLICATION_CREDENTIALS=/opt/my-service/your_service_account_file.json"
 ExecStart=/opt/pubsub-2-clickhouse/venv/bin/python3 /opt/pubsub-2-clickhouse/main.py
 WorkingDirectory=/opt/pubsub-2-clickhouse/
-StandardOutput=syslog
-StandardError=syslog
 Restart=always
 RestartSec=10
-User=serviceuser  # Run the service as the dedicated user
+User=serviceuser
 
 [Install]
 WantedBy=multi-user.target
