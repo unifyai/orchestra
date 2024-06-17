@@ -14,6 +14,8 @@ env:
 
 on:
   push:
+    branches:
+    - pubsub-2-clickhouse
     paths:
     - $GH_WORKDIR/**
 
