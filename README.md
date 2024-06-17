@@ -2,30 +2,35 @@
 
 This repo includes the code for orchestra, the server in charge of the model hub api and the benchmarks.
 
+- Orchestra Production API URL: https://api.unify.ai/v0
+- Orchestra Staging API URL: https://orchestra-staging-lz5fmz6i7q-ew.a.run.app/v0
+
 ## Docs and other READMEs
 
 - [API Endpoints README](./orchestra/web/api/README.md): How to add new endpoints to the orchestra API, How to secure the endpoints.
 - [Database README](./orchestra/db/README.md): Migrations, Google Cloud Infrastructure, Syncying staging DB.
-- TODO: Setting up local env
-- TODO: Debugging configurations, tests (unit, integration, load testing, manual), running orchestra locally in debug mode
+- TODO: [Secrets and Environment Variables](#secrets--environment-variables)
+- [Running the tests](#running-the-tests)
+- [Running orchestra](#running-orchestra)
+- TODO: Tests (unit, integration, load testing, manual)
+- TODO: Adding model, providers, and model endpoints
 - TODO: [Telemetry](./Telemetry.md)
 - TODO: GCP services in use and flows
-- TODO: CI/CD
+- [CI/CD](./.github/workflows/README.md)
 
 ## Project structure
 
 ```bash
 $ tree "orchestra"
 orchestra
+├── __main__.py  # Startup script. Starts uvicorn.
 ├── conftest.py  # Fixtures for all tests.
+├── settings.py  # Main configuration settings for project.
+├── tests  # Tests for project.
 ├── db  # module contains db configurations
+│   ├── migrations  # Files related to alembic migrations.
 │   ├── dao  # Data Access Objects. Contains different classes to interact with database.
 │   └── models  # Package contains different models for ORMs.
-├── __main__.py  # Startup script. Starts uvicorn.
-├── services  # Package for different external services such as rabbit or redis etc.
-├── settings.py  # Main configuration settings for project.
-├── static  # Static content.
-├── tests  # Tests for project.
 └── web  # Package contains web server. Handlers, startup config.
     ├── api  # Package with all handlers.
     │   └── dependencies.py  # Contains utilities and helpers for v0/router.
@@ -36,17 +41,12 @@ orchestra
 
 ## Poetry
 
-This project uses poetry. It's a modern dependency management tool.
-To run the project use this set of commands:
+This project uses poetry to manage dependencies.
+To install dependencies:
 
 ```bash
 poetry install
-poetry run python -m orchestra
 ```
-
-This will start the server on the configured host.
-
-You can find swagger documentation at `/v0/docs`.
 
 For development, you can activate the poetry virtual environment by:
 
@@ -54,6 +54,95 @@ For development, you can activate the poetry virtual environment by:
 poetry shell
 ```
 
+## Pre-commit
+
+To install pre-commit simply run inside the shell:
+```bash
+pre-commit install
+```
+
+## Secrets / Environment Variables
+
+TODO: Lorem ipsum
+TODO: Tool to fetch them from GCP
+
+VSCode will load the .env file by default, but take into account that you might need to configure your IDE to load the variables.
+
+## Running the tests
+
+To run the orchestra test suite, you will need the poetry environment and a PSQL server running. Both in codespaces and locally, the easiest way to do this is by creating a PSQL image from the official container. You **don't** need to create a database or populate with data, the tests procedures will do it.
+
+```bash
+docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:15.2-bullseye
+```
+
+Once the database server is running, you can run the tests using the poetry environment. Take into account that some tests will require **secrets and environment variables**.
+
+```bash
+pytest -vv .
+```
+
+## Running orchestra
+
+To run the orchestra service locally, you will need a database with valid data, the corresponding secrets/environment variables, and the poetry environment.
+
+If you already have a docker container running PSQL you won't need to create a new image. Otherwise:
+
+```bash
+docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:15.2-bullseye
+```
+
+Now, connect to the PSQL database (password=`orchestra`):
+
+```bash
+psql -h localhost -U orchestra -d orchestra
+```
+
+Now you will need to download a dump from the real Db to populate the data. You can get it from [here](https://console.cloud.google.com/storage/browser/_details/temp_file_holder/orchestra.dump.sql;tab=live_object?authuser=2&project=saas-368716).
+
+In the PSQL console, run:
+
+```bash
+\i orchestra.dump.sql
+```
+
+This will populate your local database with the entries from the dump. however, the database might not be completely up to date, so you will most likely need to run (in the poetry environment):
+
+```bash
+alembic upgrade "head"
+```
+
+Your DB should now be fully functional! The psql console has most likely kicked you out when loading the dump, so to connect to the database again, run `\c orchestra`. Now, you should be able to see all the tables (e.g. `\dt`).
+
+To run the service, you can do `poetry run python -m orchestra` but you won't be able to debug the service.
+
+To run orchestra in debug mode (in VSCode / Codespaces), your `launch.json` file should look something like this:
+
+```python
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: FastAPI",
+            "type": "python",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "orchestra.web.application:get_app",
+                "--reload"
+            ],
+            "jinja": true,
+            "justMyCode": true
+        }
+    ]
+}
+```
+
+Once the service is running, you can send requests to http://127.0.0.1:8000/v0
+
+-----------------------
+
+TODO: Clean below
 
 ## Configuration
 
@@ -98,128 +187,5 @@ It's only for demo purpose.
 
 You can read more about OpenTelemetry here: https://opentelemetry.io/
 
-## Pre-commit
 
-To install pre-commit simply run inside the shell:
-```bash
-pre-commit install
-```
 
-Run tests before pushing them
-```bash
-pre-commit run -a
-poetry run mypy .
-```
-
-## Running tests
-
-If you want to run it in docker, simply run:
-
-```bash
-docker-compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml --project-directory . run --build --rm api pytest -vv .
-docker-compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml --project-directory . down
-```
-
-For running tests on your local machine.
-1. you need to start a database.
-
-I prefer doing it with docker:
-```
-docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:15.2-bullseye
-```
-
-2. Run the pytest.
-```bash
-pytest -vv .
-```
-## Setting up the database locally
-### Getting local dump file
-1. To setup the database locally, you need to create a dump file of the staging database. To do so, you can either run the following commands:
-    - Connect to the sql database using gcloud:
-        ```bash
-        gcloud sql connect staging
-        ```
-    - After connecting to staging, run the following command on your terminal. This will create a dump file.
-        ```bash
-        pg_dump -h 34.141.85.117 -p 5432 -U postgres orchestra > orchestra.sql
-        ```
-    OR
-    - Use GCP UI to pg_dump the data through the [export page here](https://console.cloud.google.com/sql/instances/dev/export?project=saas-368716) into [temp_file_holder](https://console.cloud.google.com/storage/browser/temp_file_holder;tab=objects?forceOnBucketsSortingFiltering=true&project=saas-368716&prefix=&forceOnObjectsSortingFiltering=false) bucket and then download from there.
-2. Now, connect to psql and run the following command to populate your local orchestra database. Note: this step assumes you've database setup and running.
-    ```bash
-    PGPASSWORD=orchestra psql -h localhost -U orchestra -d orchestra
-    \i <path to orchestra.sql>
-    \q
-    ```
-
-### Setting up the database in the docker container
-This way you can configure your database that is spun up using the docker compose.
-
-Copy over the dump file to the docker container
-```bash
-docker cp <file_name>.sql <postgres:15.2-bullseye_container_id>:/<file_name>.sql
-```
-
-```bash
-docker exec -it <postgres:15.2-bullseye_container_id> /bin/bash
-```
-
-Now, connect to psql and run the following command to populate your local orchestra database
-```bash
-psql -h 127.0.0.1  -p 5432 -U orchestra -d orchestra
-```
-
-```sql
-\connect orchestra;
-\i <snapshot_name>.sql
-```
-
-### Setting up the local database
-To populate database for the local orchestra, run the following commands
-```bash
-poetry run python -m orchestra
-docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:15.2-bullseye
-alembic upgrade head
-```
-
-Now, connect to psql and run the following command to populate your local orchestra database
-```bash
-psql -h 127.0.0.1  -p 5432 -U orchestra -d orchestra
-```
-
-```sql
-\connect orchestra;
-\i <snapshot_name>.sql
-```
-
-## Debugging in vscode
-
-To run the debugger you will need a valid connection to a db. To run `orchestra` in debug model, your `launch.json` file should look something like this:
-
-```python
-{
-    "version": "0.2.0",
-    "configurations": [
-        {
-            "name": "Python: FastAPI",
-            "type": "python",
-            "request": "launch",
-            "module": "uvicorn",
-            "args": [
-                "orchestra.web.application:get_app",
-                "--reload"
-            ],
-            "jinja": true,
-            "justMyCode": true
-        }
-    ]
-}
-```
-
-## Staging environment
-
-The `staging` branch has CI/CD already setup. All changes there will reflect to https://orchestra-staging-lz5fmz6i7q-ew.a.run.app.
-
-## Telemetry
-
-For instructions to access the telemetry dashboard and how it's setup, please see [Telemetry.md](./Telemetry.md)
