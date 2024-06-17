@@ -12,12 +12,7 @@ env:
 # TODO: Only when pushing to main
 # TODO: Staging?
 
-on:
-  push:
-    branches:
-    - pubsub-2-clickhouse
-    paths:
-    - $GH_WORKDIR/**
+on: push
 
 jobs:
   deploy:
@@ -25,7 +20,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
 
     - name: Set up Google Cloud SDK
       uses: google-github-actions/setup-gcloud@v2
