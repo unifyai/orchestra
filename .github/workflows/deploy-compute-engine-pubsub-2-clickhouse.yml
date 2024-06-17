@@ -7,7 +7,7 @@ env:
   GCLOUD_ZONE: europe-west1-b
   GCLOUD_WORKDIR: /opt/pubsub-2-clickhouse
   GCLOUD_INSTANCE: pubsub-2-clickhouse
-  GCLOUD_USERNAME: guillermo
+  GCLOUD_USERNAME: serviceuser
 
 # TODO: Only when pushing to main
 # TODO: Staging?
