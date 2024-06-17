@@ -26,6 +26,7 @@ from orchestra.web.api.utils.dynamic_routing import (
     RouterConfig,
     dynamic_routing,
     parse_endpoint,
+    get_router_endpoint_id,
 )
 from orchestra.web.api.utils.helpers import filter_request_params
 from orchestra.web.api.utils.http_responses import (
@@ -93,9 +94,21 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     model, provider = model_priority_list[0]
     try_provider = 0
     router_choices = None
-    using_router = model == "router"
+    using_router = model.startswith("router")
     router_str = provider if using_router else None
     num_tries = 5
+    
+    if using_router:
+        # parse router string
+        tmp = model.split("_", 1)
+        if len(tmp) == 1:
+            endpoint_id = "7393085398840246272"
+        else:
+            router_name = tmp[1]
+            # check router_name in the db
+            # check the user_id matches too
+            # 
+            endpoint_id = get_router_endpoint_id(router_name, user_id)
 
     t0 = time.time()
 
@@ -111,7 +124,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                         if msg["content"] is not None:
                             num_tokens_est += len(msg["content"])
                     # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
-                    router_choices = rc(messages[-1]["content"], num_tokens_est * 1.25)
+                    router_choices = rc(messages[-1]["content"], num_tokens_est * 1.25, endpoint_id)
                     model_priority_list = router_choices
             else:  # Non model routing, TODO: clean up to simplify
                 target_metric, metrics_thresholds = parse_endpoint(provider)
