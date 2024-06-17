@@ -17,6 +17,7 @@ on: push
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: orchestra-testing
 
     steps:
     - name: Checkout repository
