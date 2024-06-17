@@ -40,7 +40,7 @@ jobs:
 
     - name: Copy service file to VM
       run: |
-        gcloud compute scp ${{ env.GH_WORKDIR }}/${{ env.SERVICE_NAME }}.service ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }}:/etc/systemd/system/ --zone ${{ env.GCLOUD_ZONE }}
+        gcloud compute scp ${{ env.GH_WORKDIR }}/${{ env.SERVICE_NAME }}.service root@${{ env.GCLOUD_INSTANCE }}:/etc/systemd/system/ --zone ${{ env.GCLOUD_ZONE }}
 
     - name: Reload and restart the service on VM
       run: |
