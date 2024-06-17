@@ -45,8 +45,8 @@ jobs:
     - name: Reload and restart the service on VM
       run: |
         gcloud compute ssh ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }} --zone ${{ env.GCLOUD_ZONE }} --command "
-          sudo cp ${{ env.GH_WORKDIR }}/${{ env.SERVICE_NAME }}.service /etc/systemd/system/ &&
-          sudo rm ${{ env.GH_WORKDIR }}/${{ env.SERVICE_NAME }}.service &&
+          sudo cp ${{ env.GCLOUD_WORKDIR }}/${{ env.SERVICE_NAME }}.service /etc/systemd/system/ &&
+          sudo rm ${{ env.GCLOUD_WORKDIR }}/${{ env.SERVICE_NAME }}.service &&
           sudo systemctl daemon-reload &&
           sudo systemctl restart ${{ env.SERVICE_NAME }}.service &&
           sudo systemctl enable ${{ env.SERVICE_NAME }}.service
