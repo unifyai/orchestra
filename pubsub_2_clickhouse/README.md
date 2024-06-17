@@ -33,3 +33,5 @@ User access within the service account needs to be configured as well.
     - `sudo chmod -R 755 /opt/pubsub-2-clickhouse`
 
 4. Configure the `deploy-compute-engine` GitHub action to point to the correct VM and run it to deploy `main.py` and the `.service` file.
+
+- Create a json key in the service account (within Google Cloud) and add it to the CI.
