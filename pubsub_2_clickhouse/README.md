@@ -4,7 +4,8 @@ The PubSub to Clickhouse connector runs in a VM. To create this service, in GCP:
 
 1. Create a service account. It will need the following roles:
 
-- `` # TODO
+- `Compute Instance Admin (v1)` # GH Action
+- `Service Account User` # GH Action
 
 User access within the service account needs to be configured as well.
 
@@ -28,10 +29,15 @@ User access within the service account needs to be configured as well.
     - `cd /opt/pubsub-2-clickhouse/`
     - `sudo python3 -m venv venv`
 - Create service user and change ownership
-    - `sudo useradd -r -s /bin/false serviceuser`
+    - `sudo useradd -r -m -s /bin/bash serviceuser`
     - `sudo chown -R serviceuser:serviceuser /opt/pubsub-2-clickhouse`
     - `sudo chmod -R 755 /opt/pubsub-2-clickhouse`
 
 4. Configure the `deploy-compute-engine` GitHub action to point to the correct VM and run it to deploy `main.py` and the `.service` file.
 
 - Create a json key in the service account (within Google Cloud) and add it to the CI.
+
+5. Check information about the service:
+
+- `sudo systemctl status pubsub_2_clickhouse.service `
+- `sudo journalctl -f -u pubsub_2_clickhouse`
