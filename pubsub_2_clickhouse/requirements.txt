@@ -1,1 +1,2 @@
 sdnotify==0.3.2
+google-cloud-pubsub==2.21.3
