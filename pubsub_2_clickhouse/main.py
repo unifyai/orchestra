@@ -12,7 +12,6 @@ logging.basicConfig(
 )
 
 
-topic_name = "projects/saas-368716/topics/test-topic"
 subscription_name = "projects/saas-368716/subscriptions/test-topic-sub"
 
 # Create an instance of sdnotify
@@ -44,7 +43,6 @@ if __name__ == "__main__":
     n.notify("READY=1")
 
     with pubsub_v1.SubscriberClient() as subscriber:
-        subscriber.create_subscription(name=subscription_name, topic=topic_name)
         future = subscriber.subscribe(subscription_name, pub_sub_callback)
     logging.info("Subscribed to topic.")
 
