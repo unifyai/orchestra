@@ -1,12 +1,12 @@
 #!pip install google-cloud-storage
 import os
 import subprocess
+import requests
 from google.cloud import storage
 from google.cloud import aiplatform
 
 
 def download_blob(bucket_name, source_blob_name, destination_file_name):
-    pass
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
     blobs = bucket.list_blobs(prefix=source_blob_name)
@@ -38,27 +38,19 @@ def deploy(user_id: str, router_name: str):
     )
 
     # build the docker container
-    # subprocess.run(
-    #    [
-    #        "sudo",
-    #        "docker",
-    #        "build",
-    #        "--build-arg",
-    #        f"root_path={save_path}",
-    #        ".",
-    #        "-t",
-    #        docker_path,
-    #    ]
-    # )
+    subprocess.run(
+        f"sudo docker build --build-arg root_path={save_path} . -t {docker_path}",
+        shell=True,
+    )
 
     ## push the docker container to artifact registry
 
-    # subprocess.run(
-    #    "gcloud auth print-access-token | sudo docker login   -u oauth2accesstoken   --password-stdin europe-west1-docker.pkg.dev",
-    #    shell=True,
-    # )
+    subprocess.run(
+       "gcloud auth print-access-token | sudo docker login   -u oauth2accesstoken   --password-stdin europe-west1-docker.pkg.dev",
+       shell=True,
+    )
 
-    # subprocess.run(f"sudo docker push {docker_path}", shell=True)
+    subprocess.run(f"sudo docker push {docker_path}", shell=True)
     # create a new model_version in model registry
 
     location = "europe-west1"
@@ -74,29 +66,35 @@ def deploy(user_id: str, router_name: str):
         serving_container_predict_route="/health",
         serving_container_health_route="/predict",
         serving_container_ports=[80],
-)
+    )
 
     print("creating endpoint ... ")
     endpoint = aiplatform.Endpoint.create(display_name=display_name)
     print("deploying model")
-    model.deploy(
-        endpoint=endpoint,
-        deployed_model_display_name=display_name,
-        traffic_percentage=100,
-        min_replica_count=1,
-        max_replica_count=1,
-        accelerator_type="NVIDIA_TESLA_T4",
-        accelerator_count=1,
-        sync=True,
-    )
+    # model.deploy(
+    #     endpoint=endpoint,
+    #     deployed_model_display_name=display_name,
+    #     traffic_percentage=100,
+    #     min_replica_count=1,
+    #     max_replica_count=1,
+    #     accelerator_type="NVIDIA_TESLA_T4",
+    #     accelerator_count=1,
+    #     sync=True,
+    # )
 
     model.wait()
 
-    print(model.display_name)
-    print(model.resource_name)
-
     # send this back to orchestra so we know where it's pointed
-    
+    payload = {
+        "user_id": user_id,
+        "router_name": router_name,
+        "router_id": endpoint.name,
+    }
+    url = f'{os.getenv("ORCHESTRA_BASE_URL")}/v0/admin/create_custom_router'
+    headers = {"Authorization": f'Bearer {os.getenv("ORCHESTRA_ADMIN_KEY")}'}
+    response = requests.put(url=url, json=payload, headers=headers)
+    print(response.text)
+
 
 if __name__ == "__main__":
-    deploy("test_user_id", "test_router")
+    deploy("clb5hx8d40002s601hooxp3ct", "a_test_router")
