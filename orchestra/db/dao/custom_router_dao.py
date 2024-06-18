@@ -7,7 +7,7 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import CustomRouter
 
 
-class CustomRouterDao:
+class CustomRouterDAO:
     """Class for accessing custom router table."""
 
     def __init__(self, session: Session = Depends(get_db_session)):
