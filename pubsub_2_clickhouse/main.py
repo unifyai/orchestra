@@ -1,7 +1,8 @@
+import concurrent
+import json
 import logging
 import signal
 import sys
-import time
 
 import sdnotify
 from google.cloud import pubsub_v1
@@ -11,26 +12,48 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
-
-subscription_name = "projects/saas-368716/subscriptions/test-topic-sub"
+# Global reference to the state of the script
+shutdown_flag = False
 
 # Create an instance of sdnotify
 n = sdnotify.SystemdNotifier()
 
+# Pub/Sub subscription
+subscription_name = "projects/saas-368716/subscriptions/orchestra-telemetry-sub"
+
 
 # Function to handle graceful shutdown
 def signal_handler(signal, frame):
+    global shutdown_flag
     logging.info("Received termination signal, shutting down gracefully...")
-    time.sleep(10)
-    logging.info("All tasks finished correctly! Stopping the service.")
-    n.notify("STOPPING=1")
-    sys.exit(0)
+    shutdown_flag = True
 
 
 # PubSub Callback to deal with the message
+# NOTE: This callback needs to be idempotent as ACKs are best effort.
 def pub_sub_callback(message):
-    logging.info(message.data)
-    message.ack()
+    global shutdown_flag
+    if not shutdown_flag:
+        try:
+            # parse message data
+            data = json.loads(message.data)
+            # do whatever with the data
+            logging.info(f"entry: {data['prompt']}")
+        except json.decoder.JSONDecodeError:
+            logging.error(f"Error parsing message: {message.data}")
+        except:
+            logging.error(f"Unrecognised error in message: {message.data}")
+        finally:
+            # acknowledge that data has been processed
+            # NOTE: If the message is not acknowledged in time, pubsub will send it
+            # again. To avoid this the AckDeadline can be modified.
+            # The processing of the data should be as quick as possible tho.
+            # (i.e. spawning a subprocess).
+            # NOTE: If there is an error with the message format, it should be
+            # logged and acknowledged, otherwise the message will keep coming.
+            message.ack()
+    else:
+        message.nack()
 
 
 # Register signal handlers
@@ -42,12 +65,25 @@ if __name__ == "__main__":
     # Notify systemd that the service is ready
     n.notify("READY=1")
 
-    with pubsub_v1.SubscriberClient() as subscriber:
-        future = subscriber.subscribe(subscription_name, pub_sub_callback)
+    # This method requires either gcloud to be authenticated (this is the case
+    # when using a service account in a Compute Engine instance) or to have an
+    # env var GOOGLE_APPLICATION_CREDENTIALS=<path_to_credentials.json> defined
+    subscriber = pubsub_v1.SubscriberClient()
+    future = subscriber.subscribe(subscription_name, pub_sub_callback)
     logging.info("Subscribed to topic.")
 
-    while True:
-        # Notify systemd that the service is alive
-        n.notify("WATCHDOG=1")
-        logging.debug(f"ping time: ({time.time()})")
-        time.sleep(5)
+    while not shutdown_flag:
+        try:
+            future.result(timeout=10)
+        except concurrent.futures.TimeoutError:
+            logging.info("No message received")
+        finally:
+            n.notify("WATCHDOG=1")
+
+    # NOTE: Any message being processed will finish before termination.
+    logging.info("All tasks finished correctly! Stopping the service.")
+    logging.info("Cancelling subscription...")
+    future.cancel()
+    subscriber.close()
+    n.notify("STOPPING=1")
+    sys.exit(0)
