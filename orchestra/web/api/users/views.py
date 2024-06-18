@@ -45,6 +45,12 @@ def credits_code(
     :param users_dao: DAO for users models.
     :return: user instance with credits from database.
     """
+
+    raise HTTPException(
+        status_code=400,
+        detail="Promo codes are not available at the moment!",
+    )
+
     qty = 50
     promo_codes = [
         "HACKERNEWS",
@@ -80,19 +86,22 @@ def credits_code(
             user_id = user
         else:
             raise HTTPException(
-                status_code=404, detail="The specified user id doesn't exist."
+                status_code=404,
+                detail="The specified user id doesn't exist.",
             )
 
     prev_recharges = recharge_dao.filter(user_id=user_id)
 
     if any(pr.type == code for pr in prev_recharges):
         raise HTTPException(
-            status_code=400, detail="This code has already been activated."
+            status_code=400,
+            detail="This code has already been activated.",
         )
 
     if any(pr.type in promo_codes for pr in prev_recharges):
         raise HTTPException(
-            status_code=400, detail="You have already used a promo code!"
+            status_code=400,
+            detail="You have already used a promo code!",
         )
 
     recharge_dao.create_recharge(
