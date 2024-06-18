@@ -389,7 +389,6 @@ def standarise_thresholds(threhsolds):
 
 
 def parse_endpoint(endpoint: str):
-
     # TODO: Raise error if not correctly formated or not valid metric
 
     main_metric = endpoint.split("<", 1)[0].split(">")[0]
@@ -484,11 +483,12 @@ def dynamic_routing(
     )
     return selected_model, selected_provider
 
-def get_router_endpoint_id(custom_router_dao: CustomRouterDAO, user_id: str, router_name: str) -> str:
+
+def get_router_endpoint_id(
+    custom_router_dao: CustomRouterDAO, user_id: str, router_name: str
+) -> str:
     ids = custom_router_dao.get_router_id(user_id=user_id, router_name=router_name)
-    print(ids)
     router_id = ids[0].router_id
-    print(router_id)
     return router_id
 
 

@@ -107,12 +107,13 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             endpoint_id = "7393085398840246272"
         else:
             router_name = tmp[1]
-            # check router_name in the db
-            # check the user_id matches too
-            #
-            endpoint_id = get_router_endpoint_id(
-                custom_router_dao, user_id, router_name
-            )
+            try:
+                endpoint_id = get_router_endpoint_id(
+                    custom_router_dao, user_id, router_name
+                )
+            except:
+                # TODO: add proper error message for this
+                raise invalid_model_str
 
     t0 = time.time()
 

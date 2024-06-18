@@ -9,6 +9,7 @@ from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.beta_list_dao import BetaListDAO
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
+from orchestra.db.dao.custom_router_dao import CustomRouterDAO
 from orchestra.db.dao.datapoint_dao import DatapointDAO
 from orchestra.db.dao.dataset_evaluation_dao import DatasetEvaluationDAO
 from orchestra.db.dao.dataset_evaluation_task_dao import DatasetEvaluationTaskDAO
