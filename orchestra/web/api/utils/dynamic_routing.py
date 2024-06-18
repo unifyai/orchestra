@@ -11,6 +11,7 @@ from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
+from orchestra.db.dao.custom_router_dao import CustomRouterDAO
 from orchestra.settings import settings
 
 # TODO: Add errors back to the refactored function
@@ -483,8 +484,12 @@ def dynamic_routing(
     )
     return selected_model, selected_provider
 
-def get_router_endpoint_id(router_name, user_id):
-    return "123"
+def get_router_endpoint_id(custom_router_dao: CustomRouterDAO, user_id: str, router_name: str) -> str:
+    ids = custom_router_dao.get_router_id(user_id=user_id, router_name=router_name)
+    print(ids)
+    router_id = ids[0].router_id
+    print(router_id)
+    return router_id
 
 
 metrics = {

@@ -52,6 +52,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     benchmark_run_dao: BenchmarkRunDAO = Depends(),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
+    custom_router_dao: CustomRouterDAO = Depends(),
 ) -> Union[ChatCompletionResponse, StreamingResponse]:
     """
     Get chat completions based on the request.
@@ -108,7 +109,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             # check router_name in the db
             # check the user_id matches too
             # 
-            endpoint_id = get_router_endpoint_id(router_name, user_id)
+            endpoint_id = get_router_endpoint_id(custom_router_dao, user_id, router_name)
 
     t0 = time.time()
 
