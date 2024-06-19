@@ -1,23 +1,18 @@
 import json
 import os
-import requests
 from typing import Annotated, Any, Dict, List
 
+import requests
+from fastapi import APIRouter, Form, HTTPException, Request, UploadFile
+from fastapi.param_functions import Depends
 from google.cloud import storage
 from google.cloud.exceptions import NotFound
 
-from fastapi import APIRouter, Form, HTTPException, Request, UploadFile
-from fastapi.param_functions import Depends
-
-from orchestra.db.dao.dataset_evaluation_task_dao import DatasetEvaluationTaskDAO
 from orchestra.db.dao.dataset_evaluation_dao import DatasetEvaluationDAO
-
+from orchestra.db.dao.dataset_evaluation_task_dao import DatasetEvaluationTaskDAO
 from orchestra.db.models.orchestra_models import DatasetEvaluationTask
 from orchestra.web.api.eval_batch.schema import EvalBatchResponse, EvalBatchTaskResponse
-
 from orchestra.web.api.utils.generate_points import generate_and_prune_points
-
-from orchestra.db.models.orchestra_models import DatasetEvaluationTask
 
 router = APIRouter()
 
@@ -57,7 +52,9 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     # Create CustomEvaluation and set status to pending
     dataset_evaluation_task_dao.create_dataset_evaluation_task(
-        name, "pending", request_fastapi.state.user_id
+        name,
+        "pending",
+        request_fastapi.state.user_id,
     )
     dataset_evaluation_task_dao.session.commit()
 
@@ -80,7 +77,7 @@ def eval_batch(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     # TODO: Deal with the response code
 
     return EvalBatchResponse(
-        info="List of prompts uploaded succesfully. You will receive an email soon!"
+        info="List of prompts uploaded succesfully. You will receive an email soon!",
     )
 
 
@@ -116,7 +113,7 @@ def training(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         upload_json_to_bucket(test_file_content, bucket_name, test_blob_name)
 
     return EvalBatchResponse(
-        info="Training data uploaded succesfully. You will receive an email soon!"
+        info="Training data uploaded succesfully. You will receive an email soon!",
     )
 
 
@@ -244,11 +241,13 @@ def get_dataset_evaluation(
     Retrieve specific dataset evaluation object from the database.
     """
     task = dataset_evaluation_task_dao.filter(name=dataset_name)
-    if not task or (
-        task[0].user_id is not None and task[0].user_id != request_fastapi.state.user_id
-    ):
+    valid_access = any(
+        [t.user_id is None or t.user_id == request_fastapi.state.user_id for t in task],
+    )
+    if not valid_access:
         raise HTTPException(
-            status_code=404, detail="Dataset not found in this user account."
+            status_code=404,
+            detail="Dataset not found in this user account.",
         )
 
     bucket_name = "plot-points-temp-storage"
