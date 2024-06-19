@@ -37,17 +37,13 @@ def pub_sub_callback(message):
     global shutdown_flag
     if not shutdown_flag:
         try:
-            # parse message data
-            logging.info(f'received data')
             data = json.loads(message.data)
-            # do whatever with the data
             logging.info(f"entry: {data}")
             deploy(user_id=data["user_id"], router_name=data["router_name"])
         except json.decoder.JSONDecodeError:
             logging.error(f"Error parsing message: {message.data}")
         except:
             logging.error(f"Unrecognised error in message: {message.data}")
-            logging.error(f'{data}')
         finally:
             # acknowledge that data has been processed
             # NOTE: If the message is not acknowledged in time, pubsub will send it

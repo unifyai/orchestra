@@ -16,6 +16,7 @@ def download_blob(bucket_name, source_blob_name, destination_file_name):
 
 def deploy(user_id: str, router_name: str):
     # fetch the router files + weights from bucket
+    return 1
     if not os.path.isdir("router_files"):
         os.mkdir("router_files")
 
