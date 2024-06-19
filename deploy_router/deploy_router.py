@@ -98,4 +98,9 @@ def deploy(user_id: str, router_name: str):
 
 
 if __name__ == "__main__":
-    deploy("clb5hx8d40002s601hooxp3ct", "a_test_router")
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("user_id")
+    parser.add_argument("router_name")
+    args = parser.parse_args()
+    deploy(args.user_id, args.router_name)

@@ -3,11 +3,10 @@ import json
 import logging
 import signal
 import sys
+import subprocess
 
 import sdnotify
 from google.cloud import pubsub_v1
-
-from deploy_router import deploy
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -39,7 +38,9 @@ def pub_sub_callback(message):
         try:
             data = json.loads(message.data)
             logging.info(f"entry: {data}")
-            deploy(user_id=data["user_id"], router_name=data["router_name"])
+            user_id = data["user_id"]
+            router_name = data["router_name"]
+            subprocess.Popen(f"python3 deploy_router.py --user_id={user_id} --router_name={router_name}", shell=True)
         except json.decoder.JSONDecodeError:
             logging.error(f"Error parsing message: {message.data}")
         except:
