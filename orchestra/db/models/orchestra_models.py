@@ -278,8 +278,7 @@ class CustomRouter(Base):
 
     __tablename__ = "custom_router"
 
-    user_id = sa.Column(
-        sa.String(), sa.ForeignKey("users.id"), primary_key=True, nullable=False
-    )
-    router_name = sa.Column(sa.String(), primary_key=True, nullable=False)
+    id = sa.Column(sa.Integer(), primary_key=True)
+    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=True)
+    router_name = sa.Column(sa.String(), nullable=False)
     router_id = sa.Column(sa.String(), nullable=False)

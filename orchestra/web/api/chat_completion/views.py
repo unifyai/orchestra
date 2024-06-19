@@ -104,7 +104,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         # parse router string
         tmp = model.split("_", 1)
         if len(tmp) == 1:
-            endpoint_id = "7393085398840246272"
+            endpoint_id = get_router_endpoint_id(custom_router_dao, user_id=None, router_name="foundation_router")
         else:
             router_name = tmp[1]
             try:
@@ -128,6 +128,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                         if msg["content"] is not None:
                             num_tokens_est += len(msg["content"])
                     # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
+                    # TODO: add error message if the router is not deployed
                     router_choices = rc(
                         messages[-1]["content"], num_tokens_est * 1.25, endpoint_id
                     )
