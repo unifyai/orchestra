@@ -10,13 +10,12 @@ def download_blob(bucket_name, source_blob_name, destination_file_name):
     bucket = storage_client.bucket(bucket_name)
     blobs = bucket.list_blobs(prefix=source_blob_name)
     for blob in blobs:
-        filename = blob.name.split("test_router/")[-1].replace("/", "_")
+        filename = blob.name.split("/")[-1]
         blob.download_to_filename(destination_file_name + filename)
 
 
 def deploy(user_id: str, router_name: str):
     # fetch the router files + weights from bucket
-    return 1
     if not os.path.isdir("router_files"):
         os.mkdir("router_files")
 
@@ -27,8 +26,8 @@ def deploy(user_id: str, router_name: str):
         os.makedirs(save_path)
 
     download_blob(
-        bucket_name="unify-router-data",
-        source_blob_name=f"custom_routers/{user_id}/{router_name}",
+        bucket_name="custom_router_data",
+        source_blob_name=f"custom_router/{user_id}/{router_name}",
         destination_file_name=save_path,
     )
     # TODO: check if it overwrites ??
