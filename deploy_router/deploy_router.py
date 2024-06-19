@@ -94,6 +94,8 @@ def deploy(user_id: str, router_name: str):
     headers = {"Authorization": f'Bearer {os.getenv("ORCHESTRA_ADMIN_KEY")}'}
     response = requests.put(url=url, json=payload, headers=headers)
     print(response.text)
+    
+    # clean-up weights : TODO
 
 
 if __name__ == "__main__":
