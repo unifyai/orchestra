@@ -38,6 +38,7 @@ def pub_sub_callback(message):
     if not shutdown_flag:
         try:
             # parse message data
+            logging.info(f'received data')
             data = json.loads(message.data)
             # do whatever with the data
             logging.info(f"entry: {data}")
@@ -46,6 +47,7 @@ def pub_sub_callback(message):
             logging.error(f"Error parsing message: {message.data}")
         except:
             logging.error(f"Unrecognised error in message: {message.data}")
+            logging.error(f'{data}')
         finally:
             # acknowledge that data has been processed
             # NOTE: If the message is not acknowledged in time, pubsub will send it
