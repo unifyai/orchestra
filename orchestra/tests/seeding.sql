@@ -56,7 +56,7 @@ INSERT INTO model VALUES (3, 'mistral-7b-instruct-v0.2', :user_id, NOW(), 'dummy
 INSERT INTO model VALUES (6, 'llama-2-13b-chat', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
 INSERT INTO model VALUES (7, 'gpt-3.5-turbo', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
 INSERT INTO model VALUES (8, 'claude-3-haiku', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
-INSERT INTO model VALUES (8, 'llama-3-8b-chat', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
+INSERT INTO model VALUES (9, 'llama-3-8b-chat', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
 INSERT INTO endpoint VALUES (1, 1, 2, NOW());
 INSERT INTO endpoint VALUES (2, 1, 3, NOW());
 INSERT INTO endpoint VALUES (3, 1, 4, NOW());
