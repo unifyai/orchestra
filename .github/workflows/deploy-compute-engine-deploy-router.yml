@@ -48,7 +48,7 @@ jobs:
     
     - name: Copy router_scripts to VM
       run: |
-        gcloud compute scp -r ${{ env.GH_WORKDIR }}/router_scripts ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }}:${{ env.GCLOUD_WORKDIR }} --zone ${{ env.GCLOUD_ZONE }}
+        gcloud compute scp --recurse ${{ env.GH_WORKDIR }}/router_scripts ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }}:${{ env.GCLOUD_WORKDIR }} --zone ${{ env.GCLOUD_ZONE }}
 
     - name: Copy deploy_router to VM
       run: |
