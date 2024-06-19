@@ -4,11 +4,15 @@ When sending messages betweens services. It's often useful to use messages queue
 
 1. Create a topic, either through the UI or using ``gcloud`` (in cloud shell, for example).
 
-``gcloud pubsub topics create <topic-name>``
+```bash
+gcloud pubsub topics create <topic-name>
+```
 
 2. Create as many subscribers as needed, messages sent to the queue will be sent once to every subscriber. By default, subscribers will be ``pull`` subscribers.
 
-``gcloud pubsub subscriptions create <sub-name> --topic=<topic-name>``
+```bash
+gcloud pubsub subscriptions create <sub-name> --topic=<topic-name>
+```
 
 > [!NOTE]
 > `<sub-name>` is often just `<topic-name>-sub`
