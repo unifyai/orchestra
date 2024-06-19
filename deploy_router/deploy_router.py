@@ -1,4 +1,3 @@
-#!pip install google-cloud-storage
 import os
 import subprocess
 import requests
