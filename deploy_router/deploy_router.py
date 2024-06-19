@@ -45,8 +45,8 @@ def deploy(user_id: str, router_name: str):
     ## push the docker container to artifact registry
 
     subprocess.run(
-       "gcloud auth print-access-token | sudo docker login   -u oauth2accesstoken   --password-stdin europe-west1-docker.pkg.dev",
-       shell=True,
+        "gcloud auth print-access-token | sudo docker login   -u oauth2accesstoken   --password-stdin europe-west1-docker.pkg.dev",
+        shell=True,
     )
 
     subprocess.run(f"sudo docker push {docker_path}", shell=True)
@@ -93,7 +93,7 @@ def deploy(user_id: str, router_name: str):
     headers = {"Authorization": f'Bearer {os.getenv("ORCHESTRA_ADMIN_KEY")}'}
     response = requests.put(url=url, json=payload, headers=headers)
     print(response.text)
-    
+
     # clean-up weights : TODO
 
 
