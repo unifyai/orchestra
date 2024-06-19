@@ -40,7 +40,7 @@ def pub_sub_callback(message):
             logging.info(f"entry: {data}")
             user_id = data["user_id"]
             router_name = data["router_name"]
-            subprocess.Popen(f"python3 deploy_router.py --user_id={user_id} --router_name={router_name}", shell=True)
+            subprocess.Popen(f"venv/bin/python3 deploy_router.py --user_id={user_id} --router_name={router_name}", shell=True)
         except json.decoder.JSONDecodeError:
             logging.error(f"Error parsing message: {message.data}")
         except:
