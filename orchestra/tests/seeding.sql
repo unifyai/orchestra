@@ -22,11 +22,11 @@ INSERT INTO provider VALUES (9, 'octoai', '', '');
 INSERT INTO provider VALUES (10, 'perplexity-ai', '', '');
 INSERT INTO provider VALUES (11, 'aws-bedrock', '', '');
 INSERT INTO provider VALUES (12, 'anthropic', '', '');
-INSERT INTO provider VALUES (13, 'groq', '', '');
+INSERT INTO provider VALUES (35, 'groq', '', '');
 
-INSERT INTO provider VALUES (14, 'lowest-input-cost-per-token-provider', '', '');
-INSERT INTO provider VALUES (15, 'lowest-output-cost-per-token-provider', '', '');
-INSERT INTO provider VALUES (16, 'lowest-itl-provider', '', '');
+INSERT INTO provider VALUES (13, 'lowest-input-cost-per-token-provider', '', '');
+INSERT INTO provider VALUES (14, 'lowest-output-cost-per-token-provider', '', '');
+INSERT INTO provider VALUES (15, 'lowest-itl-provider', '', '');
 INSERT INTO provider VALUES (18, 'lowest-ttft-provider', '', '');
 INSERT INTO provider VALUES (19, 'lowest-input-cost-per-token<0.1ic-provider', '', '');
 INSERT INTO provider VALUES (20, 'lowest-output-cost-per-token<0.1ic-provider', '', '');
