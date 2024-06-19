@@ -7,6 +7,7 @@ The PubSub to Clickhouse connector runs in a VM. To create this service, in GCP:
 - `Compute Instance Admin (v1)` # GH Action
 - `Service Account User` # GH Action
 - `Pub/Sub Subscriber` # Consume from Pub/Sub subscriptions
+- `Pub/Sub Publisher` # Publish to Pub/Sub topics
 
 User access within the service account needs to be configured as well.
 

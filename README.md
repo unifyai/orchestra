@@ -11,6 +11,7 @@ This repo includes the code for orchestra, the server in charge of the model hub
 - TODO: [Telemetry](./Telemetry.md)
 - TODO: GCP services in use and flows
 - TODO: CI/CD
+- [Pub/Sub](./PubSub.md): How to set up and interact with Pub/Sub message queues.
 
 ## Project structure
 
