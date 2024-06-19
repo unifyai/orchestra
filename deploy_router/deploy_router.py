@@ -100,7 +100,7 @@ def deploy(user_id: str, router_name: str):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("user_id")
-    parser.add_argument("router_name")
+    parser.add_argument("--user_id", required=True)
+    parser.add_argument("--router_name", required=True)
     args = parser.parse_args()
     deploy(args.user_id, args.router_name)
