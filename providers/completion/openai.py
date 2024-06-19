@@ -39,7 +39,7 @@ supported_models = {
         "cost": {"prompt": 30, "completion": 60},
     },
     "gpt-4-turbo": {
-        "endpoint": "gpt-4-turbo-preview",
+        "endpoint": "gpt-4-turbo",
         "context_window": 128000,
         "cost": {"prompt": 10, "completion": 30},
     },
