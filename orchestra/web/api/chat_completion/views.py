@@ -122,6 +122,9 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     models=(model,),
                     metrics_thresholds=metrics_thresholds,
                 )
+                # TODO: this is probably still buggye with corner cases,
+                # more exhaustive testing is needed.
+                model_priority_list[try_provider] = (model, provider)
         if try_provider >= len(model_priority_list):
             break
         model, provider = model_priority_list[try_provider]
