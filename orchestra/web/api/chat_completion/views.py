@@ -148,20 +148,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             else:
                 raise e
 
-    db_operations_kwargs = {
-        "user_id": user_id,
-        "model": model,
-        "provider": provider,
-        "prompt": messages,
-        "signature": request.signature,
-        "used_router": using_router,
-        "router": router_str,
-        "model_dao": model_dao,
-        "provider_dao": provider_dao,
-        "endpoint_dao": endpoint_dao,
-        "query_dao": query_dao,
-        "users_dao": users_dao,
-    }
+    processing_time = (time.time() - t0) * 1000
 
     # TODO: Handle when response is None
     if not response:
@@ -173,6 +160,24 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             object="chat.completion",
             usage={},
         )
+
+    db_operations_kwargs = {
+        "user_id": user_id,
+        "model": model,
+        "provider": provider,
+        "prompt": messages,
+        "signature": request.signature,
+        "used_router": using_router,
+        "router": router_str,
+        "processing_time": processing_time,
+        "req_tokens": response["usage"]["req_tokens"],
+        "resp_tokens": response["usage"]["resp_tokens"],
+        "model_dao": model_dao,
+        "provider_dao": provider_dao,
+        "endpoint_dao": endpoint_dao,
+        "query_dao": query_dao,
+        "users_dao": users_dao,
+    }
 
     if stream:
 
@@ -193,9 +198,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     response["model"] = f"{model}@{provider}"
     response["usage"]["cost"] = cost
-    response_fastapi.headers[
-        "openai-processing-ms"
-    ] = f"{(time.time() - t0) * 1000:.0f}"
+    response_fastapi.headers["openai-processing-ms"] = f"{processing_time:.0f}"
     return ChatCompletionResponse(**response)
 
 

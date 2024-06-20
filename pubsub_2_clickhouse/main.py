@@ -4,6 +4,7 @@ import logging
 import signal
 import sys
 
+import requests
 import sdnotify
 from google.cloud import pubsub_v1
 
@@ -36,8 +37,16 @@ def pub_sub_callback(message):
     if not shutdown_flag:
         try:
             # parse message data
-            data = json.loads(message.data)
+            data = [json.loads(message.data)]
             # do whatever with the data
+            requests.post(
+                "https://api.airfold.co/v1/events/events",
+                headers={
+                    "Authorization": "Bearer aft_mpbZHI19EHe8CsRnUGsQ4f2ALIJ.KW4wY9z6u21Lbdnm8FS58Lqh6U3rTpsmo3FFeAsubCY",
+                    "Content-Type": "application/json",
+                },
+                json=data,
+            )
             logging.info(f"entry: {data['prompt']}")
         except json.decoder.JSONDecodeError:
             logging.error(f"Error parsing message: {message.data}")

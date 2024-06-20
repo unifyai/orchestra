@@ -1,6 +1,8 @@
 import json
-from typing import Callable, Dict, List, Optional
-import logging
+import time
+from typing import Dict, List, Optional
+
+from google.cloud import pubsub_v1
 
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
@@ -14,6 +16,28 @@ from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.query.views import create_query_model
 from orchestra.web.api.utils.helpers import recharge_and_generate_invoice
 from orchestra.web.api.utils.http_responses import internal_endpoint_not_found
+
+
+def telemetry_to_pub_sub(model, provider, processing_time, req_tokens, resp_tokens):
+    # TODO: Make sure this sends msgs correctly in staging/local
+    publisher = pubsub_v1.PublisherClient()
+    topic_name = "projects/saas-368716/topics/orchestra-telemetry"
+
+    msg = json.dumps(
+        {
+            "id": "0",
+            "timestamp": str(time.time()),
+            "model": model,
+            "provider": provider,
+            "group_id": 0,
+            "processing_time": str(processing_time),
+            "req_tokens": str(req_tokens),
+            "resp_tokens": str(resp_tokens),
+        },
+    ).encode()
+
+    future = publisher.publish(topic_name, msg)
+    future.result()
 
 
 def db_operations(  # noqa: WPS211, WPS217, WPS210
@@ -30,6 +54,9 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     signature: Optional[str],
     used_router: Optional[bool] = None,
     router: Optional[str] = None,
+    processing_time: Optional[float] = 0,
+    req_tokens: Optional[int] = 0,
+    resp_tokens: Optional[int] = 0,
 ):
     """
     Perform database operations.
@@ -84,3 +111,5 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         and user.autorecharge_qty > 0
     ):
         recharge_and_generate_invoice(user, users_dao)
+
+    telemetry_to_pub_sub(model, provider, processing_time, req_tokens, resp_tokens)
