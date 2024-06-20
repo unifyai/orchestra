@@ -21,8 +21,10 @@ class CustomRouterDAO:
         )
 
     def get_router_id(self, user_id: str, router_name) -> List[CustomRouter]:
-        query = select(CustomRouter).where(CustomRouter.router_name == router_name).where(
-            (CustomRouter.user_id == user_id) | (CustomRouter.user_id == None)
+        query = (
+            select(CustomRouter)
+            .where(CustomRouter.router_name == router_name)
+            .where((CustomRouter.user_id == user_id) | (CustomRouter.user_id == None))
         )
 
         raw_custom_routers = self.session.execute(query)

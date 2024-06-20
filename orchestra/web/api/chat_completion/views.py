@@ -104,7 +104,9 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         # parse router string
         tmp = model.split("_", 1)
         if len(tmp) == 1:
-            endpoint_id = get_router_endpoint_id(custom_router_dao, user_id=None, router_name="foundation_router")
+            endpoint_id = get_router_endpoint_id(
+                custom_router_dao, user_id=None, router_name="foundation_router"
+            )
         else:
             router_name = tmp[1]
             try:
