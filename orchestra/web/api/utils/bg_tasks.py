@@ -22,6 +22,7 @@ from orchestra.web.api.utils.http_responses import internal_endpoint_not_found
 
 def telemetry_to_pub_sub(model, provider, processing_time, usage):
     # TODO: Make sure this sends msgs correctly in staging/local
+    # TODO: change telemetry during CI tests
     # key_path = "./archive/pubsub_2_clickhouse.json"
     # credentials = service_account.Credentials.from_service_account_file(key_path)
     # publisher = pubsub_v1.PublisherClient(credentials=credentials)
