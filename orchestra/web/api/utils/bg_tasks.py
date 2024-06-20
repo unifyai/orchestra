@@ -1,5 +1,5 @@
+import datetime
 import json
-import time
 from typing import Dict, List, Optional
 
 from google.cloud import pubsub_v1
@@ -17,20 +17,25 @@ from orchestra.web.api.query.views import create_query_model
 from orchestra.web.api.utils.helpers import recharge_and_generate_invoice
 from orchestra.web.api.utils.http_responses import internal_endpoint_not_found
 
+# from google.oauth2 import service_account
+
 
 def telemetry_to_pub_sub(model, provider, processing_time, req_tokens, resp_tokens):
     # TODO: Make sure this sends msgs correctly in staging/local
+    # key_path = "./archive/pubsub_2_clickhouse.json"
+    # credentials = service_account.Credentials.from_service_account_file(key_path)
+    # publisher = pubsub_v1.PublisherClient(credentials=credentials)
     publisher = pubsub_v1.PublisherClient()
     topic_name = "projects/saas-368716/topics/orchestra-telemetry"
 
     msg = json.dumps(
         {
             "id": "0",
-            "timestamp": str(time.time()),
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "model": model,
             "provider": provider,
             "group_id": 0,
-            "processing_time": str(processing_time),
+            "processing_time": str(int(processing_time)),
             "req_tokens": str(req_tokens),
             "resp_tokens": str(resp_tokens),
         },
