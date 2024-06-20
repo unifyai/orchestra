@@ -17,6 +17,7 @@ This repo includes the code for orchestra, the server in charge of the model hub
 - TODO: [Telemetry](./Telemetry.md)
 - TODO: GCP services in use and flows
 - [CI/CD](./.github/workflows/README.md)
+- [Pub/Sub](./PubSub.md): How to set up and interact with Pub/Sub message queues.
 
 ## Project structure
 
@@ -186,6 +187,3 @@ This docker configuration is not supposed to be used in production.
 It's only for demo purpose.
 
 You can read more about OpenTelemetry here: https://opentelemetry.io/
-
-
-
