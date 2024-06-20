@@ -151,8 +151,6 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             else:
                 raise e
 
-    processing_time = (time.time() - t0) * 1000
-
     # TODO: Handle when response is None
     if not response:
         return ChatCompletionResponse(
@@ -172,15 +170,14 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         "signature": request.signature,
         "used_router": using_router,
         "router": router_str,
-        "processing_time": processing_time,
-        "req_tokens": response["usage"]["prompt_tokens"],
-        "resp_tokens": response["usage"]["completion_tokens"],
         "model_dao": model_dao,
         "provider_dao": provider_dao,
         "endpoint_dao": endpoint_dao,
         "query_dao": query_dao,
         "users_dao": users_dao,
     }
+
+    processing_time = (time.time() - t0) * 1000
 
     if stream:
 
@@ -189,18 +186,29 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 part_dict["model"] = f"{model}@{provider}"
                 chat_response = ChatCompletionResponse(**part_dict)
                 yield f"data: {json.dumps(chat_response.model_dump())}\n\n"  # noqa: WPS237, E501
+            processing_time = (time.time() - t0) * 1000
             background_tasks.add_task(
                 db_operations,
                 cost=response.total_cost,
+                processing_time=processing_time,
+                usage=chat_response.usage,
                 **db_operations_kwargs,
             )
 
         return StreamingResponse(stream_and_update_db())
     else:
-        background_tasks.add_task(db_operations, cost=cost, **db_operations_kwargs)
+        processing_time = (time.time() - t0) * 1000
+        background_tasks.add_task(
+            db_operations,
+            cost=cost,
+            processing_time=processing_time,
+            usage=response["usage"],
+            **db_operations_kwargs,
+        )
 
     response["model"] = f"{model}@{provider}"
     response["usage"]["cost"] = cost
+    processing_time = (time.time() - t0) * 1000
     response_fastapi.headers["openai-processing-ms"] = f"{processing_time:.0f}"
     return ChatCompletionResponse(**response)
 
