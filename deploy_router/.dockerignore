@@ -1,0 +1,4 @@
+# .dockerignore
+router_files
+venv
+__pycache__
