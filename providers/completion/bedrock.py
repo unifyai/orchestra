@@ -281,7 +281,7 @@ def sse_to_part_dict(part, whole, endpoint):
 supported_models = {
     "mistral-7b-instruct-v0.2": {
         "endpoint": "mistral.mistral-7b-instruct-v0:2",
-        "context_window": 16384,
+        "context_window": 32768,
         "cost": {"prompt": 0.15, "completion": 0.2},
     },
     "mixtral-8x7b-instruct-v0.1": {
@@ -291,12 +291,12 @@ supported_models = {
     },
     "llama-3-8b-chat": {
         "endpoint": "meta.llama3-8b-instruct-v1:0",
-        "context_window": 8000,
+        "context_window": 8192,
         "cost": {"prompt": 0.3, "completion": 0.6},
     },
     "llama-3-70b-chat": {
         "endpoint": "meta.llama3-70b-instruct-v1:0",
-        "context_window": 8000,
+        "context_window": 8192,
         "cost": {"prompt": 2.65, "completion": 3.5},
     },
 }
