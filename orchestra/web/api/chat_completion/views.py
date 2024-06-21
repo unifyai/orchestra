@@ -164,6 +164,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     db_operations_kwargs = {
         "user_id": user_id,
+        "secondary_user_id": request.user,
         "model": model,
         "provider": provider,
         "prompt": messages,

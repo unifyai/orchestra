@@ -20,7 +20,15 @@ from orchestra.web.api.utils.http_responses import internal_endpoint_not_found
 # from google.oauth2 import service_account
 
 
-def telemetry_to_pub_sub(model, provider, processing_time, usage):
+def telemetry_to_pub_sub(
+    user_id,
+    secondary_user_id,
+    model,
+    provider,
+    router,
+    processing_time,
+    usage,
+):
     # TODO: Make sure this sends msgs correctly in staging/local
     # TODO: change telemetry during CI tests
     # key_path = "./archive/pubsub_2_clickhouse.json"
@@ -34,10 +42,13 @@ def telemetry_to_pub_sub(model, provider, processing_time, usage):
 
     msg = json.dumps(
         {
-            "id": "0",
+            "user_id": user_id,
+            "secondary_user_id": secondary_user_id,
+            "response_id": "0",
             "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "model": model,
             "provider": provider,
+            "router": router,
             "group_id": 0,
             "processing_time": str(int(processing_time)),
             "req_tokens": str(req_tokens),
@@ -60,7 +71,8 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     endpoint_dao: EndpointDAO,
     query_dao: QueryDAO,
     users_dao: UsersDAO,
-    signature: Optional[str],
+    secondary_user_id: Optional[str] = None,
+    signature: Optional[str] = "",
     used_router: Optional[bool] = None,
     router: Optional[str] = None,
     processing_time: Optional[float] = 0,
@@ -83,6 +95,8 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     """
     if usage is None:
         usage = {}
+    if secondary_user_id is None:
+        secondary_user_id = ""
     model_id = int(get_model(mdl_code=model, model_dao=model_dao)[0].id)
     provider_id = int(get_provider(name=provider, provider_dao=provider_dao)[0].id)
     endpoint_ids = get_endpoint(
@@ -122,4 +136,12 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     ):
         recharge_and_generate_invoice(user, users_dao)
 
-    telemetry_to_pub_sub(model, provider, processing_time, usage)
+    telemetry_to_pub_sub(
+        user_id,
+        secondary_user_id,
+        model,
+        provider,
+        router,
+        processing_time,
+        usage,
+    )
