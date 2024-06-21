@@ -40,7 +40,7 @@ def pub_sub_callback(message):
             data = [json.loads(message.data)]
             # do whatever with the data
             requests.post(
-                "https://api.airfold.co/v1/events/events",
+                "https://api.airfold.co/v1/events/queries",
                 headers={
                     "Authorization": "Bearer aft_mpbZHI19EHe8CsRnUGsQ4f2ALIJ.KW4wY9z6u21Lbdnm8FS58Lqh6U3rTpsmo3FFeAsubCY",
                     "Content-Type": "application/json",
