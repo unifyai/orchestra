@@ -23,49 +23,29 @@ class OctoAI(BaseCompletionProvider):
 
 
 supported_models = {
-    "llama-2-70b-chat": {
-        "endpoint": "llama-2-70b-chat-fp16",
-        "context_window": 4096,
-        "cost": {"prompt": 0.6, "completion": 1.9},
-    },
-    "llama-2-70b-chat-int4": {
-        "endpoint": "llama-2-70b-chat-int4",
-        "context_window": 4096,
-        "cost": {"prompt": 0.6, "completion": 1.2},
-    },
-    "llama-2-13b-chat": {
-        "endpoint": "llama-2-13b-chat-fp16",
-        "context_window": 4096,
-        "cost": {"prompt": 0.2, "completion": 0.5},
-    },
-    "codellama-34b-instruct": {
-        "endpoint": "codellama-34b-instruct-fp16",
-        "context_window": 16384,
-        "cost": {"prompt": 0.5, "completion": 1},
-    },
-    "codellama-34b-instruct-int4": {
-        "endpoint": "codellama-34b-instruct-int4",
-        "context_window": 4096,
-        "cost": {"prompt": 0.5, "completion": 0.8},
-    },
-    "codellama-13b-instruct": {
-        "endpoint": "codellama-13b-instruct-fp16",
-        "context_window": 4096,
-        "cost": {"prompt": 0.2, "completion": 0.5},
-    },
-    "codellama-7b-instruct": {
-        "endpoint": "codellama-7b-instruct-fp16",
-        "context_window": 4096,
-        "cost": {"prompt": 0.1, "completion": 0.25},
-    },
     "mistral-7b-instruct-v0.2": {
-        "endpoint": "mistral-7b-instruct-fp16",
-        "context_window": 4096,
-        "cost": {"prompt": 0.1, "completion": 0.25},
+        "endpoint": "mistral-7b-instruct",
+        "context_window": 32768,
+        "cost": {"prompt": 0.15, "completion": 0.15},
     },
     "mixtral-8x7b-instruct-v0.1": {
-        "endpoint": "mixtral-8x7b-instruct-fp16",
-        "context_window": 4096,
-        "cost": {"prompt": 0.3, "completion": 0.5},
+        "endpoint": "mixtral-8x7b-instruct",
+        "context_window": 32768,
+        "cost": {"prompt": 0.45, "completion": 0.45},
+    },
+    "mixtral-8x22b-instruct-v0.1": {
+        "endpoint": "mixtral-8x22b-instruct",
+        "context_window": 65536,
+        "cost": {"prompt": 1.2, "completion": 1.2},
+    },
+    "llama-3-8b-chat": {
+        "endpoint": "meta-llama-3-8b-instruct",
+        "context_window": 8192,
+        "cost": {"prompt": 0.15, "completion": 0.15},
+    },
+    "llama-3-70b-chat": {
+        "endpoint": "meta-llama-3-70b-instruct",
+        "context_window": 8192,
+        "cost": {"prompt": 0.9, "completion": 0.9},
     },
 }
