@@ -28,6 +28,8 @@ def telemetry_to_pub_sub(
     router,
     processing_time,
     usage,
+    signature,
+    prompt,
 ):
     # TODO: Make sure this sends msgs correctly in staging/local
     # TODO: change telemetry during CI tests
@@ -53,6 +55,8 @@ def telemetry_to_pub_sub(
             "processing_time": str(int(processing_time)),
             "req_tokens": str(req_tokens),
             "resp_tokens": str(resp_tokens),
+            "signature": signature,
+            "prompt": prompt,
         },
     ).encode()
 
@@ -146,4 +150,6 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         router,
         processing_time,
         usage,
+        signature,
+        json.dumps(prompt),
     )
