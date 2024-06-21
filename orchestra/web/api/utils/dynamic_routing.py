@@ -137,6 +137,8 @@ class RouterConfig:
         #     ttl_hash=get_ttl_hash(),
         # )
         endpoints = baked_router_endpoints
+        endpoints = [e for e in endpoints if e.provider in self.providers]
+        endpoints = [e for e in endpoints if e.model in self.models]
         # Get quality from the neural router scoring function
         model_scores = neural_scoring(prompt)
         if debug:
@@ -653,7 +655,11 @@ baked_router_endpoints = [
         provider_id=4,
     ),
     Endpoint(
-        id=1416, model="gpt-4-turbo", model_id=135, provider="openai", provider_id=5
+        id=1416,
+        model="gpt-4-turbo",
+        model_id=135,
+        provider="openai",
+        provider_id=5,
     ),
     Endpoint(id=1431, model="gpt-4o", model_id=144, provider="openai", provider_id=5),
     Endpoint(
