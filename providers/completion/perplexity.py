@@ -35,31 +35,21 @@ supported_models = {
     "codellama-34b-instruct": {
         "endpoint": "codellama-34b-instruct",
         "context_window": 16384,
-        "cost": {"prompt": 0.35, "completion": 1.4},
+        "cost": {"prompt": 0.8, "completion": 0.8},
     },
     "llama-2-70b-chat": {
         "endpoint": "llama-2-70b-chat",
         "context_window": 4096,
-        "cost": {"prompt": 0.7, "completion": 2.8},
+        "cost": {"prompt": 1, "completion": 1},
     },
-    "mistral-7b-instruct-v0.2": {
-        "endpoint": "mistral-7b-instruct",
-        "context_window": 4096,
-        "cost": {"prompt": 0.07, "completion": 0.28},
-    },
-    # "mixtral-8x7b-instruct-v0.1": {
-    #     "endpoint": "mixtral-8x7b-instruct",
-    #     "context_window": 4096,
-    #     "cost": {"prompt": 0.13, "completion": 0.56}, This needs to be revisited
-    # },
-    "pplx-7b-chat": {
-        "endpoint": "pplx-7b-chat",
+    "llama-3-8b-chat": {
+        "endpoint": "llama-3-8b-instruct",
         "context_window": 8192,
-        "cost": {"prompt": 0.07, "completion": 0.28},
+        "cost": {"prompt": 0.2, "completion": 0.2},
     },
-    "pplx-70b-chat": {
-        "endpoint": "pplx-70b-chat",
-        "context_window": 4096,
-        "cost": {"prompt": 0.7, "completion": 2.8},
+    "llama-3-70b-chat": {
+        "endpoint": "llama-3-70b-instruct",
+        "context_window": 8192,
+        "cost": {"prompt": 1, "completion": 1},
     },
 }
