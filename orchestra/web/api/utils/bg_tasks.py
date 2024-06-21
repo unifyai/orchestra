@@ -97,6 +97,8 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         usage = {}
     if secondary_user_id is None:
         secondary_user_id = ""
+    if router is None:
+        router = ""
     model_id = int(get_model(mdl_code=model, model_dao=model_dao)[0].id)
     provider_id = int(get_provider(name=provider, provider_dao=provider_dao)[0].id)
     endpoint_ids = get_endpoint(
