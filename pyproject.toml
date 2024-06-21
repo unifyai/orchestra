@@ -48,6 +48,7 @@ stripe = "^8.10.0"
 python-multipart = "^0.0.9"
 scipy = "^1.13.0"
 google-cloud-storage = "^2.16.0"
+google-cloud-pubsub = "^2.21.5"
 
 
 [tool.poetry.dev-dependencies]
