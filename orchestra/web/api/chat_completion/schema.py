@@ -50,7 +50,7 @@ class ChatCompletionResponse(BaseModel):
     """
 
     model: str
-    created: int
+    created: Optional[int]
     id: Optional[str] = None
     object: str = "chat.completion"
     usage: Dict[str, Any]
