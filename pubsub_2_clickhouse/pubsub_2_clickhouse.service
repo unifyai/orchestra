@@ -1,0 +1,13 @@
+[Unit]
+Description=GCP Pub/Sub to ClickHouse Service
+After=network.target
+
+[Service]
+ExecStart=/opt/pubsub-2-clickhouse/venv/bin/python3 /opt/pubsub-2-clickhouse/main.py
+WorkingDirectory=/opt/pubsub-2-clickhouse/
+Restart=always
+RestartSec=10
+User=serviceuser
+
+[Install]
+WantedBy=multi-user.target
