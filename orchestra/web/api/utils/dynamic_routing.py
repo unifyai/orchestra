@@ -11,6 +11,7 @@ from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
+from orchestra.db.dao.custom_router_dao import CustomRouterDAO
 from orchestra.settings import settings
 
 # TODO: Add errors back to the refactored function
@@ -128,7 +129,7 @@ class RouterConfig:
             + self.t * (ttft - self.t0)
         )
 
-    def __call__(self, prompt, input_tokens, debug=False):
+    def __call__(self, prompt, input_tokens, router_endpoint_id, debug=False):
         # Get full list of endpoints
         # endpoints = get_endpoints_of(
         #     self.endpoint_dao,
@@ -140,7 +141,7 @@ class RouterConfig:
         endpoints = [e for e in endpoints if e.provider in self.providers]
         endpoints = [e for e in endpoints if e.model in self.models]
         # Get quality from the neural router scoring function
-        model_scores = neural_scoring(prompt)
+        model_scores = neural_scoring(prompt, router_endpoint_id)
         if debug:
             return model_scores
 
@@ -193,8 +194,8 @@ class RouterConfig:
         return [key.split("@") for key in ordered_keys]
 
 
-def neural_scoring(prompt):
-    endpoint = aiplatform.Endpoint(settings.vertexai_router_endpoint_id)
+def neural_scoring(prompt, endpoint_id):
+    endpoint = aiplatform.Endpoint(endpoint_id)
     prediction = endpoint.predict(instances=[{"prompt": prompt}])
     out = prediction.predictions[0]["scores"]
     out["gpt-4-turbo"] = out.pop("gpt-4-0125-preview")
@@ -390,7 +391,6 @@ def standarise_thresholds(threhsolds):
 
 
 def parse_endpoint(endpoint: str):
-
     # TODO: Raise error if not correctly formated or not valid metric
 
     main_metric = endpoint.split("<", 1)[0].split(">")[0]
@@ -484,6 +484,14 @@ def dynamic_routing(
         target_metric,
     )
     return selected_model, selected_provider
+
+
+def get_router_endpoint_id(
+    custom_router_dao: CustomRouterDAO, user_id: str, router_name: str
+) -> str:
+    ids = custom_router_dao.get_router_id(user_id=user_id, router_name=router_name)
+    router_id = ids[0].router_id
+    return router_id
 
 
 metrics = {
