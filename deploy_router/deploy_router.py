@@ -14,10 +14,11 @@ def download_blob(bucket_name, source_blob_name, destination_file_name):
         blob.download_to_filename(destination_file_name + filename)
 
 
-def deploy(user_id: str, router_name: str):
+def deploy(user_id: str, router_name: str, orchestra_url: str):
     # fetch the router files + weights from bucket
-    if not os.path.isdir("router_files"):
-        os.mkdir("router_files")
+    if os.path.isdir("router_files"):
+        os.remove("router_files")
+    os.mkdir("router_files")
 
     save_path = f"router_files/{user_id}/{router_name}/"
     if os.path.isdir(save_path):
@@ -36,6 +37,7 @@ def deploy(user_id: str, router_name: str):
         f"europe-west1-docker.pkg.dev/saas-368716/router/{user_id}/{router_name}"
     )
 
+    # TODO: use the docker sdk
     # build the docker container
     subprocess.run(
         f"sudo docker build --build-arg root_path={save_path} . -t {docker_path}",
@@ -89,13 +91,13 @@ def deploy(user_id: str, router_name: str):
         "router_name": router_name,
         "router_id": endpoint.name,
     }
-    url = f'{os.getenv("ORCHESTRA_BASE_URL")}/v0/admin/create_custom_router'
+    print(payload)
+    url = f'{orchestra_url}/v0/admin/create_custom_router'
     headers = {"Authorization": f'Bearer {os.getenv("ORCHESTRA_ADMIN_KEY")}'}
     response = requests.put(url=url, json=payload, headers=headers)
     print(response.text)
 
-    # clean-up weights : TODO
-
+    # clean up docker image
 
 if __name__ == "__main__":
     import argparse
