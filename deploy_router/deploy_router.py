@@ -16,9 +16,11 @@ def download_blob(bucket_name, source_blob_name, destination_file_name):
 
 def deploy(user_id: str, router_name: str, orchestra_url: str):
     # fetch the router files + weights from bucket
-    if os.path.isdir("router_files"):
-        os.remove("router_files")
-    os.mkdir("router_files")
+    # TODO: cleanup old weights
+    # if os.path.isdir("router_files"):
+    #     os.remove("router_files")
+    if not os.path.isdir("router_files"):
+        os.mkdir("router_files")
 
     save_path = f"router_files/{user_id}/{router_name}/"
     if os.path.isdir(save_path):
