@@ -198,7 +198,8 @@ def neural_scoring(prompt, endpoint_id):
     endpoint = aiplatform.Endpoint(endpoint_id)
     prediction = endpoint.predict(instances=[{"prompt": prompt}])
     out = prediction.predictions[0]["scores"]
-    out["gpt-4-turbo"] = out.pop("gpt-4-0125-preview")
+    if "gpt-4-0125-preview" in out:
+        out["gpt-4-turbo"] = out.pop("gpt-4-0125-preview")
     return out
 
 
