@@ -42,7 +42,7 @@ def pub_sub_callback(message):
             router_name = data["router_name"]
             orchestra_url = data["orchestra_url"]
             subprocess.Popen(
-                f"venv/bin/python3 deploy_router.py --user_id={user_id} --router_name={router_name}, --orchestra_url={orchestra_url}",
+                f"venv/bin/python3 deploy_router.py --user_id={user_id} --router_name={router_name} --orchestra_url={orchestra_url}",
                 shell=True,
             )
         except json.decoder.JSONDecodeError:
