@@ -92,12 +92,13 @@ def deploy(user_id: str, router_name: str, orchestra_url: str):
         "router_id": endpoint.name,
     }
     print(payload)
-    url = f'{orchestra_url}/v0/admin/create_custom_router'
+    url = f"{orchestra_url}/v0/admin/create_custom_router"
     headers = {"Authorization": f'Bearer {os.getenv("ORCHESTRA_ADMIN_KEY")}'}
     response = requests.put(url=url, json=payload, headers=headers)
     print(response.text)
 
     # clean up docker image
+
 
 if __name__ == "__main__":
     import argparse
