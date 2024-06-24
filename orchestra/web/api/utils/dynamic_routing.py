@@ -150,6 +150,8 @@ class RouterConfig:
         # Iterate over each endpoint
         for endpoint in endpoints:
             name = f"{endpoint.model}@{endpoint.provider}"
+            if endpoint.model not in model_scores:
+                continue
             endpoint_metrics[name] = {}
             endpoint_metrics[name]["quality"] = model_scores[endpoint.model]
             # Fetch the metrics values
