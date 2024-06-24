@@ -6,7 +6,7 @@ from transformers import AutoTokenizer
 
 from dcn import DCN
 
-DEVICE = "cpu"
+DEVICE = "cuda"
 
 config_path = "config.yaml"
 with open(config_path, "r") as f:
