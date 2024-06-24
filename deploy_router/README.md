@@ -11,7 +11,7 @@ msg = json.dumps(
     {
         "user_id": "clb5hx8d40002s601hooxp3ct",
         "router_name": "a_test_router",
-        "orchestra_str": # relevant string
+        "orchestra_url": # relevant string
     }
 ).encode()
 

@@ -72,16 +72,16 @@ def deploy(user_id: str, router_name: str, orchestra_url: str):
     print("creating endpoint ... ")
     endpoint = aiplatform.Endpoint.create(display_name=display_name)
     print("deploying model")
-    # model.deploy(
-    #     endpoint=endpoint,
-    #     deployed_model_display_name=display_name,
-    #     traffic_percentage=100,
-    #     min_replica_count=1,
-    #     max_replica_count=1,
-    #     accelerator_type="NVIDIA_TESLA_T4",
-    #     accelerator_count=1,
-    #     sync=True,
-    # )
+    model.deploy(
+        endpoint=endpoint,
+        deployed_model_display_name=display_name,
+        traffic_percentage=100,
+        min_replica_count=1,
+        max_replica_count=1,
+        accelerator_type="NVIDIA_TESLA_T4",
+        accelerator_count=1,
+        sync=True,
+    )
 
     model.wait()
 
@@ -105,5 +105,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--user_id", required=True)
     parser.add_argument("--router_name", required=True)
+    parser.add_argument("--orchestra_url", required=True)
     args = parser.parse_args()
-    deploy(args.user_id, args.router_name)
+    deploy(args.user_id, args.router_name, args.orchestra_url)
