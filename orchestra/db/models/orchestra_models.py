@@ -271,3 +271,14 @@ class CustomEndpoint(Base):
     name = sa.Column(sa.String(), nullable=False)
     url = sa.Column(sa.String(), nullable=False)
     key_id = sa.Column(sa.Integer(), sa.ForeignKey("custom_api_key.id"), nullable=False)
+
+
+class CustomRouter(Base):
+    """Model class for the custom router table."""
+
+    __tablename__ = "custom_router"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=True)
+    router_name = sa.Column(sa.String(), nullable=False)
+    router_id = sa.Column(sa.String(), nullable=False)
