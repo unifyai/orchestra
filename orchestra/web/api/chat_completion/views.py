@@ -15,6 +15,7 @@ from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dao.custom_router_dao import CustomRouterDAO
 from orchestra.web.api.chat_completion.schema import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -26,6 +27,7 @@ from orchestra.web.api.utils.dynamic_routing import (
     RouterConfig,
     dynamic_routing,
     parse_endpoint,
+    get_router_endpoint_id,
 )
 from orchestra.web.api.utils.helpers import filter_request_params
 from orchestra.web.api.utils.http_responses import (
@@ -51,6 +53,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     benchmark_run_dao: BenchmarkRunDAO = Depends(),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
+    custom_router_dao: CustomRouterDAO = Depends(),
 ) -> Union[ChatCompletionResponse, StreamingResponse]:
     """
     Get chat completions based on the request.
@@ -93,14 +96,30 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     model, provider = model_priority_list[0]
     try_provider = 0
     router_choices = None
-    using_router = model == "router"
+    using_router = model.startswith("router")
     router_str = provider if using_router else None
     num_tries = 5
+
+    if using_router:
+        # parse router string
+        tmp = model.split("_", 1)
+        if len(tmp) == 1:
+            endpoint_id = get_router_endpoint_id(
+                custom_router_dao, user_id=None, router_name="foundation_router"
+            )
+        else:
+            router_name = tmp[1]
+            try:
+                endpoint_id = get_router_endpoint_id(
+                    custom_router_dao, user_id, router_name
+                )
+            except:
+                # TODO: add proper error message for this
+                raise invalid_model_str
 
     t0 = time.time()
 
     while try_provider >= 0 and try_provider < num_tries:
-
         if provider not in PROVIDER_CLASSES or using_router:
             # Dynamic routing
             if using_router:
@@ -111,7 +130,10 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                         if msg["content"] is not None:
                             num_tokens_est += len(msg["content"])
                     # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
-                    router_choices = rc(messages[-1]["content"], num_tokens_est * 1.25)
+                    # TODO: add error message if the router is not deployed
+                    router_choices = rc(
+                        messages[-1]["content"], num_tokens_est * 1.25, endpoint_id
+                    )
                     model_priority_list = router_choices
             else:  # Non model routing, TODO: clean up to simplify
                 target_metric, metrics_thresholds = parse_endpoint(provider)
