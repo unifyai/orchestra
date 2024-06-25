@@ -79,7 +79,7 @@ substitutions:
   _AR_HOSTNAME: europe-west3-docker.pkg.dev
   _PLATFORM: managed
   _JOB_NAME: orchestra-migrator
-  _FIXED_COMMIT_HASH: e950f7046993d0be7525666534c95b4df390cb93
+  _FIXED_COMMIT_HASH: b0c329cfa03b7ff1811f54b891bba9ff5ed40687
 tags:
 - gcp-cloud-build-deploy-cloud-run
 - gcp-cloud-build-deploy-cloud-run-managed
