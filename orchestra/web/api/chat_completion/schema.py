@@ -16,7 +16,7 @@ class ChatCompletionRequest(BaseModel):
 
     # TODO: This removes all other params if not specified
     model: str
-    messages: List[Dict[str, str]]
+    messages: List[Dict[str, Any]]
     temperature: float = 0.9
     stream: bool = False
     max_tokens: Optional[int] = None
