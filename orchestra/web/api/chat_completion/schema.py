@@ -1,3 +1,4 @@
+import time
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel
@@ -50,7 +51,7 @@ class ChatCompletionResponse(BaseModel):
     """
 
     model: str
-    created: Optional[int] = None
+    created: int = time.time()
     id: Optional[str] = None
     object: str = "chat.completion"
     usage: Dict[str, Any]
