@@ -76,7 +76,7 @@ jobs:
         POETRY_VIRTUALENVS_CREATE: false
 
     - name: Set up service account
-      run: echo "${{ secrets.GCP_CREDENTIALS_DEPLOY_ROUTER }}" > credentials.json
+      run: echo '${{ secrets.GCP_CREDENTIALS_DEPLOY_ROUTER }}' > credentials.json
 
     - name: Run pytest check
       run: poetry run pytest -vv --cov="orchestra" .
