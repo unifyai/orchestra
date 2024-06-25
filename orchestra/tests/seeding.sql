@@ -99,6 +99,7 @@ INSERT INTO endpoint VALUES (30, 4, 31, NOW());
 INSERT INTO endpoint VALUES (31, 4, 32, NOW());
 INSERT INTO endpoint VALUES (32, 4, 33, NOW());
 INSERT INTO endpoint VALUES (33, 4, 34, NOW());
+INSERT INTO endpoint VALUES (34, 9, 35, NOW());
 
 
 -- Benchmark run
