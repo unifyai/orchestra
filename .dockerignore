@@ -1,8 +1,7 @@
 ### Python template
 
 deploy/
-.dockerignore
-idea/
+.idea/
 .vscode/
 .git/
 # Byte-compiled / optimized / DLL files
