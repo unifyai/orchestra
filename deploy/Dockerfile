@@ -6,10 +6,6 @@ RUN apt-get update && apt-get install -y \
 # Install curl
 RUN apt-get update && apt-get install -y curl
 
-# Download and install Google Cloud SDK
-RUN curl https://sdk.cloud.google.com > install.sh
-RUN bash install.sh --disable-prompts
-
 RUN pip install poetry==1.4.2
 
 # Configuring poetry
