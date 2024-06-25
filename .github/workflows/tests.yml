@@ -83,7 +83,6 @@ jobs:
       uses: 'google-github-actions/auth@v2'
       with:
         credentials_json: '${{ secrets.ORCHESTRA_VERTEXAI_CREDENTIALS }}'
-        token_format: "access_token"
 
     - name: Set up Cloud SDK
       uses: 'google-github-actions/setup-gcloud@v2'
@@ -110,7 +109,6 @@ jobs:
         ORCHESTRA_VERTEXAI_PROJECT: ${{ secrets.ORCHESTRA_VERTEXTAI_PROJECT }}
         ORCHESTRA_VERTEXAI_LOCATION: ${{ secrets.ORCHESTRA_VERTEXTAI_LOCATION }}
         ORCHESTRA_VERTEXAI_ROUTER_ENDPOINT_ID: ${{ secrets.ORCHESTRA_VERTEXTAI_ROUTER_ENDPOINT_ID }}
-        ORCHESTRA_VERTEXAI_API_KEY: ${{ steps.auth.outputs.access_token }}
         ORCHESTRA_BASE_URL: "http://127.0.0.1:8000"
         AUTH_ACCOUNT_API_KEY: ${{ secrets.AUTH_ACCOUNT_API_KEY }}
         AUTH_ACCOUNT_USER_ID: ${{ secrets.AUTH_ACCOUNT_USER_ID }}
