@@ -26,7 +26,7 @@ class ChatCompletionRequest(BaseModel):
     top_logprobs: Optional[int] = None
     n: Optional[int] = None
     presence_penalty: Optional[float] = None
-    response_format: Optional[str] = None
+    response_format: Optional[Dict[str, str]] = None
     seed: Optional[int] = None
     stop: Optional[Union[str, List[str]]] = None
     top_p: Optional[float] = None
@@ -59,3 +59,12 @@ class ChatCompletionResponse(BaseModel):
 
 class RouterScoresResponse(BaseModel):
     scores: Dict[str, float]
+
+
+class QueryMetricsRequest(BaseModel):
+    secondary_user_id: Optional[str] = ""
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    models: Optional[str] = None
+    providers: Optional[str] = None
+    interval: Optional[str] = 300

@@ -9,6 +9,7 @@ from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.beta_list_dao import BetaListDAO
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
+from orchestra.db.dao.custom_router_dao import CustomRouterDAO
 from orchestra.db.dao.datapoint_dao import DatapointDAO
 from orchestra.db.dao.dataset_evaluation_dao import DatasetEvaluationDAO
 from orchestra.db.dao.dataset_evaluation_task_dao import DatasetEvaluationTaskDAO
@@ -63,6 +64,7 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     UsersModelResponse,
     CustomApiKeyModelResponse,
     CustomEndpointModelResponse,
+    CustomRouterRequest,
 )
 
 router = APIRouter()
@@ -989,4 +991,16 @@ def update_dataset_evaluation(
         score=dataset_evaluation_object.score,
         input_tokens=dataset_evaluation_object.input_tokens,
         output_tokens=dataset_evaluation_object.output_tokens,
+    )
+
+
+@router.put("/create_custom_router")
+def create_custom_router(
+    custom_router_object: CustomRouterRequest,
+    custom_router_dao: CustomRouterDAO = Depends(),
+) -> None:
+    custom_router_dao.create_custom_router(
+        user_id=custom_router_object.user_id,
+        router_name=custom_router_object.router_name,
+        router_id=custom_router_object.router_id,
     )
