@@ -27,6 +27,7 @@ MODELS = [
     "mistral-7b-instruct-v0.2@mistral-ai",
     "mistral-7b-instruct-v0.2@octoai",
     "mistral-7b-instruct-v0.2@perplexity-ai",
+    "gemini-1.5-flash@vertex-ai",
 ]
 
 payload_fn = {
