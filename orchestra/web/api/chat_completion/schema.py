@@ -59,3 +59,12 @@ class ChatCompletionResponse(BaseModel):
 
 class RouterScoresResponse(BaseModel):
     scores: Dict[str, float]
+
+
+class QueryMetricsRequest(BaseModel):
+    secondary_user_id: Optional[str] = ""
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    models: Optional[str] = None
+    providers: Optional[str] = None
+    interval: Optional[str] = 300
