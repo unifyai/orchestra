@@ -11,8 +11,6 @@ steps:
    '.', '-f', 'deploy/Dockerfile', '--target', 'prod'
   ]
   id: Build Orchestra
-  waitFor:
-  - "-"
 - name: gcr.io/cloud-builders/docker
   args:
     - push
