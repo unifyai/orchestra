@@ -1,6 +1,6 @@
 import json
 import time
-from typing import Union
+from typing import Any, Dict, Union
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.param_functions import Depends
@@ -10,15 +10,16 @@ from providers.completion import PROVIDER_CLASSES
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
+from orchestra.db.dao.custom_router_dao import CustomRouterDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.dao.custom_router_dao import CustomRouterDAO
 from orchestra.web.api.chat_completion.schema import (
     ChatCompletionRequest,
     ChatCompletionResponse,
+    QueryMetricsRequest,
     RouterScoresResponse,
 )
 from orchestra.web.api.users.views import get_credits
@@ -26,8 +27,8 @@ from orchestra.web.api.utils.bg_tasks import db_operations
 from orchestra.web.api.utils.dynamic_routing import (
     RouterConfig,
     dynamic_routing,
-    parse_endpoint,
     get_router_endpoint_id,
+    parse_endpoint,
 )
 from orchestra.web.api.utils.helpers import filter_request_params
 from orchestra.web.api.utils.http_responses import (
@@ -105,13 +106,17 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         tmp = model.split("_", 1)
         if len(tmp) == 1:
             endpoint_id = get_router_endpoint_id(
-                custom_router_dao, user_id=None, router_name="foundation_router"
+                custom_router_dao,
+                user_id=None,
+                router_name="foundation_router",
             )
         else:
             router_name = tmp[1]
             try:
                 endpoint_id = get_router_endpoint_id(
-                    custom_router_dao, user_id, router_name
+                    custom_router_dao,
+                    user_id,
+                    router_name,
                 )
             except:
                 # TODO: add proper error message for this
@@ -132,7 +137,9 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
                     # TODO: add error message if the router is not deployed
                     router_choices = rc(
-                        messages[-1]["content"], num_tokens_est * 1.25, endpoint_id
+                        messages[-1]["content"],
+                        num_tokens_est * 1.25,
+                        endpoint_id,
                     )
                     model_priority_list = router_choices
             else:  # Non model routing, TODO: clean up to simplify
@@ -245,3 +252,35 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     rc = RouterConfig(request.model, endpoint_dao, benchmark_run_dao)
     scores = rc(request.messages[-1]["content"], debug=True)
     return RouterScoresResponse(scores=scores)
+
+
+@router.get("/metrics")
+def get_query_metrics(
+    request_fastapi: Request,
+    request: QueryMetricsRequest,
+) -> Dict[str, Any]:
+    import requests
+
+    response = requests.get(
+        "https://api.airfold.co/v1/pipes/queries_metrics.json",
+        # TODO: mb will rotate this tomorrow
+        headers={
+            "Authorization": "Bearer aft_mpbZHI19EHe8CsRnUGsQ4f2ALIJ.KW4wY9z6u21Lbdnm8FS58Lqh6U3rTpsmo3FFeAsubCY",
+        },
+        params={
+            "user_id": request_fastapi.state.user_id,
+            "secondary_user_id": request.secondary_user_id,
+            "start_time": request.start_time,
+            "end_time": request.end_time,
+            "models": request.models,
+            "providers": request.providers,
+            "interval": request.interval,
+        },
+    )
+
+    if response.status_code == 200:
+        data = response.json()
+        return data
+    else:
+        # TODO: meaningful errors
+        print("Error:", response.status_code, response.text)
