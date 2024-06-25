@@ -61,6 +61,8 @@ class ChatCompletionResponse(BaseModel):
         super().__init__(**data)
         if self.created is None:
             self.created = int(time.time())
+        if self.id is None:
+            self.id = "msg-id"
 
 
 class RouterScoresResponse(BaseModel):
