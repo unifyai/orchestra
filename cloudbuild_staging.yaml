@@ -7,7 +7,7 @@ steps:
   args: ['build', '-t',
    '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA',
    '--cache-from',
-   '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$_FIXED_COMMIT_HASH', '--pull', 'false'
+   '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$_FIXED_COMMIT_HASH', '--pull', 'false',
    '.', '-f', 'deploy/Dockerfile', '--target', 'prod'
   ]
   id: Build Orchestra
