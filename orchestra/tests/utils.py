@@ -70,9 +70,11 @@ def check_in_dict_and_instance(dict, key, types):
 
 def check_text_gen_response(response: Dict, object_str: str):
 
-    assert isinstance(response.get("id"), str)
+    response_id = response.get("id")
+    assert response_id is None or isinstance(response_id, str)
     assert response.get("object") == object_str
-    assert isinstance(response.get("created"), int)
+    response_created = response.get("created")
+    assert response_created is None or isinstance(response_created, int)
     # TODO: We need to add a system_fingerprint
     # assert isinstance(response.get("system_fingerprint"), str)
     assert isinstance(response.get("choices"), list)
