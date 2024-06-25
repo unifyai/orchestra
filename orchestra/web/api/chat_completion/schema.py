@@ -51,11 +51,16 @@ class ChatCompletionResponse(BaseModel):
     """
 
     model: str
-    created: int = time.time()
+    created: Optional[int] = None
     id: Optional[str] = None
     object: str = "chat.completion"
     usage: Dict[str, Any]
     choices: List[Dict[str, Any]]
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        if self.created is None:
+            self.created = int(time.time())
 
 
 class RouterScoresResponse(BaseModel):
