@@ -64,7 +64,7 @@ INSERT INTO endpoint VALUES (4, 1, 5, NOW());
 INSERT INTO endpoint VALUES (5, 1, 6, NOW());
 INSERT INTO endpoint VALUES (6, 1, 7, NOW());
 INSERT INTO endpoint VALUES (7, 3, 8, NOW());
-INSERT INTO endpoint VALUES (8, 3, 9, NOW());
+INSERT INTO endpoint VALUES (8, 9, 9, NOW());
 INSERT INTO endpoint VALUES (9, 3, 10, NOW());
 INSERT INTO endpoint VALUES (10, 6, 11, NOW());
 INSERT INTO endpoint VALUES (11, 3, 11, NOW());
