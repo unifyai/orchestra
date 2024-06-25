@@ -179,6 +179,16 @@ class DatasetEvaluationModelRequest(BaseModel):
     output_tokens: int
 
 
+class CustomRouterRequest(BaseModel):
+    """
+    Request model for creating new custom router.
+    """
+
+    user_id: str
+    router_name: str
+    router_id: str
+
+
 class UsersModelResponse(BaseModel):
     """
     Response model for users models.

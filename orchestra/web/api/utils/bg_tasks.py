@@ -1,6 +1,8 @@
+import datetime
 import json
-from typing import Callable, Dict, List, Optional
-import logging
+from typing import Dict, List, Optional
+
+from google.cloud import pubsub_v1
 
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
@@ -15,6 +17,52 @@ from orchestra.web.api.query.views import create_query_model
 from orchestra.web.api.utils.helpers import recharge_and_generate_invoice
 from orchestra.web.api.utils.http_responses import internal_endpoint_not_found
 
+# from google.oauth2 import service_account
+
+
+def telemetry_to_pub_sub(
+    user_id,
+    secondary_user_id,
+    model,
+    provider,
+    router,
+    processing_time,
+    usage,
+    signature,
+    prompt,
+):
+    # TODO: Make sure this sends msgs correctly in staging/local
+    # TODO: change telemetry during CI tests
+    # key_path = "./archive/pubsub_2_clickhouse.json"
+    # credentials = service_account.Credentials.from_service_account_file(key_path)
+    # publisher = pubsub_v1.PublisherClient(credentials=credentials)
+    publisher = pubsub_v1.PublisherClient()
+    topic_name = "projects/saas-368716/topics/orchestra-telemetry"
+
+    req_tokens = usage.get("prompt_tokens", 0)
+    resp_tokens = usage.get("completion_tokens", 0)
+
+    msg = json.dumps(
+        {
+            "user_id": user_id,
+            "secondary_user_id": secondary_user_id,
+            "response_id": "0",
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "model": model,
+            "provider": provider,
+            "router": router,
+            "group_id": 0,
+            "processing_time": str(int(processing_time)),
+            "req_tokens": str(req_tokens),
+            "resp_tokens": str(resp_tokens),
+            "signature": signature,
+            "prompt": prompt,
+        },
+    ).encode()
+
+    future = publisher.publish(topic_name, msg)
+    future.result()
+
 
 def db_operations(  # noqa: WPS211, WPS217, WPS210
     user_id: str,
@@ -27,9 +75,12 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     endpoint_dao: EndpointDAO,
     query_dao: QueryDAO,
     users_dao: UsersDAO,
-    signature: Optional[str],
+    secondary_user_id: Optional[str] = None,
+    signature: Optional[str] = "",
     used_router: Optional[bool] = None,
     router: Optional[str] = None,
+    processing_time: Optional[float] = 0,
+    usage: Optional[Dict] = None,
 ):
     """
     Perform database operations.
@@ -46,6 +97,12 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
 
     :raises HTTPException: when endpoint is not found.
     """
+    if usage is None:
+        usage = {}
+    if secondary_user_id is None:
+        secondary_user_id = ""
+    if router is None:
+        router = ""
     model_id = int(get_model(mdl_code=model, model_dao=model_dao)[0].id)
     provider_id = int(get_provider(name=provider, provider_dao=provider_dao)[0].id)
     endpoint_ids = get_endpoint(
@@ -84,3 +141,15 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         and user.autorecharge_qty > 0
     ):
         recharge_and_generate_invoice(user, users_dao)
+
+    telemetry_to_pub_sub(
+        user_id,
+        secondary_user_id,
+        model,
+        provider,
+        router,
+        processing_time,
+        usage,
+        signature,
+        json.dumps(prompt),
+    )

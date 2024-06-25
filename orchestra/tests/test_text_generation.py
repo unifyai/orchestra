@@ -12,6 +12,7 @@ from orchestra.tests.utils import (
     get_chat_completions_payload,
     get_chat_completions_payload_fallback,
     get_credits,
+    get_inference_payload,
 )
 
 MODELS = [
@@ -26,18 +27,20 @@ MODELS = [
     "mistral-7b-instruct-v0.2@aws-bedrock",
     "mistral-7b-instruct-v0.2@mistral-ai",
     "mistral-7b-instruct-v0.2@octoai",
-    "mistral-7b-instruct-v0.2@perplexity-ai",
     "gemini-1.5-flash@vertex-ai",
+    "llama-3-8b-chat@perplexity-ai",
+    "llama-3-8b-chat@groq",
 ]
 
 payload_fn = {
     "/v0/chat/completions": get_chat_completions_payload,
+    "/v0/inference": get_inference_payload,
 }
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("model", MODELS)
-@pytest.mark.parametrize("endpoint", ["/v0/chat/completions"])
+@pytest.mark.parametrize("endpoint", ["/v0/chat/completions", "/v0/inference"])
 @pytest.mark.parametrize("stream_str", ["stream", "standard"])
 async def test_text_generation(  # noqa: WPS218, E501
     model: str,
