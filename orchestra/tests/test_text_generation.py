@@ -28,7 +28,7 @@ MODELS = [
     "mistral-7b-instruct-v0.2@aws-bedrock",
     "mistral-7b-instruct-v0.2@mistral-ai",
     "mistral-7b-instruct-v0.2@octoai",
-    "mistral-7b-instruct-v0.2@perplexity-ai",
+    "llama-3-8b-chat@perplexity-ai",
     "llama-3-8b-chat@groq",
 ]
 
