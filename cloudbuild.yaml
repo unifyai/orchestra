@@ -1,19 +1,16 @@
 steps:
 - name: gcr.io/cloud-builders/docker
-  args:
-  - build
-  - '--no-cache'
-  - '-t'
-  - >-
-    $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
-  - .
-  - '-f'
-  - deploy/Dockerfile
-  - '--target'
-  - prod
+  entrypoint: 'bash'
+  args: ['-c', 'docker pull $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$_FIXED_COMMIT_HASH || exit 0']
+  id: Pull Docker Cache
+- name: gcr.io/cloud-builders/docker
+  args: ['build', '-t',
+   '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA',
+   '--cache-from',
+   '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$_FIXED_COMMIT_HASH',
+   '.', '-f', 'deploy/Dockerfile', '--target', 'prod'
+  ]
   id: Build Orchestra
-  waitFor:
-  - "-"
 - name: gcr.io/cloud-builders/docker
   args:
   - push
@@ -153,6 +150,7 @@ substitutions:
   _BENCHMARK_JOB_EU: bench-europe-west1
   _BENCHMARK_JOB_AS: bench-asia-east2
   _RECHARGING_JOB_NAME: orchestra-recharging
+  _FIXED_COMMIT_HASH: 99d98a85b721c5e197a8ae537554be82424a6c1b
 tags:
 - gcp-cloud-build-deploy-cloud-run
 - gcp-cloud-build-deploy-cloud-run-managed
