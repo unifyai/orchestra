@@ -24,8 +24,11 @@ class VertexAI(BaseCompletionProvider):
         )
         auth_req = google.auth.transport.requests.Request()
         creds.refresh(auth_req)
-        os.environ["ORCHESTRA_VERTEXAI_API_KEY"] = creds.token
-        return "ORCHESTRA_VERTEXAI_API_KEY"
+        return creds.token
+
+    @property
+    def api_key(self) -> str:
+        return self.api_key_var
 
     @property
     def base_url(self):
