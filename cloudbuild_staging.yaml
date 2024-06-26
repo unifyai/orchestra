@@ -64,6 +64,9 @@ steps:
   entrypoint: gcloud
   waitFor:
   - 'Migrate'
+images:
+- >-
+  $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
 options:
   substitutionOption: ALLOW_LOOSE
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
@@ -76,7 +79,7 @@ substitutions:
   _AR_HOSTNAME: europe-west3-docker.pkg.dev
   _PLATFORM: managed
   _JOB_NAME: orchestra-migrator
-  _FIXED_COMMIT_HASH: b0c329cfa03b7ff1811f54b891bba9ff5ed40687
+  _FIXED_COMMIT_HASH: 99d98a85b721c5e197a8ae537554be82424a6c1b
 tags:
 - gcp-cloud-build-deploy-cloud-run
 - gcp-cloud-build-deploy-cloud-run-managed
