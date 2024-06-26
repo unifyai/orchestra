@@ -4,6 +4,16 @@ from typing import List
 from fastapi import HTTPException
 from starlette import status
 
+dataset_already_exists = HTTPException(
+    status_code=status.HTTP_400_BAD_REQUEST,
+    detail="A dataset with this name already exists. Please, choose a different one.",
+)
+
+dataset_does_not_exist = HTTPException(
+    status_code=status.HTTP_400_BAD_REQUEST,
+    detail="This dataset does not exist.",
+)
+
 invalid_model_id = HTTPException(
     status_code=status.HTTP_400_BAD_REQUEST,
     detail=f"Invalid input. model-id doesn't match any entry in the model hub.",
@@ -69,7 +79,8 @@ admin_not_authorized = HTTPException(
 )
 
 user_id_not_found = HTTPException(
-    status_code=status.HTTP_404_NOT_FOUND, detail="Specified user-id not found."
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail="Specified user-id not found.",
 )
 
 provider_not_found_under_conditions = HTTPException(
