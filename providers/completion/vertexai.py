@@ -17,18 +17,14 @@ class VertexAI(BaseCompletionProvider):
         self.supported_models = supported_models
 
     @property
-    def api_key_var(self) -> str:
-        creds, _ = google.auth.load_credentials_from_file(
-            os.environ["ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON"],
+    def api_key(self) -> str:
+        # TODO: check if this doesn't add TTFT, prob does
+        creds, _ = google.auth.default(
             scopes=["https://www.googleapis.com/auth/cloud-platform"],
         )
         auth_req = google.auth.transport.requests.Request()
         creds.refresh(auth_req)
         return creds.token
-
-    @property
-    def api_key(self) -> str:
-        return self.api_key_var
 
     @property
     def base_url(self):
