@@ -68,7 +68,6 @@ class Settings(BaseSettings):
     vertexai_service_acc_json: str = ""
     vertexai_project: str = "saas-368716"
     vertexai_location: str = "europe-west1"
-    vertexai_router_endpoint_id: str = "7393085398840246272"
 
     @property
     def db_url(self) -> URL:

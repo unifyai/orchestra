@@ -1,3 +1,4 @@
+import time
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel
@@ -50,11 +51,18 @@ class ChatCompletionResponse(BaseModel):
     """
 
     model: str
-    created: int
+    created: Optional[int] = None
     id: Optional[str] = None
     object: str = "chat.completion"
     usage: Dict[str, Any]
     choices: List[Dict[str, Any]]
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        if self.created is None:
+            self.created = int(time.time())
+        if self.id is None:
+            self.id = "msg-id"
 
 
 class RouterScoresResponse(BaseModel):

@@ -1,7 +1,7 @@
 from typing import Callable
-import os
-from google.cloud import aiplatform
+
 from fastapi import FastAPI
+from google.cloud import aiplatform
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
@@ -62,7 +62,7 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
                 SERVICE_NAME: "orchestra",
                 TELEMETRY_SDK_LANGUAGE: "python",
                 DEPLOYMENT_ENVIRONMENT: settings.environment,
-            }
+            },
         ),
     )
 
@@ -140,11 +140,9 @@ def register_startup_event(
         _setup_db(app)
         setup_opentelemetry(app)
         setup_prometheus(app)
-        os.environ[
-            "GOOGLE_APPLICATION_CREDENTIALS"
-        ] = settings.vertexai_service_acc_json
         aiplatform.init(
-            project=settings.vertexai_project, location=settings.vertexai_location
+            project=settings.vertexai_project,
+            location=settings.vertexai_location,
         )
         app.middleware_stack = app.build_middleware_stack()
         pass  # noqa: WPS420

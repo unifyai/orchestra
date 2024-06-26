@@ -23,6 +23,7 @@ INSERT INTO provider VALUES (10, 'perplexity-ai', '', '');
 INSERT INTO provider VALUES (11, 'aws-bedrock', '', '');
 INSERT INTO provider VALUES (12, 'anthropic', '', '');
 INSERT INTO provider VALUES (35, 'groq', '', '');
+INSERT INTO provider VALUES (36, 'vertex-ai', '', '');
 
 INSERT INTO provider VALUES (13, 'lowest-input-cost-per-token-provider', '', '');
 INSERT INTO provider VALUES (14, 'lowest-output-cost-per-token-provider', '', '');
@@ -57,6 +58,8 @@ INSERT INTO model VALUES (6, 'llama-2-13b-chat', :user_id, NOW(), 'dummy_task', 
 INSERT INTO model VALUES (7, 'gpt-3.5-turbo', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
 INSERT INTO model VALUES (8, 'claude-3-haiku', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
 INSERT INTO model VALUES (9, 'llama-3-8b-chat', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
+INSERT INTO model VALUES (10, 'gemini-1.5-flash', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
+
 INSERT INTO endpoint VALUES (1, 1, 2, NOW());
 INSERT INTO endpoint VALUES (2, 1, 3, NOW());
 INSERT INTO endpoint VALUES (3, 1, 4, NOW());
@@ -70,6 +73,8 @@ INSERT INTO endpoint VALUES (10, 6, 11, NOW());
 INSERT INTO endpoint VALUES (11, 3, 11, NOW());
 INSERT INTO endpoint VALUES (15, 7, 1, NOW());
 INSERT INTO endpoint VALUES (16, 8, 12, NOW());
+INSERT INTO endpoint VALUES (35, 10, 36, NOW());
+INSERT INTO endpoint VALUES (34, 9, 35, NOW());
 
 -- Runtime Dynamic routing
 INSERT INTO model VALUES (4, 'pbr-model', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
@@ -99,7 +104,6 @@ INSERT INTO endpoint VALUES (30, 4, 31, NOW());
 INSERT INTO endpoint VALUES (31, 4, 32, NOW());
 INSERT INTO endpoint VALUES (32, 4, 33, NOW());
 INSERT INTO endpoint VALUES (33, 4, 34, NOW());
-INSERT INTO endpoint VALUES (34, 9, 35, NOW());
 
 
 -- Benchmark run
