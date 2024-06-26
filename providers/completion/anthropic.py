@@ -43,16 +43,29 @@ class Anthropic(BaseCompletionProvider):
 
     def response_to_chat_completion(self, response):
         created_at = int(time.time())
+        message = dict(
+            content=response.content[0].text,
+            role="assistant",
+        )
+        if response.stop_reason == "tool_use":
+            tool_calls = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    tool_d = dict(
+                        name=block.name,
+                        id=block.id,
+                        function=dict(arguments=block.input),
+                        type=block.type,
+                    )
+                    tool_calls.append(tool_d)
+            message["tool_calls"] = tool_calls
         return dict(
             id=response.id,
             choices=[
                 dict(
-                    finish_reason=response.content[0].text,
+                    finish_reason=response.stop_reason,
                     index=0,
-                    message=dict(
-                        content=response.content[0].text,
-                        role="assistant",
-                    ),
+                    message=message,
                     logprobs=None,
                 ),
             ],
@@ -69,6 +82,8 @@ class Anthropic(BaseCompletionProvider):
             messages, system_prompt = _pop_system_prompts(messages)
             if system_prompt:
                 kwargs["system"] = system_prompt
+            if "tools" in kwargs:
+                kwargs["tools"] = _format_tools_to_anthropic(kwargs["tools"])
             response = self.client.messages.create(
                 messages=messages,
                 model=self.provider_endpoint,
@@ -143,6 +158,15 @@ def _pop_system_prompts(messages):
         else:
             clean_messages.append(msg)
     return clean_messages, ". ".join(system_prompts)
+
+
+def _format_tools_to_anthropic(tool_list_oai):
+    def _fmt_tool(tool_oai_fmt):
+        tool_d = tool_oai_fmt["function"]
+        tool_d["input_schema"] = tool_d.pop("parameters")
+        return tool_d
+
+    return [_fmt_tool(t) for t in tool_list_oai]
 
 
 _sse_types_to_ignore = {
