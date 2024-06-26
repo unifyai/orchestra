@@ -1,8 +1,8 @@
 import os
 import subprocess
+
 import requests
-from google.cloud import storage
-from google.cloud import aiplatform
+from google.cloud import aiplatform, storage
 
 
 def download_blob(bucket_name, source_blob_name, destination_file_name):
@@ -56,6 +56,7 @@ def deploy(user_id: str, router_name: str, orchestra_url: str):
     subprocess.run(f"sudo docker push {docker_path}", shell=True)
     # create a new model_version in model registry
 
+    # TODO: This is hardcoded atm
     location = "europe-west1"
     project = "saas-368716"
     aiplatform.init(project=project, location=location)
@@ -99,7 +100,7 @@ def deploy(user_id: str, router_name: str, orchestra_url: str):
     response = requests.put(url=url, json=payload, headers=headers)
     print(response.text)
 
-    # clean up docker image
+    # TODO: clean up docker image
 
 
 if __name__ == "__main__":
