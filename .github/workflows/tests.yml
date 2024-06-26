@@ -80,9 +80,6 @@ jobs:
       env:
         POETRY_VIRTUALENVS_CREATE: false
 
-    # - name: Set up service account
-    #   run: echo '${{ secrets.ORCHESTRA_VERTEXAI_CREDENTIALS }}' > credentials.json
-
     - name: Run pytest check
       run: poetry run pytest -vv --cov="orchestra" .
       env:
@@ -101,11 +98,6 @@ jobs:
         ORCHESTRA_PERPLEXITY_AI_API_KEY: ${{ secrets.ORCHESTRA_PERPLEXITY_API_KEY }}
         ORCHESTRA_TOGETHER_AI_API_KEY: ${{ secrets.ORCHESTRA_TOGETHER_AI_API_KEY }}
         ORCHESTRA_ADMIN_KEY: ${{ secrets.ORCHESTRA_ADMIN_KEY }}
-        # ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON: "./credentials.json"
-        # ORCHESTRA_VERTEXAI_GCLOUD_PATH: "/usr/bin/gcloud"
-        # ORCHESTRA_VERTEXAI_PROJECT: ${{ secrets.ORCHESTRA_VERTEXAI_PROJECT }}
-        # ORCHESTRA_VERTEXAI_LOCATION: ${{ secrets.ORCHESTRA_VERTEXAI_LOCATION }}
-        # ORCHESTRA_VERTEXAI_ROUTER_ENDPOINT_ID: ${{ secrets.ORCHESTRA_VERTEXAI_ROUTER_ENDPOINT_ID }}
         AUTH_ACCOUNT_API_KEY: ${{ secrets.AUTH_ACCOUNT_API_KEY }}
         AUTH_ACCOUNT_USER_ID: ${{ secrets.AUTH_ACCOUNT_USER_ID }}
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
