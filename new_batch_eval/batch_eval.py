@@ -1,25 +1,26 @@
+import asyncio
 import json
 import logging
 import os
 
-
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s - %(levelname)s - %(run_name)s - %(message)s",
-)
+from dataclasses import dataclass
+from fetch_queries import generate_queries
+from fetch_judgements import generate_judgements
+from extract_score import ratings_from_sample
+from token_counts import count_tokens
 
 
 @dataclass
 class BenchmarkConfig:
     benchmark_name: str
     models_to_benchmark: list[str]
-    judge_model: str
+    judge_model_tag: str
     user_id: str
     user_email: str
     api_key: str
 
 
-def main(msg, data_dir):
+async def main(msg, data_dir):
     """msg is a json object with two fields: config and prompts
     prompts is a list of json objects of the form {"prompt", "reference_answer"}.
     """
@@ -33,7 +34,7 @@ def main(msg, data_dir):
 
     # create root folder
 
-    run_name = f"{user_id}_{benchmark_name}"
+    run_name = f"{cfg.user_id}_{cfg.benchmark_name}"
     run_save_path = os.path.join(data_dir, run_name)
     model_responses_path = os.path.join(run_save_path, "model_responses")
     model_judgements_path = os.path.join(run_save_path, "model_judgements")
@@ -45,15 +46,17 @@ def main(msg, data_dir):
         os.mkdir(model_judgements_path)
         # make prompt file
         with open(prompts_path, "w") as f:
-            for entry in prompts:
+            for id_, entry in enumerate(prompts):
+                entry["id_"] = id_
                 f.write(json.dumps(entry) + "\n")
     else:
         with open(prompts_path) as f:
-            for line, p_new in zip(f, prompts):
+            for ix, (line, p_new) in enumerate(zip(f, prompts)):
                 p_old = json.loads(line)
+                p_new["id_"] = ix
                 assert (
                     p_old == p_new
-                ), "mismatch in prompts, but running with repeated name"
+                ), f"mismatch in prompts, {p_old}, {p_new}"
 
     def _format_model_tag(model_tag):
         return model_tag.replace("@", "___")
@@ -72,10 +75,13 @@ def main(msg, data_dir):
         process_queries(model_tag, prompts_path, model_responses_path, cfg.api_key)
         for model_tag in cfg.models_to_benchmark
     ]
-    log_info = {"run_name": str(run_name)}
-    logging.info(f"Begin getting queries", extra=log_info)
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format=f"%(asctime)s - %(levelname)s - {str(run_name)} - %(message)s",
+    )
+    logging.info(f"Begin getting queries")
     await asyncio.gather(*tasks)
-    logging.info(f"End getting queries", extra=log_info)
+    logging.info(f"End getting queries")
 
     async def process_judgements(
         model_tag,
@@ -90,7 +96,7 @@ def main(msg, data_dir):
             prompt_file=prompts_path,
             asst_response_file=os.path.join(model_responses_path, f"{model_str}.jsonl"),
             judge_response_file=os.path.join(
-                model_judgements_path, f"{model_name}.jsonl"
+                model_judgements_path, f"{model_str}.jsonl"
             ),
             asst_model_tag=model_tag,
             judge_model_tag=judge_model_tag,
@@ -110,13 +116,46 @@ def main(msg, data_dir):
         for model_tag in cfg.models_to_benchmark
     ]
 
-    logging.info(f"Begin getting judgements", extra=log_info)
+    logging.info(f"Begin getting judgements")
     await asyncio.gather(*tasks)
-    logging.info(f"End getting judgements", extra=log_info)
+    logging.info(f"End getting judgements")
     
     # get router scores on the prompts
 
     # count all tokens
-    # use the api for this ??
+    # use the api for this ? 
+    id_model_to_tokens = count_tokens(root_dir=run_save_path)
 
-    # upload
+
+    logging.info(f"Begin collating")
+    id_to_model_to_scores = {}
+    for model_tag in cfg.models_to_benchmark:
+        model_str = _format_model_tag(model_tag)
+        judge_response_file = os.path.join(model_judgements_path, f"{model_str}.jsonl")
+        if not os.path.exists(judge_response_file):
+            logging.info(f"Judge response file does not exist for {model_str}")
+            continue
+
+        with open(judge_response_file) as f:
+            for line in f:
+                data = json.loads(line)
+                judge_response = data["judge_response"]
+                score = ratings_from_sample(judge_response)
+                if data["id_"] not in id_to_model_to_scores:
+                    id_to_model_to_scores[data["id_"]] = {}
+                id_to_model_to_scores[data["id_"]][model_str] = score
+
+    # upload to the db 
+
+if __name__ == "__main__":
+    cfg = {"benchmark_name": "test_benchmark", 
+    "models_to_benchmark": ["llama-3-8b-chat@together-ai", "gpt-4o@openai"],
+    "judge_model_tag": "gpt-4o@openai",
+    "user_id": "clwq7wcn00006o7rt5nea9ktt", 
+    "user_email": "tje541@gmail.com",
+    "api_key": os.environ["UNIFY_API_KEY"]}
+    prompts = [{"prompt": "hello world"}]
+    msg_d = {"config": cfg, "prompts": prompts}
+    msg_raw = json.dumps(msg_d)
+    save_dir = "tmp/"
+    asyncio.run(main(msg_raw, save_dir))
