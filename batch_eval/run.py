@@ -2,18 +2,17 @@
 import asyncio
 import json
 import os
+import smtplib
 import sys
 import time
-
-import smtplib
 from email.message import EmailMessage
 
 import requests
-from fetch_queries import generate_queries
-from fetch_judgements import generate_judgements
 from extract_score import ratings_from_sample
-from token_counts import count_tokens
+from fetch_judgements import generate_judgements
+from fetch_queries import generate_queries
 from google.cloud import aiplatform
+from token_counts import count_tokens
 
 body = """
 <!DOCTYPE html>
@@ -181,19 +180,21 @@ async def main():
         if not DEBUG:
             # Get router scores
             log_msg("Getting router scores...")
+            # TODO: This needs to be updated
             aiplatform.init(
                 project=os.getenv("ORCHESTRA_VERTEXAI_PROJECT"),
                 location=os.getenv("ORCHESTRA_VERTEXAI_LOCATION"),
             )
+            # TODO: this needs to take the router id as part of the request
             endpoint = aiplatform.Endpoint(
-                os.getenv("ORCHESTRA_VERTEXAI_ROUTER_ENDPOINT_ID")
+                os.getenv("ORCHESTRA_VERTEXAI_ROUTER_ENDPOINT_ID"),
             )
             router_scores = {}
             with open(prompt_file, "r") as pf:
                 for ix, line in enumerate(pf):
                     data = json.loads(line)
                     prediction = endpoint.predict(
-                        instances=[{"prompt": data["prompt"]}]
+                        instances=[{"prompt": data["prompt"]}],
                     )
                     out = prediction.predictions[0]["scores"]
                     out["gpt-4-turbo"] = out.pop("gpt-4-0125-preview")
