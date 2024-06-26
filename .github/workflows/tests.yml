@@ -67,9 +67,9 @@ jobs:
     - uses: actions/checkout@v2
     - name: Auth into Google Cloud
       uses: 'google-github-actions/auth@v2'
-      # TODO: change for appropriate credentials
+      # This service account also needs pub/sub
       with:
-        credentials_json: '${{ secrets.GCP_CREDENTIALS_PUBSUB_2_CLICKHOUSE }}'
+        credentials_json: '${{ secrets.ORCHESTRA_VERTEXAI_CREDENTIALS }}'
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
