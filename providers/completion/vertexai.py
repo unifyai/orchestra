@@ -1,7 +1,7 @@
-import os
-
 import google.auth
 from providers.completion.base_completion_provider import BaseCompletionProvider
+
+from orchestra.settings import settings
 
 
 class VertexAI(BaseCompletionProvider):
@@ -30,7 +30,7 @@ class VertexAI(BaseCompletionProvider):
     def base_url(self):
         return (
             "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/"
-            f"{os.environ['ORCHESTRA_VERTEXAI_PROJECT']}/locations/{os.environ['ORCHESTRA_VERTEXAI_LOCATION']}/endpoints/openapi"
+            f"{settings.vertexai_project}/locations/{settings.vertexai_location}/endpoints/openapi"
         )
 
 
