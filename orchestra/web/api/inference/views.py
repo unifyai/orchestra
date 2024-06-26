@@ -1,5 +1,6 @@
 import json
 import re
+import time
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.param_functions import Depends
@@ -157,6 +158,10 @@ def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217,
                 for part_dict in response.generator():
                     part_dict["model"] = model
                     part_dict["provider"] = provider
+                    if part_dict.get("id") is None:
+                        part_dict["id"] = "msg-id"
+                    if part_dict.get("created") is None:
+                        part_dict["created"] = int(time.time())
                     yield f"data: {json.dumps(part_dict)}\n\n"  # noqa: WPS237
                 background_tasks.add_task(
                     db_operations,
@@ -172,6 +177,10 @@ def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217,
         response["model"] = model
         response["provider"] = provider
         response["usage"]["cost"] = cost
+        if response.get("id") is None:
+            response["id"] = "msg-id"
+        if response.get("created") is None:
+            response["created"] = int(time.time())
         return JSONResponse(response)
 
     """

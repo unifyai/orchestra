@@ -1,5 +1,6 @@
 ### Python template
 
+batch_eval/
 deploy/
 .idea/
 .vscode/
