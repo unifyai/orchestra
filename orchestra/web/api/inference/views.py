@@ -1,5 +1,6 @@
 import json
 import re
+import time
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.param_functions import Depends
@@ -172,6 +173,10 @@ def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217,
         response["model"] = model
         response["provider"] = provider
         response["usage"]["cost"] = cost
+        if response.get("id") is None:
+            response["id"] = "msg-id"
+        if response.get("created") is None:
+            response["created"] = int(time.time())
         return JSONResponse(response)
 
     """
