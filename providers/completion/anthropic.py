@@ -47,11 +47,16 @@ class Anthropic(BaseCompletionProvider):
             content=response.content[0].text,
             role="assistant",
         )
-        if response.stop_reason == 'tool_use':
+        if response.stop_reason == "tool_use":
             tool_calls = []
             for block in response.content:
-                if block.type == 'tool_use':
-                    tool_d = dict(name=block.name, id=block.id, function=dict(arguments=block.input), type=block.type)
+                if block.type == "tool_use":
+                    tool_d = dict(
+                        name=block.name,
+                        id=block.id,
+                        function=dict(arguments=block.input),
+                        type=block.type,
+                    )
                     tool_calls.append(tool_d)
             message["tool_calls"] = tool_calls
         return dict(
@@ -160,6 +165,7 @@ def _format_tools_to_anthropic(tool_list_oai):
         tool_d = tool_oai_fmt["function"]
         tool_d["input_schema"] = tool_d.pop("parameters")
         return tool_d
+
     return [_fmt_tool(t) for t in tool_list_oai]
 
 
