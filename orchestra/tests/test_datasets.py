@@ -1,14 +1,30 @@
 import copy
 import os
 
+import pytest
 from httpx import AsyncClient
 
 from orchestra.tests.utils import HEADERS
-from orchestra.web.api.dataset.views import blob_exists, dir_exists
+from orchestra.web.api.dataset.views import (
+    blob_exists,
+    bucket_name,
+    delete_dir,
+    dir_exists,
+)
 
 user_id = os.getenv("AUTH_ACCOUNT_USER_ID")
 headers = copy.copy(HEADERS)
 headers.pop("Content-Type", None)
+
+
+@pytest.fixture
+def cleanup():
+    to_remove = []
+    yield to_remove
+    for name in to_remove:
+        dir_name = f"{user_id}/{name}/"
+        if dir_exists(bucket_name, dir_name):
+            delete_dir(bucket_name, dir_name)
 
 
 def assert_correct_upload(response, name):
@@ -41,24 +57,80 @@ def delete_dataset(client, name):
     return client.delete("/v0/dataset", headers=headers, params=params)
 
 
-async def test_upload_dataset(client: AsyncClient):
+async def test_upload_dataset_invalid_name(client: AsyncClient, cleanup):
+
+    file_path = "./orchestra/tests/sample_datasets/prompts.jsonl"
+    name = "../dataset"
+    cleanup.append(name)
+
+    # Upload dataset
+    response = await upload_dataset(client, file_path, name)
+    assert response.status_code == 400
+    assert (
+        response.json()["detail"]
+        == "Invalid name for a dataset. Please, choose a different one."
+    )
+
+
+async def test_upload_dataset(client: AsyncClient, cleanup):
 
     file_path = "./orchestra/tests/sample_datasets/prompts.jsonl"
     name = "test_upload_dataset"
+    cleanup.append(name)
 
     # Upload dataset
     response = await upload_dataset(client, file_path, name)
     assert_correct_upload(response, name)
+
+    # Already uploaded dataset
+    response = await upload_dataset(client, file_path, name)
+    assert response.status_code == 400
+    assert (
+        response.json()["detail"]
+        == "A dataset with this name already exists. Please, choose a different one."
+    )
 
     # Clean-up
     response = await delete_dataset(client, name)
     assert_delete(response, name)
 
 
-async def test_list_datasets(client: AsyncClient):
+async def test_upload_incorrect_dataset(client: AsyncClient, cleanup):
+
+    names = ["wrong", "extra_kw", "no_prompt"]
+    details = [
+        (
+            "The uploaded dataset has the wrong format. It must be a jsonl file where"
+            " each line has a `prompt` key and optionally a `ref_answer` one."
+        ),
+        (
+            "The uploaded dataset has the wrong format. It must be a jsonl file where"
+            " each line has a `prompt` key and optionally a `ref_answer` one."
+            " Unknown keyword `expected_answer` in line 2."
+        ),
+        (
+            "The uploaded dataset has the wrong format. It must be a jsonl file where"
+            " each line has a `prompt` key and optionally a `ref_answer` one."
+            " Key `prompt` not found in line 1."
+        ),
+    ]
+
+    for name, detail in zip(names, details):
+
+        file_path = f"./orchestra/tests/sample_datasets/{name}.jsonl"
+        cleanup.append(name)
+
+        # Upload dataset
+        response = await upload_dataset(client, file_path, name)
+        assert response.status_code == 400
+        assert response.json()["detail"] == detail
+
+
+async def test_list_datasets(client: AsyncClient, cleanup):
 
     file_path = "./orchestra/tests/sample_datasets/prompts.jsonl"
-    names = [f"test_upload_dataset_{i}" for i in range(3)]
+    names = [f"test_list_dataset_{i}" for i in range(3)]
+    cleanup += names
 
     for name in names:
         # Upload datasets
@@ -67,9 +139,14 @@ async def test_list_datasets(client: AsyncClient):
 
     # List datasets
     response = await client.get("/v0/dataset/list", headers=headers)
-    # TODO: This will probably break in the CI when the other tests
-    # are running at the same time.
-    assert set(response.json()) == set(names)
+    # checks
+    datasets = response.json()
+    # No full paths
+    assert not any(["/" in d for d in datasets])
+    # The datasets are contained in the list
+    assert set(datasets) <= set(names)
+    # No repeated elements
+    assert len(datasets) == len(set(datasets))
 
     # Clean-up
     for name in names:
@@ -77,10 +154,11 @@ async def test_list_datasets(client: AsyncClient):
         assert_delete(response, name)
 
 
-async def test_download_datasets(client: AsyncClient):
+async def test_download_datasets(client: AsyncClient, cleanup):
 
     file_path = "./orchestra/tests/sample_datasets/prompts.jsonl"
     name = "test_download_dataset"
+    cleanup.append(name)
 
     # Upload dataset
     response = await upload_dataset(client, file_path, name)

@@ -8,6 +8,7 @@ from google.cloud.exceptions import NotFound
 from orchestra.web.api.utils.http_responses import (
     dataset_already_exists,
     dataset_does_not_exist,
+    invalid_dataset_name,
 )
 
 router = APIRouter()
@@ -136,6 +137,8 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     """
     Uploads a dataset.
     """
+    if "/" in name:
+        raise invalid_dataset_name
     file_content = file.file.read()
     _upload_dataset(request_fastapi.state.user_id, name, file_content)
     return {"info": "Dataset uploaded succesfully!"}
@@ -150,6 +153,8 @@ def delete_dataset(
     """
     Deletes a dataset.
     """
+    if "/" in name:
+        raise invalid_dataset_name
     _delete_dataset(request_fastapi.state.user_id, name)
     return {"info": "Dataset deleted succesfully!"}
 
@@ -160,7 +165,7 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
 ) -> List[str]:
     """
-    Uploads a dataset.
+    Lists the user datasets.
     """
     datasets = _list_datasets(request_fastapi.state.user_id)
     return datasets
@@ -176,6 +181,8 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     """
     Download a dataset.
     """
+    if "/" in name:
+        raise invalid_dataset_name
     blob_name = f"{request_fastapi.state.user_id}/{name}/0/dataset.jsonl"
     if not blob_exists(bucket_name, blob_name):
         raise dataset_does_not_exist
