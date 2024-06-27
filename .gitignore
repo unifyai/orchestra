@@ -8,6 +8,7 @@ __pycache__/
 *$py.class
 *venv*
 archive*
+lcov.info
 
 # C extensions
 *.so
