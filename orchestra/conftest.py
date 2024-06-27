@@ -24,7 +24,7 @@ def anyio_backend() -> str:
 
 
 @pytest.fixture(scope="session")
-def _engine() -> Generator[Engine, None, None]:
+def _engine(worker_id) -> Generator[Engine, None, None]:
     """
     Create engine and databases.
 
@@ -37,7 +37,12 @@ def _engine() -> Generator[Engine, None, None]:
 
     create_database()
 
-    engine = create_engine(str(settings.db_url))
+    url = str(settings.db_url)
+    # If using xdist, the testing database (orchestra_test) needs to be
+    # instantiated for every thread
+    if worker_id:
+        url = url.replace("orchestra_test", f"orchestra_test_{worker_id}")
+    engine = create_engine(url)
     meta.create_all(engine)
     with engine.begin() as conn:
         user_id = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
