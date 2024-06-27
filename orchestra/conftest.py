@@ -59,6 +59,7 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
 @pytest.fixture
 def dbsession(
     _engine: Engine,
+    worker_id,
 ) -> Generator[Session, None, None]:
     """
     Get session to database.
