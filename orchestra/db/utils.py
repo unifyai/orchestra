@@ -6,11 +6,13 @@ from orchestra.settings import settings
 
 def create_database(worker_id=None) -> None:
     """Create a database."""
-    db_url = make_url(str(settings.db_url.with_path("/postgres")))
-    engine = create_engine(db_url, isolation_level="AUTOCOMMIT")
+    url = str(settings.db_url.with_path("/postgres"))
     datname = settings.db_base
     if worker_id:
+        url = url.replace("orchestra_test", f"orchestra_test_{worker_id}")
         datname += f"_{worker_id}"
+    db_url = make_url(url)
+    engine = create_engine(db_url, isolation_level="AUTOCOMMIT")
 
     with engine.connect() as conn:
         database_existance = conn.execute(
@@ -21,7 +23,7 @@ def create_database(worker_id=None) -> None:
         database_exists = database_existance.scalar() == 1
 
     if database_exists:
-        drop_database()
+        drop_database(worker_id)
 
     with engine.connect() as conn:  # noqa: WPS440
         conn.execute(
@@ -33,11 +35,13 @@ def create_database(worker_id=None) -> None:
 
 def drop_database(worker_id=None) -> None:
     """Drop current database."""
-    db_url = make_url(str(settings.db_url.with_path("/postgres")))
-    engine = create_engine(db_url, isolation_level="AUTOCOMMIT")
+    url = str(settings.db_url.with_path("/postgres"))
     datname = settings.db_base
     if worker_id:
+        url = url.replace("orchestra_test", f"orchestra_test_{worker_id}")
         datname += f"_{worker_id}"
+    db_url = make_url(url)
+    engine = create_engine(db_url, isolation_level="AUTOCOMMIT")
 
     with engine.connect() as conn:
         disc_users = (
