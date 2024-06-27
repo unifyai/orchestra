@@ -97,6 +97,7 @@ env = [
     "ORCHESTRA_DB_BASE=orchestra_test",
     "ORCHESTRA_SENTRY_DSN=",
 ]
+addopts = "--cov --cov-report=lcov:lcov.info --cov-report=term"
 
 [fastapi-template.options]
 project_name = "orchestra"
