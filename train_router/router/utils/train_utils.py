@@ -5,7 +5,8 @@ from datetime import datetime
 
 import yaml
 import pandas as pd
-import wandb
+from utils.data_utils import ratings_from_sample
+#import wandb
 
 
 def load_train_config(path):
@@ -39,7 +40,6 @@ class MetricTracker:
         return avgs
 
 
-from data_utils import ratings_from_sample
 
 
 def load_datasets(paths):
