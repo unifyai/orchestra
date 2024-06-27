@@ -35,7 +35,7 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
 
     load_all_models()
 
-    create_database()
+    create_database(worker_id)
 
     url = str(settings.db_url)
     # If using xdist, the testing database (orchestra_test) needs to be
@@ -53,7 +53,7 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
         yield engine
     finally:
         engine.dispose()
-        drop_database()
+        drop_database(worker_id)
 
 
 @pytest.fixture
