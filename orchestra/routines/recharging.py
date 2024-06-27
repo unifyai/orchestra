@@ -17,8 +17,11 @@ handler.setLevel(logging.INFO)
 logger.addHandler(handler)
 
 
-def recharge_credits():  # noqa: D103, WPS210
-    engine = create_engine(str(settings.db_url))
+def recharge_credits(worker_id=None):  # noqa: D103, WPS210
+    url = str(settings.db_url)
+    if worker_id:
+        url = url.replace("orchestra_test", f"orchestra_test_{worker_id}")
+    engine = create_engine(url)
     session_factory = sessionmaker(engine, expire_on_commit=False)
     with session_factory() as session:
         users_dao = UsersDAO(session)

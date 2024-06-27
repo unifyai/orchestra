@@ -81,7 +81,7 @@ jobs:
         POETRY_VIRTUALENVS_CREATE: false
 
     - name: Run pytest check
-      run: poetry run pytest -vv --cov="orchestra" .
+      run: poetry run pytest -vv --cov="orchestra" -n 4 .
       env:
         ORCHESTRA_HOST: "0.0.0.0"
         ORCHESTRA_DB_HOST: localhost

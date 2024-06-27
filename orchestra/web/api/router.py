@@ -4,6 +4,7 @@ from fastapi.routing import APIRouter
 from orchestra.web.api import (  # noqa: WPS235
     admin,
     chat_completion,
+    dataset,
     endpoint,
     eval_batch,
     inference,
@@ -18,6 +19,11 @@ API_KEY_AUTH = [Depends(auth_api_key)]
 ADMIN_AUTH = [Depends(auth_admin_key)]
 
 api_router = APIRouter()
+api_router.include_router(
+    dataset.router,
+    tags=["dataset"],
+    dependencies=API_KEY_AUTH,
+)
 api_router.include_router(
     users.router,
     tags=["users"],
