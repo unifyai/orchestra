@@ -51,7 +51,7 @@ def delete_dir(bucket_name: str, dir_name: str) -> None:
 
 def read_json_from_bucket(bucket_name, blob_name, raw=False):
     blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    json_data = blob.download_as_string()
+    json_data = blob.download_as_bytes()
     if raw:
         return json_data
     return json.loads(json_data.decode("utf-8"))
@@ -167,15 +167,16 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
 
 # download dataset
+# TODO: This probably should get a URL that the user can cURL instead
 @router.get("/dataset")
 def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
-    name: Annotated[str, Form()],
+    name: str,
 ) -> List[Dict[str, str]]:
     """
     Download a dataset.
     """
-    blob_name = f"{request_fastapi.state.user_id}/{name}.jsonl"
+    blob_name = f"{request_fastapi.state.user_id}/{name}/0/dataset.jsonl"
     if not blob_exists(bucket_name, blob_name):
         raise dataset_does_not_exist
     else:

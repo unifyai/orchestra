@@ -67,6 +67,8 @@ async def test_list_datasets(client: AsyncClient):
 
     # List datasets
     response = await client.get("/v0/dataset/list", headers=headers)
+    # TODO: This will probably break in the CI when the other tests
+    # are running at the same time.
     assert set(response.json()) == set(names)
 
     # Clean-up
@@ -75,4 +77,22 @@ async def test_list_datasets(client: AsyncClient):
         assert_delete(response, name)
 
 
-# TODO: Test download
+async def test_download_datasets(client: AsyncClient):
+
+    file_path = "./orchestra/tests/sample_datasets/prompts.jsonl"
+    name = "test_download_dataset"
+
+    # Upload dataset
+    response = await upload_dataset(client, file_path, name)
+    assert_correct_upload(response, name)
+
+    # Download dataset
+    params = {"name": name}
+    response = await client.get("/v0/dataset", headers=headers, params=params)
+    jsonl = response.json()
+    assert jsonl[0]["prompt"] == "This is the first prompt"
+    assert len(jsonl) == 3
+
+    # Clean-up
+    response = await delete_dataset(client, name)
+    assert_delete(response, name)
