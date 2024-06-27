@@ -117,6 +117,7 @@ def training(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     )
 
 
+# TODO: Remove
 def _upload_dataset(request, file_content, name):
     check_file_content(file_content)
 
@@ -133,6 +134,7 @@ def _upload_dataset(request, file_content, name):
         upload_json_to_bucket(file_content, bucket_name, blob_name)
 
 
+# TODO: Remove
 @router.post("/upload_dataset")
 def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
@@ -148,6 +150,7 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     return EvalBatchResponse(info="Dataset uploaded succesfully!")
 
 
+# TODO: Remove
 @router.get("/download_dataset")
 def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
@@ -173,6 +176,7 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         return json.loads(string)
 
 
+# TODO: Remove
 def check_file_exists(bucket_name, blob_name):
     client = storage.Client()
     bucket = client.bucket(bucket_name)
@@ -184,6 +188,7 @@ def check_file_exists(bucket_name, blob_name):
         return False
 
 
+# TODO: Remove
 def read_json_from_bucket(bucket_name, blob_name, raw=False):
     client = storage.Client()
     bucket = client.bucket(bucket_name)
@@ -194,6 +199,7 @@ def read_json_from_bucket(bucket_name, blob_name, raw=False):
     return json.loads(json_data.decode("utf-8"))
 
 
+# TODO: Remove
 def upload_json_to_bucket(json_data, bucket_name, destination_blob_name):
     client = storage.Client()
     bucket = client.bucket(bucket_name)
@@ -201,6 +207,7 @@ def upload_json_to_bucket(json_data, bucket_name, destination_blob_name):
     blob.upload_from_string(json_data, content_type="application/json")
 
 
+# TODO: Remove
 def check_file_content(file_content: str):
     valid = True
     info = (

@@ -6,9 +6,9 @@ from orchestra.routines.recharging import recharge_credits
 from orchestra.web.api.admin.views import get_user
 
 
-def test_recharge(dbsession) -> None:
+def test_recharge(dbsession, worker_id) -> None:
     """Tests the recharge routine code."""
-    recharge_credits()
+    recharge_credits(worker_id)
     users_dao = UsersDAO(dbsession)
     # user has (current + recharge ) < limit
     simple = get_user("recharge_simple", users_dao)[0]
