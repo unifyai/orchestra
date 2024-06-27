@@ -87,18 +87,12 @@ def _delete_dataset(user_id: str, name: str):
 
 def _list_datasets(user_id: str):
     bucket = storage.Client().bucket(bucket_name)
-
     # List blobs with the specified prefix
-    blobs = bucket.list_blobs(prefix=user_id, delimiter="/")
-
-    # The delimiter argument tells the API to treat the character as a directory separator
-    # and to return directory names (prefixes) as well as file names
-
-    print("Directories:")
-    for prefix in blobs.prefixes:
-        print(f"- {prefix}")
-
-    return list(blobs.prefixes)
+    blobs = list(bucket.list_blobs(prefix=user_id))
+    dirs = set([b.id.split("/")[2] for b in blobs])
+    # Clean legacy datasets
+    dirs = {d for d in dirs if not d.endswith(".jsonl")}
+    return list(dirs)
 
 
 def check_file_content(file_content: str):
