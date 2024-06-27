@@ -131,6 +131,9 @@ def main(msg):
 
     command = f"""gcloud compute scp --project={project_id} --zone={zone} --recurse ./train_job_files/ {instance_name}:~/"""
     subprocess.run(command, shell=True)
+    
+    command = f"""gcloud compute scp --project={project_id} --zone={zone} --recurse ./router/ {instance_name}:~/"""
+    subprocess.run(command, shell=True)
 
     # scp the docker image over
     command = f"""gcloud compute scp --project={project_id} --zone={zone} ./Dockerfile {instance_name}:~/"""
@@ -142,7 +145,7 @@ def main(msg):
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="{docker_build_cmd}" """
     subprocess.run(command, shell=True)
     
-    docker_run_cmd = "docker run -d --name train router_training"
+    docker_run_cmd = "docker run -d -it --name train router_training"
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="{docker_run_cmd}" """
     subprocess.run(command, shell=True)
 

@@ -35,7 +35,7 @@ parser.add_argument(
     "-cf", "--config_file", help="yaml config file for the training run"
 )
 parser.add_argument("-s", "--seed", default=0)
-parser.add_argument("-tn", "--train_num", type=int, required=True)
+parser.add_argument("-tn", "--train_num", type=int, default=100000, required=False)
 
 
 warmup_steps = 50
