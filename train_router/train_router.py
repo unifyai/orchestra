@@ -123,28 +123,31 @@ def main(msg):
     project_id = "saas-368716"
     zone = "europe-west1-b"
     instance_name = "router-training-gpu1"
-    
+
+    # start the instance
+    command = f"""gcloud compute instances start {instance_name} --project={project_id} --zone={zone}"""
+
     # check if nvidia is installed...
-    
+
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="sudo /opt/deeplearning/install-driver.sh" """
     # subprocess.run(command, shell=True)
 
-    command = f"""gcloud compute scp --project={project_id} --zone={zone} --recurse ./train_job_files/ {instance_name}:~/"""
+    command = f"""gcloud compute scp --project={project_id} --zone={zone} --recurse ./gpu_vm_files/* {instance_name}:~/"""
     subprocess.run(command, shell=True)
-    
+
     command = f"""gcloud compute scp --project={project_id} --zone={zone} --recurse ./router/ {instance_name}:~/"""
-    subprocess.run(command, shell=True)
+    # subprocess.run(command, shell=True)
 
     # scp the docker image over
     command = f"""gcloud compute scp --project={project_id} --zone={zone} ./Dockerfile {instance_name}:~/"""
-    subprocess.run(command, shell=True)
+    # subprocess.run(command, shell=True)
 
     # build & run the docker container
-    
+
     docker_build_cmd = "docker build -t router_training ."
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="{docker_build_cmd}" """
     subprocess.run(command, shell=True)
-    
+
     docker_run_cmd = "docker run -d -it --name train router_training"
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="{docker_run_cmd}" """
     subprocess.run(command, shell=True)
