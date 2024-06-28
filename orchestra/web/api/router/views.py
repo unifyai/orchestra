@@ -42,15 +42,15 @@ def find_invalid_endpoints():
 
 
 def send_to_train_server(action, **data):
-    topic = ""  # TODO
-    send_pubsub_msg(topic, {"action": action, **data})
-    raise NotImplementedError
+    topic = "projects/saas-368716/topics/train_router"
+    url = "https://api.unify.ai"  # TODO: Deal with staging/test
+    send_pubsub_msg(topic, {"action": action, **data, "orchestra_url": url})
 
 
 def send_to_deploy_server(action, **data):
-    topic = ""  # TODO
-    send_pubsub_msg(topic, {"action": action, **data})
-    raise NotImplementedError
+    topic = "projects/saas-368716/topics/deploy_router"
+    url = "https://api.unify.ai"  # TODO: Deal with staging/test
+    send_pubsub_msg(topic, {"action": action, **data, "orchestra_url": url})
 
 
 # endpoints
@@ -127,7 +127,7 @@ def deploy_router(request_fastapi: Request, name: str) -> Dict[str, str]:
     return {"info": "Router deployment started! You will receive an email soon!"}
 
 
-@router.delete("/router")
+@router.delete("/router/deploy")
 def delete_router(request_fastapi: Request, name: str) -> Dict[str, str]:
     """
     Deactivates and deletes a deployed router.
