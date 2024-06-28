@@ -126,6 +126,7 @@ def main(msg):
 
     # start the instance
     command = f"""gcloud compute instances start {instance_name} --project={project_id} --zone={zone}"""
+    subprocess.run(command, shell=True)
 
     # check if nvidia is installed...
 

@@ -3,8 +3,8 @@ experiment:
 
 data:
   data_paths:
-    - /workspace/router/train_data_files/train_data.jsonl
-  validation_path: /workspace/router/train_data_files/validation_data.jsonl
+    - /workspace/router/train_job_files/train_data.jsonl
+  validation_path: /workspace/router/train_job_files/validation_data.jsonl
   train_split_ratio: 0.99
   num_training_samples: 100000
 
