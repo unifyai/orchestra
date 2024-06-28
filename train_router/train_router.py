@@ -1,9 +1,4 @@
 import json
-
-from dataclasses import dataclass
-
-import google.cloud.compute_v1 as compute_v1
-from google.api_core.extended_operation import ExtendedOperation
 import re
 import os
 import sys
@@ -11,11 +6,12 @@ import subprocess
 from typing import Any
 import warnings
 
+import google.cloud.compute_v1 as compute_v1
+from google.cloud import storage
+from google.api_core.extended_operation import ExtendedOperation
 
-@dataclass
-class TrainRequest:
-    train_cfg: dict
-    bucket_path: str
+
+from dataclasses import dataclass
 
 
 def wait_for_extended_operation(
@@ -111,7 +107,43 @@ def create_vm():
     return instance_client.get(project=project_id, zone=zone, instance=instance_name)
 
 
+@dataclass
+class TrainRequest:
+    train_cfg: dict
+    bucket_path: str
+
+def evaluation_available(user_id, dataset_name, endpoint_id):
+    name = f'uploaded_datasets/{user_id}/{dataset_name}/eval.jsonl'
+    storage_client = storage.Client()
+    bucket_name = '' # TODO: what is the bucket gonna be called ?
+    bucket = storage_client.bucket(bucket_name)
+    stats = storage.Blob(bucket=bucket, name=name).exists(storage_client)
+
+
 def main(msg):
+
+    train_req = None
+
+    cfg = None
+
+	for e in train_cfg.endpoints:
+        if not evaluation_available(cfg.user_id, cfg.dataset_name, cfg.endpoint_id):
+            start_evaluation(dataset, e)
+
+    timeout = 2 * 3600
+    start_time = time.time()
+    while (time.time() - start_time) < timeout:
+      time.sleep(60)
+      if all_evaluations_available(dataset, endpoints):
+        break
+
+    train()
+
+
+
+
+
+
     # train_req = TrainRequest(**json.loads(msg))
 
     # create a vm

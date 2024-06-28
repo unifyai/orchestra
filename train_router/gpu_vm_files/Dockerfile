@@ -10,6 +10,5 @@ COPY train_job_files/ ./train_job_files/
 
 RUN pip install -r ./requirements.txt
 
-#CMD ["python3", "train.py", "-cf", "/workspace/router/train_job_files/config.yaml"]
-CMD ["/bin/bash"]
+CMD ["python3", "train.py", "-cf", "/workspace/router/train_job_files/config.yaml"]
 
