@@ -11,6 +11,7 @@ import math
 from functools import cache
 
 import torch
+
 # import wandb
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LambdaLR
@@ -171,7 +172,6 @@ def validate(model, val_dataloader, config):
 # model_name: predicted score
 
 
-
 @cache
 def create_eval_set(val_path):
     id_to_prompt = {}
@@ -249,13 +249,13 @@ def validate_all_models(model, val_path):
 if __name__ == "__main__":
     args = parser.parse_args()
     config = load_train_config(args.config_file)
-    #wandb.init(
+    # wandb.init(
     #    # set the wandb project where this run will be logged
     #    # mode="disabled",
     #    project="new_router",
     #    name=config["experiment"]["run_name"],
     #    config={**config},
-    #)
+    # )
 
     # load datasets
     df = load_datasets(config["data"]["data_paths"])
