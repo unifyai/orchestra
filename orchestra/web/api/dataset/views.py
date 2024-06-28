@@ -2,9 +2,15 @@ import json
 from typing import Annotated, Dict, List
 
 from fastapi import APIRouter, Form, HTTPException, Request, UploadFile
-from google.cloud import storage
-from google.cloud.exceptions import NotFound
 
+from orchestra.web.api.utils.gcp import (
+    blob_exists,
+    delete_dir,
+    dir_exists,
+    list_dir,
+    read_json_from_bucket,
+    upload_json_to_bucket,
+)
 from orchestra.web.api.utils.http_responses import (
     dataset_already_exists,
     dataset_does_not_exist,
@@ -18,49 +24,6 @@ bucket_name = "uploaded_datasets"
 
 # utils
 # TODO: Remove duplication in batch_eval endpoints
-
-
-def blob_exists(bucket_name: str, blob_name: str) -> bool:
-    blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    try:
-        blob.reload()
-    except NotFound:
-        return False
-    return True
-
-
-def dir_exists(bucket_name: str, dir_name: str) -> bool:
-    bucket = storage.Client().bucket(bucket_name)
-    blobs = list(bucket.list_blobs(prefix=dir_name))
-    return len(blobs) > 0
-
-
-def delete_dir(bucket_name: str, dir_name: str) -> None:
-    bucket = storage.Client().bucket(bucket_name)
-
-    # Ensure the directory_name ends with a slash
-    if not dir_name.endswith("/"):
-        dir_name += "/"
-
-    # List all blobs with the directory_name prefix
-    blobs = bucket.list_blobs(prefix=dir_name)
-
-    # Delete each blob
-    for blob in blobs:
-        blob.delete()
-
-
-def read_json_from_bucket(bucket_name, blob_name, raw=False):
-    blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    json_data = blob.download_as_bytes()
-    if raw:
-        return json_data
-    return json.loads(json_data.decode("utf-8"))
-
-
-def upload_json_to_bucket(json_data: Dict[str, str], bucket_name: str, blob_name: str):
-    blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    blob.upload_from_string(json_data, content_type="application/json")
 
 
 def _upload_dataset(user_id: str, name: str, file_content: bytes):
@@ -87,9 +50,7 @@ def _delete_dataset(user_id: str, name: str):
 
 
 def _list_datasets(user_id: str):
-    bucket = storage.Client().bucket(bucket_name)
-    # List blobs with the specified prefix
-    blobs = list(bucket.list_blobs(prefix=user_id))
+    blobs = list_dir(bucket_name, user_id)
     dirs = set([b.id.split("/")[2] for b in blobs])
     # Clean legacy datasets
     dirs = {d for d in dirs if not d.endswith(".jsonl")}
