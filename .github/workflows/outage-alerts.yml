@@ -7,9 +7,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  sync:
-    name: Sync
+  outage_alerts:
+    name: Outage Alerts
     runs-on: ubuntu-latest
+    environment: orchestra-testing
     steps:
     - name: Checkout
       uses: actions/checkout@v3
