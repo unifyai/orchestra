@@ -1,4 +1,4 @@
-name: Dockerfile Push
+name: Outage Alerts
 
 on:
   # schedule:
