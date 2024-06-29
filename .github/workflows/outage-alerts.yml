@@ -33,12 +33,8 @@ jobs:
 
     - name: Alert Prod
       run: |
-        cd orchestra
         python3 outage_alerts.py false ${{ secrets.DISCORD_WEBHOOK_URL }}
-        cd ..
 
     - name: Alert Staging
       run: |
-        cd orchestra
         python3 outage_alerts.py true ${{ secrets.DISCORD_WEBHOOK_URL }}
-        cd ..
