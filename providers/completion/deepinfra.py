@@ -51,7 +51,7 @@ supported_models = {
     "mistral-7b-instruct-v0.1": {
         "endpoint": "mistralai/Mistral-7B-Instruct-v0.1",
         "context_window": 32768,
-        "cost": {"prompt": 0.07, "completion": 0.07},
+        "cost": {"prompt": 0.064, "completion": 0.064},
     },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "mistralai/Mixtral-8x7B-Instruct-v0.1",
