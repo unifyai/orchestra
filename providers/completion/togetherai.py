@@ -76,7 +76,7 @@ supported_models = {
     "codellama-13b": {
         "endpoint": "togethercomputer/CodeLlama-13b",
         "context_window": 16384,
-        "cost": {"prompt": 0.225, "completion": 0.225},
+        "cost": {"prompt": 0.3, "completion": 0.3},
     },
     "codellama-34b": {
         "endpoint": "togethercomputer/CodeLlama-34b",
@@ -91,7 +91,7 @@ supported_models = {
     "codellama-13b-instruct": {
         "endpoint": "togethercomputer/CodeLlama-13b-Instruct",
         "context_window": 8192,
-        "cost": {"prompt": 0.225, "completion": 0.225},
+        "cost": {"prompt": 0.3, "completion": 0.3},
     },
     "codellama-34b-instruct": {
         "endpoint": "togethercomputer/CodeLlama-34b-Instruct",
@@ -106,7 +106,7 @@ supported_models = {
     "codellama-13b-python": {
         "endpoint": "togethercomputer/CodeLlama-13b-Python",
         "context_window": 16384,
-        "cost": {"prompt": 0.225, "completion": 0.225},
+        "cost": {"prompt": 0.3, "completion": 0.3},
     },
     "codellama-34b-python": {
         "endpoint": "togethercomputer/CodeLlama-34b-Python",
@@ -166,7 +166,7 @@ supported_models = {
     "llama-2-13b": {
         "endpoint": "togethercomputer/llama-2-13b",
         "context_window": 4096,
-        "cost": {"prompt": 0.225, "completion": 0.225},
+        "cost": {"prompt": 0.3, "completion": 0.3},
     },
     "llama-2-70b": {
         "endpoint": "togethercomputer/llama-2-70b",
@@ -181,7 +181,7 @@ supported_models = {
     "llama-2-13b-chat": {
         "endpoint": "togethercomputer/llama-2-13b-chat",
         "context_window": 4096,
-        "cost": {"prompt": 0.225, "completion": 0.225},
+        "cost": {"prompt": 0.3, "completion": 0.3},
     },
     "llama-2-70b-chat": {
         "endpoint": "togethercomputer/llama-2-70b-chat",
@@ -261,7 +261,7 @@ supported_models = {
     "nous-hermes-llama2-13b": {
         "endpoint": "NousResearch/Nous-Hermes-Llama2-13b",
         "context_window": 4096,
-        "cost": {"prompt": 0.225, "completion": 0.225},
+        "cost": {"prompt": 0.3, "completion": 0.3},
     },
     "openhermes-2-mistral-7b": {
         "endpoint": "teknium/OpenHermes-2-Mistral-7B",

@@ -31,7 +31,7 @@ supported_models = {
     "gemma-7b-it": {
         "endpoint": "google/gemma-7b-it",
         "context_window": 8192,
-        "cost": {"prompt": 0.13, "completion": 0.13},
+        "cost": {"prompt": 0.07, "completion": 0.07},
     },
     "llama-2-7b-chat": {
         "endpoint": "meta-llama/Llama-2-7b-chat-hf",
@@ -51,12 +51,12 @@ supported_models = {
     "mistral-7b-instruct-v0.1": {
         "endpoint": "mistralai/Mistral-7B-Instruct-v0.1",
         "context_window": 32768,
-        "cost": {"prompt": 0.13, "completion": 0.13},
+        "cost": {"prompt": 0.07, "completion": 0.07},
     },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "mistralai/Mixtral-8x7B-Instruct-v0.1",
         "context_window": 32768,
-        "cost": {"prompt": 0.27, "completion": 0.27},
+        "cost": {"prompt": 0.24, "completion": 0.24},
     },
     "codellama-34b-instruct": {
         "endpoint": "codellama/CodeLlama-34b-Instruct-hf",

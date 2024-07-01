@@ -36,7 +36,7 @@ supported_models = {
     "mixtral-8x22b-instruct-v0.1": {
         "endpoint": "accounts/fireworks/models/mixtral-8x22b-instruct",
         "context_window": 65536,
-        "cost": {"prompt": 0.9, "completion": 0.9},
+        "cost": {"prompt": 1.2, "completion": 1.2},
     },
     "gemma-7b-it": {
         "endpoint": "accounts/fireworks/models/gemma-7b-it",
