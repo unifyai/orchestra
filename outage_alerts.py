@@ -41,7 +41,7 @@ if __name__ == "__main__":
     client = logging.Client(project=project, credentials=creds)
 
     # generate all error messages over the past 1 hour
-    log_name = "orchestra-" + ("staging" if staging else "")
+    log_name = "orchestra" + ("-staging" if staging else "")
     timestamp_filter = (datetime.now() - timedelta(minutes=65)).strftime(
         "%Y-%m-%dT%H:%M:%S.%fZ",
     )
@@ -65,16 +65,18 @@ if __name__ == "__main__":
             else None
         )
         if module:
-            request_timestamp = (
-                entry.received_timestamp - timedelta(seconds=1)
+            start_timestamp = (
+                entry.received_timestamp - timedelta(seconds=60)
             ).strftime(
                 "%Y-%m-%dT%H:%M:%S.%fZ",
             )
-            error_timestamp = entry.received_timestamp.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            end_timestamp = (entry.received_timestamp + timedelta(seconds=60)).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ",
+            )
             previous_entries = client.list_entries(
                 filter_=(
                     f'resource.type="cloud_run_revision" AND resource.labels.service_name="{log_name}" '
-                    f'AND timestamp > "{request_timestamp}" AND timestamp <= "{error_timestamp}"'
+                    f'AND timestamp > "{start_timestamp}" AND timestamp <= "{end_timestamp}"'
                 ),
                 order_by="timestamp desc",
             )
