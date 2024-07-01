@@ -1,9 +1,9 @@
 name: Outage Alerts
 
 on:
-  # schedule:
-    # runs everyday at 23:00 UTC
-    # - cron:  '0 * * * *'
+  schedule:
+    # runs every hour
+  - cron: '0 * * * *'
   workflow_dispatch:
 
 jobs:
