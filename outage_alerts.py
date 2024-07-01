@@ -1,4 +1,5 @@
 import sys
+import urllib.parse
 from datetime import datetime, timedelta
 
 import requests
@@ -12,13 +13,13 @@ def find_str(string, start_str, end_str):
     return string[start_idx:end_idx]
 
 
-def send_discord_message(timestamp, log_name, host, endpoint):
+def send_discord_message(timestamp, log_name, host, endpoint, link):
     response = requests.post(
         webhook_url,
         {
             "content": (
                 "--------------------" + "\n"
-                f"**Error** encountered at {timestamp.strftime('%H:%M:%S %Z')} in **{log_name}**"
+                f"**Error** encountered at [{timestamp.strftime('%H:%M:%S %Z')}]({link}) in **{log_name}**"
                 + "\n"
                 f"**Host**: {host}" + "\n"
                 f"**Endpoint**: {endpoint}"
@@ -53,6 +54,20 @@ if __name__ == "__main__":
 
     # Print the log entries
     for i, entry in enumerate(entries):
+        formatted_timestamp = entry.received_timestamp.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        error_link = (
+            "https://console.cloud.google.com/logs/query;query="
+            + urllib.parse.quote(
+                'resource.type="cloud_run_revision"\n'
+                'resource.labels.service_name="orchestra"\n'
+                'resource.labels.location="europe-west1"\n'
+                "severity=ERROR\n"
+                f'insertId="{entry.insert_id}"',
+            )
+            + ";storageScope=project;"
+            + f"cursorTimestamp={formatted_timestamp};"
+            + "duration=P1D?project=saas-368716"
+        )
         module = (
             None
             if not entry.payload
@@ -101,6 +116,7 @@ if __name__ == "__main__":
                                 log_name,
                                 host,
                                 endpoint,
+                                error_link,
                             )
                             break
                     else:
@@ -123,5 +139,6 @@ if __name__ == "__main__":
                                 log_name,
                                 f"bedrock-runtime.{region}.amazonaws.com",
                                 endpoint,
+                                error_link,
                             )
                             break
