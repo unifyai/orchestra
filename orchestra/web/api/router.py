@@ -11,7 +11,7 @@ from orchestra.web.api import (  # noqa: WPS235
     model,
     monitoring,
     provider,
-    router,
+    routing,
     users,
 )
 from orchestra.web.api.dependencies import auth_admin_key, auth_api_key
@@ -21,7 +21,7 @@ ADMIN_AUTH = [Depends(auth_admin_key)]
 
 api_router = APIRouter()
 api_router.include_router(
-    router.router,
+    routing.router,
     tags=["router"],
     dependencies=API_KEY_AUTH,
 )

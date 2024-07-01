@@ -7,7 +7,11 @@ from typing import Dict, List
 from fastapi import APIRouter, Request
 from providers.completion import PROVIDER_CLASSES
 
-from orchestra.web.api.utils.gcp import blob_exists, send_pubsub_msg
+from orchestra.web.api.utils.gcp import (
+    blob_exists,
+    send_pubsub_msg,
+    vertex_ai_endpoint_exists,
+)
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
     invalid_training_endpoints,
@@ -44,8 +48,13 @@ def router_training_exists(user_id, name):
     return True
 
 
-def router_is_deployed():
-    raise NotImplementedError
+def router_is_deployed(user_id, name):
+    # TODO: Implement checks to ensure no one can deploy a router if
+    # the name is already in use.
+    endpoint = f"{user_id}_{name}"
+    if vertex_ai_endpoint_exists(endpoint):
+        return True
+    return False
 
 
 def is_standard_endpoint(model: str, provider: str):
@@ -152,7 +161,7 @@ def deploy_router(request_fastapi: Request, name: str) -> Dict[str, str]:
     if not router_training_exists(user_id, name):
         raise router_training_does_not_exist
     # Check if the router is already deployed
-    if router_is_deployed(router):
+    if router_is_deployed(user_id, name):
         raise router_already_deployed
     # Send the request with the job to the router deployment service
     send_to_deploy_server(action="deploy", user_id=user_id, name=name)
@@ -166,7 +175,7 @@ def delete_router(request_fastapi: Request, name: str) -> Dict[str, str]:
     """
     user_id = request_fastapi.state.user_id
     # Check if the router exists
-    if not router_is_deployed(router):
+    if not router_is_deployed(user_id, name):
         raise router_is_not_deployed
     # Send the request with the job to the router deployment service
     send_to_deploy_server(action="delete", user_id=user_id, name=name)
