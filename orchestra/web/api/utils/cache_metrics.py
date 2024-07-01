@@ -6,13 +6,17 @@ from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 
 
 def _format_data(endpoint_data):
-
     return ""
+
+
+def get_all_endpoints():
+    """ queries the db and gets the endpoints that we care about. """
+    return ""
+
 
 def refresh_cache(benchmark_dao: BenchmarkRunDAO, cache_path: str):
     """ Pulls and replaces the file in cache_path. """
 
-    # TODO: optimize the dao to do this all at once.
     REFRESH_INTERVAL = 3 * 60 * 60
 
     old_cache = {}

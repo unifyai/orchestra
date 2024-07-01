@@ -226,6 +226,10 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 usage=chat_response.usage,
                 **db_operations_kwargs,
             )
+            if using_router:
+                background_tasks.add_task(
+
+                    )
 
         return StreamingResponse(stream_and_update_db())
     else:
