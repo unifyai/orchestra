@@ -38,7 +38,7 @@ supported_models = {
     "gemma-7b-it": {
         "endpoint": "gemma-7b",
         "context_window": 8192,
-        "cost": {"prompt": 0.1, "completion": 0.1},
+        "cost": {"prompt": 0.07, "completion": 0.07},
     },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "mixtral-8x7b",
@@ -48,7 +48,7 @@ supported_models = {
     "llama-2-7b-chat": {
         "endpoint": "llama2-7b",
         "context_window": 4096,
-        "cost": {"prompt": 0.1, "completion": 0.1},
+        "cost": {"prompt": 0.07, "completion": 0.07},
     },
     "llama-2-13b-chat": {
         "endpoint": "llama2-13b",
