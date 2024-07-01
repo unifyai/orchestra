@@ -105,7 +105,10 @@ if __name__ == "__main__":
                             in previous_entry.payload
                         ):
                             host = find_str(previous_entry.payload, "host='", "'")
-                        if f"{module}._base_client:Request" in previous_entry.payload:
+                        if (
+                            f"{module}._base_client:Request options:"
+                            in previous_entry.payload
+                        ):
                             endpoint = find_str(
                                 previous_entry.payload,
                                 "'model': '",
