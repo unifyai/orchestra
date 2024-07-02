@@ -53,6 +53,11 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.5, "completion": 0.5},
     },
+    "qwen-2-72b-instruct": {
+        "endpoint": "accounts/fireworks/models/qwen2-72b-instruct",
+        "context_window": 32768,
+        "cost": {"prompt": 0.9, "completion": 0.9},
+    },
     # "codellama-13b-instruct": {
     #     "endpoint": "accounts/fireworks/models/code-llama-13b-instruct",
     #     "context_window": 32768,
@@ -68,9 +73,4 @@ supported_models = {
     #     "context_window": 4096,
     #     "cost": {"prompt": 0.9, "completion": 0.9},
     # },
-    "qwen-2-72b-instruct": {
-        "endpoint": "accounts/fireworks/models/qwen2-72b-instruct",
-        "context_window": 32768,
-        "cost": {"prompt": 0.9, "completion": 0.9},
-    },
 }
