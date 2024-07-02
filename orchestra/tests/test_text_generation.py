@@ -20,7 +20,7 @@ MODELS = [
     "claude-3-haiku@anthropic",
     "llama-3-8b-chat@anyscale",
     "llama-3-8b-chat@deepinfra",
-    "llama-2-7b-chat@fireworks-ai",
+    "llama-3-8b-chat@fireworks-ai",
     "llama-2-7b-chat@lepton-ai",
     "llama-2-7b-chat@replicate",
     "llama-2-7b-chat@together-ai",
