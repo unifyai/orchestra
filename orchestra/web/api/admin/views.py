@@ -25,8 +25,8 @@ from orchestra.db.dao.task_dao import TaskDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     BenchmarkRun,
+    CreditCardFingerprint,
     CustomApiKey,
-    CustomEndpoint,
     Datapoint,
     DatasetEvaluation,
     DatasetEvaluationTask,
@@ -41,6 +41,7 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
 )
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     BenchmarkRunModelResponse,
+    CreditCardFingerprintModelResponse,
     CustomApiKeyModelResponse,
     CustomEndpointModelResponse,
     CustomRouterRequest,
@@ -1046,3 +1047,17 @@ def create_credit_card_fingerprint(
     if len(results) > 0:
         return True
     return False
+
+
+@router.get(
+    "/credit_card_fingerprint",
+    response_model=List[CreditCardFingerprintModelResponse],
+)
+def create_credit_card_fingerprint(
+    user_id: str,
+    credit_card_fingerprint_dao: CreditCardFingerprintDAO = Depends(),
+) -> List[CreditCardFingerprint]:
+    """
+    Returns the credit card fingerprints entry in the database matching a user id.
+    """
+    return credit_card_fingerprint_dao.filter(user_id=user_id)
