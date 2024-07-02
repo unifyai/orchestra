@@ -299,4 +299,14 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 2.65, "completion": 3.5},
     },
+    "command-r+": {
+        "endpoint": "cohere.command-r-plus-v1:0",
+        "context_window": 128000,
+        "cost": {"prompt": 3, "completion": 15},
+    },
+    "mistral-large": {
+        "endpoint": "mistral.mistral-large-2402-v1:0",
+        "context_window": 32000,
+        "cost": {"prompt": 4, "completion": 12},
+    },
 }
