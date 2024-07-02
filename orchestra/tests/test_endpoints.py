@@ -1,10 +1,10 @@
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
-from starlette import status
 from sqlalchemy import text
+from starlette import status
 
-from orchestra.tests.utils import HEADERS, ADMIN_HEADERS
+from orchestra.tests.utils import ADMIN_HEADERS, HEADERS
 
 
 @pytest.mark.anyio
@@ -30,6 +30,7 @@ async def test_get_credits(  # noqa: WPS218, E501
     assert isinstance(response_dict["credits"], float)
     assert "id" in response_dict
     assert isinstance(response_dict["id"], str)
+    assert len(response_dict.keys()) == 2
 
     return response_dict["credits"]
 
