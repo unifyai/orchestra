@@ -1,21 +1,24 @@
 import json
 import os
-import time
+from datetime import datetime, timedelta
+
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
+from orchestra.db.dao.endpoint_dao import EndpointDAO
 
 
 def _format_data(endpoint_data):
-    return ""
+    ret = {}
+    for d in endpoint_data:
+        ret[d.metric_name] = float(d.value)
+    ret["measured_at"] = str(d.measured_at)
+    return ret
 
 
-def get_all_endpoints():
-    """ queries the db and gets the endpoints that we care about. """
-    return ""
-
-
-def refresh_cache(benchmark_dao: BenchmarkRunDAO, cache_path: str):
-    """ Pulls and replaces the file in cache_path. """
+def refresh_cache(
+    endpoint_dao: EndpointDAO, benchmark_dao: BenchmarkRunDAO, cache_path: str
+):
+    """Pulls and replaces the file in cache_path."""
 
     REFRESH_INTERVAL = 3 * 60 * 60
 
@@ -23,26 +26,32 @@ def refresh_cache(benchmark_dao: BenchmarkRunDAO, cache_path: str):
     if os.path.isfile(cache_path):
         with open(cache_path) as f:
             old_cache = json.load(f)
-        if (time.time() - old_cache["oldest_entry"]) <= REFRESH_INTERVAL:
+            cache_date = datetime.strptime(
+                old_cache["oldest_entry"], "%Y-%m-%d %H:%M:%S.%f"
+            )
+        if (datetime.now() - cache_date) <= timedelta(seconds=REFRESH_INTERVAL):
             return
 
     new_cache = {}
-    for endpoint_id in get_all_endpoints():
+    for endpoint_id in endpoint_dao.get_active_endpoints():
         if old_cache and endpoint_id in old_cache:
-            endpoint_cache_time = old_cache[endpoint_id]["benchmark_time"]
-            if (time.time() - endpoint_cache_time) <= REFRESH_INTERVAL
+            # TODO: timezones ???
+            cache_date = datetime.strptime(
+                old_cache[endpoint_id]["measured_at"], "%Y-%m-%d %H:%M:%S.%f"
+            )
+            if (datetime.now() - cache_date) <= timedelta(seconds=REFRESH_INTERVAL):
                 new_cache[endpoint_id] = old_cache[endpoint_id]
                 continue
+        endpoint_data = benchmark_dao.get_latest_endpoint_benchmark(endpoint_id)
+        if endpoint_data:
+            new_cache[endpoint_id] = _format_data(endpoint_data)
 
-        endpoint_data = benchmark_dao.get_model_benchmark_datapoints(endpoint_id)
-        new_cache[endpoint_id] = _format_data(endpoint_data)
-    
-    oldest_entry = max(e["benchmark_time"] for e in new_cache)
+    oldest_entry = max(e["measured_at"] for e in new_cache.values())
     new_cache["oldest_entry"] = oldest_entry
     # TODO: use tempfile module
     cache_tmp_path = cache_path.replace(".json", "_tmp.json")
-    with open(cache_tmp_path, 'w') as f:
-        json.dump(f, new_cache)
+    with open(cache_tmp_path, "w") as f:
+        json.dump(new_cache, f)
         f.flush()
         os.fsync(f.fileno())
     os.replace(cache_tmp_path, cache_path)

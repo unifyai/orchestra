@@ -36,6 +36,8 @@ from orchestra.web.api.utils.http_responses import (
     invalid_messages,
     invalid_model_str,
 )
+from orchestra.web.api.utils.cache_metrics import refresh_cache
+from orchestra.settings import settings
 
 router = APIRouter()
 
@@ -228,8 +230,8 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             )
             if using_router:
                 background_tasks.add_task(
-
-                    )
+                    refresh_cache(benchmark_run_dao, settings.cache_path)
+                )
 
         return StreamingResponse(stream_and_update_db())
     else:
@@ -241,6 +243,10 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             usage=response["usage"],
             **db_operations_kwargs,
         )
+        if using_router:
+            background_tasks.add_task(
+                refresh_cache(benchmark_run_dao, settings.cache_path)
+            )
 
     response["model"] = f"{model}@{provider}"
     response["usage"]["cost"] = cost

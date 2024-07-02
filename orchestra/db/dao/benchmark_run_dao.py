@@ -101,6 +101,26 @@ class BenchmarkRunDAO:
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())
 
+    def get_latest_endpoint_benchmark(self, endpoint_id):
+        subquery = (
+            select(
+                func.max(BenchmarkRun.id).label("latest_benchmark_id"),
+            )
+            .where(BenchmarkRun.endpoint_id == endpoint_id)
+            .where(BenchmarkRun.regime == "concurrent-1")
+            .where(BenchmarkRun.region == "Belgium")
+            .where(BenchmarkRun.seq_len == "short")
+            .alias("latest_benchmark_runs")
+        )
+
+        query = (
+            select(Datapoint, BenchmarkRun)
+            .join(BenchmarkRun, BenchmarkRun.id == Datapoint.benchmark_run_id)
+            .join(subquery, BenchmarkRun.id == subquery.c.latest_benchmark_id)
+        )
+        rows = self.session.execute(query)
+        return list(rows.scalars().fetchall())
+
     def get_model_benchmark_datapoints(self, model_id):
         """
         Gets the latest benchmark run for each provider for a given model.
