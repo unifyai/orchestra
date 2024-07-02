@@ -33,11 +33,6 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
-    "mixtral-8x7b-instruct-v0.1": {
-        "endpoint": "accounts/fireworks/models/mixtral-8x7b-instruct",
-        "context_window": 32768,
-        "cost": {"prompt": 0.5, "completion": 0.5},
-    },
     "mixtral-8x22b-instruct-v0.1": {
         "endpoint": "accounts/fireworks/models/mixtral-8x22b-instruct",
         "context_window": 65536,
@@ -52,6 +47,11 @@ supported_models = {
         "endpoint": "accounts/fireworks/models/mistral-7b-instruct-v3",
         "context_window": 32768,
         "cost": {"prompt": 0.2, "completion": 0.2},
+    },
+    "mixtral-8x7b-instruct-v0.1": {
+        "endpoint": "accounts/fireworks/models/mixtral-8x7b-instruct",
+        "context_window": 32768,
+        "cost": {"prompt": 0.5, "completion": 0.5},
     },
     # "codellama-13b-instruct": {
     #     "endpoint": "accounts/fireworks/models/code-llama-13b-instruct",
