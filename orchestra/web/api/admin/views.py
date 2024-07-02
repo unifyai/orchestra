@@ -6,6 +6,7 @@ from fastapi.param_functions import Depends
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.beta_list_dao import BetaListDAO
+from orchestra.db.dao.credit_card_fingerprint import CreditCardFingerprintDAO
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.custom_router_dao import CustomRouterDAO
@@ -1017,3 +1018,29 @@ def update_user_prompt_telemetry(
     Updates database evaluation model in the database.
     """
     users_dao.set_prompt_telemetry(user_id, activated)
+
+
+@router.post("/credit_card_fingerprint")
+def create_credit_card_fingerprint(
+    user_id: str,
+    fingerprint: str,
+    credit_card_fingerprint_dao: CreditCardFingerprintDAO = Depends(),
+) -> None:
+    """
+    Creates a credit card fingerprint entry in the database.
+    """
+    credit_card_fingerprint_dao.create(user_id, fingerprint)
+
+
+@router.get("/duplicated_credit_card_fingerprint")
+def create_credit_card_fingerprint(
+    fingerprint: str,
+    credit_card_fingerprint_dao: CreditCardFingerprintDAO = Depends(),
+) -> bool:
+    """
+    Creates a credit card fingerprint entry in the database.
+    """
+    results = credit_card_fingerprint_dao.filter(fingerprint=fingerprint)
+    if len(results) > 0:
+        return True
+    return False
