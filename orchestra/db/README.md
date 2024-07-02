@@ -92,6 +92,8 @@ Once there, you can run `\df` to list active functions. you should see `update_o
 - Save the file
 - Execute `\g` in the psql terminal
 
+The password for the postgres user in staging is [this one](https://console.cloud.google.com/security/secret-manager/secret/STAGING_DB_POSTGRES_PASS/versions?project=saas-368716).
+
 ## Recurring credit grant
 
 Recurring credit grants is controlled through a Job in Cloud run called `orchestra-recharging`. If active, there will be a trigger associated with the job. The script that is executed is `recharging.py`.
