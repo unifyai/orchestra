@@ -50,9 +50,21 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
             allowed_args = ["temperature", "top_p", "max_tokens"]
             if "max_tokens" in kwargs:
                 kwargs["max_gen_tokens"] = kwargs.pop("max_tokens")
+        else:
+            allowed_args = []
 
         kwargs_bedrock = {k: v for k, v in kwargs.items() if k in allowed_args}
-        kwargs_bedrock["prompt"] = self.prompt_factory(_messages)
+        if "command" in self.provider_endpoint:
+            kwargs_bedrock["chat_history"] = [
+                {
+                    "role": "USER" if message["role"] == "user" else "CHATBOT",
+                    "message": message["content"],
+                }
+                for message in _messages[:-1]
+            ]
+            kwargs_bedrock["message"] = _messages[-1]["content"]
+        else:
+            kwargs_bedrock["prompt"] = self.prompt_factory(_messages)
 
         return kwargs_bedrock
 
@@ -113,6 +125,9 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
         elif "llama" in self.provider_endpoint:
             finish_reason = body["stop_reason"]
             content = body["generation"]
+        else:
+            finish_reason = body["finish_reason"]
+            content = body["text"]
         return dict(
             id=metadata["x-amzn-requestid"],
             choices=[
@@ -234,6 +249,9 @@ def sse_to_part_dict(part, whole, endpoint):
     elif "llama" in endpoint:
         finish_reason = part["stop_reason"]
         data = part["generation"]
+    else:
+        finish_reason = part["finish_reason"] if part["is_finished"] else ""
+        data = part["text"] if "text" in part else ""
 
     # TODO Handle usage properly after the refactor
     if "amazon-bedrock-invocationMetrics" in part:
@@ -298,5 +316,15 @@ supported_models = {
         "endpoint": "meta.llama3-70b-instruct-v1:0",
         "context_window": 8192,
         "cost": {"prompt": 2.65, "completion": 3.5},
+    },
+    "mistral-large": {
+        "endpoint": "mistral.mistral-large-2402-v1:0",
+        "context_window": 32000,
+        "cost": {"prompt": 4, "completion": 12},
+    },
+    "command-r-plus": {
+        "endpoint": "cohere.command-r-plus-v1:0",
+        "context_window": 128000,
+        "cost": {"prompt": 3, "completion": 15},
     },
 }
