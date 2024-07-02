@@ -230,7 +230,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             )
             if using_router:
                 background_tasks.add_task(
-                    refresh_cache(benchmark_run_dao, settings.cache_path)
+                    refresh_cache(endpoint_dao, benchmark_run_dao, settings.cache_path)
                 )
 
         return StreamingResponse(stream_and_update_db())
@@ -245,7 +245,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         )
         if using_router:
             background_tasks.add_task(
-                refresh_cache(benchmark_run_dao, settings.cache_path)
+                refresh_cache(endpoint_dao, benchmark_run_dao, settings.cache_path)
             )
 
     response["model"] = f"{model}@{provider}"
