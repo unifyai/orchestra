@@ -1,6 +1,5 @@
 import datetime
-import time
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.param_functions import Depends
@@ -41,6 +40,9 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
 )
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     BenchmarkRunModelResponse,
+    CustomApiKeyModelResponse,
+    CustomEndpointModelResponse,
+    CustomRouterRequest,
     DatapointModelRequest,
     DatapointModelResponse,
     DatasetEvaluationModelRequest,
@@ -62,9 +64,6 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     TaskModelRequest,
     TaskModelResponse,
     UsersModelResponse,
-    CustomApiKeyModelResponse,
-    CustomEndpointModelResponse,
-    CustomRouterRequest,
 )
 
 router = APIRouter()
@@ -960,7 +959,9 @@ def update_dataset_evaluation_task_status(  # noqa: WPS211
     Update the status of a dataset evaluation task.
     """
     dataset_evaluation_task.update_dataset_evaluation_task(
-        user_id=user_id, name=name, status=status
+        user_id=user_id,
+        name=name,
+        status=status,
     )
     dataset_evaluation_task.session.commit()
 
@@ -1004,3 +1005,15 @@ def create_custom_router(
         router_name=custom_router_object.router_name,
         router_id=custom_router_object.router_id,
     )
+
+
+@router.put("/update_user_prompt_telemetry")
+def update_user_prompt_telemetry(
+    user_id: str,
+    activated: bool,
+    users_dao: UsersDAO = Depends(),
+) -> None:
+    """
+    Updates database evaluation model in the database.
+    """
+    users_dao.set_prompt_telemetry(user_id, activated)

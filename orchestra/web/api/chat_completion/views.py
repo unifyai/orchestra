@@ -93,6 +93,8 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     user_id = request_fastapi.state.user_id
     user = get_credits(request_fastapi, users_dao=users_dao)
     available_credits = float(user.credits if user else 0)
+    store_prompt = user.store_prompts if user else True
+    store_prompt = True if store_prompt is None else store_prompt
 
     model, provider = model_priority_list[0]
     try_provider = 0
@@ -196,7 +198,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         "secondary_user_id": request.user,
         "model": model,
         "provider": provider,
-        "prompt": messages,
+        "prompt": messages if store_prompt else [],
         "signature": request.signature,
         "used_router": using_router,
         "router": router_str,

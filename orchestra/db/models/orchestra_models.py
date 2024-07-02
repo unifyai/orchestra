@@ -191,6 +191,7 @@ class Users(Base):
     autorecharge = sa.Column(sa.Boolean, nullable=False)
     autorecharge_threshold = sa.Column(sa.Numeric, nullable=False)
     autorecharge_qty = sa.Column(sa.Numeric, nullable=False)
+    store_prompts = sa.Column(sa.Boolean, nullable=True)
 
 
 class Recharge(Base):

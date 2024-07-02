@@ -35,6 +35,7 @@ class UsersDAO:
                 autorecharge=False,
                 autorecharge_threhsold=0,
                 autorecharge_qty=0,
+                store_prompts=True,
             ),
         )
 
@@ -93,6 +94,25 @@ class UsersDAO:
                 user.credits + decimal.Decimal(quantity),
             )
 
+    def set_prompt_telemetry(
+        self,
+        user_id: str,
+        activated: bool,
+    ) -> None:
+        """
+        Update the active status of prompt telemetry.
+
+        :param user_id: id of a user.
+        :param activated: whether to store or not the prompts.
+        """
+        query = select(Users)
+        query = query.where(Users.id == user_id)
+
+        raw_users = self.session.execute(query)
+        user = raw_users.scalars().first()
+        if user is not None:
+            setattr(user, "store_prompts", activated)
+
     def set_stripe_customer_id(
         self,
         user_id: str,
@@ -137,7 +157,9 @@ class UsersDAO:
         user = self.get_user_with_id(user_id)
         if user is not None:
             setattr(
-                user, "autorecharge_threshold", decimal.Decimal(threshold)
+                user,
+                "autorecharge_threshold",
+                decimal.Decimal(threshold),
             )  # noqa: B010
 
     def set_autorecharge_qty(
