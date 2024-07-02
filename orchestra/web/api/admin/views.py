@@ -1021,6 +1021,17 @@ def update_user_prompt_telemetry(
     users_dao.set_prompt_telemetry(user_id, activated)
 
 
+@router.get("/user_prompt_telemetry")
+def get_user_prompt_telemetry(
+    user_id: str,
+    users_dao: UsersDAO = Depends(),
+) -> bool:
+    """
+    Returns state of the store prompts attr for a given user.
+    """
+    return users_dao.is_telemetry_activated(user_id)
+
+
 @router.post("/credit_card_fingerprint")
 def create_credit_card_fingerprint(
     user_id: str,
