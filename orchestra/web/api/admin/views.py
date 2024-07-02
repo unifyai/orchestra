@@ -1034,6 +1034,7 @@ def create_credit_card_fingerprint(
 
 @router.get("/duplicated_credit_card_fingerprint")
 def create_credit_card_fingerprint(
+    user_id: str,
     fingerprint: str,
     credit_card_fingerprint_dao: CreditCardFingerprintDAO = Depends(),
 ) -> bool:
@@ -1041,6 +1042,7 @@ def create_credit_card_fingerprint(
     Creates a credit card fingerprint entry in the database.
     """
     results = credit_card_fingerprint_dao.filter(fingerprint=fingerprint)
+    results = [r for r in results if r.user_id != user_id]
     if len(results) > 0:
         return True
     return False
