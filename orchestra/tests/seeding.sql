@@ -61,7 +61,7 @@ INSERT INTO model VALUES (9, 'llama-3-8b-chat', :user_id, NOW(), 'dummy_task', '
 INSERT INTO model VALUES (10, 'gemini-1.5-flash', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
 
 INSERT INTO endpoint VALUES (1, 9, 2, NOW());
-INSERT INTO endpoint VALUES (2, 1, 3, NOW());
+INSERT INTO endpoint VALUES (2, 9, 3, NOW());
 INSERT INTO endpoint VALUES (3, 1, 4, NOW());
 INSERT INTO endpoint VALUES (4, 1, 5, NOW());
 INSERT INTO endpoint VALUES (5, 1, 6, NOW());
