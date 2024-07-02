@@ -71,6 +71,13 @@ class UsersDAO:
         except IndexError:
             raise user_id_not_found
 
+    def is_telemetry_activated(self, id: str) -> bool:
+        try:
+            telemetry_activated = self.filter(id=id)[0].store_prompts
+            return telemetry_activated if telemetry_activated is not None else True
+        except IndexError:
+            raise user_id_not_found
+
     def recharge_credit(
         self,
         user_id: str,
