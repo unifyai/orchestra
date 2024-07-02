@@ -48,6 +48,11 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
+    "mistral-7b-instruct-v0.3": {
+        "endpoint": "accounts/fireworks/models/mistral-7b-instruct-v3",
+        "context_window": 32768,
+        "cost": {"prompt": 0.2, "completion": 0.2},
+    },
     # "codellama-13b-instruct": {
     #     "endpoint": "accounts/fireworks/models/code-llama-13b-instruct",
     #     "context_window": 32768,
@@ -63,11 +68,6 @@ supported_models = {
     #     "context_window": 4096,
     #     "cost": {"prompt": 0.9, "completion": 0.9},
     # },
-    "mistral-7b-instruct-v0.3": {
-        "endpoint": "accounts/fireworks/models/mistral-7b-instruct-v3",
-        "context_window": 32768,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
     "qwen-2-72b-instruct": {
         "endpoint": "accounts/fireworks/models/qwen2-72b-instruct",
         "context_window": 32768,
