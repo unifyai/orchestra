@@ -73,4 +73,9 @@ supported_models = {
     #     "context_window": 4096,
     #     "cost": {"prompt": 0.9, "completion": 0.9},
     # },
+    "gemma-2-9b-it": {
+        "endpoint": "accounts/fireworks/models/gemma2-9b-it",
+        "context_window": 8192,
+        "cost": {"prompt": 0.2, "completion": 0.2},
+    },
 }
