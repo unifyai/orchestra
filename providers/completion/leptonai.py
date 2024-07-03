@@ -45,19 +45,19 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.5, "completion": 0.5},
     },
-    "llama-2-7b-chat": {
-        "endpoint": "llama2-7b",
-        "context_window": 4096,
+    "llama-3-8b-chat": {
+        "endpoint": "llama3-8b",
+        "context_window": 8192,
         "cost": {"prompt": 0.07, "completion": 0.07},
     },
-    "llama-2-13b-chat": {
-        "endpoint": "llama2-13b",
-        "context_window": 4096,
-        "cost": {"prompt": 0.3, "completion": 0.3},
-    },
-    "llama-2-70b-chat": {
-        "endpoint": "llama2-70b",
-        "context_window": 4096,
+    "llama-3-70b-chat": {
+        "endpoint": "llama3-70b",
+        "context_window": 8192,
         "cost": {"prompt": 0.8, "completion": 0.8},
+    },
+    "mistral-7b-instruct-v0.3": {
+        "endpoint": "mistral-7b",
+        "context_window": 32768,
+        "cost": {"prompt": 0.07, "completion": 0.07},
     },
 }

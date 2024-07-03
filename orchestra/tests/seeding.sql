@@ -63,7 +63,7 @@ INSERT INTO model VALUES (10, 'gemini-1.5-flash', :user_id, NOW(), 'dummy_task',
 INSERT INTO endpoint VALUES (1, 9, 2, NOW());
 INSERT INTO endpoint VALUES (2, 9, 3, NOW());
 INSERT INTO endpoint VALUES (3, 9, 4, NOW());
-INSERT INTO endpoint VALUES (4, 1, 5, NOW());
+INSERT INTO endpoint VALUES (4, 9, 5, NOW());
 INSERT INTO endpoint VALUES (5, 1, 6, NOW());
 INSERT INTO endpoint VALUES (6, 1, 7, NOW());
 INSERT INTO endpoint VALUES (7, 3, 8, NOW());
