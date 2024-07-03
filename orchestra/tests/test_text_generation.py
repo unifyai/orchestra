@@ -22,7 +22,7 @@ MODELS = [
     "llama-3-8b-chat@deepinfra",
     "llama-3-8b-chat@fireworks-ai",
     "llama-3-8b-chat@lepton-ai",
-    "llama-2-7b-chat@replicate",
+    "llama-3-8b-chat@replicate",
     "llama-2-7b-chat@together-ai",
     "mistral-7b-instruct-v0.2@aws-bedrock",
     "mistral-7b-instruct-v0.3@mistral-ai",
