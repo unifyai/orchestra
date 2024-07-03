@@ -28,7 +28,7 @@ supported_models = {
         "context_window": 65536,
         "cost": {"prompt": 2, "completion": 6},
     },
-    "mistral-7b-instruct-v0.2": {
+    "mistral-7b-instruct-v0.3": {
         "endpoint": "open-mistral-7b",
         "context_window": 32768,
         "cost": {"prompt": 0.25, "completion": 0.25},
@@ -42,11 +42,6 @@ supported_models = {
         "endpoint": "mistral-small-latest",
         "context_window": 32768,
         "cost": {"prompt": 1, "completion": 3},
-    },
-    "mistral-medium": {
-        "endpoint": "mistral-medium-latest",
-        "context_window": 32768,
-        "cost": {"prompt": 2.7, "completion": 8.1},
     },
     "mistral-large": {
         "endpoint": "mistral-large-latest",
