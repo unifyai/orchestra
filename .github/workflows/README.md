@@ -6,6 +6,7 @@ This directory holds the workflows that run as GitHub actions:
 
 - [staging-sync.yml](./staging-sync.yml): Force pushes main to staging whenever a push to main happens.
 - [tests.yml](./tests.yml): Sets up and runs `black` and the test suite. API Keys and environment variables need to be added and defined in the GitHub CI environemnt.
+- [outage-alerts.yml](./outage-alerts.yml): Runs every hour to detect outages in endpoints based on errors in the orchestra logs (production and staging).
 
 ## Google Cloud
 

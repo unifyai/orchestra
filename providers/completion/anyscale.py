@@ -38,21 +38,6 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 0.15, "completion": 0.15},
     },
-    "llama-2-7b-chat": {
-        "endpoint": "meta-llama/Llama-2-7b-chat-hf",
-        "context_window": 4096,
-        "cost": {"prompt": 0.15, "completion": 0.15},
-    },
-    "llama-2-13b-chat": {
-        "endpoint": "meta-llama/Llama-2-13b-chat-hf",
-        "context_window": 4096,
-        "cost": {"prompt": 0.25, "completion": 0.25},
-    },
-    "llama-2-70b-chat": {
-        "endpoint": "meta-llama/Llama-2-70b-chat-hf",
-        "context_window": 4096,
-        "cost": {"prompt": 1, "completion": 1},
-    },
     "mistral-7b-instruct-v0.1": {
         "endpoint": "mistralai/Mistral-7B-Instruct-v0.1",
         "context_window": 16384,
@@ -63,14 +48,24 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.5, "completion": 0.5},
     },
-    "codellama-34b-instruct": {
-        "endpoint": "codellama/CodeLlama-34b-Instruct-hf",
-        "context_window": 16384,
+    "mixtral-8x22b-instruct-v0.1": {
+        "endpoint": "mistralai/Mixtral-8x22B-Instruct-v0.1",
+        "context_window": 65536,
+        "cost": {"prompt": 0.9, "completion": 0.9},
+    },
+    "llama-3-8b-chat": {
+        "endpoint": "meta-llama/Meta-Llama-3-8B-Instruct",
+        "context_window": 8192,
+        "cost": {"prompt": 0.15, "completion": 0.15},
+    },
+    "llama-3-70b-chat": {
+        "endpoint": "meta-llama/Meta-Llama-3-70B-Instruct",
+        "context_window": 8192,
         "cost": {"prompt": 1, "completion": 1},
     },
-    "zephyr-7b-beta": {
-        "endpoint": "HuggingFaceH4/zephyr-7b-beta",
-        "context_window": 16384,
-        "cost": {"prompt": 0.15, "completion": 0.15},
+    "codellama-70b-instruct": {
+        "endpoint": "codellama/CodeLlama-70b-Instruct-hf",
+        "context_window": 4096,
+        "cost": {"prompt": 1, "completion": 1},
     },
 }

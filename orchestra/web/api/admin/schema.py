@@ -382,3 +382,8 @@ class CustomEndpointModelResponse(BaseModel):
     name: str
     url: str
     key: str
+
+
+class CreditCardFingerprintModelResponse(BaseModel):
+    user_id: str
+    fingerprint: str

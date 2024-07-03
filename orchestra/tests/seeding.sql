@@ -59,14 +59,15 @@ INSERT INTO model VALUES (7, 'gpt-3.5-turbo', :user_id, NOW(), 'dummy_task', '',
 INSERT INTO model VALUES (8, 'claude-3-haiku', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
 INSERT INTO model VALUES (9, 'llama-3-8b-chat', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
 INSERT INTO model VALUES (10, 'gemini-1.5-flash', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
+INSERT INTO model VALUES (11, 'mistral-7b-instruct-v0.3', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
 
-INSERT INTO endpoint VALUES (1, 1, 2, NOW());
-INSERT INTO endpoint VALUES (2, 1, 3, NOW());
-INSERT INTO endpoint VALUES (3, 1, 4, NOW());
-INSERT INTO endpoint VALUES (4, 1, 5, NOW());
-INSERT INTO endpoint VALUES (5, 1, 6, NOW());
-INSERT INTO endpoint VALUES (6, 1, 7, NOW());
-INSERT INTO endpoint VALUES (7, 3, 8, NOW());
+INSERT INTO endpoint VALUES (1, 9, 2, NOW());
+INSERT INTO endpoint VALUES (2, 9, 3, NOW());
+INSERT INTO endpoint VALUES (3, 9, 4, NOW());
+INSERT INTO endpoint VALUES (4, 9, 5, NOW());
+INSERT INTO endpoint VALUES (5, 9, 6, NOW());
+INSERT INTO endpoint VALUES (6, 9, 7, NOW());
+INSERT INTO endpoint VALUES (7, 11, 8, NOW());
 INSERT INTO endpoint VALUES (8, 3, 9, NOW());
 INSERT INTO endpoint VALUES (9, 9, 10, NOW());
 INSERT INTO endpoint VALUES (10, 6, 11, NOW());

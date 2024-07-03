@@ -191,6 +191,7 @@ class Users(Base):
     autorecharge = sa.Column(sa.Boolean, nullable=False)
     autorecharge_threshold = sa.Column(sa.Numeric, nullable=False)
     autorecharge_qty = sa.Column(sa.Numeric, nullable=False)
+    store_prompts = sa.Column(sa.Boolean, nullable=True)
 
 
 class Recharge(Base):
@@ -282,3 +283,13 @@ class CustomRouter(Base):
     user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=True)
     router_name = sa.Column(sa.String(), nullable=False)
     router_id = sa.Column(sa.String(), nullable=False)
+
+
+class CreditCardFingerprint(Base):
+    """Model class for the credit card fingerprint table."""
+
+    __tablename__ = "credit_card_fingerprint"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
+    fingerprint = sa.Column(sa.String(), nullable=False)

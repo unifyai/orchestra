@@ -1,12 +1,12 @@
 import datetime
-import time
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.beta_list_dao import BetaListDAO
+from orchestra.db.dao.credit_card_fingerprint import CreditCardFingerprintDAO
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.custom_router_dao import CustomRouterDAO
@@ -25,8 +25,8 @@ from orchestra.db.dao.task_dao import TaskDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     BenchmarkRun,
+    CreditCardFingerprint,
     CustomApiKey,
-    CustomEndpoint,
     Datapoint,
     DatasetEvaluation,
     DatasetEvaluationTask,
@@ -41,6 +41,10 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
 )
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     BenchmarkRunModelResponse,
+    CreditCardFingerprintModelResponse,
+    CustomApiKeyModelResponse,
+    CustomEndpointModelResponse,
+    CustomRouterRequest,
     DatapointModelRequest,
     DatapointModelResponse,
     DatasetEvaluationModelRequest,
@@ -62,9 +66,6 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     TaskModelRequest,
     TaskModelResponse,
     UsersModelResponse,
-    CustomApiKeyModelResponse,
-    CustomEndpointModelResponse,
-    CustomRouterRequest,
 )
 
 router = APIRouter()
@@ -960,7 +961,9 @@ def update_dataset_evaluation_task_status(  # noqa: WPS211
     Update the status of a dataset evaluation task.
     """
     dataset_evaluation_task.update_dataset_evaluation_task(
-        user_id=user_id, name=name, status=status
+        user_id=user_id,
+        name=name,
+        status=status,
     )
     dataset_evaluation_task.session.commit()
 
@@ -1004,3 +1007,68 @@ def create_custom_router(
         router_name=custom_router_object.router_name,
         router_id=custom_router_object.router_id,
     )
+
+
+@router.put("/update_user_prompt_telemetry")
+def update_user_prompt_telemetry(
+    user_id: str,
+    activated: bool,
+    users_dao: UsersDAO = Depends(),
+) -> None:
+    """
+    Updates database evaluation model in the database.
+    """
+    users_dao.set_prompt_telemetry(user_id, activated)
+
+
+@router.get("/user_prompt_telemetry")
+def get_user_prompt_telemetry(
+    user_id: str,
+    users_dao: UsersDAO = Depends(),
+) -> bool:
+    """
+    Returns state of the store prompts attr for a given user.
+    """
+    return users_dao.is_telemetry_activated(user_id)
+
+
+@router.post("/credit_card_fingerprint")
+def create_credit_card_fingerprint(
+    user_id: str,
+    fingerprint: str,
+    credit_card_fingerprint_dao: CreditCardFingerprintDAO = Depends(),
+) -> None:
+    """
+    Creates a credit card fingerprint entry in the database.
+    """
+    credit_card_fingerprint_dao.create(user_id, fingerprint)
+
+
+@router.get("/duplicated_credit_card_fingerprint")
+def create_credit_card_fingerprint(
+    user_id: str,
+    fingerprint: str,
+    credit_card_fingerprint_dao: CreditCardFingerprintDAO = Depends(),
+) -> bool:
+    """
+    Creates a credit card fingerprint entry in the database.
+    """
+    results = credit_card_fingerprint_dao.filter(fingerprint=fingerprint)
+    results = [r for r in results if r.user_id != user_id]
+    if len(results) > 0:
+        return True
+    return False
+
+
+@router.get(
+    "/credit_card_fingerprint",
+    response_model=List[CreditCardFingerprintModelResponse],
+)
+def create_credit_card_fingerprint(
+    user_id: str,
+    credit_card_fingerprint_dao: CreditCardFingerprintDAO = Depends(),
+) -> List[CreditCardFingerprint]:
+    """
+    Returns the credit card fingerprints entry in the database matching a user id.
+    """
+    return credit_card_fingerprint_dao.filter(user_id=user_id)
