@@ -5,13 +5,16 @@ from typing import Annotated, Any, Dict, List
 import requests
 from fastapi import APIRouter, Form, HTTPException, Request, UploadFile
 from fastapi.param_functions import Depends
-from google.cloud import storage
-from google.cloud.exceptions import NotFound
 
 from orchestra.db.dao.dataset_evaluation_dao import DatasetEvaluationDAO
 from orchestra.db.dao.dataset_evaluation_task_dao import DatasetEvaluationTaskDAO
 from orchestra.db.models.orchestra_models import DatasetEvaluationTask
 from orchestra.web.api.eval_batch.schema import EvalBatchResponse, EvalBatchTaskResponse
+from orchestra.web.api.utils.gcp import (
+    blob_exists,
+    read_json_from_bucket,
+    upload_json_to_bucket,
+)
 from orchestra.web.api.utils.generate_points import generate_and_prune_points
 
 router = APIRouter()
@@ -102,7 +105,7 @@ def training(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     train_blob_name = f"{request_fastapi.state.user_id}_{name}_train.json"
     test_blob_name = f"{request_fastapi.state.user_id}_{name}_test.json"
 
-    exists = check_file_exists(bucket_name, train_blob_name)
+    exists = blob_exists(bucket_name, train_blob_name)
     if exists:
         raise HTTPException(
             status_code=400,
@@ -124,7 +127,7 @@ def _upload_dataset(request, file_content, name):
     bucket_name = "uploaded_datasets"
     blob_name = f"{request.state.user_id}/{name}.jsonl"
 
-    exists = check_file_exists(bucket_name, blob_name)
+    exists = blob_exists(bucket_name, blob_name)
     if exists:
         raise HTTPException(
             status_code=400,
@@ -163,7 +166,7 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     bucket_name = "uploaded_datasets"
     blob_name = f"{request_fastapi.state.user_id}/{name}.jsonl"
 
-    exists = check_file_exists(bucket_name, blob_name)
+    exists = blob_exists(bucket_name, blob_name)
     if not exists:
         raise HTTPException(
             status_code=400,
@@ -174,37 +177,6 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         string = "[".encode() + string + "]".encode()
         string = string.replace("}\n{".encode(), "},{".encode())
         return json.loads(string)
-
-
-# TODO: Remove
-def check_file_exists(bucket_name, blob_name):
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
-    blob = bucket.blob(blob_name)
-    try:
-        blob.reload()
-        return True
-    except NotFound:
-        return False
-
-
-# TODO: Remove
-def read_json_from_bucket(bucket_name, blob_name, raw=False):
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
-    blob = bucket.blob(blob_name)
-    json_data = blob.download_as_string()
-    if raw:
-        return json_data
-    return json.loads(json_data.decode("utf-8"))
-
-
-# TODO: Remove
-def upload_json_to_bucket(json_data, bucket_name, destination_blob_name):
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
-    blob = bucket.blob(destination_blob_name)
-    blob.upload_from_string(json_data, content_type="application/json")
 
 
 # TODO: Remove
@@ -261,7 +233,7 @@ def get_dataset_evaluation(
     blob_name = f"{dataset_name}.json"
 
     generate_points = False
-    exists = check_file_exists(bucket_name, blob_name)
+    exists = blob_exists(bucket_name, blob_name)
     if exists:
         points = read_json_from_bucket(bucket_name, blob_name)
         # If stored points is empty, try to regenerate
