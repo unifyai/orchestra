@@ -50,13 +50,18 @@ supported_models = {
     },
     "codellama-13b-instruct": {
         "endpoint": "togethercomputer/CodeLlama-13b-Instruct",
-        "context_window": 8192,
+        "context_window": 16384,
         "cost": {"prompt": 0.3, "completion": 0.3},
     },
     "codellama-7b-instruct": {
         "endpoint": "togethercomputer/CodeLlama-7b-Instruct",
-        "context_window": 8192,
+        "context_window": 16384,
         "cost": {"prompt": 0.2, "completion": 0.2},
+    },
+    "codellama-70b-instruct": {
+        "endpoint": "codellama/CodeLlama-70b-Instruct-hf",
+        "content": 4096,
+        "cost": {"prompt": 0.9, "completion": 0.9},
     },
     "deepseek-coder-33b-instruct": {
         "endpoint": "deepseek-ai/deepseek-coder-33b-instruct",
