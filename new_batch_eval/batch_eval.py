@@ -156,15 +156,22 @@ async def main(msg, data_dir):
 
 
 if __name__ == "__main__":
+    providers = ["together-ai", "fireworks-ai", "groq", "octoai", "aws-bedrock", "lepton-ai", "deepinfra"]
+    models = [f"llama-3-8b-chat@{p}" for p in providers]
     cfg = {
-        "benchmark_name": "test_benchmark",
-        "models_to_benchmark": ["llama-3-8b-chat@together-ai", "gpt-4o@openai"],
+        "benchmark_name": "battle_of_the_llamas",
+        
+        "models_to_benchmark": models,
         "judge_model_tag": "gpt-4o@openai",
         "user_id": "clwq7wcn00006o7rt5nea9ktt",
         "user_email": "tje541@gmail.com",
         "api_key": os.environ["UNIFY_API_KEY"],
     }
     prompts = [{"prompt": "hello world"}]
+    prompts = []
+    with open("/home/tje/Downloads/11_Jun_routerbench_datasets_mtbench.jsonl") as f:
+        prompts = [json.loads(l) for l in f]
+    prompts = prompts[:250]
     msg_d = {"config": cfg, "prompts": prompts}
     msg_raw = json.dumps(msg_d)
     save_dir = "tmp/"
