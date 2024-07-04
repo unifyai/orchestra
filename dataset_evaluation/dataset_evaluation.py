@@ -4,10 +4,9 @@ import logging
 import os
 from dataclasses import dataclass
 
+from dataset_evaluation.utils.fetch_judgements import generate_judgements
+from dataset_evaluation.utils.fetch_queries import generate_queries
 from google.cloud import storage
-
-from .utils.fetch_judgements import generate_judgements
-from .utils.fetch_queries import generate_queries
 
 
 @dataclass
