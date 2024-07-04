@@ -1,11 +1,11 @@
 import json
 import asyncio
 
-import request_handling as request_handling
+from utils.request_handling import generic_call
 
 
 async def call_model(payload):
-    ret = await request_handling.generic_call(payload)
+    ret = await generic_call(payload)
     return ret
 
 

@@ -1,9 +1,9 @@
 import json
 import os
 
-from generic_mp import process_requests
-import request_handling
-from judge_configs import format_no_ref, format_with_ref
+from utils.generic_mp import process_requests
+from utils.request_handling import Request, create_payload
+from utils.judge_configs import format_no_ref, format_with_ref
 
 
 def create_judge_prompt(prompt_data):
@@ -20,8 +20,8 @@ def create_judge_prompt(prompt_data):
 
 def create_request(model_tag: str, url, headers, prompt_data: dict, model_name):
     prompt = create_judge_prompt(prompt_data)
-    payload = request_handling.create_payload(model_tag=model_tag, prompt=prompt)
-    return request_handling.Request(
+    payload = create_payload(model_tag=model_tag, prompt=prompt)
+    return Request(
         id_=prompt_data["id"],
         payload=payload,
         url=url,

@@ -1,15 +1,13 @@
 import json
 import os
 
-from generic_mp import process_requests
-import request_handling
+from utils.generic_mp import process_requests
+from utils.request_handling import Request, create_payload
 
 
 def create_request(model_tag: str, url, headers, prompt_data):
-    payload = request_handling.create_payload(
-        model_tag=model_tag, prompt=prompt_data["prompt"]
-    )
-    return request_handling.Request(
+    payload = create_payload(model_tag=model_tag, prompt=prompt_data["prompt"])
+    return Request(
         id_=prompt_data["id"],
         payload=payload,
         url=url,

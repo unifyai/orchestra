@@ -2,12 +2,12 @@ import asyncio
 import json
 import logging
 import os
-
 from dataclasses import dataclass
-from fetch_queries import generate_queries
-from fetch_judgements import generate_judgements
-from extract_score import ratings_from_sample
-from token_counts import count_tokens
+
+from utils.fetch_queries import generate_queries
+from utils.fetch_judgements import generate_judgements
+from utils.extract_score import ratings_from_sample
+from utils.token_counts import count_tokens
 
 
 @dataclass
@@ -156,11 +156,18 @@ async def main(msg, data_dir):
 
 
 if __name__ == "__main__":
-    providers = ["together-ai", "fireworks-ai", "groq", "octoai", "aws-bedrock", "lepton-ai", "deepinfra"]
+    providers = [
+        "together-ai",
+        "fireworks-ai",
+        "groq",
+        "octoai",
+        "aws-bedrock",
+        "lepton-ai",
+        "deepinfra",
+    ]
     models = [f"llama-3-8b-chat@{p}" for p in providers]
     cfg = {
         "benchmark_name": "battle_of_the_llamas",
-        
         "models_to_benchmark": models,
         "judge_model_tag": "gpt-4o@openai",
         "user_id": "clwq7wcn00006o7rt5nea9ktt",
@@ -171,7 +178,7 @@ if __name__ == "__main__":
     prompts = []
     with open("/home/tje/Downloads/11_Jun_routerbench_datasets_mtbench.jsonl") as f:
         prompts = [json.loads(l) for l in f]
-    prompts = prompts[:250]
+    prompts = prompts[:2]
     msg_d = {"config": cfg, "prompts": prompts}
     msg_raw = json.dumps(msg_d)
     save_dir = "tmp/"
