@@ -2,8 +2,8 @@ import concurrent
 import json
 import logging
 import signal
-import sys
 import subprocess
+import sys
 
 import sdnotify
 from google.cloud import pubsub_v1
@@ -20,7 +20,7 @@ shutdown_flag = False
 n = sdnotify.SystemdNotifier()
 
 # Pub/Sub subscription
-subscription_name = "projects/saas-368716/subscriptions/train_router-sub"
+subscription_name = "projects/saas-368716/subscriptions/deploy_router-sub"
 
 
 # Function to handle graceful shutdown
@@ -36,15 +36,25 @@ def pub_sub_callback(message):
     global shutdown_flag
     if not shutdown_flag:
         try:
-            data = json.loads(message.data)
-            logging.info(f"entry: {data}")
-            assert False, "todo"
-            user_id = data["user_id"]
-            router_name = data["router_name"]
-            subprocess.Popen(
-                f"venv/bin/python3 train_router.py --user_id={user_id} --router_name={router_name} --orchestra_url={orchestra_url}",
-                shell=True,
-            )
+            d = json.loads(message.data)
+            logging.info(f"entry: {d}")
+            if d["action"] == "train":
+                subprocess.Popen(
+                    [
+                        "venv/bin/python3",
+                        "train_router.py",
+                        f"--user_id={d['user_id']}",
+                        f"--router_name={d['name']}",
+                        f"--dataset={d['dataset']}",
+                        f"--endpoints={d['endpoints']}",
+                        f"--orchestra_url={d['orchestra_url']}",
+                    ],
+                )
+            elif d["action"] == "delete":
+                # TODO: Implement this
+                pass
+            else:
+                logging.error(f"Unknown action: {message.data}")
         except json.decoder.JSONDecodeError:
             logging.error(f"Error parsing message: {message.data}")
         except:
