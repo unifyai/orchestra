@@ -156,6 +156,9 @@ async def main(msg, data_dir):
 
 
 if __name__ == "__main__":
+    import argparse
+
+
     providers = [
         "together-ai",
         "fireworks-ai",

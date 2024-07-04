@@ -20,7 +20,7 @@ shutdown_flag = False
 n = sdnotify.SystemdNotifier()
 
 # Pub/Sub subscription
-subscription_name = "projects/saas-368716/subscriptions/train_router-sub"
+subscription_name = "projects/saas-368716/subscriptions/batch_eval-sub"
 
 
 # Function to handle graceful shutdown
@@ -38,11 +38,10 @@ def pub_sub_callback(message):
         try:
             data = json.loads(message.data)
             logging.info(f"entry: {data}")
-            assert False, "todo"
             user_id = data["user_id"]
             router_name = data["router_name"]
             subprocess.Popen(
-                f"venv/bin/python3 train_router.py --user_id={user_id} --router_name={router_name} --orchestra_url={orchestra_url}",
+                f"venv/bin/python3 batch_eval.py --user_id={user_id} --router_name={router_name} --orchestra_url={orchestra_url}",
                 shell=True,
             )
         except json.decoder.JSONDecodeError:
