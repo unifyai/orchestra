@@ -59,7 +59,7 @@ def router_is_deployed(user_id, name):
 
 def is_standard_endpoint(model: str, provider: str):
     if provider in PROVIDER_CLASSES:
-        lm = PROVIDER_CLASSES["provider"](model)
+        lm = PROVIDER_CLASSES[provider](model)
         if model in lm.supported_models:
             return True
     return False
