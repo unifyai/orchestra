@@ -44,6 +44,7 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
 
     def process_kwargs(self, messages, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         _messages = messages[:]
+
         if "mistral" in self.provider_endpoint:
             allowed_args = ["max_tokens", "stop", "temperature", "top_p", "top_k"]
         elif "llama" in self.provider_endpoint:
@@ -54,17 +55,7 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
             allowed_args = []
 
         kwargs_bedrock = {k: v for k, v in kwargs.items() if k in allowed_args}
-        if "command" in self.provider_endpoint:
-            kwargs_bedrock["chat_history"] = [
-                {
-                    "role": "USER" if message["role"] == "user" else "CHATBOT",
-                    "message": message["content"],
-                }
-                for message in _messages[:-1]
-            ]
-            kwargs_bedrock["message"] = _messages[-1]["content"]
-        else:
-            kwargs_bedrock["prompt"] = self.prompt_factory(_messages)
+        kwargs_bedrock = self.prompt_factory(_messages, kwargs_bedrock)
 
         return kwargs_bedrock
 
@@ -148,15 +139,38 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
         )
 
     # TODO Put this in a util file as its also used in replicate
-    def prompt_factory(self, messages):
-        return "\n".join(
-            (
-                f"[INST] {message['content']} [/INST]"
-                if message["role"] == "user"
-                else message["content"]
+    def prompt_factory(self, messages, kwargs_bedrock):
+        if "mistral" in self.provider_endpoint:
+            kwargs_bedrock["prompt"] = "\n".join(
+                (
+                    f"[INST] {message['content']} [/INST]"
+                    if message["role"] == "user"
+                    else message["content"]
+                )
+                for message in messages
             )
-            for message in messages
-        )
+        elif "llama" in self.provider_endpoint:
+            kwargs_bedrock["prompt"] = (
+                "<|begin_of_text|>"
+                + "".join(
+                    (
+                        f"<|start_header_id|>{message['role']}<|end_header_id|>\n"
+                        + f"{message['content']}<|eot_id|>\n"
+                    )
+                    for message in messages
+                )
+                + "<|start_header_id|>assistant<|end_header_id|>\n"
+            )
+        else:
+            kwargs_bedrock["chat_history"] = [
+                {
+                    "role": "USER" if message["role"] == "user" else "CHATBOT",
+                    "message": message["content"],
+                }
+                for message in messages[:-1]
+            ]
+            kwargs_bedrock["message"] = messages[-1]["content"]
+        return kwargs_bedrock
 
 
 class BedrockSyncGeneratorWrapper(SyncGeneratorWrapper):
