@@ -19,7 +19,7 @@ class BenchmarkConfig:
     judge_model_tag: str
     user_id: str
     api_key: str
-    base_url: str
+    orchestra_url: str
 
 
 async def main(msg, data_dir):
@@ -72,7 +72,7 @@ async def main(msg, data_dir):
             model_tag=model_tag,
             batch_size=5,
             api_key=api_key,
-            base_url=cfg.base_url,
+            orchestra_url=cfg.orchestra_url,
         )
 
     tasks = [
@@ -106,7 +106,7 @@ async def main(msg, data_dir):
             judge_model_tag=judge_model_tag,
             batch_size=2,
             api_key=api_key,
-            base_url=cfg.base_url,
+            orchestra_url=cfg.orchestra_url,
         )
 
     tasks = [
@@ -180,7 +180,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--user_id", required=True)
     parser.add_argument("--api_key", required=True)
-    parser.add_argument("--base_url", required=True)
+    parser.add_argument("--orchestra_url", required=True)
     parser.add_argument("--dataset_name", required=True)
     parser.add_argument("--endpoint", required=True)
     args = parser.parse_args()
@@ -191,10 +191,10 @@ if __name__ == "__main__":
         "judge_model_tag": "gpt-4o@openai",
         "user_id": args.user_id,
         "api_key": args.api_key,
-        "base_url": args.base_url,
+        "orchestra_url": args.orchestra_url,
     }
 
     msg_d = {"config": cfg}
     msg_raw = json.dumps(msg_d)
-    save_dir = "tmp/"
+    save_dir = "save_files/"
     asyncio.run(main(msg_raw, save_dir))

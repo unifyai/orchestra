@@ -40,9 +40,9 @@ async def generate_judgements(
     judge_model_tag,
     batch_size,
     api_key,
-    base_url,
+    orchestra_url,
 ):
-    url = f"{base_url}/chat/completions"
+    url = f"{orchestra_url}/v0/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}"}
 
     asst_model_name = asst_model_tag.split("@")[0]

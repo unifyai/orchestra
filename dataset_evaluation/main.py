@@ -44,7 +44,7 @@ def pub_sub_callback(message):
             endpoint = data["endpoint"]
             orchestra_url = data["orchestra_url"]
             subprocess.Popen(
-                f"venv/bin/python3 batch_eval.py --user_id={user_id} --api_key={api_key} --dataset_name={dataset_name} --endpoint={endpoint} --orchestra_url={orchestra_url}",
+                f"venv/bin/python3 dataset_evaluation.py --user_id={user_id} --api_key={api_key} --dataset_name={dataset_name} --endpoint={endpoint} --orchestra_url={orchestra_url}",
                 shell=True,
             )
         except json.decoder.JSONDecodeError:
