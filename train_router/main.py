@@ -44,6 +44,7 @@ def pub_sub_callback(message):
                         "venv/bin/python3",
                         "train_router.py",
                         f"--user_id={d['user_id']}",
+                        f"--api_key={d['api_key']}",
                         f"--router_name={d['name']}",
                         f"--dataset={d['dataset']}",
                         f"--endpoints={d['endpoints']}",

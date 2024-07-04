@@ -186,6 +186,7 @@ def train_router(
     a live endpoint. To do this, use the `/router/deploy` POST endpoint.
     """
     user_id = request_fastapi.state.user_id
+    api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
     # Check if the router already exists
     if router_training_exists(user_id, name):
         raise router_training_already_exists
@@ -200,6 +201,7 @@ def train_router(
     send_to_train_server(
         action="train",
         user_id=user_id,
+        api_key=api_key,
         name=name,
         dataset=dataset,
         endpoints=endpoints,
