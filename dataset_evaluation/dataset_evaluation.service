@@ -3,7 +3,7 @@ Description=GCP Pub/Sub to dataset evaluation
 After=network.target
 
 [Service]
-ExecStart=/opt/deploy-router/venv/bin/python3 /opt/dataset-evaluation/main.py
+ExecStart=/opt/dataset-evaluation/venv/bin/python3 /opt/dataset-evaluation/main.py
 WorkingDirectory=/opt/dataset-evaluation/
 Restart=always
 RestartSec=10
