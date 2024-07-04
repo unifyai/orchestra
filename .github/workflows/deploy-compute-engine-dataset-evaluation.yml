@@ -1,0 +1,50 @@
+name: Deploy dataset_evaluation to Google Cloud VM
+
+env:
+  GH_WORKDIR: dataset_evaluation # Dir name in the orchestra repo
+  SERVICE_NAME: dataset-evaluation # Systemd service name
+  GCLOUD_PROJECT: saas-368716
+  GCLOUD_ZONE: europe-west1-b
+  GCLOUD_WORKDIR: /opt/dataset-evaluation
+  GCLOUD_INSTANCE: dataset-evaluation
+  GCLOUD_USERNAME: serviceuser
+
+# TODO: Only when pushing to main
+# TODO: Staging?
+
+on: push
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: orchestra-testing
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Auth into Google Cloud
+      uses: 'google-github-actions/auth@v2'
+      with:
+        credentials_json: '${{ secrets.GCP_CREDENTIALS_DATASET_EVALUATION }}'
+
+    - name: Set up Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        version: 'latest'
+        project_id: ${{ env.GCLOUD_PROJECT }}
+
+    - name: Copy files to VM
+      run: |
+        gcloud compute scp --recurse ${{ env.GH_WORKDIR }}/* ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }}:${{ env.GCLOUD_WORKDIR }} --zone ${{ env.GCLOUD_ZONE }}
+
+    - name: Reload and restart the service on VM
+      run: |
+        gcloud compute ssh ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }} --zone ${{ env.GCLOUD_ZONE }} --command "
+          ${{ env.GCLOUD_WORKDIR }}/venv/bin/python3 -m pip install -r ${{ env.GCLOUD_WORKDIR }}/requirements.txt
+          sudo cp ${{ env.GCLOUD_WORKDIR }}/${{ env.SERVICE_NAME }}.service /etc/systemd/system/ &&
+          sudo rm ${{ env.GCLOUD_WORKDIR }}/${{ env.SERVICE_NAME }}.service &&
+          sudo systemctl daemon-reload &&
+          sudo systemctl restart ${{ env.SERVICE_NAME }}.service &&
+          sudo systemctl enable ${{ env.SERVICE_NAME }}.service
+        "
