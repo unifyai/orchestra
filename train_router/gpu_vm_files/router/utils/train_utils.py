@@ -73,6 +73,8 @@ def create_dirs(exp_name=None):
     dir_name = str(datetime.now()).replace(" ", "_")
     if exp_name:
         dir_name = exp_name + "_" + dir_name
+    if not os.path.isdir("artifacts"):
+        os.mkdir("artifacts")
     os.mkdir(f"artifacts/{dir_name}")
     for d in ["datasets", "models"]:
         os.mkdir(f"artifacts/{dir_name}/{d}")

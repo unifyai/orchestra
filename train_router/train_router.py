@@ -236,6 +236,19 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
         raise Exception
 
     train_data, valid_data = create_train_data(user_id, dataset, endpoints)
+    # TODO: train data
+    unrolled_data = []
+    for td in train_data:
+        for e, score in td["model_provider"].items():
+            unrolled_data.append(
+                {
+                    "id_": td["id_"],
+                    "prompt": td["prompt"],
+                    "model_provider": e,
+                    "score": score,
+                }
+            )
+    train_data = unrolled_data
 
     dir = os.path.dirname(os.path.abspath(__file__))
     with open(
@@ -250,6 +263,7 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
         for line in valid_data:
             f.write(json.dumps(line) + "\n")
 
+    # For now: uses a vm that's already created + nvidia installed...
     # vm_data = create_vm()
 
     project_id = "saas-368716"
