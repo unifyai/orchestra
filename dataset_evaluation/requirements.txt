@@ -1,0 +1,5 @@
+sdnotify==0.3.2
+google-cloud-pubsub==2.21.3
+google-cloud-storage==2.17.0
+aiohttp==3.9.3
+tiktoken==0.5.2
