@@ -171,14 +171,27 @@ class Replicate(BaseCompletionProvider):
         return output
 
     def prompt_factory(self, messages):
-        return "\n".join(
-            (
-                f"[INST] {message['content']} [/INST]"
-                if message["role"] == "user"
-                else message["content"]
+        if "llama" in self.provider_endpoint:
+            return (
+                "<|begin_of_text|>"
+                + "".join(
+                    (
+                        f"<|start_header_id|>{message['role']}<|end_header_id|>\n"
+                        + f"{message['content']}<|eot_id|>\n"
+                    )
+                    for message in messages
+                )
+                + "<|start_header_id|>assistant<|end_header_id|>\n"
             )
-            for message in messages
-        )
+        else:
+            return "\n".join(
+                (
+                    f"[INST] {message['content']} [/INST]"
+                    if message["role"] == "user"
+                    else message["content"]
+                )
+                for message in messages
+            )
 
 
 class R8SyncGeneratorWrapper(SyncGeneratorWrapper):
