@@ -17,12 +17,14 @@ def create_request(model_tag: str, url, headers, prompt_data):
     )
 
 
-async def generate_queries(prompt_file, response_file, model_tag, batch_size, api_key):
+async def generate_queries(
+    prompt_file, response_file, model_tag, batch_size, api_key, base_url
+):
     model_name = model_tag.split("@")[0]
 
     print(f"Generating queries for: {model_tag}")
 
-    url = f'{os.getenv("ORCHESTRA_BASE_URL")}/v0/chat/completions'
+    url = f"{base_url}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}"}
 
     completed = set()
