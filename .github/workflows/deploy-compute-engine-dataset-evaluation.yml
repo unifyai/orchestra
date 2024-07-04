@@ -34,21 +34,21 @@ jobs:
         version: 'latest'
         project_id: ${{ env.GCLOUD_PROJECT }}
 
-    - name: Copy main.py to VM
+    - name: Copy files to VM
       run: |
-        gcloud compute scp ${{ env.GH_WORKDIR }}/main.py ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }}:${{ env.GCLOUD_WORKDIR }} --zone ${{ env.GCLOUD_ZONE }}
+        gcloud compute scp --recurse ${{ env.GH_WORKDIR }} ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }}:${{ env.GCLOUD_WORKDIR }} --zone ${{ env.GCLOUD_ZONE }}
 
-    - name: Copy requirements.txt to VM
-      run: |
-        gcloud compute scp ${{ env.GH_WORKDIR }}/requirements.txt ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }}:${{ env.GCLOUD_WORKDIR }} --zone ${{ env.GCLOUD_ZONE }}
+    # - name: Copy requirements.txt to VM
+    #   run: |
+    #     gcloud compute scp ${{ env.GH_WORKDIR }}/requirements.txt ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }}:${{ env.GCLOUD_WORKDIR }} --zone ${{ env.GCLOUD_ZONE }}
 
-    - name: Copy service file to VM
-      run: |
-        gcloud compute scp ${{ env.GH_WORKDIR }}/${{ env.SERVICE_NAME }}.service ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }}:${{ env.GCLOUD_WORKDIR }} --zone ${{ env.GCLOUD_ZONE }}
+    # - name: Copy service file to VM
+    #   run: |
+    #     gcloud compute scp ${{ env.GH_WORKDIR }}/${{ env.SERVICE_NAME }}.service ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }}:${{ env.GCLOUD_WORKDIR }} --zone ${{ env.GCLOUD_ZONE }}
 
-    - name: Copy dataset_evaluation.py to VM
-      run: |
-        gcloud compute scp ${{ env.GH_WORKDIR }}/dataset_evaluation.py ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }}:${{ env.GCLOUD_WORKDIR }} --zone ${{ env.GCLOUD_ZONE }}
+    # - name: Copy dataset_evaluation.py to VM
+    #   run: |
+    #     gcloud compute scp ${{ env.GH_WORKDIR }}/dataset_evaluation.py ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }}:${{ env.GCLOUD_WORKDIR }} --zone ${{ env.GCLOUD_ZONE }}
 
     - name: Reload and restart the service on VM
       run: |
