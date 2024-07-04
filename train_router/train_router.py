@@ -1,21 +1,21 @@
-import json
-import re
-import os
-import sys
+import argparse
 import subprocess
-from typing import Any
-import warnings
+import sys
+import time
+from dataclasses import dataclass
+from typing import Any, List
 
 import google.cloud.compute_v1 as compute_v1
-from google.cloud import storage
+import requests
 from google.api_core.extended_operation import ExtendedOperation
-
-
-from dataclasses import dataclass
+from google.cloud import storage
+from google.cloud.exceptions import NotFound
 
 
 def wait_for_extended_operation(
-    operation: ExtendedOperation, verbose_name: str = "operation", timeout: int = 300
+    operation: ExtendedOperation,
+    verbose_name: str = "operation",
+    timeout: int = 300,
 ) -> Any:
     result = operation.result(timeout=timeout)
 
@@ -83,7 +83,7 @@ def create_vm():
         compute_v1.AcceleratorConfig(
             accelerator_count=1,
             accelerator_type="projects/saas-368716/zones/europe-west1-b/acceleratorTypes/nvidia-tesla-t4",
-        )
+        ),
     ]
     instance.guest_accelerators = accelerators
     instance.scheduling.on_host_maintenance = (
@@ -112,37 +112,54 @@ class TrainRequest:
     train_cfg: dict
     bucket_path: str
 
-def evaluation_available(user_id, dataset_name, endpoint_id):
-    name = f'uploaded_datasets/{user_id}/{dataset_name}/eval.jsonl'
-    storage_client = storage.Client()
-    bucket_name = '' # TODO: what is the bucket gonna be called ?
-    bucket = storage_client.bucket(bucket_name)
-    stats = storage.Blob(bucket=bucket, name=name).exists(storage_client)
+
+def evaluation_available(user_id, dataset_name, endpoint):
+    bucket_name = f"uploaded_datasets"
+    blob_dir = f"{user_id}/{dataset_name}/0/{endpoint}/"
+
+    blob_names = [
+        blob_dir + "responses.jsonl",
+        blob_dir + "judgements.jsonl",
+    ]
+
+    for blob_name in blob_names:
+        blob = storage.Client().bucket(bucket_name).blob(blob_name)
+        try:
+            blob.reload()
+        except NotFound:
+            return False
+    return True
 
 
-def main(msg):
+def start_evaluation(api_key, base_url, dataset, endpoint):
+    url = base_url + "/evaluation"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+    }
+    payload = {"dataset": dataset, "endpoint": endpoint}
+    response = requests.post(url, params=payload, headers=headers)
 
-    train_req = None
+    # TODO: Log this properly
+    print(response.status_code)
+    print(response.text)
 
-    cfg = None
 
-	for e in train_cfg.endpoints:
-        if not evaluation_available(cfg.user_id, cfg.dataset_name, cfg.endpoint_id):
-            start_evaluation(dataset, e)
+def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
+
+    for e in endpoints:
+        if not evaluation_available(user_id, dataset, e):
+            start_evaluation(api_key, orchestra_url, dataset, e)
 
     timeout = 2 * 3600
     start_time = time.time()
     while (time.time() - start_time) < timeout:
-      time.sleep(60)
-      if all_evaluations_available(dataset, endpoints):
-        break
+        time.sleep(60)
+        if all([evaluation_available(user_id, dataset, e) for e in endpoints]):
+            break
 
-    train()
+    train()  # TODO: I guess this is triggered below
 
-
-
-
-
+    train_req = None
 
     # train_req = TrainRequest(**json.loads(msg))
 
@@ -187,5 +204,43 @@ def main(msg):
 
 
 if __name__ == "__main__":
-    ret = main(1)
-    print(ret)
+    # Create the parser
+    parser = argparse.ArgumentParser(description="Train Router Script")
+
+    # Define the arguments
+    parser.add_argument("--user_id", type=str, required=True, help="User ID")
+    parser.add_argument("--api_key", type=str, required=True, help="User API KEY")
+    parser.add_argument("--router_name", type=str, required=True, help="Router Name")
+    parser.add_argument("--dataset", type=str, required=True, help="Dataset Name")
+    parser.add_argument(
+        "--endpoints",
+        type=List[str],
+        required=True,
+        help="List of endpoints",
+    )
+    parser.add_argument(
+        "--orchestra_url",
+        type=str,
+        required=True,
+        help="Orchestra URL",
+    )
+
+    # Parse the arguments
+    args = parser.parse_args()
+
+    # Access the arguments
+    user_id = args.user_id
+    api_key = args.api_key
+    router_name = args.router_name
+    dataset = args.dataset
+    endpoints = args.endpoints
+    orchestra_url = args.orchestra_url
+
+    main(
+        user_id=user_id,
+        api_key=api_key,
+        router_name=router_name,
+        dataset=dataset,
+        endpoints=endpoints,
+        orchestra_url=orchestra_url,
+    )
