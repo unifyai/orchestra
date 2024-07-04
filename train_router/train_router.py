@@ -2,11 +2,15 @@ import argparse
 import subprocess
 import sys
 import time
+import json
+import re
+import math
+import random
+import requests
 from dataclasses import dataclass
 from typing import Any, List
 
 import google.cloud.compute_v1 as compute_v1
-import requests
 from google.api_core.extended_operation import ExtendedOperation
 from google.cloud import storage
 from google.cloud.exceptions import NotFound
@@ -144,8 +148,80 @@ def start_evaluation(api_key, base_url, dataset, endpoint):
     print(response.text)
 
 
-def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
+def extract_judgement(text):
+    score_mapping: {
+        "irrelevant": 0,
+        "very_bad": 0,
+        "very_good": 0.8,
+        "very bad": 0,
+        "bad": 0,
+        "good": 0.5,
+        "satisfactory": 0.5,
+        "very good": 0.8,
+        "excellent": 1.0,
+    }
 
+    json_text = re.search(
+        '\{[\n\r\s]+"assistant_rating":.*?\}', text, flags=re.DOTALL | re.MULTILINE
+    )
+    if json_text is None:
+        return float("nan")
+
+    judge_response = json_text.group(0)
+
+    try:
+        rating = json.loads(judge_response)["assistant_rating"]
+
+        if isinstance(rating, list):
+            rating = rating[0]
+        try:
+            rating = score_mapping[rating.lower()]
+        except:
+            return 0.0
+        return rating
+
+    except:
+        return float("nan")
+
+
+def create_train_data(user_id, dataset, endpoints):
+    bucket_name = "uploaded_datasets"
+    all_prompts = []
+    id_to_prompt = {}
+    id_model_to_score = {}
+    for endpoint in endpoints:
+        blob_name = f"{user_id}/{dataset}/0/{endpoint}/judgements.jsonl"
+        blob = storage.Client().bucket(bucket_name).blob(blob_name)
+        ret = blob.download_as_bytes().decode("utf-8").split("\n")
+        for line in ret:
+            if line:
+                data = json.loads(line)
+                data["score"] = extract_judgement(data["judge_response"])
+                del data["judge_response"]
+                all_prompts.append(data)
+                id_to_prompt[data["id_"]] = data["prompt"]
+                id_model_to_score[(data["id_"], endpoint)] = data["score"]
+
+    # partition:
+    combined_files = []
+    for id_ in id_to_prompt:
+        scores_per_endpoint = {e: id_model_to_score[(id_, e)] for e in endpoints}
+        combined_files.append(
+            {"id_": id_, "prompt": id_to_prompt[id_], "scores": scores_per_endpoint}
+        )
+
+    n = len(combined_files)
+    random.shuffle(combined_files)
+    train_frac = 0.8
+    valid_num = math.floor((1 - train_frac) * n)
+
+    train_data = combined_files[valid_num:]
+    valid_data = combined_files[:valid_num]
+
+    return train_data, valid_data
+
+
+def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
     for e in endpoints:
         if not evaluation_available(user_id, dataset, e):
             start_evaluation(api_key, orchestra_url, dataset, e)
@@ -156,18 +232,25 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
         time.sleep(60)
         if all([evaluation_available(user_id, dataset, e) for e in endpoints]):
             break
+    else:
+        raise Exception
 
-    train()  # TODO: I guess this is triggered below
+    train_data, valid_data = create_train_data(user_id, dataset, endpoints)
 
-    train_req = None
+    dir = os.path.dirname(os.path.abspath(__file__))
+    with open(
+        os.path.join(dir, "gpu_vm_files", "train_job_files", "train_data.jsonl"), "w"
+    ) as f:
+        for line in train_data:
+            f.write(json.dumps(line) + "\n")
 
-    # train_req = TrainRequest(**json.loads(msg))
+    with open(
+        os.path.join(dir, "gpu_vm_files", "train_job_files", "valid_data.jsonl"), "w"
+    ) as f:
+        for line in valid_data:
+            f.write(json.dumps(line) + "\n")
 
-    # create a vm
     # vm_data = create_vm()
-
-    # scp the train data over
-    # scp the train config over
 
     project_id = "saas-368716"
     zone = "europe-west1-b"
@@ -177,20 +260,13 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
     command = f"""gcloud compute instances start {instance_name} --project={project_id} --zone={zone}"""
     subprocess.run(command, shell=True)
 
-    # check if nvidia is installed...
+    # check if nvidia is installed
 
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="sudo /opt/deeplearning/install-driver.sh" """
     # subprocess.run(command, shell=True)
 
     command = f"""gcloud compute scp --project={project_id} --zone={zone} --recurse ./gpu_vm_files/* {instance_name}:~/"""
-    subprocess.run(command, shell=True)
-
-    command = f"""gcloud compute scp --project={project_id} --zone={zone} --recurse ./router/ {instance_name}:~/"""
-    # subprocess.run(command, shell=True)
-
-    # scp the docker image over
-    command = f"""gcloud compute scp --project={project_id} --zone={zone} ./Dockerfile {instance_name}:~/"""
-    # subprocess.run(command, shell=True)
+    subprocessrun(command, shell=True)
 
     # build & run the docker container
 
