@@ -6,10 +6,8 @@ from dataclasses import dataclass
 
 from google.cloud import storage
 
-from utils.fetch_queries import generate_queries
-from utils.fetch_judgements import generate_judgements
-from utils.extract_score import ratings_from_sample
-from utils.token_counts import count_tokens
+from .utils.fetch_judgements import generate_judgements
+from .utils.fetch_queries import generate_queries
 
 
 @dataclass
@@ -76,7 +74,7 @@ async def main(msg, data_dir):
         )
 
     tasks = [
-        process_queries(cfg.endpoint, prompts_path, model_responses_path, cfg.api_key)
+        process_queries(cfg.endpoint, prompts_path, model_responses_path, cfg.api_key),
     ]
     logging.basicConfig(
         level=logging.DEBUG,
@@ -100,7 +98,8 @@ async def main(msg, data_dir):
             prompt_file=prompts_path,
             asst_response_file=os.path.join(model_responses_path, f"{model_str}.jsonl"),
             judge_response_file=os.path.join(
-                model_judgements_path, f"{judgements_file_str}.jsonl"
+                model_judgements_path,
+                f"{judgements_file_str}.jsonl",
             ),
             asst_model_tag=model_tag,
             judge_model_tag=judge_model_tag,
@@ -117,7 +116,7 @@ async def main(msg, data_dir):
             model_responses_path,
             model_judgements_path,
             cfg.api_key,
-        )
+        ),
     ]
 
     logging.info(f"Begin getting judgements")
@@ -159,7 +158,7 @@ async def main(msg, data_dir):
     blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/{cfg.endpoint}/responses.jsonl"
     blob = storage.Client().bucket(bucket_name).blob(blob_name)
     blob.upload_from_filename(
-        os.path.join(model_responses_path, _format_model_tag(cfg.endpoint) + ".jsonl")
+        os.path.join(model_responses_path, _format_model_tag(cfg.endpoint) + ".jsonl"),
     )
     # upload judgements
     blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/{cfg.endpoint}/judgements.jsonl"
@@ -168,7 +167,7 @@ async def main(msg, data_dir):
         os.path.join(
             model_judgements_path,
             _format_judgements_file(cfg.endpoint, cfg.judge_model_tag) + ".jsonl",
-        )
+        ),
     )
     # upload tokens
     # TODO
