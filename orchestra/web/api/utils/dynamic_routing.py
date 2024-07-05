@@ -169,7 +169,9 @@ class RouterConfig:
 
             # Remove endpoints outside of the thresholds
             for metric, threshold in self.thresholds.items():
-                if not(threshold[0] < endpoint_metrics[endpoint.id][metric] < threshold[1]):
+                if not (
+                    threshold[0] < endpoint_metrics[endpoint.id][metric] < threshold[1]
+                ):
                     break
             else:
                 thresholded_endpoints.append(endpoint)
