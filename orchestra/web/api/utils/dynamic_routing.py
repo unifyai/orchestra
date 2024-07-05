@@ -490,6 +490,7 @@ def get_router_endpoint_id(
     router_id = ids[0].router_id
     return router_id
 
+
 metrics = {
     "claude-3-haiku@anthropic": {
         "cost": 1.25,
