@@ -21,6 +21,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from orchestra.settings import settings
+from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
+from orchestra.db.dao.endpoint_dao import EndpointDAO
+from orchestra.web.api.utils.cache_metrics import refresh_cache
 
 
 def _setup_db(app: FastAPI) -> None:  # pragma: no cover
@@ -138,6 +141,13 @@ def register_startup_event(
     def _startup() -> None:  # noqa: WPS430
         app.middleware_stack = None
         _setup_db(app)
+
+        # After _setup_db app.state.db_session_factory should be populated
+        with app.state.db_session_factory() as session:
+            benchmark_run_dao = BenchmarkRunDAO(session)
+            endpoint_dao = EndpointDAO(session)
+            refresh_cache(endpoint_dao, benchmark_run_dao, settings.cache_path)
+
         setup_opentelemetry(app)
         setup_prometheus(app)
         aiplatform.init(

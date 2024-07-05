@@ -99,5 +99,7 @@ class Settings(BaseSettings):
         extra="allow",
     )
 
+    cache_path: str = "/tmp/cache_metrics.jsonl"
+
 
 settings = Settings()

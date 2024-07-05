@@ -145,41 +145,35 @@ class RouterConfig:
         if debug:
             return model_scores
 
-        endpoint_metrics = {}
+        # Load cached metrics
+        with open(settings.cache_path) as f:
+            endpoint_metrics = json.load(f)
         thresholded_endpoints = []
         # Iterate over each endpoint
         for endpoint in endpoints:
-            name = f"{endpoint.model}@{endpoint.provider}"
             if endpoint.model not in model_scores:
                 continue
-            endpoint_metrics[name] = {}
-            endpoint_metrics[name]["quality"] = model_scores[endpoint.model]
-            # Fetch the metrics values
-            for metric in [
-                "input_cost_per_token",
-                "output_cost_per_token",
-                "ttft",
-                "itl",
-                "context_window",
-            ]:
-                endpoint_metrics[name][metric] = float(
-                    get_value_of(self.benchmark_run_dao, endpoint, metric),
-                )
-            endpoint_metrics[name]["cost"] = (
-                endpoint_metrics[name]["input_cost_per_token"] * 3
-                + endpoint_metrics[name]["output_cost_per_token"]
+            endpoint_metrics[endpoint.id]["quality"] = model_scores[endpoint.model]
+
+            endpoint_metrics[endpoint.id]["cost"] = (
+                endpoint_metrics[endpoint.id]["input_cost_per_token"] * 3
+                + endpoint_metrics[endpoint.id]["output_cost_per_token"]
             ) / 4
 
+            endpoint_ctx_window = PROVIDER_CLASSES[endpoint.provider](
+                "",
+            ).supported_models[endpoint.model]["context_window"]
+
+            if endpoint_ctx_window <= input_tokens:
+                continue
+
             # Remove endpoints outside of the thresholds
-            valid = True
             for metric, threshold in self.thresholds.items():
-                if threshold[0] < endpoint_metrics[name][metric] < threshold[1]:
-                    pass
-                else:
-                    valid = False
-            if endpoint_metrics[name]["context_window"] <= input_tokens:
-                valid = False
-            if valid:
+                if not (
+                    threshold[0] < endpoint_metrics[endpoint.id][metric] < threshold[1]
+                ):
+                    break
+            else:
                 thresholded_endpoints.append(endpoint)
 
         if not thresholded_endpoints:
@@ -189,7 +183,7 @@ class RouterConfig:
         endpoint_scores = {}
         for endpoint in thresholded_endpoints:
             name = f"{endpoint.model}@{endpoint.provider}"
-            endpoint_scores[name] = self.cost_fn(**endpoint_metrics[name])
+            endpoint_scores[name] = self.cost_fn(**endpoint_metrics[endpoint.id])
 
         # Return a list of endpoints ordered by lowest cost
         ordered_keys = sorted(endpoint_scores, key=lambda k: endpoint_scores[k])
@@ -649,6 +643,7 @@ for endpoint in metrics:
     metrics[endpoint]["context_window"] = PROVIDER_CLASSES[provider](
         "",
     ).supported_models[model]["context_window"]
+
 
 baked_router_endpoints = [
     Endpoint(

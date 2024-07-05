@@ -66,6 +66,16 @@ class EndpointDAO:
         rows = self.session.execute(query)
         return list(rows.fetchall())
 
+    def get_active_endpoints(self):
+        query = (
+            select(Endpoint.id, Model.mdl_code, Provider.name)
+            .join(Model)
+            .join(Provider)
+            .where(Model.active == True)
+        )
+        rows = self.session.execute(query)
+        return list(rows.scalars().fetchall())
+
     def filter(
         self,
         id: Optional[int] = None,  # noqa: WPS125
