@@ -34,6 +34,7 @@ def refresh_cache(
 
     new_cache = {}
     for endpoint_id in endpoint_dao.get_active_endpoints():
+        break
         if old_cache and endpoint_id in old_cache:
             # TODO: timezones ???
             cache_date = datetime.strptime(
@@ -41,13 +42,15 @@ def refresh_cache(
             )
             if (datetime.now() - cache_date) <= timedelta(seconds=REFRESH_INTERVAL):
                 new_cache[endpoint_id] = old_cache[endpoint_id]
-                continue
+                break
+                #continue
         endpoint_data = benchmark_dao.get_latest_endpoint_benchmark(endpoint_id)
         if endpoint_data:
             new_cache[endpoint_id] = _format_data(endpoint_data)
+        break
 
-    oldest_entry = max(e["measured_at"] for e in new_cache.values())
-    new_cache["oldest_entry"] = oldest_entry
+    #oldest_entry = max(e["measured_at"] for e in new_cache.values())
+    #new_cache["oldest_entry"] = oldest_entry
     # TODO: use tempfile module
     cache_tmp_path = cache_path.replace(".json", "_tmp.json")
     with open(cache_tmp_path, "w") as f:
