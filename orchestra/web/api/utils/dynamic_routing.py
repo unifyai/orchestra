@@ -145,41 +145,33 @@ class RouterConfig:
         if debug:
             return model_scores
 
-        endpoint_metrics = {}
+        # Load cached metrics
+        with open(settings.cache_path) as f:
+            endpoint_metrics = json.load(f)
         thresholded_endpoints = []
         # Iterate over each endpoint
         for endpoint in endpoints:
-            name = f"{endpoint.model}@{endpoint.provider}"
             if endpoint.model not in model_scores:
                 continue
-            endpoint_metrics[name] = {}
-            endpoint_metrics[name]["quality"] = model_scores[endpoint.model]
-            # Fetch the metrics values
-            for metric in [
-                "input_cost_per_token",
-                "output_cost_per_token",
-                "ttft",
-                "itl",
-                "context_window",
-            ]:
-                endpoint_metrics[name][metric] = float(
-                    get_value_of(self.benchmark_run_dao, endpoint, metric),
-                )
-            endpoint_metrics[name]["cost"] = (
-                endpoint_metrics[name]["input_cost_per_token"] * 3
-                + endpoint_metrics[name]["output_cost_per_token"]
+            endpoint_metrics[endpoint.id]["quality"] = model_scores[endpoint.model]
+
+            endpoint_metrics[endpoint.id]["cost"] = (
+                endpoint_metrics[endpoint.id]["input_cost_per_token"] * 3
+                + endpoint_metrics[endpoint.id]["output_cost_per_token"]
             ) / 4
 
+            endpoint_ctx_window = PROVIDER_CLASSES[endpoint.provider](
+                "",
+            ).supported_models[endpoint.model]["context_window"]
+
+            if endpoint_ctx_window <= input_tokens:
+                continue
+
             # Remove endpoints outside of the thresholds
-            valid = True
             for metric, threshold in self.thresholds.items():
-                if threshold[0] < endpoint_metrics[name][metric] < threshold[1]:
-                    pass
-                else:
-                    valid = False
-            if endpoint_metrics[name]["context_window"] <= input_tokens:
-                valid = False
-            if valid:
+                if not(threshold[0] < endpoint_metrics[endpoint.id][metric] < threshold[1]):
+                    break
+            else:
                 thresholded_endpoints.append(endpoint)
 
         if not thresholded_endpoints:
@@ -189,7 +181,7 @@ class RouterConfig:
         endpoint_scores = {}
         for endpoint in thresholded_endpoints:
             name = f"{endpoint.model}@{endpoint.provider}"
-            endpoint_scores[name] = self.cost_fn(**endpoint_metrics[name])
+            endpoint_scores[name] = self.cost_fn(**endpoint_metrics[endpoint.id])
 
         # Return a list of endpoints ordered by lowest cost
         ordered_keys = sorted(endpoint_scores, key=lambda k: endpoint_scores[k])
@@ -496,159 +488,6 @@ def get_router_endpoint_id(
     router_id = ids[0].router_id
     return router_id
 
-
-metrics = {
-    "claude-3-haiku@anthropic": {
-        "cost": 1.25,
-        "ttft": 641.8530669999427,
-        "itl": 7.320965663317298,
-    },
-    "claude-3-opus@anthropic": {
-        "cost": 75,
-        "ttft": 2591.2904499998604,
-        "itl": 34.60999395530718,
-    },
-    "claude-3-sonnet@anthropic": {
-        "cost": 15,
-        "ttft": 1151.3890589999392,
-        "itl": 12.03211326126186,
-    },
-    "deepseek-coder-33b-instruct@together-ai": {
-        "cost": 0.8,
-        "ttft": 350.50168700001905,
-        "itl": 27.84690674999979,
-    },
-    "gemma-7b-it@anyscale": {
-        "cost": 0.15,
-        "ttft": 1176.8055530000083,
-        "itl": 23.80950663414629,
-    },
-    "gemma-7b-it@together-ai": {
-        "cost": 0.2,
-        "ttft": 355.0849639999569,
-        "itl": 10.75794840476246,
-    },
-    "gemma-7b-it@fireworks-ai": {
-        "cost": 0.2,
-        "ttft": 596.3048590000426,
-        "itl": 4.905699351647504,
-    },
-    "gemma-7b-it@lepton-ai": {
-        "cost": 0.1,
-        "ttft": 1013.7901719999718,
-        "itl": 10.638872657407488,
-    },
-    "gemma-7b-it@deepinfra": {
-        "cost": 0.13,
-        "ttft": 1106.7886140000383,
-        "itl": 18.87030848101254,
-    },
-    "gpt-3.5-turbo@openai": {
-        "cost": 1.5,
-        "ttft": 400.21933599996373,
-        "itl": 27.26199600000041,
-    },
-    "gpt-4-turbo@openai": {
-        "cost": 30,
-        "ttft": 635.7509760000539,
-        "itl": 42.31438732535859,
-    },
-    "gpt-4@openai": {
-        "cost": 45,
-        "ttft": 760,
-        "itl": 46.05,
-    },
-    "gpt-4o@openai": {
-        "cost": 7.5,
-        "ttft": 589,
-        "itl": 20.05,
-    },
-    "llama-3-70b-chat@fireworks-ai": {"cost": 0.9, "ttft": 469.78, "itl": 6.58},
-    "llama-3-70b-chat@together-ai": {"cost": 0.9, "ttft": 466.28, "itl": 5.38},
-    "llama-3-8b-chat@fireworks-ai": {"cost": 0.2, "ttft": 355.48, "itl": 3.06},
-    "llama-3-8b-chat@together-ai": {"cost": 0.2, "ttft": 1035.13, "itl": 3.98},
-    "mistral-large@mistral-ai": {
-        "cost": 24,
-        "ttft": 439.49507400009225,
-        "itl": 54.14005861235942,
-    },
-    "mistral-small@mistral-ai": {
-        "cost": 6,
-        "ttft": 371.52690400000665,
-        "itl": 18.000006300000376,
-    },
-    "mixtral-8x7b-instruct-v0.1@together-ai": {
-        "cost": 0.6,
-        "ttft": 405.11531099997455,
-        "itl": 4.174361656626742,
-    },
-    "mixtral-8x7b-instruct-v0.1@octoai": {
-        "cost": 0.5,
-        "ttft": 1164.472783000008,
-        "itl": 24.274311994623353,
-    },
-    "mixtral-8x7b-instruct-v0.1@replicate": {
-        "cost": 1,
-        "ttft": 887.903352999956,
-        "itl": 15.394309863636439,
-    },
-    "mixtral-8x7b-instruct-v0.1@mistral-ai": {
-        "cost": 0.7,
-        "ttft": 352.0689869999387,
-        "itl": 12.773902387097081,
-    },
-    "mixtral-8x7b-instruct-v0.1@anyscale": {
-        "cost": 0.5,
-        "ttft": 1749.3290439999782,
-        "itl": 34.07672297029734,
-    },
-    "mixtral-8x7b-instruct-v0.1@fireworks-ai": {
-        "cost": 0.5,
-        "ttft": 324.21352400001524,
-        "itl": 3.380061226190194,
-    },
-    "mixtral-8x7b-instruct-v0.1@lepton-ai": {
-        "cost": 0.5,
-        "ttft": 872.5847029999159,
-        "itl": 12.631626471590804,
-    },
-    "mixtral-8x7b-instruct-v0.1@deepinfra": {
-        "cost": 0.27,
-        "ttft": 1130.8457239999825,
-        "itl": 15.669842747059405,
-    },
-    "mixtral-8x7b-instruct-v0.1@aws-bedrock": {
-        "cost": 0.7,
-        "ttft": 713.9613250001275,
-        "itl": 15.034942066296473,
-    },
-    "mixtral-8x22b-instruct-v0.1@mistral-ai": {
-        "cost": 3,
-        "ttft": 135,
-        "itl": 12.25,
-    },
-    "mixtral-8x22b-instruct-v0.1@fireworks-ai": {
-        "cost": 0.9,
-        "ttft": 314,
-        "itl": 11.63,
-    },
-    "mixtral-8x22b-instruct-v0.1@together-ai": {
-        "cost": 1.2,
-        "ttft": 840,
-        "itl": 21.88,
-    },
-    "mixtral-8x22b-instruct-v0.1@deepinfra": {
-        "cost": 0.65,
-        "ttft": 950,
-        "itl": 19.91,
-    },
-}
-
-for endpoint in metrics:
-    model, provider = endpoint.split("@")
-    metrics[endpoint]["context_window"] = PROVIDER_CLASSES[provider](
-        "",
-    ).supported_models[model]["context_window"]
 
 baked_router_endpoints = [
     Endpoint(
