@@ -1,5 +1,6 @@
 import json
 import time
+import os
 from typing import Any, Dict, Union
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
@@ -74,7 +75,8 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     :raises HTTPException: when user has insufficient credits.
     """
-
+    if not os.path.isfile(settings.cache_path):
+        refresh_cache(endpoint_dao, benchmark_run_dao, settings.cache_path)
     try:
         # TODO: Check that model exists
         model_priority_list = []
