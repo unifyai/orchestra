@@ -146,7 +146,7 @@ def register_startup_event(
         with app.state.db_session_factory() as session:
             benchmark_run_dao = BenchmarkRunDAO(session)
             endpoint_dao = EndpointDAO(session)
-    #        refresh_cache(endpoint_dao, benchmark_run_dao, settings.cache_path)
+            refresh_cache(endpoint_dao, benchmark_run_dao, settings.cache_path)
 
         setup_opentelemetry(app)
         setup_prometheus(app)
