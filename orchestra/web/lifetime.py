@@ -143,10 +143,10 @@ def register_startup_event(
         _setup_db(app)
 
         # After _setup_db app.state.db_session_factory should be populated
-        with app.state.db_session_factory() as session:
-            benchmark_run_dao = BenchmarkRunDAO(session)
-            endpoint_dao = EndpointDAO(session)
-            refresh_cache(endpoint_dao, benchmark_run_dao, settings.cache_path)
+        # #with app.state.db_session_factory() as session:
+        #     benchmark_run_dao = BenchmarkRunDAO(session)
+        #     endpoint_dao = EndpointDAO(session)
+        #     refresh_cache(endpoint_dao, benchmark_run_dao, settings.cache_path)
 
         setup_opentelemetry(app)
         setup_prometheus(app)
