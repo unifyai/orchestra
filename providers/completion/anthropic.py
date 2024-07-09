@@ -51,8 +51,9 @@ class Anthropic(BaseCompletionProvider):
             tool_calls = []
             for block in response.content:
                 if block.type == "tool_use":
+                    function_d = dict(arguments=block.input)
+                    function_d["name"] = block.name
                     tool_d = dict(
-                        name=block.name,
                         id=block.id,
                         function=dict(arguments=block.input),
                         type=block.type,
