@@ -1,7 +1,7 @@
 import json
 from typing import Annotated, Dict, List
 
-from fastapi import APIRouter, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Form, HTTPException, Query, Request, UploadFile
 
 from orchestra.web.api.utils.gcp import (
     blob_exists,
@@ -96,7 +96,7 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     name: Annotated[str, Form()],
 ) -> Dict[str, str]:
     """
-    Uploads a dataset.
+    Uploads a dataset to the platform.
     """
     if "/" in name:
         raise invalid_dataset_name
@@ -109,10 +109,10 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 @router.delete("/dataset")
 def delete_dataset(
     request_fastapi: Request,
-    name: str,
+    name: str = Query(..., description="Name of the dataset."),
 ) -> Dict[str, str]:
     """
-    Deletes a dataset.
+    Deletes a dataset from the platform.
     """
     if "/" in name:
         raise invalid_dataset_name
@@ -126,7 +126,7 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
 ) -> List[str]:
     """
-    Lists the user datasets.
+    Lists the user datasets in the platform.
     """
     datasets = _list_datasets(request_fastapi.state.user_id)
     return datasets
@@ -137,10 +137,10 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 @router.get("/dataset")
 def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
-    name: str,
+    name: str = Query(..., description="Name of the dataset."),
 ) -> List[Dict[str, str]]:
     """
-    Download a dataset.
+    Downloads a dataset from the platform.
     """
     if "/" in name:
         raise invalid_dataset_name
