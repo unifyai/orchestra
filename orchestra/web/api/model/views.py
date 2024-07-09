@@ -20,7 +20,7 @@ def list_models(
     model_dao: ModelDAO = Depends(),
 ) -> List[Model]:
     """
-    Retrieve all model objects from the database.
+    Returns a list of every model available through the API.
     \f
     :return: list of active model names from database.
     """
