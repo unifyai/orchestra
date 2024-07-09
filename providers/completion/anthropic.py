@@ -86,9 +86,9 @@ class Anthropic(BaseCompletionProvider):
             if "tools" in kwargs:
                 kwargs["tools"] = _format_tools_to_anthropic(kwargs["tools"])
             if "tool_choice" in kwargs:
-                if "tool_choice" == "auto":
+                if kwargs["tool_choice"] == "auto":
                     kwargs["tool_choice"] = {"type": "auto"}
-                elif "tool_choice" == "required":
+                elif kwargs["tool_choice"] == "required":
                     kwargs["tool_choice"] = {"type": "any"}
                 elif (
                     "type" in kwargs["tool_choice"]
