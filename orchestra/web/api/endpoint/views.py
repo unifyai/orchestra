@@ -1,7 +1,7 @@
-from typing import List, Optional
 import time
+from typing import List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.endpoint_dao import EndpointDAO
@@ -16,7 +16,13 @@ _endpoint_list_cache = {}
 
 
 @public_router.get("/endpoints_of", response_model=List[str])
-def get_endpoints_of(model: str, endpoint_dao: EndpointDAO = Depends()):
+def get_endpoints_of(
+    model: str = Query(..., description="Model to get available endpoints from."),
+    endpoint_dao: EndpointDAO = Depends(),
+):
+    """
+    Lists available endpoints for a given model.
+    """
     if (
         model not in _endpoint_list_cache
         or time.time() - _endpoint_list_cache[model].get("ts", 0) > 3600
@@ -34,7 +40,13 @@ _provider_list_cache = {}
 
 
 @public_router.get("/providers_of", response_model=List[str])
-def get_providers_of(model: str, endpoint_dao: EndpointDAO = Depends()):
+def get_providers_of(
+    model: str = Query(..., description="Model to get available providers from."),
+    endpoint_dao: EndpointDAO = Depends(),
+):
+    """
+    Lists available providers for a given model.
+    """
     if (
         model not in _provider_list_cache
         or time.time() - _provider_list_cache[model].get("ts", 0) > 3600

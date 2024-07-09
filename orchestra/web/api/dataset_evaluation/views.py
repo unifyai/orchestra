@@ -4,7 +4,7 @@ Includes endpoints related to dataset evaluations.
 
 from typing import Dict
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.web.api.utils.gcp import blob_exists, send_pubsub_msg
@@ -73,9 +73,12 @@ def send_to_dataset_evaluation_server(action, **data):
 @router.post("/evaluation")
 def evaluate_dataset(
     request_fastapi: Request,
-    dataset: str,
-    endpoint: str,
+    dataset: str = Query(..., description="Name of the dataset to evaluate on."),
+    endpoint: str = Query(..., description="Endpoint to evaluate."),
 ) -> Dict[str, str]:
+    """
+    Evaluates a given endpoint in a dataset.
+    """
     user_id = request_fastapi.state.user_id
     api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
     # Check if the dataset exists
@@ -99,11 +102,14 @@ def evaluate_dataset(
 @router.delete("/evaluation")
 def delete_dataset_evaluation(
     request_fastapi: Request,
-    dataset: str,
-    endpoint: str,
+    dataset: str = Query(..., description="Name of the dataset."),
+    endpoint: str = Query(
+        ...,
+        description="Endpoint which evaluation will be deleted.",
+    ),
 ) -> Dict[str, str]:
     """
-    Deactivates and deletes a dataset evaluation.
+    Deletes a dataset evaluation.
     """
     user_id = request_fastapi.state.user_id
     # Delete the dataset_evaluation files

@@ -42,7 +42,7 @@ def get_app() -> FastAPI:
             ],
         )
     app = FastAPI(
-        title="orchestra",
+        title="UnifyAI HTTP API Reference",
         version=metadata.version("orchestra"),
         docs_url="/v0/docs",
         redoc_url="/v0/redoc",

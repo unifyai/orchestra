@@ -1,7 +1,7 @@
 import datetime
 from typing import Optional, Union
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.recharge_dao import RechargeDAO
@@ -18,7 +18,7 @@ def get_credits(
     users_dao: UsersDAO = Depends(),
 ) -> Union[Users, None]:
     """
-    Retrieves credits for the user doing the request.
+    Returns the number of available credits.
     \f
     :param request_fastapi: FastAPI request object.
     :param users_dao: DAO for users models.
@@ -31,16 +31,24 @@ def get_credits(
 @router.post("/promo", response_model=CreditsCodeResponse)
 def credits_code(
     request_fastapi: Request,
-    code: str,
-    user: Optional[str] = None,
+    code: str = Query(..., description="Promo code to be activated."),
+    user: Optional[str] = Query(
+        None,
+        description=(
+            "ID of the user that receives the credits,"
+            "defaults to the user making the request."
+        ),
+    ),
     recharge_dao: RechargeDAO = Depends(),
     users_dao: UsersDAO = Depends(),
 ) -> Union[CreditsCodeResponse, None]:
     """
-    Checks if it's a valid promo code.
+    Activates a valid promo code.
     \f
     :param request_fastapi: FastAPI request object.
     :param code: Promo code to be activated.
+    :param user: ID of the user that receives the credits, if not present
+    if defaults to the user making the request.
     :param recharge_dao: DAO for recharge models.
     :param users_dao: DAO for users models.
     :return: user instance with credits from database.

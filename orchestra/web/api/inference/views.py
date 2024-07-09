@@ -59,7 +59,8 @@ def post_inference(  # noqa: C901, WPS212, WPS210, WPS231, E501, WPS211, WPS217,
     datapoint_dao: DatapointDAO = Depends(),
 ):
     """
-    Get inference result based on the request.
+    DEPRECATION WARNING: This endpoint is deprecated and will be removed. Instead,
+    use the /chat/completions endpoint for LLM inference.
     \f
     :param background_tasks: FastAPI background tasks.
     :param request_fastapi: FastAPI request object.

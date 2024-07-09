@@ -4,7 +4,7 @@ Includes endpoints for training and deployment of a router.
 
 from typing import Dict, List
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.web.api.utils.gcp import (
@@ -105,10 +105,19 @@ def send_to_deploy_server(action, **data):
 @router.post("router/train")
 def train_router(
     request_fastapi: Request,
-    name: str,
-    dataset: str,
-    endpoints: List[str],
+    name: str = Query(..., description="Name of the router."),
+    dataset: str = Query(
+        ...,
+        description="Name of the dataset to train the router on.",
+    ),
+    endpoints: List[str] = Query(
+        ...,
+        description="List of endpoints to include in the router.",
+    ),
 ) -> Dict[str, str]:
+    """
+    Trains a router based on a dataset and a set of endpoints.
+    """
     user_id = request_fastapi.state.user_id
     # Check if the router already exists
     if router_training_exists(user_id, name):
@@ -132,7 +141,10 @@ def train_router(
 
 
 @router.delete("/router/train")
-def delete_router_train(request_fastapi: Request, name: str) -> Dict[str, str]:
+def delete_router_train(
+    request_fastapi: Request,
+    name: str = Query(..., description="Name of the router to delete."),
+) -> Dict[str, str]:
     """
     Deactivates and deletes a trained router.
     """
@@ -152,7 +164,10 @@ def delete_router_train(request_fastapi: Request, name: str) -> Dict[str, str]:
 
 
 @router.post("/router/deploy")
-def deploy_router(request_fastapi: Request, name: str) -> Dict[str, str]:
+def deploy_router(
+    request_fastapi: Request,
+    name: str = Query(..., description="Name of the router to deploy."),
+) -> Dict[str, str]:
     """
     Deploys a router.
     """
@@ -169,7 +184,10 @@ def deploy_router(request_fastapi: Request, name: str) -> Dict[str, str]:
 
 
 @router.delete("/router/deploy")
-def delete_router(request_fastapi: Request, name: str) -> Dict[str, str]:
+def delete_router(
+    request_fastapi: Request,
+    name: str = Query(..., description="Name of the router to un-deploy."),
+) -> Dict[str, str]:
     """
     Deactivates and deletes a deployed router.
     """
