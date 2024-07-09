@@ -55,7 +55,7 @@ class Anthropic(BaseCompletionProvider):
                     function_d["name"] = block.name
                     tool_d = dict(
                         id=block.id,
-                        function=dict(arguments=block.input),
+                        function=function_d,
                         type=block.type,
                     )
                     tool_calls.append(tool_d)
