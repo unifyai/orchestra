@@ -90,7 +90,10 @@ class Anthropic(BaseCompletionProvider):
                     kwargs["tool_choice"] = {"type": "auto"}
                 elif "tool_choice" == "required":
                     kwargs["tool_choice"] = {"type": "any"}
-                elif "type" in kwargs["tool_choice"] and kwargs["tool_choice"]["type"] == "function":
+                elif (
+                    "type" in kwargs["tool_choice"]
+                    and kwargs["tool_choice"]["type"] == "function"
+                ):
                     tool_name = kwargs["tool_choice"]["function"]["name"]
                     kwargs["tool_choice"] = {"type": "tool", "name": tool_name}
                 elif kwargs["tool_choice"] == "none":
