@@ -51,10 +51,11 @@ class Anthropic(BaseCompletionProvider):
             tool_calls = []
             for block in response.content:
                 if block.type == "tool_use":
+                    function_d = dict(arguments=block.input)
+                    function_d["name"] = block.name
                     tool_d = dict(
-                        name=block.name,
                         id=block.id,
-                        function=dict(arguments=block.input),
+                        function=function_d,
                         type=block.type,
                     )
                     tool_calls.append(tool_d)
@@ -84,6 +85,20 @@ class Anthropic(BaseCompletionProvider):
                 kwargs["system"] = system_prompt
             if "tools" in kwargs:
                 kwargs["tools"] = _format_tools_to_anthropic(kwargs["tools"])
+            if "tool_choice" in kwargs:
+                if "tool_choice" == "auto":
+                    kwargs["tool_choice"] = {"type": "auto"}
+                elif "tool_choice" == "required":
+                    kwargs["tool_choice"] = {"type": "any"}
+                elif (
+                    "type" in kwargs["tool_choice"]
+                    and kwargs["tool_choice"]["type"] == "function"
+                ):
+                    tool_name = kwargs["tool_choice"]["function"]["name"]
+                    kwargs["tool_choice"] = {"type": "tool", "name": tool_name}
+                elif kwargs["tool_choice"] == "none":
+                    del kwargs["tool_choice"]
+                    del kwargs["tools"]
             response = self.client.messages.create(
                 messages=messages,
                 model=self.provider_endpoint,
