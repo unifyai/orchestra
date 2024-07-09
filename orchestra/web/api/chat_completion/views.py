@@ -57,7 +57,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     custom_router_dao: CustomRouterDAO = Depends(),
 ) -> Union[ChatCompletionResponse, StreamingResponse]:
     """
-    Get chat completions based on the request.
+    OpenAI compatible /chat/completions endpoint for LLM inference.
     \f
     :param background_tasks: FastAPI background tasks.
     :param request_fastapi: FastAPI request object.
@@ -245,7 +245,11 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     return ChatCompletionResponse(**response)
 
 
-@router.post("/router/scores", response_model=RouterScoresResponse)
+@router.post(
+    "/router/scores",
+    include_in_schema=False,
+    response_model=RouterScoresResponse,
+)
 def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request: ChatCompletionRequest,
     endpoint_dao: EndpointDAO = Depends(),
@@ -261,6 +265,10 @@ def get_query_metrics(
     request_fastapi: Request,
     request: QueryMetricsRequest,
 ) -> Dict[str, Any]:
+    """
+    Returns aggregated telemetry data from previous queries to the /chat/completions
+    endpoint.
+    """
     import requests
 
     response = requests.get(
