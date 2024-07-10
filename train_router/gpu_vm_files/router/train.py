@@ -181,10 +181,11 @@ def create_eval_set(val_path):
             entry = json.loads(line)
             id_ = entry["id_"]
             prompt = entry["prompt"]
-            gt = {key: entry[key] for key in entry if key not in ["id_", "prompt_"]}
+            #for entry in score
+            #gt = {key: entry[key] for key in entry if key not in ["id_", "prompt_"]}
             # gt = entry["gt"]
             # this is a dict: model_name to score
-            gt_list = [gt[f"{model_name}"] for model_name in MODEL_MAPPING]
+            gt_list = [entry["scores"][f"{model_name}"] for model_name in MODEL_MAPPING]
             # this is a list of model scores, in the order of model mapping
             id_to_prompt[id_] = prompt
             id_to_gt[id_] = gt_list
