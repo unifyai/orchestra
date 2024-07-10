@@ -7,6 +7,7 @@ import re
 import math
 import random
 import requests
+import os
 from dataclasses import dataclass
 from typing import Any, List
 
@@ -224,22 +225,24 @@ def create_train_data(user_id, dataset, endpoints):
 def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
     for e in endpoints:
         if not evaluation_available(user_id, dataset, e):
+            print(f"starting evaluation for {e}")
             start_evaluation(api_key, orchestra_url, dataset, e)
 
     timeout = 2 * 3600
     start_time = time.time()
     while (time.time() - start_time) < timeout:
-        time.sleep(60)
         if all([evaluation_available(user_id, dataset, e) for e in endpoints]):
             break
+        time.sleep(60)
     else:
         raise Exception
 
     train_data, valid_data = create_train_data(user_id, dataset, endpoints)
     # TODO: train data
     unrolled_data = []
+    print(train_data)
     for td in train_data:
-        for e, score in td["model_provider"].items():
+        for e, score in td["scores"].items():
             unrolled_data.append(
                 {
                     "id_": td["id_"],
@@ -280,7 +283,7 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
     # subprocess.run(command, shell=True)
 
     command = f"""gcloud compute scp --project={project_id} --zone={zone} --recurse ./gpu_vm_files/* {instance_name}:~/"""
-    subprocessrun(command, shell=True)
+    subprocess.run(command, shell=True)
 
     # build & run the docker container
 
@@ -288,7 +291,7 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="{docker_build_cmd}" """
     subprocess.run(command, shell=True)
 
-    docker_run_cmd = "docker run -d -it --name train router_training"
+    docker_run_cmd = "docker run -d --name train --gpus all -it router_training"
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="{docker_run_cmd}" """
     subprocess.run(command, shell=True)
 
@@ -304,7 +307,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, required=True, help="Dataset Name")
     parser.add_argument(
         "--endpoints",
-        type=List[str],
+        type=str,
         required=True,
         help="List of endpoints",
     )
@@ -325,6 +328,8 @@ if __name__ == "__main__":
     dataset = args.dataset
     endpoints = args.endpoints
     orchestra_url = args.orchestra_url
+
+    endpoints = endpoints.split(",")
 
     main(
         user_id=user_id,
