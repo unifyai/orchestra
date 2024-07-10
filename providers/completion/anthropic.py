@@ -43,8 +43,9 @@ class Anthropic(BaseCompletionProvider):
 
     def response_to_chat_completion(self, response):
         created_at = int(time.time())
+        resp_txt = response.content[0].text if hasattr(response.content[0], "text") else ""
         message = dict(
-            content=response.content[0].text,
+            content=resp_txt,
             role="assistant",
         )
         if response.stop_reason == "tool_use":
@@ -106,6 +107,7 @@ class Anthropic(BaseCompletionProvider):
                 max_tokens=max_tokens,
                 **kwargs,
             )
+            print(response)
             if stream:
                 return (AnthropicSyncGeneratorWrapper(self, response, messages), None)
             else:
