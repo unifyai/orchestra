@@ -43,7 +43,9 @@ class Anthropic(BaseCompletionProvider):
 
     def response_to_chat_completion(self, response):
         created_at = int(time.time())
-        resp_txt = response.content[0].text if hasattr(response.content[0], "text") else ""
+        resp_txt = (
+            response.content[0].text if hasattr(response.content[0], "text") else ""
+        )
         message = dict(
             content=resp_txt,
             role="assistant",
