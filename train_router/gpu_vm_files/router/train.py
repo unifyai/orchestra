@@ -260,7 +260,9 @@ if __name__ == "__main__":
     # load datasets
     df = load_datasets(config["data"]["data_paths"])
 
-    models = df["model_provider"].str.split("@").str[0].unique().tolist()
+    # models = df["model_provider"].str.split("@").str[0].unique().tolist()
+    models = df["model_provider"].unique().tolist()
+    print(models)
     data = df.to_dict("records")
 
     MODEL_MAPPING = {k: v for v, k in enumerate(models)}

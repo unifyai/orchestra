@@ -83,7 +83,7 @@ class CoMPDataset(Dataset):
         )
         prompt_id = tokenized_inputs["input_ids"].squeeze()
         attn_mask = tokenized_inputs["attention_mask"].squeeze()
-        model_id = self.model_mapping[sample["model_provider"].split("@")[0]]
+        model_id = self.model_mapping[sample["model_provider"]]
         score = ratings_from_sample(sample, self.score_mapping)
         if self.ordinal:
             score = [1] * (score + 1) + [0] * (self.num_classes - score - 1)
