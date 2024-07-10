@@ -156,7 +156,6 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
         try:  # noqa: WPS225
@@ -199,7 +198,6 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-
         client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
 
         try:  # noqa: WPS225
@@ -247,6 +245,10 @@ class BaseGeneratorWrapper:
         if choices:
             if choices[0]["delta"]["content"] is None:
                 if not part_dict.get("usage") and not choices[0]["finish_reason"]:
+                    if "tool_calls" in choices[0]["delta"] and (
+                        choices[0]["delta"]["tool_calls"] is not None
+                    ):  # TODO this is a bit hacky ...
+                        return part_dict
                     return None
                 return part_dict
 
