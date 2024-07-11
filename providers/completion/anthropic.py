@@ -102,6 +102,14 @@ class Anthropic(BaseCompletionProvider):
                 elif kwargs["tool_choice"] == "none":
                     del kwargs["tool_choice"]
                     del kwargs["tools"]
+
+            new_messages = []
+            for message in messages:
+                if message["role"] == "tool":
+                    message = _format_tool_result(message)
+                new_messages.append(message)
+            messages = new_messages
+
             response = self.client.messages.create(
                 messages=messages,
                 model=self.provider_endpoint,
@@ -186,6 +194,32 @@ def _format_tools_to_anthropic(tool_list_oai):
         return tool_d
 
     return [_fmt_tool(t) for t in tool_list_oai]
+
+
+def _format_tool_use(msg):
+    text_block = {"type": "text", "text": msg["content"]}
+    tool_uses = msg["tool_calls"]
+    ret = [text_block]
+    for tool_use in tool_uses:
+        tool_block = {
+            "type": "tool_use",
+            "id": tool_use["id"],
+            "input": {tool_use["function"]["arguments"]},
+            "name": tool_use["function"]["name"],
+        }
+        ret.append(tool_block)
+    return ret
+
+
+def _format_tool_result(msg):
+    new_msg = {}
+    new_msg["role"] = "user"
+    new_msg["content"] = {
+        "type": "tool_result",
+        "tool_use_id": msg["tool_call_id"],
+        "content": msg["content"],
+    }
+    return new_msg
 
 
 _sse_types_to_ignore = {
