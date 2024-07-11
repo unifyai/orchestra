@@ -1,4 +1,5 @@
 import logging
+import json
 import time
 from typing import Any, List
 
@@ -102,6 +103,22 @@ class Anthropic(BaseCompletionProvider):
                 elif kwargs["tool_choice"] == "none":
                     del kwargs["tool_choice"]
                     del kwargs["tools"]
+
+            new_messages = []
+            for message in messages:
+                if message["role"] == "tool":
+                    message = _format_tool_result(message)
+                elif (
+                    message["role"] == "assistant"
+                    and message.get("tool_calls") is not None
+                ):
+                    try:
+                        message = _format_tool_use(message)
+                    except:
+                        pass
+                new_messages.append(message)
+            messages = new_messages
+
             response = self.client.messages.create(
                 messages=messages,
                 model=self.provider_endpoint,
@@ -109,7 +126,6 @@ class Anthropic(BaseCompletionProvider):
                 max_tokens=max_tokens,
                 **kwargs,
             )
-            print(response)
             if stream:
                 return (AnthropicSyncGeneratorWrapper(self, response, messages), None)
             else:
@@ -186,6 +202,38 @@ def _format_tools_to_anthropic(tool_list_oai):
         return tool_d
 
     return [_fmt_tool(t) for t in tool_list_oai]
+
+
+def _format_tool_use(msg):
+    ret = {"role": "assistant"}
+    blocks = []
+    if msg["content"]:
+        text_block = {"type": "text", "text": msg["content"]}
+        blocks = [text_block]
+    tool_uses = msg["tool_calls"]
+    for tool_use in tool_uses:
+        tool_block = {
+            "type": "tool_use",
+            "id": tool_use["id"],
+            "input": json.loads(tool_use["function"]["arguments"].replace("'", '"')),
+            "name": tool_use["function"]["name"],
+        }
+        blocks.append(tool_block)
+    ret["content"] = blocks
+    return ret
+
+
+def _format_tool_result(msg):
+    new_msg = {}
+    new_msg["role"] = "user"
+    new_msg["content"] = [
+        {
+            "type": "tool_result",
+            "tool_use_id": msg["tool_call_id"],
+            "content": msg["content"],
+        }
+    ]
+    return new_msg
 
 
 _sse_types_to_ignore = {
