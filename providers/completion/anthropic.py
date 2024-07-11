@@ -109,7 +109,8 @@ class Anthropic(BaseCompletionProvider):
                 if message["role"] == "tool":
                     message = _format_tool_result(message)
                 elif (
-                    message["role"] == "assistant" and message.get("tool_calls") is not None
+                    message["role"] == "assistant"
+                    and message.get("tool_calls") is not None
                 ):
                     try:
                         message = _format_tool_use(message)
