@@ -134,7 +134,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     rc = RouterConfig(request.model, endpoint_dao, benchmark_run_dao)
                     num_tokens_est = 0
                     for msg in messages:
-                        if msg["content"] is not None:
+                        if msg.get("content") is not None:
                             num_tokens_est += len(msg["content"])
                     # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
                     # TODO: add error message if the router is not deployed
