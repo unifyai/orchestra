@@ -89,14 +89,64 @@ def check_file_content(file_content: str):
 # endpoints
 
 
-@router.post("/dataset")
+@router.post(
+    "/dataset",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Dataset uploaded sucessfully!"},
+                },
+            },
+        },
+        400: {
+            "description": "Invalid dataset name",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid name for a dataset. Please, choose a different one.",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Dataset already exists",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "A dataset with this name already exists. Please, choose a different one.",
+                    },
+                },
+            },
+        },
+    },
+)
 def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
     file: Annotated[UploadFile, Form()],
     name: Annotated[str, Form()],
 ) -> Dict[str, str]:
     """
-    Uploads a dataset to the platform.
+    Uploads a custom dataset to the platform.
+
+    The uploaded file must be a JSONL file with **at least** a `prompt` key:
+
+    ```
+    {"prompt": "This is the first prompt"}
+    {"prompt": "This is the second prompt"}
+    {"prompt": "This is the third prompt"}
+    ```
+
+    Additionally, you can include a `ref_answer` key, which will be accounted
+    during the evaluations.
+
+    ```
+    {"prompt": "This is the first prompt", "ref_answer": "First reference answer"}
+    {"prompt": "This is the second prompt", "ref_answer": "Second reference answer"}
+    {"prompt": "This is the third prompt", "ref_answer": "Third reference answer"}
+    ```
+
     """
     if "/" in name:
         raise invalid_dataset_name
@@ -106,13 +156,35 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
 
 # delete dataset
-@router.delete("/dataset")
+@router.delete(
+    "/dataset",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Dataset deleted succesfully!"},
+                },
+            },
+        },
+        400: {
+            "description": "Invalid dataset name",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid name for a dataset. Please, choose a different one.",
+                    },
+                },
+            },
+        },
+    },
+)
 def delete_dataset(
     request_fastapi: Request,
     name: str = Query(..., description="Name of the dataset."),
 ) -> Dict[str, str]:
     """
-    Deletes a dataset from the platform.
+    Deletes a previously updated dataset and any relevant artifacts from the platform.
     """
     if "/" in name:
         raise invalid_dataset_name
@@ -121,12 +193,22 @@ def delete_dataset(
 
 
 # list datasets
-@router.get("/dataset/list")
+@router.get(
+    "/dataset/list",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {"example": ["dataset_1", "dataset_2", "..."]},
+            },
+        },
+    },
+)
 def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
 ) -> List[str]:
     """
-    Lists the user datasets in the platform.
+    Lists all the custom datasets uploaded by the user to the platform.
     """
     datasets = _list_datasets(request_fastapi.state.user_id)
     return datasets
@@ -134,13 +216,47 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
 # download dataset
 # TODO: This probably should get a URL that the user can cURL instead
-@router.get("/dataset")
+@router.get(
+    "/dataset",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {"prompt": "This is the first prompt"},
+                        {"prompt": "This is the second prompt"},
+                        "...",
+                    ],
+                },
+            },
+        },
+        400: {
+            "description": "Invalid dataset name",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid name for a dataset. Please, choose a different one.",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Dataset Not Found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "This dataset does not exist."},
+                },
+            },
+        },
+    },
+)
 def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
     name: str = Query(..., description="Name of the dataset."),
 ) -> List[Dict[str, str]]:
     """
-    Downloads a dataset from the platform.
+    Downloads a specific dataset from the platform.
     """
     if "/" in name:
         raise invalid_dataset_name
