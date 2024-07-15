@@ -1,5 +1,5 @@
 import json
-from typing import Dict
+from typing import Dict, List
 
 from google.cloud import aiplatform, pubsub_v1, storage
 from google.cloud.exceptions import NotFound
@@ -80,6 +80,11 @@ def upload_json_to_bucket(json_data: Dict[str, str], bucket_name: str, blob_name
 
 
 def vertex_ai_endpoint_exists(name: str) -> bool:
+    endpoints = vertex_ai_endpoint_list()
+    return name in endpoints
+
+
+def vertex_ai_endpoint_list() -> List[str]:
     region = "europe-west1"
     project_id = "saas-368716"
     client_options = {"api_endpoint": f"{region}-aiplatform.googleapis.com"}
@@ -89,9 +94,4 @@ def vertex_ai_endpoint_exists(name: str) -> bool:
     parent = f"projects/{project_id}/locations/{region}"
 
     # List the endpoints
-    endpoints = client.list_endpoints(parent=parent)
-
-    for endpoint in endpoints:
-        if endpoint.display_name == name:
-            return True
-    return False
+    return [e.display_name for e in client.list_endpoints(parent=parent)]
