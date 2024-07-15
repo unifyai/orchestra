@@ -2,15 +2,17 @@
 Includes endpoints for training and deployment of a router.
 """
 
-from typing import Dict, List
+from typing import Dict, List, Union
 
 from fastapi import APIRouter, Query, Request
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.web.api.utils.gcp import (
     blob_exists,
+    list_dir,
     send_pubsub_msg,
     vertex_ai_endpoint_exists,
+    vertex_ai_endpoint_list,
 )
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
@@ -84,6 +86,25 @@ def find_invalid_endpoints(endpoints):
     return invalid_endpoints
 
 
+def _list_trained_routers(user_id: str):
+    bucket_name = "custom_router_data"
+    blobs = list_dir(bucket_name, f"custom_router/{user_id}")
+    trained_routers = []
+    for b in blobs:
+        if "model.pth" in b.id:
+            trained_routers.append(b.id.split("/")[3])
+    return trained_routers
+
+
+def _list_deployed_routers(user_id: str):
+    router_endpoints = vertex_ai_endpoint_list()
+    clean_routers = []
+    for r in router_endpoints:
+        if user_id in r:
+            clean_routers.append(r.removeprefix(f"{user_id}_"))
+    return clean_routers
+
+
 def send_to_train_server(action, **data):
     topic = "projects/saas-368716/topics/train_router"
     url = "https://api.unify.ai"  # TODO: Deal with staging/test
@@ -102,21 +123,30 @@ def send_to_deploy_server(action, **data):
 # TODO: List trained routers
 
 
-@router.post("router/train")
+@router.post("/router/train")
 def train_router(
     request_fastapi: Request,
     name: str = Query(..., description="Name of the router."),
     dataset: str = Query(
         ...,
-        description="Name of the dataset to train the router on.",
+        description=(
+            "Name of the dataset to train the router on."
+            " To use a dataset, you need to first upload it to your account"
+            " using the `/dataset` POST endpoints."
+        ),
     ),
     endpoints: List[str] = Query(
         ...,
-        description="List of endpoints to include in the router.",
+        description=(
+            "List of endpoints to include in the router."
+            " Endpoints must be specified using the `model@provider` format."
+        ),
     ),
 ) -> Dict[str, str]:
     """
-    Trains a router based on a dataset and a set of endpoints.
+    Trains a router based on a dataset and a set of endpoints. To use a
+    custom-trained router, you will need to deploy the resulting artifacts to
+    a live endpoint. To do this, use the `/router/deploy` POST endpoint.
     """
     user_id = request_fastapi.state.user_id
     # Check if the router already exists
@@ -140,13 +170,31 @@ def train_router(
     return {"info": "Router training started! You will receive an email soon!"}
 
 
+@router.get("/router/train/list")
+def get_trained_routers(
+    request_fastapi: Request,
+) -> Dict[str, Dict[str, Union[str, List[str]]]]:
+    """
+    Fetches a list of the trained routers and relevant metadata. These routers are training
+    artifacts and therefore don't imply an active, deployed router. To fetch a list of
+    deployed routers, you can use the /router/deploy/list GET endpoint.
+    """
+    user_id = request_fastapi.state.user_id
+    routers = _list_trained_routers(user_id)
+    # TODO: Do this correctly
+    routers_metadata = {}
+    for router in routers:
+        routers_metadata[router] = {"dataset": "", "endpoints": [""]}
+    return routers_metadata
+
+
 @router.delete("/router/train")
 def delete_router_train(
     request_fastapi: Request,
     name: str = Query(..., description="Name of the router to delete."),
 ) -> Dict[str, str]:
     """
-    Deactivates and deletes a trained router.
+    Deletes the training files of a specific router.
     """
     user_id = request_fastapi.state.user_id
     # Check if the router files exist
@@ -169,7 +217,12 @@ def deploy_router(
     name: str = Query(..., description="Name of the router to deploy."),
 ) -> Dict[str, str]:
     """
-    Deploys a router.
+    Deploys a trained router to a live endpoint.
+
+    To use this router, replace the model in the endpoint string with the
+    router name. E.g. you can use `router-abc` by calling the
+    `router-abc@q:1` endpoint.
+
     """
     user_id = request_fastapi.state.user_id
     # Check if the files exist
@@ -189,7 +242,7 @@ def delete_router(
     name: str = Query(..., description="Name of the router to un-deploy."),
 ) -> Dict[str, str]:
     """
-    Deactivates and deletes a deployed router.
+    Deactivates and deletes a previously deployed router.
     """
     user_id = request_fastapi.state.user_id
     # Check if the router exists
@@ -200,3 +253,25 @@ def delete_router(
     #   un-deploy router
     #   modify entry in the db
     return {"info": "Router deletion started! You will receive an email soon!"}
+
+
+@router.get("/router/deploy/list")
+def get_deployed_routers(
+    request_fastapi: Request,
+) -> Dict[str, Dict[str, Union[str, List[str]]]]:
+    """
+    Fetches a list of the deployed routers and relevant metadata. These routers only
+    include deployed routers. To fetch a list of all trained routers,
+    you can use the /router/train/list GET endpoint.
+
+    To use any of these routers, replace the model in the endpoint string with the
+    router name. E.g. you can use `router-abc` with the endpoint `router-abc@q:1`.
+
+    """
+    user_id = request_fastapi.state.user_id
+    routers = _list_deployed_routers(user_id)
+    # TODO: Do this correctly
+    routers_metadata = {}
+    for router in routers:
+        routers_metadata[router] = {"dataset": "", "endpoints": [""]}
+    return routers_metadata
