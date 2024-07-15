@@ -2,12 +2,12 @@
 Includes endpoints related to dataset evaluations.
 """
 
-from typing import Dict
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Query, Request
 from providers.completion import PROVIDER_CLASSES
 
-from orchestra.web.api.utils.gcp import blob_exists, send_pubsub_msg
+from orchestra.web.api.utils.gcp import blob_exists, list_dir, send_pubsub_msg
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
     invalid_training_endpoints,
@@ -16,6 +16,28 @@ from orchestra.web.api.utils.http_responses import (
 router = APIRouter()
 
 # utils
+
+
+# TODO: Move to utils (duplicated in dataset)
+def _list_datasets(user_id: str):
+    bucket_name = "uploaded_datasets"
+    blobs = list_dir(bucket_name, user_id)
+    dirs = set([b.id.split("/")[2] for b in blobs])
+    # Clean legacy datasets
+    dirs = {d for d in dirs if not d.endswith(".jsonl")}
+    return list(dirs)
+
+
+def _list_evaluations(user_id: str, dataset: str):
+    bucket_name = "uploaded_datasets"
+    blobs = list_dir(bucket_name, f"{user_id}/{dataset}")
+    endpoints = []
+    for b in blobs:
+        # keep only the endpoints
+        levels = b.id.split("/")
+        if "judgements.jsonl" in b.id and len(levels) > 4:
+            endpoints.append(levels[4])
+    return endpoints
 
 
 # TODO: Move to utils (duplicated in routing)
@@ -66,18 +88,23 @@ def send_to_dataset_evaluation_server(action, **data):
 
 # endpoints
 
-# TODO: List dataset evaluations
 # TODO: Update dataset evaluation
 
 
 @router.post("/evaluation")
 def evaluate_dataset(
     request_fastapi: Request,
-    dataset: str = Query(..., description="Name of the dataset to evaluate on."),
-    endpoint: str = Query(..., description="Endpoint to evaluate."),
+    dataset: str = Query(..., description="Name of the uploaded dataset to evaluate."),
+    endpoint: str = Query(
+        ...,
+        description=(
+            "Endpoint to evaluate."
+            " Endpoints must be specified using the `model@provider` format."
+        ),
+    ),
 ) -> Dict[str, str]:
     """
-    Evaluates a given endpoint in a dataset.
+    Evaluates the output quality of a given LLM endpoint in a custom dataset.
     """
     user_id = request_fastapi.state.user_id
     api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
@@ -102,14 +129,18 @@ def evaluate_dataset(
 @router.delete("/evaluation")
 def delete_dataset_evaluation(
     request_fastapi: Request,
-    dataset: str = Query(..., description="Name of the dataset."),
+    dataset: str = Query(
+        ...,
+        description="Name of the dataset to delete an evaluation from.",
+    ),
     endpoint: str = Query(
         ...,
-        description="Endpoint which evaluation will be deleted.",
+        description="Endpoint whose evaluation will be deleted.",
     ),
 ) -> Dict[str, str]:
     """
-    Deletes a dataset evaluation.
+    Deletes a specific dataset evaluation quality score
+    and the corresponding artifacts.
     """
     user_id = request_fastapi.state.user_id
     # Delete the dataset_evaluation files
@@ -120,3 +151,29 @@ def delete_dataset_evaluation(
         endpoint=endpoint,
     )
     return {"info": "Dataset evaluation deleted!"}
+
+
+@router.get("/evaluation/list")
+def get_dataset_evaluations(
+    request_fastapi: Request,
+    dataset: Optional[str] = Query(
+        None,
+        description=(
+            "Name of the dataset to fetch evaluation from."
+            " If not specified, all evaluations will be returned."
+        ),
+    ),
+) -> Dict[str, List[str]]:
+    """
+    Fetches a list of the endpoints that have been evaluated on a given dataset.
+    """
+    user_id = request_fastapi.state.user_id
+    if dataset is not None:
+        # Check if the dataset exists
+        if not dataset_exists(user_id, dataset):
+            raise dataset_does_not_exist
+    evaluations = {}
+    datasets = [dataset] if dataset is not None else _list_datasets(user_id)
+    for d in datasets:
+        evaluations[d] = _list_evaluations(user_id, d)
+    return evaluations

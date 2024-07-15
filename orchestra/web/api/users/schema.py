@@ -12,14 +12,3 @@ class CreditsResponse(BaseModel):
 
     id: str
     credits: float
-
-
-class CreditsCodeResponse(BaseModel):
-    """
-    Response model for credits code models.
-
-    Attributes:
-        msg (str): Message returned to the user.
-    """
-
-    msg: str

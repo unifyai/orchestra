@@ -1,5 +1,5 @@
 import datetime
-from typing import Optional, Union
+from typing import Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
@@ -7,16 +7,27 @@ from fastapi.param_functions import Depends
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.models.orchestra_models import Users
-from orchestra.web.api.users.schema import CreditsCodeResponse, CreditsResponse
+from orchestra.web.api.users.schema import CreditsResponse
 
 router = APIRouter()
 
 
-@router.get("/get_credits", response_model=Union[CreditsResponse, None])
+@router.get(
+    "/get_credits",
+    response_model=CreditsResponse,
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {"example": {"id": "<USER_ID>", "credits": 10}},
+            },
+        },
+    },
+)
 def get_credits(
     request_fastapi: Request,
     users_dao: UsersDAO = Depends(),
-) -> Union[Users, None]:
+) -> Users:
     """
     Returns the number of available credits.
     \f
@@ -25,10 +36,34 @@ def get_credits(
     :return: user instance with credits from database.
     """
     user = users_dao.filter(id=request_fastapi.state.user_id)
-    return user[0] if user else None
+    return user[0]
 
 
-@router.post("/promo", response_model=CreditsCodeResponse)
+@router.post(
+    "/promo",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Code {code} activated succesfully!"},
+                },
+            },
+        },
+        400: {
+            "description": "Already activated code",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "This code has already been activated."},
+                },
+            },
+        },
+        404: {
+            "description": "Code Not Found",
+            "content": {"application/json": {"example": {"detail": "Invalid code."}}},
+        },
+    },
+)
 def credits_code(
     request_fastapi: Request,
     code: str = Query(..., description="Promo code to be activated."),
@@ -41,9 +76,9 @@ def credits_code(
     ),
     recharge_dao: RechargeDAO = Depends(),
     users_dao: UsersDAO = Depends(),
-) -> Union[CreditsCodeResponse, None]:
+) -> Dict[str, str]:
     """
-    Activates a valid promo code.
+    Activates a promotional code.
     \f
     :param request_fastapi: FastAPI request object.
     :param code: Promo code to be activated.
@@ -119,4 +154,4 @@ def credits_code(
         type=code,
     )
     users_dao.recharge_credit(user_id, qty)
-    return CreditsCodeResponse(msg=f"Code {code} activated succesfully!")
+    return {"info": f"Code {code} activated succesfully!"}
