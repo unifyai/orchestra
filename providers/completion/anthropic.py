@@ -104,6 +104,13 @@ class Anthropic(BaseCompletionProvider):
                     del kwargs["tool_choice"]
                     del kwargs["tools"]
 
+            if "n" in kwargs:
+                if kwargs.get("n") == 1:
+                    del kwargs["n"]
+                else:
+                    # TODO: need custom error handling for this to work...
+                    raise ValueError("Only n=1 is supported for Anthropic models")
+
             new_messages = []
             for message in messages:
                 if message["role"] == "tool":
