@@ -15,12 +15,25 @@ public_router = APIRouter()
 _model_list_cache = {}
 
 
-@public_router.get("/models", response_model=List[str])
+@public_router.get(
+    "/models",
+    response_model=List[str],
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": ["model_a", "model_b", "..."],
+                },
+            },
+        },
+    },
+)
 def list_models(
     model_dao: ModelDAO = Depends(),
 ) -> List[Model]:
     """
-    Returns a list of every model available through the API.
+    Returns a list of every LLM available through the Unify API.
     \f
     :return: list of active model names from database.
     """
