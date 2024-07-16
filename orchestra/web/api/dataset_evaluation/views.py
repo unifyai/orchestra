@@ -91,7 +91,42 @@ def send_to_dataset_evaluation_server(action, **data):
 # TODO: Update dataset evaluation
 
 
-@router.post("/evaluation")
+@router.post(
+    "/evaluation",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Dataset evaluation started! You will receive an email soon!",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Invalid Endpoints",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Invalid input. Couldn't find"
+                            " endpoints [model_1@endpoint_1, model_2@endpoint_2]."
+                        ),
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Dataset Not Found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "This dataset does not exist!"},
+                },
+            },
+        },
+    },
+)
 def evaluate_dataset(
     request_fastapi: Request,
     dataset: str = Query(..., description="Name of the uploaded dataset to evaluate."),
@@ -104,7 +139,7 @@ def evaluate_dataset(
     ),
 ) -> Dict[str, str]:
     """
-    Evaluates the output quality of a given LLM endpoint in a custom dataset.
+    Evaluates the quality of the responses from a given LLM endpoint in a custom dataset.
     """
     user_id = request_fastapi.state.user_id
     api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
@@ -126,7 +161,19 @@ def evaluate_dataset(
     return {"info": "Dataset evaluation started! You will receive an email soon!"}
 
 
-@router.delete("/evaluation")
+@router.delete(
+    "/evaluation",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Dataset evaluation deleted!"},
+                },
+            },
+        },
+    },
+)
 def delete_dataset_evaluation(
     request_fastapi: Request,
     dataset: str = Query(
@@ -153,7 +200,37 @@ def delete_dataset_evaluation(
     return {"info": "Dataset evaluation deleted!"}
 
 
-@router.get("/evaluation/list")
+@router.get(
+    "/evaluation/list",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {
+                            "dataset_1": [
+                                "model_1@provider_1",
+                                "model_2@provider_2",
+                                "...",
+                            ],
+                        },
+                        {"dataset_2": ["..."]},
+                        {"...": ["..."]},
+                    ],
+                },
+            },
+        },
+        404: {
+            "description": "Dataset Not Found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "This dataset does not exist!"},
+                },
+            },
+        },
+    },
+)
 def get_dataset_evaluations(
     request_fastapi: Request,
     dataset: Optional[str] = Query(

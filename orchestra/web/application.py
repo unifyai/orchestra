@@ -47,6 +47,7 @@ def get_app() -> FastAPI:
         docs_url="/v0/docs",
         redoc_url="/v0/redoc",
         openapi_url="/v0/openapi.json",
+        swagger_ui_parameters={"defaultModelsExpandDepth": -1},
         default_response_class=UJSONResponse,
     )
 

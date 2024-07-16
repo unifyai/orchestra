@@ -123,7 +123,44 @@ def send_to_deploy_server(action, **data):
 # TODO: List trained routers
 
 
-@router.post("/router/train")
+@router.post(
+    "/router/train",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Router training started! You will receive an email soon!",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Router Training Already Exist",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "A router with this name has already been trained. Please, "
+                            "choose a different one."
+                        ),
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Dataset Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "This dataset does not exist.",
+                    },
+                },
+            },
+        },
+    },
+)
 def train_router(
     request_fastapi: Request,
     name: str = Query(..., description="Name of the router."),
@@ -170,7 +207,25 @@ def train_router(
     return {"info": "Router training started! You will receive an email soon!"}
 
 
-@router.get("/router/train/list")
+@router.get(
+    "/router/train/list",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "router_1": {
+                            "dataset": "dataset_1",
+                            "endpoints": ["model@provider", "..."],
+                        },
+                        "...": {"..."},
+                    },
+                },
+            },
+        },
+    },
+)
 def get_trained_routers(
     request_fastapi: Request,
 ) -> Dict[str, Dict[str, Union[str, List[str]]]]:
@@ -188,7 +243,30 @@ def get_trained_routers(
     return routers_metadata
 
 
-@router.delete("/router/train")
+@router.delete(
+    "/router/train",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {"example": {"info": "Trained router deleted!"}},
+            },
+        },
+        400: {
+            "description": "Router Training Does Not Exist",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "This router training doesn't exist. "
+                            "Please, choose a different one or trigger the training first."
+                        ),
+                    },
+                },
+            },
+        },
+    },
+)
 def delete_router_train(
     request_fastapi: Request,
     name: str = Query(..., description="Name of the router to delete."),
@@ -211,7 +289,34 @@ def delete_router_train(
 # TODO: List deployed routers
 
 
-@router.post("/router/deploy")
+@router.post(
+    "/router/deploy",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Router deployment started! You will receive an email soon!",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Router Training Does Not Exist",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "This router training doesn't exist. "
+                            "Please, choose a different one or trigger the training first."
+                        ),
+                    },
+                },
+            },
+        },
+    },
+)
 def deploy_router(
     request_fastapi: Request,
     name: str = Query(..., description="Name of the router to deploy."),
@@ -236,7 +341,29 @@ def deploy_router(
     return {"info": "Router deployment started! You will receive an email soon!"}
 
 
-@router.delete("/router/deploy")
+@router.delete(
+    "/router/deploy",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Router deletion started! You will receive an email soon!",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Router Not Deployed",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "This router is not deployed!"},
+                },
+            },
+        },
+    },
+)
 def delete_router(
     request_fastapi: Request,
     name: str = Query(..., description="Name of the router to un-deploy."),
@@ -255,7 +382,25 @@ def delete_router(
     return {"info": "Router deletion started! You will receive an email soon!"}
 
 
-@router.get("/router/deploy/list")
+@router.get(
+    "/router/deploy/list",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "router_1": {
+                            "dataset": "dataset_1",
+                            "endpoints": ["model@provider", "..."],
+                        },
+                        "...": {"..."},
+                    },
+                },
+            },
+        },
+    },
+)
 def get_deployed_routers(
     request_fastapi: Request,
 ) -> Dict[str, Dict[str, Union[str, List[str]]]]:
