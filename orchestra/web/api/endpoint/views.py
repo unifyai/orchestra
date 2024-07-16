@@ -15,13 +15,26 @@ public_router = APIRouter()
 _endpoint_list_cache = {}
 
 
-@public_router.get("/endpoints_of", response_model=List[str])
+@public_router.get(
+    "/endpoints_of",
+    response_model=List[str],
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": ["model_a@provider_1", "model_a@provider_2", "..."],
+                },
+            },
+        },
+    },
+)
 def get_endpoints_of(
     model: str = Query(..., description="Model to get available endpoints from."),
     endpoint_dao: EndpointDAO = Depends(),
 ):
     """
-    Lists available endpoints for a given model.
+    Lists available endpoints for a given model as `model@provider` strings.
     """
     if (
         model not in _endpoint_list_cache
@@ -39,7 +52,20 @@ def get_endpoints_of(
 _provider_list_cache = {}
 
 
-@public_router.get("/providers_of", response_model=List[str])
+@public_router.get(
+    "/providers_of",
+    response_model=List[str],
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": ["provider_1", "provider_2", "..."],
+                },
+            },
+        },
+    },
+)
 def get_providers_of(
     model: str = Query(..., description="Model to get available providers from."),
     endpoint_dao: EndpointDAO = Depends(),
