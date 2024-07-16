@@ -139,7 +139,7 @@ def register_startup_event(
         app.middleware_stack = None
         _setup_db(app)
         setup_opentelemetry(app)
-        setup_prometheus(app)
+        # setup_prometheus(app)
         aiplatform.init(
             project=settings.vertexai_project,
             location=settings.vertexai_location,
