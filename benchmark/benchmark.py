@@ -23,6 +23,7 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     BenchmarkSeqLen,
     Datapoint,
     Endpoint,
+    LatestBenchmark,
     Metric,
     Model,
     Provider,
@@ -321,6 +322,39 @@ async def commit_benchmark_runs(
         )
         async_session.add(new_br)
         new_brs.append(new_br)
+
+        # add latest benchmark
+        latest_br = LatestBenchmark(
+            endpoint_id=br["endpoint_id"],
+            regime=br["regime"],
+            region=br["region"],
+            seq_len=br["input_policy"],
+            input_cost=br["input_cost_per_token"],
+            output_cost=br["output_cost_per_token"],
+            ttft=br["ttft"][0],
+            itl=br["itl"][0],
+            measured_at=datetime.datetime.now(),
+        )
+        latest_qry = await async_session.get(
+            LatestBenchmark,
+            {
+                "endpoint_id": latest_br.endpoint_id,
+                "regime": latest_br.regime,
+                "region": latest_br.region,
+                "seq_len": latest_br.seq_len,
+            },
+        )
+
+        if latest_qry is None:
+            async_session.add(latest_br)
+        else:
+            # slightly hacky ...
+            latest_qry.input_cost = latest_br.input_cost
+            latest_qry.output_cost = latest_br.output_cost
+            latest_qry.ttft = latest_br.ttft
+            latest_qry.itl = latest_br.itl
+            latest_qry.measured_at = latest_br.measured_at
+
     await async_session.commit()
     return new_brs
 
