@@ -122,6 +122,11 @@ dataset_does_not_exist = HTTPException(
     detail="This dataset does not exist.",
 )
 
+evaluation_does_not_exist = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail="This evaluation does not exist.",
+)
+
 provider_not_found_under_conditions = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
     detail="No providers found within the specified thresholds.",

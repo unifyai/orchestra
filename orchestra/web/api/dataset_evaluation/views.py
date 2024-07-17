@@ -7,9 +7,16 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, Query, Request
 from providers.completion import PROVIDER_CLASSES
 
-from orchestra.web.api.utils.gcp import blob_exists, list_dir, send_pubsub_msg
+from orchestra.web.api.utils.gcp import (
+    blob_exists,
+    delete_dir,
+    dir_exists,
+    list_dir,
+    send_pubsub_msg,
+)
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
+    evaluation_does_not_exist,
     invalid_training_endpoints,
 )
 
@@ -78,6 +85,18 @@ def find_invalid_endpoints(endpoints):
             invalid_endpoints.append(e)  # temp
             continue
     return invalid_endpoints
+
+
+def _delete_evaluation(user_id: str, dataset: str, endpoint: str):
+    bucket_name = "uploaded_datasets"
+    # TODO: 0 will need to be accounted when introducing dynamic datasets
+    if dataset == "":
+        raise dataset_does_not_exist
+    dir_name = f"{user_id}/{dataset}/0/{endpoint}"
+    if not dir_exists(bucket_name, dir_name):
+        raise evaluation_does_not_exist
+    else:
+        delete_dir(bucket_name, dir_name)
 
 
 def send_to_dataset_evaluation_server(action, **data):
@@ -191,12 +210,14 @@ def delete_dataset_evaluation(
     """
     user_id = request_fastapi.state.user_id
     # Delete the dataset_evaluation files
-    send_to_dataset_evaluation_server(
-        action="delete",
-        user_id=user_id,
-        dataset=dataset,
-        endpoint=endpoint,
-    )
+    _delete_evaluation(user_id, dataset, endpoint)
+    # TODO: Move this to the microservice
+    # send_to_dataset_evaluation_server(
+    #     action="delete",
+    #     user_id=user_id,
+    #     dataset=dataset,
+    #     endpoint=endpoint,
+    # )
     return {"info": "Dataset evaluation deleted!"}
 
 
