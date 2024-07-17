@@ -293,3 +293,21 @@ class CreditCardFingerprint(Base):
     id = sa.Column(sa.Integer(), primary_key=True)
     user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
     fingerprint = sa.Column(sa.String(), nullable=False)
+
+
+class LatestBenchmark(Base):
+    """Model class for latest benchmark data table."""
+
+    __tablename__ = "latest_benchmark"
+
+    endpoint_id = sa.Column(
+        sa.Integer(), sa.ForeignKey("endpoint.id"), nullable=False, primary_key=True
+    )
+    regime = sa.Column(sa.String(), primary_key=True)
+    region = sa.Column(sa.String(), primary_key=True)
+    seq_len = sa.Column(sa.String(), primary_key=True)
+    input_cost = sa.Column(sa.Numeric())
+    output_cost = sa.Column(sa.Numeric())
+    ttft = sa.Column(sa.Numeric())
+    itl = sa.Column(sa.Numeric())
+    measured_at = sa.Column(sa.TIMESTAMP(), nullable=False)
