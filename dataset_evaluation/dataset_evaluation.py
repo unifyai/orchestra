@@ -13,10 +13,11 @@ from utils.fetch_queries import generate_queries
 class BenchmarkConfig:
     dataset_name: str
     endpoint: str
-    judge_model_tag: str
+    judge_models: list[str]
     user_id: str
     api_key: str
     orchestra_url: str
+    system_prompt: str = ""
 
 
 async def main(msg, data_dir):
@@ -90,6 +91,7 @@ async def main(msg, data_dir):
         model_responses_path,
         model_judgements_path,
         api_key,
+        system_prompt,
     ):
         model_str = _format_model_tag(model_tag)
         judgements_file_str = _format_judgements_file(model_tag, judge_model_tag)
@@ -105,17 +107,20 @@ async def main(msg, data_dir):
             batch_size=2,
             api_key=api_key,
             orchestra_url=cfg.orchestra_url,
+            system_prompt=system_prompt,
         )
 
     tasks = [
         process_judgements(
             cfg.endpoint,
-            cfg.judge_model_tag,
+            judge_tag,
             prompts_path,
             model_responses_path,
             model_judgements_path,
             cfg.api_key,
-        ),
+            cfg.system_prompt,
+        )
+        for judge_tag in cfg.judge_models
     ]
 
     logging.info(f"Begin getting judgements")
@@ -160,14 +165,16 @@ async def main(msg, data_dir):
         os.path.join(model_responses_path, _format_model_tag(cfg.endpoint) + ".jsonl"),
     )
     # upload judgements
-    blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/{cfg.endpoint}/judgements.jsonl"
-    blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    blob.upload_from_filename(
-        os.path.join(
-            model_judgements_path,
-            _format_judgements_file(cfg.endpoint, cfg.judge_model_tag) + ".jsonl",
-        ),
-    )
+    for judge_tag in cfg.judge_models:
+        fmtd_judge_tag = _format_model_tag(judge_tag)
+        blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/{cfg.endpoint}/{fmtd_judge_tag}_judgements.jsonl"
+        blob = storage.Client().bucket(bucket_name).blob(blob_name)
+        blob.upload_from_filename(
+            os.path.join(
+                model_judgements_path,
+                _format_judgements_file(cfg.endpoint, judge_tag) + ".jsonl",
+            ),
+        )
     # upload tokens
     # TODO
 
@@ -181,15 +188,19 @@ if __name__ == "__main__":
     parser.add_argument("--orchestra_url", required=True)
     parser.add_argument("--dataset_name", required=True)
     parser.add_argument("--endpoint", required=True)
+    parser.add_argument("--judge_models", type=str, required=True)
+    parser.add_argument("--system_prompt")
     args = parser.parse_args()
 
+    judge_model_list = args.judge_models.split(",")
     cfg = {
         "dataset_name": args.dataset_name,
         "endpoint": args.endpoint,
-        "judge_model_tag": "gpt-4o@openai",
+        "judge_models": judge_model_list,
         "user_id": args.user_id,
         "api_key": args.api_key,
         "orchestra_url": args.orchestra_url,
+        "system_prompt": args.system_prompt,
     }
 
     msg_d = {"config": cfg}

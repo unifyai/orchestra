@@ -6,9 +6,15 @@ from utils.request_handling import Request, create_payload
 from utils.judge_configs import format_no_ref, format_with_ref
 
 
-def create_judge_prompt(prompt_data):
+def create_judge_prompt(prompt_data, system_prompt):
     prompt = prompt_data["prompt"]
     model_response = prompt_data["model_response"]
+    if system_prompt is not "":
+        judge_prompt = system_prompt.replace("[[[PROMPT]]]", prompt)
+        judge_prompt = judge_prompt.replace("[[[MODEL_RESPONSE]]]", model_resp)
+        # TODO: more here...
+        judge_prompt = judge_prompt.replace("[[[REF_ANSWER]]]", model_resp)
+
     if "ref_answer" in prompt_data:
         judge_prompt = format_with_ref(
             prompt=prompt, ref_ans=prompt_data["ref_answer"], model_resp=model_response
@@ -18,8 +24,8 @@ def create_judge_prompt(prompt_data):
     return judge_prompt
 
 
-def create_request(model_tag: str, url, headers, prompt_data: dict, model_name):
-    prompt = create_judge_prompt(prompt_data)
+def create_request(model_tag: str, url, headers, prompt_data: dict, model_name, system_prompt):
+    prompt = create_judge_prompt(prompt_data, system_prompt)
     payload = create_payload(model_tag=model_tag, prompt=prompt)
     return Request(
         id_=prompt_data["id"],
@@ -41,6 +47,7 @@ async def generate_judgements(
     batch_size,
     api_key,
     orchestra_url,
+    system_prompt,
 ):
     url = f"{orchestra_url}/v0/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}"}
@@ -76,7 +83,7 @@ async def generate_judgements(
                 continue
             data["model_response"] = id_to_response[data["row_id"]]
             data["id"] = data["row_id"]
-            req = create_request(judge_model_tag, url, headers, data, asst_model_name)
+            req = create_request(judge_model_tag, url, headers, data, asst_model_name, system_prompt)
             unprocessed_prompts.append(req)
 
     print(f"{len(no_resp)=}")
