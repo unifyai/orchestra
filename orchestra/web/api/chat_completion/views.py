@@ -1,6 +1,6 @@
 import json
 import time
-from typing import Any, Dict, Union
+from typing import Any, Dict, Optional, Union
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.param_functions import Depends
@@ -19,7 +19,6 @@ from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.chat_completion.schema import (
     ChatCompletionRequest,
     ChatCompletionResponse,
-    QueryMetricsRequest,
     RouterScoresResponse,
 )
 from orchestra.web.api.users.views import get_credits
@@ -260,10 +259,15 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     return RouterScoresResponse(scores=scores)
 
 
-@router.get("/query_metrics")
+@router.get("/metrics")
 def get_query_metrics(
     request_fastapi: Request,
-    request: QueryMetricsRequest,
+    secondary_user_id: Optional[str] = "",
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    models: Optional[str] = None,
+    providers: Optional[str] = None,
+    interval: Optional[str] = 300,
 ) -> Dict[str, Any]:
     """
     Returns aggregated telemetry data from previous queries to the /chat/completions
@@ -279,12 +283,12 @@ def get_query_metrics(
         },
         params={
             "user_id": request_fastapi.state.user_id,
-            "secondary_user_id": request.secondary_user_id,
-            "start_time": request.start_time,
-            "end_time": request.end_time,
-            "models": request.models,
-            "providers": request.providers,
-            "interval": request.interval,
+            "secondary_user_id": secondary_user_id,
+            "start_time": start_time,
+            "end_time": end_time,
+            "models": models,
+            "providers": providers,
+            "interval": interval,
         },
     )
 
