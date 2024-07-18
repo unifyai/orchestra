@@ -260,7 +260,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     return RouterScoresResponse(scores=scores)
 
 
-@router.get("/metrics")
+@router.get("/query_metrics")
 def get_query_metrics(
     request_fastapi: Request,
     request: QueryMetricsRequest,
