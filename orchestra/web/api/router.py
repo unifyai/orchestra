@@ -96,6 +96,4 @@ api_router.include_router(
     dependencies=ADMIN_AUTH,
 )
 api_router.include_router(monitoring.router)
-api_router.include_router(
-    benchmarks.router, tags=["benchmarks"], dependencies=API_KEY_AUTH
-)
+api_router.include_router(benchmarks.router, tags=["benchmarks"])
