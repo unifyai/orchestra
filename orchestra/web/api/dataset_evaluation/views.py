@@ -163,7 +163,7 @@ def evaluate_dataset(
         default="", description="Optionally change the system prompt"
     ),
     class_cfg: list[dict[str, Any]] = Body(
-        default={}, description="A description of the classes for judging."
+        default=[], description="A description of the classes for judging."
     ),
 ) -> Dict[str, str]:
     """
