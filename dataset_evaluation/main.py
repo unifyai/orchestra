@@ -47,7 +47,7 @@ def pub_sub_callback(message):
                 --endpoint={data["endpoint"]}
                 --judge_models={data["judge_models"]}
                 --system_prompt={data["system_prompt"]}
-                --class_cfg={data["class_cfg"]}""",
+                --class_cfg={json.dumps(data["class_cfg"])}""",
                 shell=True,
             ) 
         except json.decoder.JSONDecodeError:

@@ -148,21 +148,21 @@ def send_to_dataset_evaluation_server(action, **data):
 )
 def evaluate_dataset(
     request_fastapi: Request,
-    dataset: str = Query(..., description="Name of the uploaded dataset to evaluate."),
-    endpoint: str = Query(
+    dataset: str = Body(..., description="Name of the uploaded dataset to evaluate."),
+    endpoint: str = Body(
         ...,
         description=(
             "Endpoint to evaluate."
             " Endpoints must be specified using the `model@provider` format."
         ),
     ),
-    judge_models: list[str] = Query(
+    judge_models: list[str] = Body(
         default=["gpt-4o@openai"], description="List of the LLMs to use as a judge"
     ),
-    system_prompt: str = Query(
+    system_prompt: str = Body(
         default="", description="Optionally change the system prompt"
     ),
-    class_cfg: dict[str, Any] = Body(
+    class_cfg: list[dict[str, Any]] = Body(
         default={}, description="A description of the classes for judging."
     ),
 ) -> Dict[str, str]:
@@ -172,10 +172,10 @@ def evaluate_dataset(
     user_id = request_fastapi.state.user_id
     api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
     # Check if the dataset exists
-    if not dataset_exists(user_id, eval_cfg.dataset):
+    if not dataset_exists(user_id, dataset):
         raise dataset_does_not_exist
     # Check that the endpoints are valid
-    invalid_endpoints = find_invalid_endpoints([eval_cfg.endpoint])
+    invalid_endpoints = find_invalid_endpoints([endpoint])
     if invalid_endpoints:
         raise invalid_training_endpoints(invalid_endpoints)
     # Send train job to the dataset_evaluation server
@@ -183,11 +183,11 @@ def evaluate_dataset(
         action="evaluate",
         user_id=user_id,
         api_key=api_key,
-        dataset=eval_cfg.dataset,
-        endpoint=eval_cfg.endpoint,
-        judge_models=eval_cfg.judge_models,
-        system_prompt=eval_cfg.system_prompt,
-        class_cfg=eval_cfg.class_cfg,
+        dataset=dataset,
+        endpoint=endpoint,
+        judge_models=judge_models,
+        system_prompt=system_prompt,
+        class_cfg=class_cfg,
     )
     return {"info": "Dataset evaluation started! You will receive an email soon!"}
 

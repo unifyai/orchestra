@@ -18,7 +18,7 @@ class BenchmarkConfig:
     api_key: str
     orchestra_url: str
     system_prompt: str
-    class_cfg: dict
+    class_cfg: str
 
 
 async def main(msg, data_dir):
@@ -27,6 +27,7 @@ async def main(msg, data_dir):
     """
     msg = json.loads(msg)
     cfg = msg["config"]
+    cfg["class_cfg"] = json.loads(cfg["class_cfg"])
     cfg = BenchmarkConfig(**cfg)
 
     # create root folder
