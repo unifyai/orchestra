@@ -3,29 +3,68 @@ import os
 
 from utils.generic_mp import process_requests
 from utils.request_handling import Request, create_payload
-from utils.judge_configs import format_no_ref, format_with_ref
+from utils.judge_templates import template_with_ref
+
+default_cfg = [
+    {"label": "excellent", "score": 1.0},
+    {"label": "very_good", "score": 0.8},
+    {"label": "good", "score": 0.5},
+    {"label": "bad", "score": 0.0},
+    {"label": "irrelevant", "score": 0.0},
+]
 
 
-def create_judge_prompt(prompt_data, system_prompt):
-    prompt = prompt_data["prompt"]
-    model_response = prompt_data["model_response"]
-    if system_prompt is not "":
-        judge_prompt = system_prompt.replace("[[[PROMPT]]]", prompt)
-        judge_prompt = judge_prompt.replace("[[[MODEL_RESPONSE]]]", model_resp)
-        # TODO: more here...
-        judge_prompt = judge_prompt.replace("[[[REF_ANSWER]]]", model_resp)
+def create_judge_rubric(cfg):
+    prompt = "First provide your explanation, then write down your final rating according to the following guidelines:"
+    for class_head in cfg:
+        head_str = f"""\n\t - "{class_head["label"]}" """
+        if "description" in class_head:
+            head_str += f""": {class_head["description"]}"""
+        prompt += head_str
 
-    if "ref_answer" in prompt_data:
-        judge_prompt = format_with_ref(
-            prompt=prompt, ref_ans=prompt_data["ref_answer"], model_resp=model_response
-        )
+    prompt += """\nAfter that, you must output your final verdict in JSON by **strictly** following this format:
+
+{"assistant_rating": [[RATING]]}
+
+Do not output anything else after your final verdict, but make sure you do give a verdict, that's the most important part!"""
+    return prompt
+
+
+def format_q(prompt_data):
+    s_to_attr = {
+        "User Question": "prompt",
+        "Reference Answer": "ref_answer",
+        "Assistant's Answer": "model_response",
+    }
+
+    ret = ""
+    for s, attr in s_to_attr.items():
+        if attr in prompt_data:
+            ret += f"""\n[The start of {s}]\n{prompt_data[attr]}\n[The end of {s}]"""
+
+    return ret
+
+
+def create_judge_prompt(prompt_data, system_prompt, class_cfg):
+    if system_prompt != "":
+        instructions = system_prompt
     else:
-        judge_prompt = format_no_ref(prompt=prompt, model_resp=model_response)
-    return judge_prompt
+        instructions = template_with_ref
+    if class_cfg:
+        judge_rubric = create_judge_rubric(class_cfg)
+    else:
+        judge_rubric = create_judge_rubric(default_cfg)
+    formatted_q = format_q(prompt_data)
+
+    final_prompt = instructions + judge_rubric + formatted_q
+
+    return final_prompt
 
 
-def create_request(model_tag: str, url, headers, prompt_data: dict, model_name, system_prompt):
-    prompt = create_judge_prompt(prompt_data, system_prompt)
+def create_request(
+    model_tag: str, url, headers, prompt_data: dict, model_name, system_prompt, class_cfg
+):
+    prompt = create_judge_prompt(prompt_data, system_prompt, class_cfg)
     payload = create_payload(model_tag=model_tag, prompt=prompt)
     return Request(
         id_=prompt_data["id"],
@@ -48,8 +87,9 @@ async def generate_judgements(
     api_key,
     orchestra_url,
     system_prompt,
+    class_cfg,
 ):
-    url = f"{orchestra_url}/v0/chat/completions"
+    url = f"{orchestra_url}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}"}
 
     asst_model_name = asst_model_tag.split("@")[0]
@@ -83,7 +123,15 @@ async def generate_judgements(
                 continue
             data["model_response"] = id_to_response[data["row_id"]]
             data["id"] = data["row_id"]
-            req = create_request(judge_model_tag, url, headers, data, asst_model_name, system_prompt)
+            req = create_request(
+                judge_model_tag,
+                url,
+                headers,
+                data,
+                asst_model_name,
+                system_prompt,
+                class_cfg,
+            )
             unprocessed_prompts.append(req)
 
     print(f"{len(no_resp)=}")

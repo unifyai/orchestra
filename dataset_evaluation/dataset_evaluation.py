@@ -17,7 +17,8 @@ class BenchmarkConfig:
     user_id: str
     api_key: str
     orchestra_url: str
-    system_prompt: str = ""
+    system_prompt: str
+    class_cfg: dict
 
 
 async def main(msg, data_dir):
@@ -92,6 +93,7 @@ async def main(msg, data_dir):
         model_judgements_path,
         api_key,
         system_prompt,
+        class_cfg,
     ):
         model_str = _format_model_tag(model_tag)
         judgements_file_str = _format_judgements_file(model_tag, judge_model_tag)
@@ -108,6 +110,7 @@ async def main(msg, data_dir):
             api_key=api_key,
             orchestra_url=cfg.orchestra_url,
             system_prompt=system_prompt,
+            class_cfg=class_cfg,
         )
 
     tasks = [
@@ -119,6 +122,7 @@ async def main(msg, data_dir):
             model_judgements_path,
             cfg.api_key,
             cfg.system_prompt,
+            cfg.class_cfg,
         )
         for judge_tag in cfg.judge_models
     ]
@@ -189,10 +193,15 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_name", required=True)
     parser.add_argument("--endpoint", required=True)
     parser.add_argument("--judge_models", type=str, required=True)
-    parser.add_argument("--system_prompt")
+    parser.add_argument("--system_prompt", type=str, default="")
+    parser.add_argument("--class_cfg", type=str)
     args = parser.parse_args()
 
     judge_model_list = args.judge_models.split(",")
+    if args.class_cfg:
+        class_cfg = json.loads(args.class_cfg)
+    else:
+        class_cfg = None
     cfg = {
         "dataset_name": args.dataset_name,
         "endpoint": args.endpoint,
@@ -201,6 +210,7 @@ if __name__ == "__main__":
         "api_key": args.api_key,
         "orchestra_url": args.orchestra_url,
         "system_prompt": args.system_prompt,
+        "class_cfg": class_cfg,
     }
 
     msg_d = {"config": cfg}
