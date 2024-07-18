@@ -38,15 +38,18 @@ def pub_sub_callback(message):
         try:
             data = json.loads(message.data)
             logging.info(f"entry: {data}")
-            user_id = data["user_id"]
-            api_key = data["api_key"]
-            dataset_name = data["dataset"]
-            endpoint = data["endpoint"]
-            orchestra_url = data["orchestra_url"]
             subprocess.Popen(
-                f"venv/bin/python3 dataset_evaluation.py --user_id={user_id} --api_key={api_key} --dataset_name={dataset_name} --endpoint={endpoint} --orchestra_url={orchestra_url}",
+                f"""venv/bin/python3 dataset_evaluation.py
+                --user_id={data["user_id"]}
+                --api_key={data["api_key"]}
+                --orchestra_url={data["orchestra_url"]}
+                --dataset_name={data["dataset"]}
+                --endpoint={data["endpoint"]}
+                --judge_models={data["judge_models"]}
+                --system_prompt={data["system_prompt"]}
+                --class_cfg={data["class_cfg"]}""",
                 shell=True,
-            )
+            ) 
         except json.decoder.JSONDecodeError:
             logging.error(f"Error parsing message: {message.data}")
         except:

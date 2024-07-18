@@ -2,9 +2,9 @@
 Includes endpoints related to dataset evaluations.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, Body
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.web.api.utils.gcp import (
@@ -156,6 +156,15 @@ def evaluate_dataset(
             " Endpoints must be specified using the `model@provider` format."
         ),
     ),
+    judge_models: list[str] = Query(
+        default=["gpt-4o@openai"], description="List of the LLMs to use as a judge"
+    ),
+    system_prompt: str = Query(
+        default="", description="Optionally change the system prompt"
+    ),
+    class_cfg: dict[str, Any] = Body(
+        default={}, description="A description of the classes for judging."
+    ),
 ) -> Dict[str, str]:
     """
     Evaluates the quality of the responses from a given LLM endpoint in a custom dataset.
@@ -163,10 +172,10 @@ def evaluate_dataset(
     user_id = request_fastapi.state.user_id
     api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
     # Check if the dataset exists
-    if not dataset_exists(user_id, dataset):
+    if not dataset_exists(user_id, eval_cfg.dataset):
         raise dataset_does_not_exist
     # Check that the endpoints are valid
-    invalid_endpoints = find_invalid_endpoints([endpoint])
+    invalid_endpoints = find_invalid_endpoints([eval_cfg.endpoint])
     if invalid_endpoints:
         raise invalid_training_endpoints(invalid_endpoints)
     # Send train job to the dataset_evaluation server
@@ -174,8 +183,11 @@ def evaluate_dataset(
         action="evaluate",
         user_id=user_id,
         api_key=api_key,
-        dataset=dataset,
-        endpoint=endpoint,
+        dataset=eval_cfg.dataset,
+        endpoint=eval_cfg.endpoint,
+        judge_models=eval_cfg.judge_models,
+        system_prompt=eval_cfg.system_prompt,
+        class_cfg=eval_cfg.class_cfg,
     )
     return {"info": "Dataset evaluation started! You will receive an email soon!"}
 
