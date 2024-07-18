@@ -27,7 +27,6 @@ async def main(msg, data_dir):
     """
     msg = json.loads(msg)
     cfg = msg["config"]
-    cfg["class_cfg"] = json.loads(cfg["class_cfg"])
     cfg = BenchmarkConfig(**cfg)
 
     # create root folder
@@ -193,12 +192,13 @@ if __name__ == "__main__":
     parser.add_argument("--orchestra_url", required=True)
     parser.add_argument("--dataset_name", required=True)
     parser.add_argument("--endpoint", required=True)
-    parser.add_argument("--judge_models", type=str, required=True)
+    parser.add_argument("--judge_models", required=True)
     parser.add_argument("--system_prompt", type=str, default="")
     parser.add_argument("--class_cfg", type=str)
     args = parser.parse_args()
 
-    judge_model_list = args.judge_models.split(",")
+    print(args.judge_models)
+
     if args.class_cfg:
         class_cfg = json.loads(args.class_cfg)
     else:
@@ -206,7 +206,7 @@ if __name__ == "__main__":
     cfg = {
         "dataset_name": args.dataset_name,
         "endpoint": args.endpoint,
-        "judge_models": judge_model_list,
+        "judge_models": args.judge_models.split(","),
         "user_id": args.user_id,
         "api_key": args.api_key,
         "orchestra_url": args.orchestra_url,
