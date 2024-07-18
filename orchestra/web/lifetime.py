@@ -81,7 +81,6 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
         app.url_path_for("swagger_ui_html"),
         app.url_path_for("swagger_ui_redirect"),
         app.url_path_for("redoc_html"),
-        "/metrics",
     ]
 
     FastAPIInstrumentor().instrument_app(
