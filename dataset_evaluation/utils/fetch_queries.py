@@ -24,7 +24,7 @@ async def generate_queries(
 
     print(f"Generating queries for: {model_tag}")
 
-    url = f"{orchestra_url}/chat/completions"
+    url = f"{orchestra_url}/v0/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}"}
 
     completed = set()

@@ -89,7 +89,7 @@ async def generate_judgements(
     system_prompt,
     class_cfg,
 ):
-    url = f"{orchestra_url}/chat/completions"
+    url = f"{orchestra_url}/v0/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}"}
 
     asst_model_name = asst_model_tag.split("@")[0]
