@@ -297,7 +297,7 @@ def get_query_metrics(
     ),
 ) -> Dict[str, Any]:
     """
-    Returns aggregated telemetry data from previous queries to the /chat/completions
+    Returns aggregated telemetry data from previous queries to the `/chat/completions`
     endpoint.
     """
     import requests
