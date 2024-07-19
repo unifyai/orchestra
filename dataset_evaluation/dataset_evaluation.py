@@ -123,9 +123,10 @@ def send_email(user_email, endpoint, dataset):
     msg["To"] = user_email
     msg["Bcc"] = "guillermo@unify.ai"
     msg["Subject"] = "Your dataset evaluation is ready!"
-    body = body.replace("<<ENDPOINT>>", endpoint)
-    body = body.replace("<<DATASET>>", dataset)
-    msg.set_content(body, subtype="html")
+    local_body = body
+    local_body = local_body.replace("<<ENDPOINT>>", endpoint)
+    local_body = local_body.replace("<<DATASET>>", dataset)
+    msg.set_content(local_body, subtype="html")
 
     email_server.send_message(msg)
     email_server.quit()
