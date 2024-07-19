@@ -9,16 +9,19 @@ from email.message import EmailMessage
 from google.cloud import secretmanager, storage
 from utils.fetch_judgements import generate_judgements
 from utils.fetch_queries import generate_queries
+from utils.parsing_judge import ratings_from_sample
 
 
 @dataclass
 class BenchmarkConfig:
     dataset_name: str
     endpoint: str
-    judge_model_tag: str
+    judge_models: list[str]
     user_id: str
     api_key: str
     orchestra_url: str
+    system_prompt: str
+    class_cfg: str
 
 
 body = """
@@ -204,6 +207,8 @@ async def main(msg, data_dir):
         model_responses_path,
         model_judgements_path,
         api_key,
+        system_prompt,
+        class_cfg,
     ):
         model_str = _format_model_tag(model_tag)
         judgements_file_str = _format_judgements_file(model_tag, judge_model_tag)
@@ -219,17 +224,22 @@ async def main(msg, data_dir):
             batch_size=2,
             api_key=api_key,
             orchestra_url=cfg.orchestra_url,
+            system_prompt=system_prompt,
+            class_cfg=class_cfg,
         )
 
     tasks = [
         process_judgements(
             cfg.endpoint,
-            cfg.judge_model_tag,
+            judge_tag,
             prompts_path,
             model_responses_path,
             model_judgements_path,
             cfg.api_key,
-        ),
+            cfg.system_prompt,
+            cfg.class_cfg,
+        )
+        for judge_tag in cfg.judge_models
     ]
 
     logging.info(f"Begin getting judgements")
@@ -274,16 +284,55 @@ async def main(msg, data_dir):
         os.path.join(model_responses_path, _format_model_tag(cfg.endpoint) + ".jsonl"),
     )
     # upload judgements
-    blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/{cfg.endpoint}/judgements.jsonl"
+    for judge_tag in cfg.judge_models:
+        fmtd_judge_tag = _format_model_tag(judge_tag)
+        blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/{cfg.endpoint}/{fmtd_judge_tag}_judgements.jsonl"
+        blob = storage.Client().bucket(bucket_name).blob(blob_name)
+        blob.upload_from_filename(
+            os.path.join(
+                model_judgements_path,
+                _format_judgements_file(cfg.endpoint, judge_tag) + ".jsonl",
+            ),
+        )
+    # TODO: upload tokens
+
+    storage_client = storage.Client()
+    bucket_name = "uploaded_datasets"
+
+    prefix = f"{cfg.user_id}/{cfg.dataset_name}/0/"
+    blobs = storage_client.list_blobs(bucket_name, prefix=prefix)
+
+    # format is {judge: {endpoint: score}}
+    results = {}
+    for b in blobs:
+        if "judgements" in b.name:
+            judge_model = (
+                b.name.split("/")[-1]
+                .replace("_judgements.jsonl", "")
+                .replace("___", "@")
+            )
+            endpoint_name = b.name.split("/")[3]
+            contents = b.download_as_bytes()
+            contents = contents.decode("utf-8").split("\n")
+            scores = []
+            for entry in contents:
+                if not entry:
+                    continue
+                entry = json.loads(entry)
+                scores.append(ratings_from_sample(entry["judge_response"]))
+
+            avg_score = sum(scores) / len(scores)
+            if judge_model in results:
+                results[judge_model][endpoint_name] = avg_score
+            else:
+                results[judge_model] = {endpoint_name: avg_score}
+
+    with open("scores.json", "w") as f:
+        json.dump(results, f)
+
+    blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/scores.json"
     blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    blob.upload_from_filename(
-        os.path.join(
-            model_judgements_path,
-            _format_judgements_file(cfg.endpoint, cfg.judge_model_tag) + ".jsonl",
-        ),
-    )
-    # upload tokens
-    # TODO
+    blob.upload_from_filename("scores.json")
 
     # send mail
     if user_email is not None:
@@ -302,16 +351,27 @@ if __name__ == "__main__":
     parser.add_argument("--orchestra_url", required=True)
     parser.add_argument("--dataset_name", required=True)
     parser.add_argument("--endpoint", required=True)
+    parser.add_argument("--judge_models", required=True)
+    parser.add_argument("--system_prompt", type=str, default="")
+    parser.add_argument("--class_cfg", type=str)
     parser.add_argument("--user_email", required=True)
     args = parser.parse_args()
 
+    print(args.judge_models)
+
+    if args.class_cfg:
+        class_cfg = json.loads(args.class_cfg)
+    else:
+        class_cfg = None
     cfg = {
         "dataset_name": args.dataset_name,
         "endpoint": args.endpoint,
-        "judge_model_tag": "gpt-4o@openai",
+        "judge_models": args.judge_models.split(","),
         "user_id": args.user_id,
         "api_key": args.api_key,
         "orchestra_url": args.orchestra_url,
+        "system_prompt": args.system_prompt,
+        "class_cfg": class_cfg,
         "user_email": args.user_email,
     }
 
