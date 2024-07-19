@@ -132,6 +132,12 @@ provider_not_found_under_conditions = HTTPException(
     detail="No providers found within the specified thresholds.",
 )
 
+def benchmark_not_found(model_provider_string: str):
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"We couldn't find benchmarks for {model_provider_string}",
+    )
+
 internal_endpoint_not_found = HTTPException(
     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
     detail="Endpoint not found",
