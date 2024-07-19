@@ -62,7 +62,13 @@ def create_judge_prompt(prompt_data, system_prompt, class_cfg):
 
 
 def create_request(
-    model_tag: str, url, headers, prompt_data: dict, model_name, system_prompt, class_cfg
+    model_tag: str,
+    url,
+    headers,
+    prompt_data: dict,
+    model_name,
+    system_prompt,
+    class_cfg,
 ):
     prompt = create_judge_prompt(prompt_data, system_prompt, class_cfg)
     payload = create_payload(model_tag=model_tag, prompt=prompt)

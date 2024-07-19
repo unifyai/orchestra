@@ -285,7 +285,3 @@ def format_with_ref(prompt, ref_ans, model_resp):
     return template_with_ref.format(
         prompt=prompt, ref_ans=ref_ans, model_resp=model_resp
     )
-
-
-
-

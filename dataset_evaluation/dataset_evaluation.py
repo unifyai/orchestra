@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from google.cloud import storage
 from utils.fetch_judgements import generate_judgements
 from utils.fetch_queries import generate_queries
+from utils.parsing_judge import ratings_from_sample
 
 
 @dataclass
@@ -179,8 +180,45 @@ async def main(msg, data_dir):
                 _format_judgements_file(cfg.endpoint, judge_tag) + ".jsonl",
             ),
         )
-    # upload tokens
-    # TODO
+    # TODO: upload tokens
+
+    storage_client = storage.Client()
+    bucket_name = "uploaded_datasets"
+
+    prefix = f"{cfg.user_id}/{cfg.dataset_name}/0/"
+    blobs = storage_client.list_blobs(bucket_name, prefix=prefix)
+
+    # format is {judge: {endpoint: score}}
+    results = {}
+    for b in blobs:
+        if "judgements" in b.name:
+            judge_model = (
+                b.name.split("/")[-1]
+                .replace("_judgements.jsonl", "")
+                .replace("___", "@")
+            )
+            endpoint_name = b.name.split("/")[3]
+            contents = b.download_as_bytes()
+            contents = contents.decode("utf-8").split("\n")
+            scores = []
+            for entry in contents:
+                if not entry:
+                    continue
+                entry = json.loads(entry)
+                scores.append(ratings_from_sample(entry["judge_response"]))
+
+            avg_score = sum(scores) / len(scores)
+            if judge_model in results:
+                results[judge_model][endpoint_name] = avg_score
+            else:
+                results[judge_model] = {endpoint_name: avg_score}
+
+    with open("scores.json", "w") as f:
+        json.dump(results, f)
+
+    blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/scores.json"
+    blob = storage.Client().bucket(bucket_name).blob(blob_name)
+    blob.upload_from_filename("scores.json")
 
 
 if __name__ == "__main__":
