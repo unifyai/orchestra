@@ -2,9 +2,9 @@
 Includes endpoints related to dataset evaluations.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, Body
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.web.api.utils.gcp import (
@@ -148,13 +148,22 @@ def send_to_dataset_evaluation_server(action, **data):
 )
 def evaluate_dataset(
     request_fastapi: Request,
-    dataset: str = Query(..., description="Name of the uploaded dataset to evaluate."),
-    endpoint: str = Query(
+    dataset: str = Body(..., description="Name of the uploaded dataset to evaluate."),
+    endpoint: str = Body(
         ...,
         description=(
             "Endpoint to evaluate."
             " Endpoints must be specified using the `model@provider` format."
         ),
+    ),
+    judge_models: list[str] = Body(
+        default=["gpt-4o@openai"], description="List of the LLMs to use as a judge"
+    ),
+    system_prompt: str = Body(
+        default="", description="Optionally change the system prompt"
+    ),
+    class_cfg: list[dict[str, Any]] = Body(
+        default=[], description="A description of the classes for judging."
     ),
 ) -> Dict[str, str]:
     """
@@ -178,6 +187,9 @@ def evaluate_dataset(
         api_key=api_key,
         dataset=dataset,
         endpoint=endpoint,
+        judge_models=judge_models,
+        system_prompt=system_prompt,
+        class_cfg=class_cfg,
     )
     return {"info": "Dataset evaluation started! You will receive an email soon!"}
 
