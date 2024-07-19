@@ -78,7 +78,7 @@ body = """
     </div>
     <div class="content">
         <h2>Hello! The Dataset Evaluation has finished 🚀</h2>
-        <p>Your dataset evaluation is ready, you can check out the results in <a href="https://console.unify.ai">your console</a>.</p>
+        <p>The evaluation of <<ENDPOINT>> on <<DATASET>> is ready, you can check out the results in <a href="https://console.unify.ai">your console</a>.</p>
     </div>
     <div class="subheader">
         <!-- Green bar at the top -->
@@ -106,7 +106,7 @@ body = """
 """
 
 
-def send_email(user_email):
+def send_email(user_email, endpoint, dataset):
     email_server = smtplib.SMTP("smtp.gmail.com", 587)
     email_server.starttls()
     email_addr = os.getenv("EMAIL_ADDR", "auth@unify.ai")
@@ -123,6 +123,8 @@ def send_email(user_email):
     msg["To"] = user_email
     msg["Bcc"] = "guillermo@unify.ai"
     msg["Subject"] = "Your dataset evaluation is ready!"
+    body = body.replace("<<ENDPOINT>>", endpoint)
+    body = body.replace("<<DATASET>>", dataset)
     msg.set_content(body, subtype="html")
 
     email_server.send_message(msg)
@@ -284,7 +286,7 @@ async def main(msg, data_dir):
 
     # send mail
     if user_email is not None:
-        send_email(user_email)
+        send_email(user_email, cfg.endpoint, cfg.dataset)
 
 
 if __name__ == "__main__":
