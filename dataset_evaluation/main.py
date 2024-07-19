@@ -2,8 +2,8 @@ import concurrent
 import json
 import logging
 import signal
-import sys
 import subprocess
+import sys
 
 import sdnotify
 from google.cloud import pubsub_v1
@@ -43,8 +43,9 @@ def pub_sub_callback(message):
             dataset_name = data["dataset"]
             endpoint = data["endpoint"]
             orchestra_url = data["orchestra_url"]
+            user_email = data.get("user_email", "")
             subprocess.Popen(
-                f"venv/bin/python3 dataset_evaluation.py --user_id={user_id} --api_key={api_key} --dataset_name={dataset_name} --endpoint={endpoint} --orchestra_url={orchestra_url}",
+                f"venv/bin/python3 dataset_evaluation.py --user_id={user_id} --api_key={api_key} --dataset_name={dataset_name} --endpoint={endpoint} --orchestra_url={orchestra_url} --user_email={user_email}",
                 shell=True,
             )
         except json.decoder.JSONDecodeError:
