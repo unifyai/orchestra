@@ -286,7 +286,7 @@ async def main(msg, data_dir):
 
     # send mail
     if user_email is not None:
-        send_email(user_email, cfg.endpoint, cfg.dataset)
+        send_email(user_email, cfg.endpoint, cfg.dataset_name)
         logging.info(
             f"Email sent to {user_email} for {cfg.endpoint}:{cfg.dataset_name}",
         )
