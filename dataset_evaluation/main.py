@@ -38,14 +38,17 @@ def pub_sub_callback(message):
         try:
             data = json.loads(message.data)
             logging.info(f"entry: {data}")
-            user_id = data["user_id"]
-            api_key = data["api_key"]
-            dataset_name = data["dataset"]
-            endpoint = data["endpoint"]
-            orchestra_url = data["orchestra_url"]
-            user_email = data.get("user_email", "")
             subprocess.Popen(
-                f"venv/bin/python3 dataset_evaluation.py --user_id={user_id} --api_key={api_key} --dataset_name={dataset_name} --endpoint={endpoint} --orchestra_url={orchestra_url} --user_email={user_email}",
+                f"""venv/bin/python3 dataset_evaluation.py \
+                --user_id={data["user_id"]} \
+                --api_key={data["api_key"]} \
+                --orchestra_url={data["orchestra_url"]} \
+                --dataset_name={data["dataset"]} \
+                --endpoint={data["endpoint"]} \
+                --judge_models={",".join(data["judge_models"])} \
+                --system_prompt={data["system_prompt"]} \
+                --class_cfg='{json.dumps(data["class_cfg"])}' \
+                --user_email={data.get("user_email", "")}""",
                 shell=True,
             )
         except json.decoder.JSONDecodeError:
