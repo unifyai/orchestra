@@ -43,4 +43,3 @@ def calc_quality(judgements_path, cfg=default_cfg):
             scores.append(prompt_score)
     print(scores)
     return sum(scores) / len(scores)
-
