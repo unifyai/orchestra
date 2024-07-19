@@ -7,6 +7,7 @@ from fastapi.param_functions import Depends
 
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.latest_benchmark_dao import LatestBenchmarkDAO
+from orchestra.web.api.utils.http_responses import benchmark_not_found
 
 router = APIRouter()
 
@@ -40,6 +41,4 @@ def get_latest_benchmark(
         }
         return ret
     except:
-        raise ValueError(
-            f"We couldn't find benchmarks for {model}@{provider}, please check again."
-        )
+        raise benchmark_not_found(f"{model}@{provider}")
