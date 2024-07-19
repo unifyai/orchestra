@@ -2,7 +2,7 @@ import json
 import time
 from typing import Any, Dict, Optional, Union
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 from fastapi.param_functions import Depends
 from fastapi.responses import StreamingResponse
 from providers.completion import PROVIDER_CLASSES
@@ -262,18 +262,48 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 @router.get("/metrics")
 def get_query_metrics(
     request_fastapi: Request,
-    secondary_user_id: Optional[str] = "",
-    start_time: Optional[str] = None,
-    end_time: Optional[str] = None,
-    models: Optional[str] = None,
-    providers: Optional[str] = None,
-    interval: Optional[str] = 300,
+    start_time: Optional[str] = Query(
+        None,
+        description="Timestamp of the earliest query to aggregate. Format is `YYYY-MM-DD hh:mm:ss`.",
+    ),
+    end_time: Optional[str] = Query(
+        None,
+        description="Timestamp of the latest query to aggregate. Format is `YYYY-MM-DD hh:mm:ss`.",
+    ),
+    models: Optional[str] = Query(
+        None,
+        description=(
+            "Models to fetch metrics from. The list must be a set of comma-sparated strings. "
+            "i.e. `gpt-3.5-turbo,gpt-4o`"
+        ),
+    ),
+    providers: Optional[str] = Query(
+        None,
+        description=(
+            "Providers to fetch metrics from. The list must be a set of comma-sparated strings. "
+            "i.e. `openai,together-ai`"
+        ),
+    ),
+    interval: Optional[str] = Query(
+        300,
+        description="Number of seconds in the aggregation interval.",
+    ),
+    secondary_user_id: Optional[str] = Query(
+        None,
+        description=(
+            "Secondary user id. The secondary user id will match any string "
+            "previously sent in the `user` attribute of `/chat/completions`."
+        ),
+    ),
 ) -> Dict[str, Any]:
     """
     Returns aggregated telemetry data from previous queries to the /chat/completions
     endpoint.
     """
     import requests
+
+    if secondary_user_id is None:
+        secondary_user_id = ""
 
     response = requests.get(
         "https://api.airfold.co/v1/pipes/queries_metrics.json",
