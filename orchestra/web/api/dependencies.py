@@ -43,6 +43,7 @@ def auth_api_key(
         logger.error(f"Digest {digest}: {auth_ret.text}")
         raise error
     request_fastapi.state.user_id = auth_ret.json()["user_id"]
+    request_fastapi.state.user_email = auth_ret.json()["email"]
 
 
 def auth_admin_key(

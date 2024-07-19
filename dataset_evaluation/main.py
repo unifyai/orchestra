@@ -2,8 +2,8 @@ import concurrent
 import json
 import logging
 import signal
-import sys
 import subprocess
+import sys
 
 import sdnotify
 from google.cloud import pubsub_v1
@@ -47,7 +47,8 @@ def pub_sub_callback(message):
                 --endpoint={data["endpoint"]} \
                 --judge_models={",".join(data["judge_models"])} \
                 --system_prompt={data["system_prompt"]} \
-                --class_cfg='{json.dumps(data["class_cfg"])}'""",
+                --class_cfg='{json.dumps(data["class_cfg"])}' \
+                --user_email={data.get("user_email", "")}""",
                 shell=True,
             )
         except json.decoder.JSONDecodeError:

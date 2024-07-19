@@ -2,9 +2,11 @@ import asyncio
 import json
 import logging
 import os
+import smtplib
 from dataclasses import dataclass
+from email.message import EmailMessage
 
-from google.cloud import storage
+from google.cloud import secretmanager, storage
 from utils.fetch_judgements import generate_judgements
 from utils.fetch_queries import generate_queries
 from utils.parsing_judge import ratings_from_sample
@@ -22,12 +24,124 @@ class BenchmarkConfig:
     class_cfg: str
 
 
+body = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dataset Evaluation Completed</title>
+    <style>
+        /* Styling for the email */
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            background-color: #ffffff;
+            text-align: center;
+        }
+        .header {
+            background-color: #00a824;
+            padding: 20px 0;
+        }
+        .subheader {
+            background-color: #00a824;
+            height: 10px;
+        }
+        .content {
+            padding: 20px;
+        }
+        .button {
+            display: inline-block;
+            background-color: #00a824; /* White background */
+            color: #ffffff; /* Green text */
+            font-weight: bold; /* Bold text */
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+        .footer {
+            background-color: #f3f3f5;
+            padding: 20px;
+            text-align: center;
+        }
+        .footer a {
+            margin: 0 10px;
+        }
+        .footer img {
+            width: 36px;
+            height: 36px;
+        }
+    </style>
+</head>
+<body>
+    <div class="subheader">
+        <!-- Green bar at the top -->
+    </div>
+    <div class="content">
+        <h2>Hello! The Dataset Evaluation has finished 🚀</h2>
+        <p>The evaluation of <<ENDPOINT>> on <<DATASET>> is ready, you can check out the results in <a href="https://console.unify.ai">your console</a>.</p>
+    </div>
+    <div class="subheader">
+        <!-- Green bar at the top -->
+    </div>
+    <div class="footer">
+        <a href="https://github.com/unifyai/" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/github.png" alt="Github" />
+        </a>
+        <a href="https://www.youtube.com/@unifyai" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/youtube.png" alt="Youtube" />
+        </a>
+        <a href="https://discord.gg/sXyFF8tDtm" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/discord.png" alt="Discord" />
+        </a>
+        <a href="https://twitter.com/letsunifyai" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/twitter.png" alt="Twitter" />
+        </a>
+        <a href="https://unifyai.substack.com/" target="_blank" rel="noreferrer">
+            <img src="https://cdn.saas.unify.ai/substack.png" alt="Substack" />
+        </a>
+    </div>
+</body>
+</html>
+
+"""
+
+
+def send_email(user_email, endpoint, dataset):
+    email_server = smtplib.SMTP("smtp.gmail.com", 587)
+    email_server.starttls()
+    email_addr = os.getenv("EMAIL_ADDR", "auth@unify.ai")
+    email_pass = os.getenv("EMAIL_PASS", "")
+    if email_pass == "":
+        client = secretmanager.SecretManagerServiceClient()
+        name = "projects/saas-368716/secrets/EMAIL_SERVER_PASSWORD/versions/latest"
+        response = client.access_secret_version(name=name)
+        email_pass = response.payload.data.decode("UTF-8")
+    email_server.login(email_addr, email_pass)
+
+    msg = EmailMessage()
+    msg["From"] = f"Unify <auth@unify.ai>"
+    msg["To"] = user_email
+    msg["Bcc"] = "guillermo@unify.ai"
+    msg["Subject"] = "Your dataset evaluation is ready!"
+    local_body = body
+    local_body = local_body.replace("<<ENDPOINT>>", endpoint)
+    local_body = local_body.replace("<<DATASET>>", dataset)
+    msg.set_content(local_body, subtype="html")
+
+    email_server.send_message(msg)
+    email_server.quit()
+
+
 async def main(msg, data_dir):
     """msg is a json object with two fields: config and prompts
     prompts is a list of json objects of the form {"prompt", "reference_answer"}.
     """
     msg = json.loads(msg)
     cfg = msg["config"]
+    user_email = cfg.pop("user_email", None)
     cfg = BenchmarkConfig(**cfg)
 
     # create root folder
@@ -220,6 +334,13 @@ async def main(msg, data_dir):
     blob = storage.Client().bucket(bucket_name).blob(blob_name)
     blob.upload_from_filename("scores.json")
 
+    # send mail
+    if user_email is not None:
+        send_email(user_email, cfg.endpoint, cfg.dataset_name)
+        logging.info(
+            f"Email sent to {user_email} for {cfg.endpoint}:{cfg.dataset_name}",
+        )
+
 
 if __name__ == "__main__":
     import argparse
@@ -233,6 +354,7 @@ if __name__ == "__main__":
     parser.add_argument("--judge_models", required=True)
     parser.add_argument("--system_prompt", type=str, default="")
     parser.add_argument("--class_cfg", type=str)
+    parser.add_argument("--user_email", required=True)
     args = parser.parse_args()
 
     print(args.judge_models)
@@ -250,6 +372,7 @@ if __name__ == "__main__":
         "orchestra_url": args.orchestra_url,
         "system_prompt": args.system_prompt,
         "class_cfg": class_cfg,
+        "user_email": args.user_email,
     }
 
     msg_d = {"config": cfg}

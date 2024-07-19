@@ -170,6 +170,7 @@ def evaluate_dataset(
     Evaluates the quality of the responses from a given LLM endpoint in a custom dataset.
     """
     user_id = request_fastapi.state.user_id
+    user_email = request_fastapi.state.user_email
     api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
     # Check if the dataset exists
     if not dataset_exists(user_id, dataset):
@@ -182,6 +183,7 @@ def evaluate_dataset(
     send_to_dataset_evaluation_server(
         action="evaluate",
         user_id=user_id,
+        user_email=user_email,
         api_key=api_key,
         dataset=dataset,
         endpoint=endpoint,

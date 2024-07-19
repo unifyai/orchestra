@@ -3,6 +3,7 @@ from fastapi.routing import APIRouter
 
 from orchestra.web.api import (  # noqa: WPS235
     admin,
+    benchmarks,
     chat_completion,
     dataset,
     dataset_evaluation,
@@ -95,3 +96,4 @@ api_router.include_router(
     dependencies=ADMIN_AUTH,
 )
 api_router.include_router(monitoring.router)
+api_router.include_router(benchmarks.router, tags=["benchmarks"])
