@@ -44,23 +44,3 @@ def calc_quality(judgements_path, cfg=default_cfg):
     print(scores)
     return sum(scores) / len(scores)
 
-
-if __name__ == "__main__":
-    cfg = [
-        {
-            "label": "Excellent",
-            "score": 1.0,
-            "description": "A perfect answer with no factual mistakes",
-        },
-        {"label": "Good", "score": 0.5},
-        {
-            "label": "Bad",
-            "score": 0.0,
-            "description": "An incorrect answer, containing a significant factual mistake",
-        },
-    ]
-    score = calc_quality(
-        "/home/tje/work/orchestra/dataset_evaluation/save_files/clwq7wcn00006o7rt5nea9ktt/SwifScore_5/model_judgements/llama-3-8b-chat___together-ai___gpt-4o___openai.jsonl",
-        cfg,
-    )
-    print(score)
