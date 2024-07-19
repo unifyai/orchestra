@@ -37,11 +37,6 @@ supported_models = {
         "context_window": 16384,
         "cost": {"prompt": 0.8, "completion": 0.8},
     },
-    "llama-2-70b-chat": {
-        "endpoint": "llama-2-70b-chat",
-        "context_window": 4096,
-        "cost": {"prompt": 1, "completion": 1},
-    },
     "llama-3-8b-chat": {
         "endpoint": "llama-3-8b-instruct",
         "context_window": 8192,
