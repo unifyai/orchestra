@@ -8,14 +8,20 @@ class CustomProvider(BaseCompletionProvider):
     """
 
     def __init__(
-        self, hub_model, custom_endpoint_dao, custom_api_key_dao, user_id, name
+        self,
+        hub_model,
+        custom_endpoint_dao,
+        custom_api_key_dao,
+        user_id,
+        name,
+        custom_api_key=None,
     ):
-        super().__init__(hub_model)
+        super().__init__(hub_model, custom_api_key=custom_api_key)
         self.custom_api_key_dao = custom_api_key_dao
         self.custom_endpoint_dao = custom_endpoint_dao
         self.custom_endpoint = custom_endpoint_dao.filter(user_id, name)[0]
         self.custom_api_key = self.custom_api_key_dao.filter(
-            id=self.custom_endpoint.key_id
+            id=self.custom_endpoint.key_id,
         )[0]
 
     @property
