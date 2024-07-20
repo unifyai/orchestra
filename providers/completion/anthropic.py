@@ -1,5 +1,5 @@
-import logging
 import json
+import logging
 import time
 from typing import Any, List
 
@@ -24,8 +24,8 @@ class Anthropic(BaseCompletionProvider):
     Pricing is per million tokens: https://docs.anthropic.com/claude/docs/models-overview#model-comparison
     """
 
-    def __init__(self, hub_model):
-        super().__init__(hub_model)
+    def __init__(self, hub_model, custom_api_key=None):
+        super().__init__(hub_model, custom_api_key=custom_api_key)
         self.client = anthropic.Anthropic(api_key=self.api_key)
         self.async_client = anthropic.AsyncAnthropic(api_key=self.api_key)
         self.supported_models = supported_models
@@ -238,7 +238,7 @@ def _format_tool_result(msg):
             "type": "tool_result",
             "tool_use_id": msg["tool_call_id"],
             "content": msg["content"],
-        }
+        },
     ]
     return new_msg
 
