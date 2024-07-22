@@ -30,8 +30,9 @@ class BaseCompletionProvider:
     # TODO: Make this a property and enforce definition with NotImplemented
     supported_models: Dict[str, Any] = {}
 
-    def __init__(self, hub_model) -> None:
+    def __init__(self, hub_model, custom_api_key=None) -> None:
         self.hub_model: str = hub_model
+        self.custom_api_key: str = custom_api_key
         self.supported_models: Dict[str, Any] = {}
 
     @property
@@ -78,6 +79,8 @@ class BaseCompletionProvider:
 
     @property
     def api_key(self) -> str:  # noqa: D102
+        if self.custom_api_key:
+            return self.custom_api_key
         key = os.getenv(self.api_key_var)
         if key is None:
             raise ValueError("ENV VAR {self.api_key_var} not found.")
