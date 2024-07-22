@@ -35,6 +35,7 @@ class ChatCompletionRequest(BaseModel):
     tool_choice: Optional[Any] = None
     user: Optional[str] = None
     signature: Optional[str] = None
+    use_custom_keys: Optional[bool] = False
 
 
 class ChatCompletionResponse(BaseModel):

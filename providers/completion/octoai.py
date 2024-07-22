@@ -9,8 +9,8 @@ class OctoAI(BaseCompletionProvider):
     Pricing: https://docs.octoai.cloud/docs/pricing (below are per million tokens)
     """
 
-    def __init__(self, hub_model):
-        super().__init__(hub_model)
+    def __init__(self, hub_model, custom_api_key=None):
+        super().__init__(hub_model, custom_api_key=custom_api_key)
         self.supported_models = supported_models
 
     @property
