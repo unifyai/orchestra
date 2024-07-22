@@ -25,8 +25,8 @@ class Replicate(BaseCompletionProvider):
     per million tokens: https://replicate.com/pricing
     """
 
-    def __init__(self, hub_model):
-        super().__init__(hub_model)
+    def __init__(self, hub_model, custom_api_key=None):
+        super().__init__(hub_model, custom_api_key=custom_api_key)
         self.supported_models = supported_models
         os.environ["REPLICATE_API_TOKEN"] = self.api_key
 
