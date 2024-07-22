@@ -94,6 +94,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     available_credits = float(user.credits if user else 0)
     store_prompt = user.store_prompts if user else True
     store_prompt = True if store_prompt is None else store_prompt
+    use_custom_keys = request.use_custom_keys
 
     model, provider = model_priority_list[0]
     try_provider = 0
@@ -101,6 +102,15 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     using_router = model.startswith("router")
     router_str = provider if using_router else None
     num_tries = 5
+
+    custom_api_key = None
+    if use_custom_keys:
+        try:
+            custom_api_key = custom_api_key_dao.filter(user_id=user_id, key=provider)[
+                0
+            ].value
+        except IndexError:
+            raise HTTPException(status_code=404, detail="Custom API key not found.")
 
     if using_router:
         # parse router string
@@ -162,8 +172,10 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         extra_args = tuple()
         if provider == "custom":
             extra_args = (custom_endpoint_dao, custom_api_key_dao, user_id, model)
-        lm = PROVIDER_CLASSES[provider](model, *extra_args)
-        if available_credits <= 0:
+        lm = PROVIDER_CLASSES[provider](
+            model, *extra_args, custom_api_key=custom_api_key
+        )
+        if available_credits <= 0 and not use_custom_keys:
             raise insufficient_credits_error
 
         stream = request.stream
@@ -220,7 +232,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             processing_time = (time.time() - t0) * 1000
             background_tasks.add_task(
                 db_operations,
-                cost=response.total_cost,
+                cost=response.total_cost if not use_custom_keys else 0,
                 processing_time=processing_time,
                 usage=chat_response.usage,
                 **db_operations_kwargs,
@@ -231,7 +243,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         processing_time = (time.time() - t0) * 1000
         background_tasks.add_task(
             db_operations,
-            cost=cost,
+            cost=cost if not use_custom_keys else 0,
             processing_time=processing_time,
             usage=response["usage"],
             **db_operations_kwargs,
