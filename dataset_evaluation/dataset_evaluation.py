@@ -334,7 +334,10 @@ async def main(msg, data_dir, shared_volume):
     prefix = os.path.join(cfg.user_id, cfg.dataset_name, "0")
     prefix_folder_path = os.path.join(shared_volume, bucket_name, prefix)
     if os.environ.get("ON_PREM"):
-        blobs = os.listdir(prefix_folder_path)
+        blobs = []
+        for root, _, files in os.walk(prefix_folder_path):
+            for file in files:
+                blobs.append(os.path.join(root, file))
     else:
         storage_client = storage.Client()
         blobs = storage_client.list_blobs(bucket_name, prefix=prefix)
