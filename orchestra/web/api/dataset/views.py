@@ -1,16 +1,10 @@
 import json
+import os
 from typing import Annotated, Dict, List
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, UploadFile
 
-from orchestra.web.api.utils.gcp import (
-    blob_exists,
-    delete_dir,
-    dir_exists,
-    list_dir,
-    read_json_from_bucket,
-    upload_json_to_bucket,
-)
+from orchestra.web.api.utils import gcp, on_prem
 from orchestra.web.api.utils.http_responses import (
     dataset_already_exists,
     dataset_does_not_exist,
@@ -30,10 +24,17 @@ def _upload_dataset(user_id: str, name: str, file_content: bytes):
     # TODO: 0 will need to be accounted when introducing dynamic datasets
     blob_name = f"{user_id}/{name}/0/dataset.jsonl"
     check_file_content(file_content)
-    if blob_exists(bucket_name, blob_name):
+    exists = (
+        on_prem.file_exists(bucket_name, blob_name)
+        if os.environ.get("ON_PREM")
+        else gcp.blob_exists(bucket_name, blob_name)
+    )
+    if exists:
         raise dataset_already_exists
+    elif os.environ.get("ON_PREM"):
+        on_prem.write_json_to_folder(file_content, bucket_name, blob_name)
     else:
-        upload_json_to_bucket(file_content, bucket_name, blob_name)
+        gcp.upload_json_to_bucket(file_content, bucket_name, blob_name)
 
 
 def _delete_dataset(user_id: str, name: str):
@@ -43,14 +44,25 @@ def _delete_dataset(user_id: str, name: str):
     if name == "":
         raise dataset_does_not_exist
     dir_name = f"{user_id}/{name}/"
-    if not dir_exists(bucket_name, dir_name):
+    exists = (
+        on_prem.dir_exists(bucket_name, dir_name)
+        if os.environ.get("ON_PREM")
+        else gcp.dir_exists(bucket_name, dir_name)
+    )
+    if not exists:
         raise dataset_does_not_exist
+    elif os.environ.get("ON_PREM"):
+        on_prem.delete_dir(bucket_name, dir_name)
     else:
-        delete_dir(bucket_name, dir_name)
+        gcp.delete_dir(bucket_name, dir_name)
 
 
 def _list_datasets(user_id: str):
-    blobs = list_dir(bucket_name, user_id)
+    blobs = (
+        on_prem.list_dir(bucket_name, user_id)
+        if os.environ.get("ON_PREM")
+        else gcp.list_dir(bucket_name, user_id)
+    )
     dirs = set([b.id.split("/")[2] for b in blobs])
     # Clean legacy datasets
     dirs = {d for d in dirs if not d.endswith(".jsonl")}
@@ -261,10 +273,19 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     if "/" in name:
         raise invalid_dataset_name
     blob_name = f"{request_fastapi.state.user_id}/{name}/0/dataset.jsonl"
-    if not blob_exists(bucket_name, blob_name):
+    exists = (
+        on_prem.file_exists(bucket_name, blob_name)
+        if os.environ.get("ON_PREM")
+        else gcp.blob_exists(bucket_name, blob_name)
+    )
+    if not exists:
         raise dataset_does_not_exist
     else:
-        string = read_json_from_bucket(bucket_name, blob_name, raw=True)
+        string = (
+            on_prem.read_json_from_folder(bucket_name, blob_name, blob_name)
+            if os.environ.get("ON_PREM")
+            else gcp.read_json_from_bucket(bucket_name, blob_name, raw=True)
+        )
         string = "[".encode() + string + "]".encode()
         string = string.replace("}\n{".encode(), "},{".encode())
         return json.loads(string)

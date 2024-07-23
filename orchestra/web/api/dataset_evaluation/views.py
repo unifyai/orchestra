@@ -2,18 +2,13 @@
 Includes endpoints related to dataset evaluations.
 """
 
-from typing import Dict, List, Optional, Any
+import os
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Query, Request, Body
+from fastapi import APIRouter, Body, Query, Request
 from providers.completion import PROVIDER_CLASSES
 
-from orchestra.web.api.utils.gcp import (
-    blob_exists,
-    delete_dir,
-    dir_exists,
-    list_dir,
-    send_pubsub_msg,
-)
+from orchestra.web.api.utils import gcp, on_prem
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
     evaluation_does_not_exist,
@@ -28,7 +23,11 @@ router = APIRouter()
 # TODO: Move to utils (duplicated in dataset)
 def _list_datasets(user_id: str):
     bucket_name = "uploaded_datasets"
-    blobs = list_dir(bucket_name, user_id)
+    blobs = (
+        on_prem.list_dir(bucket_name, user_id)
+        if os.environ.get("ON_PREM")
+        else gcp.list_dir(bucket_name, user_id)
+    )
     dirs = set([b.id.split("/")[2] for b in blobs])
     # Clean legacy datasets
     dirs = {d for d in dirs if not d.endswith(".jsonl")}
@@ -37,7 +36,11 @@ def _list_datasets(user_id: str):
 
 def _list_evaluations(user_id: str, dataset: str):
     bucket_name = "uploaded_datasets"
-    blobs = list_dir(bucket_name, f"{user_id}/{dataset}")
+    blobs = (
+        on_prem.list_dir(bucket_name, f"{user_id}/{dataset}")
+        if os.environ.get("ON_PREM")
+        else gcp.list_dir(bucket_name, f"{user_id}/{dataset}")
+    )
     endpoints = []
     for b in blobs:
         # keep only the endpoints
@@ -53,7 +56,12 @@ def dataset_exists(user_id, name):
     # well.
     bucket_name = "uploaded_datasets"
     blob_name = f"{user_id}/{name}/0/dataset.jsonl"
-    if blob_exists(bucket_name, blob_name):
+    exists = (
+        on_prem.file_exists(bucket_name, blob_name)
+        if os.environ.get("ON_PREM")
+        else gcp.blob_exists(bucket_name, blob_name)
+    )
+    if exists:
         return True
     return False
 
@@ -93,16 +101,27 @@ def _delete_evaluation(user_id: str, dataset: str, endpoint: str):
     if dataset == "":
         raise dataset_does_not_exist
     dir_name = f"{user_id}/{dataset}/0/{endpoint}"
-    if not dir_exists(bucket_name, dir_name):
+    exists = (
+        on_prem.dir_exists(bucket_name, dir_name)
+        if os.environ.get("ON_PREM")
+        else gcp.dir_exists(bucket_name, dir_name)
+    )
+    if not exists:
         raise evaluation_does_not_exist
+    elif os.environ.get("ON_PREM"):
+        on_prem.delete_dir(bucket_name, dir_name)
     else:
-        delete_dir(bucket_name, dir_name)
+        gcp.delete_dir(bucket_name, dir_name)
 
 
 def send_to_dataset_evaluation_server(action, **data):
     topic = "projects/saas-368716/topics/dataset_evaluation"
     url = "https://api.unify.ai"  # TODO: Deal with staging/test
-    send_pubsub_msg(topic, {"action": action, **data, "orchestra_url": url})
+    if os.environ.get("ON_PREM"):
+        on_prem.send_pubsub_msg(topic, {"action": action, **data, "orchestra_url": url})
+    else:
+        gcp.send_pubsub_msg(topic, {"action": action, **data, "orchestra_url": url})
+    print(f"Published: {str({'action': action, **data, 'orchestra_url': url})}")
 
 
 # endpoints
@@ -157,13 +176,16 @@ def evaluate_dataset(
         ),
     ),
     judge_models: list[str] = Body(
-        default=["gpt-4o@openai"], description="List of the LLMs to use as a judge"
+        default=["gpt-4o@openai"],
+        description="List of the LLMs to use as a judge",
     ),
     system_prompt: str = Body(
-        default="", description="Optionally change the system prompt"
+        default="",
+        description="Optionally change the system prompt",
     ),
     class_cfg: list[dict[str, Any]] = Body(
-        default=[], description="A description of the classes for judging."
+        default=[],
+        description="A description of the classes for judging.",
     ),
 ) -> Dict[str, str]:
     """
