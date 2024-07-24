@@ -350,7 +350,7 @@ async def main(msg, data_dir, shared_volume):
             judge_model = (
                 name.split("/")[-1].replace("_judgements.jsonl", "").replace("___", "@")
             )
-            endpoint_name = name.split("/")[3]
+            endpoint_name = name.split("/")[-2]
             contents = (
                 open(os.path.join(prefix_folder_path, name), "rb").read()
                 if os.environ.get("ON_PREM")
