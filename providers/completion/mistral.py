@@ -48,4 +48,9 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 4, "completion": 12},
     },
+    "mistral-nemo": {
+        "endpoint": "open-mistral-nemo-2407",
+        "context_window": 128000,
+        "cost": {"prompt": 0.3, "completion": 0.3},
+    },
 }

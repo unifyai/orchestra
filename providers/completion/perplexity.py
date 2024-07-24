@@ -32,10 +32,10 @@ class Perplexity(BaseCompletionProvider):
 
 
 supported_models = {
-    "codellama-34b-instruct": {
-        "endpoint": "codellama-34b-instruct",
+    "mixtral-8x7b-instruct-v0.1": {
+        "endpoint": "mixtral-8x7b-instruct",
         "context_window": 16384,
-        "cost": {"prompt": 0.8, "completion": 0.8},
+        "cost": {"prompt": 0.6, "completion": 0.6},
     },
     "llama-3-8b-chat": {
         "endpoint": "llama-3-8b-instruct",
