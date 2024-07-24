@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 
 from google.cloud import secretmanager, storage
+from utils.automatic_judgements import automatic_judgements
 from utils.fetch_judgements import generate_judgements
 from utils.fetch_queries import generate_queries
 from utils.parsing_judge import ratings_from_sample
@@ -158,7 +159,10 @@ async def main(msg, data_dir, shared_volume):
 
     bucket_name = "uploaded_datasets"
     blob_name = os.path.join(cfg.user_id, cfg.dataset_name, "0", "dataset.jsonl")
-    tmp_prompts_path = prompts_path.replace("prompts.jsonl", "tmp_prompts.jsonl")
+    tmp_prompts_path = prompts_path.replace(
+        "prompts.jsonl",
+        f"{cfg.endpoint}_tmp_prompts.jsonl",
+    )
     if os.environ.get("ON_PREM"):
         blob_name = os.path.join(shared_volume, bucket_name, blob_name)
         os.makedirs(os.sep.join(blob_name.split(os.sep)[:-1]), exist_ok=True)
@@ -235,23 +239,42 @@ async def main(msg, data_dir, shared_volume):
             class_cfg=class_cfg,
         )
 
-    tasks = [
-        process_judgements(
+    if cfg.judge_models[0] in ["multiple_choice", "number"]:
+        # automatic judge
+        model_str = _format_model_tag(cfg.endpoint)
+        asst_response_file = os.path.join(model_responses_path, f"{model_str}.jsonl")
+        automatic_judgements_file_str = _format_judgements_file(
             cfg.endpoint,
-            judge_tag,
-            prompts_path,
-            model_responses_path,
-            model_judgements_path,
-            cfg.api_key,
-            cfg.system_prompt,
-            cfg.class_cfg,
+            cfg.judge_models[0],
         )
-        for judge_tag in cfg.judge_models
-    ]
+        judge_response_file = os.path.join(
+            model_judgements_path,
+            f"{automatic_judgements_file_str}.jsonl",
+        )
+        automatic_judgements(
+            prompt_file=prompts_path,
+            asst_response_file=asst_response_file,
+            judge_response_file=judge_response_file,
+            parse_type=cfg.judge_models[0],
+        )
+    else:
+        tasks = [
+            process_judgements(
+                cfg.endpoint,
+                judge_tag,
+                prompts_path,
+                model_responses_path,
+                model_judgements_path,
+                cfg.api_key,
+                cfg.system_prompt,
+                cfg.class_cfg,
+            )
+            for judge_tag in cfg.judge_models
+        ]
 
-    logging.info(f"Begin getting judgements")
-    await asyncio.gather(*tasks)
-    logging.info(f"End getting judgements")
+        logging.info(f"Begin getting judgements")
+        await asyncio.gather(*tasks)
+        logging.info(f"End getting judgements")
 
     # get router scores on the prompts
 
@@ -362,7 +385,10 @@ async def main(msg, data_dir, shared_volume):
                 if not entry:
                     continue
                 entry = json.loads(entry)
-                scores.append(ratings_from_sample(entry["judge_response"]))
+                if "score" in entry:
+                    scores.append(float(entry["score"]))
+                else:
+                    scores.append(ratings_from_sample(entry["judge_response"]))
 
             avg_score = sum(scores) / len(scores)
             if judge_model in results:
