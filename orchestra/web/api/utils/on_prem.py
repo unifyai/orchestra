@@ -33,10 +33,13 @@ def list_dir(bucket_name: str, prefix: str):
     return os.listdir(dir_path)
 
 
-def read_json_from_folder(bucket_name: str, file_name: str):
+def read_json_from_folder(bucket_name: str, file_name: str, raw: bool = False):
     file_path = os.path.join(shared_volume, bucket_name, file_name)
-    with open(file_path) as f:
-        return json.loads(f)
+    with open(file_path, "rb") as f:
+        json_data = f.read()
+    if raw:
+        return json_data
+    return json.loads(json_data.decode("utf-8"))
 
 
 def write_json_to_folder(json_data: Dict[str, str], bucket_name: str, file_name: str):

@@ -282,7 +282,7 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         raise dataset_does_not_exist
     else:
         string = (
-            on_prem.read_json_from_folder(bucket_name, blob_name, blob_name)
+            on_prem.read_json_from_folder(bucket_name, blob_name, raw=True)
             if os.environ.get("ON_PREM")
             else gcp.read_json_from_bucket(bucket_name, blob_name, raw=True)
         )
