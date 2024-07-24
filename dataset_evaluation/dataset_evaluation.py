@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+
 import os
 import smtplib
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from google.cloud import secretmanager, storage
 from utils.fetch_judgements import generate_judgements
 from utils.fetch_queries import generate_queries
 from utils.parsing_judge import ratings_from_sample
+from utils.automatic_judgements import automatic_judgements
 
 
 @dataclass
@@ -228,23 +230,41 @@ async def main(msg, data_dir):
             class_cfg=class_cfg,
         )
 
-    tasks = [
-        process_judgements(
-            cfg.endpoint,
-            judge_tag,
-            prompts_path,
-            model_responses_path,
-            model_judgements_path,
-            cfg.api_key,
-            cfg.system_prompt,
-            cfg.class_cfg,
+    if cfg.judge_models[0] in ["multiple_choice", "number"]:
+        # automatic judge
+        model_str = _format_model_tag(cfg.endpoint)
+        asst_response_file = os.path.join(model_responses_path, f"{model_str}.jsonl")
+        automatic_judgements_file_str = _format_judgements_file(
+            cfg.endpoint, cfg.judge_models[0]
         )
-        for judge_tag in cfg.judge_models
-    ]
+        judge_response_file = os.path.join(
+            model_judgements_path,
+            f"{automatic_judgements_file_str}.jsonl",
+        )
+        automatic_judgements(
+            prompt_file=prompts_path,
+            asst_response_file=asst_response_file,
+            judge_response_file=judge_response_file,
+            parse_type=cfg.judge_models[0],
+        )
+    else:
+        tasks = [
+            process_judgements(
+                cfg.endpoint,
+                judge_tag,
+                prompts_path,
+                model_responses_path,
+                model_judgements_path,
+                cfg.api_key,
+                cfg.system_prompt,
+                cfg.class_cfg,
+            )
+            for judge_tag in cfg.judge_models
+        ]
 
-    logging.info(f"Begin getting judgements")
-    await asyncio.gather(*tasks)
-    logging.info(f"End getting judgements")
+        logging.info(f"Begin getting judgements")
+        await asyncio.gather(*tasks)
+        logging.info(f"End getting judgements")
 
     # get router scores on the prompts
 
@@ -319,7 +339,10 @@ async def main(msg, data_dir):
                 if not entry:
                     continue
                 entry = json.loads(entry)
-                scores.append(ratings_from_sample(entry["judge_response"]))
+                if "score" in entry:
+                    scores.append(float(entry["score"]))
+                else:
+                    scores.append(ratings_from_sample(entry["judge_response"]))
 
             avg_score = sum(scores) / len(scores)
             if judge_model in results:
