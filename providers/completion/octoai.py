@@ -23,7 +23,7 @@ class OctoAI(BaseCompletionProvider):
 
 
 supported_models = {
-    "mistral-7b-instruct-v0.2": {
+    "mistral-7b-instruct-v0.3": {
         "endpoint": "mistral-7b-instruct",
         "context_window": 32768,
         "cost": {"prompt": 0.15, "completion": 0.15},
@@ -47,5 +47,25 @@ supported_models = {
         "endpoint": "meta-llama-3-70b-instruct",
         "context_window": 8192,
         "cost": {"prompt": 0.9, "completion": 0.9},
+    },
+    "llama-3.1-8b-chat": {
+        "endpoint": "meta-llama-3.1-8b-instruct",
+        "context_window": 131072,
+        "cost": {"prompt": 0.15, "completion": 0.15},
+    },
+    "llama-3.1-70b-chat": {
+        "endpoint": "meta-llama-3.1-70b-instruct",
+        "context_window": 131072,
+        "cost": {"prompt": 0.9, "completion": 0.9},
+    },
+    "llama-3.1-405b-chat": {
+        "endpoint": "meta-llama-3.1-405b-instruct",
+        "context_window": 131072,
+        "cost": {"prompt": 3, "completion": 9},
+    },
+    "qwen-2-7b-instruct": {
+        "endpoint": "qwen2-7b-instruct",
+        "context_window": 32768,
+        "cost": {"prompt": 0.15, "completion": 0.15},
     },
 }
