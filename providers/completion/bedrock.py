@@ -341,4 +341,14 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 3, "completion": 15},
     },
+    "llama-3.1-8b-chat": {
+        "endpoint": "meta.llama3-1-8b-instruct-v1:0",
+        "context_window": 128000,
+        "cost": {"prompt": 0.3, "completion": 0.6},
+    },
+    "llama-3.1-70b-chat": {
+        "endpoint": "meta.llama3-1-70b-instruct-v1:0",
+        "context_window": 8192,
+        "cost": {"prompt": 2.65, "completion": 3.5},
+    },
 }

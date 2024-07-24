@@ -23,6 +23,11 @@ class Groq(BaseCompletionProvider):
 
 
 supported_models = {
+    "gemma-2-9b-it": {
+        "endpoint": "gemma2-9b-it",
+        "context_window": 8192,
+        "cost": {"prompt": 0.2, "completion": 0.2},
+    },
     "gemma-7b-it": {
         "endpoint": "gemma-7b-it",
         "context_window": 8192,
