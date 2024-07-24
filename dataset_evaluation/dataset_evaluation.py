@@ -159,7 +159,9 @@ async def main(msg, data_dir):
     bucket_name = "uploaded_datasets"
     blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/dataset.jsonl"
     blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    tmp_prompts_path = prompts_path.replace("prompts.jsonl", f"{cfg.endpoint}_tmp_prompts.jsonl")
+    tmp_prompts_path = prompts_path.replace(
+        "prompts.jsonl", f"{cfg.endpoint}_tmp_prompts.jsonl"
+    )
     blob.download_to_filename(tmp_prompts_path)
     with open(tmp_prompts_path) as f:
         prompts = [json.loads(l) for l in f]
