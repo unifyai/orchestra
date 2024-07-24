@@ -20,8 +20,6 @@ def automatic_judgements(
             gt = data["ref_answer"]
             id_to_gt[id_] = gt
 
-    print(type(parse_type))
-    print((parse_type))
     if parse_type == "number":
         parse_fn = parse_number
     elif parse_type == "multiple_choice":
