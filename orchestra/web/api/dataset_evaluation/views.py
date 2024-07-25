@@ -46,6 +46,7 @@ def _list_evaluations(user_id: str, dataset: str):
             endpoints.append(levels[4])
     return endpoints
 
+
 def _get_scores(user_id: str, dataset: str):
     bucket_name = "uploaded_datasets"
     storage_client = storage.Client()
@@ -308,11 +309,10 @@ def get_dataset_evaluations(
                 "application/json": {
                     "example": [
                         {
-                            "dataset": [
-                                "model_1@provider_1",
-                                "model_2@provider_2",
-                                "...",
-                            ],
+                            "judge": {
+                                "model_1@provider_1": "score_1",
+                                "model_2@provider_2": "score_2",
+                            },
                         },
                     ],
                 },
@@ -332,9 +332,7 @@ def get_dataset_evaluation_results(
     request_fastapi: Request,
     dataset: Optional[str] = Query(
         None,
-        description=(
-            "Name of the dataset to fetch evaluation from."
-        ),
+        description=("Name of the dataset to fetch evaluation from."),
     ),
 ) -> Dict[str, List[str]]:
     """
@@ -344,4 +342,4 @@ def get_dataset_evaluation_results(
     if not dataset_exists(user_id, dataset):
         raise dataset_does_not_exist
     scores = _get_scores(user_id, dataset)
-    return evaluations
+    return scores
