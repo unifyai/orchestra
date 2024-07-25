@@ -63,7 +63,9 @@ def _list_datasets(user_id: str):
         if os.environ.get("ON_PREM")
         else gcp.list_dir(bucket_name, user_id)
     )
-    dirs = set([b.id.split("/")[2] for b in blobs])
+    dirs = set(
+        [(b if os.environ.get("ON_PREM") else b.id).split("/")[2] for b in blobs],
+    )
     # Clean legacy datasets
     dirs = {d for d in dirs if not d.endswith(".jsonl")}
     return list(dirs)

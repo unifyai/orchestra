@@ -115,7 +115,16 @@ def delete_dir(bucket_name: str, dir_name: str) -> None:
 
 def list_dir(bucket_name: str, prefix: str):
     dir_path = os.path.join(shared_volume, bucket_name, prefix)
-    return os.listdir(dir_path)
+    blobs = []
+    for root, _, files in os.walk(dir_path):
+        for file in files:
+            blobs.append(
+                os.path.join(root, file).replace(
+                    os.path.join(shared_volume, bucket_name),
+                    "",
+                ),
+            )
+    return blobs
 
 
 def read_json_from_folder(bucket_name: str, file_name: str, raw: bool = False):
