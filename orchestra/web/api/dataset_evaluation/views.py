@@ -54,7 +54,7 @@ def _get_scores(user_id: str, dataset: str):
     bucket = storage_client.bucket(bucket_name)
     blob = bucket.blob(f"{user_id}/{dataset}/0/scores.json")
     content = blob.download_as_bytes().decode("utf-8")
-    return content
+    return json.loads(content)
 
 
 # TODO: Move to utils (duplicated in routing)
@@ -335,7 +335,7 @@ def get_dataset_evaluation_results(
         None,
         description=("Name of the dataset to fetch evaluation from."),
     ),
-) -> Dict[str, List[str]]:
+) -> Dict:
     """
     Fetches a list of the endpoints that have been evaluated on a given dataset.
     """
