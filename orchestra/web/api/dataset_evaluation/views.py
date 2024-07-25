@@ -46,6 +46,14 @@ def _list_evaluations(user_id: str, dataset: str):
             endpoints.append(levels[4])
     return endpoints
 
+def _get_scores(user_id: str, dataset: str):
+    bucket_name = "uploaded_datasets"
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(f"{user_id}/{dataset}/0/scores.json")
+    content = blob.download_as_bytes().decode("utf-8")
+    return content
+
 
 # TODO: Move to utils (duplicated in routing)
 def dataset_exists(user_id, name):
@@ -288,4 +296,52 @@ def get_dataset_evaluations(
     datasets = [dataset] if dataset is not None else _list_datasets(user_id)
     for d in datasets:
         evaluations[d] = _list_evaluations(user_id, d)
+    return evaluations
+
+
+@router.get(
+    "/evaluation/results",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {
+                            "dataset": [
+                                "model_1@provider_1",
+                                "model_2@provider_2",
+                                "...",
+                            ],
+                        },
+                    ],
+                },
+            },
+        },
+        404: {
+            "description": "Dataset Not Found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "This dataset does not exist!"},
+                },
+            },
+        },
+    },
+)
+def get_dataset_evaluation_results(
+    request_fastapi: Request,
+    dataset: Optional[str] = Query(
+        None,
+        description=(
+            "Name of the dataset to fetch evaluation from."
+        ),
+    ),
+) -> Dict[str, List[str]]:
+    """
+    Fetches a list of the endpoints that have been evaluated on a given dataset.
+    """
+    user_id = request_fastapi.state.user_id
+    if not dataset_exists(user_id, dataset):
+        raise dataset_does_not_exist
+    scores = _get_scores(user_id, dataset)
     return evaluations
