@@ -5,8 +5,9 @@ Includes endpoints related to dataset evaluations.
 from typing import Dict, List, Optional, Any
 
 from fastapi import APIRouter, Query, Request, Body
-from providers.completion import PROVIDER_CLASSES
+from google.cloud import storage
 
+from providers.completion import PROVIDER_CLASSES
 from orchestra.web.api.utils.gcp import (
     blob_exists,
     delete_dir,
