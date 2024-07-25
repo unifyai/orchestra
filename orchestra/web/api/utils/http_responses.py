@@ -145,7 +145,12 @@ internal_endpoint_not_found = HTTPException(
     detail="Endpoint not found",
 )
 
-
+model_not_found = HTTPException(
+    status_code=status.HTTP_400_BAD_REQUEST,
+    detail=(
+        "Model not found"
+    ),
+)
 # TODO: Test this
 def server_error_with_digest(text: str):
     digest = hashlib.shake_256(text.encode()).digest(4).hex()

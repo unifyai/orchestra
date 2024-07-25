@@ -144,7 +144,7 @@ class BenchmarkRunDAO:
         :param id: id of benchmark_run instance.
         :param endpoint_id: endpoint_id of benchmark_run instance.
         :param regime: regime of benchmark_run instance.
-        :param region: region of benchmark_run instance.
+        param region: region of benchmark_run instance.
         :param seq_len: seq_len of benchmark_run instance.
         :param measured_at: measured_at of benchmark_run instance.
         """
@@ -163,3 +163,43 @@ class BenchmarkRunDAO:
                 setattr(benchmark_run, "seq_len", seq_len)  # noqa: B010
             if measured_at:
                 setattr(benchmark_run, "measured_at", measured_at)  # noqa: B010
+
+    def benchmarks_between(
+        self,
+        endpoint_id,
+        start_time,
+        end_time,
+        regime,
+        region,
+        seq_len,
+    ):
+        query = (
+            select(Datapoint)
+            .join(BenchmarkRun, BenchmarkRun.id == Datapoint.benchmark_run_id)
+            .where(BenchmarkRun.endpoint_id == endpoint_id)
+            .where(BenchmarkRun.regime == regime)
+            .where(BenchmarkRun.region == region)
+            .where(BenchmarkRun.seq_len == seq_len)
+            .filter(
+                BenchmarkRun.measured_at >= start_time,
+                BenchmarkRun.measured_at <= end_time,
+            )
+        )
+
+        rows = self.session.execute(query)
+        db_data = list(rows.scalars().fetchall())
+        run_id_to_data = {}
+        for entry in db_data:
+            entry = entry.__dict__
+            br_id = entry["benchmark_run_id"]
+            if br_id not in run_id_to_data:
+                run_id_to_data[br_id] = {"timestamp": entry["measured_at"]}
+            run_id_to_data[br_id][entry["metric_name"]] = str(round(entry["value"],2))
+
+
+        ret = []
+        for br_id in run_id_to_data.keys():
+            tmp = run_id_to_data[br_id]
+            ret.append(tmp)
+            
+        return ret
