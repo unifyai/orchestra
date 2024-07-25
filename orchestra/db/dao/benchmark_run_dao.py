@@ -194,12 +194,11 @@ class BenchmarkRunDAO:
             br_id = entry["benchmark_run_id"]
             if br_id not in run_id_to_data:
                 run_id_to_data[br_id] = {"timestamp": entry["measured_at"]}
-            run_id_to_data[br_id][entry["metric_name"]] = str(round(entry["value"],2))
-
+            run_id_to_data[br_id][entry["metric_name"]] = str(round(entry["value"], 2))
 
         ret = []
         for br_id in run_id_to_data.keys():
             tmp = run_id_to_data[br_id]
             ret.append(tmp)
-            
+
         return ret

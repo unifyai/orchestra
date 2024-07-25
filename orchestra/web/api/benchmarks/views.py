@@ -13,7 +13,9 @@ from orchestra.web.api.utils.http_responses import benchmark_not_found, model_no
 router = APIRouter()
 
 
-def _get_endpoint_from_model_provider(model: str, provider: str, endpoint_dao: EndpointDAO):
+def _get_endpoint_from_model_provider(
+    model: str, provider: str, endpoint_dao: EndpointDAO
+):
     try:
         endpoint_id = endpoint_dao.get_endpoints_of(
             models=(model,), only_from=(provider,)
@@ -34,7 +36,6 @@ def get_latest_benchmark(
     endpoint_dao: EndpointDAO = Depends(),
     latest_benchmark_dao: LatestBenchmarkDAO = Depends(),
 ):
-
     try:
         endpoint_id = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
         result = latest_benchmark_dao.get_latest_benchmarks(
@@ -52,6 +53,7 @@ def get_latest_benchmark(
     except:
         raise benchmark_not_found(f"{model}@{provider}")
 
+
 @router.post("/benchmarks/filter")
 def filter_benchmark(
     model: str,
@@ -66,8 +68,14 @@ def filter_benchmark(
 ):
     try:
         endpoint_id = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
-        result = benchmark_run_dao.benchmarks_between(endpoint_id=endpoint_id, start_time=start_time, end_time=end_time, regime=regime, region=region, seq_len=seq_len)
+        result = benchmark_run_dao.benchmarks_between(
+            endpoint_id=endpoint_id,
+            start_time=start_time,
+            end_time=end_time,
+            regime=regime,
+            region=region,
+            seq_len=seq_len,
+        )
         return result
     except:
         raise benchmark_not_found(f"{model}@{provider}")
-
