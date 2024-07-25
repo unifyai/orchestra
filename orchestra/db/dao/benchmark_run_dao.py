@@ -144,7 +144,7 @@ class BenchmarkRunDAO:
         :param id: id of benchmark_run instance.
         :param endpoint_id: endpoint_id of benchmark_run instance.
         :param regime: regime of benchmark_run instance.
-        param region: region of benchmark_run instance.
+        :param region: region of benchmark_run instance.
         :param seq_len: seq_len of benchmark_run instance.
         :param measured_at: measured_at of benchmark_run instance.
         """
