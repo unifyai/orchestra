@@ -44,8 +44,9 @@ def _list_evaluations(user_id: str, dataset: str):
     endpoints = []
     for b in blobs:
         # keep only the endpoints
-        levels = b.id.split("/")
-        if "judgements.jsonl" in b.id and len(levels) > 4:
+        b_id = b if os.environ.get("ON_PREM") else b.id
+        levels = b_id.split("/")
+        if "judgements.jsonl" in b_id and len(levels) > 4:
             endpoints.append(levels[4])
     return endpoints
 
