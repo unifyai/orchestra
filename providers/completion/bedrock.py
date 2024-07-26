@@ -68,8 +68,20 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
         kwargs_bedrock = self.process_kwargs(messages, kwargs)
         region = _get_region(self.provider_endpoint)
         client = self.client(region)
-        system_prompts = ""
-        converse_api_params = ["maxTokens", "stopSequences", "temperature", "topP"]
+
+        system_prompts = []
+        new_messages = []
+        for msg in messages:
+            txt = msg["content"]
+            if msg["role"] == "system":
+                system_prompts.append({"text": msg["content"]})
+            else:
+                msg["content"] = [{"text": txt}]
+                new_messages.append(msg)
+
+        new_messages = messages
+
+        converse_api_params = ["maxTokens", "stopSequences", "temperature", "topP"]# TODO: these aren't the correct names
         additional_model_params = ["top_k",] #TODO: add more of these
 
         inference_config = {}
@@ -81,12 +93,15 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
             if param_name in kwargs:
                 additional_model_fields[param_name] = kwargs[param_name]
 
-        breakpoint()
         if stream:
-            response = client.invoke_model_with_response_stream(
+            response = client.converse_stream(
                 modelId=self.provider_endpoint,
-                body=json.dumps(kwargs_bedrock),
+                messages=messages,
+                system=system_prompts,
+                inferenceConfig=inference_config,
+                additionalModelRequestFields=additional_model_fields
             )
+            
             return (BedrockSyncGeneratorWrapper(self, response, messages), None)
 
         response = client.converse(
@@ -100,13 +115,13 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
             self.response_to_chat_completion(response),
             self.compute_cost(
                 int(
-                    response["ResponseMetadata"]["HTTPHeaders"][
-                        "x-amzn-bedrock-input-token-count"
+                    response["usage"][
+                        "inputTokens"
                     ],
                 ),
                 int(
-                    response["ResponseMetadata"]["HTTPHeaders"][
-                        "x-amzn-bedrock-output-token-count"
+                    response["usage"][
+                        "outputTokens"
                     ],
                 ),
             ),
@@ -126,17 +141,15 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
 
     def response_to_chat_completion(self, response):
         metadata = response["ResponseMetadata"]["HTTPHeaders"]
-        body = json.loads(response["body"].read())
         created_at = self.str_to_ts(metadata["date"])
-        if "mistral" in self.provider_endpoint:
-            finish_reason = body["outputs"][0]["stop_reason"]
-            content = body["outputs"][0]["text"]
-        elif "llama" in self.provider_endpoint:
-            finish_reason = body["stop_reason"]
-            content = body["generation"]
-        else:
-            finish_reason = body["finish_reason"]
-            content = body["text"]
+        finish_reason = response["stopReason"]
+        usage = {
+            "prompt_tokens": response["usage"]["inputTokens"],
+            "completion_tokens":  response["usage"]["outputTokens"],
+            "total_tokens":  response["usage"]["totalTokens"],
+        }
+        content = response["output"]["message"]["content"][0]["text"]
+
         return dict(
             id=metadata["x-amzn-requestid"],
             choices=[
@@ -153,7 +166,7 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
             created=created_at,
             model=self.hub_model,
             object="chat.completion",
-            usage=self.usage_from_response(metadata),
+            usage=usage,
         )
 
     # TODO Put this in a util file as its also used in replicate
@@ -199,32 +212,42 @@ class BedrockSyncGeneratorWrapper(SyncGeneratorWrapper):
         whole = []
         self.prompt_tokens = 0
         self.completion_tokens = 0
-        try:  # noqa: WPS501
-            for part in self._response["body"]:
-                chunk = json.loads(part.get("chunk").get("bytes").decode())
-                chunk["id"] = self._response["ResponseMetadata"]["HTTPHeaders"][
-                    "x-amzn-requestid"
-                ]
-                part_dict = self.generator_iteration(chunk, whole)
-                usage = part_dict.get("usage")
-                if not part_dict:
-                    continue
-                if usage:
-                    self.prompt_tokens += usage["prompt_tokens"]
-                    self.completion_tokens = usage["completion_tokens"]
-                    part_dict["usage"] = {}
-                    if part_dict["choices"][0]["finish_reason"]:
-                        continue
+        stream = self._response.get("stream")
+        for event in stream:
+            if "messageStart" in event:
+                pass #TODO: for tool use 
+            if 'contentBlockDelta' in event:
+                content = event['contentBlockDelta']['delta']['text']
+            else:
+                content = ""
+            if "messageStop" in event:
+                finish_reason = event['messageStop']['stopReason']
+            else:
+                finish_reason = ""
 
-                yield part_dict
-        finally:
-            part_dict["usage"] = {
-                "prompt_tokens": self.prompt_tokens,
-                "completion_tokens": self.completion_tokens,
-                "total_tokens": self.prompt_tokens + self.completion_tokens,
+            if "metadata" in event:
+                usage = {
+                    "prompt_tokens": event["metadata"]["usage"]["inputTokens"],
+                    "completion_tokens": event["metadata"]["usage"]["outputTokens"],
+                    "total_tokens": event["metadata"]["usage"]["totalTokens"],
+                }
+            else:
+                usage = {}
+            part_dict = {
+                "id": str(id(event)),
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": content},
+                        "logprobs": None,  # TODO?
+                        "finish_reason": finish_reason,  
+                    },
+                ],
+                "usage": usage,
             }
-            yield from self.get_final_chunk(part_dict, whole)
-
+            yield part_dict
 
 class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
     def __init__(self, provider, response, messages, body):
@@ -242,10 +265,14 @@ class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
             service_name="bedrock-runtime",
             region_name=_get_region(self.provider.provider_endpoint),
         ) as client:
-            self._response = await client.invoke_model_with_response_stream(
-                modelId=self.provider.provider_endpoint,
-                body=json.dumps(self._body),
+            self._response = await client.converse_stream(
+                modelId=self.provider_endpoint,
+                messages=messages,
+                system=system_prompts,
+                inferenceConfig=inference_config,
+                additionalModelRequestFields=additional_model_fields
             )
+
             try:  # noqa: WPS501
                 async for part in self._response["body"]:
                     chunk = json.loads(part.get("chunk").get("bytes").decode())
