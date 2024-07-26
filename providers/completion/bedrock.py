@@ -63,13 +63,22 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
 
         new_messages = messages
 
-        converse_api_param_map = {"maxTokens": "max_tokens", "stopSequences": "stop", "temperature": "temperature", "topP": "top_p"}
-        additional_model_params = ["top_k",] #TODO: add more of these
+        converse_api_param_map = {
+            "maxTokens": "max_tokens",
+            "stopSequences": "stop",
+            "temperature": "temperature",
+            "topP": "top_p",
+        }
+        additional_model_params = [
+            "top_k",
+        ]  # TODO: add more of these
 
         inference_config = {}
         for param_name in converse_api_param_map:
             if converse_api_param_map[param_name] in kwargs:
-                inference_config[param_name] = kwargs[converse_api_param_map[param_name]]
+                inference_config[param_name] = kwargs[
+                    converse_api_param_map[param_name]
+                ]
 
         additional_model_fields = {}
         for param_name in additional_model_params:
@@ -82,9 +91,9 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
                 messages=messages,
                 system=system_prompts,
                 inferenceConfig=inference_config,
-                additionalModelRequestFields=additional_model_fields
+                additionalModelRequestFields=additional_model_fields,
             )
-            
+
             return (BedrockSyncGeneratorWrapper(self, response, messages), None)
 
         response = client.converse(
@@ -92,20 +101,16 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
             messages=messages,
             system=system_prompts,
             inferenceConfig=inference_config,
-            additionalModelRequestFields=additional_model_fields
+            additionalModelRequestFields=additional_model_fields,
         )
         return (
             self.response_to_chat_completion(response),
             self.compute_cost(
                 int(
-                    response["usage"][
-                        "inputTokens"
-                    ],
+                    response["usage"]["inputTokens"],
                 ),
                 int(
-                    response["usage"][
-                        "outputTokens"
-                    ],
+                    response["usage"]["outputTokens"],
                 ),
             ),
         )
@@ -128,8 +133,8 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
         finish_reason = response["stopReason"]
         usage = {
             "prompt_tokens": response["usage"]["inputTokens"],
-            "completion_tokens":  response["usage"]["outputTokens"],
-            "total_tokens":  response["usage"]["totalTokens"],
+            "completion_tokens": response["usage"]["outputTokens"],
+            "total_tokens": response["usage"]["totalTokens"],
         }
         content = response["output"]["message"]["content"][0]["text"]
 
@@ -164,13 +169,13 @@ class BedrockSyncGeneratorWrapper(SyncGeneratorWrapper):
         stream = self._response.get("stream")
         for event in stream:
             if "messageStart" in event:
-                pass #TODO: for tool use 
-            if 'contentBlockDelta' in event:
-                content = event['contentBlockDelta']['delta']['text']
+                pass  # TODO: for tool use
+            if "contentBlockDelta" in event:
+                content = event["contentBlockDelta"]["delta"]["text"]
             else:
                 content = ""
             if "messageStop" in event:
-                finish_reason = event['messageStop']['stopReason']
+                finish_reason = event["messageStop"]["stopReason"]
             else:
                 finish_reason = ""
 
@@ -191,12 +196,13 @@ class BedrockSyncGeneratorWrapper(SyncGeneratorWrapper):
                         "index": 0,
                         "delta": {"content": content},
                         "logprobs": None,  # TODO?
-                        "finish_reason": finish_reason,  
+                        "finish_reason": finish_reason,
                     },
                 ],
                 "usage": usage,
             }
             yield part_dict
+
 
 class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
     def __init__(self, provider, response, messages, body):
@@ -210,7 +216,6 @@ class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
         whole = []
         self.prompt_tokens = 0
         self.completion_tokens = 0
-        
 
     async def generator(self):  # noqa: D102, C901, WPS210, WPS231
         whole = []
@@ -225,20 +230,20 @@ class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
                 messages=messages,
                 system=system_prompts,
                 inferenceConfig=inference_config,
-                additionalModelRequestFields=additional_model_fields
+                additionalModelRequestFields=additional_model_fields,
             )
 
             stream = self._response.get("stream")
 
             async for event in stream:
                 if "messageStart" in event:
-                    pass #TODO: for tool use 
-                if 'contentBlockDelta' in event:
-                    content = event['contentBlockDelta']['delta']['text']
+                    pass  # TODO: for tool use
+                if "contentBlockDelta" in event:
+                    content = event["contentBlockDelta"]["delta"]["text"]
                 else:
                     content = ""
                 if "messageStop" in event:
-                    finish_reason = event['messageStop']['stopReason']
+                    finish_reason = event["messageStop"]["stopReason"]
                 else:
                     finish_reason = ""
 
@@ -259,7 +264,7 @@ class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
                             "index": 0,
                             "delta": {"content": content},
                             "logprobs": None,  # TODO?
-                            "finish_reason": finish_reason,  
+                            "finish_reason": finish_reason,
                         },
                     ],
                     "usage": usage,
@@ -320,10 +325,12 @@ def sse_to_part_dict(part, whole, endpoint):
     whole[0] += data
     return part_dict
 
+
 def _get_region(provider_endpoint):
     if "anthropic" in provider_endpoint:
         return "us-east-1"
     return "us-west-2"
+
 
 supported_models = {
     "mistral-7b-instruct-v0.2": {
@@ -381,5 +388,4 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 3, "completion": 15},
     },
-
 }
