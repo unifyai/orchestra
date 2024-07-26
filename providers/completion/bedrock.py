@@ -370,8 +370,13 @@ supported_models = {
     },
     "llama-3.1-70b-chat": {
         "endpoint": "meta.llama3-1-70b-instruct-v1:0",
-        "context_window": 8192,
+        "context_window": 128000,
         "cost": {"prompt": 2.65, "completion": 3.5},
+    },
+    "llama-3.1-405b-chat": {
+        "endpoint": "meta.llama3-1-405b-instruct-v1:0",
+        "context_window": 128000,
+        "cost": {"prompt": 5.32, "completion": 16},
     },
     "claude-3-haiku": {
         "endpoint": "anthropic.claude-3-haiku-20240307-v1:0",
