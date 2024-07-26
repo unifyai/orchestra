@@ -383,6 +383,11 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 3, "completion": 15},
     },
+    "claude-3-opus": {
+        "endpoint": "anthropic.claude-3-opus-20240229-v1:0",
+        "context_window": 200000,
+        "cost": {"prompt": 15, "completion": 75},
+    },
     "claude-3.5-sonnet": {
         "endpoint": "anthropic.claude-3-5-sonnet-20240620-v1:0",
         "context_window": 200000,
