@@ -39,8 +39,8 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
             "total_tokens": prompt_tokens + completion_tokens,
         }
 
-    def client(self):
-        return boto3.client(service_name="bedrock-runtime", region_name="us-west-2")
+    def client(self, region_name="us-west-2"):
+        return boto3.client(service_name="bedrock-runtime", region_name=region_name)
 
     def process_kwargs(self, messages, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         _messages = messages[:]
@@ -66,7 +66,22 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
         **kwargs: Any,
     ) -> Any:  # noqa: WPS210
         kwargs_bedrock = self.process_kwargs(messages, kwargs)
-        client = self.client()
+        region = _get_region(self.provider_endpoint)
+        client = self.client(region)
+        system_prompts = ""
+        converse_api_params = ["maxTokens", "stopSequences", "temperature", "topP"]
+        additional_model_params = ["top_k",] #TODO: add more of these
+
+        inference_config = {}
+        for param_name in converse_api_params:
+            if param_name in kwargs:
+                inference_config[param_name] = kwargs[param_name]
+        additional_model_fields = {}
+        for param_name in additional_model_params:
+            if param_name in kwargs:
+                additional_model_fields[param_name] = kwargs[param_name]
+
+        breakpoint()
         if stream:
             response = client.invoke_model_with_response_stream(
                 modelId=self.provider_endpoint,
@@ -74,9 +89,12 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
             )
             return (BedrockSyncGeneratorWrapper(self, response, messages), None)
 
-        response = client.invoke_model(
+        response = client.converse(
             modelId=self.provider_endpoint,
-            body=json.dumps(kwargs_bedrock),
+            messages=messages,
+            system=system_prompts,
+            inferenceConfig=inference_config,
+            additionalModelRequestFields=additional_model_fields
         )
         return (
             self.response_to_chat_completion(response),
@@ -222,7 +240,7 @@ class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
         session = aioboto3.Session()
         async with session.client(
             service_name="bedrock-runtime",
-            region_name="us-west-2",
+            region_name=_get_region(self.provider.provider_endpoint),
         ) as client:
             self._response = await client.invoke_model_with_response_stream(
                 modelId=self.provider.provider_endpoint,
@@ -309,6 +327,10 @@ def sse_to_part_dict(part, whole, endpoint):
     whole[0] += data
     return part_dict
 
+def _get_region(provider_endpoint):
+    if "anthropic" in provider_endpoint:
+        return "us-east-1"
+    return "us-west-2"
 
 supported_models = {
     "mistral-7b-instruct-v0.2": {
@@ -351,4 +373,20 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 2.65, "completion": 3.5},
     },
+    "claude-3-haiku": {
+        "endpoint": "anthropic.claude-3-haiku-20240307-v1:0",
+        "context_window": 200000,
+        "cost": {"prompt": 0.25, "completion": 1.25},
+    },
+    "claude-3-sonnet": {
+        "endpoint": "anthropic.claude-3-sonnet-20240229-v1:0",
+        "context_window": 200000,
+        "cost": {"prompt": 3, "completion": 15},
+    },
+    "claude-3.5-sonnet": {
+        "endpoint": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "context_window": 200000,
+        "cost": {"prompt": 3, "completion": 15},
+    },
+
 }
