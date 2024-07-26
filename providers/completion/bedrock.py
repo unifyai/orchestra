@@ -327,7 +327,7 @@ def sse_to_part_dict(part, whole, endpoint):
 
 
 def _get_region(provider_endpoint):
-    if "anthropic" in provider_endpoint:
+    if "anthropic" in provider_endpoint and not "opus" in provider_endpoint:
         return "us-east-1"
     return "us-west-2"
 
