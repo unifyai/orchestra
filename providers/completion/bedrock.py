@@ -42,30 +42,12 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
     def client(self, region_name="us-west-2"):
         return boto3.client(service_name="bedrock-runtime", region_name=region_name)
 
-    def process_kwargs(self, messages, kwargs: Dict[str, Any]) -> Dict[str, Any]:
-        _messages = messages[:]
-
-        if "mistral" in self.provider_endpoint:
-            allowed_args = ["max_tokens", "stop", "temperature", "top_p", "top_k"]
-        elif "llama" in self.provider_endpoint:
-            allowed_args = ["temperature", "top_p", "max_tokens"]
-            if "max_tokens" in kwargs:
-                kwargs["max_gen_tokens"] = kwargs.pop("max_tokens")
-        else:
-            allowed_args = []
-
-        kwargs_bedrock = {k: v for k, v in kwargs.items() if k in allowed_args}
-        kwargs_bedrock = self.prompt_factory(_messages, kwargs_bedrock)
-
-        return kwargs_bedrock
-
     def __call__(
         self,
         messages: List,
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:  # noqa: WPS210
-        kwargs_bedrock = self.process_kwargs(messages, kwargs)
         region = _get_region(self.provider_endpoint)
         client = self.client(region)
 
@@ -81,13 +63,14 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
 
         new_messages = messages
 
-        converse_api_params = ["maxTokens", "stopSequences", "temperature", "topP"]# TODO: these aren't the correct names
+        converse_api_param_map = {"maxTokens": "max_tokens", "stopSequences": "stop", "temperature": "temperature", "topP": "top_p"}
         additional_model_params = ["top_k",] #TODO: add more of these
 
         inference_config = {}
-        for param_name in converse_api_params:
-            if param_name in kwargs:
-                inference_config[param_name] = kwargs[param_name]
+        for param_name in converse_api_param_map:
+            if converse_api_param_map[param_name] in kwargs:
+                inference_config[param_name] = kwargs[converse_api_param_map[param_name]]
+
         additional_model_fields = {}
         for param_name in additional_model_params:
             if param_name in kwargs:
@@ -169,40 +152,6 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
             usage=usage,
         )
 
-    # TODO Put this in a util file as its also used in replicate
-    def prompt_factory(self, messages, kwargs_bedrock):
-        if "mistral" in self.provider_endpoint:
-            kwargs_bedrock["prompt"] = "\n".join(
-                (
-                    f"[INST] {message['content']} [/INST]"
-                    if message["role"] == "user"
-                    else message["content"]
-                )
-                for message in messages
-            )
-        elif "llama" in self.provider_endpoint:
-            kwargs_bedrock["prompt"] = (
-                "<|begin_of_text|>"
-                + "".join(
-                    (
-                        f"<|start_header_id|>{message['role']}<|end_header_id|>\n"
-                        + f"{message['content']}<|eot_id|>\n"
-                    )
-                    for message in messages
-                )
-                + "<|start_header_id|>assistant<|end_header_id|>\n"
-            )
-        else:
-            kwargs_bedrock["chat_history"] = [
-                {
-                    "role": "USER" if message["role"] == "user" else "CHATBOT",
-                    "message": message["content"],
-                }
-                for message in messages[:-1]
-            ]
-            kwargs_bedrock["message"] = messages[-1]["content"]
-        return kwargs_bedrock
-
 
 class BedrockSyncGeneratorWrapper(SyncGeneratorWrapper):
     def generator_iteration(self, part, whole):
@@ -259,6 +208,12 @@ class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
 
     async def generator(self):  # noqa: D102, C901, WPS210, WPS231
         whole = []
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        
+
+    async def generator(self):  # noqa: D102, C901, WPS210, WPS231
+        whole = []
 
         session = aioboto3.Session()
         async with session.client(
@@ -273,32 +228,43 @@ class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
                 additionalModelRequestFields=additional_model_fields
             )
 
-            try:  # noqa: WPS501
-                async for part in self._response["body"]:
-                    chunk = json.loads(part.get("chunk").get("bytes").decode())
-                    chunk["id"] = self._response["ResponseMetadata"]["HTTPHeaders"][
-                        "x-amzn-requestid"
-                    ]
-                    part_dict = self.generator_iteration(chunk, whole)
-                    usage = part_dict.get("usage")
-                    if not part_dict:
-                        continue
-                    if usage:
-                        self.prompt_tokens += usage["prompt_tokens"]
-                        self.completion_tokens = usage["completion_tokens"]
-                        part_dict["usage"] = {}
-                        if part_dict["choices"][0]["finish_reason"]:
-                            continue
+            stream = self._response.get("stream")
 
-                    yield part_dict
-            finally:
-                part_dict["usage"] = {
-                    "prompt_tokens": self.prompt_tokens,
-                    "completion_tokens": self.completion_tokens,
-                    "total_tokens": self.prompt_tokens + self.completion_tokens,
+            async for event in stream:
+                if "messageStart" in event:
+                    pass #TODO: for tool use 
+                if 'contentBlockDelta' in event:
+                    content = event['contentBlockDelta']['delta']['text']
+                else:
+                    content = ""
+                if "messageStop" in event:
+                    finish_reason = event['messageStop']['stopReason']
+                else:
+                    finish_reason = ""
+
+                if "metadata" in event:
+                    usage = {
+                        "prompt_tokens": event["metadata"]["usage"]["inputTokens"],
+                        "completion_tokens": event["metadata"]["usage"]["outputTokens"],
+                        "total_tokens": event["metadata"]["usage"]["totalTokens"],
+                    }
+                else:
+                    usage = {}
+                part_dict = {
+                    "id": str(id(event)),
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": content},
+                            "logprobs": None,  # TODO?
+                            "finish_reason": finish_reason,  
+                        },
+                    ],
+                    "usage": usage,
                 }
-                for val in self.get_final_chunk(part_dict, whole):
-                    yield val
+                yield part_dict
 
 
 def sse_to_part_dict(part, whole, endpoint):
