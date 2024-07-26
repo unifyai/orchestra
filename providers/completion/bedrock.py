@@ -39,25 +39,8 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
             "total_tokens": prompt_tokens + completion_tokens,
         }
 
-    def client(self):
-        return boto3.client(service_name="bedrock-runtime", region_name="us-west-2")
-
-    def process_kwargs(self, messages, kwargs: Dict[str, Any]) -> Dict[str, Any]:
-        _messages = messages[:]
-
-        if "mistral" in self.provider_endpoint:
-            allowed_args = ["max_tokens", "stop", "temperature", "top_p", "top_k"]
-        elif "llama" in self.provider_endpoint:
-            allowed_args = ["temperature", "top_p", "max_tokens"]
-            if "max_tokens" in kwargs:
-                kwargs["max_gen_tokens"] = kwargs.pop("max_tokens")
-        else:
-            allowed_args = []
-
-        kwargs_bedrock = {k: v for k, v in kwargs.items() if k in allowed_args}
-        kwargs_bedrock = self.prompt_factory(_messages, kwargs_bedrock)
-
-        return kwargs_bedrock
+    def client(self, region_name="us-west-2"):
+        return boto3.client(service_name="bedrock-runtime", region_name=region_name)
 
     def __call__(
         self,
@@ -65,31 +48,69 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:  # noqa: WPS210
-        kwargs_bedrock = self.process_kwargs(messages, kwargs)
-        client = self.client()
+        region = _get_region(self.provider_endpoint)
+        client = self.client(region)
+
+        system_prompts = []
+        new_messages = []
+        for msg in messages:
+            txt = msg["content"]
+            if msg["role"] == "system":
+                system_prompts.append({"text": msg["content"]})
+            else:
+                msg["content"] = [{"text": txt}]
+                new_messages.append(msg)
+
+        new_messages = messages
+
+        converse_api_param_map = {
+            "maxTokens": "max_tokens",
+            "stopSequences": "stop",
+            "temperature": "temperature",
+            "topP": "top_p",
+        }
+        additional_model_params = [
+            "top_k",
+        ]  # TODO: add more of these
+
+        inference_config = {}
+        for param_name in converse_api_param_map:
+            if converse_api_param_map[param_name] in kwargs:
+                inference_config[param_name] = kwargs[
+                    converse_api_param_map[param_name]
+                ]
+
+        additional_model_fields = {}
+        for param_name in additional_model_params:
+            if param_name in kwargs:
+                additional_model_fields[param_name] = kwargs[param_name]
+
         if stream:
-            response = client.invoke_model_with_response_stream(
+            response = client.converse_stream(
                 modelId=self.provider_endpoint,
-                body=json.dumps(kwargs_bedrock),
+                messages=messages,
+                system=system_prompts,
+                inferenceConfig=inference_config,
+                additionalModelRequestFields=additional_model_fields,
             )
+
             return (BedrockSyncGeneratorWrapper(self, response, messages), None)
 
-        response = client.invoke_model(
+        response = client.converse(
             modelId=self.provider_endpoint,
-            body=json.dumps(kwargs_bedrock),
+            messages=messages,
+            system=system_prompts,
+            inferenceConfig=inference_config,
+            additionalModelRequestFields=additional_model_fields,
         )
         return (
             self.response_to_chat_completion(response),
             self.compute_cost(
                 int(
-                    response["ResponseMetadata"]["HTTPHeaders"][
-                        "x-amzn-bedrock-input-token-count"
-                    ],
+                    response["usage"]["inputTokens"],
                 ),
                 int(
-                    response["ResponseMetadata"]["HTTPHeaders"][
-                        "x-amzn-bedrock-output-token-count"
-                    ],
+                    response["usage"]["outputTokens"],
                 ),
             ),
         )
@@ -108,17 +129,15 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
 
     def response_to_chat_completion(self, response):
         metadata = response["ResponseMetadata"]["HTTPHeaders"]
-        body = json.loads(response["body"].read())
         created_at = self.str_to_ts(metadata["date"])
-        if "mistral" in self.provider_endpoint:
-            finish_reason = body["outputs"][0]["stop_reason"]
-            content = body["outputs"][0]["text"]
-        elif "llama" in self.provider_endpoint:
-            finish_reason = body["stop_reason"]
-            content = body["generation"]
-        else:
-            finish_reason = body["finish_reason"]
-            content = body["text"]
+        finish_reason = response["stopReason"]
+        usage = {
+            "prompt_tokens": response["usage"]["inputTokens"],
+            "completion_tokens": response["usage"]["outputTokens"],
+            "total_tokens": response["usage"]["totalTokens"],
+        }
+        content = response["output"]["message"]["content"][0]["text"]
+
         return dict(
             id=metadata["x-amzn-requestid"],
             choices=[
@@ -135,42 +154,8 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
             created=created_at,
             model=self.hub_model,
             object="chat.completion",
-            usage=self.usage_from_response(metadata),
+            usage=usage,
         )
-
-    # TODO Put this in a util file as its also used in replicate
-    def prompt_factory(self, messages, kwargs_bedrock):
-        if "mistral" in self.provider_endpoint:
-            kwargs_bedrock["prompt"] = "\n".join(
-                (
-                    f"[INST] {message['content']} [/INST]"
-                    if message["role"] == "user"
-                    else message["content"]
-                )
-                for message in messages
-            )
-        elif "llama" in self.provider_endpoint:
-            kwargs_bedrock["prompt"] = (
-                "<|begin_of_text|>"
-                + "".join(
-                    (
-                        f"<|start_header_id|>{message['role']}<|end_header_id|>\n"
-                        + f"{message['content']}<|eot_id|>\n"
-                    )
-                    for message in messages
-                )
-                + "<|start_header_id|>assistant<|end_header_id|>\n"
-            )
-        else:
-            kwargs_bedrock["chat_history"] = [
-                {
-                    "role": "USER" if message["role"] == "user" else "CHATBOT",
-                    "message": message["content"],
-                }
-                for message in messages[:-1]
-            ]
-            kwargs_bedrock["message"] = messages[-1]["content"]
-        return kwargs_bedrock
 
 
 class BedrockSyncGeneratorWrapper(SyncGeneratorWrapper):
@@ -181,31 +166,42 @@ class BedrockSyncGeneratorWrapper(SyncGeneratorWrapper):
         whole = []
         self.prompt_tokens = 0
         self.completion_tokens = 0
-        try:  # noqa: WPS501
-            for part in self._response["body"]:
-                chunk = json.loads(part.get("chunk").get("bytes").decode())
-                chunk["id"] = self._response["ResponseMetadata"]["HTTPHeaders"][
-                    "x-amzn-requestid"
-                ]
-                part_dict = self.generator_iteration(chunk, whole)
-                usage = part_dict.get("usage")
-                if not part_dict:
-                    continue
-                if usage:
-                    self.prompt_tokens += usage["prompt_tokens"]
-                    self.completion_tokens = usage["completion_tokens"]
-                    part_dict["usage"] = {}
-                    if part_dict["choices"][0]["finish_reason"]:
-                        continue
+        stream = self._response.get("stream")
+        for event in stream:
+            if "messageStart" in event:
+                pass  # TODO: for tool use
+            if "contentBlockDelta" in event:
+                content = event["contentBlockDelta"]["delta"]["text"]
+            else:
+                content = ""
+            if "messageStop" in event:
+                finish_reason = event["messageStop"]["stopReason"]
+            else:
+                finish_reason = ""
 
-                yield part_dict
-        finally:
-            part_dict["usage"] = {
-                "prompt_tokens": self.prompt_tokens,
-                "completion_tokens": self.completion_tokens,
-                "total_tokens": self.prompt_tokens + self.completion_tokens,
+            if "metadata" in event:
+                usage = {
+                    "prompt_tokens": event["metadata"]["usage"]["inputTokens"],
+                    "completion_tokens": event["metadata"]["usage"]["outputTokens"],
+                    "total_tokens": event["metadata"]["usage"]["totalTokens"],
+                }
+            else:
+                usage = {}
+            part_dict = {
+                "id": str(id(event)),
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": content},
+                        "logprobs": None,  # TODO?
+                        "finish_reason": finish_reason,
+                    },
+                ],
+                "usage": usage,
             }
-            yield from self.get_final_chunk(part_dict, whole)
+            yield part_dict
 
 
 class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
@@ -218,42 +214,62 @@ class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
 
     async def generator(self):  # noqa: D102, C901, WPS210, WPS231
         whole = []
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+
+    async def generator(self):  # noqa: D102, C901, WPS210, WPS231
+        whole = []
 
         session = aioboto3.Session()
         async with session.client(
             service_name="bedrock-runtime",
-            region_name="us-west-2",
+            region_name=_get_region(self.provider.provider_endpoint),
         ) as client:
-            self._response = await client.invoke_model_with_response_stream(
-                modelId=self.provider.provider_endpoint,
-                body=json.dumps(self._body),
+            self._response = await client.converse_stream(
+                modelId=self.provider_endpoint,
+                messages=messages,
+                system=system_prompts,
+                inferenceConfig=inference_config,
+                additionalModelRequestFields=additional_model_fields,
             )
-            try:  # noqa: WPS501
-                async for part in self._response["body"]:
-                    chunk = json.loads(part.get("chunk").get("bytes").decode())
-                    chunk["id"] = self._response["ResponseMetadata"]["HTTPHeaders"][
-                        "x-amzn-requestid"
-                    ]
-                    part_dict = self.generator_iteration(chunk, whole)
-                    usage = part_dict.get("usage")
-                    if not part_dict:
-                        continue
-                    if usage:
-                        self.prompt_tokens += usage["prompt_tokens"]
-                        self.completion_tokens = usage["completion_tokens"]
-                        part_dict["usage"] = {}
-                        if part_dict["choices"][0]["finish_reason"]:
-                            continue
 
-                    yield part_dict
-            finally:
-                part_dict["usage"] = {
-                    "prompt_tokens": self.prompt_tokens,
-                    "completion_tokens": self.completion_tokens,
-                    "total_tokens": self.prompt_tokens + self.completion_tokens,
+            stream = self._response.get("stream")
+
+            async for event in stream:
+                if "messageStart" in event:
+                    pass  # TODO: for tool use
+                if "contentBlockDelta" in event:
+                    content = event["contentBlockDelta"]["delta"]["text"]
+                else:
+                    content = ""
+                if "messageStop" in event:
+                    finish_reason = event["messageStop"]["stopReason"]
+                else:
+                    finish_reason = ""
+
+                if "metadata" in event:
+                    usage = {
+                        "prompt_tokens": event["metadata"]["usage"]["inputTokens"],
+                        "completion_tokens": event["metadata"]["usage"]["outputTokens"],
+                        "total_tokens": event["metadata"]["usage"]["totalTokens"],
+                    }
+                else:
+                    usage = {}
+                part_dict = {
+                    "id": str(id(event)),
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": content},
+                            "logprobs": None,  # TODO?
+                            "finish_reason": finish_reason,
+                        },
+                    ],
+                    "usage": usage,
                 }
-                for val in self.get_final_chunk(part_dict, whole):
-                    yield val
+                yield part_dict
 
 
 def sse_to_part_dict(part, whole, endpoint):
@@ -310,6 +326,12 @@ def sse_to_part_dict(part, whole, endpoint):
     return part_dict
 
 
+def _get_region(provider_endpoint):
+    if "anthropic" in provider_endpoint and not "opus" in provider_endpoint:
+        return "us-east-1"
+    return "us-west-2"
+
+
 supported_models = {
     "mistral-7b-instruct-v0.2": {
         "endpoint": "mistral.mistral-7b-instruct-v0:2",
@@ -350,5 +372,25 @@ supported_models = {
         "endpoint": "meta.llama3-1-70b-instruct-v1:0",
         "context_window": 8192,
         "cost": {"prompt": 2.65, "completion": 3.5},
+    },
+    "claude-3-haiku": {
+        "endpoint": "anthropic.claude-3-haiku-20240307-v1:0",
+        "context_window": 200000,
+        "cost": {"prompt": 0.25, "completion": 1.25},
+    },
+    "claude-3-sonnet": {
+        "endpoint": "anthropic.claude-3-sonnet-20240229-v1:0",
+        "context_window": 200000,
+        "cost": {"prompt": 3, "completion": 15},
+    },
+    "claude-3-opus": {
+        "endpoint": "anthropic.claude-3-opus-20240229-v1:0",
+        "context_window": 200000,
+        "cost": {"prompt": 15, "completion": 75},
+    },
+    "claude-3.5-sonnet": {
+        "endpoint": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "context_window": 200000,
+        "cost": {"prompt": 3, "completion": 15},
     },
 }
