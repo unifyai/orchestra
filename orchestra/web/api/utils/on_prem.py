@@ -103,6 +103,21 @@ def file_exists(bucket_name: str, file_name: str) -> bool:
     return os.path.exists(file_path)
 
 
+def get_scores(user_id: str, dataset: str):
+    bucket_name = "uploaded_datasets"
+    file_path = os.path.join(
+        shared_volume,
+        bucket_name,
+        user_id,
+        dataset,
+        "0",
+        "scores.json",
+    )
+    with open(file_path, "rb") as f:
+        json_data = f.read()
+    return json.loads(json_data.decode("utf-8"))
+
+
 def dir_exists(bucket_name: str, dir_name: str) -> bool:
     dir_path = os.path.join(shared_volume, bucket_name, dir_name)
     return len(os.listdir(dir_path)) > 0

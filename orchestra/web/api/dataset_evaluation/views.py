@@ -51,6 +51,14 @@ def _list_evaluations(user_id: str, dataset: str):
     return endpoints
 
 
+def _get_scores(user_id: str, dataset: str):
+    return (
+        on_prem.get_scores(user_id, dataset)
+        if os.environ.get("ON_PREM")
+        else gcp.get_scores(user_id, dataset)
+    )
+
+
 # TODO: Move to utils (duplicated in routing)
 def dataset_exists(user_id, name):
     # TODO: This needs to take public datasets into account as
@@ -312,3 +320,48 @@ def get_dataset_evaluations(
     for d in datasets:
         evaluations[d] = _list_evaluations(user_id, d)
     return evaluations
+
+
+@router.get(
+    "/evaluation/results",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {
+                            "judge": {
+                                "model_1@provider_1": "score_1",
+                                "model_2@provider_2": "score_2",
+                            },
+                        },
+                    ],
+                },
+            },
+        },
+        404: {
+            "description": "Dataset Not Found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "This dataset does not exist!"},
+                },
+            },
+        },
+    },
+)
+def get_dataset_evaluation_results(
+    request_fastapi: Request,
+    dataset: Optional[str] = Query(
+        None,
+        description=("Name of the dataset to fetch evaluation from."),
+    ),
+) -> Dict:
+    """
+    Fetches a list of the endpoints that have been evaluated on a given dataset.
+    """
+    user_id = request_fastapi.state.user_id
+    if not dataset_exists(user_id, dataset):
+        raise dataset_does_not_exist
+    scores = _get_scores(user_id, dataset)
+    return scores

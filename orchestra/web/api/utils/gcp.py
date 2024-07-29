@@ -36,6 +36,15 @@ def blob_exists(bucket_name: str, blob_name: str) -> bool:
     return True
 
 
+def get_scores(user_id: str, dataset: str):
+    bucket_name = "uploaded_datasets"
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(f"{user_id}/{dataset}/0/scores.json")
+    content = blob.download_as_bytes().decode("utf-8")
+    return json.loads(content)
+
+
 def dir_exists(bucket_name: str, dir_name: str) -> bool:
     bucket = storage.Client().bucket(bucket_name)
     blobs = list(bucket.list_blobs(prefix=dir_name))
