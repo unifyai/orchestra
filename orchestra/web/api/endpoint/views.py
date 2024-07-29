@@ -41,7 +41,7 @@ def get_endpoints_of(
     endpoint_dao: EndpointDAO = Depends(),
 ):
     """
-    Lists available endpoints for a given model as `model@provider` strings.
+    Lists available endpoints. You can pass either: a model string, a provider string, or neither to get all supported endpoints.
     """
     if model and provider:
         raise overspecified_model_provider
