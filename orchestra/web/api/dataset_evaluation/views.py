@@ -337,7 +337,7 @@ def get_dataset_evaluation_results(
     ),
 ) -> Dict:
     """
-    Fetches a list of the endpoints that have been evaluated on a given dataset.
+    Fetches the results of a given dataset evaluation.
     """
     user_id = request_fastapi.state.user_id
     if not dataset_exists(user_id, dataset):
