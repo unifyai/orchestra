@@ -24,7 +24,7 @@ MODELS = [
     "llama-3-8b-chat@lepton-ai",
     "llama-3-8b-chat@replicate",
     "llama-3-8b-chat@together-ai",
-    "mistral-7b-instruct-v0.2@aws-bedrock",
+    "llama-3-8b-chat@aws-bedrock",
     "mistral-7b-instruct-v0.3@mistral-ai",
     "mistral-7b-instruct-v0.3@octoai",
     "gemini-1.5-flash@vertex-ai",
@@ -55,8 +55,6 @@ async def test_text_generation(  # noqa: WPS218, E501
     """
     # TODO: Test max tokens and rest of parameters
     model, provider = model.split("@")
-    if provider == "aws-bedrock" and endpoint.endswith("inference"):
-        return
 
     stream = stream_str == "stream"
     data = payload_fn[endpoint](model, provider, stream=stream)
