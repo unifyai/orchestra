@@ -94,7 +94,7 @@ class OnPremModel:
 
 
 def send_pubsub_msg(topic: str, msg: Dict[str, str]) -> None:
-    r = redis.Redis(host=os.environ.get("REDIS_HOST"))
+    r = redis.Redis(host=os.environ.get("REDIS_HOST", "host.docker.internal"))
     r.publish(topic.split("/")[-1] + "-sub", json.dumps(msg).encode())
 
 

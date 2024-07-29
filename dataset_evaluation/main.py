@@ -84,7 +84,7 @@ if __name__ == "__main__":
     n.notify("READY=1")
 
     if os.environ.get("ON_PREM"):
-        r = redis.Redis(host=os.environ.get("REDIS_HOST"))
+        r = redis.Redis(host=os.environ.get("REDIS_HOST", "host.docker.internal"))
         p = r.pubsub()
         p.subscribe(**{subscription_name.split("/")[-1]: pub_sub_callback})
         thread = p.run_in_thread(sleep_time=0.001)
