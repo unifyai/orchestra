@@ -1,3 +1,4 @@
+import json
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
@@ -129,3 +130,54 @@ async def test_autorecharge_qty(  # noqa: WPS218, E501
     assert response.status_code == status.HTTP_200_OK
     post = dbsession.execute(query).all()[0][5]
     assert post == 10
+
+
+@pytest.mark.anyio
+async def test_endpoints_of_model(  # noqa: WPS218, E501
+    client: AsyncClient,
+    fastapi_app: FastAPI,
+):
+    url = "/v0/endpoints_of"
+    params = {"model": "gpt-3.5-turbo"}
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == status.HTTP_200_OK
+    response_dict = json.loads(response.text)
+    assert isinstance(response_dict, list)
+    assert response_dict == ["openai"]
+
+
+@pytest.mark.anyio
+async def test_endpoints_of_provider(  # noqa: WPS218, E501
+    client: AsyncClient,
+    fastapi_app: FastAPI,
+):
+    url = "/v0/endpoints_of"
+    params = {"provider": "aws-bedrock"}
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == status.HTTP_200_OK
+    response_dict = json.loads(response.text)
+    assert isinstance(response_dict, list)
+    assert response_dict == ["llama-2-13b-chat", "mistral-7b-instruct-v0.2"]
+
+
+@pytest.mark.anyio
+async def test_endpoints_of_all(  # noqa: WPS218, E501
+    client: AsyncClient,
+    fastapi_app: FastAPI,
+):
+    url = "/v0/endpoints_of"
+    response = await client.get(url, headers=HEADERS)
+    assert response.status_code == status.HTTP_200_OK
+    for endpoint in ["llama-3-8b-chat@anyscale", "llama-3-8b-chat@deepinfra"]:
+        assert endpoint in json.loads(response.text)
+
+
+@pytest.mark.anyio
+async def test_endpoints_of_overspecified(  # noqa: WPS218, E501
+    client: AsyncClient,
+    fastapi_app: FastAPI,
+):
+    url = "/v0/endpoints_of"
+    params = {"model": "gpt-4o", "provider": "openai"}
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
