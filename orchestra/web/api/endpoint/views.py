@@ -9,6 +9,8 @@ from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.web.api.endpoint.schema import EndpointModelResponseVerbose
 
+from orchestra.web.api.utils.http_responses import overspecified_model_provider
+
 router = APIRouter()
 public_router = APIRouter()
 
@@ -30,23 +32,44 @@ _endpoint_list_cache = {}
     },
 )
 def get_endpoints_of(
-    model: str = Query(..., description="Model to get available endpoints from."),
+    model: str = Query(
+        default=None, description="Model to get available endpoints from."
+    ),
+    provider: str = Query(
+        default=None, description="Provider to get available endpoints from."
+    ),
     endpoint_dao: EndpointDAO = Depends(),
 ):
     """
     Lists available endpoints for a given model as `model@provider` strings.
     """
+    if model and provider:
+        raise overspecified_model_provider
     if (
-        model not in _endpoint_list_cache
-        or time.time() - _endpoint_list_cache[model].get("ts", 0) > 3600
-    ):
-        _endpoint_list_cache[model] = {}
-        _endpoint_list_cache[model]["ts"] = time.time()
-        res = endpoint_dao.get_endpoints_of((model,))
-        _endpoint_list_cache[model]["strings"] = [
-            f"{r.Model.mdl_code}@{r.Provider.name}" for r in res
-        ]
-    return _endpoint_list_cache[model]["strings"]
+        model,
+        provider,
+    ) not in _endpoint_list_cache or time.time() - _endpoint_list_cache[
+        (model, provider)
+    ].get(
+        "ts", 0
+    ) > 3600:
+        _endpoint_list_cache[(model, provider)] = {}
+        _endpoint_list_cache[(model, provider)]["ts"] = time.time()
+        res = endpoint_dao.get_endpoints_of((model,), (provider,))
+        if model:
+            _endpoint_list_cache[(model, provider)]["strings"] = [
+                f"{r.Provider.name}" for r in res
+            ]
+        elif provider:
+            _endpoint_list_cache[(model, provider)]["strings"] = [
+                f"{r.Model.mdl_code}" for r in res
+            ]
+        else:
+            _endpoint_list_cache[(model, provider)]["strings"] = [
+                f"{r.Model.mdl_code}@{r.Provider.name}" for r in res
+            ]
+
+    return _endpoint_list_cache[(model, provider)]["strings"]
 
 
 _provider_list_cache = {}
