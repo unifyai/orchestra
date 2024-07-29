@@ -149,10 +149,21 @@ class BedrockSyncGeneratorWrapper(SyncGeneratorWrapper):
                 finish_reason = ""
 
             if "metadata" in event:
+                usage_raw = event["metadata"]["usage"]
+                tc = self.provider.compute_cost(
+                    int(
+                        usage_raw["inputTokens"],
+                    ),
+                    int(
+                        usage_raw["outputTokens"],
+                    ),
+                )
+                self.total_cost = tc
                 usage = {
-                    "prompt_tokens": event["metadata"]["usage"]["inputTokens"],
-                    "completion_tokens": event["metadata"]["usage"]["outputTokens"],
-                    "total_tokens": event["metadata"]["usage"]["totalTokens"],
+                    "cost": tc,
+                    "prompt_tokens": usage_raw["inputTokens"],
+                    "completion_tokens": usage_raw["outputTokens"],
+                    "total_tokens": usage_raw["totalTokens"],
                 }
             else:
                 usage = {}
@@ -219,10 +230,19 @@ class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
                     finish_reason = ""
 
                 if "metadata" in event:
+                    usage_raw = event["metadata"]["usage"]
                     usage = {
-                        "prompt_tokens": event["metadata"]["usage"]["inputTokens"],
-                        "completion_tokens": event["metadata"]["usage"]["outputTokens"],
-                        "total_tokens": event["metadata"]["usage"]["totalTokens"],
+                        "cost": self.provider.compute_cost(
+                            int(
+                                usage_raw["inputTokens"],
+                            ),
+                            int(
+                                usage_raw["outputTokens"],
+                            ),
+                        ),
+                        "prompt_tokens": usage_raw["inputTokens"],
+                        "completion_tokens": usage_raw["outputTokens"],
+                        "total_tokens": usage_raw["totalTokens"],
                     }
                 else:
                     usage = {}
