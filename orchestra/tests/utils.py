@@ -34,7 +34,7 @@ def _partial_openai_payload(temperature=0.5, max_tokens=100, stream=False):
         "messages": [
             {
                 "role": "system",
-                "content": "You are an useful assitant",
+                "content": "You are an useful assistant",
             },
             {
                 "role": "user",
