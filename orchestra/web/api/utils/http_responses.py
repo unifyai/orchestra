@@ -150,6 +150,11 @@ model_not_found = HTTPException(
     detail=("Model not found"),
 )
 
+overspecified_model_provider = HTTPException(
+    status_code=status.HTTP_400_BAD_REQUEST,
+    detail=("You can only specify at most one of (model, provider)"),
+)
+
 
 # TODO: Test this
 def server_error_with_digest(text: str):

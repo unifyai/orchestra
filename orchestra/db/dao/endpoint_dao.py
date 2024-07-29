@@ -54,14 +54,12 @@ class EndpointDAO:
         self,
         models: Tuple[str, ...],
         only_from: Optional[Tuple[str, ...]] = None,
-    ):
-        query = (
-            select(Endpoint, Model, Provider)
-            .join(Model)
-            .join(Provider)
-            .where(Model.mdl_code.in_(models))
-        )
-        if only_from:
+    ) -> List[str]:
+        query = select(Endpoint, Model, Provider).join(Model).join(Provider)
+        query = query.where(Model.active == True)
+        if models and models[0] is not None:
+            query = query.where(Model.mdl_code.in_(models))
+        if only_from and only_from[0] is not None:
             query = query.where(Provider.name.in_(only_from))
         rows = self.session.execute(query)
         return list(rows.fetchall())
