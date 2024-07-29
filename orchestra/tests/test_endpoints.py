@@ -157,7 +157,7 @@ async def test_endpoints_of_provider(  # noqa: WPS218, E501
     assert response.status_code == status.HTTP_200_OK
     response_dict = json.loads(response.text)
     assert isinstance(response_dict, list)
-    assert response_dict == ["llama-2-13b-chat", "mistral-7b-instruct-v0.2"]
+    assert response_dict == ["llama-2-13b-chat", "llama-3-8b-chat"]
 
 
 @pytest.mark.anyio
