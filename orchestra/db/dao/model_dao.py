@@ -67,6 +67,7 @@ class ModelDAO:
         id: Optional[int] = None,  # noqa: WPS125
         mdl_code: Optional[str] = None,
         uploaded_at: Optional[datetime.datetime] = None,
+        task: Optional[str] = None,
         active: Optional[bool] = None,
     ) -> List[Model]:
         """
@@ -85,6 +86,8 @@ class ModelDAO:
             query = query.where(Model.mdl_code == mdl_code)
         if uploaded_at:
             query = query.where(Model.uploaded_at == uploaded_at)
+        if task:
+            query = query.where(Model.task == task)
         if active:
             query = query.where(Model.active == active)
         rows = self.session.execute(query)

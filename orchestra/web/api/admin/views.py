@@ -572,15 +572,9 @@ def create_model(
     uploaded_at = datetime.datetime.now()
     model_dao.create_model(
         mdl_code=new_model_object.mdl_code,
-        user_id=new_model_object.user_id,
         uploaded_at=uploaded_at,
         task=new_model_object.task,
-        description=new_model_object.description,
-        license=new_model_object.license,
         active=new_model_object.active,
-        input_args_format=new_model_object.input_args_format,
-        output_format=new_model_object.output_format,
-        custom_fields=new_model_object.custom_fields,
     )
 
 
@@ -588,15 +582,9 @@ def create_model(
 def update_model(  # noqa: WPS211
     id: int,  # noqa: WPS125
     mdl_code: Optional[str] = None,
-    user_id: Optional[str] = None,
     uploaded_at: Optional[datetime.datetime] = None,
     task: Optional[str] = None,
-    description: Optional[str] = None,
-    license: Optional[str] = None,
     active: Optional[bool] = None,
-    input_args_format: Optional[str] = None,
-    output_format: Optional[str] = None,
-    custom_fields: Optional[str] = None,
     model_dao: ModelDAO = Depends(),
 ) -> None:
     """
@@ -604,29 +592,17 @@ def update_model(  # noqa: WPS211
 
     :param id: id of model instance.
     :param mdl_code: mdl_code of model instance.
-    :param user_id: user_id of model instance.
     :param uploaded_at: uploaded_at of model instance.
     :param task: task of model instance.
-    :param description: description of model instance.
-    :param license: license of model instance.
     :param active: is model instance active.
-    :param input_args_format: input_args_format of model instance.
-    :param output_format: output_format of model instance.
-    :param custom_fields: custom_fields of model instance.
     :param model_dao: DAO for model models.
     """
     model_dao.update_model(
         id=id,
         mdl_code=mdl_code,
-        user_id=user_id,
         uploaded_at=uploaded_at,
         task=task,
-        description=description,
-        license=license,
         active=active,
-        input_args_format=input_args_format,
-        output_format=output_format,
-        custom_fields=custom_fields,
     )
 
 
