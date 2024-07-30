@@ -2,7 +2,7 @@ import logging
 import sys
 from typing import Any, Union
 
-from google.cloud import logging as cloud_logging
+# from google.cloud import logging as cloud_logging
 from loguru import logger
 from opentelemetry.trace import INVALID_SPAN, INVALID_SPAN_CONTEXT, get_current_span
 
@@ -82,10 +82,10 @@ def configure_logging() -> None:  # pragma: no cover
     intercept_handler = InterceptHandler()
     handlers = [intercept_handler]
 
-    if settings.db_host != "localhost":
-        client = cloud_logging.Client()
-        cloud_handler = client.get_default_handler()
-        handlers = [cloud_handler]
+    # if settings.db_host != "localhost":
+    #     client = cloud_logging.Client()
+    #     cloud_handler = client.get_default_handler()
+    #     handlers = [cloud_handler]
     logging.basicConfig(handlers=handlers, level=logging.NOTSET)
 
     for logger_name in logging.root.manager.loggerDict:
