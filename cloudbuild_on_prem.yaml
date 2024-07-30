@@ -15,7 +15,7 @@ steps:
   waitFor:
   - 'Build Orchestra'
 - name: gcr.io/cloud-builders/docker
-  args: ['build', '-t', '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:latest', '--cache-from', '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$_FIXED_COMMIT_HASH', '.', '-f', 'deploy/Dockerfile', '--target', 'prod']
+  args: ['tag', '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA', '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:latest']
   id: Build Orchestra Latest
 - name: gcr.io/cloud-builders/docker
   args:
