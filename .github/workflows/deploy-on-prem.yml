@@ -22,21 +22,20 @@ jobs:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-
     - name: Build and push Dataset Evaluation Image
       run: |
         cd dataset_evaluation
-        docker build -t dataset-evaluation-on-prem:latest -f Dockerfile .
-        docker push dataset-evaluation-on-prem:latest
+        docker build -t unifyai/dataset-evaluation-on-prem:latest -f Dockerfile .
+        docker push unifyai/dataset-evaluation-on-prem:latest
 
     - name: Pull and Push Orchestra Image
       run: |
         docker pull europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra-on-prem:latest
-        docker tag europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra-on-prem:latest orchestra-on-prem:latest
-        docker push orchestra-on-prem:latest
+        docker tag europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra-on-prem:latest unifyai/orchestra-on-prem:latest
+        docker push unifyai/orchestra-on-prem:latest
 
     - name: Pull and Push Console Image
       run: |
         docker pull europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/unify-interfaces/saas-web-app-test-staging:latest
-        docker tag europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/unify-interfaces/saas-web-app-test-staging:latest unify-interfaces-on-prem:latest
-        docker push unify-interfaces-on-prem:latest
+        docker tag europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/unify-interfaces/saas-web-app-test-staging:latest unifyai/unify-interfaces-on-prem:latest
+        docker push unifyai/unify-interfaces-on-prem:latest
