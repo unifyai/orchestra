@@ -1,0 +1,42 @@
+name: On-prem Docker Build
+
+on:
+#   schedule:
+    # runs everyday at 23:00 UTC
+    # - cron:  '0 23 * * *'
+  workflow_dispatch:
+
+jobs:
+
+  build:
+    name: On-prem Docker Build
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+
+    - name: Build and push Dataset Evaluation Image
+      run: |
+        cd orchestra/dataset_evaluation
+        docker build -t dataset-evaluation-on-prem:latest -f Dockerfile .
+        docker push dataset-evaluation-on-prem:latest
+
+    - name: Pull and Push Orchestra Image
+      run: |
+        docker pull europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra-on-prem:latest
+        docker tag europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra-on-prem:latest orchestra-on-prem:latest
+        docker push orchestra-on-prem:latest
+
+    - name: Pull and Push Console Image
+      run: |
+        docker pull europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/unify-interfaces/saas-web-app-test-staging:latest
+        docker tag europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/unify-interfaces/saas-web-app-test-staging:latest unify-interfaces-on-prem:latest
+        docker push unify-interfaces:latest
