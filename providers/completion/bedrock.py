@@ -51,39 +51,8 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
         region = _get_region(self.provider_endpoint)
         client = self.client(region)
 
-        system_prompts = []
-        new_messages = []
-        for msg in messages:
-            txt = msg["content"]
-            if msg["role"] == "system":
-                system_prompts.append({"text": msg["content"]})
-            else:
-                msg["content"] = [{"text": txt}]
-                new_messages.append(msg)
-
-        new_messages = messages
-
-        converse_api_param_map = {
-            "maxTokens": "max_tokens",
-            "stopSequences": "stop",
-            "temperature": "temperature",
-            "topP": "top_p",
-        }
-        additional_model_params = [
-            "top_k",
-        ]  # TODO: add more of these
-
-        inference_config = {}
-        for param_name in converse_api_param_map:
-            if converse_api_param_map[param_name] in kwargs:
-                inference_config[param_name] = kwargs[
-                    converse_api_param_map[param_name]
-                ]
-
-        additional_model_fields = {}
-        for param_name in additional_model_params:
-            if param_name in kwargs:
-                additional_model_fields[param_name] = kwargs[param_name]
+        system_prompts, messages = _format_messages_for_converse(messages)
+        inference_config, additional_model_fields = _format_kwargs_for_converse(kwargs)
 
         if stream:
             response = client.converse_stream(
@@ -180,10 +149,21 @@ class BedrockSyncGeneratorWrapper(SyncGeneratorWrapper):
                 finish_reason = ""
 
             if "metadata" in event:
+                usage_raw = event["metadata"]["usage"]
+                tc = self.provider.compute_cost(
+                    int(
+                        usage_raw["inputTokens"],
+                    ),
+                    int(
+                        usage_raw["outputTokens"],
+                    ),
+                )
+                self.total_cost = tc
                 usage = {
-                    "prompt_tokens": event["metadata"]["usage"]["inputTokens"],
-                    "completion_tokens": event["metadata"]["usage"]["outputTokens"],
-                    "total_tokens": event["metadata"]["usage"]["totalTokens"],
+                    "cost": tc,
+                    "prompt_tokens": usage_raw["inputTokens"],
+                    "completion_tokens": usage_raw["outputTokens"],
+                    "total_tokens": usage_raw["totalTokens"],
                 }
             else:
                 usage = {}
@@ -221,6 +201,8 @@ class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
         whole = []
 
         session = aioboto3.Session()
+        system_prompts, messages = _format_messages_for_converse(messages)
+        inference_config, additional_model_fields = _format_kwargs_for_converse(kwargs)
         async with session.client(
             service_name="bedrock-runtime",
             region_name=_get_region(self.provider.provider_endpoint),
@@ -248,10 +230,19 @@ class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
                     finish_reason = ""
 
                 if "metadata" in event:
+                    usage_raw = event["metadata"]["usage"]
                     usage = {
-                        "prompt_tokens": event["metadata"]["usage"]["inputTokens"],
-                        "completion_tokens": event["metadata"]["usage"]["outputTokens"],
-                        "total_tokens": event["metadata"]["usage"]["totalTokens"],
+                        "cost": self.provider.compute_cost(
+                            int(
+                                usage_raw["inputTokens"],
+                            ),
+                            int(
+                                usage_raw["outputTokens"],
+                            ),
+                        ),
+                        "prompt_tokens": usage_raw["inputTokens"],
+                        "completion_tokens": usage_raw["outputTokens"],
+                        "total_tokens": usage_raw["totalTokens"],
                     }
                 else:
                     usage = {}
@@ -330,6 +321,46 @@ def _get_region(provider_endpoint):
     if "anthropic" in provider_endpoint and not "opus" in provider_endpoint:
         return "us-east-1"
     return "us-west-2"
+
+
+def _format_messages_for_converse(messages):
+    system_prompts = []
+    new_messages = []
+    for msg in messages:
+        txt = msg["content"]
+        if msg["role"] == "system":
+            system_prompts.append({"text": msg["content"]})
+        else:
+            msg["content"] = [{"text": txt}]
+            new_messages.append(msg)
+
+    return system_prompts, new_messages
+
+
+def _format_kwargs_for_converse(kwargs):
+    """takes a dict of kwargs and returns the two dictionaries to pass to the
+    converse api.
+    """
+    converse_api_param_map = {
+        "maxTokens": "max_tokens",
+        "stopSequences": "stop",
+        "temperature": "temperature",
+        "topP": "top_p",
+    }
+    additional_model_params = [
+        "top_k",
+    ]  # TODO: add more of these
+
+    inference_config = {}
+    for param_name in converse_api_param_map:
+        if converse_api_param_map[param_name] in kwargs:
+            inference_config[param_name] = kwargs[converse_api_param_map[param_name]]
+
+    additional_model_fields = {}
+    for param_name in additional_model_params:
+        if param_name in kwargs:
+            additional_model_fields[param_name] = kwargs[param_name]
+    return inference_config, additional_model_fields
 
 
 supported_models = {
