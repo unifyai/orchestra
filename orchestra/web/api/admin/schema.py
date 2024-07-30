@@ -36,21 +36,6 @@ class EndpointModelRequest(BaseModel):
     provider_id: int
 
 
-class LicenseModelRequest(BaseModel):
-    """
-    Request model for creating new license model.
-
-    Attributes:
-        name (str): The name of the license.
-        image_url (str): The image url of the license.
-        description (str): The description of the license.
-    """
-
-    name: str
-    image_url: str
-    description: str
-
-
 class MetricModelRequest(BaseModel):
     """
     Request model for creating new metric model.
@@ -291,21 +276,6 @@ class EndpointModelResponse(BaseModel):
     mdl_id: int
     provider_id: int
     created_at: datetime.datetime
-
-
-class LicenseModelResponse(BaseModel):
-    """
-    Response model for license models.
-
-    Attributes:
-        name (str): The name of the license.
-        image_url (str): The image url of the license.
-        description (str): The description of the license.
-    """
-
-    name: str
-    image_url: str
-    description: str
 
 
 class MetricModelResponse(BaseModel):
