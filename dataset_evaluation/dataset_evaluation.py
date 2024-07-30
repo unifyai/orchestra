@@ -4,6 +4,7 @@ import logging
 import os
 import smtplib
 from dataclasses import dataclass
+from typing import Optional
 from email.message import EmailMessage
 
 from google.cloud import secretmanager, storage
@@ -21,8 +22,8 @@ class BenchmarkConfig:
     user_id: str
     api_key: str
     orchestra_url: str
-    system_prompt: str
-    class_cfg: str
+    system_prompt: Optional[str] = None
+    class_cfg: Optional[list[dict]] = None
 
 
 body = """
@@ -140,8 +141,7 @@ async def main(msg, data_dir):
     """msg is a json object with two fields: config and prompts
     prompts is a list of json objects of the form {"prompt", "reference_answer"}.
     """
-    msg = json.loads(msg)
-    cfg = msg["config"]
+    cfg = json.loads(msg)
     user_email = cfg.pop("user_email", None)
     cfg = BenchmarkConfig(**cfg)
 
@@ -367,39 +367,8 @@ async def main(msg, data_dir):
 
 
 if __name__ == "__main__":
-    import argparse
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--user_id", required=True)
-    parser.add_argument("--api_key", required=True)
-    parser.add_argument("--orchestra_url", required=True)
-    parser.add_argument("--dataset_name", required=True)
-    parser.add_argument("--endpoint", required=True)
-    parser.add_argument("--judge_models", required=True)
-    parser.add_argument("--system_prompt", type=str, default="")
-    parser.add_argument("--class_cfg", type=str)
-    parser.add_argument("--user_email", required=True)
-    args = parser.parse_args()
-
-    print(args.judge_models)
-
-    if args.class_cfg:
-        class_cfg = json.loads(args.class_cfg)
-    else:
-        class_cfg = None
-    cfg = {
-        "dataset_name": args.dataset_name,
-        "endpoint": args.endpoint,
-        "judge_models": args.judge_models.split(","),
-        "user_id": args.user_id,
-        "api_key": args.api_key,
-        "orchestra_url": args.orchestra_url,
-        "system_prompt": args.system_prompt,
-        "class_cfg": class_cfg,
-        "user_email": args.user_email,
-    }
-
-    msg_d = {"config": cfg}
-    msg_raw = json.dumps(msg_d)
+    import sys
+    message_raw = sys.argv[1]
     save_dir = "save_files/"
-    asyncio.run(main(msg_raw, save_dir))
+    asyncio.run(main(message_raw, save_dir))
