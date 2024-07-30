@@ -39,11 +39,7 @@ def pub_sub_callback(message):
             data = json.loads(message.data)
             logging.info(f"entry: {data}")
             subprocess.Popen(
-                [
-                    "venv/bin/python3",
-                    "dataset_evaluation.py",
-                    message.data
-                ]
+                ["venv/bin/python3", "dataset_evaluation.py", message.data]
             )
         except json.decoder.JSONDecodeError:
             logging.error(f"Error parsing message: {message.data}")
