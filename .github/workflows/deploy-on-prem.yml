@@ -39,4 +39,4 @@ jobs:
       run: |
         docker pull europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/unify-interfaces/saas-web-app-test-staging:latest
         docker tag europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/unify-interfaces/saas-web-app-test-staging:latest unify-interfaces-on-prem:latest
-        docker push unify-interfaces:latest
+        docker push unify-interfaces-on-prem:latest
