@@ -25,8 +25,7 @@ jobs:
 
     - name: Build and push Dataset Evaluation Image
       run: |
-        ls
-        cd orchestra/dataset_evaluation
+        cd dataset_evaluation
         docker build -t dataset-evaluation-on-prem:latest -f Dockerfile .
         docker push dataset-evaluation-on-prem:latest
 
