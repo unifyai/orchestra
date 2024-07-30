@@ -31,7 +31,7 @@ jobs:
         GCP_DEFAULT_CREDENTIALS: '${{ secrets.GCP_DEFAULT_CREDENTIALS }}'
       run: |
         import os
-        for q in (os.getenv("MY_VAL")):
+        for q in (os.getenv("GCP_DEFAULT_CREDENTIALS")):
           print(q, end="")
       shell: python
 
