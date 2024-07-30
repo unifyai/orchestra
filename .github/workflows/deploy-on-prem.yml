@@ -27,12 +27,6 @@ jobs:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-    - name: Build and push Dataset Evaluation Image
-      run: |
-        cd dataset_evaluation
-        docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/dataset-evaluation-on-prem:latest -f Dockerfile .
-        docker push ${{ secrets.DOCKERHUB_USERNAME }}/dataset-evaluation-on-prem:latest
-
     - name: Pull and Push Orchestra Image
       run: |
         docker pull europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra-on-prem:latest
@@ -44,3 +38,9 @@ jobs:
         docker pull europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/unify-interfaces/saas-web-app-test-staging:latest
         docker tag europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/unify-interfaces/saas-web-app-test-staging:latest ${{ secrets.DOCKERHUB_USERNAME }}/unify-interfaces-on-prem:latest
         docker push ${{ secrets.DOCKERHUB_USERNAME }}/unify-interfaces-on-prem:latest
+
+    - name: Build and push Dataset Evaluation Image
+      run: |
+        cd dataset_evaluation
+        docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/dataset-evaluation-on-prem:latest -f Dockerfile .
+        docker push ${{ secrets.DOCKERHUB_USERNAME }}/dataset-evaluation-on-prem:latest
