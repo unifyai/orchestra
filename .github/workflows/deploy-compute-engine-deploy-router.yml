@@ -12,7 +12,11 @@ env:
 # TODO: Only when pushing to main
 # TODO: Staging?
 
-on: push
+on:
+  push:
+    branches:
+    - main
+    - staging
 
 jobs:
   deploy:
@@ -45,7 +49,7 @@ jobs:
     - name: Copy Dockerfile to VM
       run: |
         gcloud compute scp ${{ env.GH_WORKDIR }}/Dockerfile ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }}:${{ env.GCLOUD_WORKDIR }} --zone ${{ env.GCLOUD_ZONE }}
-    
+
     - name: Copy router_scripts to VM
       run: |
         gcloud compute scp --recurse ${{ env.GH_WORKDIR }}/router_scripts ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }}:${{ env.GCLOUD_WORKDIR }} --zone ${{ env.GCLOUD_ZONE }}
