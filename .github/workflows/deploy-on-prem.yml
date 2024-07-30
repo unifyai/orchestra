@@ -22,7 +22,6 @@ jobs:
 
     - name: Pull and Push Orchestra Image
       run: |
-        env
         docker pull europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra-on-prem:latest
 
     - name: Login to Docker Hub
