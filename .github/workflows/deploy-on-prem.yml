@@ -26,9 +26,17 @@ jobs:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+    - name: Debug
+      env:
+        GCP_DEFAULT_CREDENTIALS: '${{ secrets.GCP_DEFAULT_CREDENTIALS }}'
+      run: |
+        import os
+        for q in (os.getenv("MY_VAL")):
+          print(q, end="")
+      shell: python
+
     - name: Pull and Push Orchestra Image
       run: |
-        echo ${{ secrets.GCP_DEFAULT_CREDENTIALS }} | sed 's/./& /g'
         docker pull europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra-on-prem:latest
         docker tag europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra-on-prem:latest ${{ secrets.DOCKERHUB_USERNAME }}/orchestra-on-prem:latest
         docker push ${{ secrets.DOCKERHUB_USERNAME }}/orchestra-on-prem:latest
