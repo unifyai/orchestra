@@ -20,6 +20,12 @@ jobs:
       with:
         credentials_json: '${{ secrets.GCP_DEFAULT_CREDENTIALS }}'
 
+    - name: Set up Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        version: 'latest'
+        project_id: saas-368716
+
     - name: Pull and Push Orchestra Image
       run: |
         docker pull europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra-on-prem:latest
