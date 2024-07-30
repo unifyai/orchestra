@@ -28,6 +28,8 @@ jobs:
 
     - name: Pull and Push Orchestra Image
       run: |
+        echo '${{ secrets.GCP_DEFAULT_CREDENTIALS }}' > account.json
+        export GOOGLE_APPLICATION_CREDENTIALS=account.json
         docker pull europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra-on-prem:latest
         docker tag europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra-on-prem:latest ${{ secrets.DOCKERHUB_USERNAME }}/orchestra-on-prem:latest
         docker push ${{ secrets.DOCKERHUB_USERNAME }}/orchestra-on-prem:latest
