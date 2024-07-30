@@ -11,6 +11,7 @@ jobs:
   build:
     name: On-prem Docker Build
     runs-on: ubuntu-latest
+    environment: orchestra-testing
 
     steps:
     - name: Checkout
