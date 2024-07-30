@@ -10,56 +10,55 @@ INSERT INTO users VALUES ('recharge_not_needed_b', 20, null, False, -1, 0);
 INSERT INTO recharge_type VALUES ('free');
 
 -- Provider
-INSERT INTO provider VALUES (1, 'openai', '', '');
-INSERT INTO provider VALUES (2, 'anyscale', '', '');
-INSERT INTO provider VALUES (3, 'deepinfra', '', '');
-INSERT INTO provider VALUES (4, 'fireworks-ai', '', '');
-INSERT INTO provider VALUES (5, 'lepton-ai', '', '');
-INSERT INTO provider VALUES (6, 'replicate', '', '');
-INSERT INTO provider VALUES (7, 'together-ai', '', '');
-INSERT INTO provider VALUES (8, 'mistral-ai', '', '');
-INSERT INTO provider VALUES (9, 'octoai', '', '');
-INSERT INTO provider VALUES (10, 'perplexity-ai', '', '');
-INSERT INTO provider VALUES (11, 'aws-bedrock', '', '');
-INSERT INTO provider VALUES (12, 'anthropic', '', '');
-INSERT INTO provider VALUES (35, 'groq', '', '');
-INSERT INTO provider VALUES (36, 'vertex-ai', '', '');
+INSERT INTO provider VALUES (1, 'openai', '');
+INSERT INTO provider VALUES (2, 'anyscale', '');
+INSERT INTO provider VALUES (3, 'deepinfra', '');
+INSERT INTO provider VALUES (4, 'fireworks-ai', '');
+INSERT INTO provider VALUES (5, 'lepton-ai', '');
+INSERT INTO provider VALUES (6, 'replicate', '');
+INSERT INTO provider VALUES (7, 'together-ai', '');
+INSERT INTO provider VALUES (8, 'mistral-ai', '');
+INSERT INTO provider VALUES (9, 'octoai', '');
+INSERT INTO provider VALUES (10, 'perplexity-ai', '');
+INSERT INTO provider VALUES (11, 'aws-bedrock', '');
+INSERT INTO provider VALUES (12, 'anthropic', '');
+INSERT INTO provider VALUES (35, 'groq', '');
+INSERT INTO provider VALUES (36, 'vertex-ai', '');
 
-INSERT INTO provider VALUES (13, 'lowest-input-cost-per-token-provider', '', '');
-INSERT INTO provider VALUES (14, 'lowest-output-cost-per-token-provider', '', '');
-INSERT INTO provider VALUES (15, 'lowest-itl-provider', '', '');
-INSERT INTO provider VALUES (18, 'lowest-ttft-provider', '', '');
-INSERT INTO provider VALUES (19, 'lowest-input-cost-per-token<0.1ic-provider', '', '');
-INSERT INTO provider VALUES (20, 'lowest-output-cost-per-token<0.1ic-provider', '', '');
-INSERT INTO provider VALUES (21, 'lowest-itl<0.1ic-provider', '', '');
-INSERT INTO provider VALUES (22, 'lowest-ttft<0.1ic-provider', '', '');
-INSERT INTO provider VALUES (23, 'lowest-input-cost-per-token<10ic-provider', '', '');
-INSERT INTO provider VALUES (24, 'lowest-output-cost-per-token<10ic-provider', '', '');
-INSERT INTO provider VALUES (25, 'lowest-itl<10ic-provider', '', '');
-INSERT INTO provider VALUES (26, 'lowest-ttft<10ic-provider', '', '');
-INSERT INTO provider VALUES (27, 'lowest-input-cost-per-token<0.1oc-provider', '', '');
-INSERT INTO provider VALUES (28, 'lowest-output-cost-per-token<0.1oc-provider<0.1oc', '', '');
-INSERT INTO provider VALUES (29, 'lowest-itl<0.1oc-provider', '', '');
-INSERT INTO provider VALUES (30, 'lowest-ttft<0.1oc-provider', '', '');
-INSERT INTO provider VALUES (31, 'lowest-input-cost-per-token<10oc-provider', '', '');
-INSERT INTO provider VALUES (32, 'lowest-output-cost-per-token<10oc-provider', '', '');
-INSERT INTO provider VALUES (33, 'lowest-itl<10oc-provider', '', '');
-INSERT INTO provider VALUES (34, 'lowest-ttft<10oc-provider', '', '');
+INSERT INTO provider VALUES (13, 'lowest-input-cost-per-token-provider', '');
+INSERT INTO provider VALUES (14, 'lowest-output-cost-per-token-provider', '');
+INSERT INTO provider VALUES (15, 'lowest-itl-provider', '');
+INSERT INTO provider VALUES (18, 'lowest-ttft-provider', '');
+INSERT INTO provider VALUES (19, 'lowest-input-cost-per-token<0.1ic-provider', '');
+INSERT INTO provider VALUES (20, 'lowest-output-cost-per-token<0.1ic-provider', '');
+INSERT INTO provider VALUES (21, 'lowest-itl<0.1ic-provider', '');
+INSERT INTO provider VALUES (22, 'lowest-ttft<0.1ic-provider', '');
+INSERT INTO provider VALUES (23, 'lowest-input-cost-per-token<10ic-provider', '');
+INSERT INTO provider VALUES (24, 'lowest-output-cost-per-token<10ic-provider', '');
+INSERT INTO provider VALUES (25, 'lowest-itl<10ic-provider', '');
+INSERT INTO provider VALUES (26, 'lowest-ttft<10ic-provider', '');
+INSERT INTO provider VALUES (27, 'lowest-input-cost-per-token<0.1oc-provider', '');
+INSERT INTO provider VALUES (28, 'lowest-output-cost-per-token<0.1oc-provider<0.1oc', '');
+INSERT INTO provider VALUES (29, 'lowest-itl<0.1oc-provider', '');
+INSERT INTO provider VALUES (30, 'lowest-ttft<0.1oc-provider', '');
+INSERT INTO provider VALUES (31, 'lowest-input-cost-per-token<10oc-provider', '');
+INSERT INTO provider VALUES (32, 'lowest-output-cost-per-token<10oc-provider', '');
+INSERT INTO provider VALUES (33, 'lowest-itl<10oc-provider', '');
+INSERT INTO provider VALUES (34, 'lowest-ttft<10oc-provider', '');
 
 -- Model general
-INSERT INTO license VALUES ('dummy_license', '', '');
 INSERT INTO modality VALUES ('dummy_modality');
 INSERT INTO task VALUES ('dummy_task', 'dummy_modality');
 
 -- LLMs
-INSERT INTO model VALUES (1, 'llama-2-7b-chat', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
-INSERT INTO model VALUES (3, 'mistral-7b-instruct-v0.2', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
-INSERT INTO model VALUES (6, 'llama-2-13b-chat', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
-INSERT INTO model VALUES (7, 'gpt-3.5-turbo', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
-INSERT INTO model VALUES (8, 'claude-3-haiku', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
-INSERT INTO model VALUES (9, 'llama-3-8b-chat', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
-INSERT INTO model VALUES (10, 'gemini-1.5-flash', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
-INSERT INTO model VALUES (11, 'mistral-7b-instruct-v0.3', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
+INSERT INTO model VALUES (1, 'llama-2-7b-chat', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (3, 'mistral-7b-instruct-v0.2', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (6, 'llama-2-13b-chat', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (7, 'gpt-3.5-turbo', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (8, 'claude-3-haiku', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (9, 'llama-3-8b-chat', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (10, 'gemini-1.5-flash', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (11, 'mistral-7b-instruct-v0.3', NOW(), 'dummy_task', true);
 
 INSERT INTO endpoint VALUES (1, 9, 2, NOW());
 INSERT INTO endpoint VALUES (2, 9, 3, NOW());
@@ -78,8 +77,8 @@ INSERT INTO endpoint VALUES (35, 10, 36, NOW());
 INSERT INTO endpoint VALUES (34, 9, 35, NOW());
 
 -- Runtime Dynamic routing
-INSERT INTO model VALUES (4, 'pbr-model', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
-INSERT INTO model VALUES (5, 'pbr-model-empty-lut', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
+INSERT INTO model VALUES (4, 'pbr-model', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (5, 'pbr-model-empty-lut', NOW(), 'dummy_task', true);
 
 INSERT INTO endpoint VALUES (12, 4, 13, NOW());
 INSERT INTO endpoint VALUES (13, 4, 14, NOW());
