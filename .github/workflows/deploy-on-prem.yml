@@ -30,7 +30,7 @@ jobs:
       run: |
         env
         export GCP_VAR_123='${{ secrets.GCP_DEFAULT_CREDENTIALS }}'
-        echo GCP_VAR_123
+        echo $GCP_VAR_123
         docker pull europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra-on-prem:latest
         docker tag europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra-on-prem:latest ${{ secrets.DOCKERHUB_USERNAME }}/orchestra-on-prem:latest
         docker push ${{ secrets.DOCKERHUB_USERNAME }}/orchestra-on-prem:latest
