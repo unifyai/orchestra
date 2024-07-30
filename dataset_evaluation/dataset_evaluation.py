@@ -8,10 +8,10 @@ from typing import Optional
 from email.message import EmailMessage
 
 from google.cloud import secretmanager, storage
-from utils.fetch_judgements import generate_judgements
-from utils.fetch_queries import generate_queries
-from utils.parsing_judge import ratings_from_sample
-from utils.automatic_judgements import automatic_judgements
+from dataset_evaluation.utils.fetch_judgements import generate_judgements
+from dataset_evaluation.utils.fetch_queries import generate_queries
+from dataset_evaluation.utils.parsing_judge import ratings_from_sample
+from dataset_evaluation.utils.automatic_judgements import automatic_judgements
 
 
 @dataclass
@@ -137,7 +137,7 @@ def send_email(user_email, endpoint, dataset):
     email_server.quit()
 
 
-async def main(msg, data_dir):
+async def evaluate_dataset(msg, data_dir):
     """msg is a json object with two fields: config and prompts
     prompts is a list of json objects of the form {"prompt", "reference_answer"}.
     """
@@ -159,9 +159,10 @@ async def main(msg, data_dir):
     bucket_name = "uploaded_datasets"
     blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/dataset.jsonl"
     blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    tmp_prompts_path = prompts_path.replace(
-        "prompts.jsonl", f"{cfg.endpoint}_tmp_prompts.jsonl"
-    )
+    folder = os.path.dirname(prompts_path)
+    folder = os.path.join(folder, "tmp")
+    os.makedirs(folder, exist_ok=True)
+    tmp_prompts_path = os.path.join(folder, f"{cfg.endpoint}_tmp_prompts.jsonl")
     blob.download_to_filename(tmp_prompts_path)
     with open(tmp_prompts_path) as f:
         prompts = [json.loads(l) for l in f]
@@ -371,4 +372,4 @@ if __name__ == "__main__":
     import sys
     message_raw = sys.argv[1]
     save_dir = "save_files/"
-    asyncio.run(main(message_raw, save_dir))
+    asyncio.run(evaluate_dataset(message_raw, save_dir))
