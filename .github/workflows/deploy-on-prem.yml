@@ -28,10 +28,10 @@ jobs:
 
     - name: Debug
       env:
-        GCP_DEFAULT_CREDENTIALS: '${{ secrets.GCP_DEFAULT_CREDENTIALS }}'
+        CREDENTIALS: '${{ secrets.GCP_DEFAULT_CREDENTIALS }}'
       run: |
         import os
-        for q in (os.getenv("GCP_DEFAULT_CREDENTIALS")):
+        for q in (os.getenv("CREDENTIALS")):
           print(q, end="")
       shell: python
 
