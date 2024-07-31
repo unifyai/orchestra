@@ -1,0 +1,47 @@
+steps:
+- name: gcr.io/cloud-builders/docker
+  entrypoint: 'bash'
+  args: ['-c', 'docker pull $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$_FIXED_COMMIT_HASH || exit 0']
+  id: Pull Docker Cache
+- name: gcr.io/cloud-builders/docker
+  args: ['build', '-t', '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA', '--cache-from', '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$_FIXED_COMMIT_HASH', '.', '-f', 'deploy/Dockerfile', '--target', 'prod']
+  id: Build Orchestra
+- name: gcr.io/cloud-builders/docker
+  args:
+  - push
+  - >-
+    $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
+  id: Push Orchestra
+  waitFor:
+  - 'Build Orchestra'
+- name: gcr.io/cloud-builders/docker
+  args: ['tag', '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA', '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:latest']
+  id: Build Orchestra Latest
+- name: gcr.io/cloud-builders/docker
+  args:
+  - push
+  - >-
+    $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:latest
+  id: Push Orchestra Latest
+  waitFor:
+  - 'Build Orchestra Latest'
+images:
+- $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
+- $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:latest
+options:
+  substitutionOption: ALLOW_LOOSE
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+substitutions:
+  _JOB_REGION: europe-west3
+  _SERVICE_NAME: orchestra
+  _TRIGGER_ID: 0bfee4b7-25c8-453a-8484-fca72480864c
+  REPO_NAME: orchestra
+  _DEPLOY_REGION: europe-west1
+  _AR_HOSTNAME: europe-west3-docker.pkg.dev
+  _PLATFORM: managed
+  _JOB_NAME: orchestra-migrator
+  _FIXED_COMMIT_HASH: 8f98f587e9081412d4570356c3e43441d0ff1705
+tags:
+- gcp-cloud-build-deploy-cloud-run
+- gcp-cloud-build-deploy-cloud-run-managed
+- orchestra
