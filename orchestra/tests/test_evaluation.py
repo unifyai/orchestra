@@ -33,6 +33,7 @@ sample_path = "./orchestra/tests/sample_datasets/with_ref.jsonl"
 
 # tests /evaluation
 def test_evaluation():
+    assert False
 
     # upload dataset
     dataset_name = f"test_dataset_EVALUATION_{int(time.time()*1000 % 1000)}"
@@ -68,6 +69,7 @@ def test_evaluation():
 
 # tests DELETE /evaluation
 def test_evaluation_delete():
+    assert False
     # upload dataset
     dataset_name = f"test_dataset_DELETE_{int(time.time()*1000 % 1000)}"
     _upload_dataset(dataset_name, sample_path)
