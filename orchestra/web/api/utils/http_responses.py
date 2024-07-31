@@ -125,9 +125,10 @@ def dataset_does_not_exist(dataset):
     )
 
 
-evaluation_does_not_exist = HTTPException(
+def evaluation_does_not_exist(dataset):
+    return HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
-    detail="This evaluation does not exist.",
+    detail=f"The evaluation for {dataset} does not exist.",
 )
 
 provider_not_found_under_conditions = HTTPException(

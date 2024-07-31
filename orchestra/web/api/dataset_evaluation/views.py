@@ -53,8 +53,11 @@ def _get_scores(user_id: str, dataset: str):
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
     blob = bucket.blob(f"{user_id}/{dataset}/0/scores.json")
-    content = blob.download_as_bytes().decode("utf-8")
-    return json.loads(content)
+    try:
+        content = blob.download_as_bytes().decode("utf-8")
+        return json.loads(content)
+    except:
+        return evaluation_does_not_exist(dataset)
 
 
 # TODO: Move to utils (duplicated in routing)
