@@ -139,7 +139,7 @@ def send_email(user_email, endpoint, dataset):
     email_server.quit()
 
 
-async def evaluate_dataset(msg, data_dir, shared_volume):
+async def evaluate_dataset(msg, data_dir, shared_volume=""):
     """msg is a json object with two fields: config and prompts
     prompts is a list of json objects of the form {"prompt", "reference_answer"}.
     """
