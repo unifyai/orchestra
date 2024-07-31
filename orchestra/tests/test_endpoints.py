@@ -235,4 +235,3 @@ async def test_models_all(  # noqa: WPS218, E501
     response_dict = response.json()
     assert isinstance(response_dict, list)
     assert len(response_dict) > 1
-    assert False, str(response.json())

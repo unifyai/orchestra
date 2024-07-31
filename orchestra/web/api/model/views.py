@@ -45,6 +45,7 @@ def list_models(
     if time.time() - _model_list_cache.get("ts", 0) > 3600:
         raw = endpoint_dao.get_endpoints_of(only_from=(provider,))
         ret = [r.Model.mdl_code for r in raw]
+        ret.sort()
         _model_list_cache["models"] = ret
         _model_list_cache["ts"] = time.time()
     return _model_list_cache["models"]
