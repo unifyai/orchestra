@@ -4,13 +4,14 @@ import logging
 import os
 import smtplib
 from dataclasses import dataclass
+from typing import Optional
 from email.message import EmailMessage
 
 from google.cloud import secretmanager, storage
-from utils.fetch_judgements import generate_judgements
-from utils.fetch_queries import generate_queries
-from utils.parsing_judge import ratings_from_sample
-from utils.automatic_judgements import automatic_judgements
+from dataset_evaluation.utils.fetch_judgements import generate_judgements
+from dataset_evaluation.utils.fetch_queries import generate_queries
+from dataset_evaluation.utils.parsing_judge import ratings_from_sample
+from dataset_evaluation.utils.automatic_judgements import automatic_judgements
 
 
 @dataclass
@@ -21,8 +22,8 @@ class BenchmarkConfig:
     user_id: str
     api_key: str
     orchestra_url: str
-    system_prompt: str
-    class_cfg: str
+    system_prompt: Optional[str] = None
+    class_cfg: Optional[list[dict]] = None
 
 
 body = """
@@ -136,12 +137,11 @@ def send_email(user_email, endpoint, dataset):
     email_server.quit()
 
 
-async def main(msg, data_dir):
+async def evaluate_dataset(msg, data_dir):
     """msg is a json object with two fields: config and prompts
     prompts is a list of json objects of the form {"prompt", "reference_answer"}.
     """
-    msg = json.loads(msg)
-    cfg = msg["config"]
+    cfg = json.loads(msg)
     user_email = cfg.pop("user_email", None)
     cfg = BenchmarkConfig(**cfg)
 
@@ -159,9 +159,10 @@ async def main(msg, data_dir):
     bucket_name = "uploaded_datasets"
     blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/dataset.jsonl"
     blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    tmp_prompts_path = prompts_path.replace(
-        "prompts.jsonl", f"{cfg.endpoint}_tmp_prompts.jsonl"
-    )
+    folder = os.path.dirname(prompts_path)
+    folder = os.path.join(folder, "tmp")
+    os.makedirs(folder, exist_ok=True)
+    tmp_prompts_path = os.path.join(folder, f"{cfg.endpoint}_tmp_prompts.jsonl")
     blob.download_to_filename(tmp_prompts_path)
     with open(tmp_prompts_path) as f:
         prompts = [json.loads(l) for l in f]
@@ -367,39 +368,9 @@ async def main(msg, data_dir):
 
 
 if __name__ == "__main__":
-    import argparse
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--user_id", required=True)
-    parser.add_argument("--api_key", required=True)
-    parser.add_argument("--orchestra_url", required=True)
-    parser.add_argument("--dataset_name", required=True)
-    parser.add_argument("--endpoint", required=True)
-    parser.add_argument("--judge_models", required=True)
-    parser.add_argument("--system_prompt", type=str, default="")
-    parser.add_argument("--class_cfg", type=str)
-    parser.add_argument("--user_email", required=True)
-    args = parser.parse_args()
+    import sys
 
-    print(args.judge_models)
-
-    if args.class_cfg:
-        class_cfg = json.loads(args.class_cfg)
-    else:
-        class_cfg = None
-    cfg = {
-        "dataset_name": args.dataset_name,
-        "endpoint": args.endpoint,
-        "judge_models": args.judge_models.split(","),
-        "user_id": args.user_id,
-        "api_key": args.api_key,
-        "orchestra_url": args.orchestra_url,
-        "system_prompt": args.system_prompt,
-        "class_cfg": class_cfg,
-        "user_email": args.user_email,
-    }
-
-    msg_d = {"config": cfg}
-    msg_raw = json.dumps(msg_d)
+    message_raw = sys.argv[1]
     save_dir = "save_files/"
-    asyncio.run(main(msg_raw, save_dir))
+    asyncio.run(evaluate_dataset(message_raw, save_dir))
