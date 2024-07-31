@@ -3,8 +3,8 @@ Description=GCP Pub/Sub to dataset evaluation
 After=network.target
 
 [Service]
-ExecStart=/opt/dataset-evaluation/venv/bin/python3 /opt/dataset-evaluation/main.py
-WorkingDirectory=/opt/dataset-evaluation/
+ExecStart=/opt/dataset_evaluation/venv/bin/python3 /opt/dataset_evaluation/main.py
+WorkingDirectory=/opt/dataset_evaluation/
 Restart=always
 RestartSec=10
 User=serviceuser
