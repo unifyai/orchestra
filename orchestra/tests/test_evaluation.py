@@ -89,7 +89,7 @@ def test_evaluation_delete():
     url = f"{orchestra_base_url}/evaluation/list"
     response = requests.get(url, headers=HEADERS)
     assert dataset_name in json.loads(response.text)
-    
+
     # check in results
     url = f"{orchestra_base_url}/evaluation/results?dataset={dataset_name}"
     response = requests.get(url, headers=HEADERS)
@@ -113,4 +113,3 @@ def test_evaluation_delete():
 
 # /evaluation/list and /evaluation/results
 # are tested implicitly in evaluate & delete
-
