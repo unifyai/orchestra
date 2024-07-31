@@ -23,8 +23,11 @@ def _upload_dataset(client, dataset_name, data_path):
     response = client.post("/v0/dataset", data=data, files=files, headers=HEADERS)
     return response
 
+
 def _delete_dataset_evaluation(client, dataset_name):
-    response = client.delete("/v0/dataset", params={"name": dataset_name}, headers=HEADERS)
+    response = client.delete(
+        "/v0/dataset", params={"name": dataset_name}, headers=HEADERS
+    )
     return response
 
 
@@ -57,7 +60,9 @@ async def test_evaluation(client: AsyncClient):
     assert dataset_name in response.json()
 
     # check evaluation in results
-    response = await client.get(f"/v0/evaluation/results?dataset={dataset_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/evaluation/results?dataset={dataset_name}", headers=HEADERS
+    )
     assert response.status_code == 200
 
     # cleanup
@@ -91,7 +96,9 @@ async def test_evaluation_delete(client: AsyncClient):
     assert dataset_name in response.json()
 
     # check in results
-    response = await client.get(f"/v0/evaluation/results?dataset={dataset_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/evaluation/results?dataset={dataset_name}", headers=HEADERS
+    )
     assert response.status_code == 200
 
     # delete evaluation
@@ -105,7 +112,9 @@ async def test_evaluation_delete(client: AsyncClient):
     assert dataset_name not in response.json()
 
     # check not in results
-    response = await client.get("/v0/evaluation/results?dataset={dataset_name}", headers=HEADERS)
+    response = await client.get(
+        "/v0/evaluation/results?dataset={dataset_name}", headers=HEADERS
+    )
     assert response.status_code != 200
 
 
