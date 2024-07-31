@@ -1,3 +1,5 @@
+import os
+
 from fastapi import Depends
 from fastapi.routing import APIRouter
 
@@ -19,7 +21,7 @@ from orchestra.web.api import (  # noqa: WPS235
 from orchestra.web.api.dependencies import auth_admin_key, auth_api_key
 
 API_KEY_AUTH = [Depends(auth_api_key)]
-ADMIN_AUTH = [Depends(auth_admin_key)]
+ADMIN_AUTH = [Depends(auth_admin_key)] if not os.environ.get("ON_PREM") else None
 
 api_router = APIRouter()
 api_router.include_router(
