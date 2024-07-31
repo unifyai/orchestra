@@ -33,9 +33,7 @@ class CustomEndpointDAO:
         if self.on_prem:
             self.on_prem_model.create(**data)
         else:
-            self.session.add(
-                CustomEndpoint(user_id=user_id, name=name, url=url, key_id=key_id),
-            )
+            self.session.add(CustomEndpoint(**data))
 
     def filter(self, user_id: str, name: str) -> List[CustomEndpoint]:
         if self.on_prem:
