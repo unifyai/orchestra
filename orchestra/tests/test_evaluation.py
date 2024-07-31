@@ -1,9 +1,12 @@
+import asyncio
 import requests
 import os
 import time
 import json
 
-orchestra_base_url = "https://api.unify.ai/v0"
+import pytest
+from httpx import AsyncClient
+
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 
 HEADERS = {
@@ -12,36 +15,32 @@ HEADERS = {
 }
 
 
-def _upload_dataset(dataset_name, data_path):
-    url = f"{orchestra_base_url}/dataset"
+def _upload_dataset(client, dataset_name, data_path):
     data = {"name": dataset_name}
     with open(data_path, "rb") as f:
         file_content = f.read()
     files = {"file": ("test.jsonl", file_content, "application/x-jsonlines")}
-    response = requests.post(url, data=data, files=files, headers=HEADERS)
-    assert response.status_code == 200
+    response = client.post("/v0/dataset", data=data, files=files, headers=HEADERS)
+    return response
 
-
-def _delete_dataset_evaluation(dataset_name):
-    url = f"{orchestra_base_url}/dataset"
-    response = requests.delete(url, params={"name": dataset_name}, headers=HEADERS)
-    assert response.status_code == 200
+def _delete_dataset_evaluation(client, dataset_name):
+    response = client.delete("/v0/dataset", params={"name": dataset_name}, headers=HEADERS)
+    return response
 
 
 sample_path = "./orchestra/tests/sample_datasets/with_ref.jsonl"
 
 
 # tests /evaluation
-def test_evaluation():
-    assert False
-
+@pytest.mark.anyio
+async def test_evaluation(client: AsyncClient):
     # upload dataset
-    dataset_name = f"test_dataset_EVALUATION_{int(time.time()*1000 % 1000)}"
-    _upload_dataset(dataset_name, sample_path)
-    time.sleep(5)
+    dataset_name = f"test_dataset_EVALUATION_{int(time.time()*1000 % 100000)}"
+    ret = await _upload_dataset(client, dataset_name, sample_path)
+    assert ret.status_code == 200
+    await asyncio.sleep(5)
 
     # evaluate dataset
-    url = f"{orchestra_base_url}/evaluation"
     endpoint = "llama-3-8b-chat@aws-bedrock"
     judge_models = ["claude-3-haiku@aws-bedrock"]
     params = {
@@ -49,33 +48,33 @@ def test_evaluation():
         "endpoint": endpoint,
         "judge_models": judge_models,
     }
-    response = requests.post(url, json=params, headers=HEADERS)
-    time.sleep(30)
+    response = await client.post("/v0/evaluation", json=params, headers=HEADERS)
+    assert response.status_code == 200
+    await asyncio.sleep(30)
 
     # check evaluation in list
-    url = f"{orchestra_base_url}/evaluation/list"
-    response = requests.get(url, headers=HEADERS)
-    assert dataset_name in json.loads(response.text)
+    response = await client.get("/v0/evaluation/list", headers=HEADERS)
+    assert dataset_name in response.json()
 
     # check evaluation in results
-    url = f"{orchestra_base_url}/evaluation/results?dataset={dataset_name}"
-    response = requests.get(url, headers=HEADERS)
+    response = await client.get(f"/v0/evaluation/results?dataset={dataset_name}", headers=HEADERS)
     assert response.status_code == 200
 
     # cleanup
     # TODO: move this to a fixture
-    _delete_dataset_evaluation(dataset_name)
+    ret = await _delete_dataset_evaluation(client, dataset_name)
+    assert ret.status_code == 200
 
 
 # tests DELETE /evaluation
-def test_evaluation_delete():
-    assert False
+@pytest.mark.anyio
+async def test_evaluation_delete(client: AsyncClient):
     # upload dataset
-    dataset_name = f"test_dataset_DELETE_{int(time.time()*1000 % 1000)}"
-    _upload_dataset(dataset_name, sample_path)
-    time.sleep(5)
+    dataset_name = f"test_dataset_DELETE_{int(time.time()*1000 % 100000)}"
+    ret = await _upload_dataset(client, dataset_name, sample_path)
+    assert ret.status_code == 200
+    await asyncio.sleep(5)
     # trigger evaluation
-    url = f"{orchestra_base_url}/evaluation"
     endpoint = "llama-3-8b-chat@aws-bedrock"
     judge_models = ["claude-3-haiku@aws-bedrock"]
     params = {
@@ -83,33 +82,30 @@ def test_evaluation_delete():
         "endpoint": endpoint,
         "judge_models": judge_models,
     }
-    response = requests.post(url, json=params, headers=HEADERS)
-    time.sleep(30)
+    response = await client.post("/v0/evaluation", json=params, headers=HEADERS)
+    assert response.status_code == 200
+    await asyncio.sleep(30)
 
-    # check in list and results
-
-    url = f"{orchestra_base_url}/evaluation/list"
-    response = requests.get(url, headers=HEADERS)
-    assert dataset_name in json.loads(response.text)
+    # check in list
+    response = await client.get("/v0/evaluation/list", headers=HEADERS)
+    assert dataset_name in response.json()
 
     # check in results
-    url = f"{orchestra_base_url}/evaluation/results?dataset={dataset_name}"
-    response = requests.get(url, headers=HEADERS)
-    assert response.status_code == 200, f"{response.text}"
+    response = await client.get(f"/v0/evaluation/results?dataset={dataset_name}", headers=HEADERS)
+    assert response.status_code == 200
 
     # delete evaluation
-    _delete_dataset_evaluation(dataset_name)
+    ret = await _delete_dataset_evaluation(client, dataset_name)
+    assert ret.status_code == 200
 
-    time.sleep(5)
+    await asyncio.sleep(5)
 
     # check not in list
-    url = f"{orchestra_base_url}/evaluation/list"
-    response = requests.get(url, headers=HEADERS)
-    assert dataset_name not in json.loads(response.text)
+    response = await client.get("/v0/evaluation/list", headers=HEADERS)
+    assert dataset_name not in response.json()
 
     # check not in results
-    url = f"{orchestra_base_url}/evaluation/results?dataset={dataset_name}"
-    response = requests.get(url, headers=HEADERS)
+    response = await client.get("/v0/evaluation/results?dataset={dataset_name}", headers=HEADERS)
     assert response.status_code != 200
 
 
