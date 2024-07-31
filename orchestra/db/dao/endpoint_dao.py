@@ -52,7 +52,7 @@ class EndpointDAO:
 
     def get_endpoints_of(
         self,
-        models: Tuple[str, ...],
+        models: Optional[Tuple[str, ...]] = None,
         only_from: Optional[Tuple[str, ...]] = None,
     ) -> List[str]:
         query = select(Endpoint, Model, Provider).join(Model).join(Provider)
