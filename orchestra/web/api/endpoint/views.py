@@ -31,7 +31,7 @@ _endpoint_list_cache = {}
         },
     },
 )
-def get_endpoints_of(
+def get_endpoints(
     model: str = Query(
         default=None, description="Model to get available endpoints from."
     ),
@@ -41,7 +41,7 @@ def get_endpoints_of(
     endpoint_dao: EndpointDAO = Depends(),
 ):
     """
-    Lists available endpoints. You can pass either: a model string, a provider string, or neither to get all supported endpoints.
+    Lists available endpoints. If a model is specified, returns the providers that support that model. If a provider is specified, returns the models that the provider supports.   
     """
     if model and provider:
         raise overspecified_model_provider
@@ -89,15 +89,15 @@ _provider_list_cache = {}
         },
     },
 )
-def get_providers_of(
+def get_providers(
     model: str = Query(
         default=None,
-        description="Model to get available providers from. If empty, will return all providers",
+        description="Model to get available providers from.",
     ),
     endpoint_dao: EndpointDAO = Depends(),
 ):
     """
-    Lists available providers for a given model.
+    Lists available providers. If a model is specified, returns the providers that support that model.
     """
     if (
         model not in _provider_list_cache

@@ -30,7 +30,7 @@ _model_list_cache = {}
         },
     },
 )
-def list_models(
+def models(
     provider: str = Query(
         default=None, description="Provider to get available models from."
     ),
@@ -38,9 +38,7 @@ def list_models(
     endpoint_dao: EndpointDAO = Depends(),
 ) -> List[Model]:
     """
-    Returns a list of every LLM available through the Unify API.
-    \f
-    :return: list of active model names from database.
+    Lists available models. If a provider is specified, returns the models that the provider supports.  
     """
     if time.time() - _model_list_cache.get("ts", 0) > 3600:
         raw = endpoint_dao.get_endpoints_of(only_from=(provider,))
