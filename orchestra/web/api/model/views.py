@@ -2,9 +2,10 @@ import datetime
 import time
 from typing import List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.param_functions import Depends
 
+from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.models.orchestra_models import Model
 from orchestra.web.api.model.schema import ModelResponse
@@ -30,7 +31,12 @@ _model_list_cache = {}
     },
 )
 def list_models(
+    provider: str = Query(
+        default=None,
+        description="Provider to get available models from.",
+    ),
     model_dao: ModelDAO = Depends(),
+    endpoint_dao: EndpointDAO = Depends(),
 ) -> List[Model]:
     """
     Returns a list of every LLM available through the Unify API.
@@ -38,7 +44,10 @@ def list_models(
     :return: list of active model names from database.
     """
     if time.time() - _model_list_cache.get("ts", 0) > 3600:
-        _model_list_cache["models"] = model_dao.get_active_models()
+        raw = endpoint_dao.get_endpoints_of(only_from=(provider,))
+        ret = [r.Model.mdl_code for r in raw]
+        ret.sort()
+        _model_list_cache["models"] = ret
         _model_list_cache["ts"] = time.time()
     return _model_list_cache["models"]
 

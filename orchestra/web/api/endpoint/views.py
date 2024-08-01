@@ -17,7 +17,7 @@ _endpoint_list_cache = {}
 
 
 @public_router.get(
-    "/endpoints_of",
+    "/endpoints",
     response_model=List[str],
     responses={
         200: {
@@ -59,17 +59,17 @@ def get_endpoints_of(
         _endpoint_list_cache[(model, provider)]["ts"] = time.time()
         res = endpoint_dao.get_endpoints_of((model,), (provider,))
         if model:
-            _endpoint_list_cache[(model, provider)]["strings"] = [
-                f"{r.Provider.name}" for r in res
-            ]
+            _endpoint_list_cache[(model, provider)]["strings"] = sorted(
+                [f"{r.Provider.name}" for r in res],
+            )
         elif provider:
-            _endpoint_list_cache[(model, provider)]["strings"] = [
-                f"{r.Model.mdl_code}" for r in res
-            ]
+            _endpoint_list_cache[(model, provider)]["strings"] = sorted(
+                [f"{r.Model.mdl_code}" for r in res],
+            )
         else:
-            _endpoint_list_cache[(model, provider)]["strings"] = [
-                f"{r.Model.mdl_code}@{r.Provider.name}" for r in res
-            ]
+            _endpoint_list_cache[(model, provider)]["strings"] = sorted(
+                [f"{r.Model.mdl_code}@{r.Provider.name}" for r in res],
+            )
 
     return _endpoint_list_cache[(model, provider)]["strings"]
 
@@ -78,7 +78,7 @@ _provider_list_cache = {}
 
 
 @public_router.get(
-    "/providers_of",
+    "/providers",
     response_model=List[str],
     responses={
         200: {
@@ -92,7 +92,10 @@ _provider_list_cache = {}
     },
 )
 def get_providers_of(
-    model: str = Query(..., description="Model to get available providers from."),
+    model: str = Query(
+        default=None,
+        description="Model to get available providers from. If empty, will return all providers",
+    ),
     endpoint_dao: EndpointDAO = Depends(),
 ):
     """
@@ -105,7 +108,9 @@ def get_providers_of(
         _provider_list_cache[model] = {}
         _provider_list_cache[model]["ts"] = time.time()
         res = endpoint_dao.get_endpoints_of((model,))
-        _provider_list_cache[model]["strings"] = [r.Provider.name for r in res]
+        ret = list(set([r.Provider.name for r in res]))
+        ret.sort()
+        _provider_list_cache[model]["strings"] = ret
     return _provider_list_cache[model]["strings"]
 
 

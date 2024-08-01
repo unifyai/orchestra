@@ -9,9 +9,6 @@ env:
   GCLOUD_INSTANCE: pubsub-2-clickhouse
   GCLOUD_USERNAME: serviceuser
 
-# TODO: Only when pushing to main
-# TODO: Staging?
-
 on:
   push:
     branches:

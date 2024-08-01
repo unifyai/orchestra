@@ -46,7 +46,7 @@ def format_q(prompt_data):
 
 
 def create_judge_prompt(prompt_data, system_prompt, class_cfg):
-    if system_prompt != "":
+    if system_prompt:
         instructions = system_prompt
     else:
         instructions = template_with_ref

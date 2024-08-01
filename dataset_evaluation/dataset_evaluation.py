@@ -4,6 +4,7 @@ import logging
 import os
 import smtplib
 from dataclasses import dataclass
+from typing import Optional
 from email.message import EmailMessage
 
 from google.cloud import secretmanager, storage
@@ -15,14 +16,15 @@ from utils.automatic_judgements import automatic_judgements
 
 @dataclass
 class BenchmarkConfig:
-    dataset_name: str
+    action: str
+    dataset: str
     endpoint: str
     judge_models: list[str]
     user_id: str
     api_key: str
     orchestra_url: str
-    system_prompt: str
-    class_cfg: str
+    system_prompt: Optional[str] = None
+    class_cfg: Optional[list[dict]] = None
 
 
 body = """
@@ -136,17 +138,16 @@ def send_email(user_email, endpoint, dataset):
     email_server.quit()
 
 
-async def main(msg, data_dir):
+async def evaluate_dataset(msg, data_dir):
     """msg is a json object with two fields: config and prompts
     prompts is a list of json objects of the form {"prompt", "reference_answer"}.
     """
-    msg = json.loads(msg)
-    cfg = msg["config"]
+    cfg = json.loads(msg)
     user_email = cfg.pop("user_email", None)
     cfg = BenchmarkConfig(**cfg)
 
     # create root folder
-    run_save_path = os.path.join(data_dir, cfg.user_id, cfg.dataset_name)
+    run_save_path = os.path.join(data_dir, cfg.user_id, cfg.dataset)
 
     os.makedirs(run_save_path, exist_ok=True)
 
@@ -157,11 +158,12 @@ async def main(msg, data_dir):
     # load prompts
 
     bucket_name = "uploaded_datasets"
-    blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/dataset.jsonl"
+    blob_name = f"{cfg.user_id}/{cfg.dataset}/0/dataset.jsonl"
     blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    tmp_prompts_path = prompts_path.replace(
-        "prompts.jsonl", f"{cfg.endpoint}_tmp_prompts.jsonl"
-    )
+    folder = os.path.dirname(prompts_path)
+    folder = os.path.join(folder, "tmp")
+    os.makedirs(folder, exist_ok=True)
+    tmp_prompts_path = os.path.join(folder, f"{cfg.endpoint}_tmp_prompts.jsonl")
     blob.download_to_filename(tmp_prompts_path)
     with open(tmp_prompts_path) as f:
         prompts = [json.loads(l) for l in f]
@@ -197,7 +199,7 @@ async def main(msg, data_dir):
     ]
     logging.basicConfig(
         level=logging.DEBUG,
-        format=f"%(asctime)s - %(levelname)s - {cfg.dataset_name} - %(message)s",
+        format=f"%(asctime)s - %(levelname)s - {cfg.dataset} - %(message)s",
     )
     logging.info(f"Begin getting queries")
     await asyncio.gather(*tasks)
@@ -299,7 +301,7 @@ async def main(msg, data_dir):
     # upload to cloud storage buckets
     #
     # upload responses
-    blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/{cfg.endpoint}/responses.jsonl"
+    blob_name = f"{cfg.user_id}/{cfg.dataset}/0/{cfg.endpoint}/responses.jsonl"
     blob = storage.Client().bucket(bucket_name).blob(blob_name)
     blob.upload_from_filename(
         os.path.join(model_responses_path, _format_model_tag(cfg.endpoint) + ".jsonl"),
@@ -307,7 +309,7 @@ async def main(msg, data_dir):
     # upload judgements
     for judge_tag in cfg.judge_models:
         fmtd_judge_tag = _format_model_tag(judge_tag)
-        blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/{cfg.endpoint}/{fmtd_judge_tag}_judgements.jsonl"
+        blob_name = f"{cfg.user_id}/{cfg.dataset}/0/{cfg.endpoint}/{fmtd_judge_tag}_judgements.jsonl"
         blob = storage.Client().bucket(bucket_name).blob(blob_name)
         blob.upload_from_filename(
             os.path.join(
@@ -320,7 +322,7 @@ async def main(msg, data_dir):
     storage_client = storage.Client()
     bucket_name = "uploaded_datasets"
 
-    prefix = f"{cfg.user_id}/{cfg.dataset_name}/0/"
+    prefix = f"{cfg.user_id}/{cfg.dataset}/0/"
     blobs = storage_client.list_blobs(bucket_name, prefix=prefix)
 
     # format is {judge: {endpoint: score}}
@@ -354,52 +356,22 @@ async def main(msg, data_dir):
     with open("scores.json", "w") as f:
         json.dump(results, f)
 
-    blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/scores.json"
+    blob_name = f"{cfg.user_id}/{cfg.dataset}/0/scores.json"
     blob = storage.Client().bucket(bucket_name).blob(blob_name)
     blob.upload_from_filename("scores.json")
 
     # send mail
     if user_email is not None:
-        send_email(user_email, cfg.endpoint, cfg.dataset_name)
+        send_email(user_email, cfg.endpoint, cfg.dataset)
         logging.info(
-            f"Email sent to {user_email} for {cfg.endpoint}:{cfg.dataset_name}",
+            f"Email sent to {user_email} for {cfg.endpoint}:{cfg.dataset}",
         )
 
 
 if __name__ == "__main__":
-    import argparse
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--user_id", required=True)
-    parser.add_argument("--api_key", required=True)
-    parser.add_argument("--orchestra_url", required=True)
-    parser.add_argument("--dataset_name", required=True)
-    parser.add_argument("--endpoint", required=True)
-    parser.add_argument("--judge_models", required=True)
-    parser.add_argument("--system_prompt", type=str, default="")
-    parser.add_argument("--class_cfg", type=str)
-    parser.add_argument("--user_email", required=True)
-    args = parser.parse_args()
+    import sys
 
-    print(args.judge_models)
-
-    if args.class_cfg:
-        class_cfg = json.loads(args.class_cfg)
-    else:
-        class_cfg = None
-    cfg = {
-        "dataset_name": args.dataset_name,
-        "endpoint": args.endpoint,
-        "judge_models": args.judge_models.split(","),
-        "user_id": args.user_id,
-        "api_key": args.api_key,
-        "orchestra_url": args.orchestra_url,
-        "system_prompt": args.system_prompt,
-        "class_cfg": class_cfg,
-        "user_email": args.user_email,
-    }
-
-    msg_d = {"config": cfg}
-    msg_raw = json.dumps(msg_d)
+    message_raw = sys.argv[1]
     save_dir = "save_files/"
-    asyncio.run(main(msg_raw, save_dir))
+    asyncio.run(evaluate_dataset(message_raw, save_dir))
