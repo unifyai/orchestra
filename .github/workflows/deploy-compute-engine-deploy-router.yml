@@ -9,10 +9,12 @@ env:
   GCLOUD_INSTANCE: deploy-router
   GCLOUD_USERNAME: serviceuser
 
-# TODO: Only when pushing to main
-# TODO: Staging?
+on:
+  push:
+    branches:
+      - main
+      - staging
 
-on: push
 
 jobs:
   deploy:

@@ -5,12 +5,9 @@ env:
   SERVICE_NAME: dataset-evaluation # Systemd service name
   GCLOUD_PROJECT: saas-368716
   GCLOUD_ZONE: europe-west1-b
-  GCLOUD_WORKDIR: /opt/dataset-evaluation
+  GCLOUD_WORKDIR: /opt/dataset_evaluation
   GCLOUD_INSTANCE: dataset-evaluation
   GCLOUD_USERNAME: serviceuser
-
-# TODO: Only when pushing to main
-# TODO: Staging?
 
 on:
   push:

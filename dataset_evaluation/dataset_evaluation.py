@@ -9,16 +9,17 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Optional
 
-from dataset_evaluation.utils.automatic_judgements import automatic_judgements
-from dataset_evaluation.utils.fetch_judgements import generate_judgements
-from dataset_evaluation.utils.fetch_queries import generate_queries
-from dataset_evaluation.utils.parsing_judge import ratings_from_sample
 from google.cloud import secretmanager, storage
+from utils.automatic_judgements import automatic_judgements
+from utils.fetch_judgements import generate_judgements
+from utils.fetch_queries import generate_queries
+from utils.parsing_judge import ratings_from_sample
 
 
 @dataclass
 class BenchmarkConfig:
-    dataset_name: str
+    action: str
+    dataset: str
     endpoint: str
     judge_models: list[str]
     user_id: str
@@ -148,7 +149,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume=""):
     cfg = BenchmarkConfig(**cfg)
 
     # create root folder
-    run_save_path = os.path.join(shared_volume, data_dir, cfg.user_id, cfg.dataset_name)
+    run_save_path = os.path.join(shared_volume, data_dir, cfg.user_id, cfg.dataset)
 
     os.makedirs(run_save_path, exist_ok=True)
 
@@ -159,7 +160,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume=""):
     # load prompts
 
     bucket_name = "uploaded_datasets"
-    blob_name = os.path.join(cfg.user_id, cfg.dataset_name, "0", "dataset.jsonl")
+    blob_name = os.path.join(cfg.user_id, cfg.dataset, "0", "dataset.jsonl")
     folder = os.path.dirname(prompts_path)
     folder = os.path.join(folder, "tmp")
     os.makedirs(folder, exist_ok=True)
@@ -206,7 +207,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume=""):
     ]
     logging.basicConfig(
         level=logging.DEBUG,
-        format=f"%(asctime)s - %(levelname)s - {cfg.dataset_name} - %(message)s",
+        format=f"%(asctime)s - %(levelname)s - {cfg.dataset} - %(message)s",
     )
     logging.info(f"Begin getting queries")
     await asyncio.gather(*tasks)
@@ -311,7 +312,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume=""):
     # upload responses
     blob_name = os.path.join(
         cfg.user_id,
-        cfg.dataset_name,
+        cfg.dataset,
         "0",
         cfg.endpoint,
         "responses.jsonl",
@@ -334,7 +335,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume=""):
         fmtd_judge_tag = _format_model_tag(judge_tag)
         blob_name = os.path.join(
             cfg.user_id,
-            cfg.dataset_name,
+            cfg.dataset,
             "0",
             cfg.endpoint,
             f"{fmtd_judge_tag}_judgements.jsonl",
@@ -355,7 +356,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume=""):
     # TODO: upload tokens
 
     bucket_name = "uploaded_datasets"
-    prefix = os.path.join(cfg.user_id, cfg.dataset_name, "0")
+    prefix = os.path.join(cfg.user_id, cfg.dataset, "0")
     prefix_folder_path = os.path.join(shared_volume, bucket_name, prefix)
     if os.environ.get("ON_PREM"):
         blobs = []
@@ -400,7 +401,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume=""):
     with open("scores.json", "w") as f:
         json.dump(results, f)
 
-    blob_name = os.path.join(cfg.user_id, cfg.dataset_name, "0", "scores.json")
+    blob_name = os.path.join(cfg.user_id, cfg.dataset, "0", "scores.json")
     if os.environ.get("ON_PREM"):
         file_path = os.path.join(shared_volume, bucket_name, blob_name)
         shutil.copy("scores.json", file_path)
@@ -411,9 +412,9 @@ async def evaluate_dataset(msg, data_dir, shared_volume=""):
 
     # send mail
     if not os.environ.get("ON_PREM") and user_email is not None:
-        send_email(user_email, cfg.endpoint, cfg.dataset_name)
+        send_email(user_email, cfg.endpoint, cfg.dataset)
         logging.info(
-            f"Email sent to {user_email} for {cfg.endpoint}:{cfg.dataset_name}",
+            f"Email sent to {user_email} for {cfg.endpoint}:{cfg.dataset}",
         )
 
 

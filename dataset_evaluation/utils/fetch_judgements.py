@@ -1,9 +1,9 @@
 import json
 import os
 
-from dataset_evaluation.utils.generic_mp import process_requests
-from dataset_evaluation.utils.request_handling import Request, create_payload
-from dataset_evaluation.utils.judge_templates import template_with_ref
+from utils.generic_mp import process_requests
+from utils.request_handling import Request, create_payload
+from utils.judge_templates import template_with_ref
 
 default_cfg = [
     {"label": "excellent", "score": 1.0},

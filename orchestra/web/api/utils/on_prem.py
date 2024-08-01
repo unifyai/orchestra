@@ -8,6 +8,8 @@ import redis
 import requests
 from fastapi import HTTPException
 
+from orchestra.web.api.utils.http_responses import evaluation_does_not_exist
+
 shared_volume = os.environ.get("SHARED_VOLUME")
 
 
@@ -115,9 +117,11 @@ def get_scores(user_id: str, dataset: str):
         "0",
         "scores.json",
     )
-    with open(file_path, "rb") as f:
-        json_data = f.read()
-    return json.loads(json_data.decode("utf-8"))
+    if os.path.exists(file_path):
+        with open(file_path, "rb") as f:
+            json_data = f.read()
+        return json.loads(json_data.decode("utf-8"))
+    return evaluation_does_not_exist(dataset)
 
 
 def dir_exists(bucket_name: str, dir_name: str) -> bool:

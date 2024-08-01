@@ -314,7 +314,7 @@ def get_dataset_evaluations(
     if dataset is not None:
         # Check if the dataset exists
         if not dataset_exists(user_id, dataset):
-            raise dataset_does_not_exist
+            raise dataset_does_not_exist(dataset)
     evaluations = {}
     datasets = [dataset] if dataset is not None else _list_datasets(user_id)
     for d in datasets:
@@ -362,6 +362,6 @@ def get_dataset_evaluation_results(
     """
     user_id = request_fastapi.state.user_id
     if not dataset_exists(user_id, dataset):
-        raise dataset_does_not_exist
+        raise dataset_does_not_exist(dataset)
     scores = _get_scores(user_id, dataset)
     return scores
