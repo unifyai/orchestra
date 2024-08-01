@@ -1,8 +1,8 @@
 import json
 import os
 
-from dataset_evaluation.utils.generic_mp import process_requests
-from dataset_evaluation.utils.request_handling import Request, create_payload
+from utils.generic_mp import process_requests
+from utils.request_handling import Request, create_payload
 
 
 def create_request(model_tag: str, url, headers, prompt_data):
