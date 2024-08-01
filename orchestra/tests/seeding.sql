@@ -47,19 +47,18 @@ INSERT INTO provider VALUES (33, 'lowest-itl<10oc-provider', '', '');
 INSERT INTO provider VALUES (34, 'lowest-ttft<10oc-provider', '', '');
 
 -- Model general
-INSERT INTO license VALUES ('dummy_license', '', '');
 INSERT INTO modality VALUES ('dummy_modality');
 INSERT INTO task VALUES ('dummy_task', 'dummy_modality');
 
 -- LLMs
-INSERT INTO model VALUES (1, 'llama-2-7b-chat', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
-INSERT INTO model VALUES (3, 'mistral-7b-instruct-v0.2', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
-INSERT INTO model VALUES (6, 'llama-2-13b-chat', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
-INSERT INTO model VALUES (7, 'gpt-3.5-turbo', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
-INSERT INTO model VALUES (8, 'claude-3-haiku', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
-INSERT INTO model VALUES (9, 'llama-3-8b-chat', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
-INSERT INTO model VALUES (10, 'gemini-1.5-flash', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
-INSERT INTO model VALUES (11, 'mistral-7b-instruct-v0.3', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
+INSERT INTO model VALUES (1, 'llama-2-7b-chat', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (3, 'mistral-7b-instruct-v0.2', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (6, 'llama-2-13b-chat', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (7, 'gpt-3.5-turbo', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (8, 'claude-3-haiku', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (9, 'llama-3-8b-chat', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (10, 'gemini-1.5-flash', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (11, 'mistral-7b-instruct-v0.3', NOW(), 'dummy_task', true);
 
 INSERT INTO endpoint VALUES (1, 9, 2, NOW());
 INSERT INTO endpoint VALUES (2, 9, 3, NOW());
@@ -78,8 +77,8 @@ INSERT INTO endpoint VALUES (35, 10, 36, NOW());
 INSERT INTO endpoint VALUES (34, 9, 35, NOW());
 
 -- Runtime Dynamic routing
-INSERT INTO model VALUES (4, 'pbr-model', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
-INSERT INTO model VALUES (5, 'pbr-model-empty-lut', :user_id, NOW(), 'dummy_task', '', 'dummy_license', '', '', '', true, false);
+INSERT INTO model VALUES (4, 'pbr-model', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (5, 'pbr-model-empty-lut', NOW(), 'dummy_task', true);
 
 INSERT INTO endpoint VALUES (12, 4, 13, NOW());
 INSERT INTO endpoint VALUES (13, 4, 14, NOW());

@@ -10,34 +10,14 @@ class Model(Base):
 
     id = sa.Column(sa.Integer(), primary_key=True)
     mdl_code = sa.Column(sa.String())
-    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"))
     uploaded_at = sa.Column(sa.TIMESTAMP(), nullable=False)
     task = sa.Column(sa.String(), sa.ForeignKey("task.name"), nullable=False)
-    description = sa.Column(sa.Text(), nullable=False)
-    license = sa.Column(sa.String(), sa.ForeignKey("license.name"))
-    input_args_format = sa.Column(sa.Text(), nullable=False)
-    output_format = sa.Column(sa.Text(), nullable=False)
-    custom_fields = sa.Column(sa.Text())
+
     active = sa.Column(
         sa.Boolean(),
         server_default="f",
         nullable=False,
     )  # type: ignore
-    is_private = sa.Column(
-        sa.Boolean(),
-        server_default="f",
-        nullable=False,
-    )  # type: ignore
-
-
-class License(Base):
-    """Model class for the license table."""
-
-    __tablename__ = "license"
-
-    name = sa.Column(sa.String(), primary_key=True)
-    image_url = sa.Column(sa.String())
-    description = sa.Column(sa.Text(), nullable=False)
 
 
 class Task(Base):
@@ -77,7 +57,6 @@ class Provider(Base):
     name = sa.Column(sa.String(), nullable=False)
     display_name = sa.Column(sa.String(), nullable=False)
     image_url = sa.Column(sa.String(), nullable=False)
-    description = sa.Column(sa.Text())
 
 
 class Datapoint(Base):
@@ -301,7 +280,10 @@ class LatestBenchmark(Base):
     __tablename__ = "latest_benchmark"
 
     endpoint_id = sa.Column(
-        sa.Integer(), sa.ForeignKey("endpoint.id"), nullable=False, primary_key=True
+        sa.Integer(),
+        sa.ForeignKey("endpoint.id"),
+        nullable=False,
+        primary_key=True,
     )
     regime = sa.Column(sa.String(), primary_key=True)
     region = sa.Column(sa.String(), primary_key=True)
