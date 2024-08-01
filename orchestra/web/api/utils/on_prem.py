@@ -187,24 +187,23 @@ def handle_on_prem(endpoint: str, method: str):
             if os.environ.get("ON_PREM"):
                 if len(non_dao_kwargs.keys()) == 0:
                     non_dao_kwargs = None
-                match method:
-                    case "get":
-                        return requests.get(
-                            request_url,
-                            params=non_dao_kwargs,
-                            headers=headers,
-                        ).json()
-                    case "post":
-                        return requests.post(
-                            request_url,
-                            params=non_dao_kwargs,
-                            headers=headers,
-                        ).json()
-                    case _:
-                        raise HTTPException(
-                            status_code=404,
-                            detail="This endpoint is not available in an on-prem setup.",
-                        )
+                if method == "get":
+                    return requests.get(
+                        request_url,
+                        params=non_dao_kwargs,
+                        headers=headers,
+                    ).json()
+                elif method == "post":
+                    return requests.post(
+                        request_url,
+                        params=non_dao_kwargs,
+                        headers=headers,
+                    ).json()
+                else:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="This endpoint is not available in an on-prem setup.",
+                    )
             return fn(*args, **kwargs)
 
         return wrapped_function
