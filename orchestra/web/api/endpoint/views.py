@@ -41,7 +41,7 @@ def get_endpoints(
     endpoint_dao: EndpointDAO = Depends(),
 ):
     """
-    Lists available endpoints. If a model is specified, returns the providers that support that model. If a provider is specified, returns the models that the provider supports.   
+    Lists available endpoints. If a model is specified, returns the providers that support that model. If a provider is specified, returns the models that the provider supports.
     """
     if model and provider:
         raise overspecified_model_provider

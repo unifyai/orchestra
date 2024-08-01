@@ -38,7 +38,7 @@ def get_models(
     endpoint_dao: EndpointDAO = Depends(),
 ) -> List[Model]:
     """
-    Lists available models. If a provider is specified, returns the models that the provider supports.  
+    Lists available models. If a provider is specified, returns the models that the provider supports.
     """
     if time.time() - _model_list_cache.get("ts", 0) > 3600:
         raw = endpoint_dao.get_endpoints_of(only_from=(provider,))
