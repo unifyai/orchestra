@@ -16,6 +16,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LambdaLR
 from transformers import AutoTokenizer, DataCollatorWithPadding
+from google.cloud import storage
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 warnings.filterwarnings("ignore")
@@ -181,8 +182,8 @@ def create_eval_set(val_path):
             entry = json.loads(line)
             id_ = entry["id_"]
             prompt = entry["prompt"]
-            #for entry in score
-            #gt = {key: entry[key] for key in entry if key not in ["id_", "prompt_"]}
+            # for entry in score
+            # gt = {key: entry[key] for key in entry if key not in ["id_", "prompt_"]}
             # gt = entry["gt"]
             # this is a dict: model_name to score
             gt_list = [entry["scores"][f"{model_name}"] for model_name in MODEL_MAPPING]
@@ -387,3 +388,33 @@ if __name__ == "__main__":
 
     # start train
     train(comp, optimizer, train_dataloader, val_dataloader, config)
+
+    # what to do with the weights at the end ??
+    # upload weights
+
+    # get weights
+
+    weight_path = os.path.join(
+        config["train"]["created_dir"],
+        "models",
+        "epochs",
+        f"model_epoch_5.pth",
+    )
+
+    config_path = os.path.join(config["train"]["created_dir"], "config.yaml")
+    model_mapping_path = os.path.join(
+        config["train"]["created_dir"], "model_mapping.json"
+    )
+    # upload weights to bucket
+
+    assert False, "need user_id and name"
+    bucket_name = "custom_router_data"
+    directory = f"custom_router/{user_id}/{name}/"
+
+    file_path = weight_path
+    file_name = "model_epoch_5.pth"
+
+    for file_path, file_name in zip([weight_path, config_path, model_mapping_path], ["model.pth", "config.yaml", "model_mapping.json"]):
+        blob_name = directory + file_name
+        blob = storage.Client().bucket(bucket_name).blob(blob_name)
+        blob.upload_from_filename(file_path)
