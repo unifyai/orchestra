@@ -8,10 +8,10 @@ from typing import Optional
 from email.message import EmailMessage
 
 from google.cloud import secretmanager, storage
-from dataset_evaluation.utils.fetch_judgements import generate_judgements
-from dataset_evaluation.utils.fetch_queries import generate_queries
-from dataset_evaluation.utils.parsing_judge import ratings_from_sample
-from dataset_evaluation.utils.automatic_judgements import automatic_judgements
+from utils.fetch_judgements import generate_judgements
+from utils.fetch_queries import generate_queries
+from utils.parsing_judge import ratings_from_sample
+from utils.automatic_judgements import automatic_judgements
 
 
 @dataclass

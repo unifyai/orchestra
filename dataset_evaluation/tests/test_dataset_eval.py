@@ -1,11 +1,17 @@
+# TODO:
+# Get rid of the sys.path stuff
+# Use AsyncClient (so can be tested on staging etc)
+
 import asyncio
 import json
 import pytest
 import requests
 import time
 import os
+import sys
 
-from dataset_evaluation.dataset_evaluation import evaluate_dataset
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from dataset_evaluation import evaluate_dataset
 
 orchestra_base_url = "https://api.unify.ai/v0"
 

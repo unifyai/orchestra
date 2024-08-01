@@ -1,7 +1,7 @@
 import json
 import asyncio
 
-from dataset_evaluation.utils.request_handling import generic_call
+from utils.request_handling import generic_call
 
 
 async def call_model(payload):
