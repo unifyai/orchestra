@@ -16,6 +16,7 @@ from utils.automatic_judgements import automatic_judgements
 
 @dataclass
 class BenchmarkConfig:
+    action: str
     dataset_name: str
     endpoint: str
     judge_models: list[str]
