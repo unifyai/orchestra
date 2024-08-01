@@ -52,8 +52,7 @@ def pub_sub_callback(message):
                     ],
                 )
             elif d["action"] == "delete":
-                # TODO: Implement this
-                pass
+                subprocess.Popen(["venv/bin/python3", "delete_router.py", message.data])
             else:
                 logging.error(f"Unknown action: {message.data}")
         except json.decoder.JSONDecodeError:
