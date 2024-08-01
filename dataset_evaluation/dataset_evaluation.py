@@ -17,7 +17,7 @@ from utils.automatic_judgements import automatic_judgements
 @dataclass
 class BenchmarkConfig:
     action: str
-    dataset_name: str
+    dataset: str
     endpoint: str
     judge_models: list[str]
     user_id: str
@@ -147,7 +147,7 @@ async def evaluate_dataset(msg, data_dir):
     cfg = BenchmarkConfig(**cfg)
 
     # create root folder
-    run_save_path = os.path.join(data_dir, cfg.user_id, cfg.dataset_name)
+    run_save_path = os.path.join(data_dir, cfg.user_id, cfg.dataset)
 
     os.makedirs(run_save_path, exist_ok=True)
 
@@ -158,7 +158,7 @@ async def evaluate_dataset(msg, data_dir):
     # load prompts
 
     bucket_name = "uploaded_datasets"
-    blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/dataset.jsonl"
+    blob_name = f"{cfg.user_id}/{cfg.dataset}/0/dataset.jsonl"
     blob = storage.Client().bucket(bucket_name).blob(blob_name)
     folder = os.path.dirname(prompts_path)
     folder = os.path.join(folder, "tmp")
@@ -199,7 +199,7 @@ async def evaluate_dataset(msg, data_dir):
     ]
     logging.basicConfig(
         level=logging.DEBUG,
-        format=f"%(asctime)s - %(levelname)s - {cfg.dataset_name} - %(message)s",
+        format=f"%(asctime)s - %(levelname)s - {cfg.dataset} - %(message)s",
     )
     logging.info(f"Begin getting queries")
     await asyncio.gather(*tasks)
@@ -301,7 +301,7 @@ async def evaluate_dataset(msg, data_dir):
     # upload to cloud storage buckets
     #
     # upload responses
-    blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/{cfg.endpoint}/responses.jsonl"
+    blob_name = f"{cfg.user_id}/{cfg.dataset}/0/{cfg.endpoint}/responses.jsonl"
     blob = storage.Client().bucket(bucket_name).blob(blob_name)
     blob.upload_from_filename(
         os.path.join(model_responses_path, _format_model_tag(cfg.endpoint) + ".jsonl"),
@@ -309,7 +309,7 @@ async def evaluate_dataset(msg, data_dir):
     # upload judgements
     for judge_tag in cfg.judge_models:
         fmtd_judge_tag = _format_model_tag(judge_tag)
-        blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/{cfg.endpoint}/{fmtd_judge_tag}_judgements.jsonl"
+        blob_name = f"{cfg.user_id}/{cfg.dataset}/0/{cfg.endpoint}/{fmtd_judge_tag}_judgements.jsonl"
         blob = storage.Client().bucket(bucket_name).blob(blob_name)
         blob.upload_from_filename(
             os.path.join(
@@ -322,7 +322,7 @@ async def evaluate_dataset(msg, data_dir):
     storage_client = storage.Client()
     bucket_name = "uploaded_datasets"
 
-    prefix = f"{cfg.user_id}/{cfg.dataset_name}/0/"
+    prefix = f"{cfg.user_id}/{cfg.dataset}/0/"
     blobs = storage_client.list_blobs(bucket_name, prefix=prefix)
 
     # format is {judge: {endpoint: score}}
@@ -356,15 +356,15 @@ async def evaluate_dataset(msg, data_dir):
     with open("scores.json", "w") as f:
         json.dump(results, f)
 
-    blob_name = f"{cfg.user_id}/{cfg.dataset_name}/0/scores.json"
+    blob_name = f"{cfg.user_id}/{cfg.dataset}/0/scores.json"
     blob = storage.Client().bucket(bucket_name).blob(blob_name)
     blob.upload_from_filename("scores.json")
 
     # send mail
     if user_email is not None:
-        send_email(user_email, cfg.endpoint, cfg.dataset_name)
+        send_email(user_email, cfg.endpoint, cfg.dataset)
         logging.info(
-            f"Email sent to {user_email} for {cfg.endpoint}:{cfg.dataset_name}",
+            f"Email sent to {user_email} for {cfg.endpoint}:{cfg.dataset}",
         )
 
 
