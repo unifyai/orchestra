@@ -266,6 +266,16 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
         for line in valid_data:
             f.write(json.dumps(line) + "\n")
 
+    # user config
+    with open(os.path.join(dir, "gpu_vm_files", "user_config.json"), "w") as f:
+        json.dump(
+            {
+                "user_id": user_id,
+                "router_name": router_name,
+            },
+            f,
+        )
+
     # For now: uses a vm that's already created + nvidia installed...
     # vm_data = create_vm()
 
