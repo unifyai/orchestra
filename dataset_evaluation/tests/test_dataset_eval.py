@@ -26,7 +26,6 @@ HEADERS = {
 
 def _create_default_cfg():
     msg = {
-        "dataset_name": "test_dataset",
         "endpoint": "llama-3-8b-chat@aws-bedrock",
         "judge_models": ["claude-3-haiku@aws-bedrock"],
         "user_id": auth_user_id,
