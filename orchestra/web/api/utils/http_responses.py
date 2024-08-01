@@ -117,15 +117,20 @@ user_id_not_found = HTTPException(
     detail="Specified user-id not found.",
 )
 
-dataset_does_not_exist = HTTPException(
-    status_code=status.HTTP_404_NOT_FOUND,
-    detail="This dataset does not exist.",
-)
 
-evaluation_does_not_exist = HTTPException(
-    status_code=status.HTTP_404_NOT_FOUND,
-    detail="This evaluation does not exist.",
-)
+def dataset_does_not_exist(dataset):
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"The dataset {dataset} does not exist.",
+    )
+
+
+def evaluation_does_not_exist(dataset):
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"The evaluation for {dataset} does not exist.",
+    )
+
 
 provider_not_found_under_conditions = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
