@@ -8,7 +8,6 @@ from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.web.api.endpoint.schema import EndpointModelResponseVerbose
-
 from orchestra.web.api.utils.http_responses import overspecified_model_provider
 
 router = APIRouter()
@@ -33,10 +32,12 @@ _endpoint_list_cache = {}
 )
 def get_endpoints(
     model: str = Query(
-        default=None, description="Model to get available endpoints from."
+        default=None,
+        description="Model to get available endpoints from.",
     ),
     provider: str = Query(
-        default=None, description="Provider to get available endpoints from."
+        default=None,
+        description="Provider to get available endpoints from.",
     ),
     endpoint_dao: EndpointDAO = Depends(),
 ):
@@ -51,7 +52,8 @@ def get_endpoints(
     ) not in _endpoint_list_cache or time.time() - _endpoint_list_cache[
         (model, provider)
     ].get(
-        "ts", 0
+        "ts",
+        0,
     ) > 3600:
         _endpoint_list_cache[(model, provider)] = {}
         _endpoint_list_cache[(model, provider)]["ts"] = time.time()
@@ -145,19 +147,12 @@ def get_endpoint_models(  # noqa: WPS210
                 created_at=raw_endpoint.created_at,  # type: ignore
                 mdl_id=int(model_inst.id),
                 mdl_code=str(model_inst.mdl_code),
-                mdl_user_id=str(model_inst.user_id),
                 mdl_uploaded_at=model_inst.uploaded_at,  # type: ignore
                 mdl_task=str(model_inst.task),
-                mdl_description=str(model_inst.description),
-                mdl_license=str(model_inst.license),
                 mdl_active=model_inst.active,  # type: ignore
-                mdl_input_args_format=str(model_inst.input_args_format),
-                mdl_output_format=str(model_inst.output_format),
-                mdl_custom_fields=str(model_inst.custom_fields),
                 provider_id=int(provider_inst.id),
                 provider_name=str(provider_inst.name),
                 provider_image_url=str(provider_inst.image_url),
-                provider_description=str(provider_inst.description),
             ),
         )
 
@@ -206,19 +201,12 @@ def get_endpoint(  # noqa: WPS210, WPS211, WPS217
                 created_at=raw_endpoint.created_at,  # type: ignore
                 mdl_id=int(model_inst.id),
                 mdl_code=str(model_inst.mdl_code),
-                mdl_user_id=str(model_inst.user_id),
                 mdl_uploaded_at=model_inst.uploaded_at,  # type: ignore
                 mdl_task=str(model_inst.task),
-                mdl_description=str(model_inst.description),
-                mdl_license=str(model_inst.license),
                 mdl_active=model_inst.active,  # type: ignore
-                mdl_input_args_format=str(model_inst.input_args_format),
-                mdl_output_format=str(model_inst.output_format),
-                mdl_custom_fields=str(model_inst.custom_fields),
                 provider_id=int(provider_inst.id),
                 provider_name=str(provider_inst.name),
                 provider_image_url=str(provider_inst.image_url),
-                provider_description=str(provider_inst.description),
             ),
         )
 
