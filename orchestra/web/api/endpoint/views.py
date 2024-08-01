@@ -58,15 +58,15 @@ def get_endpoints(
         res = endpoint_dao.get_endpoints_of((model,), (provider,))
         if model:
             _endpoint_list_cache[(model, provider)]["strings"] = sorted(
-                [f"{r.Provider.name}" for r in res]
+                list(set([f"{r.Provider.name}" for r in res]))
             )
         elif provider:
             _endpoint_list_cache[(model, provider)]["strings"] = sorted(
-                [f"{r.Model.mdl_code}" for r in res]
+                list(set([f"{r.Model.mdl_code}" for r in res]))
             )
         else:
             _endpoint_list_cache[(model, provider)]["strings"] = sorted(
-                [f"{r.Model.mdl_code}@{r.Provider.name}" for r in res]
+                list(set([f"{r.Model.mdl_code}@{r.Provider.name}" for r in res]))
             )
 
     return _endpoint_list_cache[(model, provider)]["strings"]
