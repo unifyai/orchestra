@@ -14,7 +14,6 @@ from orchestra.db.dao.datapoint_dao import DatapointDAO
 from orchestra.db.dao.dataset_evaluation_dao import DatasetEvaluationDAO
 from orchestra.db.dao.dataset_evaluation_task_dao import DatasetEvaluationTaskDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
-from orchestra.db.dao.license_dao import LicenseDAO
 from orchestra.db.dao.metric_dao import MetricDAO
 from orchestra.db.dao.modality_dao import ModalityDAO
 from orchestra.db.dao.model_dao import ModelDAO
@@ -28,10 +27,7 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     CreditCardFingerprint,
     CustomApiKey,
     Datapoint,
-    DatasetEvaluation,
-    DatasetEvaluationTask,
     Endpoint,
-    License,
     Metric,
     Modality,
     Recharge,
@@ -48,11 +44,8 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     DatapointModelRequest,
     DatapointModelResponse,
     DatasetEvaluationModelRequest,
-    DatasetEvaluationModelResponse,
     EndpointModelRequest,
     EndpointModelResponse,
-    LicenseModelRequest,
-    LicenseModelResponse,
     MetricModelRequest,
     MetricModelResponse,
     ModalityModelRequest,
@@ -315,38 +308,6 @@ def get_endpoint(
     )
 
 
-@router.get("/get_all_licenses", response_model=List[LicenseModelResponse])
-def get_license_models(
-    limit: int = 10,
-    offset: int = 0,
-    license_dao: LicenseDAO = Depends(),
-) -> List[License]:
-    """
-    Retrieve all license objects from the database.
-
-    :param limit: limit of license objects, defaults to 10.
-    :param offset: offset of license objects, defaults to 0.
-    :param license_dao: DAO for license models.
-    :return: list of license objects from database.
-    """
-    return license_dao.get_all_licenses(limit=limit, offset=offset)
-
-
-@router.get("/get_license", response_model=List[LicenseModelResponse])
-def get_license(
-    name: str,
-    license_dao: LicenseDAO = Depends(),
-) -> List[License]:
-    """
-    Retrieve specific license object from the database.
-
-    :param name: name of license instance.
-    :param license_dao: DAO for license models.
-    :return: list of license objects from database.
-    """
-    return license_dao.filter(name=name)
-
-
 @router.get("/get_all_metrics", response_model=List[MetricModelResponse])
 def get_metric_models(
     limit: int = 10,
@@ -560,24 +521,6 @@ def create_endpoint_model(
     )
 
 
-@router.put("/create_license")
-def create_license_model(
-    new_license_object: LicenseModelRequest,
-    license_dao: LicenseDAO = Depends(),
-) -> None:
-    """
-    Creates license model in the database.
-
-    :param new_license_object: new license model item.
-    :param license_dao: DAO for license models.
-    """
-    license_dao.create_license(
-        name=new_license_object.name,
-        image_url=new_license_object.image_url,
-        description=new_license_object.description,
-    )
-
-
 @router.put("/create_metric")
 def create_metric_model(
     new_metric_object: MetricModelRequest,
@@ -629,15 +572,9 @@ def create_model(
     uploaded_at = datetime.datetime.now()
     model_dao.create_model(
         mdl_code=new_model_object.mdl_code,
-        user_id=new_model_object.user_id,
         uploaded_at=uploaded_at,
         task=new_model_object.task,
-        description=new_model_object.description,
-        license=new_model_object.license,
         active=new_model_object.active,
-        input_args_format=new_model_object.input_args_format,
-        output_format=new_model_object.output_format,
-        custom_fields=new_model_object.custom_fields,
     )
 
 
@@ -645,15 +582,9 @@ def create_model(
 def update_model(  # noqa: WPS211
     id: int,  # noqa: WPS125
     mdl_code: Optional[str] = None,
-    user_id: Optional[str] = None,
     uploaded_at: Optional[datetime.datetime] = None,
     task: Optional[str] = None,
-    description: Optional[str] = None,
-    license: Optional[str] = None,
     active: Optional[bool] = None,
-    input_args_format: Optional[str] = None,
-    output_format: Optional[str] = None,
-    custom_fields: Optional[str] = None,
     model_dao: ModelDAO = Depends(),
 ) -> None:
     """
@@ -661,29 +592,17 @@ def update_model(  # noqa: WPS211
 
     :param id: id of model instance.
     :param mdl_code: mdl_code of model instance.
-    :param user_id: user_id of model instance.
     :param uploaded_at: uploaded_at of model instance.
     :param task: task of model instance.
-    :param description: description of model instance.
-    :param license: license of model instance.
     :param active: is model instance active.
-    :param input_args_format: input_args_format of model instance.
-    :param output_format: output_format of model instance.
-    :param custom_fields: custom_fields of model instance.
     :param model_dao: DAO for model models.
     """
     model_dao.update_model(
         id=id,
         mdl_code=mdl_code,
-        user_id=user_id,
         uploaded_at=uploaded_at,
         task=task,
-        description=description,
-        license=license,
         active=active,
-        input_args_format=input_args_format,
-        output_format=output_format,
-        custom_fields=custom_fields,
     )
 
 
