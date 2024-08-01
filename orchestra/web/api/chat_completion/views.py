@@ -207,6 +207,8 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             usage={},
         )
 
+    db_operations_kwargs = {}
+
     if not on_prem:
         db_operations_kwargs = {
             "user_id": user_id,
@@ -224,16 +226,17 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             "users_dao": users_dao,
         }
 
-        processing_time = (time.time() - t0) * 1000
+    processing_time = (time.time() - t0) * 1000
 
-        if stream:
+    if stream:
 
-            def stream_and_update_db():  # noqa: WPS430 # TODO: Should this be async?
-                for part_dict in response.generator():
-                    part_dict["model"] = f"{model}@{provider}"
-                    chat_response = ChatCompletionResponse(**part_dict)
-                    yield f"data: {json.dumps(chat_response.model_dump())}\n\n"  # noqa: WPS237, E501
-                processing_time = (time.time() - t0) * 1000
+        def stream_and_update_db():  # noqa: WPS430 # TODO: Should this be async?
+            for part_dict in response.generator():
+                part_dict["model"] = f"{model}@{provider}"
+                chat_response = ChatCompletionResponse(**part_dict)
+                yield f"data: {json.dumps(chat_response.model_dump())}\n\n"  # noqa: WPS237, E501
+            processing_time = (time.time() - t0) * 1000
+            if not on_prem:
                 background_tasks.add_task(
                     db_operations,
                     cost=response.total_cost if not use_custom_keys else 0,
@@ -242,9 +245,10 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     **db_operations_kwargs,
                 )
 
-            return StreamingResponse(stream_and_update_db())
-        else:
-            processing_time = (time.time() - t0) * 1000
+        return StreamingResponse(stream_and_update_db())
+    else:
+        processing_time = (time.time() - t0) * 1000
+        if not on_prem:
             background_tasks.add_task(
                 db_operations,
                 cost=cost if not use_custom_keys else 0,
