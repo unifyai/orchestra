@@ -30,7 +30,7 @@ _model_list_cache = {}
         },
     },
 )
-def models(
+def get_models(
     provider: str = Query(
         default=None, description="Provider to get available models from."
     ),
