@@ -13,8 +13,6 @@ from orchestra.web.api.model.schema import ModelResponse
 router = APIRouter()
 public_router = APIRouter()
 
-_model_list_cache = {}
-
 
 @public_router.get(
     "/models",
@@ -40,13 +38,10 @@ def get_models(
     """
     Lists available models. If a provider is specified, returns the models that the provider supports.
     """
-    if time.time() - _model_list_cache.get("ts", 0) > 3600:
-        raw = endpoint_dao.get_endpoints_of(only_from=(provider,))
-        ret = list(set([r.Model.mdl_code for r in raw]))
-        ret.sort()
-        _model_list_cache["models"] = ret
-        _model_list_cache["ts"] = time.time()
-    return _model_list_cache["models"]
+    raw = endpoint_dao.get_endpoints_of((None,), (provider,))
+    ret = list(set([r.Model.mdl_code for r in raw]))
+    ret.sort()
+    return ret
 
 
 @router.get("/get_model", response_model=List[ModelResponse])
