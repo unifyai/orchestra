@@ -78,7 +78,7 @@ def _generic_test_dataset_evaluation(**kwargs):
     dataset_name = f"pytest_test_dataset_{int(time.time()*1000 % 1000)}"
     msg = _create_default_cfg()
     msg.update(kwargs)
-    msg["dataset_name"] = dataset_name
+    msg["dataset"] = dataset_name
 
     _create_dataset_evaluation(dataset_name, test_sample_data_path)
     _run_test_dataset_evaluation(msg)
