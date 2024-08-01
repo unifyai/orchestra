@@ -404,10 +404,12 @@ if __name__ == "__main__":
     model_mapping_path = os.path.join(
         config["train"]["created_dir"], "model_mapping.json"
     )
+    metadata_path = os.path.join(config["train"]["created_dir"], "metadata.jsonl")
     # upload weights to bucket
 
     with open("/workspace/router/train_job_files/user_config.json") as f:
         user_config = json.load(f)
+
     user_id = user_config["user_id"]
     router_name = user_config["router_name"]
 
@@ -417,10 +419,17 @@ if __name__ == "__main__":
     file_path = weight_path
     file_name = "model_epoch_5.pth"
 
+    router_metadata = {
+        "dataset": user_config["dataset"],
+        "endpoints": user_config["endpoints"],
+    }
+
+    with open(metadata_path, "w") as f:
+        json.dump(router_metadata, f)
 
     for file_path, file_name in zip(
-        [weight_path, config_path, model_mapping_path],
-        ["model.pth", "config.yaml", "model_mapping.json"],
+        [weight_path, config_path, model_mapping_path, metadata_path],
+        ["model.pth", "config.yaml", "model_mapping.json", "metadata.json"],
     ):
         blob_name = directory + file_name
         blob = storage.Client().bucket(bucket_name).blob(blob_name)

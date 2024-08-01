@@ -274,6 +274,8 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
             {
                 "user_id": user_id,
                 "router_name": router_name,
+                "dataset": dataset,
+                "endpoints": endpoints,
             },
             f,
         )
