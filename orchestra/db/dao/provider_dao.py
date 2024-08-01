@@ -19,21 +19,18 @@ class ProviderDAO:
         name: str,
         display_name: str,
         image_url: str,
-        description: str,
     ) -> None:
         """
         Add single provider to session.
 
         :param name: name of a provider.
         :param image_url: image_url of a provider.
-        :param description: description of a provider.
         """
         self.session.add(
             Provider(
                 name=name,
                 display_name=display_name,
                 image_url=image_url,
-                description=description,
             ),
         )
 
