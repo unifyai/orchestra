@@ -406,7 +406,8 @@ if __name__ == "__main__":
     )
     # upload weights to bucket
 
-    user_config = json.load("/user_config.json")
+    with open("/workspace/router/train_job_files/user_config.json") as f:
+        user_config = json.load(f)
     user_id = user_config["user_id"]
     router_name = user_config["router_name"]
 
@@ -415,6 +416,7 @@ if __name__ == "__main__":
 
     file_path = weight_path
     file_name = "model_epoch_5.pth"
+
 
     for file_path, file_name in zip(
         [weight_path, config_path, model_mapping_path],
