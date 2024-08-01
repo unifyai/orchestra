@@ -20,7 +20,7 @@ shutdown_flag = False
 n = sdnotify.SystemdNotifier()
 
 # Pub/Sub subscription
-subscription_name = "projects/saas-368716/subscriptions/deploy_router-sub"
+subscription_name = "projects/saas-368716/subscriptions/train_router-sub"
 
 
 # Function to handle graceful shutdown

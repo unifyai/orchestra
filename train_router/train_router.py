@@ -267,7 +267,9 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
             f.write(json.dumps(line) + "\n")
 
     # user config
-    with open(os.path.join(dir, "gpu_vm_files", "user_config.json"), "w") as f:
+    with open(
+        os.path.join(dir, "gpu_vm_files", "train_job_files", "user_config.json"), "w"
+    ) as f:
         json.dump(
             {
                 "user_id": user_id,
@@ -287,8 +289,12 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
     command = f"""gcloud compute instances start {instance_name} --project={project_id} --zone={zone}"""
     subprocess.run(command, shell=True)
 
-    # check if nvidia is installed
+    # prune old docker containers
+    docker_prune_cmd = "docker container prune -f"
+    command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="{docker_prune_cmd}" """
+    subprocess.run(command, shell=True)
 
+    # check if nvidia is installed
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="sudo /opt/deeplearning/install-driver.sh" """
     # subprocess.run(command, shell=True)
 
@@ -301,7 +307,7 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="{docker_build_cmd}" """
     subprocess.run(command, shell=True)
 
-    docker_run_cmd = "docker run -d --name train --gpus all -it router_training"
+    docker_run_cmd = "docker run -d --gpus all -it router_training"
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="{docker_run_cmd}" """
     subprocess.run(command, shell=True)
 
