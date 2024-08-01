@@ -389,7 +389,6 @@ if __name__ == "__main__":
     # start train
     train(comp, optimizer, train_dataloader, val_dataloader, config)
 
-    # what to do with the weights at the end ??
     # upload weights
 
     # get weights
@@ -407,14 +406,20 @@ if __name__ == "__main__":
     )
     # upload weights to bucket
 
-    assert False, "need user_id and name"
+    user_config = json.load("/user_config.json")
+    user_id = user_config["user_id"]
+    router_name = user_config["router_name"]
+
     bucket_name = "custom_router_data"
-    directory = f"custom_router/{user_id}/{name}/"
+    directory = f"custom_router/{user_id}/{router_name}/"
 
     file_path = weight_path
     file_name = "model_epoch_5.pth"
 
-    for file_path, file_name in zip([weight_path, config_path, model_mapping_path], ["model.pth", "config.yaml", "model_mapping.json"]):
+    for file_path, file_name in zip(
+        [weight_path, config_path, model_mapping_path],
+        ["model.pth", "config.yaml", "model_mapping.json"],
+    ):
         blob_name = directory + file_name
         blob = storage.Client().bucket(bucket_name).blob(blob_name)
         blob.upload_from_filename(file_path)
