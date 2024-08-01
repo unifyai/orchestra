@@ -5,10 +5,11 @@ from typing import List, Optional
 from fastapi import APIRouter, Query
 from fastapi.param_functions import Depends
 
-from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
+from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.models.orchestra_models import Model
 from orchestra.web.api.model.schema import ModelResponse
+from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 public_router = APIRouter()
@@ -30,9 +31,11 @@ _model_list_cache = {}
         },
     },
 )
+@handle_on_prem(endpoint="/models", method="get")
 def list_models(
     provider: str = Query(
-        default=None, description="Provider to get available models from."
+        default=None,
+        description="Provider to get available models from.",
     ),
     model_dao: ModelDAO = Depends(),
     endpoint_dao: EndpointDAO = Depends(),

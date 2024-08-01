@@ -1,10 +1,12 @@
 import json
 import os
 import shutil
-from functools import reduce
-from typing import Dict, List, Tuple, Union
+from functools import reduce, wraps
+from typing import Callable, Dict, List, Tuple, Union
 
 import redis
+import requests
+from fastapi import HTTPException
 
 shared_volume = os.environ.get("SHARED_VOLUME")
 
@@ -156,3 +158,51 @@ def write_json_to_folder(json_data: Dict[str, str], bucket_name: str, file_name:
     os.makedirs(os.sep.join(file_path.split(os.sep)[:-1]), exist_ok=True)
     with open(file_path, "wb") as f:
         f.write(json_data)
+
+
+def handle_on_prem(endpoint: str, method: str):
+    def decorator(fn: Callable):
+        @wraps(fn)
+        def wrapped_function(*args, **kwargs):
+            non_dao_kwargs = {
+                key: value
+                for key, value in kwargs.items()
+                if "DAO" not in value.__class__.__name__ and key != "request_fastapi"
+            }
+            headers = (
+                dict()
+                if "request_fastapi" not in kwargs
+                else dict(kwargs["request_fastapi"]._headers)
+            )
+            headers = {
+                key: value
+                for key, value in headers.items()
+                if key in ["content-type", "authorization"]
+            }
+            request_url = os.environ.get("PUBLIC_ORCHESTRA_URL", "") + endpoint
+            if os.environ.get("ON_PREM"):
+                if len(non_dao_kwargs.keys()) == 0:
+                    non_dao_kwargs = None
+                match method:
+                    case "get":
+                        return requests.get(
+                            request_url,
+                            params=non_dao_kwargs,
+                            headers=headers,
+                        ).json()
+                    case "post":
+                        return requests.post(
+                            request_url,
+                            params=non_dao_kwargs,
+                            headers=headers,
+                        ).json()
+                    case _:
+                        raise HTTPException(
+                            status_code=404,
+                            detail="This endpoint is not available in an on-prem setup.",
+                        )
+            return fn(*args, **kwargs)
+
+        return wrapped_function
+
+    return decorator
