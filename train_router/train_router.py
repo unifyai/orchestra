@@ -225,7 +225,7 @@ def create_train_data(user_id, dataset, endpoints, judge_name):
     return train_data, valid_data
 
 
-def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url, judge_name="claude-3.5-sonnet@aws-bedrock"):
+def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url, judge_name="gpt-4o@openai"):
     logging.info("starting TRAINING")
     for e in endpoints:
         if not evaluation_available(user_id, dataset, e, judge_name):
