@@ -249,6 +249,7 @@ class CustomEndpoint(Base):
     id = sa.Column(sa.Integer(), primary_key=True)
     user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
     name = sa.Column(sa.String(), nullable=False)
+    mdl_name = sa.Column(sa.String(), nullable=True)
     url = sa.Column(sa.String(), nullable=False)
     key_id = sa.Column(sa.Integer(), sa.ForeignKey("custom_api_key.id"), nullable=False)
 

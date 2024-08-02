@@ -1,4 +1,5 @@
-from typing import Any, List, Tuple
+from typing import List, Tuple
+
 from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -14,10 +15,21 @@ class CustomEndpointDAO:
         self.session = session
 
     def create_custom_endpoint(
-        self, user_id: str, name: str, url: str, key_id: int
+        self,
+        user_id: str,
+        name: str,
+        mdl_name: str,
+        url: str,
+        key_id: int,
     ) -> None:
         self.session.add(
-            CustomEndpoint(user_id=user_id, name=name, url=url, key_id=key_id)
+            CustomEndpoint(
+                user_id=user_id,
+                name=name,
+                mdl_name=mdl_name,
+                url=url,
+                key_id=key_id,
+            ),
         )
 
     def filter(self, user_id: str, name: str) -> List[CustomEndpoint]:
@@ -31,10 +43,15 @@ class CustomEndpointDAO:
 
         return list(raw_custom_endpoints.scalars().fetchall())
 
-    def get_user_endpoints(self, user_id: str) -> List[Tuple[str, str, str]]:
+    def get_user_endpoints(self, user_id: str) -> List[Tuple[str, str, str, str]]:
 
         query = (
-            select(CustomEndpoint.name, CustomEndpoint.url, CustomApiKey.key)
+            select(
+                CustomEndpoint.name,
+                CustomEndpoint.mdl_name,
+                CustomEndpoint.url,
+                CustomApiKey.key,
+            )
             .join(CustomApiKey, CustomEndpoint.key_id == CustomApiKey.id)
             .where(CustomEndpoint.user_id == user_id)
         )
