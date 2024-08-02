@@ -381,7 +381,7 @@ def get_dataset_evaluation_results(
     scores["input_tokens"] = _get_input_tokens(user_id, dataset)
     scores["output_tokens"] = {}
     for judge in scores.keys():
-        for endpoint in judge.keys():
+        for endpoint in scores[judge].keys():
             scores["output_tokens"][endpoint] = _get_response_tokens(
                 user_id,
                 dataset,
