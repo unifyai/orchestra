@@ -4,14 +4,15 @@ import logging
 import os
 import smtplib
 from dataclasses import dataclass
-from typing import Optional
 from email.message import EmailMessage
+from typing import Optional
 
+import tiktoken
 from google.cloud import secretmanager, storage
+from utils.automatic_judgements import automatic_judgements
 from utils.fetch_judgements import generate_judgements
 from utils.fetch_queries import generate_queries
 from utils.parsing_judge import ratings_from_sample
-from utils.automatic_judgements import automatic_judgements
 
 
 @dataclass
@@ -238,7 +239,8 @@ async def evaluate_dataset(msg, data_dir):
         model_str = _format_model_tag(cfg.endpoint)
         asst_response_file = os.path.join(model_responses_path, f"{model_str}.jsonl")
         automatic_judgements_file_str = _format_judgements_file(
-            cfg.endpoint, cfg.judge_models[0]
+            cfg.endpoint,
+            cfg.judge_models[0],
         )
         judge_response_file = os.path.join(
             model_judgements_path,
@@ -317,7 +319,22 @@ async def evaluate_dataset(msg, data_dir):
                 _format_judgements_file(cfg.endpoint, judge_tag) + ".jsonl",
             ),
         )
-    # TODO: upload tokens
+    # upload num of tokens in responses
+    model_str = _format_model_tag(cfg.endpoint)
+    asst_response_file = os.path.join(model_responses_path, f"{model_str}.jsonl")
+    encoding = tiktoken.get_encoding("cl100k_base")
+    num_output_tokens = 0
+    with open(asst_response_file) as f:
+        for line in f:
+            data = json.loads(line)
+            model_response = data["model_response"]
+            num_output_tokens += len(encoding.encode(model_response))
+    blob_name = (
+        f"{cfg.user_id}/{cfg.dataset}/0/{cfg.endpoint}/num_tokens_in_responses.json"
+    )
+    blob = storage.Client().bucket(bucket_name).blob(blob_name)
+    string = json.dumps({"num_tokens": num_output_tokens})
+    blob.upload_from_string(string, content_type="application/json")
 
     storage_client = storage.Client()
     bucket_name = "uploaded_datasets"
