@@ -32,7 +32,7 @@ _endpoint_list_cache = {}
     },
 )
 @handle_on_prem(endpoint="/endpoints", method="get")
-def get_endpoints_of(
+def get_endpoints(
     model: str = Query(
         default=None,
         description="Model to get available endpoints from.",
@@ -44,7 +44,7 @@ def get_endpoints_of(
     endpoint_dao: EndpointDAO = Depends(),
 ):
     """
-    Lists available endpoints. You can pass either: a model string, a provider string, or neither to get all supported endpoints.
+    Lists available endpoints. If a model is specified, returns the providers that support that model. If a provider is specified, returns the models that the provider supports.
     """
     if model and provider:
         raise overspecified_model_provider
@@ -62,15 +62,15 @@ def get_endpoints_of(
         res = endpoint_dao.get_endpoints_of((model,), (provider,))
         if model:
             _endpoint_list_cache[(model, provider)]["strings"] = sorted(
-                [f"{r.Provider.name}" for r in res],
+                list(set([f"{r.Provider.name}" for r in res])),
             )
         elif provider:
             _endpoint_list_cache[(model, provider)]["strings"] = sorted(
-                [f"{r.Model.mdl_code}" for r in res],
+                list(set([f"{r.Model.mdl_code}" for r in res])),
             )
         else:
             _endpoint_list_cache[(model, provider)]["strings"] = sorted(
-                [f"{r.Model.mdl_code}@{r.Provider.name}" for r in res],
+                list(set([f"{r.Model.mdl_code}@{r.Provider.name}" for r in res])),
             )
 
     return _endpoint_list_cache[(model, provider)]["strings"]
@@ -94,15 +94,15 @@ _provider_list_cache = {}
     },
 )
 @handle_on_prem(endpoint="/providers", method="get")
-def get_providers_of(
+def get_providers(
     model: str = Query(
         default=None,
-        description="Model to get available providers from. If empty, will return all providers",
+        description="Model to get available providers from.",
     ),
     endpoint_dao: EndpointDAO = Depends(),
 ):
     """
-    Lists available providers for a given model.
+    Lists available providers. If a model is specified, returns the providers that support that model.
     """
     if (
         model not in _provider_list_cache
@@ -150,19 +150,12 @@ def get_endpoint_models(  # noqa: WPS210
                 created_at=raw_endpoint.created_at,  # type: ignore
                 mdl_id=int(model_inst.id),
                 mdl_code=str(model_inst.mdl_code),
-                mdl_user_id=str(model_inst.user_id),
                 mdl_uploaded_at=model_inst.uploaded_at,  # type: ignore
                 mdl_task=str(model_inst.task),
-                mdl_description=str(model_inst.description),
-                mdl_license=str(model_inst.license),
                 mdl_active=model_inst.active,  # type: ignore
-                mdl_input_args_format=str(model_inst.input_args_format),
-                mdl_output_format=str(model_inst.output_format),
-                mdl_custom_fields=str(model_inst.custom_fields),
                 provider_id=int(provider_inst.id),
                 provider_name=str(provider_inst.name),
                 provider_image_url=str(provider_inst.image_url),
-                provider_description=str(provider_inst.description),
             ),
         )
 
@@ -211,19 +204,12 @@ def get_endpoint(  # noqa: WPS210, WPS211, WPS217
                 created_at=raw_endpoint.created_at,  # type: ignore
                 mdl_id=int(model_inst.id),
                 mdl_code=str(model_inst.mdl_code),
-                mdl_user_id=str(model_inst.user_id),
                 mdl_uploaded_at=model_inst.uploaded_at,  # type: ignore
                 mdl_task=str(model_inst.task),
-                mdl_description=str(model_inst.description),
-                mdl_license=str(model_inst.license),
                 mdl_active=model_inst.active,  # type: ignore
-                mdl_input_args_format=str(model_inst.input_args_format),
-                mdl_output_format=str(model_inst.output_format),
-                mdl_custom_fields=str(model_inst.custom_fields),
                 provider_id=int(provider_inst.id),
                 provider_name=str(provider_inst.name),
                 provider_image_url=str(provider_inst.image_url),
-                provider_description=str(provider_inst.description),
             ),
         )
 

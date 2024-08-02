@@ -59,6 +59,22 @@ def _get_scores(user_id: str, dataset: str):
     )
 
 
+def _get_input_tokens(user_id: str, dataset: str):
+    return (
+        on_prem.get_input_tokens(user_id, dataset)
+        if os.environ.get("ON_PREM")
+        else gcp.get_input_tokens(user_id, dataset)
+    )
+
+
+def _get_response_tokens(user_id: str, dataset: str, endpoint: str):
+    return (
+        on_prem.get_response_tokens(user_id, dataset, endpoint)
+        if os.environ.get("ON_PREM")
+        else gcp.get_response_tokens(user_id, dataset, endpoint)
+    )
+
+
 # TODO: Move to utils (duplicated in routing)
 def dataset_exists(user_id, name):
     # TODO: This needs to take public datasets into account as
@@ -335,6 +351,10 @@ def get_dataset_evaluations(
                                 "model_1@provider_1": "score_1",
                                 "model_2@provider_2": "score_2",
                             },
+                            "input_tokens": "num_tokens_in_dataset",
+                            "output_tokens": {
+                                "model_1@provider_1": "num_tokens_in_endpoint_responses",
+                            },
                         },
                     ],
                 },
@@ -364,4 +384,17 @@ def get_dataset_evaluation_results(
     if not dataset_exists(user_id, dataset):
         raise dataset_does_not_exist(dataset)
     scores = _get_scores(user_id, dataset)
+    if not isinstance(scores, dict):
+        return scores
+    output_tokens = {}
+    for judge in scores.keys():
+        for endpoint in scores[judge].keys():
+            output_tokens[endpoint] = _get_response_tokens(
+                user_id,
+                dataset,
+                endpoint,
+            )
+    scores["input_tokens"] = _get_input_tokens(user_id, dataset)
+    scores["output_tokens"] = output_tokens
+
     return scores

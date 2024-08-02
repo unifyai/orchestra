@@ -2,6 +2,7 @@ import json
 import os
 from typing import Annotated, Dict, List
 
+import tiktoken
 from fastapi import APIRouter, Form, HTTPException, Query, Request, UploadFile
 
 from orchestra.web.api.utils import gcp, on_prem
@@ -100,6 +101,26 @@ def check_file_content(file_content: str):
         raise HTTPException(status_code=400, detail=info)
 
 
+def get_tokens_in_dataset(dataset_content: List[Dict[str, str]]):
+    encoding = tiktoken.get_encoding("cl100k_base")
+    num_tokens = 0
+    dicts = dataset_content.decode().split("\n")
+    dicts = [json.loads(d) for d in dicts if d != ""]
+    for line in dicts:
+        prompt = line["prompt"]
+        num_tokens += len(encoding.encode(prompt))
+    return num_tokens
+
+
+def _store_num_tokens(user_id: str, name: str, num_tokens: int):
+    blob_name = f"{user_id}/{name}/0/num_tokens.json"
+    if blob_exists(bucket_name, blob_name):
+        raise dataset_already_exists
+    else:
+        string = json.dumps({"num_tokens": num_tokens})
+        upload_json_to_bucket(string, bucket_name, blob_name)
+
+
 # endpoints
 
 
@@ -166,6 +187,8 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         raise invalid_dataset_name
     file_content = file.file.read()
     _upload_dataset(request_fastapi.state.user_id, name, file_content)
+    num_tokens = get_tokens_in_dataset(file_content)
+    _store_num_tokens(request_fastapi.state.user_id, name, num_tokens)
     return {"info": "Dataset uploaded succesfully!"}
 
 

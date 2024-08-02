@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Optional
 
+import tiktoken
 from google.cloud import secretmanager, storage
 from utils.automatic_judgements import automatic_judgements
 from utils.fetch_judgements import generate_judgements
@@ -340,6 +341,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume=""):
             cfg.endpoint,
             f"{fmtd_judge_tag}_judgements.jsonl",
         )
+
         model_judgements_formatted_path = os.path.join(
             model_judgements_path,
             _format_judgements_file(cfg.endpoint, judge_tag) + ".jsonl",
@@ -353,7 +355,28 @@ async def evaluate_dataset(msg, data_dir, shared_volume=""):
             blob = storage.Client().bucket(bucket_name).blob(blob_name)
             blob.upload_from_filename(model_judgements_formatted_path)
 
-    # TODO: upload tokens
+    # upload num of tokens in responses
+    model_str = _format_model_tag(cfg.endpoint)
+    asst_response_file = os.path.join(model_responses_path, f"{model_str}.jsonl")
+    encoding = tiktoken.get_encoding("cl100k_base")
+    num_output_tokens = 0
+    with open(asst_response_file) as f:
+        for line in f:
+            data = json.loads(line)
+            model_response = data["model_response"]
+            num_output_tokens += len(encoding.encode(model_response))
+    blob_name = (
+        f"{cfg.user_id}/{cfg.dataset}/0/{cfg.endpoint}/num_tokens_in_responses.json"
+    )
+    string = json.dumps({"num_tokens": num_output_tokens})
+    if os.environ.get("ON_PREM"):
+        blob_name = os.path.join(shared_volume, bucket_name, blob_name)
+        os.makedirs(os.sep.join(blob_name.split(os.sep)[:-1]), exist_ok=True)
+        with open(blob_name, "w") as f:
+            f.write(string)
+    else:
+        blob = storage.Client().bucket(bucket_name).blob(blob_name)
+        blob.upload_from_string(string, content_type="application/json")
 
     bucket_name = "uploaded_datasets"
     prefix = os.path.join(cfg.user_id, cfg.dataset, "0")
