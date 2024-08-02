@@ -140,6 +140,7 @@ def evaluation_available(user_id, dataset_name, endpoint):
 
 def start_evaluation(api_key, base_url, dataset, endpoint):
     url = base_url + "/v0/evaluation"
+    logging.info(url)
     headers = {
         "Authorization": f"Bearer {api_key}",
     }
