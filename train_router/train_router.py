@@ -250,7 +250,7 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
     train_data, valid_data = create_train_data(user_id, dataset, endpoints)
     # TODO: train data
     unrolled_data = []
-    print(train_data)
+
     for td in train_data:
         for e, score in td["scores"].items():
             unrolled_data.append(
@@ -298,10 +298,12 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
     instance_name = "router-training-gpu1"
 
     # start the instance
+    logging.info("starting gpu")
     command = f"""gcloud compute instances start {instance_name} --project={project_id} --zone={zone}"""
     subprocess.run(command, shell=True)
 
     # prune old docker containers
+    logging.info("pruning docker")
     docker_prune_cmd = "docker container prune -f"
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="{docker_prune_cmd}" """
     subprocess.run(command, shell=True)
@@ -310,15 +312,17 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="sudo /opt/deeplearning/install-driver.sh" """
     # subprocess.run(command, shell=True)
 
+    logging.info("move files")
     command = f"""gcloud compute scp --project={project_id} --zone={zone} --recurse ./gpu_vm_files/* {instance_name}:~/"""
     subprocess.run(command, shell=True)
 
     # build & run the docker container
-
+    logging.info("building docker container")
     docker_build_cmd = "docker build -t router_training ."
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="{docker_build_cmd}" """
     subprocess.run(command, shell=True)
 
+    logging.info("running docker container")
     docker_run_cmd = "docker run -d --gpus all -it router_training"
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="{docker_run_cmd}" """
     subprocess.run(command, shell=True)
