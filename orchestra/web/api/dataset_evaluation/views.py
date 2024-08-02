@@ -1,13 +1,14 @@
 """
 Includes endpoints related to dataset evaluations.
 """
+
 import json
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Query, Request, Body
+from fastapi import APIRouter, Body, Query, Request
 from google.cloud import storage
-
 from providers.completion import PROVIDER_CLASSES
+
 from orchestra.web.api.utils.gcp import (
     blob_exists,
     delete_dir,
@@ -58,6 +59,30 @@ def _get_scores(user_id: str, dataset: str):
         return json.loads(content)
     except:
         return evaluation_does_not_exist(dataset)
+
+
+def _get_input_tokens(user_id: str, dataset: str):
+    bucket_name = "uploaded_datasets"
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(f"{user_id}/{dataset}/0/num_tokens.json")
+    try:
+        content = blob.download_as_bytes().decode("utf-8")
+        return json.loads(content)["num_tokens"]
+    except:
+        return 1
+
+
+def _get_response_tokens(user_id: str, dataset: str, endpoint: str):
+    bucket_name = "uploaded_datasets"
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(f"{user_id}/{dataset}/0/{endpoint}/num_tokens_in_responses.json")
+    try:
+        content = blob.download_as_bytes().decode("utf-8")
+        return json.loads(content)["num_tokens"]
+    except:
+        return 1
 
 
 # TODO: Move to utils (duplicated in routing)
@@ -170,13 +195,16 @@ def evaluate_dataset(
         ),
     ),
     judge_models: list[str] = Body(
-        default=["gpt-4o@openai"], description="List of the LLMs to use as a judge"
+        default=["gpt-4o@openai"],
+        description="List of the LLMs to use as a judge",
     ),
     system_prompt: str = Body(
-        default="", description="Optionally change the system prompt"
+        default="",
+        description="Optionally change the system prompt",
     ),
     class_cfg: list[dict[str, Any]] = Body(
-        default=[], description="A description of the classes for judging."
+        default=[],
+        description="A description of the classes for judging.",
     ),
 ) -> Dict[str, str]:
     """
@@ -346,4 +374,13 @@ def get_dataset_evaluation_results(
     if not dataset_exists(user_id, dataset):
         raise dataset_does_not_exist(dataset)
     scores = _get_scores(user_id, dataset)
+    scores["input_tokens"] = _get_input_tokens(user_id, dataset)
+    scores["output_tokens"] = {}
+    for judge in scores.keys():
+        for endpoint in judge.keys():
+            scores["output_tokens"][endpoint] = _get_response_tokens(
+                user_id,
+                dataset,
+                endpoint,
+            )
     return scores
