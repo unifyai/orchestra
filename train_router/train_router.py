@@ -16,6 +16,8 @@ from google.api_core.extended_operation import ExtendedOperation
 from google.cloud import storage
 from google.cloud.exceptions import NotFound
 
+import logging
+logging.basicConfig(filename="router_training_log.log", level=logging.INFO)
 
 def wait_for_extended_operation(
     operation: ExtendedOperation,
@@ -223,11 +225,10 @@ def create_train_data(user_id, dataset, endpoints):
 
 
 def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
-    import logging
-    logging.basicConfig(filename="router_training_log.log", level=logging.INFO)
     logging.info("starting TRAINING")
     for e in endpoints:
         if not evaluation_available(user_id, dataset, e):
+            logging.info(f"STARTING EVALUATION FOR {user_id} {dataset} {e}")
             print(f"starting evaluation for {e}")
             start_evaluation(api_key, orchestra_url, dataset, e)
 
@@ -241,6 +242,7 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
     else:
         raise Exception
 
+    logging.info("ALL EVALS AVAILABLE, BEGINNING TRAINING")
     train_data, valid_data = create_train_data(user_id, dataset, endpoints)
     # TODO: train data
     unrolled_data = []
