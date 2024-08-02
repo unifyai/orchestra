@@ -13,7 +13,7 @@ HEADERS = {
 }
 
 
-sample_path = "./orchestra/tests/sample_datasets/with_ref.jsonl"
+sample_path = "./orchestra/tests/sample_datasets/with_refx10.jsonl"
 
 
 def _upload_dataset(client, dataset_name, data_path):
