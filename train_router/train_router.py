@@ -126,7 +126,7 @@ def evaluation_available(user_id, dataset_name, endpoint):
 
     blob_names = [
         blob_dir + "responses.jsonl",
-        blob_dir + "judgements.jsonl",
+        blob_dir + "gpt-4o___openai_judgements.jsonl",
     ]
 
     for blob_name in blob_names:
@@ -194,7 +194,7 @@ def create_train_data(user_id, dataset, endpoints):
     id_to_prompt = {}
     id_model_to_score = {}
     for endpoint in endpoints:
-        blob_name = f"{user_id}/{dataset}/0/{endpoint}/judgements.jsonl"
+        blob_name = f"{user_id}/{dataset}/0/{endpoint}/gpt-4o___openai_judgements.jsonl"
         blob = storage.Client().bucket(bucket_name).blob(blob_name)
         ret = blob.download_as_bytes().decode("utf-8").split("\n")
         for line in ret:
