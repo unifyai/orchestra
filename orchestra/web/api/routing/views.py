@@ -5,6 +5,8 @@ Includes endpoints for training and deployment of a router.
 from typing import Dict, List, Union
 
 from fastapi import APIRouter, Query, Request
+from google.cloud import storage
+
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.web.api.utils.gcp import (
@@ -100,7 +102,7 @@ def _list_trained_routers(user_id: str):
                 metadata_contents = metadata_blob.download_as_bytes().decode("utf-8")
                 metadata = json.loads(metadata_contents)
             except:
-                metdata = {"dataset": "", "endpoints": [""]}
+                metadata = {"dataset": "", "endpoints": [""]}
             router_name = b.id.split("/")[3]
             routers_metadata[router_name] = metadata
     return routers_metadata
