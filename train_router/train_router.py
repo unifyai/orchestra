@@ -145,6 +145,7 @@ def start_evaluation(api_key, base_url, dataset, endpoint):
         "Authorization": f"Bearer {api_key}",
     }
     payload = {"dataset": dataset, "endpoint": endpoint}
+    logging.info(payload)
     response = requests.post(url, params=payload, headers=headers)
 
     # TODO: Log this properly
