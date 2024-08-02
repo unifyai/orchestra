@@ -322,38 +322,40 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
 
 if __name__ == "__main__":
     # Create the parser
-    parser = argparse.ArgumentParser(description="Train Router Script")
+    # parser = argparse.ArgumentParser(description="Train Router Script")
 
-    # Define the arguments
-    parser.add_argument("--user_id", type=str, required=True, help="User ID")
-    parser.add_argument("--api_key", type=str, required=True, help="User API KEY")
-    parser.add_argument("--router_name", type=str, required=True, help="Router Name")
-    parser.add_argument("--dataset", type=str, required=True, help="Dataset Name")
-    parser.add_argument(
-        "--endpoints",
-        type=str,
-        required=True,
-        help="List of endpoints",
-    )
-    parser.add_argument(
-        "--orchestra_url",
-        type=str,
-        required=True,
-        help="Orchestra URL",
-    )
+    # # Define the arguments
+    # parser.add_argument("--user_id", type=str, required=True, help="User ID")
+    # parser.add_argument("--api_key", type=str, required=True, help="User API KEY")
+    # parser.add_argument("--router_name", type=str, required=True, help="Router Name")
+    # parser.add_argument("--dataset", type=str, required=True, help="Dataset Name")
+    # parser.add_argument(
+    #     "--endpoints",
+    #     type=str,
+    #     required=True,
+    #     help="List of endpoints",
+    # )
+    # parser.add_argument(
+    #     "--orchestra_url",
+    #     type=str,
+    #     required=True,
+    #     help="Orchestra URL",
+    # )
 
-    # Parse the arguments
-    args = parser.parse_args()
+    # # Parse the arguments
+    # args = parser.parse_args()
+
+    import sys
+    args = sys.argv[1]
+    args = json.loads(args)
 
     # Access the arguments
-    user_id = args.user_id
-    api_key = args.api_key
-    router_name = args.router_name
-    dataset = args.dataset
-    endpoints = args.endpoints
-    orchestra_url = args.orchestra_url
-
-    endpoints = endpoints.split(",")
+    user_id = args["user_id"]
+    api_key = args["api_key"]
+    router_name = args["name"]
+    dataset = args["dataset"]
+    endpoints = args["endpoints"]
+    orchestra_url = args["orchestra_url"]
 
     main(
         user_id=user_id,

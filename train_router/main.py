@@ -40,19 +40,13 @@ def pub_sub_callback(message):
             logging.info(f"entry: {d}")
             if d["action"] == "train":
                 logging.info("trying to run subprocess popen")
-                ret = subprocess.Popen(
+                subprocess.Popen(
                     [
                         "venv/bin/python3",
                         "train_router.py",
-                        f"--user_id={d['user_id']}",
-                        f"--api_key={d['api_key']}",
-                        f"--router_name={d['name']}",
-                        f"--dataset={d['dataset']}",
-                        f"--endpoints={d['endpoints']}",
-                        f"--orchestra_url={d['orchestra_url']}",
+                        message.data,
                     ],
                 )
-                print(ret)
             elif d["action"] == "delete":
                 subprocess.Popen(["venv/bin/python3", "delete_router.py", message.data])
             else:
