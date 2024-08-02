@@ -120,13 +120,13 @@ class TrainRequest:
     bucket_path: str
 
 
-def evaluation_available(user_id, dataset_name, endpoint):
+def evaluation_available(user_id, dataset_name, endpoint, judge_name):
     bucket_name = f"uploaded_datasets"
     blob_dir = f"{user_id}/{dataset_name}/0/{endpoint}/"
 
     blob_names = [
         blob_dir + "responses.jsonl",
-        blob_dir + "gpt-4o___openai_judgements.jsonl",
+        blob_dir + f'{judge_name.replace("@", "___")}_judgements.jsonl',
     ]
 
     for blob_name in blob_names:
@@ -138,13 +138,13 @@ def evaluation_available(user_id, dataset_name, endpoint):
     return True
 
 
-def start_evaluation(api_key, base_url, dataset, endpoint):
+def start_evaluation(api_key, base_url, dataset, endpoint, judge_name):
     url = base_url + "/v0/evaluation"
     logging.info(url)
     headers = {
         "Authorization": f"Bearer {api_key}",
     }
-    payload = {"dataset": dataset, "endpoint": endpoint}
+    payload = {"dataset": dataset, "endpoint": endpoint, "judge_models": [judge_name]}
     logging.info(payload)
     response = requests.post(url, json=payload, headers=headers)
 
@@ -188,13 +188,13 @@ def extract_judgement(text):
         return float("nan")
 
 
-def create_train_data(user_id, dataset, endpoints):
+def create_train_data(user_id, dataset, endpoints, judge_name):
     bucket_name = "uploaded_datasets"
     all_prompts = []
     id_to_prompt = {}
     id_model_to_score = {}
     for endpoint in endpoints:
-        blob_name = f"{user_id}/{dataset}/0/{endpoint}/gpt-4o___openai_judgements.jsonl"
+        blob_name = f"{user_id}/{dataset}/0/{endpoint}/{judge_name.replace('@', '___')}_judgements.jsonl"
         blob = storage.Client().bucket(bucket_name).blob(blob_name)
         ret = blob.download_as_bytes().decode("utf-8").split("\n")
         for line in ret:
@@ -225,26 +225,26 @@ def create_train_data(user_id, dataset, endpoints):
     return train_data, valid_data
 
 
-def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
+def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url, judge_name="claude-3.5-sonnet@aws-bedrock"):
     logging.info("starting TRAINING")
     for e in endpoints:
-        if not evaluation_available(user_id, dataset, e):
+        if not evaluation_available(user_id, dataset, e, judge_name):
             logging.info(f"STARTING EVALUATION FOR {orchestra_url} {user_id} {dataset} {e}")
             print(f"starting evaluation for {e}")
-            start_evaluation(api_key, orchestra_url, dataset, e)
+            start_evaluation(api_key, orchestra_url, dataset, e, judge_name)
 
     timeout = 2 * 3600
     start_time = time.time()
     while (time.time() - start_time) < timeout:
         logging.info(f"SEEING IF ALL EVALUATIONS ARE AVAILABLE for {dataset}")
-        if all([evaluation_available(user_id, dataset, e) for e in endpoints]):
+        if all([evaluation_available(user_id, dataset, e, judge_name) for e in endpoints]):
             break
         time.sleep(10)
     else:
         raise Exception
 
     logging.info("ALL EVALS AVAILABLE, BEGINNING TRAINING")
-    train_data, valid_data = create_train_data(user_id, dataset, endpoints)
+    train_data, valid_data = create_train_data(user_id, dataset, endpoints, judge_name)
     # TODO: train data
     unrolled_data = []
 
