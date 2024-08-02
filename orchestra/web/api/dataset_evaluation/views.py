@@ -345,6 +345,10 @@ def get_dataset_evaluations(
                                 "model_1@provider_1": "score_1",
                                 "model_2@provider_2": "score_2",
                             },
+                            "input_tokens": "num_tokens_in_dataset",
+                            "output_tokens": {
+                                "model_1@provider_1": "num_tokens_in_endpoint_responses",
+                            },
                         },
                     ],
                 },
