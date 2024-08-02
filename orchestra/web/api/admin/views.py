@@ -477,6 +477,7 @@ def create_custom_endpoint_model(
     custom_endpoint_dao.create_custom_endpoint(
         user_id=user_id,
         name=name,
+        mdl_name=name,
         url=url,
         key_id=key_id,
     )
