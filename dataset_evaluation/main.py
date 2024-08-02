@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import sys
+from queue import Queue
 
 import redis
 import sdnotify
@@ -17,6 +18,12 @@ logging.basicConfig(
 
 # Global reference to the state of the script
 shutdown_flag = False
+
+# Queue for maintaining requested jobs
+q = Queue()
+
+# Current status of execution
+running = False
 
 # Create an instance of sdnotify
 n = sdnotify.SystemdNotifier()
@@ -35,6 +42,8 @@ def signal_handler(signal, frame):
 # PubSub Callback to deal with the message
 # NOTE: This callback needs to be idempotent as ACKs are best effort.
 def pub_sub_callback(message):
+    global running
+    running = True
     message_data = (
         message["data"].decode() if os.environ.get("ON_PREM") else message.data
     )
@@ -43,9 +52,11 @@ def pub_sub_callback(message):
         try:
             data = json.loads(message_data)
             logging.info(f"entry: {data}")
-            subprocess.Popen(
+            process = subprocess.Popen(
                 ["venv/bin/python3", "dataset_evaluation.py", message_data],
             )
+            if os.environ.get("ON_PREM"):
+                process.wait()
         except json.decoder.JSONDecodeError:
             logging.error(f"Error parsing message: {message_data}")
         except:
@@ -62,6 +73,11 @@ def pub_sub_callback(message):
                 message.ack()
     elif not os.environ.get("ON_PREM"):
         message.nack()
+    running = False
+
+
+def push_msg_to_queue(message):
+    q.put(message)
 
 
 # Register signal handlers
@@ -76,7 +92,7 @@ if __name__ == "__main__":
     if os.environ.get("ON_PREM"):
         r = redis.Redis(host=os.environ.get("REDIS_HOST", "host.docker.internal"))
         p = r.pubsub()
-        p.subscribe(**{subscription_name.split("/")[-1]: pub_sub_callback})
+        p.subscribe(**{subscription_name.split("/")[-1]: push_msg_to_queue})
         thread = p.run_in_thread(sleep_time=0.001)
     else:
         # This method requires either gcloud to be authenticated (this is the case
@@ -91,6 +107,8 @@ if __name__ == "__main__":
         try:
             if not os.environ.get("ON_PREM"):
                 future.result(timeout=10)
+            elif not q.empty() and not running:
+                pub_sub_callback(q.get())
         except concurrent.futures.TimeoutError:
             logging.info("No message received")
         finally:
