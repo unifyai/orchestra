@@ -114,11 +114,18 @@ def get_tokens_in_dataset(dataset_content: List[Dict[str, str]]):
 
 def _store_num_tokens(user_id: str, name: str, num_tokens: int):
     blob_name = f"{user_id}/{name}/0/num_tokens.json"
-    if blob_exists(bucket_name, blob_name):
+    exists = (
+        on_prem.file_exists(bucket_name, blob_name)
+        if os.environ.get("ON_PREM")
+        else gcp.blob_exists(bucket_name, blob_name)
+    )
+    string = json.dumps({"num_tokens": num_tokens}).encode()
+    if exists:
         raise dataset_already_exists
+    elif os.environ.get("ON_PREM"):
+        on_prem.write_json_to_folder(string, bucket_name, blob_name)
     else:
-        string = json.dumps({"num_tokens": num_tokens})
-        upload_json_to_bucket(string, bucket_name, blob_name)
+        gcp.upload_json_to_bucket(string, bucket_name, blob_name)
 
 
 # endpoints
