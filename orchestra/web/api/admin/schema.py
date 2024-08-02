@@ -336,8 +336,10 @@ class CustomApiKeyModelResponse(BaseModel):
     value: str
 
 
+# TODO: remove once the public endpoint is being used instead of the admin one
 class CustomEndpointModelResponse(BaseModel):
     name: str
+    mdl_name: str
     url: str
     key: str
 
