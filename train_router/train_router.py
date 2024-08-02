@@ -221,9 +221,10 @@ def create_train_data(user_id, dataset, endpoints):
 
     return train_data, valid_data
 
-import logging
 
 def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
+    import logging
+    logging.basicConfig(filename="router_training_log.log", level=logging.INFO)
     logging.info("starting TRAINING")
     for e in endpoints:
         if not evaluation_available(user_id, dataset, e):
