@@ -89,11 +89,20 @@ def find_invalid_endpoints(endpoints):
 def _list_trained_routers(user_id: str):
     bucket_name = "custom_router_data"
     blobs = list_dir(bucket_name, f"custom_router/{user_id}")
-    trained_routers = []
+    bucket = storage.Client().bucket(bucket_name)
+    routers_metadata = {}
     for b in blobs:
-        if "model.pth" in b.id:
-            trained_routers.append(b.id.split("/")[3])
-    return trained_routers
+        if "model.pth" in b.name:
+            metadata_path = b.name.replace("model.pth", "metadata.json")
+            metadata_blob = bucket.blob(metadata_path)
+            try:
+                metadata_contents = metadata_blob.download_as_bytes().decode("utf-8")
+                metadata = json.loads(metadata_contents)
+            except:
+                metdata = {"dataset": "", "endpoints": [""]}
+            router_name = b.id.split("/")[3]
+            routers_metadata[router_name] = metadata
+    return routers_metadata
 
 
 def _list_deployed_routers(user_id: str):
@@ -237,11 +246,7 @@ def get_trained_routers(
     deployed routers, you can use the /router/deploy/list GET endpoint.
     """
     user_id = request_fastapi.state.user_id
-    routers = _list_trained_routers(user_id)
-    # TODO: Do this correctly
-    routers_metadata = {}
-    for router in routers:
-        routers_metadata[router] = {"dataset": "", "endpoints": [""]}
+    routers_metadata = _list_trained_routers(user_id)
     return routers_metadata
 
 
