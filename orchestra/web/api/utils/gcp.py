@@ -4,6 +4,8 @@ from typing import Dict, List
 from google.cloud import aiplatform, pubsub_v1, storage
 from google.cloud.exceptions import NotFound
 
+from orchestra.web.api.utils.http_responses import evaluation_does_not_exist
+
 # Pub/Sub
 
 
@@ -34,6 +36,42 @@ def blob_exists(bucket_name: str, blob_name: str) -> bool:
     except NotFound:
         return False
     return True
+
+
+def get_scores(user_id: str, dataset: str):
+    bucket_name = "uploaded_datasets"
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(f"{user_id}/{dataset}/0/scores.json")
+    try:
+        content = blob.download_as_bytes().decode("utf-8")
+        return json.loads(content)
+    except:
+        raise evaluation_does_not_exist(dataset)
+
+
+def get_input_tokens(user_id: str, dataset: str):
+    bucket_name = "uploaded_datasets"
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(f"{user_id}/{dataset}/0/num_tokens.json")
+    try:
+        content = blob.download_as_bytes().decode("utf-8")
+        return json.loads(content)["num_tokens"]
+    except:
+        return 1
+
+
+def get_response_tokens(user_id: str, dataset: str, endpoint: str):
+    bucket_name = "uploaded_datasets"
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(f"{user_id}/{dataset}/0/{endpoint}/num_tokens_in_responses.json")
+    try:
+        content = blob.download_as_bytes().decode("utf-8")
+        return json.loads(content)["num_tokens"]
+    except:
+        return 1
 
 
 def dir_exists(bucket_name: str, dir_name: str) -> bool:
