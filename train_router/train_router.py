@@ -153,7 +153,8 @@ def start_evaluation(api_key, base_url, dataset, endpoint, judge_name):
 
 
 def extract_judgement(text):
-    score_mapping: {
+
+    score_mapping = {
         "irrelevant": 0,
         "very_bad": 0,
         "very_good": 0.8,
@@ -166,21 +167,17 @@ def extract_judgement(text):
     }
 
     json_text = re.search(
-        '\{[\n\r\s]+"assistant_rating":.*?\}', text, flags=re.DOTALL | re.MULTILINE
+        '\{[\n\r\s]*"assistant_rating":.*?\}', text, flags=re.DOTALL | re.MULTILINE
     )
     if json_text is None:
         return float("nan")
 
     judge_response = json_text.group(0)
-
     try:
         rating = json.loads(judge_response)["assistant_rating"]
-
-        if isinstance(rating, list):
-            rating = rating[0]
         try:
             rating = score_mapping[rating.lower()]
-        except:
+        except Exception as e:
             return 0.0
         return rating
 
