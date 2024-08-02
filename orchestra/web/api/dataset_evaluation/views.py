@@ -378,13 +378,15 @@ def get_dataset_evaluation_results(
     if not dataset_exists(user_id, dataset):
         raise dataset_does_not_exist(dataset)
     scores = _get_scores(user_id, dataset)
-    scores["input_tokens"] = _get_input_tokens(user_id, dataset)
-    scores["output_tokens"] = {}
+    output_tokens = {}
     for judge in scores.keys():
         for endpoint in scores[judge].keys():
-            scores["output_tokens"][endpoint] = _get_response_tokens(
+            output_tokens[endpoint] = _get_response_tokens(
                 user_id,
                 dataset,
                 endpoint,
             )
+    scores["input_tokens"] = _get_input_tokens(user_id, dataset)
+    scores["output_tokens"] = output_tokens
+
     return scores
