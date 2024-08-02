@@ -230,7 +230,7 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
     logging.info("starting TRAINING")
     for e in endpoints:
         if not evaluation_available(user_id, dataset, e):
-            logging.info(f"STARTING EVALUATION FOR {user_id} {dataset} {e}")
+            logging.info(f"STARTING EVALUATION FOR {orchestra_url} {user_id} {dataset} {e}")
             print(f"starting evaluation for {e}")
             start_evaluation(api_key, orchestra_url, dataset, e)
 
