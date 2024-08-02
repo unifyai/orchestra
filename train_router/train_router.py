@@ -233,6 +233,7 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url):
     timeout = 2 * 3600
     start_time = time.time()
     while (time.time() - start_time) < timeout:
+        logging.info("SEEING IF ALL EVALUATIONS ARE AVAILABLE")
         if all([evaluation_available(user_id, dataset, e) for e in endpoints]):
             break
         time.sleep(60)
