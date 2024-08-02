@@ -7,6 +7,7 @@ from orchestra.web.api import (  # noqa: WPS235
     admin,
     benchmarks,
     chat_completion,
+    custom_endpoint,
     dataset,
     dataset_evaluation,
     endpoint,
@@ -42,6 +43,11 @@ api_router.include_router(
 api_router.include_router(
     chat_completion.router,
     tags=["Querying LLMs"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    custom_endpoint.router,
+    tags=["Custom Endpoints and API keys"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(

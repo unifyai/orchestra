@@ -26,10 +26,17 @@ class CustomEndpointDAO:
         self,
         user_id: str,
         name: str,
+        mdl_name: str,
         url: str,
         key_id: int,
     ) -> None:
-        data = {"user_id": user_id, "name": name, "url": url, "key_id": key_id}
+        data = {
+            "user_id": user_id,
+            "name": name,
+            "mdl_name": mdl_name,
+            "url": url,
+            "key_id": key_id,
+        }
         if self.on_prem:
             self.on_prem_model.create(**data)
         else:
@@ -50,19 +57,24 @@ class CustomEndpointDAO:
         raw_custom_endpoints = self.session.execute(query)
         return list(raw_custom_endpoints.scalars().fetchall())
 
-    def get_user_endpoints(self, user_id: str) -> List[Tuple[str, str, str]]:
+    def get_user_endpoints(self, user_id: str) -> List[Tuple[str, str, str, str]]:
         if self.on_prem:
             return self.on_prem_model.read(
                 filters={"custom_endpoint": {"user_id": user_id}},
                 join_table="custom_api_key",
                 join_columns=["key_id", "id"],
                 select_columns={
-                    "custom_endpoint": ["name", "url"],
+                    "custom_endpoint": ["name", "mdl_name", "url"],
                     "custom_api_key": ["key"],
                 },
             )
         query = (
-            select(CustomEndpoint.name, CustomEndpoint.url, CustomApiKey.key)
+            select(
+                CustomEndpoint.name,
+                CustomEndpoint.mdl_name,
+                CustomEndpoint.url,
+                CustomApiKey.key,
+            )
             .join(CustomApiKey, CustomEndpoint.key_id == CustomApiKey.id)
             .where(CustomEndpoint.user_id == user_id)
         )

@@ -174,7 +174,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
         extra_args = tuple()
         if not on_prem and provider == "custom":
-            extra_args = (custom_endpoint_dao, custom_api_key_dao, user_id, model)
+            extra_args = (custom_endpoint_dao, custom_api_key_dao, user_id)
         lm = PROVIDER_CLASSES[provider](
             model, *extra_args, custom_api_key=custom_api_key
         )
