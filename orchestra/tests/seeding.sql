@@ -11,7 +11,6 @@ INSERT INTO recharge_type VALUES ('free');
 
 -- Provider
 INSERT INTO provider VALUES (1, 'openai', '', '');
-INSERT INTO provider VALUES (2, 'anyscale', '', '');
 INSERT INTO provider VALUES (3, 'deepinfra', '', '');
 INSERT INTO provider VALUES (4, 'fireworks-ai', '', '');
 INSERT INTO provider VALUES (5, 'lepton-ai', '', '');
@@ -61,7 +60,6 @@ INSERT INTO model VALUES (10, 'gemini-1.5-flash', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (11, 'mistral-7b-instruct-v0.3', NOW(), 'dummy_task', true);
 
 INSERT INTO endpoint VALUES (1, 9, 2, NOW());
-INSERT INTO endpoint VALUES (2, 9, 3, NOW());
 INSERT INTO endpoint VALUES (3, 9, 4, NOW());
 INSERT INTO endpoint VALUES (4, 9, 5, NOW());
 INSERT INTO endpoint VALUES (5, 9, 6, NOW());
