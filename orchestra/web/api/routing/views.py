@@ -434,5 +434,8 @@ def get_deployed_routers(
     user_id = request_fastapi.state.user_id
     routers_metadata = _list_deployed_routers(user_id)
     trained_routers = _list_trained_routers(user_id)
-    ret = {router_name: trained_routers[router_name] for router_name in sorted(routers_metadata)}
+    ret = {
+        router_name: trained_routers[router_name]
+        for router_name in sorted(routers_metadata)
+    }
     return ret

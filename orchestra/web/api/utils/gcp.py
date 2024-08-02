@@ -134,6 +134,7 @@ def vertex_ai_endpoint_list() -> List[str]:
     # List the endpoints
     return [e.display_name for e in client.list_endpoints(parent=parent)]
 
+
 def vertex_ai_endpoint_undeploy(user_id, name):
     region = "europe-west1"
     project_id = "saas-368716"
@@ -148,7 +149,7 @@ def vertex_ai_endpoint_undeploy(user_id, name):
             break
     else:
         raise Exception
-    
+
     request = aiplatform_v1.UndeployModelRequest(
         endpoint=endpoint_name,
         deployed_model_id=deployed_model_id,
