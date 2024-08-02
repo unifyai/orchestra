@@ -15,6 +15,7 @@ from orchestra.web.api.utils.gcp import (
     send_pubsub_msg,
     vertex_ai_endpoint_exists,
     vertex_ai_endpoint_list,
+    vertex_ai_endpoint_undeploy,
 )
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
@@ -384,17 +385,18 @@ def delete_router(
     name: str = Query(..., description="Name of the router to un-deploy."),
 ) -> Dict[str, str]:
     """
-    Deactivates and deletes a previously deployed router.
+    Deactivates a previously deployed router.
     """
     user_id = request_fastapi.state.user_id
     # Check if the router exists
     if not router_is_deployed(user_id, name):
         raise router_is_not_deployed
     # Send the request with the job to the router deployment service
-    send_to_deploy_server(action="delete", user_id=user_id, name=name)
+    # send_to_deploy_server(action="delete", user_id=user_id, name=name)
+    vertex_ai_endpoint_undeploy(user_id=user_id, name=name)
     #   un-deploy router
     #   modify entry in the db
-    return {"info": "Router deletion started! You will receive an email soon!"}
+    return {"info": "Router deletion started."}
 
 
 @router.get(
@@ -430,9 +432,7 @@ def get_deployed_routers(
 
     """
     user_id = request_fastapi.state.user_id
-    routers = _list_deployed_routers(user_id)
-    # TODO: Do this correctly
-    routers_metadata = {}
-    for router in routers:
-        routers_metadata[router] = {"dataset": "", "endpoints": [""]}
-    return routers_metadata
+    routers_metadata = _list_deployed_routers(user_id)
+    trained_routers = _list_trained_routers(user_id)
+    ret = {router_name: trained_routers[router_name] for router_name in sorted(routers_metadata)}
+    return ret

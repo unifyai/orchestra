@@ -1,0 +1,13 @@
+[Unit]
+Description=GCP Pub/Sub to train router
+After=network.target
+
+[Service]
+ExecStart=/opt/train-router/venv/bin/python3 /opt/train-router/main.py
+WorkingDirectory=/opt/train-router/
+Restart=always
+RestartSec=10
+User=serviceuser
+
+[Install]
+WantedBy=multi-user.target

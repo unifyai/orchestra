@@ -1,7 +1,7 @@
 import json
 from typing import Dict, List
 
-from google.cloud import aiplatform, pubsub_v1, storage
+from google.cloud import aiplatform, pubsub_v1, storage, aiplatform_v1
 from google.cloud.exceptions import NotFound
 
 from orchestra.web.api.utils.http_responses import evaluation_does_not_exist
@@ -133,3 +133,27 @@ def vertex_ai_endpoint_list() -> List[str]:
 
     # List the endpoints
     return [e.display_name for e in client.list_endpoints(parent=parent)]
+
+def vertex_ai_endpoint_undeploy(user_id, name):
+    region = "europe-west1"
+    project_id = "saas-368716"
+    client_options = {"api_endpoint": f"{region}-aiplatform.googleapis.com"}
+    client = aiplatform_v1.EndpointServiceClient(client_options=client_options)
+
+    parent = f"projects/{project_id}/locations/{region}"
+    for e in client.list_endpoints(parent=parent):
+        if e.display_name == f"{user_id}_{name}":
+            endpoint_name = e.name
+            deployed_model_id = e.deployed_models[0].id
+            break
+    else:
+        raise Exception
+    
+    request = aiplatform_v1.UndeployModelRequest(
+        endpoint=endpoint_name,
+        deployed_model_id=deployed_model_id,
+    )
+
+    operation = client.undeploy_model(request=request)
+    response = operation.result()
+    return response

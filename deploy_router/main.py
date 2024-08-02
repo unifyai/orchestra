@@ -48,16 +48,6 @@ def pub_sub_callback(message):
                         f"--orchestra_url={d['orchestra_url']}",
                     ],
                 )
-            elif d["action"] == "delete":
-                subprocess.Popen(
-                    [
-                        "venv/bin/python3",
-                        "delete_router.py",  # TODO: This is not implemented yet
-                        f"--user_id={d['user_id']}",
-                        f"--router_name={d['router_name']}",
-                        f"--orchestra_url={d['orchestra_url']}",
-                    ],
-                )
             else:
                 logging.error(f"Unknown action: {message.data}")
         except json.decoder.JSONDecodeError:
