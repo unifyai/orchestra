@@ -320,6 +320,7 @@ async def evaluate_dataset(msg, data_dir):
             ),
         )
     # upload num of tokens in responses
+    model_str = _format_model_tag(cfg.endpoint)
     asst_response_file = os.path.join(model_responses_path, f"{model_str}.jsonl")
     encoding = tiktoken.get_encoding("cl100k_base")
     num_output_tokens = 0
