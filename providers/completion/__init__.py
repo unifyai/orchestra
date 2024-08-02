@@ -1,7 +1,6 @@
 """providers.completion package."""
 
 from providers.completion.anthropic import Anthropic
-from providers.completion.anyscale import Anyscale
 from providers.completion.bedrock import AWSBedrock
 from providers.completion.custom_provider import CustomProvider
 from providers.completion.deepinfra import Deepinfra
@@ -17,7 +16,6 @@ from providers.completion.togetherai import TogetherAI
 from providers.completion.vertexai import VertexAI
 
 PROVIDER_CLASSES = {
-    "anyscale": Anyscale,
     "perplexity-ai": Perplexity,
     "together-ai": TogetherAI,
     "anthropic": Anthropic,

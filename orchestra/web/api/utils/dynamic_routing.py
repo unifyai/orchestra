@@ -10,9 +10,8 @@ from google.cloud import aiplatform
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
-from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.custom_router_dao import CustomRouterDAO
-from orchestra.settings import settings
+from orchestra.db.dao.endpoint_dao import EndpointDAO
 
 # TODO: Add errors back to the refactored function
 from orchestra.web.api.utils.http_responses import (  # invalid_optimisation_goal,; invalid_price_threshold,
@@ -47,7 +46,6 @@ default_providers = {
     "together-ai",
     "mistral-ai",
     "openai",
-    "anyscale",
     "fireworks-ai",
     "deepinfra",
     "octoai",
@@ -490,7 +488,9 @@ def dynamic_routing(
 
 
 def get_router_endpoint_id(
-    custom_router_dao: CustomRouterDAO, user_id: str, router_name: str
+    custom_router_dao: CustomRouterDAO,
+    user_id: str,
+    router_name: str,
 ) -> str:
     ids = custom_router_dao.get_router_id(user_id=user_id, router_name=router_name)
     router_id = ids[0].router_id
@@ -517,11 +517,6 @@ metrics = {
         "cost": 0.8,
         "ttft": 350.50168700001905,
         "itl": 27.84690674999979,
-    },
-    "gemma-7b-it@anyscale": {
-        "cost": 0.15,
-        "ttft": 1176.8055530000083,
-        "itl": 23.80950663414629,
     },
     "gemma-7b-it@together-ai": {
         "cost": 0.2,
@@ -596,11 +591,6 @@ metrics = {
         "cost": 0.7,
         "ttft": 352.0689869999387,
         "itl": 12.773902387097081,
-    },
-    "mixtral-8x7b-instruct-v0.1@anyscale": {
-        "cost": 0.5,
-        "ttft": 1749.3290439999782,
-        "itl": 34.07672297029734,
     },
     "mixtral-8x7b-instruct-v0.1@fireworks-ai": {
         "cost": 0.5,
@@ -688,13 +678,6 @@ baked_router_endpoints = [
         provider_id=3,
     ),
     Endpoint(
-        id=1377,
-        model="mixtral-8x7b-instruct-v0.1",
-        model_id=29,
-        provider="anyscale",
-        provider_id=2,
-    ),
-    Endpoint(
         id=1378,
         model="deepseek-coder-33b-instruct",
         model_id=132,
@@ -714,13 +697,6 @@ baked_router_endpoints = [
         model_id=29,
         provider="deepinfra",
         provider_id=12,
-    ),
-    Endpoint(
-        id=1407,
-        model="gemma-7b-it",
-        model_id=134,
-        provider="anyscale",
-        provider_id=2,
     ),
     Endpoint(
         id=1408,

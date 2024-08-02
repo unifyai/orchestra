@@ -1,10 +1,10 @@
-from functools import cmp_to_key
-import math
 import copy
+import math
+from functools import cmp_to_key
 from statistics import mean
+
 import numpy as np
 import scipy
-
 
 ROUTER_POINT = "router_2.12e-01_5.00e-04_2.78e-04"
 
@@ -65,13 +65,16 @@ def reorganize_data(raw_responses):
 
 def compute_cost(endpoint_metrics):
     input_cost = endpoint_metrics["input_cost"] * endpoint_metrics.get(
-        "input_tokens", 1
+        "input_tokens",
+        1,
     )
     output_cost = endpoint_metrics["output_cost"] * endpoint_metrics.get(
-        "output_tokens", 1
+        "output_tokens",
+        1,
     )
     total_tokens = endpoint_metrics.get("input_tokens", 1) + endpoint_metrics.get(
-        "output_tokens", 1
+        "output_tokens",
+        1,
     )
     weighted_cost = (input_cost + output_cost) / total_tokens
     return weighted_cost
@@ -115,19 +118,19 @@ def generate_router_points(data, _metrics):
             [
                 endpoint_scores[endpoint] / endpoint_costs[endpoint]
                 for endpoint in current_endpoints
-            ]
+            ],
         )
         ttft_multiplier = mean(
             [
                 endpoint_scores[endpoint] / endpoint_ttft[endpoint]
                 for endpoint in current_endpoints
-            ]
+            ],
         )
         itl_multiplier = mean(
             [
                 endpoint_scores[endpoint] / endpoint_itl[endpoint]
                 for endpoint in current_endpoints
-            ]
+            ],
         )
 
         num = 20
@@ -187,7 +190,7 @@ def generate_router_points(data, _metrics):
                                     endpoint_to_model(max_endpoint).replace("_pred", "")
                                     + "_score"
                                 ],
-                            }
+                            },
                         )
 
                     router_scores = {}
@@ -243,7 +246,7 @@ def generate_router_points(data, _metrics):
                             [
                                 router_scores[endpoint] * router_counts[endpoint]
                                 for endpoint in router_scores
-                            ]
+                            ],
                         )
                         / total_weight
                     )
@@ -252,7 +255,7 @@ def generate_router_points(data, _metrics):
                             [
                                 router_cost[endpoint] * router_counts[endpoint]
                                 for endpoint in router_cost
-                            ]
+                            ],
                         )
                         / total_weight
                     )
@@ -261,7 +264,7 @@ def generate_router_points(data, _metrics):
                             [
                                 router_ttft[endpoint] * router_counts[endpoint]
                                 for endpoint in router_ttft
-                            ]
+                            ],
                         )
                         / total_weight
                     )
@@ -270,7 +273,7 @@ def generate_router_points(data, _metrics):
                             [
                                 router_itl[endpoint] * router_counts[endpoint]
                                 for endpoint in router_itl
-                            ]
+                            ],
                         )
                         / total_weight
                     )
@@ -282,10 +285,11 @@ def generate_router_points(data, _metrics):
                             list(
                                 {
                                     endpoint: round(
-                                        router_counts[endpoint] / total_weight, 2
+                                        router_counts[endpoint] / total_weight,
+                                        2,
                                     )
                                     for endpoint in router_counts
-                                }.items()
+                                }.items(),
                             ),
                             key=cmp_to_key(lambda x, y: x[1] > y[1]),
                         )[:10]
@@ -298,7 +302,7 @@ def generate_router_points(data, _metrics):
                             "ttft": final_ttft,
                             "itl": final_itl,
                             "breakdown": breakdown,
-                        }
+                        },
                     )
         final_scores[dataset] = router_points
     return final_scores
@@ -332,7 +336,7 @@ def get_point_solutions(data):
                 {
                     "model": model,
                     "quality": round(model_scores[model] / model_counts[model], 2),
-                }
+                },
             )
 
         final_scores[dataset] = dataset_scores
@@ -378,7 +382,7 @@ def get_point_solutions_full(data, _metrics):
                         "cost": endpoint_costs[endpoint],
                         "ttft": endpoint_ttft[endpoint],
                         "itl": endpoint_itl[endpoint],
-                    }
+                    },
                 )
 
         final_scores[dataset] = dataset_scores
@@ -406,10 +410,11 @@ def prune_router_points(router_points):
                 [
                     [point["quality"], point["cost"], point["ttft"], point["itl"]]
                     for point in convex_points
-                ]
+                ],
             )
             normalized_metrics = (metrics - np.mean(metrics, axis=0)) / np.std(
-                metrics, axis=0
+                metrics,
+                axis=0,
             )
 
             num = normalized_metrics.shape[0]
@@ -504,13 +509,6 @@ metrics = {
         "itl": 27.84690674999979,
         "input_cost": 0.8,
         "output_cost": 0.8,
-    },
-    "gemma-7b-it@anyscale": {
-        "cost": 0.15,
-        "ttft": 1176.8055530000083,
-        "itl": 23.80950663414629,
-        "input_cost": 0.15,
-        "output_cost": 0.15,
     },
     "gemma-7b-it@together-ai": {
         "cost": 0.2,
@@ -637,13 +635,6 @@ metrics = {
         "itl": 12.773902387097081,
         "input_cost": 0.7,
         "output_cost": 0.7,
-    },
-    "mixtral-8x7b-instruct-v0.1@anyscale": {
-        "cost": 0.5,
-        "ttft": 1749.3290439999782,
-        "itl": 34.07672297029734,
-        "input_cost": 0.5,
-        "output_cost": 0.5,
     },
     "mixtral-8x7b-instruct-v0.1@fireworks-ai": {
         "cost": 0.5,
@@ -785,13 +776,6 @@ metrics = {
         "input_cost": 0.35,
         "output_cost": 1.4,
     },
-    "codellama-34b-instruct@anyscale": {
-        "cost": 1,
-        "ttft": 1447.77,
-        "itl": 31.31,
-        "input_cost": 1,
-        "output_cost": 1,
-    },
     "codellama-13b-instruct@octoai": {
         "cost": 0.65,  #
         "ttft": 630.77,
@@ -819,13 +803,6 @@ metrics = {
         "itl": 13.22,
         "input_cost": 0.2,
         "output_cost": 0.2,
-    },
-    "mistral-7b-instruct-v0.1@anyscale": {
-        "cost": 0.15,
-        "ttft": 2103.77,
-        "itl": 33.54,
-        "input_cost": 0.15,
-        "output_cost": 0.15,
     },
     "mistral-7b-instruct-v0.1@together-ai": {
         "cost": 0.2,
@@ -876,13 +853,6 @@ metrics = {
         "input_cost": 0.2,
         "output_cost": 0.2,
     },
-    "llama-2-7b-chat@anyscale": {
-        "cost": 0.15,
-        "ttft": 1782.82,
-        "itl": 51.56,
-        "input_cost": 0.15,
-        "output_cost": 0.15,
-    },
     "llama-2-7b-chat@together-ai": {
         "cost": 0.2,
         "ttft": 390.79,
@@ -918,13 +888,6 @@ metrics = {
         "input_cost": 0.13,
         "output_cost": 0.13,
     },
-    "llama-2-13b-chat@anyscale": {
-        "cost": 0.25,
-        "ttft": 1828.87,
-        "itl": 69.31,
-        "input_cost": 0.25,
-        "output_cost": 0.25,
-    },
     "llama-2-13b-chat@together-ai": {
         "cost": 0.23,
         "ttft": 1031.49,
@@ -959,13 +922,6 @@ metrics = {
         "itl": 14.35,
         "input_cost": 0.22,
         "output_cost": 0.22,
-    },
-    "llama-2-70b-chat@anyscale": {
-        "cost": 1,
-        "ttft": 931.48,
-        "itl": 33.1,
-        "input_cost": 1,
-        "output_cost": 1,
     },
     "llama-2-70b-chat@together-ai": {
         "cost": 0.9,

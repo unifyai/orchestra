@@ -1,4 +1,5 @@
 import json
+
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
@@ -168,7 +169,7 @@ async def test_endpoints_of_all(  # noqa: WPS218, E501
     url = "/v0/endpoints"
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == status.HTTP_200_OK
-    for endpoint in ["llama-3-8b-chat@anyscale", "llama-3-8b-chat@deepinfra"]:
+    for endpoint in ["llama-3-8b-chat@together-ai", "llama-3-8b-chat@deepinfra"]:
         assert endpoint in json.loads(response.text)
 
 
