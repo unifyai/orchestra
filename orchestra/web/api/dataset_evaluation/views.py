@@ -58,7 +58,7 @@ def _get_scores(user_id: str, dataset: str):
         content = blob.download_as_bytes().decode("utf-8")
         return json.loads(content)
     except:
-        return evaluation_does_not_exist(dataset)
+        raise evaluation_does_not_exist(dataset)
 
 
 def _get_input_tokens(user_id: str, dataset: str):
