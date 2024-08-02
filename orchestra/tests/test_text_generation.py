@@ -18,7 +18,6 @@ from orchestra.tests.utils import (
 MODELS = [
     # "gpt-3.5-turbo@openai",
     "claude-3-haiku@anthropic",
-    "llama-3-8b-chat@anyscale",
     "llama-3-8b-chat@deepinfra",
     "llama-3-8b-chat@fireworks-ai",
     "llama-3-8b-chat@lepton-ai",
