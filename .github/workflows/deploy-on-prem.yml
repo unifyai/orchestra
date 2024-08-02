@@ -38,8 +38,8 @@ jobs:
 
     - name: Pull and Push Orchestra Image
       run: |
-        docker pull europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra-on-prem:latest
-        docker tag europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra-on-prem:latest ${{ secrets.DOCKERHUB_USERNAME }}/orchestra-on-prem:latest
+        docker pull europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra:latest
+        docker tag europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra:latest ${{ secrets.DOCKERHUB_USERNAME }}/orchestra-on-prem:latest
         docker push ${{ secrets.DOCKERHUB_USERNAME }}/orchestra-on-prem:latest
 
     - name: Pull and Push Console Image
