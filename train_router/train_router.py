@@ -146,7 +146,7 @@ def start_evaluation(api_key, base_url, dataset, endpoint):
     }
     payload = {"dataset": dataset, "endpoint": endpoint}
     logging.info(payload)
-    response = requests.post(url, params=payload, headers=headers)
+    response = requests.post(url, json=payload, headers=headers)
 
     # TODO: Log this properly
     logging.info(response.status_code)
