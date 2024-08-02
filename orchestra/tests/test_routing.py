@@ -15,6 +15,7 @@ HEADERS = {
 
 sample_path = "./orchestra/tests/sample_datasets/with_ref.jsonl"
 
+
 def _upload_dataset(client, dataset_name, data_path):
     data = {"name": dataset_name}
     with open(data_path, "rb") as f:
@@ -29,7 +30,9 @@ def _upload_dataset(client, dataset_name, data_path):
 
 async def test_train_router(client: AsyncClient):
     dataset_name = f"test_train_router_{int(time.time()*1000 % 100000)}"
-    response = await _upload_dataset(client, dataset_name=dataset_name, data_path=sample_path)
+    response = await _upload_dataset(
+        client, dataset_name=dataset_name, data_path=sample_path
+    )
     assert response.status_code == 200, str(response.json())
 
     url = "/v0/router/train"
@@ -40,18 +43,18 @@ async def test_train_router(client: AsyncClient):
     assert response.status_code == 200
 
     # check if it's actually trained
-    for tries in range(30*60):
+    for tries in range(30 * 60):
         url = "/v0/router/train/list"
         response = await client.get(url, headers=HEADERS)
         if router_name not in response.json():
             asyncio.sleep(60)
 
-    # delete it 
+    # delete it
     url = "/v0/router/train"
     params = {"name": router_name}
     response = await client.delete(url, params=params, headers=HEADERS)
     assert response.status_code == 200
-    
+
     # check if it's deleted
     url = "/v0/router/train/list"
     response = await client.get(url, headers=HEADERS)
@@ -69,6 +72,7 @@ async def test_train_router(client: AsyncClient):
 #     assert False
 
 ###
+
 
 def test_deploy_router(client: AsyncClient):
     url = "/v0/router/deploy"
