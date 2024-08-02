@@ -378,6 +378,8 @@ def get_dataset_evaluation_results(
     if not dataset_exists(user_id, dataset):
         raise dataset_does_not_exist(dataset)
     scores = _get_scores(user_id, dataset)
+    if not isinstance(scores, dict):
+        return scores
     output_tokens = {}
     for judge in scores.keys():
         for endpoint in scores[judge].keys():
