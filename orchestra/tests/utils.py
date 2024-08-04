@@ -135,7 +135,6 @@ def check_in_dict_and_instance(dict, key, types):
 
 
 def check_text_gen_response(response: Dict, object_str: str):
-
     assert isinstance(response.get("id"), str)
     assert response.get("object") == object_str
     assert isinstance(response.get("created"), int)
@@ -182,14 +181,13 @@ def check_text_gen_choice(choice: Dict, message: str):
     assert isinstance(message_dict.get("content"), str)
 
 
-
 def get_chat_completions_payload_tool_use(model_str):
     messages = []
-    messages.append({"role": "user", "content": "what is the weather going to be like in Glasgow, Scotland over the next 2 days"})
-    payload = {
-        "messages": messages,
-        "tools": tools,
-        "model": model_str
-    }
+    messages.append(
+        {
+            "role": "user",
+            "content": "what is the weather going to be like in Glasgow, Scotland over the next 2 days",
+        }
+    )
+    payload = {"messages": messages, "tools": tools, "model": model_str}
     return payload
-

@@ -13,7 +13,7 @@ from orchestra.tests.utils import (
     get_chat_completions_payload_fallback,
     get_credits,
     get_inference_payload,
-    get_chat_completions_payload_tool_use
+    get_chat_completions_payload_tool_use,
 )
 
 MODELS = [
@@ -117,26 +117,23 @@ async def test_fallback_after_fail(
     check_text_gen_usage(response_json.get("usage"))
 
 
-
-
 @pytest.mark.anyio
 @pytest.mark.parametrize("model", ["gpt-3.5-turbo@openai", "claude-3-haiku@anthropic"])
 async def test_function_calling(model, client: AsyncClient):
-
     endpoint = "/v0/chat/completions"
     data = get_chat_completions_payload_tool_use(model)
     response = await client.post(endpoint, headers=HEADERS, json=data)
     assert response.status_code == status.HTTP_200_OK
 
     response_json = response.json()
-    assert len(response_json["choices"][0]["message"]["tool_calls"]) >= 1, str(response_json)
-    
+    assert len(response_json["choices"][0]["message"]["tool_calls"]) >= 1, str(
+        response_json
+    )
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("model", MODELS)
 async def test_n_1(model, client: AsyncClient):
-
     model, provider = model.split("@")
     endpoint = "/v0/chat/completions"
     get_chat_completions_payload
@@ -144,4 +141,3 @@ async def test_n_1(model, client: AsyncClient):
     data["n"] = 1
     response = await client.post(endpoint, headers=HEADERS, json=data)
     assert response.status_code == status.HTTP_200_OK
-
