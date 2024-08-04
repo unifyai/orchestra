@@ -129,10 +129,10 @@ def _delete_evaluation(user_id: str, dataset: str, endpoint: str):
     bucket_name = "uploaded_datasets"
     # TODO: 0 will need to be accounted when introducing dynamic datasets
     if dataset == "":
-        raise dataset_does_not_exist
+        raise dataset_does_not_exist(dataset)
     dir_name = f"{user_id}/{dataset}/0/{endpoint}"
     if not dir_exists(bucket_name, dir_name):
-        raise evaluation_does_not_exist
+        raise evaluation_does_not_exist(dataset)
     else:
         delete_dir(bucket_name, dir_name)
 
@@ -215,7 +215,7 @@ def evaluate_dataset(
     api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
     # Check if the dataset exists
     if not dataset_exists(user_id, dataset):
-        raise dataset_does_not_exist
+        raise dataset_does_not_exist(dataset)
     # Check that the endpoints are valid
     invalid_endpoints = find_invalid_endpoints([endpoint])
     if invalid_endpoints:
