@@ -23,6 +23,57 @@ prompt = (
     "Give a short response with line breaks within each sentence."
 )
 
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["celsius", "fahrenheit"],
+                        "description": "The temperature unit to use. Infer this from the users location.",
+                    },
+                },
+                "required": ["location", "format"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_n_day_weather_forecast",
+            "description": "Get an N-day weather forecast",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["celsius", "fahrenheit"],
+                        "description": "The temperature unit to use. Infer this from the users location.",
+                    },
+                    "num_days": {
+                        "type": "integer",
+                        "description": "The number of days to forecast",
+                    },
+                },
+                "required": ["location", "format", "num_days"],
+            },
+        },
+    },
+]
+
 
 async def get_credits(client):
     response = await client.get("/v0/get_credits", headers=HEADERS)
@@ -84,7 +135,6 @@ def check_in_dict_and_instance(dict, key, types):
 
 
 def check_text_gen_response(response: Dict, object_str: str):
-
     assert isinstance(response.get("id"), str)
     assert response.get("object") == object_str
     assert isinstance(response.get("created"), int)
@@ -129,3 +179,15 @@ def check_text_gen_choice(choice: Dict, message: str):
         assert isinstance(message_dict.get("role"), str)
     # TODO: Add option for empty message if end of stream and delta
     assert isinstance(message_dict.get("content"), str)
+
+
+def get_chat_completions_payload_tool_use(model_str):
+    messages = []
+    messages.append(
+        {
+            "role": "user",
+            "content": "what is the weather going to be like in Glasgow, Scotland over the next 2 days",
+        }
+    )
+    payload = {"messages": messages, "tools": tools, "model": model_str}
+    return payload
