@@ -322,7 +322,7 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url, judge
 
     # build & run the docker container
     logging.info("building docker container")
-    docker_build_cmd = f"docker build --build-arg RUN_FOLDER={run_name} -t router_training ~/{run_name}"
+    docker_build_cmd = f"docker build -t router_training ~/{run_name}"
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="{docker_build_cmd}" """
     subprocess.run(command, shell=True)
 
