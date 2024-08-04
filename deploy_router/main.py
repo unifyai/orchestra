@@ -43,9 +43,7 @@ def pub_sub_callback(message):
                     [
                         "venv/bin/python3",
                         "deploy_router.py",
-                        f"--user_id={d['user_id']}",
-                        f"--router_name={d['router_name']}",
-                        f"--orchestra_url={d['orchestra_url']}",
+                        message.data,
                     ],
                 )
             else:

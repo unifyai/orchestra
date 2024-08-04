@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 
 import requests
@@ -104,11 +105,6 @@ def deploy(user_id: str, router_name: str, orchestra_url: str):
 
 
 if __name__ == "__main__":
-    import argparse
+    msg = sys.argv[1]
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--user_id", required=True)
-    parser.add_argument("--router_name", required=True)
-    parser.add_argument("--orchestra_url", required=True)
-    args = parser.parse_args()
-    deploy(args.user_id, args.router_name, args.orchestra_url)
+    deploy(msg["user_id"], msg["name"], msg["orchestra_url"])
