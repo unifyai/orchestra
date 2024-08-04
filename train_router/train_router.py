@@ -317,12 +317,12 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url, judge
     # subprocess.run(command, shell=True)
 
     logging.info("move files")
-    command = f"""gcloud compute scp --project={project_id} --zone={zone} --recurse ./{save_files}/{run_name} {instance_name}:~/{run_name}"""
+    command = f"""gcloud compute scp --project={project_id} --zone={zone} --recurse {run_folder} {instance_name}:~/{run_name}"""
     subprocess.run(command, shell=True)
 
     # build & run the docker container
     logging.info("building docker container")
-    docker_build_cmd = f"docker build --build-arg RUN_FOLDER={run_name} -t router_training ."
+    docker_build_cmd = f"docker build --build-arg RUN_FOLDER={run_name} -t router_training ~/{run_name}"
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="{docker_build_cmd}" """
     subprocess.run(command, shell=True)
 
