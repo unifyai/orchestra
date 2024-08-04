@@ -8,6 +8,7 @@ import math
 import random
 import requests
 import os
+import shutil
 from dataclasses import dataclass
 from typing import Any, List
 
@@ -257,22 +258,31 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url, judge
             )
     train_data = unrolled_data
 
+    run_name = f"{user_id}_{router_name}_{int(time.time() * 100) % 1000}"
     dir = os.path.dirname(os.path.abspath(__file__))
+    run_folder = os.path.join(dir, "save_files", run_name)
+    train_job_files_folder = os.path.join(run_folder, "train_job_files")
+
+    os.makedirs(run_folder, exist_ok=True)
+
+    shutil.copytree(os.path.join(dir, "reference_gpu_vm_files"), run_folder, dirs_exist_ok=True) 
+
+
     with open(
-        os.path.join(dir, "gpu_vm_files", "train_job_files", "train_data.jsonl"), "w"
+        os.path.join(train_job_files_folder, "train_data.jsonl"), "w"
     ) as f:
         for line in train_data:
             f.write(json.dumps(line) + "\n")
 
     with open(
-        os.path.join(dir, "gpu_vm_files", "train_job_files", "valid_data.jsonl"), "w"
+        os.path.join(train_job_files_folder, "valid_data.jsonl"), "w"
     ) as f:
         for line in valid_data:
             f.write(json.dumps(line) + "\n")
 
     # user config
     with open(
-        os.path.join(dir, "gpu_vm_files", "train_job_files", "user_config.json"), "w"
+        os.path.join(train_job_files_folder, "user_config.json"), "w"
     ) as f:
         json.dump(
             {
@@ -307,12 +317,12 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url, judge
     # subprocess.run(command, shell=True)
 
     logging.info("move files")
-    command = f"""gcloud compute scp --project={project_id} --zone={zone} --recurse ./gpu_vm_files/* {instance_name}:~/"""
+    command = f"""gcloud compute scp --project={project_id} --zone={zone} --recurse ./{save_files}/{run_name} {instance_name}:~/{run_name}"""
     subprocess.run(command, shell=True)
 
     # build & run the docker container
     logging.info("building docker container")
-    docker_build_cmd = "docker build -t router_training ."
+    docker_build_cmd = f"docker build --build-arg RUN_FOLDER={run_name} -t router_training ."
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="{docker_build_cmd}" """
     subprocess.run(command, shell=True)
 
