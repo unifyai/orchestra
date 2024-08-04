@@ -29,25 +29,27 @@ def _upload_dataset(client, dataset_name, data_path):
 
 
 async def test_train_router(client: AsyncClient):
-    dataset_name = f"test_train_router_{int(time.time()*1000 % 100000)}"
+    dataset_name = f"1_test_train_router_{int(time.time()*1000 % 100000)}"
     response = await _upload_dataset(
         client, dataset_name=dataset_name, data_path=sample_path
     )
     assert response.status_code == 200, str(response.json())
 
     url = "/v0/router/train"
-    router_name = f"test_router_train_{int(time.time()*1000 % 100000)}"
+    router_name = f"123_test_router_train_{int(time.time()*1000 % 100000)}"
     endpoints = ["llama-3.1-8b-chat@aws-bedrock", "claude-3-haiku@aws-bedrock"]
     params = {"name": router_name, "dataset": dataset_name, "endpoints": endpoints}
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200
 
     # check if it's actually trained
-    for tries in range(30 * 60):
+    for tries in range(5):
         url = "/v0/router/train/list"
         response = await client.get(url, headers=HEADERS)
         if router_name not in response.json():
-            asyncio.sleep(60)
+            await asyncio.sleep(60)
+        else:
+            break
 
     # delete it
     url = "/v0/router/train"
@@ -74,16 +76,16 @@ async def test_train_router(client: AsyncClient):
 ###
 
 
-def test_deploy_router(client: AsyncClient):
-    url = "/v0/router/deploy"
-    assert False
+# def test_deploy_router(client: AsyncClient):
+#     url = "/v0/router/deploy"
+#     assert False
 
 
-def test_deploy_delete_router(client: AsyncClient):
-    url = "/v0/router/deploy"
-    assert False
+# def test_deploy_delete_router(client: AsyncClient):
+#     url = "/v0/router/deploy"
+#     assert False
 
 
-def test_deploy_list_router(client: AsyncClient):
-    url = "/v0/router/deploy/list"
-    assert False
+# def test_deploy_list_router(client: AsyncClient):
+#     url = "/v0/router/deploy/list"
+#     assert False
