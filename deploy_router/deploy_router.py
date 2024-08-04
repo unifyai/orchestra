@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import subprocess
@@ -106,5 +107,6 @@ def deploy(user_id: str, router_name: str, orchestra_url: str):
 
 if __name__ == "__main__":
     msg = sys.argv[1]
+    msg = json.loads(msg)
 
     deploy(msg["user_id"], msg["name"], msg["orchestra_url"])
