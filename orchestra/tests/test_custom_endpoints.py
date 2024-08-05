@@ -54,8 +54,7 @@ async def test_custom_benchmark(  # noqa: WPS218, E501
     params = {
         "endpoint_name": endpoint_name,
         "metric_name": "time-to-first-token",
-        # "start_time": str(datetime.datetime(2024, 1, 1)),
-        "start_time": "2024-01-01",  # str(datetime.datetime(2024, 1, 1)),
+        "start_time": "2024-01-01",
         "end_time": str(datetime.datetime.now()),
     }
     response = await client.get(url, params=params, headers=HEADERS)
