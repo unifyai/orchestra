@@ -54,10 +54,13 @@ class OnPremModel:
                     os.path.join(self.shared_volume, "db", f"{join_table}.json"),
                 ) as f:
                     join_entries = json.load(f)["data"]
-                    join_entries = reduce(
-                        lambda x, y: {**x, **y},
-                        [{entry[join_columns[1]]: entry} for entry in join_entries],
-                    )
+                    if join_entries:
+                        join_entries = reduce(
+                            lambda x, y: {**x, **y},
+                            [{entry[join_columns[1]]: entry} for entry in join_entries],
+                        )
+                    else:
+                        join_entries = dict()
             else:
                 join_entries = dict()
             final_entries[join_table] = [
