@@ -22,6 +22,7 @@ from orchestra.web.api.utils.http_responses import (
     router_training_already_exists,
     router_training_does_not_exist,
 )
+from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 
@@ -161,6 +162,7 @@ def send_to_deploy_server(action, **data):
         },
     },
 )
+@handle_on_prem(endpoint="/router/train", method="post")
 def train_router(
     request_fastapi: Request,
     name: str = Query(..., description="Name of the router."),
@@ -226,6 +228,7 @@ def train_router(
         },
     },
 )
+@handle_on_prem(endpoint="/router/train/list", method="get")
 def get_trained_routers(
     request_fastapi: Request,
 ) -> Dict[str, Dict[str, Union[str, List[str]]]]:
@@ -267,6 +270,7 @@ def get_trained_routers(
         },
     },
 )
+@handle_on_prem(endpoint="/router/train", method="delete")
 def delete_router_train(
     request_fastapi: Request,
     name: str = Query(..., description="Name of the router to delete."),
@@ -317,6 +321,7 @@ def delete_router_train(
         },
     },
 )
+@handle_on_prem(endpoint="/router/deploy", method="post")
 def deploy_router(
     request_fastapi: Request,
     name: str = Query(..., description="Name of the router to deploy."),
@@ -364,6 +369,7 @@ def deploy_router(
         },
     },
 )
+@handle_on_prem(endpoint="/router/deploy", method="delete")
 def delete_router(
     request_fastapi: Request,
     name: str = Query(..., description="Name of the router to un-deploy."),
@@ -401,6 +407,7 @@ def delete_router(
         },
     },
 )
+@handle_on_prem(endpoint="/router/deploy/list", method="get")
 def get_deployed_routers(
     request_fastapi: Request,
 ) -> Dict[str, Dict[str, Union[str, List[str]]]]:

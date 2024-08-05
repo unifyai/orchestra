@@ -5,20 +5,24 @@ Includes endpoints related to benchmarks.
 from fastapi import APIRouter
 from fastapi.param_functions import Depends
 
+from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.latest_benchmark_dao import LatestBenchmarkDAO
-from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.web.api.utils.http_responses import benchmark_not_found, model_not_found
+from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 
 
 def _get_endpoint_from_model_provider(
-    model: str, provider: str, endpoint_dao: EndpointDAO
+    model: str,
+    provider: str,
+    endpoint_dao: EndpointDAO,
 ):
     try:
         endpoint_id = endpoint_dao.get_endpoints_of(
-            models=(model,), only_from=(provider,)
+            models=(model,),
+            only_from=(provider,),
         )
         endpoint_id = endpoint_id[0][0].id
         return endpoint_id
@@ -27,6 +31,7 @@ def _get_endpoint_from_model_provider(
 
 
 @router.get("/benchmarks")
+@handle_on_prem(endpoint="/benchmarks", method="get")
 def get_latest_benchmark(
     model: str,
     provider: str,
@@ -39,7 +44,10 @@ def get_latest_benchmark(
     try:
         endpoint_id = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
         result = latest_benchmark_dao.get_latest_benchmarks(
-            endpoint_id=endpoint_id, regime=regime, region=region, seq_len=seq_len
+            endpoint_id=endpoint_id,
+            regime=regime,
+            region=region,
+            seq_len=seq_len,
         )
         result = result[0]
         ret = {
@@ -55,6 +63,7 @@ def get_latest_benchmark(
 
 
 @router.post("/benchmarks/filter")
+@handle_on_prem(endpoint="/benchmarks/filter", method="post")
 def filter_benchmark(
     model: str,
     provider: str,

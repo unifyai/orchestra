@@ -5,12 +5,8 @@ import pytest
 from httpx import AsyncClient
 
 from orchestra.tests.utils import HEADERS
-from orchestra.web.api.dataset.views import (
-    blob_exists,
-    bucket_name,
-    delete_dir,
-    dir_exists,
-)
+from orchestra.web.api.dataset.views import bucket_name
+from orchestra.web.api.utils.gcp import blob_exists, delete_dir, dir_exists
 
 user_id = os.getenv("AUTH_ACCOUNT_USER_ID")
 headers = copy.copy(HEADERS)

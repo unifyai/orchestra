@@ -1,7 +1,7 @@
-import json
+import os
 import time
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, List
 
 import aioboto3
 import boto3
@@ -202,7 +202,9 @@ class BedrockAsyncGeneratorWrapper(SyncGeneratorWrapper):
 
         session = aioboto3.Session()
         system_prompts, messages = _format_messages_for_converse(messages)
-        inference_config, additional_model_fields = _format_kwargs_for_converse(kwargs)
+        inference_config, additional_model_fields = _format_kwargs_for_converse(
+            self._body,
+        )
         async with session.client(
             service_name="bedrock-runtime",
             region_name=_get_region(self.provider.provider_endpoint),
@@ -318,6 +320,9 @@ def sse_to_part_dict(part, whole, endpoint):
 
 
 def _get_region(provider_endpoint):
+    region = os.environ.get("AWS_REGION")
+    if os.environ.get("ON_PREM") and region:
+        return region
     if "anthropic" in provider_endpoint and not "opus" in provider_endpoint:
         return "us-east-1"
     return "us-west-2"

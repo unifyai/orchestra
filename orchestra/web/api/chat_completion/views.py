@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from typing import Any, Dict, Optional, Union
 
@@ -35,6 +36,7 @@ from orchestra.web.api.utils.http_responses import (
     invalid_messages,
     invalid_model_str,
 )
+from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 
@@ -88,13 +90,14 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         raise invalid_messages
 
     # TODO: Add validation of the other parameters if mandatory
-
+    on_prem = os.environ.get("ON_PREM")
     user_id = request_fastapi.state.user_id
-    user = get_credits(request_fastapi, users_dao=users_dao)
-    available_credits = float(user.credits if user else 0)
-    store_prompt = user.store_prompts if user else True
-    store_prompt = True if store_prompt is None else store_prompt
     use_custom_keys = request.use_custom_keys
+    if not on_prem:
+        user = get_credits(request_fastapi, users_dao=users_dao)
+        available_credits = float(user.credits if user else 0)
+        store_prompt = user.store_prompts if user else True
+        store_prompt = True if store_prompt is None else store_prompt
 
     model, provider = model_priority_list[0]
     try_provider = 0
@@ -112,7 +115,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         except IndexError:
             raise HTTPException(status_code=404, detail="Custom API key not found.")
 
-    if using_router:
+    if not on_prem and using_router:
         # parse router string
         tmp = model.split("_", 1)
         if len(tmp) == 1:
@@ -136,7 +139,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     t0 = time.time()
 
     while try_provider >= 0 and try_provider < num_tries:
-        if provider not in PROVIDER_CLASSES or using_router:
+        if not on_prem and provider not in PROVIDER_CLASSES or using_router:
             # Dynamic routing
             if using_router:
                 if router_choices is None:
@@ -170,12 +173,12 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         model, provider = model_priority_list[try_provider]
 
         extra_args = tuple()
-        if provider == "custom":
+        if not on_prem and provider == "custom":
             extra_args = (custom_endpoint_dao, custom_api_key_dao, user_id)
         lm = PROVIDER_CLASSES[provider](
             model, *extra_args, custom_api_key=custom_api_key
         )
-        if available_credits <= 0 and not use_custom_keys:
+        if not on_prem and available_credits <= 0 and not use_custom_keys:
             raise insufficient_credits_error
 
         stream = request.stream
@@ -204,21 +207,24 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             usage={},
         )
 
-    db_operations_kwargs = {
-        "user_id": user_id,
-        "secondary_user_id": request.user,
-        "model": model,
-        "provider": provider,
-        "prompt": messages if store_prompt else [],
-        "signature": request.signature,
-        "used_router": using_router,
-        "router": router_str,
-        "model_dao": model_dao,
-        "provider_dao": provider_dao,
-        "endpoint_dao": endpoint_dao,
-        "query_dao": query_dao,
-        "users_dao": users_dao,
-    }
+    db_operations_kwargs = {}
+
+    if not on_prem:
+        db_operations_kwargs = {
+            "user_id": user_id,
+            "secondary_user_id": request.user,
+            "model": model,
+            "provider": provider,
+            "prompt": messages if store_prompt else [],
+            "signature": request.signature,
+            "used_router": using_router,
+            "router": router_str,
+            "model_dao": model_dao,
+            "provider_dao": provider_dao,
+            "endpoint_dao": endpoint_dao,
+            "query_dao": query_dao,
+            "users_dao": users_dao,
+        }
 
     processing_time = (time.time() - t0) * 1000
 
@@ -230,24 +236,26 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 chat_response = ChatCompletionResponse(**part_dict)
                 yield f"data: {json.dumps(chat_response.model_dump())}\n\n"  # noqa: WPS237, E501
             processing_time = (time.time() - t0) * 1000
-            background_tasks.add_task(
-                db_operations,
-                cost=response.total_cost if not use_custom_keys else 0,
-                processing_time=processing_time,
-                usage=chat_response.usage,
-                **db_operations_kwargs,
-            )
+            if not on_prem:
+                background_tasks.add_task(
+                    db_operations,
+                    cost=response.total_cost if not use_custom_keys else 0,
+                    processing_time=processing_time,
+                    usage=chat_response.usage,
+                    **db_operations_kwargs,
+                )
 
         return StreamingResponse(stream_and_update_db())
     else:
         processing_time = (time.time() - t0) * 1000
-        background_tasks.add_task(
-            db_operations,
-            cost=cost if not use_custom_keys else 0,
-            processing_time=processing_time,
-            usage=response["usage"],
-            **db_operations_kwargs,
-        )
+        if not on_prem:
+            background_tasks.add_task(
+                db_operations,
+                cost=cost if not use_custom_keys else 0,
+                processing_time=processing_time,
+                usage=response["usage"],
+                **db_operations_kwargs,
+            )
 
     response["model"] = f"{model}@{provider}"
     response["usage"]["cost"] = cost
@@ -272,6 +280,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
 
 @router.get("/metrics")
+@handle_on_prem(endpoint="/metrics", method="none")
 def get_query_metrics(
     request_fastapi: Request,
     start_time: Optional[str] = Query(
@@ -321,7 +330,7 @@ def get_query_metrics(
         "https://api.airfold.co/v1/pipes/queries_metrics.json",
         # TODO: mb will rotate this tomorrow
         headers={
-            "Authorization": "Bearer aft_mpbZHI19EHe8CsRnUGsQ4f2ALIJ.KW4wY9z6u21Lbdnm8FS58Lqh6U3rTpsmo3FFeAsubCY",
+            "Authorization": f"Bearer {os.environ.get('AIRFOLD_KEY')}",
         },
         params={
             "user_id": request_fastapi.state.user_id,

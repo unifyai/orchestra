@@ -2,7 +2,9 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import smtplib
+import sys
 from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Optional
@@ -139,7 +141,7 @@ def send_email(user_email, endpoint, dataset):
     email_server.quit()
 
 
-async def evaluate_dataset(msg, data_dir):
+async def evaluate_dataset(msg, data_dir, shared_volume=""):
     """msg is a json object with two fields: config and prompts
     prompts is a list of json objects of the form {"prompt", "reference_answer"}.
     """
@@ -148,7 +150,7 @@ async def evaluate_dataset(msg, data_dir):
     cfg = BenchmarkConfig(**cfg)
 
     # create root folder
-    run_save_path = os.path.join(data_dir, cfg.user_id, cfg.dataset)
+    run_save_path = os.path.join(shared_volume, data_dir, cfg.user_id, cfg.dataset)
 
     os.makedirs(run_save_path, exist_ok=True)
 
@@ -159,13 +161,19 @@ async def evaluate_dataset(msg, data_dir):
     # load prompts
 
     bucket_name = "uploaded_datasets"
-    blob_name = f"{cfg.user_id}/{cfg.dataset}/0/dataset.jsonl"
-    blob = storage.Client().bucket(bucket_name).blob(blob_name)
+    blob_name = os.path.join(cfg.user_id, cfg.dataset, "0", "dataset.jsonl")
     folder = os.path.dirname(prompts_path)
     folder = os.path.join(folder, "tmp")
     os.makedirs(folder, exist_ok=True)
     tmp_prompts_path = os.path.join(folder, f"{cfg.endpoint}_tmp_prompts.jsonl")
-    blob.download_to_filename(tmp_prompts_path)
+    if os.environ.get("ON_PREM"):
+        blob_name = os.path.join(shared_volume, bucket_name, blob_name)
+        os.makedirs(os.sep.join(blob_name.split(os.sep)[:-1]), exist_ok=True)
+        with open(tmp_prompts_path, "w") as f:
+            f.write(open(blob_name).read())
+    else:
+        blob = storage.Client().bucket(bucket_name).blob(blob_name)
+        blob.download_to_filename(tmp_prompts_path)
     with open(tmp_prompts_path) as f:
         prompts = [json.loads(l) for l in f]
 
@@ -303,22 +311,50 @@ async def evaluate_dataset(msg, data_dir):
     # upload to cloud storage buckets
     #
     # upload responses
-    blob_name = f"{cfg.user_id}/{cfg.dataset}/0/{cfg.endpoint}/responses.jsonl"
-    blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    blob.upload_from_filename(
-        os.path.join(model_responses_path, _format_model_tag(cfg.endpoint) + ".jsonl"),
+    blob_name = os.path.join(
+        cfg.user_id,
+        cfg.dataset,
+        "0",
+        cfg.endpoint,
+        "responses.jsonl",
     )
+    model_responses_formatted_path = os.path.join(
+        model_responses_path,
+        _format_model_tag(cfg.endpoint) + ".jsonl",
+    )
+    if os.environ.get("ON_PREM"):
+        blob_name = os.path.join(shared_volume, bucket_name, blob_name)
+        os.makedirs(os.sep.join(blob_name.split(os.sep)[:-1]), exist_ok=True)
+        with open(blob_name, "w") as f:
+            f.write(open(model_responses_formatted_path).read())
+    else:
+        blob = storage.Client().bucket(bucket_name).blob(blob_name)
+        blob.upload_from_filename(model_responses_formatted_path)
+
     # upload judgements
     for judge_tag in cfg.judge_models:
         fmtd_judge_tag = _format_model_tag(judge_tag)
-        blob_name = f"{cfg.user_id}/{cfg.dataset}/0/{cfg.endpoint}/{fmtd_judge_tag}_judgements.jsonl"
-        blob = storage.Client().bucket(bucket_name).blob(blob_name)
-        blob.upload_from_filename(
-            os.path.join(
-                model_judgements_path,
-                _format_judgements_file(cfg.endpoint, judge_tag) + ".jsonl",
-            ),
+        blob_name = os.path.join(
+            cfg.user_id,
+            cfg.dataset,
+            "0",
+            cfg.endpoint,
+            f"{fmtd_judge_tag}_judgements.jsonl",
         )
+
+        model_judgements_formatted_path = os.path.join(
+            model_judgements_path,
+            _format_judgements_file(cfg.endpoint, judge_tag) + ".jsonl",
+        )
+        if os.environ.get("ON_PREM"):
+            blob_name = os.path.join(shared_volume, bucket_name, blob_name)
+            os.makedirs(os.sep.join(blob_name.split(os.sep)[:-1]), exist_ok=True)
+            with open(blob_name, "w") as f:
+                f.write(open(model_judgements_formatted_path).read())
+        else:
+            blob = storage.Client().bucket(bucket_name).blob(blob_name)
+            blob.upload_from_filename(model_judgements_formatted_path)
+
     # upload num of tokens in responses
     model_str = _format_model_tag(cfg.endpoint)
     asst_response_file = os.path.join(model_responses_path, f"{model_str}.jsonl")
@@ -332,27 +368,42 @@ async def evaluate_dataset(msg, data_dir):
     blob_name = (
         f"{cfg.user_id}/{cfg.dataset}/0/{cfg.endpoint}/num_tokens_in_responses.json"
     )
-    blob = storage.Client().bucket(bucket_name).blob(blob_name)
     string = json.dumps({"num_tokens": num_output_tokens})
-    blob.upload_from_string(string, content_type="application/json")
+    if os.environ.get("ON_PREM"):
+        blob_name = os.path.join(shared_volume, bucket_name, blob_name)
+        os.makedirs(os.sep.join(blob_name.split(os.sep)[:-1]), exist_ok=True)
+        with open(blob_name, "w") as f:
+            f.write(string)
+    else:
+        blob = storage.Client().bucket(bucket_name).blob(blob_name)
+        blob.upload_from_string(string, content_type="application/json")
 
-    storage_client = storage.Client()
     bucket_name = "uploaded_datasets"
-
-    prefix = f"{cfg.user_id}/{cfg.dataset}/0/"
-    blobs = storage_client.list_blobs(bucket_name, prefix=prefix)
+    prefix = os.path.join(cfg.user_id, cfg.dataset, "0")
+    prefix_folder_path = os.path.join(shared_volume, bucket_name, prefix)
+    if os.environ.get("ON_PREM"):
+        blobs = []
+        for root, _, files in os.walk(prefix_folder_path):
+            for file in files:
+                blobs.append(os.path.join(root, file))
+    else:
+        storage_client = storage.Client()
+        blobs = storage_client.list_blobs(bucket_name, prefix=prefix)
 
     # format is {judge: {endpoint: score}}
     results = {}
     for b in blobs:
-        if "judgements" in b.name:
+        name = b if os.environ.get("ON_PREM") else b.name
+        if "judgements" in name:
             judge_model = (
-                b.name.split("/")[-1]
-                .replace("_judgements.jsonl", "")
-                .replace("___", "@")
+                name.split("/")[-1].replace("_judgements.jsonl", "").replace("___", "@")
             )
-            endpoint_name = b.name.split("/")[3]
-            contents = b.download_as_bytes()
+            endpoint_name = name.split("/")[-2]
+            contents = (
+                open(os.path.join(prefix_folder_path, name), "rb").read()
+                if os.environ.get("ON_PREM")
+                else b.download_as_bytes()
+            )
             contents = contents.decode("utf-8").split("\n")
             scores = []
             for entry in contents:
@@ -373,12 +424,17 @@ async def evaluate_dataset(msg, data_dir):
     with open("scores.json", "w") as f:
         json.dump(results, f)
 
-    blob_name = f"{cfg.user_id}/{cfg.dataset}/0/scores.json"
-    blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    blob.upload_from_filename("scores.json")
+    blob_name = os.path.join(cfg.user_id, cfg.dataset, "0", "scores.json")
+    if os.environ.get("ON_PREM"):
+        file_path = os.path.join(shared_volume, bucket_name, blob_name)
+        shutil.copy("scores.json", file_path)
+        shutil.rmtree(os.path.join(shared_volume, data_dir))
+    else:
+        blob = storage.Client().bucket(bucket_name).blob(blob_name)
+        blob.upload_from_filename("scores.json")
 
     # send mail
-    if user_email is not None:
+    if not os.environ.get("ON_PREM") and user_email is not None:
         send_email(user_email, cfg.endpoint, cfg.dataset)
         logging.info(
             f"Email sent to {user_email} for {cfg.endpoint}:{cfg.dataset}",
@@ -386,9 +442,7 @@ async def evaluate_dataset(msg, data_dir):
 
 
 if __name__ == "__main__":
-
-    import sys
-
+    shared_volume = os.environ.get("SHARED_VOLUME", "")
     message_raw = sys.argv[1]
     save_dir = "save_files/"
-    asyncio.run(evaluate_dataset(message_raw, save_dir))
+    asyncio.run(evaluate_dataset(message_raw, save_dir, shared_volume))

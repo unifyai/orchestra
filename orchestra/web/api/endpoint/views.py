@@ -9,6 +9,7 @@ from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.web.api.endpoint.schema import EndpointModelResponseVerbose
 from orchestra.web.api.utils.http_responses import overspecified_model_provider
+from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 public_router = APIRouter()
@@ -30,6 +31,7 @@ _endpoint_list_cache = {}
         },
     },
 )
+@handle_on_prem(endpoint="/endpoints", method="get")
 def get_endpoints(
     model: str = Query(
         default=None,
@@ -60,15 +62,15 @@ def get_endpoints(
         res = endpoint_dao.get_endpoints_of((model,), (provider,))
         if model:
             _endpoint_list_cache[(model, provider)]["strings"] = sorted(
-                list(set([f"{r.Provider.name}" for r in res]))
+                list(set([f"{r.Provider.name}" for r in res])),
             )
         elif provider:
             _endpoint_list_cache[(model, provider)]["strings"] = sorted(
-                list(set([f"{r.Model.mdl_code}" for r in res]))
+                list(set([f"{r.Model.mdl_code}" for r in res])),
             )
         else:
             _endpoint_list_cache[(model, provider)]["strings"] = sorted(
-                list(set([f"{r.Model.mdl_code}@{r.Provider.name}" for r in res]))
+                list(set([f"{r.Model.mdl_code}@{r.Provider.name}" for r in res])),
             )
 
     return _endpoint_list_cache[(model, provider)]["strings"]
@@ -91,6 +93,7 @@ _provider_list_cache = {}
         },
     },
 )
+@handle_on_prem(endpoint="/providers", method="get")
 def get_providers(
     model: str = Query(
         default=None,

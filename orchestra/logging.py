@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 from typing import Any, Union
 
@@ -82,7 +83,7 @@ def configure_logging() -> None:  # pragma: no cover
     intercept_handler = InterceptHandler()
     handlers = [intercept_handler]
 
-    if settings.db_host != "localhost":
+    if settings.db_host != "localhost" and not os.environ.get("ON_PREM"):
         client = cloud_logging.Client()
         cloud_handler = client.get_default_handler()
         handlers = [cloud_handler]
