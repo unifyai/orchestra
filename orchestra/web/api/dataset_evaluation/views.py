@@ -124,7 +124,7 @@ def _delete_evaluation(user_id: str, dataset: str, endpoint: str):
     bucket_name = "uploaded_datasets"
     # TODO: 0 will need to be accounted when introducing dynamic datasets
     if dataset == "":
-        raise dataset_does_not_exist
+        raise dataset_does_not_exist(dataset)
     dir_name = f"{user_id}/{dataset}/0/{endpoint}"
     exists = (
         on_prem.dir_exists(bucket_name, dir_name)
@@ -132,7 +132,7 @@ def _delete_evaluation(user_id: str, dataset: str, endpoint: str):
         else gcp.dir_exists(bucket_name, dir_name)
     )
     if not exists:
-        raise evaluation_does_not_exist
+        raise evaluation_does_not_exist(dataset)
     elif os.environ.get("ON_PREM"):
         on_prem.delete_dir(bucket_name, dir_name)
     else:
@@ -221,7 +221,7 @@ def evaluate_dataset(
     api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
     # Check if the dataset exists
     if not dataset_exists(user_id, dataset):
-        raise dataset_does_not_exist
+        raise dataset_does_not_exist(dataset)
     # Check that the endpoints are valid
     invalid_endpoints = find_invalid_endpoints([endpoint])
     if invalid_endpoints:
