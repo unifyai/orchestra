@@ -2,6 +2,7 @@ import json
 import sys
 from google.cloud import storage
 
+
 def delete_dir(bucket_name: str, dir_name: str) -> None:
     bucket = storage.Client().bucket(bucket_name)
 

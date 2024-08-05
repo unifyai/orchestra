@@ -19,6 +19,7 @@ from google.cloud.exceptions import NotFound
 
 logging.basicConfig(filename="router_training_log.log", level=logging.INFO)
 
+
 def wait_for_extended_operation(
     operation: ExtendedOperation,
     verbose_name: str = "operation",
@@ -222,11 +223,21 @@ def create_train_data(user_id, dataset, endpoints, judge_name):
     return train_data, valid_data
 
 
-def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url, judge_name="gpt-4o@openai"):
+def main(
+    user_id,
+    api_key,
+    router_name,
+    dataset,
+    endpoints,
+    orchestra_url,
+    judge_name="gpt-4o@openai",
+):
     logging.info("starting TRAINING")
     for e in endpoints:
         if not evaluation_available(user_id, dataset, e, judge_name):
-            logging.info(f"STARTING EVALUATION FOR {orchestra_url} {user_id} {dataset} {e}")
+            logging.info(
+                f"STARTING EVALUATION FOR {orchestra_url} {user_id} {dataset} {e}"
+            )
             print(f"starting evaluation for {e}")
             start_evaluation(api_key, orchestra_url, dataset, e, judge_name)
 
@@ -234,7 +245,9 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url, judge
     start_time = time.time()
     while (time.time() - start_time) < timeout:
         logging.info(f"SEEING IF ALL EVALUATIONS ARE AVAILABLE for {dataset}")
-        if all([evaluation_available(user_id, dataset, e, judge_name) for e in endpoints]):
+        if all(
+            [evaluation_available(user_id, dataset, e, judge_name) for e in endpoints]
+        ):
             break
         time.sleep(10)
     else:
@@ -264,25 +277,20 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url, judge
 
     os.makedirs(run_folder, exist_ok=True)
 
-    shutil.copytree(os.path.join(dir, "reference_gpu_vm_files"), run_folder, dirs_exist_ok=True) 
+    shutil.copytree(
+        os.path.join(dir, "reference_gpu_vm_files"), run_folder, dirs_exist_ok=True
+    )
 
-
-    with open(
-        os.path.join(train_job_files_folder, "train_data.jsonl"), "w"
-    ) as f:
+    with open(os.path.join(train_job_files_folder, "train_data.jsonl"), "w") as f:
         for line in train_data:
             f.write(json.dumps(line) + "\n")
 
-    with open(
-        os.path.join(train_job_files_folder, "valid_data.jsonl"), "w"
-    ) as f:
+    with open(os.path.join(train_job_files_folder, "valid_data.jsonl"), "w") as f:
         for line in valid_data:
             f.write(json.dumps(line) + "\n")
 
     # user config
-    with open(
-        os.path.join(train_job_files_folder, "user_config.json"), "w"
-    ) as f:
+    with open(os.path.join(train_job_files_folder, "user_config.json"), "w") as f:
         json.dump(
             {
                 "user_id": user_id,
