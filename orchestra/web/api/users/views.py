@@ -8,6 +8,7 @@ from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.models.orchestra_models import Users
 from orchestra.web.api.users.schema import CreditsResponse
+from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 
@@ -24,6 +25,7 @@ router = APIRouter()
         },
     },
 )
+@handle_on_prem(endpoint="/get_credits", method="none")
 def get_credits(
     request_fastapi: Request,
     users_dao: UsersDAO = Depends(),
@@ -64,6 +66,7 @@ def get_credits(
         },
     },
 )
+@handle_on_prem(endpoint="/promo", method="none")
 def credits_code(
     request_fastapi: Request,
     code: str = Query(..., description="Promo code to be activated."),

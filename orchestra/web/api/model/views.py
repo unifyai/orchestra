@@ -1,5 +1,4 @@
 import datetime
-import time
 from typing import List, Optional
 
 from fastapi import APIRouter, Query
@@ -9,6 +8,7 @@ from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.models.orchestra_models import Model
 from orchestra.web.api.model.schema import ModelResponse
+from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 public_router = APIRouter()
@@ -28,6 +28,7 @@ public_router = APIRouter()
         },
     },
 )
+@handle_on_prem(endpoint="/models", method="get")
 def get_models(
     provider: str = Query(
         default=None,
