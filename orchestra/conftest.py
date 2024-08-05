@@ -1,5 +1,4 @@
 import os
-import pathlib
 from typing import Any, AsyncGenerator, Generator
 
 import pytest
@@ -12,8 +11,6 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.utils import create_database, drop_database
 from orchestra.settings import settings
 from orchestra.web.application import get_app
-
-FILE_DIR = pathlib.Path(__file__).parent.resolve()
 
 
 @pytest.fixture(scope="session")
@@ -49,7 +46,7 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
     meta.create_all(engine)
     with engine.begin() as conn:
         user_id = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
-        with open(os.path.join(FILE_DIR, "tests/seeding.sql"))as file:
+        with open("orchestra/tests/seeding.sql") as file:
             conn.execute(text(file.read()), {"user_id": user_id})
 
     try:
