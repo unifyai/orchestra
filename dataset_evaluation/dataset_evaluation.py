@@ -147,7 +147,6 @@ async def evaluate_dataset(msg, data_dir, shared_volume=""):
     """
     cfg = json.loads(msg)
     user_email = cfg.pop("user_email", None)
-    cfg.pop("action")
     cfg = BenchmarkConfig(**cfg)
 
     # create root folder
