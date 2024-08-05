@@ -88,32 +88,3 @@ def filter_benchmark(
         return result
     except:
         raise benchmark_not_found(f"{model}@{provider}")
-
-
-
-@router.get("/custom_benchmark")
-def get_latest_benchmark(
-    model: str,
-    provider: str,
-    regime: str = "concurrent-1",
-    region: str = "Belgium",
-    seq_len: str = "short",
-    endpoint_dao: EndpointDAO = Depends(),
-    latest_benchmark_dao: LatestBenchmarkDAO = Depends(),
-):
-    try:
-        endpoint_id = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
-        result = latest_benchmark_dao.get_latest_benchmarks(
-            endpoint_id=endpoint_id, regime=regime, region=region, seq_len=seq_len
-        )
-        result = result[0]
-        ret = {
-            "ttft": result.ttft,
-            "itl": result.itl,
-            "input_cost": result.input_cost,
-            "output_cost": result.output_cost,
-            "measured_at": result.measured_at,
-        }
-        return ret
-    except:
-        raise benchmark_not_found(f"{model}@{provider}")
