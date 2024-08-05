@@ -19,5 +19,5 @@ def delete_dir(bucket_name: str, dir_name: str) -> None:
 if __name__ == "__main__":
     msg = sys.argv[1]
     msg = json.loads(msg)
-    directory = msg["user_id"] + "/" + msg["name"]
+    directory = "custom_router" + "/" + msg["user_id"] + "/" + msg["name"]
     delete_dir(bucket_name="custom_router_data", dir_name=directory)
