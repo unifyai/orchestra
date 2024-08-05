@@ -43,11 +43,11 @@ async def test_train_router(client: AsyncClient):
     assert response.status_code == 200
 
     # check if it's actually trained
-    for tries in range(5):
+    for tries in range(10):
         url = "/v0/router/train/list"
         response = await client.get(url, headers=HEADERS)
         if router_name not in response.json():
-            await asyncio.sleep(60)
+            await asyncio.sleep(30)
         else:
             break
 
