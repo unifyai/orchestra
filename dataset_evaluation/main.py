@@ -1,10 +1,13 @@
 import concurrent
 import json
 import logging
+import os
 import signal
 import subprocess
 import sys
+from queue import Queue
 
+import redis
 import sdnotify
 from google.cloud import pubsub_v1
 
@@ -15,6 +18,12 @@ logging.basicConfig(
 
 # Global reference to the state of the script
 shutdown_flag = False
+
+# Queue for maintaining requested jobs
+q = Queue()
+
+# Current status of execution
+running = False
 
 # Create an instance of sdnotify
 n = sdnotify.SystemdNotifier()
@@ -33,18 +42,25 @@ def signal_handler(signal, frame):
 # PubSub Callback to deal with the message
 # NOTE: This callback needs to be idempotent as ACKs are best effort.
 def pub_sub_callback(message):
+    global running
+    running = True
+    message_data = (
+        message["data"].decode() if os.environ.get("ON_PREM") else message.data
+    )
     global shutdown_flag
     if not shutdown_flag:
         try:
-            data = json.loads(message.data)
+            data = json.loads(message_data)
             logging.info(f"entry: {data}")
-            subprocess.Popen(
-                ["venv/bin/python3", "dataset_evaluation.py", message.data]
+            process = subprocess.Popen(
+                ["venv/bin/python3", "dataset_evaluation.py", message_data],
             )
+            if os.environ.get("ON_PREM"):
+                process.wait()
         except json.decoder.JSONDecodeError:
-            logging.error(f"Error parsing message: {message.data}")
+            logging.error(f"Error parsing message: {message_data}")
         except:
-            logging.error(f"Unrecognised error in message: {message.data}")
+            logging.error(f"Unrecognised error in message: {message_data}")
         finally:
             # acknowledge that data has been processed
             # NOTE: If the message is not acknowledged in time, pubsub will send it
@@ -53,9 +69,15 @@ def pub_sub_callback(message):
             # (i.e. spawning a subprocess).
             # NOTE: If there is an error with the message format, it should be
             # logged and acknowledged, otherwise the message will keep coming.
-            message.ack()
-    else:
+            if not os.environ.get("ON_PREM"):
+                message.ack()
+    elif not os.environ.get("ON_PREM"):
         message.nack()
+    running = False
+
+
+def push_msg_to_queue(message):
+    q.put(message)
 
 
 # Register signal handlers
@@ -67,16 +89,26 @@ if __name__ == "__main__":
     # Notify systemd that the service is ready
     n.notify("READY=1")
 
-    # This method requires either gcloud to be authenticated (this is the case
-    # when using a service account in a Compute Engine instance) or to have an
-    # env var GOOGLE_APPLICATION_CREDENTIALS=<path_to_credentials.json> defined
-    subscriber = pubsub_v1.SubscriberClient()
-    future = subscriber.subscribe(subscription_name, pub_sub_callback)
+    if os.environ.get("ON_PREM"):
+        r = redis.Redis(host=os.environ.get("REDIS_HOST", "host.docker.internal"))
+        p = r.pubsub()
+        p.subscribe(**{subscription_name.split("/")[-1]: push_msg_to_queue})
+        thread = p.run_in_thread(sleep_time=0.001)
+    else:
+        # This method requires either gcloud to be authenticated (this is the case
+        # when using a service account in a Compute Engine instance) or to have an
+        # env var GOOGLE_APPLICATION_CREDENTIALS=<path_to_credentials.json> defined
+        subscriber = pubsub_v1.SubscriberClient()
+        future = subscriber.subscribe(subscription_name, pub_sub_callback)
+
     logging.info("Subscribed to topic.")
 
     while not shutdown_flag:
         try:
-            future.result(timeout=10)
+            if not os.environ.get("ON_PREM"):
+                future.result(timeout=10)
+            elif not q.empty() and not running:
+                pub_sub_callback(q.get())
         except concurrent.futures.TimeoutError:
             logging.info("No message received")
         finally:
@@ -85,7 +117,12 @@ if __name__ == "__main__":
     # NOTE: Any message being processed will finish before termination.
     logging.info("All tasks finished correctly! Stopping the service.")
     logging.info("Cancelling subscription...")
-    future.cancel()
-    subscriber.close()
+
+    if os.environ.get("ON_PREM"):
+        thread.stop()
+    else:
+        future.cancel()
+        subscriber.close()
+
     n.notify("STOPPING=1")
     sys.exit(0)
