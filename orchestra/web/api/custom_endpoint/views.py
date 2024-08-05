@@ -140,3 +140,60 @@ def create_custom_endpoint(
         key_id=key_id,
     )
     return {"info": "Custom endpoint created succesfully!"}
+
+
+
+ALLOWED_METRICS = ["input-cost", "output-cost", "tokens-per-second", "time-to-first-token", "inter-token-latency", "end-2-end-latency", "cold-start"]
+ALLOWED_METRICS_STR = ""
+for metric in ALLOWED_METRICS:
+    ALLOWED_METRICS_STR += f'"{metric}", '
+ALLOWED_METRICS_STR = ALLOWED_METRICS_STR[:-2]
+
+@router.put(
+    "/upload_custom_benchmark",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Custom endpoint benchmark uploaded succesfully!"},
+                },
+            },
+        },
+        400: {
+            "description": "Benchmark not valid",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid data submitted"},
+                },
+            },
+        },
+    } 
+)
+def upload_custom_benchmark(
+    request_fastapi: Request,
+    endpoint_name: str = Query(
+        ...,
+        description="Name of the custom endpoint to submit a benchmark for.",
+    ),
+    metric_name: str = Query(
+        ...,
+        description=f"""Name of the metric to submit. Allowed metrics are: {ALLOWED_METRICS_STR}.""",
+    ),
+    value: float = Query(
+        ...,
+        description="Value of the metric to submit.",
+    ),
+    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+    custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDao = Depends(),
+):
+    if metric_name not in ALLOWED_METRICS:
+        raise HTTPException(status_code=400, detail=f"{metric_name} not one of the allowed metrics. Allowed metrics are: {ALLOWED_METRICS_STR}.")
+    # check if the endpoint is valid
+    user_id = request_fastapi.state.user_id
+    available_endpoints = custom_endpoint_dao.get_user_endpoints(user_id=user_id)
+    allowed_names = (e["name"] for e in available_endpoints)
+    if endpoint_name not in allowed_names:
+        raise HTTPException(status_code=400, detail=f"""{endpoint_name} not found. Available endpoints are {", ".join(allowed_names)}.""")
+    custom_endpoint_benchmark_dao.upload_benchmark(endpoint_name=endpoint_name, metric_name=metric_name, value=value)
+    return {"info": "Benchmark uploaded!"}
