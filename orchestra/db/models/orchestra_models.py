@@ -294,3 +294,19 @@ class LatestBenchmark(Base):
     ttft = sa.Column(sa.Numeric())
     itl = sa.Column(sa.Numeric())
     measured_at = sa.Column(sa.TIMESTAMP(), nullable=False)
+
+
+class CustomEndpointBenchmark(Base):
+    """Model class for custom endpoint runtime benchmark table."""
+
+    __tablename__ = "custom_endpoint_benchmark"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    custom_endpoint_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("custom_endpoint.id"),
+        nullable=False,
+    )
+    metric_name = sa.Column(sa.String(), nullable=False)
+    value = sa.Column(sa.Numeric(), nullable=False)
+    measured_at = sa.Column(sa.TIMESTAMP(), nullable=False)
