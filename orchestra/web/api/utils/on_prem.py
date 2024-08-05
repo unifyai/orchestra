@@ -48,14 +48,18 @@ class OnPremModel:
         # to those in the primary table
         final_entries = {self.table_name: entries}
         if join_table and join_columns:
-            with open(
-                os.path.join(self.shared_volume, "db", f"{join_table}.json"),
-            ) as f:
-                join_entries = json.load(f)["data"]
-                join_entries = reduce(
-                    lambda x, y: {**x, **y},
-                    [{entry[join_columns[1]]: entry} for entry in join_entries],
-                )
+            json_path = os.path.join(self.shared_volume, "db", f"{join_table}.json")
+            if os.path.exists(json_path):
+                with open(
+                    os.path.join(self.shared_volume, "db", f"{join_table}.json"),
+                ) as f:
+                    join_entries = json.load(f)["data"]
+                    join_entries = reduce(
+                        lambda x, y: {**x, **y},
+                        [{entry[join_columns[1]]: entry} for entry in join_entries],
+                    )
+            else:
+                join_entries = dict()
             final_entries[join_table] = [
                 join_entries[entry[join_columns[0]]]
                 for entry in final_entries[self.table_name]
