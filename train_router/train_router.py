@@ -17,7 +17,7 @@ from google.api_core.extended_operation import ExtendedOperation
 from google.cloud import storage
 from google.cloud.exceptions import NotFound
 
-logging.basicConfig(filename="router_training_log.log", level=logging.INFO)
+logging.basicConfig(filename="router_training.log", level=logging.INFO)
 
 
 def wait_for_extended_operation(
