@@ -1,14 +1,14 @@
-import argparse
+import json
+import logging
+import math
+import os
+import random
+import re
+import requests
+import shutil
 import subprocess
 import sys
 import time
-import json
-import re
-import math
-import random
-import requests
-import os
-import shutil
 from dataclasses import dataclass
 from typing import Any, List
 
@@ -17,7 +17,6 @@ from google.api_core.extended_operation import ExtendedOperation
 from google.cloud import storage
 from google.cloud.exceptions import NotFound
 
-import logging
 logging.basicConfig(filename="router_training_log.log", level=logging.INFO)
 
 def wait_for_extended_operation(
@@ -122,7 +121,7 @@ class TrainRequest:
 
 
 def evaluation_available(user_id, dataset_name, endpoint, judge_name):
-    bucket_name = f"uploaded_datasets"
+    bucket_name = "uploaded_datasets"
     blob_dir = f"{user_id}/{dataset_name}/0/{endpoint}/"
 
     blob_names = [
@@ -333,31 +332,6 @@ def main(user_id, api_key, router_name, dataset, endpoints, orchestra_url, judge
 
 
 if __name__ == "__main__":
-    # Create the parser
-    # parser = argparse.ArgumentParser(description="Train Router Script")
-
-    # # Define the arguments
-    # parser.add_argument("--user_id", type=str, required=True, help="User ID")
-    # parser.add_argument("--api_key", type=str, required=True, help="User API KEY")
-    # parser.add_argument("--router_name", type=str, required=True, help="Router Name")
-    # parser.add_argument("--dataset", type=str, required=True, help="Dataset Name")
-    # parser.add_argument(
-    #     "--endpoints",
-    #     type=str,
-    #     required=True,
-    #     help="List of endpoints",
-    # )
-    # parser.add_argument(
-    #     "--orchestra_url",
-    #     type=str,
-    #     required=True,
-    #     help="Orchestra URL",
-    # )
-
-    # # Parse the arguments
-    # args = parser.parse_args()
-
-    import sys
     args = sys.argv[1]
     args = json.loads(args)
 
