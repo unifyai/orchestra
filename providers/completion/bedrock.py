@@ -90,9 +90,8 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        kwargs_bedrock = self.process_kwargs(messages, kwargs)
         return (
-            BedrockAsyncGeneratorWrapper(self, None, messages, kwargs_bedrock),
+            BedrockAsyncGeneratorWrapper(self, None, messages, kwargs),
             None,
         )
 
