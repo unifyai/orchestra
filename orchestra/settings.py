@@ -1,4 +1,5 @@
 import enum
+import os
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Optional
@@ -66,8 +67,16 @@ class Settings(BaseSettings):
     cors_allow_origins: list[str] = []
 
     vertexai_service_acc_json: str = ""
-    vertexai_project: str = "saas-368716"
-    vertexai_location: str = "europe-west1"
+    vertexai_project: str = (
+        os.environ.get("ORCHESTRA_VERTEXAI_PROJECT")
+        if os.environ.get("ON_PREM")
+        else "saas-368716"
+    )
+    vertexai_location: str = (
+        os.environ.get("ORCHESTRA_VERTEXAI_LOCATION")
+        if os.environ.get("ON_PREM")
+        else "europe-west1"
+    )
 
     @property
     def db_url(self) -> URL:
