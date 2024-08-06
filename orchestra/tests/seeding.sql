@@ -58,6 +58,7 @@ INSERT INTO model VALUES (8, 'claude-3-haiku', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (9, 'llama-3-8b-chat', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (10, 'gemini-1.5-flash', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (11, 'mistral-7b-instruct-v0.3', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (12, 'claude-3.5-sonnet', NOW(), 'dummy_task', true);
 
 INSERT INTO endpoint VALUES (1, 9, 3, NOW());
 INSERT INTO endpoint VALUES (3, 9, 4, NOW());
@@ -73,6 +74,7 @@ INSERT INTO endpoint VALUES (15, 7, 1, NOW());
 INSERT INTO endpoint VALUES (16, 8, 12, NOW());
 INSERT INTO endpoint VALUES (35, 10, 36, NOW());
 INSERT INTO endpoint VALUES (34, 9, 35, NOW());
+INSERT INTO endpoint VALUES (36, 12, 12, NOW());
 
 -- Runtime Dynamic routing
 INSERT INTO model VALUES (4, 'pbr-model', NOW(), 'dummy_task', true);
