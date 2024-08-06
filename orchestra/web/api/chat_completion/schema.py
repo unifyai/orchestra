@@ -1,7 +1,7 @@
 import time
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class ChatCompletionRequest(BaseModel):
@@ -15,9 +15,13 @@ class ChatCompletionRequest(BaseModel):
         stream (bool): Whether to stream the response.
     """
 
-    # TODO: This removes all other params if not specified
+    # This allows extra arguments through.
+    model_config = ConfigDict(extra="allow")
+
     model: str
     messages: List[Dict[str, Any]]
+
+    # openai args
     temperature: float = 0.9
     stream: bool = False
     max_tokens: Optional[int] = None
@@ -34,6 +38,8 @@ class ChatCompletionRequest(BaseModel):
     tools: Optional[List[Any]] = None
     tool_choice: Optional[Any] = None
     user: Optional[str] = None
+
+    # args that are for orchestra use only
     signature: Optional[str] = None
     use_custom_keys: Optional[bool] = False
 
