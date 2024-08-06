@@ -211,8 +211,7 @@ class BaseCompletionProvider:
                 model=self.provider_endpoint,
                 messages=messages,
                 stream=stream,
-                extra_body=extra_body
-                **kwargs,
+                extra_body=extra_body**kwargs,
             )
             if isinstance(response, AsyncStream) or stream:
                 return (AsyncGeneratorWrapper(self, response, messages), None)

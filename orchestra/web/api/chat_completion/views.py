@@ -187,7 +187,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         stream = request.stream
 
         filtered_params = filter_orchestra_only_args(request.model_dump())
-   
+
         try:
             response, cost = lm(messages=messages, **filtered_params)
             try_provider = -1

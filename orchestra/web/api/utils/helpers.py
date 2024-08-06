@@ -13,6 +13,7 @@ OPENAI_ALLOWED_ARGS = set(inspect.signature(oai_func).parameters.keys())
 anth_func = Anthropic(api_key="").messages.create
 ANTHROPIC_ALLOWED_ARGS = set(inspect.signature(anth_func).parameters.keys())
 
+
 def filter_kwargs_for_openai_client(kwargs: dict) -> Tuple[dict, dict]:
     extra_body = kwargs.get("extra_body", {})
     new_kwargs = {}
@@ -24,6 +25,7 @@ def filter_kwargs_for_openai_client(kwargs: dict) -> Tuple[dict, dict]:
             new_kwargs[k] = v
 
     return new_kwargs, extra_body
+
 
 def filter_kwargs_for_anthropic_client(kwargs: dict) -> Tuple[dict, dict]:
     extra_body = kwargs.get("extra_body", {})
