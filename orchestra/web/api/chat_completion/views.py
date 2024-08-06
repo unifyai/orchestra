@@ -30,7 +30,10 @@ from orchestra.web.api.utils.dynamic_routing import (
     get_router_endpoint_id,
     parse_endpoint,
 )
-from orchestra.web.api.utils.helpers import filter_request_params
+from orchestra.web.api.utils.helpers import (
+    filter_request_params,
+    filter_orchestra_only_args,
+)
 from orchestra.web.api.utils.http_responses import (
     insufficient_credits_error,
     invalid_messages,
@@ -183,7 +186,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
         stream = request.stream
 
-        filtered_params = filter_request_params(request.model_dump())
+        filtered_params = filter_orchestra_only_args(request.model_dump())
 
         try:
             response, cost = lm(messages=messages, **filtered_params)
