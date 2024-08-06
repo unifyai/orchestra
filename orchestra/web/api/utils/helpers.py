@@ -1,6 +1,51 @@
+import inspect
 import logging
 import os
+
 import stripe
+from openai import OpenAI
+from anthropic import Anthropic
+
+oai_func = OpenAI(api_key="").chat.completions.create
+OPENAI_ALLOWED_ARGS = set(inspect.signature(oai_func).parameters.keys())
+
+anth_func = Anthropic(api_key="").messages.create
+ANTHROPIC_ALLOWED_ARGS = set(inspect.signature(anth_func).parameters.keys())
+
+
+def filter_kwargs_for_openai_client(kwargs: dict) -> tuple[dict, dict]:
+    extra_body = kwargs.get("extra_body", {})
+    new_kwargs = {}
+
+    for k, v in kwargs.items():
+        if k not in OPENAI_ALLOWED_ARGS:
+            extra_body[k] = v
+        else:
+            new_kwargs[k] = v
+
+    return new_kwargs, extra_body
+
+
+def filter_kwargs_for_anthropic_client(kwargs: dict) -> tuple[dict, dict]:
+    extra_body = kwargs.get("extra_body", {})
+    new_kwargs = {}
+
+    for k, v in kwargs.items():
+        if k not in ANTHROPIC_ALLOWED_ARGS:
+            extra_body[k] = v
+        else:
+            new_kwargs[k] = v
+
+    return new_kwargs, extra_body
+
+
+def filter_orchestra_only_args(arguments):
+    return {
+        k: v
+        for k, v in arguments.items()
+        if v is not None
+        and k not in ["model", "messages", "signature", "use_custom_keys"]
+    }
 
 
 def filter_request_params(arguments):
