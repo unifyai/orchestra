@@ -24,6 +24,7 @@ def upload_benchmark(client, endpoint_name, metric_name, value):
     response = client.post(url, params=params, headers=HEADERS)
     return response
 
+
 @pytest.mark.anyio
 async def test_custom_benchmark(  # noqa: WPS218, E501
     client: AsyncClient,
@@ -100,7 +101,7 @@ async def test_custom_benchmark_get_latest(  # noqa: WPS218, E501
     # upload benchmarks
     response = await upload_benchmark(client, endpoint_name, "time-to-first-token", 135)
     assert response.status_code == 200, response.json()
-    
+
     response = await upload_benchmark(client, endpoint_name, "inter-token-latency", 500)
     assert response.status_code == 200, response.json()
 

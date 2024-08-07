@@ -39,7 +39,10 @@ def get_latest_benchmark(
     model: str = Query(..., description="Model name"),
     provider: str = Query(..., description="Provider name"),
     regime: str = Query(default="concurrent-1"),
-    region: str = Query(default="Belgium", description="""Region where the benchmark is run. Options are: "Belgium", "Hong Kong", "Iowa"."""),
+    region: str = Query(
+        default="Belgium",
+        description="""Region where the benchmark is run. Options are: "Belgium", "Hong Kong", "Iowa".""",
+    ),
     seq_len: str = Query(default="short"),
     endpoint_dao: EndpointDAO = Depends(),
     latest_benchmark_dao: LatestBenchmarkDAO = Depends(),
