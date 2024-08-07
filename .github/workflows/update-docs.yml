@@ -107,6 +107,7 @@ jobs:
     - name: Push changes to docs
       run: |
         cd docs-new
+        git remote add target git@github.com:unifyai/docs-new.git
         git add .
         git commit -m "updated docs"
-        git push origin main
+        git push target main
