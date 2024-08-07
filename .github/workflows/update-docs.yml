@@ -108,6 +108,8 @@ jobs:
       run: |
         cd docs-new
         git remote add target git@github.com:unifyai/docs-new.git
+        git config --global user.name "vedpatwardhan"
+        git config --global user.email "vedpat3@gmail.com"
         git add .
         git commit -m "updated docs"
         git push target main
