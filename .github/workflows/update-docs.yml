@@ -92,4 +92,4 @@ jobs:
         cd docs-new
         git add .
         git commit -m "updated docs"
-        git push -f origin main
+        git push origin main
