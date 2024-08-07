@@ -39,10 +39,10 @@ jobs:
     - name: Install deps
       run: |
         cd orchestra
-        ls
         pip install -U pip
         pip install poetry
         poetry install
+        cd ..
       env:
         POETRY_VIRTUALENVS_CREATE: false
 
@@ -70,7 +70,7 @@ jobs:
       run: |
         cd orchestra
         cp ../docs-new/mint.json mint.json
-        poetry run python generate_api_reference.py
+        python generate_api_reference.py
         rm -rf ../docs-new/api-reference
         mv api-reference ../docs-new/api-reference
         mv mint.json ../docs-new/mint.json
@@ -78,7 +78,7 @@ jobs:
 
     - name: Generate docs for unify
       run: |
-        python3 -m pip install pydoc-markdown
+        python -m pip install pydoc-markdown
         cd unify
         cp ../docs-new/mint.json mint.json
         mkdir output
@@ -87,7 +87,7 @@ jobs:
         pydoc-markdown | tee ../output/result.txt
         cd ..
         mv generate_docs.py output/generate_docs.py
-        python3 generate_docs.py
+        python generate_docs.py
         rm -rf generate_docs.py result.txt
         cd ..
         mv output python
