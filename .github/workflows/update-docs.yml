@@ -14,6 +14,7 @@ jobs:
       with:
         fetch-depth: 0
         repository: unifyai/orchestra
+        path: orchestra
 
     - name: Checkout 🛎️ docs-new
       uses: actions/checkout@v4
@@ -21,12 +22,14 @@ jobs:
         fetch-depth: 0
         submodules: recursive
         repository: unifyai/docs-new
+        path: docs-new
 
     - name: Checkout 🛎️ unify
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
         repository: unifyai/unify
+        path: unify
 
     - name: Set up Python
       uses: actions/setup-python@v2
