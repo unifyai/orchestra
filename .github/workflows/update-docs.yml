@@ -94,6 +94,8 @@ jobs:
         cd ..
 
     - name: Push changes to docs
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         cd docs-new
         git add .
