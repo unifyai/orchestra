@@ -16,7 +16,8 @@ from openai import (
 )
 
 from orchestra.web.api.utils.http_responses import server_error_with_digest
-from orchestra.web.api.utils.helpers import filter_kwargs_for_openai_client
+
+# from orchestra.web.api.utils.helpers import filter_kwargs_for_openai_client
 
 logger = logging.getLogger(__name__)
 
@@ -162,13 +163,13 @@ class BaseCompletionProvider:
     ) -> Any:
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
-        kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
+        # kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
         try:  # noqa: WPS225
             response = client.chat.completions.create(
                 model=self.provider_endpoint,
                 messages=messages,
                 stream=stream,
-                extra_body=extra_body,
+                # extra_body=extra_body,
                 **kwargs,
             )
             if isinstance(response, Stream) or stream:
@@ -205,13 +206,13 @@ class BaseCompletionProvider:
         **kwargs: Any,
     ) -> Any:
         client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
-        kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
+        # kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
         try:  # noqa: WPS225
             response = client.chat.completions.create(
                 model=self.provider_endpoint,
                 messages=messages,
                 stream=stream,
-                extra_body=extra_body,
+                # extra_body=extra_body,
                 **kwargs,
             )
             if isinstance(response, AsyncStream) or stream:
