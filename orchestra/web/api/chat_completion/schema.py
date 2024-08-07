@@ -1,7 +1,7 @@
 import time
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
 
 class ChatCompletionRequest(BaseModel):
@@ -16,7 +16,7 @@ class ChatCompletionRequest(BaseModel):
     """
 
     # This allows extra arguments through.
-    model_config = ConfigDict(extra="allow")
+    # model_config = ConfigDict(extra="allow")
 
     model: str
     messages: List[Dict[str, Any]]
