@@ -87,8 +87,10 @@ jobs:
         pydoc-markdown | tee ../output/result.txt
         cd ..
         mv generate_docs.py output/generate_docs.py
+        cd output
         python generate_docs.py
         rm -rf generate_docs.py result.txt
+        cd ..
         mv output python
         mv python ../docs-new/python
         mv mint.json ../docs-new/mint.json
