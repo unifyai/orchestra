@@ -89,6 +89,7 @@ jobs:
         python generate_docs.py
         rm -rf output/result.txt
         mv output python
+        rm -rf ../docs-new/python
         mv python ../docs-new/python
         mv mint.json ../docs-new/mint.json
         cd ..
