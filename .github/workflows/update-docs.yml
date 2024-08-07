@@ -38,9 +38,11 @@ jobs:
 
     - name: Install deps
       run: |
+        cd orchestra
         pip install -U pip
         pip install poetry
         poetry install
+        cd ..
       env:
         POETRY_VIRTUALENVS_CREATE: false
 
@@ -68,7 +70,7 @@ jobs:
       run: |
         cd orchestra
         cp ../docs-new/mint.json mint.json
-        poetry run python generate_api_reference.py
+        python generate_api_reference.py
         rm -rf ../docs-new/api-reference
         mv api-reference ../docs-new/api-reference
         mv mint.json ../docs-new/mint.json
@@ -76,7 +78,7 @@ jobs:
 
     - name: Generate docs for unify
       run: |
-        python3 -m pip install pydoc-markdown
+        python -m pip install pydoc-markdown
         cd unify
         cp ../docs-new/mint.json mint.json
         mkdir output
@@ -84,18 +86,31 @@ jobs:
         cd unify
         pydoc-markdown | tee ../output/result.txt
         cd ..
-        mv generate_docs.py output/generate_docs.py
-        python3 generate_docs.py
-        rm -rf generate_docs.py result.txt
-        cd ..
+        python generate_docs.py
+        rm -rf output/result.txt
         mv output python
+        rm -rf ../docs-new/python
         mv python ../docs-new/python
         mv mint.json ../docs-new/mint.json
         cd ..
 
+    - name: Set up SSH key
+      env:
+        SSH_AUTH_SOCK: /tmp/ssh_agent.sock
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.SSH_DOCS }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan github.com >> ~/.ssh/known_hosts
+        eval "$(ssh-agent -s)"
+        ssh-add ~/.ssh/id_rsa
+
     - name: Push changes to docs
       run: |
         cd docs-new
+        git remote add target git@github.com:unifyai/docs-new.git
+        git config --global user.name "vedpatwardhan"
+        git config --global user.email "vedpat3@gmail.com"
         git add .
         git commit -m "updated docs"
-        git push origin main
+        git push target main
