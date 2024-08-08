@@ -6,7 +6,12 @@ from httpx import AsyncClient
 
 from orchestra.tests.utils import HEADERS
 from orchestra.web.api.dataset.views import bucket_name
-from orchestra.web.api.utils.gcp import blob_exists, delete_dir, dir_exists
+from orchestra.web.api.utils.gcp import (
+    blob_exists,
+    delete_dir,
+    dir_exists,
+    internal_id_to_displayname,
+)
 
 user_id = os.getenv("AUTH_ACCOUNT_USER_ID")
 headers = copy.copy(HEADERS)
@@ -17,8 +22,11 @@ headers.pop("Content-Type", None)
 def cleanup():
     to_remove = []
     yield to_remove
+    lut = internal_id_to_displayname(user_id)
+    lut = {name: id_ for id_, name in lut.items()}
     for name in to_remove:
-        dir_name = f"{user_id}/{name}/"
+        internal_id = lut.get(name, name)
+        dir_name = f"{user_id}/{internal_id}/"
         if dir_exists(bucket_name, dir_name):
             delete_dir(bucket_name, dir_name)
 
@@ -26,14 +34,18 @@ def cleanup():
 def assert_correct_upload(response, name):
     assert response.status_code == 200
     assert response.json()["info"] == "Dataset uploaded succesfully!"
-    blob_name = f"{user_id}/{name}/0/dataset.jsonl"
+    lut = internal_id_to_displayname(user_id)
+    lut = {name: id_ for id_, name in lut.items()}
+    blob_name = f"{user_id}/{lut.get(name, name)}/0/dataset.jsonl"
     assert blob_exists("uploaded_datasets", blob_name)
 
 
 def assert_delete(response, name):
     assert response.status_code == 200
     assert response.json()["info"] == "Dataset deleted succesfully!"
-    dir_name = f"{user_id}/{name}/"
+    lut = internal_id_to_displayname(user_id)
+    lut = {name: id_ for id_, name in lut.items()}
+    dir_name = f"{user_id}/{lut.get(name, name)}/"
     assert not dir_exists("uploaded_datasets", dir_name)
 
 

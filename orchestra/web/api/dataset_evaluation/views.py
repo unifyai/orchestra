@@ -31,15 +31,26 @@ def _list_datasets(user_id: str):
     dirs = set([b.id.split("/")[2] for b in blobs])
     # Clean legacy datasets
     dirs = {d for d in dirs if not d.endswith(".jsonl")}
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(user_id)
+    dirs = [id_to_name.get(d, d) for d in dirs]
     return list(dirs)
 
 
 def _list_evaluations(user_id: str, dataset: str):
     bucket_name = "uploaded_datasets"
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(user_id)
+    name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    internal_id = name_to_id.get(dataset, dataset)
     blobs = (
-        on_prem.list_dir(bucket_name, f"{user_id}/{dataset}")
+        on_prem.list_dir(bucket_name, f"{user_id}/{internal_id}")
         if os.environ.get("ON_PREM")
-        else gcp.list_dir(bucket_name, f"{user_id}/{dataset}")
+        else gcp.list_dir(bucket_name, f"{user_id}/{internal_id}")
     )
     endpoints = []
     for b in blobs:
@@ -52,26 +63,44 @@ def _list_evaluations(user_id: str, dataset: str):
 
 
 def _get_scores(user_id: str, dataset: str):
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(user_id)
+    name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    internal_id = name_to_id.get(dataset, dataset)
     return (
-        on_prem.get_scores(user_id, dataset)
+        on_prem.get_scores(user_id, internal_id)
         if os.environ.get("ON_PREM")
-        else gcp.get_scores(user_id, dataset)
+        else gcp.get_scores(user_id, internal_id)
     )
 
 
 def _get_input_tokens(user_id: str, dataset: str):
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(user_id)
+    name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    internal_id = name_to_id.get(dataset, dataset)
     return (
-        on_prem.get_input_tokens(user_id, dataset)
+        on_prem.get_input_tokens(user_id, internal_id)
         if os.environ.get("ON_PREM")
-        else gcp.get_input_tokens(user_id, dataset)
+        else gcp.get_input_tokens(user_id, internal_id)
     )
 
 
 def _get_response_tokens(user_id: str, dataset: str, endpoint: str):
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(user_id)
+    name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    internal_id = name_to_id.get(dataset, dataset)
     return (
-        on_prem.get_response_tokens(user_id, dataset, endpoint)
+        on_prem.get_response_tokens(user_id, dataset, internal_id)
         if os.environ.get("ON_PREM")
-        else gcp.get_response_tokens(user_id, dataset, endpoint)
+        else gcp.get_response_tokens(user_id, dataset, internal_id)
     )
 
 
@@ -80,7 +109,13 @@ def dataset_exists(user_id, name):
     # TODO: This needs to take public datasets into account as
     # well.
     bucket_name = "uploaded_datasets"
-    blob_name = f"{user_id}/{name}/0/dataset.jsonl"
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(user_id)
+    name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    internal_id = name_to_id.get(name, name)
+    blob_name = f"{user_id}/{internal_id}/0/dataset.jsonl"
     exists = (
         on_prem.file_exists(bucket_name, blob_name)
         if os.environ.get("ON_PREM")
@@ -125,7 +160,13 @@ def _delete_evaluation(user_id: str, dataset: str, endpoint: str):
     # TODO: 0 will need to be accounted when introducing dynamic datasets
     if dataset == "":
         raise dataset_does_not_exist(dataset)
-    dir_name = f"{user_id}/{dataset}/0/{endpoint}"
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(user_id)
+    name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    internal_id = name_to_id.get(dataset, dataset)
+    dir_name = f"{user_id}/{internal_id}/0/{endpoint}"
     exists = (
         on_prem.dir_exists(bucket_name, dir_name)
         if os.environ.get("ON_PREM")
@@ -226,13 +267,19 @@ def evaluate_dataset(
     invalid_endpoints = find_invalid_endpoints([endpoint])
     if invalid_endpoints:
         raise invalid_training_endpoints(invalid_endpoints)
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(user_id)
+    name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    internal_id = name_to_id.get(dataset, dataset)
     # Send train job to the dataset_evaluation server
     send_to_dataset_evaluation_server(
         action="evaluate",
         user_id=user_id,
         user_email=user_email,
         api_key=api_key,
-        dataset=dataset,
+        dataset=internal_id,
         endpoint=endpoint,
         judge_models=judge_models,
         system_prompt=system_prompt,

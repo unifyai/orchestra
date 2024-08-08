@@ -133,3 +133,19 @@ def vertex_ai_endpoint_list() -> List[str]:
 
     # List the endpoints
     return [e.display_name for e in client.list_endpoints(parent=parent)]
+
+
+def internal_id_to_displayname(user_id):
+    bucket_name = "uploaded_datasets"
+    bucket = storage.Client().bucket(bucket_name)
+    id_to_displayname = {}
+    for blob in bucket.list_blobs(prefix=f"{user_id}/"):
+        if not blob.name.endswith("metadata.json"):
+            continue
+        internal_id = blob.name.split("/")[-2]
+        display_name = json.loads(blob.download_as_bytes().decode("utf-8"))[
+            "display_name"
+        ]
+        id_to_displayname[internal_id] = display_name
+
+    return id_to_displayname
