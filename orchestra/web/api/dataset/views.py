@@ -130,7 +130,12 @@ def _store_num_tokens(user_id: str, internal_id: str, num_tokens: int):
         gcp.upload_json_to_bucket(string, bucket_name, blob_name)
 
 
-def _store_metadata(user_id: str, internal_id: str, name: str):
+def _store_metadata(
+    user_id: str,
+    internal_id: str,
+    name: str,
+    alredy_exists: bool = False,
+):
     blob_name = f"{user_id}/{internal_id}/metadata.json"
     exists = (
         on_prem.file_exists(bucket_name, blob_name)
@@ -138,7 +143,7 @@ def _store_metadata(user_id: str, internal_id: str, name: str):
         else gcp.blob_exists(bucket_name, blob_name)
     )
     string = json.dumps({"display_name": name}).encode()
-    if exists:
+    if exists and not alredy_exists:
         raise dataset_already_exists
     elif os.environ.get("ON_PREM"):
         on_prem.write_json_to_folder(string, bucket_name, blob_name)
@@ -253,7 +258,6 @@ def delete_dataset(
     """
     if "../" in name or name[0] == "/":
         raise invalid_dataset_name
-    # TODO: Get internal id from name
     if os.environ.get("ON_PREM"):
         id_to_name = on_prem.internal_id_to_displayname(request_fastapi.state.user_id)
     else:
@@ -339,7 +343,6 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     """
     if "../" in name or name[0] == "/":
         raise invalid_dataset_name
-    # TODO: Get internal id from name
     if os.environ.get("ON_PREM"):
         id_to_name = on_prem.internal_id_to_displayname(request_fastapi.state.user_id)
     else:
@@ -365,4 +368,66 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         return json.loads(string)
 
 
-# TODO: Add rename method
+@router.put(
+    "/dataset/rename",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Dataset name updated sucessfully!"},
+                },
+            },
+        },
+        400: {
+            "description": "Invalid dataset name",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid name for a dataset. Please, choose a different one.",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Dataset already exists",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "A dataset with this name already exists. Please, choose a different one.",
+                    },
+                },
+            },
+        },
+    },
+)
+def rename_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
+    request_fastapi: Request,
+    name: str = Query(..., description="Name of the dataset."),
+    new_name: str = Query(..., description="New name of the dataset."),
+) -> Dict[str, str]:
+    """
+    Renames a previously updated dataset.
+
+    """
+    if "../" in name or name[0] == "/":
+        raise invalid_dataset_name
+    if "../" in new_name or new_name[0] == "/":
+        raise invalid_dataset_name
+
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(request_fastapi.state.user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(request_fastapi.state.user_id)
+
+    user_id = request_fastapi.state.user_id
+    name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    internal_id = name_to_id.get(name, None)
+    if not internal_id:
+        raise dataset_does_not_exist(name)
+    if new_name in name_to_id:
+        raise invalid_dataset_name
+
+    _store_metadata(user_id, internal_id, new_name, alredy_exists=True)
+
+    return {"info": "Dataset name updated succesfully!"}
