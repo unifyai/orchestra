@@ -10,6 +10,7 @@ from orchestra.web.api import (  # noqa: WPS235
     custom_endpoint,
     dataset,
     dataset_evaluation,
+    docs,
     endpoint,
     eval_batch,
     inference,
@@ -104,6 +105,9 @@ api_router.include_router(
     dependencies=ADMIN_AUTH,
 )
 api_router.include_router(monitoring.router)
+api_router.include_router(docs.router)
 api_router.include_router(
-    benchmarks.router, tags=["benchmarks"], dependencies=API_KEY_AUTH
+    benchmarks.router,
+    tags=["benchmarks"],
+    dependencies=API_KEY_AUTH,
 )
