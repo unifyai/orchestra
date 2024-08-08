@@ -254,8 +254,10 @@ def delete_dataset(
     if "../" in name or name[0] == "/":
         raise invalid_dataset_name
     # TODO: Get internal id from name
-    # TODO: Deal with this when on-prem
-    id_to_name = gcp.internal_id_to_displayname(request_fastapi.state.user_id)
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(request_fastapi.state.user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(request_fastapi.state.user_id)
     name_to_id = {name: id_ for id_, name in id_to_name.items()}
     internal_id = name_to_id.get(name, name)
     _delete_dataset(request_fastapi.state.user_id, internal_id)
@@ -281,8 +283,10 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     Lists all the custom datasets uploaded by the user to the platform.
     """
     datasets = _list_datasets(request_fastapi.state.user_id)
-    # TODO: Get names from internal ids
-    id_to_name = gcp.internal_id_to_displayname(request_fastapi.state.user_id)
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(request_fastapi.state.user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(request_fastapi.state.user_id)
     dataset_names = []
     for d in datasets:
         dataset_names.append(id_to_name.get(d, d))
@@ -336,8 +340,10 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     if "../" in name or name[0] == "/":
         raise invalid_dataset_name
     # TODO: Get internal id from name
-    # TODO: Deal with this when on-prem
-    id_to_name = gcp.internal_id_to_displayname(request_fastapi.state.user_id)
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(request_fastapi.state.user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(request_fastapi.state.user_id)
     name_to_id = {name: id_ for id_, name in id_to_name.items()}
     internal_id = name_to_id.get(name, name)
     blob_name = f"{request_fastapi.state.user_id}/{internal_id}/0/dataset.jsonl"
