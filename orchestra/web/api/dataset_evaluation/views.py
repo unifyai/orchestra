@@ -80,7 +80,13 @@ def dataset_exists(user_id, name):
     # TODO: This needs to take public datasets into account as
     # well.
     bucket_name = "uploaded_datasets"
-    blob_name = f"{user_id}/{name}/0/dataset.jsonl"
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(user_id)
+    name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    internal_id = name_to_id.get(name, name)
+    blob_name = f"{user_id}/{internal_id}/0/dataset.jsonl"
     exists = (
         on_prem.file_exists(bucket_name, blob_name)
         if os.environ.get("ON_PREM")
