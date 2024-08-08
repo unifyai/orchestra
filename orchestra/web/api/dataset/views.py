@@ -1,5 +1,7 @@
+import hashlib
 import json
 import os
+import time
 from typing import Annotated, Dict, List
 
 import tiktoken
@@ -21,9 +23,9 @@ bucket_name = "uploaded_datasets"
 # TODO: Remove duplication in batch_eval endpoints
 
 
-def _upload_dataset(user_id: str, name: str, file_content: bytes):
+def _upload_dataset(user_id: str, internal_id: str, file_content: bytes):
     # TODO: 0 will need to be accounted when introducing dynamic datasets
-    blob_name = f"{user_id}/{name}/0/dataset.jsonl"
+    blob_name = f"{user_id}/{internal_id}/0/dataset.jsonl"
     check_file_content(file_content)
     exists = (
         on_prem.file_exists(bucket_name, blob_name)
@@ -38,20 +40,20 @@ def _upload_dataset(user_id: str, name: str, file_content: bytes):
         gcp.upload_json_to_bucket(file_content, bucket_name, blob_name)
 
 
-def _delete_dataset(user_id: str, name: str):
+def _delete_dataset(user_id: str, internal_id: str):
     # TODO: This needs to ensure that no evaluations exist before
     # deleting the whole directory
     # TODO: 0 will need to be accounted when introducing dynamic datasets
-    if name == "":
-        raise dataset_does_not_exist
-    dir_name = f"{user_id}/{name}/"
+    if internal_id == "":
+        raise dataset_does_not_exist(internal_id)
+    dir_name = f"{user_id}/{internal_id}/"
     exists = (
         on_prem.dir_exists(bucket_name, dir_name)
         if os.environ.get("ON_PREM")
         else gcp.dir_exists(bucket_name, dir_name)
     )
     if not exists:
-        raise dataset_does_not_exist
+        raise dataset_does_not_exist(internal_id)
     elif os.environ.get("ON_PREM"):
         on_prem.delete_dir(bucket_name, dir_name)
     else:
@@ -112,8 +114,8 @@ def get_tokens_in_dataset(dataset_content: List[Dict[str, str]]):
     return num_tokens
 
 
-def _store_num_tokens(user_id: str, name: str, num_tokens: int):
-    blob_name = f"{user_id}/{name}/0/num_tokens.json"
+def _store_num_tokens(user_id: str, internal_id: str, num_tokens: int):
+    blob_name = f"{user_id}/{internal_id}/0/num_tokens.json"
     exists = (
         on_prem.file_exists(bucket_name, blob_name)
         if os.environ.get("ON_PREM")
@@ -121,6 +123,27 @@ def _store_num_tokens(user_id: str, name: str, num_tokens: int):
     )
     string = json.dumps({"num_tokens": num_tokens}).encode()
     if exists:
+        raise dataset_already_exists
+    elif os.environ.get("ON_PREM"):
+        on_prem.write_json_to_folder(string, bucket_name, blob_name)
+    else:
+        gcp.upload_json_to_bucket(string, bucket_name, blob_name)
+
+
+def _store_metadata(
+    user_id: str,
+    internal_id: str,
+    name: str,
+    alredy_exists: bool = False,
+):
+    blob_name = f"{user_id}/{internal_id}/metadata.json"
+    exists = (
+        on_prem.file_exists(bucket_name, blob_name)
+        if os.environ.get("ON_PREM")
+        else gcp.blob_exists(bucket_name, blob_name)
+    )
+    string = json.dumps({"display_name": name}).encode()
+    if exists and not alredy_exists:
         raise dataset_already_exists
     elif os.environ.get("ON_PREM"):
         on_prem.write_json_to_folder(string, bucket_name, blob_name)
@@ -190,12 +213,15 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     ```
 
     """
-    if "/" in name:
+    if "../" in name or name[0] == "/":
         raise invalid_dataset_name
     file_content = file.file.read()
-    _upload_dataset(request_fastapi.state.user_id, name, file_content)
+    name_to_hash = f"{name}_{time.time}".encode("utf-8")
+    internal_id = hashlib.shake_128(name_to_hash).hexdigest(8)
+    _upload_dataset(request_fastapi.state.user_id, internal_id, file_content)
     num_tokens = get_tokens_in_dataset(file_content)
-    _store_num_tokens(request_fastapi.state.user_id, name, num_tokens)
+    _store_num_tokens(request_fastapi.state.user_id, internal_id, num_tokens)
+    _store_metadata(request_fastapi.state.user_id, internal_id, name)
     return {"info": "Dataset uploaded succesfully!"}
 
 
@@ -230,9 +256,15 @@ def delete_dataset(
     """
     Deletes a previously updated dataset and any relevant artifacts from the platform.
     """
-    if "/" in name:
+    if "../" in name or name[0] == "/":
         raise invalid_dataset_name
-    _delete_dataset(request_fastapi.state.user_id, name)
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(request_fastapi.state.user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(request_fastapi.state.user_id)
+    name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    internal_id = name_to_id.get(name, name)
+    _delete_dataset(request_fastapi.state.user_id, internal_id)
     return {"info": "Dataset deleted succesfully!"}
 
 
@@ -255,7 +287,14 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     Lists all the custom datasets uploaded by the user to the platform.
     """
     datasets = _list_datasets(request_fastapi.state.user_id)
-    return datasets
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(request_fastapi.state.user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(request_fastapi.state.user_id)
+    dataset_names = []
+    for d in datasets:
+        dataset_names.append(id_to_name.get(d, d))
+    return dataset_names
 
 
 # download dataset
@@ -302,16 +341,22 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     """
     Downloads a specific dataset from the platform.
     """
-    if "/" in name:
+    if "../" in name or name[0] == "/":
         raise invalid_dataset_name
-    blob_name = f"{request_fastapi.state.user_id}/{name}/0/dataset.jsonl"
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(request_fastapi.state.user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(request_fastapi.state.user_id)
+    name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    internal_id = name_to_id.get(name, name)
+    blob_name = f"{request_fastapi.state.user_id}/{internal_id}/0/dataset.jsonl"
     exists = (
         on_prem.file_exists(bucket_name, blob_name)
         if os.environ.get("ON_PREM")
         else gcp.blob_exists(bucket_name, blob_name)
     )
     if not exists:
-        raise dataset_does_not_exist
+        raise dataset_does_not_exist(name)
     else:
         string = (
             on_prem.read_json_from_folder(bucket_name, blob_name, raw=True)
@@ -321,3 +366,68 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         string = "[".encode() + string + "]".encode()
         string = string.replace("}\n{".encode(), "},{".encode())
         return json.loads(string)
+
+
+@router.put(
+    "/dataset/rename",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Dataset name updated sucessfully!"},
+                },
+            },
+        },
+        400: {
+            "description": "Invalid dataset name",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid name for a dataset. Please, choose a different one.",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Dataset already exists",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "A dataset with this name already exists. Please, choose a different one.",
+                    },
+                },
+            },
+        },
+    },
+)
+def rename_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
+    request_fastapi: Request,
+    name: str = Query(..., description="Name of the dataset."),
+    new_name: str = Query(..., description="New name of the dataset."),
+) -> Dict[str, str]:
+    """
+    Renames a previously updated dataset.
+
+    """
+    if "../" in name or name[0] == "/":
+        raise invalid_dataset_name
+    if "../" in new_name or new_name[0] == "/":
+        raise invalid_dataset_name
+
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(request_fastapi.state.user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(request_fastapi.state.user_id)
+
+    user_id = request_fastapi.state.user_id
+    name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    internal_id = name_to_id.get(name, None)
+    if not internal_id:
+        raise dataset_does_not_exist(name)
+    if new_name in name_to_id:
+        raise invalid_dataset_name
+
+    _store_metadata(user_id, internal_id, new_name, alredy_exists=True)
+
+    return {"info": "Dataset name updated succesfully!"}
