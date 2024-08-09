@@ -1,5 +1,5 @@
 """Endpoint model API."""
 
-from orchestra.web.api.endpoint.views import router, public_router
+from orchestra.web.api.endpoint.views import router
 
-__all__ = ["router", "public_router"]
+__all__ = ["router"]

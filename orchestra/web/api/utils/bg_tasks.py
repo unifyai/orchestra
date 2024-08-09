@@ -7,9 +7,6 @@ from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.web.api.endpoint.views import get_endpoint
-from orchestra.web.api.model.views import get_model
-from orchestra.web.api.provider.views import get_provider
 from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.query.views import create_query_model
 from orchestra.web.api.utils.gcp import send_pubsub_msg
@@ -91,24 +88,13 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         secondary_user_id = ""
     if router is None:
         router = ""
-    model_id = int(get_model(mdl_code=model, model_dao=model_dao)[0].id)
-    provider_id = int(get_provider(name=provider, provider_dao=provider_dao)[0].id)
-    endpoint_ids = get_endpoint(
-        mdl_id=model_id,
-        provider_id=provider_id,
-        endpoint_dao=endpoint_dao,
-        model_dao=model_dao,
-        provider_dao=provider_dao,
-    )
-    endpoint_id = next(
-        (
-            int(endpoint.endpoint_id)
-            for endpoint in endpoint_ids
-            if endpoint.provider_id == provider_id
-        ),
-        None,
-    )
-    if endpoint_id is None:
+    model_id = int(model_dao.filter(mdl_code=model)[0].id)
+    provider_id = int(provider_dao.filter(name=provider)[0].id)
+    try:
+        endpoint_id = int(
+            endpoint_dao.filter(mdl_id=model_id, provider_id=provider_id)[0].id,
+        )
+    except IndexError:
         raise internal_endpoint_not_found
     query_model_request = QueryModelRequest(
         user_id=user_id,

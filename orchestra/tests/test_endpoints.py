@@ -144,7 +144,7 @@ async def test_endpoints_of_model(  # noqa: WPS218, E501
     assert response.status_code == status.HTTP_200_OK
     response_dict = json.loads(response.text)
     assert isinstance(response_dict, list)
-    assert response_dict == ["openai"]
+    assert response_dict == ["gpt-3.5-turbo@openai"]
 
 
 @pytest.mark.anyio
@@ -158,7 +158,10 @@ async def test_endpoints_of_provider(  # noqa: WPS218, E501
     assert response.status_code == status.HTTP_200_OK
     response_dict = json.loads(response.text)
     assert isinstance(response_dict, list)
-    assert response_dict == ["llama-2-13b-chat", "llama-3-8b-chat"]
+    assert response_dict == [
+        "llama-2-13b-chat@aws-bedrock",
+        "llama-3-8b-chat@aws-bedrock",
+    ]
 
 
 @pytest.mark.anyio
