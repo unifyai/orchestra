@@ -1,23 +1,17 @@
-import time
-from typing import List, Optional
+from typing import List
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.param_functions import Depends
 
+from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
-from orchestra.db.dao.model_dao import ModelDAO
-from orchestra.db.dao.provider_dao import ProviderDAO
-from orchestra.web.api.endpoint.schema import EndpointModelResponseVerbose
 from orchestra.web.api.utils.http_responses import overspecified_model_provider
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
-public_router = APIRouter()
-
-_endpoint_list_cache = {}
 
 
-@public_router.get(
+@router.get(
     "/endpoints",
     response_model=List[str],
     responses={
@@ -33,6 +27,7 @@ _endpoint_list_cache = {}
 )
 @handle_on_prem(endpoint="/endpoints", method="get")
 def get_endpoints(
+    request_fastapi: Request,
     model: str = Query(
         default=None,
         description="Model to get available endpoints from.",
@@ -42,44 +37,35 @@ def get_endpoints(
         description="Provider to get available endpoints from.",
     ),
     endpoint_dao: EndpointDAO = Depends(),
+    custom_endpoint_dao: CustomEndpointDAO = Depends(),
 ):
     """
-    Lists available endpoints. If a model is specified, returns the providers that support that model. If a provider is specified, returns the models that the provider supports.
+    Lists available endpoints in `model@provider` format. If `model` or `provider` are specified,
+    only the matching endpoints will be listed.
     """
+    user_id = request_fastapi.state.user_id
     if model and provider:
         raise overspecified_model_provider
-    if (
-        model,
-        provider,
-    ) not in _endpoint_list_cache or time.time() - _endpoint_list_cache[
-        (model, provider)
-    ].get(
-        "ts",
-        0,
-    ) > 3600:
-        _endpoint_list_cache[(model, provider)] = {}
-        _endpoint_list_cache[(model, provider)]["ts"] = time.time()
-        res = endpoint_dao.get_endpoints_of((model,), (provider,))
-        if model:
-            _endpoint_list_cache[(model, provider)]["strings"] = sorted(
-                list(set([f"{r.Provider.name}" for r in res])),
-            )
-        elif provider:
-            _endpoint_list_cache[(model, provider)]["strings"] = sorted(
-                list(set([f"{r.Model.mdl_code}" for r in res])),
-            )
-        else:
-            _endpoint_list_cache[(model, provider)]["strings"] = sorted(
-                list(set([f"{r.Model.mdl_code}@{r.Provider.name}" for r in res])),
-            )
 
-    return _endpoint_list_cache[(model, provider)]["strings"]
+    res = endpoint_dao.get_endpoints_of((model,), (provider,))
+    endpoints = list(set([f"{r.Model.mdl_code}@{r.Provider.name}" for r in res]))
+
+    private_endpoints_raw = custom_endpoint_dao.get_user_endpoints(user_id=user_id)
+    private_endpoints = [f"{e[0]}@custom" for e in private_endpoints_raw]
+
+    if model and f"{model}@custom" in private_endpoints:
+        endpoints.append(f"{model}@custom")
+
+    if provider and provider == "custom":
+        extra_endpoints += private_endpoints
+
+    if not model and not provider:
+        endpoints += private_endpoints
+
+    return sorted(endpoints)
 
 
-_provider_list_cache = {}
-
-
-@public_router.get(
+@router.get(
     "/providers",
     response_model=List[str],
     responses={
@@ -95,122 +81,29 @@ _provider_list_cache = {}
 )
 @handle_on_prem(endpoint="/providers", method="get")
 def get_providers(
+    request_fastapi: Request,
     model: str = Query(
         default=None,
         description="Model to get available providers from.",
     ),
     endpoint_dao: EndpointDAO = Depends(),
+    custom_endpoint_dao: CustomEndpointDAO = Depends(),
 ):
     """
     Lists available providers. If a model is specified, returns the providers that support that model.
     """
-    if (
-        model not in _provider_list_cache
-        or time.time() - _provider_list_cache[model].get("ts", 0) > 3600
-    ):
-        _provider_list_cache[model] = {}
-        _provider_list_cache[model]["ts"] = time.time()
-        res = endpoint_dao.get_endpoints_of((model,))
-        ret = list(set([r.Provider.name for r in res]))
-        ret.sort()
-        _provider_list_cache[model]["strings"] = ret
-    return _provider_list_cache[model]["strings"]
+    user_id = request_fastapi.state.user_id
 
+    res = endpoint_dao.get_endpoints_of((model,))
+    providers = list(set([r.Provider.name for r in res]))
 
-@router.get("/endpoints", response_model=List[EndpointModelResponseVerbose])
-def get_endpoint_models(  # noqa: WPS210
-    limit: int = 10,
-    offset: int = 0,
-    endpoint_dao: EndpointDAO = Depends(),
-    model_dao: ModelDAO = Depends(),
-    provider_dao: ProviderDAO = Depends(),
-) -> List[EndpointModelResponseVerbose]:
-    """
-    Retrieve all endpoint objects from the database.
-    \f
-    :param limit: limit of endpoint objects, defaults to 10.
-    :param offset: offset of endpoint objects, defaults to 0.
-    :param endpoint_dao: DAO for endpoint models.
-    :param model_dao: DAO for model models.
-    :param provider_dao: DAO for provider models.
-    :return: list of endpoint objects from database.
-    """
-    raw_endpoints = endpoint_dao.get_all_endpoints_raw(limit=limit, offset=offset)
+    private_endpoints_raw = custom_endpoint_dao.get_user_endpoints(user_id=user_id)
+    private_models = [e[0] for e in private_endpoints_raw]
 
-    endpoints = []
-    for raw_endpoint in raw_endpoints:
-        model = model_dao.filter(id=int(raw_endpoint.mdl_id))
-        provider = provider_dao.filter(id=int(raw_endpoint.provider_id))
+    if model and model in private_models:
+        providers.append("custom")
 
-        model_inst = model[0]
-        provider_inst = provider[0]
-        endpoints.append(
-            EndpointModelResponseVerbose(
-                endpoint_id=int(raw_endpoint.id),
-                created_at=raw_endpoint.created_at,  # type: ignore
-                mdl_id=int(model_inst.id),
-                mdl_code=str(model_inst.mdl_code),
-                mdl_uploaded_at=model_inst.uploaded_at,  # type: ignore
-                mdl_task=str(model_inst.task),
-                mdl_active=model_inst.active,  # type: ignore
-                provider_id=int(provider_inst.id),
-                provider_name=str(provider_inst.name),
-                provider_image_url=str(provider_inst.image_url),
-            ),
-        )
+    if not model and len(private_endpoints_raw) > 0:
+        providers.append("custom")
 
-    return endpoints
-
-
-@router.get("/get_endpoint", response_model=List[EndpointModelResponseVerbose])
-def get_endpoint(  # noqa: WPS210, WPS211, WPS217
-    endpoint_id: Optional[int] = None,
-    mdl_id: Optional[int] = None,
-    provider_id: Optional[int] = None,
-    endpoint_dao: EndpointDAO = Depends(),
-    model_dao: ModelDAO = Depends(),
-    provider_dao: ProviderDAO = Depends(),
-) -> List[EndpointModelResponseVerbose]:
-    """
-    Retrieve specific endpoint object from the database.
-    \f
-    :param endpoint_id: endpoint_id of endpoint instance.
-    :param mdl_id: mdl_id of endpoint instance.
-    :param provider_id: provider_id of endpoint instance.
-    :param endpoint_dao: DAO for endpoint models.
-    :param model_dao: DAO for model models.
-    :param provider_dao: DAO for provider models.
-    :return: list of endpoint objects from database.
-    """
-    if endpoint_id:
-        raw_endpoints = endpoint_dao.filter(id=endpoint_id)
-    elif mdl_id:
-        raw_endpoints = endpoint_dao.filter(mdl_id=mdl_id)
-    elif provider_id:
-        raw_endpoints = endpoint_dao.filter(provider_id=provider_id)
-    else:
-        raw_endpoints = endpoint_dao.get_all_endpoints_raw(limit=10, offset=0)
-
-    endpoints = []
-    for raw_endpoint in raw_endpoints:
-        model = model_dao.filter(id=int(raw_endpoint.mdl_id))
-        provider = provider_dao.filter(id=int(raw_endpoint.provider_id))
-
-        model_inst = model[0]
-        provider_inst = provider[0]
-        endpoints.append(
-            EndpointModelResponseVerbose(
-                endpoint_id=int(raw_endpoint.id),
-                created_at=raw_endpoint.created_at,  # type: ignore
-                mdl_id=int(model_inst.id),
-                mdl_code=str(model_inst.mdl_code),
-                mdl_uploaded_at=model_inst.uploaded_at,  # type: ignore
-                mdl_task=str(model_inst.task),
-                mdl_active=model_inst.active,  # type: ignore
-                provider_id=int(provider_inst.id),
-                provider_name=str(provider_inst.name),
-                provider_image_url=str(provider_inst.image_url),
-            ),
-        )
-
-    return endpoints
+    return sorted(providers)
