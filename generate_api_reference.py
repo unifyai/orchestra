@@ -8,7 +8,7 @@ openapi_config = app.openapi()
 
 os.makedirs("api-reference", exist_ok=True)
 with open("api-reference/openapi.json", "w") as f:
-    json.dump(openapi_config, f)
+    json.dump(openapi_config, f, indent=4)
 
 paths = list(openapi_config["paths"].keys())
 print("\n".join(paths))
@@ -48,4 +48,4 @@ for group in pages:
 mint["navigation"] = mint["navigation"][:start_idx] + results
 
 with open("mint.json", "w") as f:
-    json.dump(mint, f)
+    json.dump(mint, f, indent=4)
