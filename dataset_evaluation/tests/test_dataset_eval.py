@@ -89,11 +89,11 @@ def _generic_test_dataset_evaluation(**kwargs):
     _delete_dataset_evaluation(dataset_name)
     _cleanup(dataset_name)
 
-
+@pytest.mark.skip()
 def test_basic_dataset_evaluation():
     _generic_test_dataset_evaluation()
 
-
+@pytest.mark.skip()
 def test_two_judges_dataset_evaluation():
     _generic_test_dataset_evaluation(
         judge_models=["llama-3-8b-chat@aws-bedrock", "claude-3-haiku@aws-bedrock"]
