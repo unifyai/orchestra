@@ -368,7 +368,7 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         return json.loads(string)
 
 
-@router.put(
+@router.post(
     "/dataset/rename",
     responses={
         200: {
@@ -403,8 +403,8 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 )
 def rename_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
-    name: str = Query(..., description="Name of the dataset."),
-    new_name: str = Query(..., description="New name of the dataset."),
+    name: str = Query(..., description="Name of the dataset to be updated."),
+    new_name: str = Query(..., description="New name for the dataset."),
 ) -> Dict[str, str]:
     """
     Renames a previously updated dataset.

@@ -1,16 +1,20 @@
-from typing import List, Optional
 import datetime
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
-from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.custom_endpoint_benchmark_dao import CustomEndpointBenchmarkDAO
+from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.models.orchestra_models import CustomApiKey, CustomEndpoint
 from orchestra.web.api.custom_endpoint.schema import (
     CustomApiKeyModelResponse,
     CustomEndpointModelResponse,
+)
+from orchestra.web.api.utils.http_responses import (
+    custom_api_key_not_found,
+    custom_endpoint_not_found,
 )
 
 router = APIRouter()
@@ -144,6 +148,174 @@ def create_custom_endpoint(
     return {"info": "Custom endpoint created succesfully!"}
 
 
+@router.post(
+    "/custom_endpoint/rename",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Custom endpoint renamed succesfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Custom endpoint Not Found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Custom endpoint not found."},
+                },
+            },
+        },
+    },
+)
+def rename_custom_endpoint(
+    request_fastapi: Request,
+    name: str = Query(..., description="Name of the custom endpoint to be updated."),
+    new_name: str = Query(..., description="New name for the custom endpoint."),
+    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+) -> None:
+    """
+    Renames a custom endpoint in your account.
+
+    """
+    user_id = request_fastapi.state.user_id
+
+    existing_endpoint = custom_endpoint_dao.filter(user_id=user_id, name=name)
+    if not existing_endpoint:
+        raise custom_endpoint_not_found
+
+    custom_endpoint_dao.rename(
+        user_id=user_id,
+        name=name,
+        new_name=new_name,
+    )
+    return {"info": "Custom endpoint renamed succesfully!"}
+
+
+@router.post(
+    "/custom_api_key/rename",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "API key renamed succesfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Custom API key Not Found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "API key not found."},
+                },
+            },
+        },
+    },
+)
+def rename_custom_api_key(
+    request_fastapi: Request,
+    key: str = Query(..., description="Name of the custom API key to be updated."),
+    new_key: str = Query(..., description="New name for the custom API key."),
+    custom_api_key_dao: CustomApiKeyDAO = Depends(),
+) -> None:
+    """
+    Renames a custom API key from a LLM provider in your account.
+
+    """
+    user_id = request_fastapi.state.user_id
+
+    existing_key = custom_api_key_dao.filter(user_id=user_id, key=key)
+    if not existing_key:
+        raise custom_api_key_not_found
+
+    custom_api_key_dao.rename(
+        user_id=user_id,
+        name=key,
+        new_name=new_key,
+    )
+    return {"info": "API key renamed succesfully!"}
+
+
+@router.delete(
+    "/custom_endpoint",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Custom endpoint deleted succesfully!"},
+                },
+            },
+        },
+    },
+)
+def delete_custom_endpoint(
+    request_fastapi: Request,
+    name: str = Query(..., description="Name of the custom endpoint to delete."),
+    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+) -> None:
+    """
+    Deletes a custom endpoint in your account.
+
+    """
+    user_id = request_fastapi.state.user_id
+
+    existing_endpoint = custom_endpoint_dao.filter(user_id=user_id, name=name)
+    if not existing_endpoint:
+        raise custom_endpoint_not_found
+
+    custom_endpoint_dao.delete(
+        user_id=user_id,
+        name=name,
+    )
+    return {"info": "Custom endpoint deleted succesfully!"}
+
+
+@router.delete(
+    "/custom_api_key",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "API key deleted succesfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Custom API key Not Found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "API key not found."},
+                },
+            },
+        },
+    },
+)
+def delete_custom_api_key(
+    request_fastapi: Request,
+    key: str = Query(..., description="Name of the custom API key to delete."),
+    custom_api_key_dao: CustomApiKeyDAO = Depends(),
+) -> None:
+    """
+    Deletes a custom API key in your account.
+
+    """
+    user_id = request_fastapi.state.user_id
+
+    existing_key = custom_api_key_dao.filter(user_id=user_id, key=key)
+    if not existing_key:
+        raise custom_api_key_not_found
+
+    custom_api_key_dao.delete(
+        user_id=user_id,
+        name=key,
+    )
+    return {"info": "API key deleted succesfully!"}
+
+
 ALLOWED_METRICS = [
     "input-cost",
     "output-cost",
@@ -167,7 +339,7 @@ ALLOWED_METRICS_STR = ALLOWED_METRICS_STR[:-2]
             "content": {
                 "application/json": {
                     "example": {
-                        "info": "Custom endpoint benchmark uploaded succesfully!"
+                        "info": "Custom endpoint benchmark uploaded succesfully!",
                     },
                 },
             },
@@ -207,7 +379,8 @@ def upload_custom_benchmark(
     # check if the endpoint is valid
     user_id = request_fastapi.state.user_id
     available_endpoints = custom_endpoint_dao.filter(
-        user_id=user_id, name=endpoint_name
+        user_id=user_id,
+        name=endpoint_name,
     )
     for endpoint in available_endpoints:
         if endpoint_name == endpoint.name:
@@ -253,7 +426,8 @@ def get_custom_benchmarks(
 ):
     user_id = request_fastapi.state.user_id
     available_endpoints = custom_endpoint_dao.filter(
-        user_id=user_id, name=endpoint_name
+        user_id=user_id,
+        name=endpoint_name,
     )
     for endpoint in available_endpoints:
         if endpoint_name == endpoint.name:
