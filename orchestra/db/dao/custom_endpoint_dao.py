@@ -2,7 +2,7 @@ import os
 from typing import List, Tuple
 
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import and_, delete, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
@@ -80,3 +80,19 @@ class CustomEndpointDAO:
         )
         raw_custom_endpoints = self.session.execute(query)
         return list(raw_custom_endpoints.fetchall())
+
+    def rename(self, user_id: str, name: str, new_name: str):
+        query = select(CustomEndpoint)
+        query = query.where(CustomEndpoint.user_id == user_id)
+        query = query.where(CustomEndpoint.name == name)
+
+        raw_custom_endpoints = self.session.execute(query)
+        custom_endpoint = raw_custom_endpoints.scalars().first()
+        if custom_endpoint is not None:
+            setattr(custom_endpoint, "name", new_name)
+
+    def delete(self, user_id: str, name: str):
+        query = delete(CustomEndpoint).where(
+            and_(CustomEndpoint.user_id == user_id, CustomEndpoint.name == name),
+        )
+        self.session.execute(query)

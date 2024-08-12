@@ -117,6 +117,16 @@ user_id_not_found = HTTPException(
     detail="Specified user-id not found.",
 )
 
+custom_api_key_not_found = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail="Custom API key not found.",
+)
+
+custom_endpoint_not_found = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail="Custom endpoint not found.",
+)
+
 
 def dataset_does_not_exist(dataset=""):
     return HTTPException(
