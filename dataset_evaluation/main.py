@@ -52,11 +52,19 @@ def pub_sub_callback(message):
         try:
             data = json.loads(message_data)
             logging.info(f"entry: {data}")
-            process = subprocess.Popen(
-                ["venv/bin/python3", "dataset_evaluation.py", message_data],
-            )
-            if os.environ.get("ON_PREM"):
-                process.wait()
+            if data["action"] == "evaluate":
+                process = subprocess.Popen(
+                    ["venv/bin/python3", "evaluate_dataset.py", message_data],
+                )
+                if os.environ.get("ON_PREM"):
+                    process.wait()
+            elif data["action"] == "refresh_scores":
+                process = subprocess.Popen(
+                    ["venv/bin/python3", "refresh_scores.py", message_data],
+                )
+                # TODO: What does the on prem wait do?
+                if os.environ.get("ON_PREM"):
+                    process.wait()
         except json.decoder.JSONDecodeError:
             logging.error(f"Error parsing message: {message_data}")
         except:
