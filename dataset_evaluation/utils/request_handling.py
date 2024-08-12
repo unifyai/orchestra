@@ -58,13 +58,8 @@ async def generic_call(request: Request):
                 print(request.payload)
             except:
                 pass
-            raise e
             print(e)
             print(f"Error with {request.payload}")
-            try:
-                print(response)
-            except:
-                pass
             if tries < 2:
                 await asyncio.sleep(2)
             else:
