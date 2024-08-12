@@ -1,9 +1,11 @@
 import json
 import os
+from functools import partial
 
 from utils.generic_mp import process_requests
 from utils.request_handling import Request, create_payload
 from utils.judge_templates import template_with_ref
+from utils.parsing_judge import ratings_from_sample
 
 default_cfg = [
     {"label": "excellent", "score": 1.0},
@@ -45,7 +47,9 @@ def format_q(prompt_data):
     return ret
 
 
-def create_judge_prompt(prompt_data, system_prompt, class_cfg):
+def create_judge_prompt(prompt_data, eval_config):
+    system_prompt = eval_config.get("system_prompt", None)
+    class_cfg = eval_config.get("class_cfg", None)
     if system_prompt:
         instructions = system_prompt
     else:
@@ -62,40 +66,48 @@ def create_judge_prompt(prompt_data, system_prompt, class_cfg):
 
 
 def create_request(
-    model_tag: str,
+    model_endpoint: str,
+    judge_endpoint: str,
     url,
     headers,
+    client,
     prompt_data: dict,
-    model_name,
-    system_prompt,
-    class_cfg,
+    eval_config,
 ):
-    prompt = create_judge_prompt(prompt_data, system_prompt, class_cfg)
-    payload = create_payload(model_tag=model_tag, prompt=prompt)
+    prompt = create_judge_prompt(
+        prompt_data,
+        eval_config,
+    )
+    payload = create_payload(model_tag=judge_endpoint, prompt=prompt)
+    score_fn = partial(ratings_from_sample, cfg=eval_config)
     return Request(
-        id_=prompt_data["id"],
+        id_=prompt_data["id_"],
         payload=payload,
         url=url,
         headers=headers,
+        client=client,
         prompt=prompt_data["prompt"],
         response_type="judge_response",
-        model_name=model_name,
+        extra_kwargs={
+            "endpoint": model_endpoint,
+            "judge_endpoint": judge_endpoint,
+            "model_response": prompt_data["model_response"],
+        },
+        score_fn=score_fn,
     )
 
 
 async def generate_judgements(
-    prompt_file,
     asst_response_file,
     judge_response_file,
     asst_model_tag,
     judge_model_tag,
     batch_size,
     api_key,
-    orchestra_url,
-    system_prompt,
-    class_cfg,
+    client,
+    eval_config,
 ):
-    url = f"{orchestra_url}/v0/chat/completions"
+    url = f"/v0/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}"}
 
     asst_model_name = asst_model_tag.split("@")[0]
@@ -110,37 +122,23 @@ async def generate_judgements(
                 data = json.loads(line)
                 completed.add(data["id_"])
 
-    id_to_response = {}
-    with open(asst_response_file) as f:
-        for line in f:
-            data = json.loads(line)
-            id_to_response[data["id_"]] = data["model_response"]
-
     unprocessed_prompts = []
-    no_resp = []
-    with open(prompt_file) as f:
+    with open(asst_response_file) as f:
         for ix, line in enumerate(f):
             data = json.loads(line)
-            data["row_id"] = data["id_"]
-            if data["row_id"] in completed:
+            if data["id_"] in completed:
                 continue
-            if data["row_id"] not in id_to_response:
-                no_resp.append(data)
-                continue
-            data["model_response"] = id_to_response[data["row_id"]]
-            data["id"] = data["row_id"]
             req = create_request(
-                judge_model_tag,
-                url,
-                headers,
-                data,
-                asst_model_name,
-                system_prompt,
-                class_cfg,
+                model_endpoint=asst_model_tag,
+                judge_endpoint=judge_model_tag,
+                url=url,
+                headers=headers,
+                client=client,
+                prompt_data=data,
+                eval_config=eval_config,
             )
             unprocessed_prompts.append(req)
 
-    print(f"{len(no_resp)=}")
     print(f"{len(unprocessed_prompts)=}")
 
     await process_requests(
