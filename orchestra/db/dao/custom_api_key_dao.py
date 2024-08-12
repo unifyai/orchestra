@@ -3,7 +3,7 @@ import os
 from typing import List, Optional
 
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import and_, delete, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
@@ -65,3 +65,19 @@ class CustomApiKeyDAO:
         for cak in copied:
             cak.value = f"****{cak.value[-4:]}"
         return copied
+
+    def rename(self, user_id: str, name: str, new_name: str):
+        query = select(CustomApiKey)
+        query = query.where(CustomApiKey.user_id == user_id)
+        query = query.where(CustomApiKey.key == name)
+
+        raw_custom_api_keys = self.session.execute(query)
+        custom_api_key = raw_custom_api_keys.scalars().first()
+        if custom_api_key is not None:
+            setattr(custom_api_key, "key", new_name)
+
+    def delete(self, user_id: str, name: str):
+        query = delete(CustomApiKey).where(
+            and_(CustomApiKey.user_id == user_id, CustomApiKey.key == name),
+        )
+        self.session.execute(query)
