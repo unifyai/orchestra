@@ -11,6 +11,7 @@ from providers.completion.base_completion_provider import (
     SyncGeneratorWrapper,
 )
 
+from orchestra.web.api.utils.helpers import filter_kwargs_for_anthropic_client
 from orchestra.web.api.utils.http_responses import server_error_with_digest
 
 logger = logging.getLogger(__name__)
@@ -124,13 +125,13 @@ class Anthropic(BaseCompletionProvider):
                         pass
                 new_messages.append(message)
             messages = new_messages
-            # kwargs, extra_body = filter_kwargs_for_anthropic_client(kwargs)
+            kwargs, extra_body = filter_kwargs_for_anthropic_client(kwargs)
             response = self.client.messages.create(
                 messages=messages,
                 model=self.provider_endpoint,
                 stream=stream,
                 max_tokens=max_tokens,
-                # extra_body=extra_body,
+                extra_body=extra_body,
                 **kwargs,
             )
             if stream:
@@ -155,13 +156,13 @@ class Anthropic(BaseCompletionProvider):
     ) -> Any:
         try:
             max_tokens = kwargs.pop("max_tokens", 1024)
-            # kwargs, extra_body = filter_kwargs_for_anthropic_client(kwargs)
+            kwargs, extra_body = filter_kwargs_for_anthropic_client(kwargs)
             response = self.async_client.messages.create(
                 messages=messages,
                 model=self.provider_endpoint,
                 stream=stream,
                 max_tokens=max_tokens,
-                # extra_body=extra_body,
+                extra_body=extra_body,
                 **kwargs,
             )
             if stream:
