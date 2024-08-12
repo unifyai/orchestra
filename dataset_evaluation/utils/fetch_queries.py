@@ -5,26 +5,33 @@ from utils.generic_mp import process_requests
 from utils.request_handling import Request, create_payload
 
 
-def create_request(model_tag: str, url, headers, prompt_data):
-    payload = create_payload(model_tag=model_tag, prompt=prompt_data["prompt"])
+def create_request(endpoint: str, url, headers, client, prompt_data):
+    payload = create_payload(model_tag=endpoint, prompt=prompt_data["prompt"])
     return Request(
         id_=prompt_data["id"],
         payload=payload,
         url=url,
         headers=headers,
+        client=client,
         prompt=prompt_data["prompt"],
         response_type="model_response",
+        extra_kwargs={"endpoint": endpoint},
     )
 
 
 async def generate_queries(
-    prompt_file, response_file, model_tag, batch_size, api_key, orchestra_url
+    prompt_file,
+    response_file,
+    endpoint,
+    batch_size,
+    api_key,
+    client,
 ):
-    model_name = model_tag.split("@")[0]
+    model_name = endpoint.split("@")[0]
 
-    print(f"Generating queries for: {model_tag}")
+    print(f"Generating queries for: {endpoint}")
 
-    url = f"{orchestra_url}/v0/chat/completions"
+    url = f"/v0/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}"}
 
     completed = set()
@@ -41,7 +48,7 @@ async def generate_queries(
             data["id"] = data["id_"]
             if data["id"] in completed:
                 continue
-            req = create_request(model_tag, url, headers, data)
+            req = create_request(endpoint, url, headers, client, data)
             unprocessed_prompts.append(req)
 
     print(len(unprocessed_prompts))

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Optional
 
+from httpx import AsyncClient
 import tiktoken
 from google.cloud import secretmanager, storage
 from utils.automatic_judgements import automatic_judgements
@@ -16,18 +17,18 @@ from utils.fetch_judgements import generate_judgements
 from utils.fetch_queries import generate_queries
 from utils.parsing_judge import ratings_from_sample
 
+from refresh_scores import refresh_scores_for_dataset
+
 
 @dataclass
 class BenchmarkConfig:
     action: str
     dataset: str
     endpoint: str
-    judge_models: list[str]
+    eval_id: str
     user_id: str
     api_key: str
     orchestra_url: str
-    system_prompt: Optional[str] = None
-    class_cfg: Optional[list[dict]] = None
 
 
 body = """
@@ -141,7 +142,7 @@ def send_email(user_email, endpoint, dataset):
     email_server.quit()
 
 
-async def evaluate_dataset(msg, data_dir, shared_volume=""):
+async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     """msg is a json object with two fields: config and prompts
     prompts is a list of json objects of the form {"prompt", "reference_answer"}.
     """
@@ -186,25 +187,48 @@ async def evaluate_dataset(msg, data_dir, shared_volume=""):
                 entry["id_"] = id_
                 f.write(json.dumps(entry) + "\n")
 
+    # load eval_config
+    bucket_name = "uploaded_datasets"
+    blob_name = os.path.join(cfg.user_id, "evaluation_configs", f"{cfg.eval_id}.config")
+    blob = storage.Client().bucket(bucket_name).blob(blob_name)
+    eval_config = json.loads(blob.download_as_bytes().decode("utf-8"))
+
+    if client is None:
+        client = AsyncClient(base_url=cfg.orchestra_url)
+
     def _format_model_tag(model_tag):
         return model_tag.replace("@", "___")
 
-    def _format_judgements_file(model_tag, judge_model_tag):
-        return _format_model_tag(model_tag) + "___" + _format_model_tag(judge_model_tag)
+    def _format_judgements_file(model_tag, judge_model_tag, eval_id):
+        return (
+            _format_model_tag(model_tag)
+            + "___"
+            + eval_id
+            + "___"
+            + _format_model_tag(judge_model_tag)
+        )
 
-    async def process_queries(model_tag, prompts_path, model_responses_path, api_key):
-        model_str = _format_model_tag(model_tag)
+    async def process_queries(
+        endpoint, prompts_path, model_responses_path, api_key, client
+    ):
+        model_str = _format_model_tag(endpoint)
         await generate_queries(
             prompt_file=prompts_path,
             response_file=os.path.join(model_responses_path, f"{model_str}.jsonl"),
-            model_tag=model_tag,
+            endpoint=endpoint,
             batch_size=5,
             api_key=api_key,
-            orchestra_url=cfg.orchestra_url,
+            client=client,
         )
 
     tasks = [
-        process_queries(cfg.endpoint, prompts_path, model_responses_path, cfg.api_key),
+        process_queries(
+            endpoint=cfg.endpoint,
+            prompts_path=prompts_path,
+            model_responses_path=model_responses_path,
+            api_key=cfg.api_key,
+            client=client,
+        ),
     ]
     logging.basicConfig(
         level=logging.DEBUG,
@@ -215,34 +239,42 @@ async def evaluate_dataset(msg, data_dir, shared_volume=""):
     logging.info(f"End getting queries")
 
     async def process_judgements(
-        model_tag,
+        endpoint,
         judge_model_tag,
         prompts_path,
         model_responses_path,
         model_judgements_path,
         api_key,
-        system_prompt,
-        class_cfg,
+        client,
+        eval_config,
     ):
-        model_str = _format_model_tag(model_tag)
-        judgements_file_str = _format_judgements_file(model_tag, judge_model_tag)
+        model_str = _format_model_tag(endpoint)
+        judgements_file_str = _format_judgements_file(
+            endpoint, judge_model_tag, cfg.eval_id
+        )
         await generate_judgements(
-            prompt_file=prompts_path,
             asst_response_file=os.path.join(model_responses_path, f"{model_str}.jsonl"),
             judge_response_file=os.path.join(
                 model_judgements_path,
                 f"{judgements_file_str}.jsonl",
             ),
-            asst_model_tag=model_tag,
+            asst_model_tag=endpoint,
             judge_model_tag=judge_model_tag,
             batch_size=2,
             api_key=api_key,
-            orchestra_url=cfg.orchestra_url,
-            system_prompt=system_prompt,
-            class_cfg=class_cfg,
+            client=client,
+            eval_config=eval_config,
         )
 
-    if cfg.judge_models[0] in ["multiple_choice", "number"]:
+    judge_models = eval_config["judge_models"]
+    if isinstance(judge_models, str):
+        judge_models = [
+            judge_models,
+        ]
+    if judge_models is None:
+        judge_models = ["claude-3.5-sonnet@aws-bedrock"]
+
+    if judge_models[0] in ["multiple_choice", "number"]:
         # automatic judge
         model_str = _format_model_tag(cfg.endpoint)
         asst_response_file = os.path.join(model_responses_path, f"{model_str}.jsonl")
@@ -269,48 +301,20 @@ async def evaluate_dataset(msg, data_dir, shared_volume=""):
                 model_responses_path,
                 model_judgements_path,
                 cfg.api_key,
-                cfg.system_prompt,
-                cfg.class_cfg,
+                client,
+                eval_config,
             )
-            for judge_tag in cfg.judge_models
+            for judge_tag in judge_models
         ]
 
         logging.info(f"Begin getting judgements")
         await asyncio.gather(*tasks)
         logging.info(f"End getting judgements")
 
-    # get router scores on the prompts
-
-    # count all tokens
-    # use the api for this ?
-    # id_model_to_tokens = count_tokens(root_dir=run_save_path)
-
-    # logging.info(f"Begin collating")
-    # id_to_model_to_scores = {}
-    # for model_tag in cfg.models_to_benchmark:
-    #    model_str = _format_model_tag(model_tag)
-    #    judgements_file_str = _format_judgements_file(model_tag, cfg.judge_model_tag)
-    #    judge_response_file = os.path.join(
-    #        model_judgements_path, f"{judgements_file_str}.jsonl"
-    #    )
-    #    if not os.path.exists(judge_response_file):
-    #        logging.info(
-    #            f"Judge response file does not exist for {judgements_file_str}"
-    #        )
-    #        continue
-
-    #    with open(judge_response_file) as f:
-    #        for line in f:
-    #            data = json.loads(line)
-    #            judge_response = data["judge_response"]
-    #            score = ratings_from_sample(judge_response)
-    #            if data["id_"] not in id_to_model_to_scores:
-    #                id_to_model_to_scores[data["id_"]] = {}
-    #            id_to_model_to_scores[data["id_"]][model_str] = score
-
+    print("Done collecting data")
     # upload to cloud storage buckets
-    #
-    # upload responses
+
+    ## upload responses
     blob_name = os.path.join(
         cfg.user_id,
         cfg.dataset,
@@ -331,20 +335,25 @@ async def evaluate_dataset(msg, data_dir, shared_volume=""):
         blob = storage.Client().bucket(bucket_name).blob(blob_name)
         blob.upload_from_filename(model_responses_formatted_path)
 
-    # upload judgements
-    for judge_tag in cfg.judge_models:
-        fmtd_judge_tag = _format_model_tag(judge_tag)
+    ## upload judgements
+    def create_judgement_blob_filename(eval_id, judge_tag):
         blob_name = os.path.join(
             cfg.user_id,
             cfg.dataset,
             "0",
             cfg.endpoint,
-            f"{fmtd_judge_tag}_judgements.jsonl",
+            f"{eval_id}",
+            f"{judge_tag.replace('@', '___')}_judged.jsonl",
         )
+        return blob_name
+
+    for judge_tag in judge_models:
+        fmtd_judge_tag = _format_model_tag(judge_tag)
+        blob_name = create_judgement_blob_filename(cfg.eval_id, judge_tag)
 
         model_judgements_formatted_path = os.path.join(
             model_judgements_path,
-            _format_judgements_file(cfg.endpoint, judge_tag) + ".jsonl",
+            _format_judgements_file(cfg.endpoint, judge_tag, cfg.eval_id) + ".jsonl",
         )
         if os.environ.get("ON_PREM"):
             blob_name = os.path.join(shared_volume, bucket_name, blob_name)
@@ -378,60 +387,9 @@ async def evaluate_dataset(msg, data_dir, shared_volume=""):
         blob = storage.Client().bucket(bucket_name).blob(blob_name)
         blob.upload_from_string(string, content_type="application/json")
 
-    bucket_name = "uploaded_datasets"
-    prefix = os.path.join(cfg.user_id, cfg.dataset, "0")
-    prefix_folder_path = os.path.join(shared_volume, bucket_name, prefix)
-    if os.environ.get("ON_PREM"):
-        blobs = []
-        for root, _, files in os.walk(prefix_folder_path):
-            for file in files:
-                blobs.append(os.path.join(root, file))
-    else:
-        storage_client = storage.Client()
-        blobs = storage_client.list_blobs(bucket_name, prefix=prefix)
-
-    # format is {judge: {endpoint: score}}
-    results = {}
-    for b in blobs:
-        name = b if os.environ.get("ON_PREM") else b.name
-        if "judgements" in name:
-            judge_model = (
-                name.split("/")[-1].replace("_judgements.jsonl", "").replace("___", "@")
-            )
-            endpoint_name = name.split("/")[-2]
-            contents = (
-                open(os.path.join(prefix_folder_path, name), "rb").read()
-                if os.environ.get("ON_PREM")
-                else b.download_as_bytes()
-            )
-            contents = contents.decode("utf-8").split("\n")
-            scores = []
-            for entry in contents:
-                if not entry:
-                    continue
-                entry = json.loads(entry)
-                if "score" in entry:
-                    scores.append(float(entry["score"]))
-                else:
-                    scores.append(ratings_from_sample(entry["judge_response"]))
-
-            avg_score = sum(scores) / len(scores)
-            if judge_model in results:
-                results[judge_model][endpoint_name] = avg_score
-            else:
-                results[judge_model] = {endpoint_name: avg_score}
-
-    with open("scores.json", "w") as f:
-        json.dump(results, f)
-
-    blob_name = os.path.join(cfg.user_id, cfg.dataset, "0", "scores.json")
-    if os.environ.get("ON_PREM"):
-        file_path = os.path.join(shared_volume, bucket_name, blob_name)
-        shutil.copy("scores.json", file_path)
-        shutil.rmtree(os.path.join(shared_volume, data_dir))
-    else:
-        blob = storage.Client().bucket(bucket_name).blob(blob_name)
-        blob.upload_from_filename("scores.json")
+    print("refreshing scores")
+    refresh_scores_for_dataset(cfg.user_id, cfg.dataset)
+    print("done refreshing scores")
 
     # send mail
     if not os.environ.get("ON_PREM") and user_email is not None:

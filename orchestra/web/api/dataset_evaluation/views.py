@@ -2,18 +2,22 @@
 Includes endpoints related to dataset evaluations.
 """
 
+import hashlib
+import json
 import os
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Query, Request
-from providers.completion import PROVIDER_CLASSES
+from fastapi import APIRouter, Body, Query, Request, HTTPException, File, UploadFile
+from google.cloud import storage
 
+from providers.completion import PROVIDER_CLASSES
 from orchestra.web.api.utils import gcp, on_prem
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
     evaluation_does_not_exist,
     invalid_training_endpoints,
 )
+from orchestra.web.api.dataset_evaluation.schema import EvalConfig
 
 router = APIRouter()
 
@@ -98,9 +102,9 @@ def _get_response_tokens(user_id: str, dataset: str, endpoint: str):
     name_to_id = {name: id_ for id_, name in id_to_name.items()}
     internal_id = name_to_id.get(dataset, dataset)
     return (
-        on_prem.get_response_tokens(user_id, dataset, internal_id)
+        on_prem.get_response_tokens(user_id, internal_id, endpoint)
         if os.environ.get("ON_PREM")
-        else gcp.get_response_tokens(user_id, dataset, internal_id)
+        else gcp.get_response_tokens(user_id, internal_id, endpoint)
     )
 
 
@@ -190,13 +194,148 @@ def send_to_dataset_evaluation_server(action, **data):
     print(f"Published: {str({'action': action, **data, 'orchestra_url': url})}")
 
 
+def refresh_scores_json(user_id):
+    send_to_dataset_evaluation_server(action="refresh_scores", user_id=user_id)
+
+
+def build_id_to_displayname(user_id):
+    bucket_name = "uploaded_datasets"
+    bucket = storage.Client().bucket(bucket_name)
+    id_to_displayname = {}
+    for blob in bucket.list_blobs(prefix=f"{user_id}/evaluation_configs"):
+        if not blob.name.endswith(".config"):
+            continue
+        id_ = blob.name.split("/")[-1]
+        assert ".config" in id_
+        id_ = id_.replace(".config", "")
+        # get display_name
+        display_name = json.loads(blob.download_as_bytes().decode("utf-8"))["eval_name"]
+        id_to_displayname[id_] = display_name
+    return id_to_displayname
+
+
+def build_displayname_to_id(user_id):
+    id_to_displayname = build_id_to_displayname(user_id)
+    return {v: k for k, v in id_to_displayname.items()}
+
+
+def eval_name_to_eval_id(user_id, eval_name):
+    displayname_to_id = build_displayname_to_id(user_id)
+    if eval_name not in displayname_to_id:
+        raise HTTPException(
+            status_code=400, detail=f"You don't have an eval with the name {eval_name}."
+        )
+    return displayname_to_id[eval_name]
+
+
+def load_eval_config_blob(user_id, eval_id):
+    bucket_name = "uploaded_datasets"
+    blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
+    blob = storage.Client().bucket(bucket_name).blob(blob_name)
+    return blob
+
+
+###########################
 # endpoints
+###########################
 
-# TODO: Update dataset evaluation
+
+@router.post("/evals/create")
+def create_eval(
+    request_fastapi: Request,
+    request: EvalConfig,
+):
+    """
+    Create an eval.
+    """
+    user_id = request_fastapi.state.user_id
+
+    # create evaluation id
+    eval_cfg_body = request.model_dump()
+    config_str = json.dumps(eval_cfg_body, sort_keys=True)
+    eval_id = hashlib.shake_128(config_str.encode("utf-8")).hexdigest(8)
+
+    # check if name is not already in use
+    eval_name = request.eval_name
+    displayname_to_id = build_displayname_to_id(user_id)
+    if eval_name in displayname_to_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"You already have an eval with the name {eval_name}!",
+        )
+
+    blob = load_eval_config_blob(user_id, eval_id)
+    blob.upload_from_string(config_str, content_type="application/json")
+    return {"info": "Eval created!"}
 
 
+@router.get("/evals/list_configs")
+def list_evals(
+    request_fastapi: Request,
+):
+    """
+    Returns the names of the eval configurations you have created.
+    """
+    displayname_to_id = build_displayname_to_id(request_fastapi.state.user_id)
+    return sorted(displayname_to_id.keys())
+
+
+@router.get("/evals/get_config")
+def return_eval_config(
+    request_fastapi: Request,
+    eval_name: str = Query(
+        description="Name of the eval to return the configuration of"
+    ),
+):
+    """
+    Returns the configuration JSON for a named eval.
+    """
+    user_id = request_fastapi.state.user_id
+    eval_id = eval_name_to_eval_id(user_id, eval_name)
+    blob = load_eval_config_blob(user_id, eval_id)
+    contents = json.loads(blob.download_as_bytes().decode("utf-8"))
+    return contents
+
+
+@router.post("/evals/rename")
+def rename_eval(
+    request_fastapi: Request,
+    eval_name: str = Query(description="Name of the existing eval to rename"),
+    new_eval_name: str = Query(description="New name for the eval"),
+):
+    """
+    Renames a named eval from `eval_name` to `new_eval_name`.
+    """
+    user_id = request_fastapi.state.user_id
+    eval_id = eval_name_to_eval_id(user_id, eval_name)
+    blob = load_eval_config_blob(user_id, eval_id)
+    contents = json.loads(blob.download_as_bytes().decode("utf-8"))
+    contents["eval_name"] = new_eval_name
+    config_str = json.dumps(contents, sort_keys=True)
+    blob.upload_from_string(config_str, content_type="application/json")
+    refresh_scores_json(user_id)
+    return {"info": "Evaluation successfully renamed"}
+
+
+@router.delete("/evals/delete")
+def delete_eval(
+    request_fastapi: Request,
+    eval_name: str = Query(description="Name of the eval to delete"),
+):
+    """
+    Deletes a named eval from your account.
+    """
+    user_id = request_fastapi.state.user_id
+    eval_id = eval_name_to_eval_id(user_id, eval_name)
+    blob = load_eval_config_blob(user_id, eval_id)
+    blob.delete()
+    refresh_scores_json(user_id)
+    # TODO: remove all corresponding model judgements?
+
+
+#
 @router.post(
-    "/evaluation",
+    "/evals/trigger",
     responses={
         200: {
             "description": "Successful Response",
@@ -231,32 +370,27 @@ def send_to_dataset_evaluation_server(action, **data):
         },
     },
 )
-def evaluate_dataset(
+def trigger_eval(
     request_fastapi: Request,
-    dataset: str = Body(..., description="Name of the uploaded dataset to evaluate."),
-    endpoint: str = Body(
+    dataset: str = Query(..., description="Name of the uploaded dataset to evaluate."),
+    endpoint: str = Query(
         ...,
         description=(
-            "Endpoint to evaluate."
+            "Name of the endpoint to evaluate."
             " Endpoints must be specified using the `model@provider` format."
         ),
     ),
-    judge_models: list[str] = Body(
-        default=["gpt-4o@openai"],
-        description="List of the LLMs to use as a judge",
-    ),
-    system_prompt: str = Body(
-        default="",
-        description="Optionally change the system prompt",
-    ),
-    class_cfg: list[dict[str, Any]] = Body(
-        default=[],
-        description="A description of the classes for judging.",
+    eval_name: str = Query(..., description="Name of the eval to use."),
+    client_side_scores: Optional[UploadFile] = File(
+        default=None, description="Optionally upload client-side scores."
     ),
 ) -> Dict[str, str]:
     """
-    Evaluates the quality of the responses from a given LLM endpoint in a custom dataset.
+    Uses the named `eval` to begin an evaluation of quality scores for the selected LLM `endpoint`, on the given `dataset`.
+    Once the evaluation has finished, you can access the scores using the `evals/get_scores` endpoint.
     """
+    if client_side_scores:
+        raise HTTPException(status_code=501, detail="Not yet implemented.")
     user_id = request_fastapi.state.user_id
     user_email = request_fastapi.state.user_email
     api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
@@ -273,6 +407,10 @@ def evaluate_dataset(
         id_to_name = gcp.internal_id_to_displayname(user_id)
     name_to_id = {name: id_ for id_, name in id_to_name.items()}
     internal_id = name_to_id.get(dataset, dataset)
+    # check that the eval_id is valid
+    if eval_name:
+        eval_id = eval_name_to_eval_id(user_id, eval_name)
+
     # Send train job to the dataset_evaluation server
     send_to_dataset_evaluation_server(
         action="evaluate",
@@ -281,167 +419,72 @@ def evaluate_dataset(
         api_key=api_key,
         dataset=internal_id,
         endpoint=endpoint,
-        judge_models=judge_models,
-        system_prompt=system_prompt,
-        class_cfg=class_cfg,
+        eval_id=eval_id,
     )
     return {"info": "Dataset evaluation started! You will receive an email soon!"}
 
 
-@router.delete(
-    "/evaluation",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {"info": "Dataset evaluation deleted!"},
-                },
-            },
-        },
-    },
+@router.get(
+    "/evals/get_scores",
 )
-def delete_dataset_evaluation(
+def get_eval_scores(
     request_fastapi: Request,
     dataset: str = Query(
-        ...,
-        description="Name of the dataset to delete an evaluation from.",
+        ..., description="Name of the dataset to fetch evaluation from."
     ),
-    endpoint: str = Query(
-        ...,
-        description="Endpoint whose evaluation will be deleted.",
+    eval_name: Optional[str] = Query(
+        default=None,
+        description="Name of the eval to fetch evaluation from. If `None`, returns all available evaluations for the dataset.",
     ),
-) -> Dict[str, str]:
-    """
-    Deletes a specific dataset evaluation quality score
-    and the corresponding artifacts.
-    """
-    user_id = request_fastapi.state.user_id
-    # Delete the dataset_evaluation files
-    _delete_evaluation(user_id, dataset, endpoint)
-    # TODO: Move this to the microservice
-    # send_to_dataset_evaluation_server(
-    #     action="delete",
-    #     user_id=user_id,
-    #     dataset=dataset,
-    #     endpoint=endpoint,
-    # )
-    return {"info": "Dataset evaluation deleted!"}
-
-
-@router.get(
-    "/evaluation/list",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": [
-                        {
-                            "dataset_1": [
-                                "model_1@provider_1",
-                                "model_2@provider_2",
-                                "...",
-                            ],
-                        },
-                        {"dataset_2": ["..."]},
-                        {"...": ["..."]},
-                    ],
-                },
-            },
-        },
-        404: {
-            "description": "Dataset Not Found",
-            "content": {
-                "application/json": {
-                    "example": {"detail": "This dataset does not exist!"},
-                },
-            },
-        },
-    },
-)
-def get_dataset_evaluations(
-    request_fastapi: Request,
-    dataset: Optional[str] = Query(
-        None,
-        description=(
-            "Name of the dataset to fetch evaluation from."
-            " If not specified, all evaluations will be returned."
-        ),
-    ),
-) -> Dict[str, List[str]]:
-    """
-    Fetches a list of the endpoints that have been evaluated on a given dataset.
-    """
-    user_id = request_fastapi.state.user_id
-    if dataset is not None:
-        # Check if the dataset exists
-        if not dataset_exists(user_id, dataset):
-            raise dataset_does_not_exist(dataset)
-    evaluations = {}
-    datasets = [dataset] if dataset is not None else _list_datasets(user_id)
-    for d in datasets:
-        evaluations[d] = _list_evaluations(user_id, d)
-    return evaluations
-
-
-@router.get(
-    "/evaluation/results",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": [
-                        {
-                            "judge": {
-                                "model_1@provider_1": "score_1",
-                                "model_2@provider_2": "score_2",
-                            },
-                            "input_tokens": "num_tokens_in_dataset",
-                            "output_tokens": {
-                                "model_1@provider_1": "num_tokens_in_endpoint_responses",
-                            },
-                        },
-                    ],
-                },
-            },
-        },
-        404: {
-            "description": "Dataset Not Found",
-            "content": {
-                "application/json": {
-                    "example": {"detail": "This dataset does not exist!"},
-                },
-            },
-        },
-    },
-)
-def get_dataset_evaluation_results(
-    request_fastapi: Request,
-    dataset: Optional[str] = Query(
-        None,
-        description=("Name of the dataset to fetch evaluation from."),
+    per_prompt: bool = Query(
+        default=False,
+        description="If `True`, returns the scores on a per-prompt level. By default set to `False`.",
     ),
 ) -> Dict:
     """
-    Fetches the results of a given dataset evaluation.
+    Fetches the results of an eval on a given dataset. If no `eval_name` is provided, returns scores for all completed evals on that dataset.
     """
     user_id = request_fastapi.state.user_id
     if not dataset_exists(user_id, dataset):
         raise dataset_does_not_exist(dataset)
-    scores = _get_scores(user_id, dataset)
-    if not isinstance(scores, dict):
-        return scores
+
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(user_id)
+    name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    internal_id = name_to_id.get(dataset, dataset)
+
+    if per_prompt:
+        raise HTTPException(status_code=501, detail="Not implemented yet")
+
+    return_single_eval = eval_name is not None
+    requested_eval_id = (
+        eval_name_to_eval_id(user_id, eval_name) if return_single_eval else None
+    )
+
+    # format of scores is {eval_id: {endpoint : {judge : score}}}
+    scores = _get_scores(user_id, internal_id)
+
     output_tokens = {}
-    for judge in scores.keys():
-        for endpoint in scores[judge].keys():
+    id_to_displayname = build_id_to_displayname(user_id)
+
+    ret = {}
+    for eval_id, eval_scores in scores.items():
+        if return_single_eval and eval_id != requested_eval_id:
+            continue
+
+        displayname = id_to_displayname[eval_id]
+
+        ret[displayname] = eval_scores
+        for endpoint in eval_scores:
             output_tokens[endpoint] = _get_response_tokens(
                 user_id,
-                dataset,
+                internal_id,
                 endpoint,
             )
-    scores["input_tokens"] = _get_input_tokens(user_id, dataset)
-    scores["output_tokens"] = output_tokens
 
-    return scores
+    ret["input_tokens"] = _get_input_tokens(user_id, dataset)
+    ret["output_tokens"] = output_tokens
+
+    return ret
