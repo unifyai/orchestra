@@ -195,7 +195,9 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     eval_config = json.loads(blob.download_as_bytes().decode("utf-8"))
 
     if client is None:
-        limits = Limits(max_keepalive_connections=None, max_connections=None, keepalive_expiry=30)
+        limits = Limits(
+            max_keepalive_connections=None, max_connections=None, keepalive_expiry=30
+        )
         client = AsyncClient(base_url=cfg.orchestra_url, limits=limits, timeout=60)
 
     def _format_model_tag(model_tag):
