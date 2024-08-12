@@ -12,9 +12,11 @@ class Request:
         payload: dict,
         url,
         headers,
+        client,
         prompt: str,
         response_type,
-        model_name="",
+        extra_kwargs={},
+        score_fn=None,
     ):
         self.id_ = id_
         self.payload = payload
@@ -22,42 +24,41 @@ class Request:
         self.headers = headers
         self.prompt = prompt
         self.response_type = response_type
-        self.model_name = model_name
+        self.client = client
+        self.extra_kwargs = extra_kwargs
+        self.score_fn = score_fn
 
     async def execute(self):
-        ret = await post_data(self.payload, self.url, self.headers)
+        ret = await post_data(self.payload, self.url, self.headers, self.client)
         return ret
 
 
 async def generic_call(request: Request):
     for tries in range(5):
         try:
-            response = await request.execute()
-            resp_json = json.loads(response)
+            resp_json = await request.execute()
             model_response = resp_json["choices"][0]["message"]["content"]
             model_provider = resp_json["model"]
-            if request.response_type == "judge_response":
-                return (
-                    True,
-                    {
-                        "id_": request.id_,
-                        "prompt": request.prompt,
-                        "model_provider": request.model_name,
-                        "judge_model": model_provider,
-                        request.response_type: model_response,
-                    },
-                )
-            else:
-                return (
-                    True,
-                    {
-                        "id_": request.id_,
-                        "prompt": request.prompt,
-                        "model_provider": model_provider,
-                        request.response_type: model_response,
-                    },
-                )
+            if request.score_fn is not None:
+                score = request.score_fn(sample=model_response)
+                request.extra_kwargs["score"] = score
+            return (
+                True,
+                {
+                    "id_": request.id_,
+                    "prompt": request.prompt,
+                    request.response_type: model_response,
+                    **request.extra_kwargs,
+                },
+            )
+
         except Exception as e:
+            try:
+                print(resp_json)
+                print(request.payload)
+            except:
+                pass
+            raise e
             print(e)
             print(f"Error with {request.payload}")
             try:
@@ -90,9 +91,6 @@ def create_payload(model_tag, prompt):
     return payload
 
 
-async def post_data(payload, url, headers):
-    async with aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=5 * 60)
-    ) as session:
-        async with session.post(url, json=payload, headers=headers) as response:
-            return await response.text()
+async def post_data(payload, url, headers, client):
+    ret = await client.post(url, json=payload, headers=headers)
+    return ret.json()
