@@ -152,7 +152,7 @@ async def test_list_datasets(client: AsyncClient, cleanup):
     # No full paths
     assert not any(["/" in d for d in datasets])
     # The datasets are contained in the list
-    assert set(datasets) <= set(names)
+    assert set(names) <= set(datasets)
     # No repeated elements
     assert len(datasets) == len(set(datasets))
 
