@@ -59,6 +59,7 @@ INSERT INTO model VALUES (9, 'llama-3-8b-chat', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (10, 'gemini-1.5-flash', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (11, 'mistral-7b-instruct-v0.3', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (12, 'claude-3.5-sonnet', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (13, 'llama-3.1-8b-chat', NOW(), 'dummy_task', true);
 
 INSERT INTO endpoint VALUES (1, 9, 3, NOW());
 INSERT INTO endpoint VALUES (3, 9, 4, NOW());
@@ -67,7 +68,7 @@ INSERT INTO endpoint VALUES (5, 9, 6, NOW());
 INSERT INTO endpoint VALUES (6, 9, 7, NOW());
 INSERT INTO endpoint VALUES (7, 11, 8, NOW());
 INSERT INTO endpoint VALUES (8, 11, 9, NOW());
-INSERT INTO endpoint VALUES (9, 9, 10, NOW());
+INSERT INTO endpoint VALUES (9, 13, 10, NOW());
 INSERT INTO endpoint VALUES (10, 6, 11, NOW());
 INSERT INTO endpoint VALUES (11, 9, 11, NOW());
 INSERT INTO endpoint VALUES (15, 7, 1, NOW());
