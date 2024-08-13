@@ -23,7 +23,7 @@ class VertexAI(BaseCompletionProvider):
         creds, _ = default(
             scopes=["https://www.googleapis.com/auth/cloud-platform"],
         )
-        auth_req = google.auth.requests.Request()
+        auth_req = google.auth.transport.requests.Request()
         creds.refresh(auth_req)
         return creds.token
 
