@@ -93,7 +93,7 @@ def check_file_content(file_content: str):
                     prompt_present = True
                 if kw not in ["prompt", "ref_answer"]:
                     info += f" Unknown keyword `{kw}` in line {i+1}."
-                    raise ValueError
+                    continue
             if not prompt_present:
                 info += f" Key `prompt` not found in line {i+1}."
                 raise ValueError
