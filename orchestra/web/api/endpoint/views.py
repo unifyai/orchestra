@@ -57,7 +57,7 @@ def get_endpoints(
         endpoints.append(f"{model}@custom")
 
     if provider and provider == "custom":
-        extra_endpoints += private_endpoints
+        endpoints += private_endpoints
 
     if not model and not provider:
         endpoints += private_endpoints
