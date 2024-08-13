@@ -207,3 +207,49 @@ async def test_trigger_eval(
 
 
 # evals/get_scores is implicitly tested
+
+
+async def test_client_side_scores(
+    client: AsyncClient,
+    cleanup_eval_config,
+    tmp_path,
+):
+   
+
+    eval_name = "test_eval_clientside"
+    cleanup_eval_config.append(eval_name)
+
+    url = "/v0/evals/create"
+    params = {
+        "eval_name": eval_name,
+        "client_side": True,
+    }
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    url = "/v0/evals/trigger"
+    dataset = "test_dataset"
+    endpoint = "llama-3-8b-chat@aws-bedrock"
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_scores.jsonl"
+    with open(file_path, "rb") as f:
+        file_content = f.read()
+    # Prepare the multipart form data
+    files = {"client_side_scores": ("test.jsonl", file_content, "application/x-jsonlines")}
+
+    params = {
+        "url": url,
+        "dataset": dataset,
+        "endpoint": endpoint,
+        "eval_name": eval_name,
+    }
+    response = await client.post(url, params=params, files=files, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    url = "/v0/evals/get_scores"
+    params = {"dataset": dataset, "eval_name": eval_name}
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    scores = response.json()
+    assert eval_name in scores
+    assert endpoint in scores[eval_name]
+    assert judge_model in scores[eval_name][endpoint]
