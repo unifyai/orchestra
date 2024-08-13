@@ -2,8 +2,9 @@ import sys
 import urllib.parse
 from datetime import datetime, timedelta
 
+import google.auth.transport.requests
 import requests
-from google.auth import default, transport
+from google.auth import default
 from google.cloud import logging
 
 
@@ -37,7 +38,7 @@ if __name__ == "__main__":
     creds, project = default(
         scopes=["https://www.googleapis.com/auth/cloud-platform"],
     )
-    auth_req = transport.requests.Request()
+    auth_req = google.auth.transport.requests.Request()
     creds.refresh(auth_req)
     client = logging.Client(project=project, credentials=creds)
 
@@ -71,13 +72,17 @@ if __name__ == "__main__":
         module = (
             None
             if not entry.payload
-            else "openai"
-            if "openai.APIError" in entry.payload
-            else "anthropic"
-            if "ERROR:providers.completion.anthropic:Digest" in entry.payload
-            else "bedrock"
-            if "botocore.errorfactory" in entry.payload
-            else None
+            else (
+                "openai"
+                if "openai.APIError" in entry.payload
+                else (
+                    "anthropic"
+                    if "ERROR:providers.completion.anthropic:Digest" in entry.payload
+                    else "bedrock"
+                    if "botocore.errorfactory" in entry.payload
+                    else None
+                )
+            )
         )
         if module:
             start_timestamp = (
