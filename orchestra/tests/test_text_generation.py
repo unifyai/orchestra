@@ -11,9 +11,9 @@ from orchestra.tests.utils import (
     check_text_gen_usage,
     get_chat_completions_payload,
     get_chat_completions_payload_fallback,
+    get_chat_completions_payload_tool_use,
     get_credits,
     get_inference_payload,
-    get_chat_completions_payload_tool_use,
 )
 
 MODELS = [
@@ -28,7 +28,7 @@ MODELS = [
     "mistral-7b-instruct-v0.3@mistral-ai",
     "mistral-7b-instruct-v0.3@octoai",
     "gemini-1.5-flash@vertex-ai",
-    "llama-3-8b-chat@perplexity-ai",
+    "llama-3.1-8b-chat@perplexity-ai",
     "llama-3-8b-chat@groq",
 ]
 
@@ -127,7 +127,7 @@ async def test_function_calling(model, client: AsyncClient):
 
     response_json = response.json()
     assert len(response_json["choices"][0]["message"]["tool_calls"]) >= 1, str(
-        response_json
+        response_json,
     )
 
 
