@@ -37,6 +37,8 @@ def get_param_fields(properties, required_props):
     for property in properties:
         required_str = 'required="true"' if property["title"] in required_props else ""
         description = property.get("description", "")
+        if not description:
+            description = ""
         body_str += (
             f'<ParamField body="{property["title"]}" type="{property["type"]}" '
             f"{required_str}>\n{description}\n</ParamField>\n\n"
