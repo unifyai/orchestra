@@ -97,10 +97,11 @@ class AIBenchRunner:
             return int(random.normalvariate(1000, 100))
 
     async def stream_output(self, result, completions):
-        async for part in result.generator():
-            choices = part.get("choices")
+        stream = await result
+        async for part in stream:
+            choices = part.choices
             if choices:
-                content = choices[0].get("delta", {}).get("content", "")
+                content = choices[0].delta.content
                 if content:
                     completions.append(
                         {
@@ -115,26 +116,20 @@ class AIBenchRunner:
         max_tokens = self._max_token_sampler()
         completions = []
         metrics_dict = {}
-        # TODO: max_tokens seem to be not respected?
-        # check by printing max_tokens value here
-        # then check the `output_tokens` in processed results
-        # TODO: remove the double return
-        result, _ = self.fn(  # type: ignore
+        stream = self.fn(  # type: ignore
             prompt=prompt,
             max_tokens=max_tokens,
             stream=True,
         )
 
         metrics_dict["failed_queries"] = 0
-        if result is None:
+        if stream is None:
             metrics_dict["failed_queries"] = 1
             return
 
         start_time = time.perf_counter()
-        await self.stream_output(result, completions)
+        await self.stream_output(stream, completions)
         end_time = time.perf_counter()
-        # TODO: remove?
-        # these artifacts sort of give away we're using litellm
         content = "".join(
             [
                 completion["content"]
@@ -159,17 +154,18 @@ class AIBenchRunner:
         completions = []
 
         start_time = time.perf_counter()
-        result, _ = self.fn(  # type: ignore
+        stream = self.fn(  # type: ignore
             prompt=prompt,
             max_tokens=10,
             stream=True,
         )
 
-        if result is None:
+        if stream is None:
             print("Run during cold start failed")
             return 0
 
-        await self.stream_output(result, completions)
+        await self.stream_output(stream, completions)
+        print(completions)
         first_token_time = completions[0]["reception_time"]
         try:
             second_token_time = completions[1]["reception_time"]
