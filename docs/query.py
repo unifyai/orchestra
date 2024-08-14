@@ -37,7 +37,7 @@ def get_request_code(route, path, examples, params):
     )
 
     # the ? is only needed if there are any params passed
-    if params:
+    if params_str:
         params_str = "?" + params_str
 
     # create the curl example
