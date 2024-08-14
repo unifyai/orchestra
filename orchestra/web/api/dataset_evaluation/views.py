@@ -415,12 +415,13 @@ def trigger_eval(
     eval_id = eval_name_to_eval_id(user_id, eval_name)
 
     if client_side_scores:
-        # TODO: check whether matches dataset 
+        file = client_side_scores.file.read()
+        # TODO: check whether matches dataset
         try:
-            lines = client_side_scores.decode().split("\n")
+            lines = file.decode().split("\n")
             lines = [json.loads(l) for l in lines if l != ""]
             for ix, line in enumerate(lines):
-                if line.keys() != ["prompt", "score"]:
+                if set(line.keys()) != set(["prompt", "score"]):
                     raise HTTPException(status_code=400, detail=f"Error in line {ix}")
         except:
             raise HTTPException(
@@ -436,9 +437,9 @@ def trigger_eval(
 
         # put everything in the bucket
         bucket_name = "uploaded_datasets"
-        blob_name = f"{user_id}/{dataset}/0/{endpoint}/{eval_id}/client_side_judged.jsonl"
+        blob_name = f"{user_id}/{internal_id}/0/{endpoint}/{eval_id}/client_side_judged.jsonl"
         blob = storage.Client().bucket(bucket_name).blob(blob_name)
-        blob.upload_from_file(client_side_scores)
+        blob.upload_from_file(file)
 
         return {"info": "Evaluation uploaded!"}
 

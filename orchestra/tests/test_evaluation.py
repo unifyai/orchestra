@@ -214,8 +214,6 @@ async def test_client_side_scores(
     cleanup_eval_config,
     tmp_path,
 ):
-   
-
     eval_name = "test_eval_clientside"
     cleanup_eval_config.append(eval_name)
 
