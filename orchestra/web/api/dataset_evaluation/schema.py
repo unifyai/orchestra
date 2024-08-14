@@ -16,10 +16,13 @@ class EvalConfig(BaseModel):
     class_config: Union[list, None] = Field(
         default=None,
         description=(
-            "If set, describes the list of classifications that the LLM judge uses to score each prompt. For example:\n"
-            '    `[{"label": "Excellent", "score": 1.0, "description": "A perfect answer with no factual mistakes"},\n'
-            '    {"label": "Good", "score": 0.5, "description": "An average answer"},\n'
-            '    {"label": "Bad", "score": 0.0, "description": "An incorrect answer, containing a significant factual mistake"}]`',
+            """If set, describes the list of classifications that the LLM judge uses to score each prompt. For example:
+```
+[{"label": "Excellent", "score": 1.0, "description": "A perfect answer with no factual mistakes"},
+{"label": "Good", "score": 0.5, "description": "An average answer"},
+{"label": "Bad", "score": 0.0, "description": "An incorrect answer, containing a significant factual mistake"}]
+```
+"""
         ),
     )
     judge_models: Union[str, list[str]] = Field(

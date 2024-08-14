@@ -20,8 +20,14 @@ def get_property_details(schema_properties, files=[]):
                 )
 
         example = property.get("example")  # example
+        description = property.get("description")  # description
         properties.append(
-            {"title": property_name, "type": property_type, "example": example},
+            {
+                "title": property_name,
+                "type": property_type,
+                "example": example,
+                "description": description,
+            },
         )
     return properties
 
@@ -33,7 +39,7 @@ def get_param_fields(properties, required_props):
         description = property.get("description", "")
         body_str += (
             f'<ParamField body="{property["title"]}" type="{property["type"]}" '
-            f"{required_str}>{description}\n</ParamField>\n\n"
+            f"{required_str}>\n{description}\n</ParamField>\n\n"
         )
     return body_str
 
