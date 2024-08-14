@@ -256,7 +256,7 @@ def create_eval(
     request: EvalConfig,
 ):
     """
-    Create an eval.
+    Create a re-useable, named eval configuration. This can be used to trigger an evaluation via the `/evals/trigger` endpoint.
     """
     user_id = request_fastapi.state.user_id
 
@@ -377,6 +377,7 @@ def delete_eval(
 )
 def trigger_eval(
     request_fastapi: Request,
+    eval_name: str = Query(..., description="Name of the eval to use."),
     dataset: str = Query(..., description="Name of the uploaded dataset to evaluate."),
     endpoint: str = Query(
         ...,
@@ -385,14 +386,15 @@ def trigger_eval(
             " Endpoints must be specified using the `model@provider` format."
         ),
     ),
-    eval_name: str = Query(..., description="Name of the eval to use."),
     client_side_scores: Optional[UploadFile] = File(
         default=None,
-        description="Optionally upload client-side scores. The format needs to be a file in JSONL format, in the same order as the `dataset`. The keys need to be `prompt` and `score`, where `score` should be a float between 0 and 1. The eval with corresponding `eval_name` needs to have `client_side=True`.",
+        description="An optional file upload for client-side scores. The file must be in JSONL format and the prompts must match the order of the `dataset`. "
+        "Each entry should include `prompt` and `score` keys, with `score` being a float between 0 and 1. The evaluation corresponding to the `eval_name` must have `client_side=True`.",
     ),
 ) -> Dict[str, str]:
     """
     Uses the named `eval` to begin an evaluation of quality scores for the selected LLM `endpoint`, on the given `dataset`.
+    You can upload custom scores (and bypass the LLM judge) by uploading a file via the `client_side_scores` argument.
     Once the evaluation has finished, you can access the scores using the `evals/get_scores` endpoint.
     """
 
