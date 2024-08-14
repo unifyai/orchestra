@@ -228,6 +228,16 @@ def eval_name_to_eval_id(user_id, eval_name):
     return displayname_to_id[eval_name]
 
 
+def check_if_eval_name_free(user_id, eval_name):
+    displayname_to_id = build_displayname_to_id(user_id)
+    if eval_name in displayname_to_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"You already have an eval with the name {eval_name}!",
+        )
+    return True
+
+
 def load_eval_config_blob(user_id, eval_id):
     bucket_name = "uploaded_datasets"
     blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
@@ -257,12 +267,7 @@ def create_eval(
 
     # check if name is not already in use
     eval_name = request.eval_name
-    displayname_to_id = build_displayname_to_id(user_id)
-    if eval_name in displayname_to_id:
-        raise HTTPException(
-            status_code=400,
-            detail=f"You already have an eval with the name {eval_name}!",
-        )
+    check_if_eval_name_free(user_id, eval_name)
 
     blob = load_eval_config_blob(user_id, eval_id)
     blob.upload_from_string(config_str, content_type="application/json")
@@ -382,15 +387,15 @@ def trigger_eval(
     ),
     eval_name: str = Query(..., description="Name of the eval to use."),
     client_side_scores: Optional[UploadFile] = File(
-        default=None, description="Optionally upload client-side scores."
+        default=None,
+        description="Optionally upload client-side scores. The format needs to be a file in JSONL format, in the same order as the `dataset`. The keys need to be `prompt` and `score`, where `score` should be a float between 0 and 1. The eval with corresponding `eval_name` needs to have `client_side=True`.",
     ),
 ) -> Dict[str, str]:
     """
     Uses the named `eval` to begin an evaluation of quality scores for the selected LLM `endpoint`, on the given `dataset`.
     Once the evaluation has finished, you can access the scores using the `evals/get_scores` endpoint.
     """
-    if client_side_scores:
-        raise HTTPException(status_code=501, detail="Not yet implemented.")
+
     user_id = request_fastapi.state.user_id
     user_email = request_fastapi.state.user_email
     api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
@@ -407,9 +412,41 @@ def trigger_eval(
         id_to_name = gcp.internal_id_to_displayname(user_id)
     name_to_id = {name: id_ for id_, name in id_to_name.items()}
     internal_id = name_to_id.get(dataset, dataset)
-    # check that the eval_id is valid
-    if eval_name:
-        eval_id = eval_name_to_eval_id(user_id, eval_name)
+    # check if the eval name is valid
+    eval_id = eval_name_to_eval_id(user_id, eval_name)
+    if client_side_scores:
+        file = client_side_scores.file.read()
+        # TODO: check whether matches dataset
+        try:
+            lines = file.decode().split("\n")
+            lines = [json.loads(l) for l in lines if l != ""]
+            for ix, line in enumerate(lines):
+                if set(line.keys()) != set(["prompt", "score"]):
+                    raise HTTPException(status_code=400, detail=f"Error in line {ix}")
+        except:
+            raise HTTPException(
+                status_code=400, detail="Error processing uploaded scores"
+            )
+
+        # check whether the eval name is a client side one:
+        blob = load_eval_config_blob(user_id, eval_id)
+        contents = json.loads(blob.download_as_bytes().decode("utf-8"))
+        if "client_side" not in contents or contents.get("client_side", "") != True:
+            raise HTTPException(
+                status_code=400,
+                detail=f"The eval {eval_name} is not a client-side eval (as client_side != True)",
+            )
+
+        # put everything in the bucket
+        bucket_name = "uploaded_datasets"
+        blob_name = (
+            f"{user_id}/{internal_id}/0/{endpoint}/{eval_id}/client_side_judged.jsonl"
+        )
+        blob = storage.Client().bucket(bucket_name).blob(blob_name)
+        blob.upload_from_string(file, content_type="application/octet-stream")
+        refresh_scores_json(user_id)
+
+        return {"info": "Evaluation uploaded!"}
 
     # Send train job to the dataset_evaluation server
     send_to_dataset_evaluation_server(
