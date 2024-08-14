@@ -231,7 +231,6 @@ async def test_client_side_scores(
     file_path = "./orchestra/tests/sample_datasets/prompts_with_scores.jsonl"
     with open(file_path, "rb") as f:
         file_content = f.read()
-    # Prepare the multipart form data
     files = {"client_side_scores": ("test.jsonl", file_content, "application/x-jsonlines")}
 
     params = {
@@ -250,4 +249,4 @@ async def test_client_side_scores(
     scores = response.json()
     assert eval_name in scores
     assert endpoint in scores[eval_name]
-    assert judge_model in scores[eval_name][endpoint]
+    assert "client_side" in scores[eval_name][endpoint]

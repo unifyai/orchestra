@@ -413,7 +413,6 @@ def trigger_eval(
     internal_id = name_to_id.get(dataset, dataset)
     # check if the eval name is valid
     eval_id = eval_name_to_eval_id(user_id, eval_name)
-
     if client_side_scores:
         file = client_side_scores.file.read()
         # TODO: check whether matches dataset
@@ -439,7 +438,8 @@ def trigger_eval(
         bucket_name = "uploaded_datasets"
         blob_name = f"{user_id}/{internal_id}/0/{endpoint}/{eval_id}/client_side_judged.jsonl"
         blob = storage.Client().bucket(bucket_name).blob(blob_name)
-        blob.upload_from_file(file)
+        blob.upload_from_string(file, content_type='application/octet-stream')
+        refresh_scores_json(user_id)
 
         return {"info": "Evaluation uploaded!"}
 
