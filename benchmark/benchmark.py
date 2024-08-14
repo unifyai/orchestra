@@ -12,6 +12,7 @@ from typing import Dict, List, Union
 
 import yaml
 from aibench.runner import AIBenchRunner
+from openai import AsyncOpenAI
 from providers.completion import PROVIDER_CLASSES
 from sqlalchemy import Column, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -68,7 +69,6 @@ def create_db_session() -> async_sessionmaker:  # noqa: WPS210
     port = os.getenv("ORCHESTRA_DB_PORT", "5432")
     db_name = os.getenv("ORCHESTRA_DB_BASE", "orchestra")
     db_url = f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{db_name}"
-    # TODO: logger.info(db_url)
     engine = create_async_engine(db_url)
     return async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
@@ -142,9 +142,6 @@ async def db_loop(  # noqa: WPS210, WPS217
     """
     async with async_session() as q_session:
         metrics = await get_names(q_session, Metric)
-        regimes = await get_names(q_session, BenchmarkRegime)
-        regions = await get_names(q_session, BenchmarkRegion)
-        seq_lens = await get_names(q_session, BenchmarkSeqLen)
     while True:
         await asyncio.sleep(period)
 
@@ -198,20 +195,22 @@ async def worker_loop(  # noqa: WPS210
         print("Testing: {}".format(endpoint))
         # Retrieve/fabricate a callable based on the model the provider
         try:
-            language_model = PROVIDER_CLASSES[endpoint["provider"]](endpoint["model"])
+            endpoint_str = f"{endpoint['model']}@{endpoint['provider']}"
         except Exception as e:
             logging.error(f"Exception raised loading CompletionsModel: {e}")
             input_queue.task_done()
             continue
 
+        client = AsyncOpenAI(
+            base_url="https://api.unify.ai/v0",
+            api_key=os.getenv("UNIFY_API_KEY"),
+        )
+
         def endpoint_fn(prompt, max_tokens, stream):
-            message = [
-                # {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt},
-            ]
-            return language_model.__call_async__(
-                message,
+            return client.chat.completions.create(
+                model=endpoint_str,
                 max_tokens=max_tokens,
+                messages=[{"role": "user", "content": prompt}],
                 stream=stream,
             )
 
@@ -493,13 +492,17 @@ async def main(endpoints=None):  # noqa: WPS210
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Run benchmark with specified endpoints."
+        description="Run benchmark with specified endpoints.",
     )
     parser.add_argument(
-        "--endpoints", type=str, help="JSON string of endpoints to test."
+        "--endpoints",
+        type=str,
+        help="JSON string of endpoints to test.",
     )
     parser.add_argument(
-        "--minimal", type=bool, help="Boolean flag for a minimal test of benchmarks"
+        "--minimal",
+        type=bool,
+        help="Boolean flag for a minimal test of benchmarks",
     )
 
     args = parser.parse_args()
