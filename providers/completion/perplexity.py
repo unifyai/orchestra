@@ -32,18 +32,13 @@ class Perplexity(BaseCompletionProvider):
 
 
 supported_models = {
-    "mixtral-8x7b-instruct-v0.1": {
-        "endpoint": "mixtral-8x7b-instruct",
-        "context_window": 16384,
-        "cost": {"prompt": 0.6, "completion": 0.6},
-    },
-    "llama-3-8b-chat": {
-        "endpoint": "llama-3-8b-instruct",
+    "llama-3.1-8b-chat": {
+        "endpoint": "llama-3.1-8b-instruct",
         "context_window": 8192,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
-    "llama-3-70b-chat": {
-        "endpoint": "llama-3-70b-instruct",
+    "llama-3.1-70b-chat": {
+        "endpoint": "llama-3.1-70b-instruct",
         "context_window": 8192,
         "cost": {"prompt": 1, "completion": 1},
     },

@@ -1,4 +1,5 @@
-import google.auth
+import google.auth.transport.requests
+from google.auth import default
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 from orchestra.settings import settings
@@ -19,7 +20,7 @@ class VertexAI(BaseCompletionProvider):
     @property
     def api_key(self) -> str:
         # TODO: check if this doesn't add TTFT, prob does
-        creds, _ = google.auth.default(
+        creds, _ = default(
             scopes=["https://www.googleapis.com/auth/cloud-platform"],
         )
         auth_req = google.auth.transport.requests.Request()
