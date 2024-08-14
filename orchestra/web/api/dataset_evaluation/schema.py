@@ -13,7 +13,7 @@ class EvalConfig(BaseModel):
         default=None,
         description="An optional custom system prompt to provide specific instructions to the judge on how to score the answers.",
     )
-    class_config: Union[dict, None] = Field(
+    class_config: Union[list, None] = Field(
         default=None,
         description="""If set, describes the list of classifications that the LLM judge uses to score each prompt. For example:
         `[{"label": "Excellent", "score": 1.0, "description": "A perfect answer with no factual mistakes"},
