@@ -5,19 +5,19 @@ Includes endpoints related to dataset evaluations.
 import hashlib
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Dict, Optional
 
-from fastapi import APIRouter, Body, Query, Request, HTTPException, File, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from google.cloud import storage
-
 from providers.completion import PROVIDER_CLASSES
+
+from orchestra.web.api.dataset_evaluation.schema import EvalConfig
 from orchestra.web.api.utils import gcp, on_prem
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
     evaluation_does_not_exist,
     invalid_training_endpoints,
 )
-from orchestra.web.api.dataset_evaluation.schema import EvalConfig
 
 router = APIRouter()
 
@@ -223,7 +223,8 @@ def eval_name_to_eval_id(user_id, eval_name):
     displayname_to_id = build_displayname_to_id(user_id)
     if eval_name not in displayname_to_id:
         raise HTTPException(
-            status_code=400, detail=f"You don't have an eval with the name {eval_name}."
+            status_code=400,
+            detail=f"You don't have an eval with the name {eval_name}.",
         )
     return displayname_to_id[eval_name]
 
@@ -284,7 +285,8 @@ def list_evals(
 def return_eval_config(
     request_fastapi: Request,
     eval_name: str = Query(
-        description="Name of the eval to return the configuration of"
+        description="Name of the eval to return the configuration of",
+        example="eval1",
     ),
 ):
     """
@@ -300,8 +302,11 @@ def return_eval_config(
 @router.post("/evals/rename")
 def rename_eval(
     request_fastapi: Request,
-    eval_name: str = Query(description="Name of the existing eval to rename"),
-    new_eval_name: str = Query(description="New name for the eval"),
+    eval_name: str = Query(
+        description="Name of the existing eval to rename",
+        example="eval1",
+    ),
+    new_eval_name: str = Query(description="New name for the eval", example="eval2"),
 ):
     """
     Renames a named eval from `eval_name` to `new_eval_name`.
@@ -320,7 +325,7 @@ def rename_eval(
 @router.delete("/evals/delete")
 def delete_eval(
     request_fastapi: Request,
-    eval_name: str = Query(description="Name of the eval to delete"),
+    eval_name: str = Query(description="Name of the eval to delete", example="eval1"),
 ):
     """
     Deletes a named eval from your account.
@@ -372,17 +377,28 @@ def delete_eval(
 )
 def trigger_eval(
     request_fastapi: Request,
-    dataset: str = Query(..., description="Name of the uploaded dataset to evaluate."),
+    dataset: str = Query(
+        ...,
+        description="Name of the uploaded dataset to evaluate.",
+        example="dataset1",
+    ),
     endpoint: str = Query(
         ...,
         description=(
             "Name of the endpoint to evaluate."
             " Endpoints must be specified using the `model@provider` format."
         ),
+        example="gpt-4o-mini@openai",
     ),
-    eval_name: str = Query(..., description="Name of the eval to use."),
+    eval_name: str = Query(
+        ...,
+        description="Name of the eval to use.",
+        example="eval1",
+    ),
     client_side_scores: Optional[UploadFile] = File(
-        default=None, description="Optionally upload client-side scores."
+        default=None,
+        description="Optionally upload client-side scores.",
+        json_schema_extra={"example": "client_scores.jsonl"},
     ),
 ) -> Dict[str, str]:
     """
@@ -430,15 +446,19 @@ def trigger_eval(
 def get_eval_scores(
     request_fastapi: Request,
     dataset: str = Query(
-        ..., description="Name of the dataset to fetch evaluation from."
+        ...,
+        description="Name of the dataset to fetch evaluation from.",
+        example="dataset1",
     ),
     eval_name: Optional[str] = Query(
         default=None,
         description="Name of the eval to fetch evaluation from. If `None`, returns all available evaluations for the dataset.",
+        example="eval1",
     ),
     per_prompt: bool = Query(
         default=False,
         description="If `True`, returns the scores on a per-prompt level. By default set to `False`.",
+        example=False,
     ),
 ) -> Dict:
     """

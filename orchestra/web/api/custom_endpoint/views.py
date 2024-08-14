@@ -59,8 +59,8 @@ def get_custom_api_keys(
 )
 def create_custom_api_key(
     request_fastapi: Request,
-    key: str = Query(..., description="Name of the API key."),
-    value: str = Query(..., description="Value of the API key."),
+    key: str = Query(..., description="Name of the API key.", example="key1"),
+    value: str = Query(..., description="Value of the API key.", example="value1"),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
 ) -> None:
     """
@@ -107,14 +107,17 @@ def create_custom_endpoint(
     name: str = Query(
         ...,
         description="Alias for the custom endpoint. This will be the name used to call the endpoint.",
+        example="endpoint1",
     ),
     url: str = Query(
         ...,
         description="Base URL of the endpoint being called. Must support the OpenAI format.",
+        example="https://api.url1.com",
     ),
     key_name: str = Query(
         ...,
         description="Name of the API key that will be passed as part of the query.",
+        example="key1",
     ),
     mdl_name: Optional[str] = Query(
         None,
@@ -122,6 +125,7 @@ def create_custom_endpoint(
             "Named passed to the custom endpoint as model name. "
             "If not specified, it will default to the endpoint alias."
         ),
+        example="llama-3.1-8b-finetuned",
     ),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
@@ -171,8 +175,16 @@ def create_custom_endpoint(
 )
 def rename_custom_endpoint(
     request_fastapi: Request,
-    name: str = Query(..., description="Name of the custom endpoint to be updated."),
-    new_name: str = Query(..., description="New name for the custom endpoint."),
+    name: str = Query(
+        ...,
+        description="Name of the custom endpoint to be updated.",
+        example="name1",
+    ),
+    new_name: str = Query(
+        ...,
+        description="New name for the custom endpoint.",
+        example="name2",
+    ),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
 ) -> None:
     """
@@ -216,8 +228,16 @@ def rename_custom_endpoint(
 )
 def rename_custom_api_key(
     request_fastapi: Request,
-    key: str = Query(..., description="Name of the custom API key to be updated."),
-    new_key: str = Query(..., description="New name for the custom API key."),
+    key: str = Query(
+        ...,
+        description="Name of the custom API key to be updated.",
+        example="key1",
+    ),
+    new_key: str = Query(
+        ...,
+        description="New name for the custom API key.",
+        example="key2",
+    ),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
 ) -> None:
     """
@@ -253,7 +273,11 @@ def rename_custom_api_key(
 )
 def delete_custom_endpoint(
     request_fastapi: Request,
-    name: str = Query(..., description="Name of the custom endpoint to delete."),
+    name: str = Query(
+        ...,
+        description="Name of the custom endpoint to delete.",
+        example="endpoint1",
+    ),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
 ) -> None:
     """
@@ -296,7 +320,11 @@ def delete_custom_endpoint(
 )
 def delete_custom_api_key(
     request_fastapi: Request,
-    key: str = Query(..., description="Name of the custom API key to delete."),
+    key: str = Query(
+        ...,
+        description="Name of the custom API key to delete.",
+        example="key1",
+    ),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
 ) -> None:
     """
@@ -359,14 +387,17 @@ def upload_custom_benchmark(
     endpoint_name: str = Query(
         ...,
         description="Name of the custom endpoint to submit a benchmark for.",
+        example="endpoint1",
     ),
     metric_name: str = Query(
         ...,
         description=f"""Name of the metric to submit. Allowed metrics are: {ALLOWED_METRICS_STR}.""",
+        example="tokens-per-second",
     ),
     value: float = Query(
         ...,
         description="Value of the metric to submit.",
+        example=10,
     ),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
     custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
@@ -408,18 +439,22 @@ def get_custom_benchmarks(
     endpoint_name: str = Query(
         ...,
         description="Name of the custom endpoint to get a benchmark for.",
+        example="endpoint1",
     ),
     metric_name: str = Query(
         ...,
         description="Name of the metric to get the benchmark of.",
+        example="tokens-per-second",
     ),
     start_time: str = Query(
         default="2024-01-01",
         description="Start time of window to get benchmarks between. Format YYYY-MM-DD",
+        example="2024-01-01",
     ),
     end_time: str = Query(
         default="2024-12-12",
         description="End time of window to get benchmarks between. Format YYYY-MM-DD",
+        example="2024-12-12",
     ),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
     custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
