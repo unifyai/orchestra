@@ -1,4 +1,8 @@
-args_to_skip = {"/v0/promo": {"post": ["user"]}, "/v0/endpoints": {"get": ["model"]}}
+args_to_skip = {
+    "/v0/promo": {"post": ["user"]},
+    "/v0/endpoints": {"get": ["model"]},
+    "/v0/prompt_history": {"get": ["tag"]},  # Temporarily added till tag support works
+}
 
 
 def get_param_details(parameter):
@@ -21,7 +25,7 @@ def get_param_details(parameter):
         default = ""
 
     description = schema.get("description")
-    example = parameter["example"]
+    example = parameter.get("example")
 
     return name, required, param_type, default, description, example
 
