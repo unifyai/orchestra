@@ -173,7 +173,7 @@ def send_to_deploy_server(action, **data):
 @handle_on_prem(endpoint="/router/train", method="post")
 def train_router(
     request_fastapi: Request,
-    name: str = Query(..., description="Name of the router."),
+    name: str = Query(..., description="Name of the router.", example="router1"),
     dataset: str = Query(
         ...,
         description=(
@@ -181,6 +181,7 @@ def train_router(
             " To use a dataset, you need to first upload it to your account"
             " using the `/dataset` POST endpoints."
         ),
+        example="dataset1",
     ),
     endpoints: List[str] = Query(
         ...,
@@ -188,6 +189,11 @@ def train_router(
             "List of endpoints to include in the router."
             " Endpoints must be specified using the `model@provider` format."
         ),
+        example=[
+            "gpt-4o-mini@openai",
+            "claude-3.5-sonnet@anthropic",
+            "llama-3.1-405b-chat@fireworks-ai",
+        ],
     ),
 ) -> Dict[str, str]:
     """
@@ -281,7 +287,11 @@ def get_trained_routers(
 @handle_on_prem(endpoint="/router/train", method="delete")
 def delete_router_train(
     request_fastapi: Request,
-    name: str = Query(..., description="Name of the router to delete."),
+    name: str = Query(
+        ...,
+        description="Name of the router to delete.",
+        example="router1",
+    ),
 ) -> Dict[str, str]:
     """
     Deletes the training files of a specific router.
@@ -332,7 +342,11 @@ def delete_router_train(
 @handle_on_prem(endpoint="/router/deploy", method="post")
 def deploy_router(
     request_fastapi: Request,
-    name: str = Query(..., description="Name of the router to deploy."),
+    name: str = Query(
+        ...,
+        description="Name of the router to deploy.",
+        example="router1",
+    ),
 ) -> Dict[str, str]:
     """
     Deploys a trained router to a live endpoint.
@@ -380,7 +394,11 @@ def deploy_router(
 @handle_on_prem(endpoint="/router/deploy", method="delete")
 def delete_router(
     request_fastapi: Request,
-    name: str = Query(..., description="Name of the router to un-deploy."),
+    name: str = Query(
+        ...,
+        description="Name of the router to un-deploy.",
+        example="router1",
+    ),
 ) -> Dict[str, str]:
     """
     Deactivates and deletes a previously deployed router.

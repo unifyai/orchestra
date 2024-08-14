@@ -1,7 +1,7 @@
 import time
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChatCompletionRequest(BaseModel):
@@ -18,13 +18,23 @@ class ChatCompletionRequest(BaseModel):
     # This allows extra arguments through.
     model_config = ConfigDict(extra="allow")
 
-    model: str
-    messages: List[Dict[str, Any]]
+    model: str = Field(..., json_schema_extra={"example": "gpt-4o-mini@openai"})
+    messages: List[Dict[str, Any]] = Field(
+        ...,
+        json_schema_extra={
+            "example": [
+                {
+                    "role": "user",
+                    "content": "Tell me a joke",
+                },
+            ],
+        },
+    )
 
     # openai args
-    temperature: float = 0.9
-    stream: bool = False
-    max_tokens: Optional[int] = None
+    temperature: float = Field(0.9, json_schema_extra={"example": 0.9})
+    stream: bool = Field(False, json_schema_extra={"example": False})
+    max_tokens: Optional[int] = Field(None, json_schema_extra={"example": 1024})
     frequency_penalty: Optional[float] = None
     logit_bias: Optional[Dict[str, float]] = None
     logprobs: Optional[bool] = None

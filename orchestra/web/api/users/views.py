@@ -69,13 +69,18 @@ def get_credits(
 @handle_on_prem(endpoint="/promo", method="none")
 def credits_code(
     request_fastapi: Request,
-    code: str = Query(..., description="Promo code to be activated."),
+    code: str = Query(
+        ...,
+        description="Promo code to be activated.",
+        example="sample_code",
+    ),
     user: Optional[str] = Query(
         None,
         description=(
             "ID of the user that receives the credits,"
             "defaults to the user making the request."
         ),
+        example="sample_user_id",
     ),
     recharge_dao: RechargeDAO = Depends(),
     users_dao: UsersDAO = Depends(),

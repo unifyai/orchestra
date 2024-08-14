@@ -189,8 +189,8 @@ def _store_metadata(
 )
 def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
-    file: Annotated[UploadFile, Form()],
-    name: Annotated[str, Form()],
+    file: Annotated[UploadFile, Form(json_schema_extra={"example": "dataset.jsonl"})],
+    name: Annotated[str, Form(json_schema_extra={"example": "dataset1"})],
 ) -> Dict[str, str]:
     """
     Uploads a custom dataset to the platform.
@@ -251,7 +251,7 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 )
 def delete_dataset(
     request_fastapi: Request,
-    name: str = Query(..., description="Name of the dataset."),
+    name: str = Query(..., description="Name of the dataset.", example="dataset1"),
 ) -> Dict[str, str]:
     """
     Deletes a previously updated dataset and any relevant artifacts from the platform.
@@ -336,8 +336,8 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 )
 def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
-    name: str = Query(..., description="Name of the dataset."),
-) -> List[Dict[str, str]]:
+    name: str = Query(..., description="Name of the dataset.", example="dataset1"),
+):
     """
     Downloads a specific dataset from the platform.
     """
@@ -403,8 +403,16 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 )
 def rename_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
-    name: str = Query(..., description="Name of the dataset to be updated."),
-    new_name: str = Query(..., description="New name for the dataset."),
+    name: str = Query(
+        ...,
+        description="Name of the dataset to be updated.",
+        example="dataset1",
+    ),
+    new_name: str = Query(
+        ...,
+        description="New name for the dataset.",
+        example="dataset2",
+    ),
 ) -> Dict[str, str]:
     """
     Renames a previously updated dataset.

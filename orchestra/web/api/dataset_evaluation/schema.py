@@ -1,10 +1,13 @@
 from typing import Union
+
 from pydantic import BaseModel, Field
 
 
 class EvalConfig(BaseModel):
     eval_name: str = Field(
-        description="A unique, user-defined name used when referencing and triggering the eval."
+        ...,
+        description="A unique, user-defined name used when referencing and triggering the eval.",
+        json_schema_extra={"example": "eval1"},
     )
     system_prompt: Union[str, None] = Field(
         default=None,
@@ -12,14 +15,20 @@ class EvalConfig(BaseModel):
     )
     class_config: Union[list, None] = Field(
         default=None,
-        description="""If set, describes the list of classifications that the LLM judge uses to score each prompt. For example: 
-    `[{"label": "Excellent", "score": 1.0, "description": "A perfect answer with no factual mistakes"},
-    {"label": "Good", "score": 0.5, "description": "An average answer"},
-    {"label": "Bad", "score": 0.0, "description": "An incorrect answer, containing a significant factual mistake"}]`""",
+        description=(
+            """If set, describes the list of classifications that the LLM judge uses to score each prompt. For example:
+```
+[{"label": "Excellent", "score": 1.0, "description": "A perfect answer with no factual mistakes"},
+{"label": "Good", "score": 0.5, "description": "An average answer"},
+{"label": "Bad", "score": 0.0, "description": "An incorrect answer, containing a significant factual mistake"}]
+```
+"""
+        ),
     )
     judge_models: Union[str, list[str]] = Field(
         default="claude-3.5-sonnet@aws-bedrock",
         description="Specifies the LLM(s) to be used as the judge. This can be a string containining a single model name or a list of model names.",
+        json_schema_extra={"example": "claude-3.5-sonnet@aws-bedrock"},
     )
     client_side: bool = Field(
         default=False,

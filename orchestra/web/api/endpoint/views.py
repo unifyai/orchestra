@@ -31,10 +31,12 @@ def get_endpoints(
     model: str = Query(
         default=None,
         description="Model to get available endpoints from.",
+        example="llama-3.1-405b-chat",
     ),
     provider: str = Query(
         default=None,
         description="Provider to get available endpoints from.",
+        example="openai",
     ),
     endpoint_dao: EndpointDAO = Depends(),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
@@ -85,6 +87,7 @@ def get_providers(
     model: str = Query(
         default=None,
         description="Model to get available providers from.",
+        example="llama-3.1-405b-chat",
     ),
     endpoint_dao: EndpointDAO = Depends(),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),

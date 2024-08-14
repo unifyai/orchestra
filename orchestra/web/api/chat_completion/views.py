@@ -286,10 +286,12 @@ def get_query_metrics(
     start_time: Optional[str] = Query(
         None,
         description="Timestamp of the earliest query to aggregate. Format is `YYYY-MM-DD hh:mm:ss`.",
+        example="2024-07-12 04:20:32",
     ),
     end_time: Optional[str] = Query(
         None,
         description="Timestamp of the latest query to aggregate. Format is `YYYY-MM-DD hh:mm:ss`.",
+        example="2024-08-12 04:20:32",
     ),
     models: Optional[str] = Query(
         None,
@@ -297,6 +299,7 @@ def get_query_metrics(
             "Models to fetch metrics from. The list must be a set of comma-sparated strings. "
             "i.e. `gpt-3.5-turbo,gpt-4o`"
         ),
+        example="gpt-4o,llama-3.1-405b-chat,claude-3.5-sonnet",
     ),
     providers: Optional[str] = Query(
         None,
@@ -304,10 +307,12 @@ def get_query_metrics(
             "Providers to fetch metrics from. The list must be a set of comma-sparated strings. "
             "i.e. `openai,together-ai`"
         ),
+        example="openai,anthropic,fireworks-ai",
     ),
     interval: Optional[str] = Query(
         300,
         description="Number of seconds in the aggregation interval.",
+        example=300,
     ),
     secondary_user_id: Optional[str] = Query(
         None,
@@ -315,6 +320,7 @@ def get_query_metrics(
             "Secondary user id. The secondary user id will match any string "
             "previously sent in the `user` attribute of `/chat/completions`."
         ),
+        example="sample_user_id",
     ),
 ) -> Dict[str, Any]:
     """
