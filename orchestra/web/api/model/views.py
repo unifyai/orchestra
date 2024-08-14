@@ -31,6 +31,7 @@ def get_models(
     provider: str = Query(
         default=None,
         description="Provider to get available models from.",
+        example="openai",
     ),
     endpoint_dao: EndpointDAO = Depends(),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
