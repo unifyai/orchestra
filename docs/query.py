@@ -72,6 +72,9 @@ def get_query(path, route, route_config):
         required_str = 'required="true"' if required else ""
         examples[name] = example
 
+        if not description:
+            description = ""
+
         # create param field tag
         query_str += (
             f'<ParamField query="{name}" type="{param_type}" '
