@@ -389,7 +389,7 @@ def trigger_eval(
     client_side_scores: Optional[UploadFile] = File(
         default=None,
         description="An optional file upload for client-side scores. The file must be in JSONL format and the prompts must match the order of the `dataset`. "
-                "Each entry should include `prompt` and `score` keys, with `score` being a float between 0 and 1. The evaluation corresponding to the `eval_name` must have `client_side=True`.",
+        "Each entry should include `prompt` and `score` keys, with `score` being a float between 0 and 1. The evaluation corresponding to the `eval_name` must have `client_side=True`.",
     ),
 ) -> Dict[str, str]:
     """
