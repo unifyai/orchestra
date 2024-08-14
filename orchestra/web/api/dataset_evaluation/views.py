@@ -227,6 +227,7 @@ def eval_name_to_eval_id(user_id, eval_name):
         )
     return displayname_to_id[eval_name]
 
+
 def check_if_eval_name_free(user_id, eval_name):
     displayname_to_id = build_displayname_to_id(user_id)
     if eval_name in displayname_to_id:
@@ -387,7 +388,7 @@ def trigger_eval(
     eval_name: str = Query(..., description="Name of the eval to use."),
     client_side_scores: Optional[UploadFile] = File(
         default=None,
-        description="Optionally upload client-side scores. The format needs to be a file in JSONL format, in the same order as the `dataset`. The keys need to be `prompt` and `score`, where `score` should be a float between 0 and 1. The eval with corresponding `eval_name` needs to have `client_side=True`."
+        description="Optionally upload client-side scores. The format needs to be a file in JSONL format, in the same order as the `dataset`. The keys need to be `prompt` and `score`, where `score` should be a float between 0 and 1. The eval with corresponding `eval_name` needs to have `client_side=True`.",
     ),
 ) -> Dict[str, str]:
     """
@@ -427,22 +428,25 @@ def trigger_eval(
                 status_code=400, detail="Error processing uploaded scores"
             )
 
-        # check whether the eval name is a client side one: 
+        # check whether the eval name is a client side one:
         blob = load_eval_config_blob(user_id, eval_id)
         contents = json.loads(blob.download_as_bytes().decode("utf-8"))
         if "client_side" not in contents or contents.get("client_side", "") != True:
-            raise HTTPException(status_code=400, detail=f"The eval {eval_name} is not a client-side eval (as client_side != True)")
-
+            raise HTTPException(
+                status_code=400,
+                detail=f"The eval {eval_name} is not a client-side eval (as client_side != True)",
+            )
 
         # put everything in the bucket
         bucket_name = "uploaded_datasets"
-        blob_name = f"{user_id}/{internal_id}/0/{endpoint}/{eval_id}/client_side_judged.jsonl"
+        blob_name = (
+            f"{user_id}/{internal_id}/0/{endpoint}/{eval_id}/client_side_judged.jsonl"
+        )
         blob = storage.Client().bucket(bucket_name).blob(blob_name)
-        blob.upload_from_string(file, content_type='application/octet-stream')
+        blob.upload_from_string(file, content_type="application/octet-stream")
         refresh_scores_json(user_id)
 
         return {"info": "Evaluation uploaded!"}
-
 
     # Send train job to the dataset_evaluation server
     send_to_dataset_evaluation_server(

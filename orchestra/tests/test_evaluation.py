@@ -231,7 +231,9 @@ async def test_client_side_scores(
     file_path = "./orchestra/tests/sample_datasets/prompts_with_scores.jsonl"
     with open(file_path, "rb") as f:
         file_content = f.read()
-    files = {"client_side_scores": ("test.jsonl", file_content, "application/x-jsonlines")}
+    files = {
+        "client_side_scores": ("test.jsonl", file_content, "application/x-jsonlines")
+    }
 
     params = {
         "url": url,
