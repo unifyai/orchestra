@@ -3,7 +3,8 @@ Includes endpoints related to benchmarks.
 """
 
 import datetime
-from fastapi import APIRouter, Request, Query
+from typing import Optional
+from fastapi import APIRouter, Request, Query, HTTPException
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
@@ -11,6 +12,7 @@ from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.latest_benchmark_dao import LatestBenchmarkDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.custom_endpoint_benchmark_dao import CustomEndpointBenchmarkDAO
+from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.web.api.utils.http_responses import benchmark_not_found, model_not_found
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
@@ -136,3 +138,18 @@ def filter_benchmark(
         return result
     except:
         raise benchmark_not_found(f"{model}@{provider}")
+
+
+@router.get("/prompt_history")
+def get_prompt_history(
+    request_fastapi: Request,
+    tag: Optional[str] = Query(
+        default=None,
+        description="Provide a tag to filter by prompts that are marked with this tag.",
+    ),
+    query_dao: QueryDAO = Depends(),
+):
+    if tag:
+        raise HTTPException(status_code=501, detail="Not Implemented Yet")
+    ret = query_dao.filter(user_id=request_fastapi.state.user_id)
+    return ret
