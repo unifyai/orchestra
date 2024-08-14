@@ -22,7 +22,7 @@ class EvalConfig(BaseModel):
             '    {"label": "Bad", "score": 0.0, "description": "An incorrect answer, containing a significant factual mistake"}]`',
         ),
     )
-    judge_models: Union[str, list[str], None] = Field(
+    judge_models: Union[str, list[str]] = Field(
         default="claude-3.5-sonnet@aws-bedrock",
         description="Specifies the LLM(s) to be used as the judge. This can be a string containining a single model name or a list of model names.",
         json_schema_extra={"example": "claude-3.5-sonnet@aws-bedrock"},
