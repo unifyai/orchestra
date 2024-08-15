@@ -79,7 +79,7 @@ def create_request(
         eval_config,
     )
     payload = create_payload(model_tag=judge_endpoint, prompt=prompt)
-    score_fn = partial(ratings_from_sample, cfg=eval_config["class_config"])
+    score_fn = partial(ratings_from_sample, cfg=eval_config.get("class_config", None))
     return Request(
         id_=prompt_data["id_"],
         payload=payload,
