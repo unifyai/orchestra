@@ -26,7 +26,7 @@ def create_judge_rubric(cfg):
 
     prompt += """\nAfter that, you must output your final verdict in JSON by **strictly** following this format:
 
-{"assistant_rating": [[RATING]]}
+{"assistant_rating": RATING}
 
 Do not output anything else after your final verdict, but make sure you do give a verdict, that's the most important part!"""
     return prompt
@@ -79,7 +79,7 @@ def create_request(
         eval_config,
     )
     payload = create_payload(model_tag=judge_endpoint, prompt=prompt)
-    score_fn = partial(ratings_from_sample, cfg=eval_config)
+    score_fn = partial(ratings_from_sample, cfg=eval_config["class_config"])
     return Request(
         id_=prompt_data["id_"],
         payload=payload,
