@@ -252,3 +252,19 @@ async def test_client_side_scores(
     assert eval_name in scores
     assert endpoint in scores[eval_name]
     assert "client_side" in scores[eval_name][endpoint]
+
+
+
+@pytest.mark.anyio
+async def test_invalid_judge_model(
+    client: AsyncClient,
+    cleanup_eval_config,
+):
+    eval_name = "invalid_judge_model"
+    judge_model = "fake_judge123@fake_provider456"
+
+    url = "/v0/evals/create"
+    params = {"eval_name": eval_name, "judge_models": judge_model}
+    cleanup_eval_config.append(eval_name)
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 400, response.json()
