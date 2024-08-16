@@ -73,7 +73,7 @@ def list_datasets(user_id):
         [b.id.split("/")[2] for b in blobs],
     )
     dirs = {d for d in dirs if not d.endswith(".jsonl")}
-    dirs.pop("evaluation_configs", "")
+    dirs.discard("evaluation_configs")
     return list(dirs)
 
 
