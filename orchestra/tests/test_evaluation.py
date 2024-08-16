@@ -254,7 +254,6 @@ async def test_client_side_scores(
     assert "client_side" in scores[eval_name][endpoint]
 
 
-
 @pytest.mark.anyio
 async def test_invalid_judge_model(
     client: AsyncClient,
