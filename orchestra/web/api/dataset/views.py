@@ -70,8 +70,8 @@ def _list_datasets(user_id: str):
         [(b if os.environ.get("ON_PREM") else b.id).split("/")[2] for b in blobs],
     )
     # Clean legacy datasets
-    dirs = {d for d in dirs if not d.endswith(".jsonl")}
-    dirs.pop("evaluation_configs", "")
+    dirs = {d for d in dirs if not d.endswith(".jsonl") and d is not "evaluation_configs"}
+    dirs.discard("evaluation_configs")
     return list(dirs)
 
 
