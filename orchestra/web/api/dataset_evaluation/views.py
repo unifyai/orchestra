@@ -261,6 +261,17 @@ def create_eval(
     """
     user_id = request_fastapi.state.user_id
 
+    judge_models = request.judge_models
+    if isinstance(request.judge_models, str):
+        judge_models = [request.judge_models]
+
+    invalid_endpoints = find_invalid_endpoints(judge_models)
+    if invalid_endpoints:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not find {'.'.join(invalid_endpoints)} to use as a judge model.",
+        )
+
     # create evaluation id
     eval_cfg_body = request.model_dump()
     config_str = json.dumps(eval_cfg_body, sort_keys=True)
