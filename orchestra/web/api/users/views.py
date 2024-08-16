@@ -38,6 +38,9 @@ def get_credits(
     :return: user instance with credits from database.
     """
     user = users_dao.filter(id=request_fastapi.state.user_id)
+    # TODO: Remove this after fixing the DB entries
+    if len(user) == 0:
+        print(f"##ANCHOR## bot: {request_fastapi.state.user_id}")
     return user[0]
 
 
