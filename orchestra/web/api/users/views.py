@@ -1,4 +1,5 @@
 import datetime
+import logging
 from typing import Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -11,6 +12,13 @@ from orchestra.web.api.users.schema import CreditsResponse
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+handler = logging.StreamHandler()
+handler.setLevel(logging.INFO)
+logger.addHandler(handler)
 
 
 @router.get(
@@ -40,7 +48,7 @@ def get_credits(
     user = users_dao.filter(id=request_fastapi.state.user_id)
     # TODO: Remove this after fixing the DB entries
     if len(user) == 0:
-        print(f"##ANCHOR## bot: {request_fastapi.state.user_id}")
+        logging.debug(f"##ANCHOR## bot: {request_fastapi.state.user_id}")
     return user[0]
 
 
