@@ -71,6 +71,7 @@ def _list_datasets(user_id: str):
     )
     # Clean legacy datasets
     dirs = {d for d in dirs if not d.endswith(".jsonl")}
+    dirs.pop("evaluation_configs", "")
     return list(dirs)
 
 
