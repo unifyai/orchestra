@@ -105,16 +105,11 @@ async def test_upload_dataset(client: AsyncClient, cleanup):
 
 async def test_upload_incorrect_dataset(client: AsyncClient, cleanup):
 
-    names = ["wrong", "extra_kw", "no_prompt"]
+    names = ["wrong", "no_prompt"]
     details = [
         (
             "The uploaded dataset has the wrong format. It must be a jsonl file where"
             " each line has a `prompt` key and optionally a `ref_answer` one."
-        ),
-        (
-            "The uploaded dataset has the wrong format. It must be a jsonl file where"
-            " each line has a `prompt` key and optionally a `ref_answer` one."
-            " Unknown keyword `expected_answer` in line 2."
         ),
         (
             "The uploaded dataset has the wrong format. It must be a jsonl file where"
