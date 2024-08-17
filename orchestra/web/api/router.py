@@ -7,9 +7,10 @@ from orchestra.web.api import (  # noqa: WPS235
     supported_endpoints,
     llm_queries,
     logging,
+    custom_endpoints,
+    custom_api_keys,
     admin,
     benchmarks,
-    custom_endpoint,
     dataset,
     dataset_evaluation,
     docs,
@@ -42,8 +43,13 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    custom_endpoint.router,
-    tags=["Custom Endpoints and API keys"],
+    custom_endpoints.router,
+    tags=["Custom Endpoints"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    custom_api_keys.router,
+    tags=["Custom API keys"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(

@@ -1,11 +1,6 @@
 from pydantic import BaseModel, validator
 
 
-class CustomApiKeyModelResponse(BaseModel):
-    key: str
-    value: str
-
-
 class CustomEndpointModelResponse(BaseModel):
     name: str
     mdl_name: str
