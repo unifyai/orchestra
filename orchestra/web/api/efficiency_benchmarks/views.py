@@ -78,6 +78,7 @@ def _get_custom_endpoint_benchmark(
             "itl": "inter-token-latency",
             "input-cost": "input-cost",
             "output-cost": "output-cost",
+            "measured-at": "measured-at"
         }
         rets = dict()
         latest_only = not start_time_provided and not end_time_provided
@@ -103,8 +104,6 @@ def _get_custom_endpoint_benchmark(
                 rets[short_name] = [item.value for item in inner_rets]
             else:
                 rets[short_name] = None
-        # ToDo: implement measured_at in the database
-        rets["measured_at"] = None
         if latest_only:
             single_return = dict()
             for key in rets.keys():
@@ -262,7 +261,7 @@ def upload_benchmark(
     request_fastapi: Request,
     endpoint_name: str = Query(
         ...,
-        description="Name of the custom endpoint to submit a benchmark for.",
+        description="Name of the *custom* endpoint to submit a benchmark for.",
         example="endpoint1",
     ),
     metric_name: str = Query(
@@ -275,6 +274,12 @@ def upload_benchmark(
         ...,
         description="Value of the metric to submit.",
         example=10,
+    ),
+    measured_at: datetime = Query(
+        ...,
+        description="The timestamp to associate with the submission."
+                    "Defaults to current time if unspecified.",
+        example="2024-08-12T04:20:32.808410",
     ),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
     custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
@@ -300,10 +305,11 @@ def upload_benchmark(
             status_code=400,
             detail=f"""The endpoint: {endpoint_name} was not found in your account.""",
         )
+    measured_at = datetime.now() if measured_at is None else measured_at
     custom_endpoint_benchmark_dao.upload_benchmark(
         endpoint_id=endpoint_id,
         metric_name=metric_name,
         value=value,
-        measured_at=datetime.now(),
+        measured_at=measured_at,
     )
     return {"info": "Benchmark uploaded!"}
