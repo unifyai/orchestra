@@ -22,7 +22,7 @@ from orchestra.web.api.chat_completion.schema import (
     ChatCompletionResponse,
     RouterScoresResponse,
 )
-from orchestra.web.api.users.views import get_credits
+from orchestra.web.api.credits.views import get_credits
 from orchestra.web.api.utils.bg_tasks import db_operations
 from orchestra.web.api.utils.dynamic_routing import (
     RouterConfig,

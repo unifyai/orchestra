@@ -18,7 +18,7 @@ from orchestra.web.api import (  # noqa: WPS235
     monitoring,
     provider,
     routing,
-    users,
+    credits,
 )
 from orchestra.web.api.dependencies import auth_admin_key, auth_api_key
 
@@ -27,7 +27,7 @@ ADMIN_AUTH = [Depends(auth_admin_key)] if not os.environ.get("ON_PREM") else Non
 
 api_router = APIRouter()
 api_router.include_router(
-    users.router,
+    credits.router,
     tags=["User"],
     dependencies=API_KEY_AUTH,
 )

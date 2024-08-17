@@ -8,7 +8,7 @@ from fastapi.param_functions import Depends
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.models.orchestra_models import Users
-from orchestra.web.api.users.schema import CreditsResponse
+from orchestra.web.api.credits.schema import CreditsResponse
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()

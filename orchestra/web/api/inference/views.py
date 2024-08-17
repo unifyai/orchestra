@@ -16,7 +16,7 @@ from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.inference.schema import InferenceRequest
-from orchestra.web.api.users.views import get_credits
+from orchestra.web.api.credits.views import get_credits
 from orchestra.web.api.utils.bg_tasks import db_operations
 from orchestra.web.api.utils.dynamic_routing import dynamic_routing, parse_endpoint
 from orchestra.web.api.utils.helpers import filter_request_params
