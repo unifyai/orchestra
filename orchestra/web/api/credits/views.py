@@ -78,7 +78,7 @@ def get_credits(
     },
 )
 @handle_on_prem(endpoint="/promo", method="none")
-def credits_code(
+def promo_code(
     request_fastapi: Request,
     code: str = Query(
         ...,
