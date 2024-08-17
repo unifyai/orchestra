@@ -57,7 +57,7 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     custom_router_dao: CustomRouterDAO = Depends(),
 ) -> Union[ChatCompletionResponse, StreamingResponse]:
     """
-    OpenAI compatible /chat/completions endpoint for LLM inference.
+    OpenAI compatible `/chat/completions` endpoint for LLM inference.
     \f
     :param background_tasks: FastAPI background tasks.
     :param request_fastapi: FastAPI request object.
