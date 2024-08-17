@@ -13,7 +13,6 @@ from orchestra.web.api import (  # noqa: WPS235
     docs,
     supported_endpoints,
     eval_batch,
-    inference,
     monitoring,
     provider,
     routing,
@@ -32,13 +31,8 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    inference.router,
-    tags=["Making Queries"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
     chat_completion.router,
-    tags=["Making Queries"],
+    tags=["LLM Queries"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(

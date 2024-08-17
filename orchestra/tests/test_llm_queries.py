@@ -13,7 +13,6 @@ from orchestra.tests.utils import (
     get_chat_completions_payload_fallback,
     get_chat_completions_payload_tool_use,
     get_credits,
-    get_inference_payload,
 )
 
 MODELS = [
@@ -32,19 +31,12 @@ MODELS = [
     "llama-3-8b-chat@groq",
 ]
 
-payload_fn = {
-    "/v0/chat/completions": get_chat_completions_payload,
-    "/v0/inference": get_inference_payload,
-}
-
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("model", MODELS)
-@pytest.mark.parametrize("endpoint", ["/v0/chat/completions", "/v0/inference"])
 @pytest.mark.parametrize("stream_str", ["stream", "standard"])
 async def test_text_generation(  # noqa: WPS218, E501
     model: str,
-    endpoint: str,
     stream_str: str,
     client: AsyncClient,
 ) -> None:
@@ -57,10 +49,10 @@ async def test_text_generation(  # noqa: WPS218, E501
     model, provider = model.split("@")
 
     stream = stream_str == "stream"
-    data = payload_fn[endpoint](model, provider, stream=stream)
+    data = get_chat_completions_payload(model, provider, stream=stream)
 
     pre_credits = await get_credits(client)
-    response = await client.post(endpoint, headers=HEADERS, json=data)
+    response = await client.post("/v0/chat/completions", headers=HEADERS, json=data)
     assert response.status_code == status.HTTP_200_OK
 
     if stream:
@@ -136,7 +128,6 @@ async def test_function_calling(model, client: AsyncClient):
 async def test_n_1(model, client: AsyncClient):
     model, provider = model.split("@")
     endpoint = "/v0/chat/completions"
-    get_chat_completions_payload
     data = get_chat_completions_payload(model, provider, stream=False)
     data["n"] = 1
     response = await client.post(endpoint, headers=HEADERS, json=data)
