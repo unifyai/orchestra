@@ -22,7 +22,7 @@ logger.addHandler(handler)
 
 
 @router.get(
-    "/get_credits",
+    "/credits",
     response_model=CreditsResponse,
     responses={
         200: {
@@ -33,7 +33,7 @@ logger.addHandler(handler)
         },
     },
 )
-@handle_on_prem(endpoint="/get_credits", method="none")
+@handle_on_prem(endpoint="/credits", method="none")
 def get_credits(
     request_fastapi: Request,
     users_dao: UsersDAO = Depends(),
