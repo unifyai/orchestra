@@ -120,7 +120,8 @@ def create_evaluator(
 ):
     """
     Create a re-usable, named evaluator.
-    This can be used to trigger an evaluation via the `/evals/trigger` endpoint.
+    This can be used to trigger an evaluation via POST requests to the
+    `/evaluation` endpoint.
     """
     user_id = request_fastapi.state.user_id
 
