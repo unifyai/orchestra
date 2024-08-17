@@ -1,5 +1,4 @@
 import os
-
 from fastapi import Depends
 from fastapi.routing import APIRouter
 
@@ -12,14 +11,14 @@ from orchestra.web.api import (  # noqa: WPS235
     dataset,
     evaluators,
     evaluations,
-    admin,
-    efficiency,
-    docs,
-    eval_batch,
-    monitoring,
-    provider,
+    efficiency_benchmarks,
     routing,
     credits,
+    eval_batch,
+    admin,
+    provider,
+    monitoring,
+    docs,
 )
 from orchestra.web.api.dependencies import auth_admin_key, auth_api_key
 
@@ -69,7 +68,7 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    efficiency.router,
+    efficiency_benchmarks.router,
     tags=["Efficiency Benchmarks"],
     dependencies=API_KEY_AUTH,
 )

@@ -101,8 +101,9 @@ def get_benchmark(
 ):
     """
     Extracts cost and speed data for the provided endpoint via our standardized
-    benchmarks, in the specified region, with the specified sequence length, and
-    returning the specified number of data points, or only the latest data if preferred.
+    efficiency benchmarks, in the specified region, with the specified sequence length,
+    and returning the specified number of data points, or only the latest data if
+    preferred.
     """
     if provider == "custom":
         try:
