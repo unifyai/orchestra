@@ -26,18 +26,19 @@ ADMIN_AUTH = [Depends(auth_admin_key)] if not os.environ.get("ON_PREM") else Non
 
 api_router = APIRouter()
 api_router.include_router(
-    credits.router,
-    tags=["Credits"],
+    supported_endpoints.router,
+    tags=["Supported Endpoints"],
+    include_in_schema=True,
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
     inference.router,
-    tags=["Querying LLMs"],
+    tags=["Making Queries"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
     chat_completion.router,
-    tags=["Querying LLMs"],
+    tags=["Making Queries"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
@@ -47,12 +48,17 @@ api_router.include_router(
 )
 api_router.include_router(
     dataset.router,
-    tags=["Dataset"],
+    tags=["Datasets"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
     dataset_evaluation.router,
-    tags=["Dataset Evaluation"],
+    tags=["Evaluations"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    benchmarks.router,
+    tags=["Benchmarks"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
@@ -61,9 +67,8 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    supported_endpoints.router,
-    tags=["Supported Endpoints"],
-    include_in_schema=True,
+    credits.router,
+    tags=["Credits"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
@@ -87,8 +92,3 @@ api_router.include_router(
 )
 api_router.include_router(monitoring.router)
 api_router.include_router(docs.router)
-api_router.include_router(
-    benchmarks.router,
-    tags=["benchmarks"],
-    dependencies=API_KEY_AUTH,
-)
