@@ -3,7 +3,7 @@ Includes endpoints related to benchmarks.
 """
 
 import datetime
-from typing import Dict, Union
+from typing import Dict, Union, List
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
@@ -50,7 +50,7 @@ def _get_endpoint_from_model_provider(
 
 @router.get(
     "/benchmark",
-    response_model=Dict[str, Union[str, float]],
+    response_model=List[Dict[str, Union[str, float]]],
     responses={
         200: {
             "description": "Successful Response",
@@ -68,19 +68,19 @@ def _get_endpoint_from_model_provider(
         },
     },
 )
-def get_latest_benchmark(
+def get_benchmark(
     request_fastapi: Request,
     model: str = Query(..., description="Name of the model.", example="gpt-4o-mini"),
     provider: str = Query(..., description="Name of the provider.", example="openai"),
     region: str = Query(
         default="Belgium",
         description="""Region where the benchmark is run.
-        Options are: "Belgium", "Hong Kong", "Iowa".""",
+        Options are: `"Belgium"`, `"Hong Kong"` or `"Iowa"`.""",
         example="Belgium",
     ),
     seq_len: str = Query(
         default="short",
-        description="Length of the sequence used for benchmarking,"
+        description="Length of the sequence used for benchmarking, "
                     "can be short or long",
         example="short",
     ),
@@ -89,6 +89,11 @@ def get_latest_benchmark(
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
     custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
 ):
+    """
+    Extracts cost and speed data for the provided endpoint via our standardized
+    benchmarks, in the specified region, with the specified sequence length, and
+    returning the specified number of data points, or only the latest data if preferred.
+    """
     if provider == "custom":
         try:
             user_id = request_fastapi.state.user_id

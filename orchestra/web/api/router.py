@@ -13,7 +13,7 @@ from orchestra.web.api import (  # noqa: WPS235
     evaluators,
     evaluations,
     admin,
-    benchmarks,
+    efficiency,
     docs,
     eval_batch,
     monitoring,
@@ -69,8 +69,8 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    benchmarks.router,
-    tags=["Benchmarks"],
+    efficiency.router,
+    tags=["Efficiency"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
