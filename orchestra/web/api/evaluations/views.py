@@ -169,7 +169,7 @@ def load_eval_config_blob(user_id, eval_id):
 ###########################
 
 @router.post(
-    "/evals/trigger",
+    "/evaluation",
     responses={
         200: {
             "description": "Successful Response",
@@ -204,7 +204,7 @@ def load_eval_config_blob(user_id, eval_id):
         },
     },
 )
-def trigger_eval(
+def trigger_evaluation(
     request_fastapi: Request,
     eval_name: str = Query(
         ...,
@@ -304,9 +304,9 @@ def trigger_eval(
 
 
 @router.get(
-    "/evals/get_scores",
+    "/evaluation",
 )
-def get_eval_scores(
+def get_evaluation(
     request_fastapi: Request,
     dataset: str = Query(
         ...,
