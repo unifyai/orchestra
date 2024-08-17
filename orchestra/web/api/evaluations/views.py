@@ -1,69 +1,22 @@
 """
 Includes endpoints related to dataset evaluations.
 """
-
-import hashlib
-import json
 import os
+import json
 from typing import Dict, Optional
-
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from google.cloud import storage
-from providers.completion import PROVIDER_CLASSES
 
-from orchestra.web.api.dataset_evaluation.schema import EvalConfig
+from providers.completion import PROVIDER_CLASSES
 from orchestra.web.api.utils import gcp, on_prem
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
-    evaluation_does_not_exist,
     invalid_training_endpoints,
 )
 
 router = APIRouter()
 
 # utils
-
-
-# TODO: Move to utils (duplicated in dataset)
-def _list_datasets(user_id: str):
-    bucket_name = "uploaded_datasets"
-    blobs = (
-        on_prem.list_dir(bucket_name, user_id)
-        if os.environ.get("ON_PREM")
-        else gcp.list_dir(bucket_name, user_id)
-    )
-    dirs = set([b.id.split("/")[2] for b in blobs])
-    # Clean legacy datasets
-    dirs = {d for d in dirs if not d.endswith(".jsonl")}
-    if os.environ.get("ON_PREM"):
-        id_to_name = on_prem.internal_id_to_displayname(user_id)
-    else:
-        id_to_name = gcp.internal_id_to_displayname(user_id)
-    dirs = [id_to_name.get(d, d) for d in dirs]
-    return list(dirs)
-
-
-def _list_evaluations(user_id: str, dataset: str):
-    bucket_name = "uploaded_datasets"
-    if os.environ.get("ON_PREM"):
-        id_to_name = on_prem.internal_id_to_displayname(user_id)
-    else:
-        id_to_name = gcp.internal_id_to_displayname(user_id)
-    name_to_id = {name: id_ for id_, name in id_to_name.items()}
-    internal_id = name_to_id.get(dataset, dataset)
-    blobs = (
-        on_prem.list_dir(bucket_name, f"{user_id}/{internal_id}")
-        if os.environ.get("ON_PREM")
-        else gcp.list_dir(bucket_name, f"{user_id}/{internal_id}")
-    )
-    endpoints = []
-    for b in blobs:
-        # keep only the endpoints
-        b_id = b if os.environ.get("ON_PREM") else b.id
-        levels = b_id.split("/")
-        if "judgements.jsonl" in b_id and len(levels) > 4:
-            endpoints.append(levels[4])
-    return endpoints
 
 
 def _get_scores(user_id: str, dataset: str):
@@ -159,31 +112,6 @@ def find_invalid_endpoints(endpoints):
     return invalid_endpoints
 
 
-def _delete_evaluation(user_id: str, dataset: str, endpoint: str):
-    bucket_name = "uploaded_datasets"
-    # TODO: 0 will need to be accounted when introducing dynamic datasets
-    if dataset == "":
-        raise dataset_does_not_exist(dataset)
-    if os.environ.get("ON_PREM"):
-        id_to_name = on_prem.internal_id_to_displayname(user_id)
-    else:
-        id_to_name = gcp.internal_id_to_displayname(user_id)
-    name_to_id = {name: id_ for id_, name in id_to_name.items()}
-    internal_id = name_to_id.get(dataset, dataset)
-    dir_name = f"{user_id}/{internal_id}/0/{endpoint}"
-    exists = (
-        on_prem.dir_exists(bucket_name, dir_name)
-        if os.environ.get("ON_PREM")
-        else gcp.dir_exists(bucket_name, dir_name)
-    )
-    if not exists:
-        raise evaluation_does_not_exist(dataset)
-    elif os.environ.get("ON_PREM"):
-        on_prem.delete_dir(bucket_name, dir_name)
-    else:
-        gcp.delete_dir(bucket_name, dir_name)
-
-
 def send_to_dataset_evaluation_server(action, **data):
     topic = "projects/saas-368716/topics/dataset_evaluation"
     url = "https://api.unify.ai"
@@ -229,16 +157,6 @@ def eval_name_to_eval_id(user_id, eval_name):
     return displayname_to_id[eval_name]
 
 
-def check_if_eval_name_free(user_id, eval_name):
-    displayname_to_id = build_displayname_to_id(user_id)
-    if eval_name in displayname_to_id:
-        raise HTTPException(
-            status_code=400,
-            detail=f"You already have an eval with the name {eval_name}!",
-        )
-    return True
-
-
 def load_eval_config_blob(user_id, eval_id):
     bucket_name = "uploaded_datasets"
     blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
@@ -250,111 +168,6 @@ def load_eval_config_blob(user_id, eval_id):
 # endpoints
 ###########################
 
-
-@router.post("/evals/create")
-def create_eval(
-    request_fastapi: Request,
-    request: EvalConfig,
-):
-    """
-    Create a re-useable, named eval configuration. This can be used to trigger an evaluation via the `/evals/trigger` endpoint.
-    """
-    user_id = request_fastapi.state.user_id
-
-    judge_models = request.judge_models
-    if isinstance(request.judge_models, str):
-        judge_models = [request.judge_models]
-
-    invalid_endpoints = find_invalid_endpoints(judge_models)
-    if invalid_endpoints:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Could not find {'.'.join(invalid_endpoints)} to use as a judge model.",
-        )
-
-    # create evaluation id
-    eval_cfg_body = request.model_dump()
-    config_str = json.dumps(eval_cfg_body, sort_keys=True)
-    eval_id = hashlib.shake_128(config_str.encode("utf-8")).hexdigest(8)
-
-    # check if name is not already in use
-    eval_name = request.eval_name
-    check_if_eval_name_free(user_id, eval_name)
-
-    blob = load_eval_config_blob(user_id, eval_id)
-    blob.upload_from_string(config_str, content_type="application/json")
-    return {"info": "Eval created!"}
-
-
-@router.get("/evals/list_configs")
-def list_evals(
-    request_fastapi: Request,
-):
-    """
-    Returns the names of the eval configurations you have created.
-    """
-    displayname_to_id = build_displayname_to_id(request_fastapi.state.user_id)
-    return sorted(displayname_to_id.keys())
-
-
-@router.get("/evals/get_config")
-def return_eval_config(
-    request_fastapi: Request,
-    eval_name: str = Query(
-        description="Name of the eval to return the configuration of",
-        example="eval1",
-    ),
-):
-    """
-    Returns the configuration JSON for a named eval.
-    """
-    user_id = request_fastapi.state.user_id
-    eval_id = eval_name_to_eval_id(user_id, eval_name)
-    blob = load_eval_config_blob(user_id, eval_id)
-    contents = json.loads(blob.download_as_bytes().decode("utf-8"))
-    return contents
-
-
-@router.post("/evals/rename")
-def rename_eval(
-    request_fastapi: Request,
-    eval_name: str = Query(
-        description="Name of the existing eval to rename",
-        example="eval1",
-    ),
-    new_eval_name: str = Query(description="New name for the eval", example="eval2"),
-):
-    """
-    Renames a named eval from `eval_name` to `new_eval_name`.
-    """
-    user_id = request_fastapi.state.user_id
-    eval_id = eval_name_to_eval_id(user_id, eval_name)
-    blob = load_eval_config_blob(user_id, eval_id)
-    contents = json.loads(blob.download_as_bytes().decode("utf-8"))
-    contents["eval_name"] = new_eval_name
-    config_str = json.dumps(contents, sort_keys=True)
-    blob.upload_from_string(config_str, content_type="application/json")
-    refresh_scores_json(user_id)
-    return {"info": "Evaluation successfully renamed"}
-
-
-@router.delete("/evals/delete")
-def delete_eval(
-    request_fastapi: Request,
-    eval_name: str = Query(description="Name of the eval to delete", example="eval1"),
-):
-    """
-    Deletes a named eval from your account.
-    """
-    user_id = request_fastapi.state.user_id
-    eval_id = eval_name_to_eval_id(user_id, eval_name)
-    blob = load_eval_config_blob(user_id, eval_id)
-    blob.delete()
-    refresh_scores_json(user_id)
-    # TODO: remove all corresponding model judgements?
-
-
-#
 @router.post(
     "/evals/trigger",
     responses={

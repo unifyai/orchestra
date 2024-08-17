@@ -11,7 +11,7 @@ from httpx import AsyncClient
 from google.cloud import storage
 
 import orchestra
-from orchestra.web.api.dataset_evaluation.views import build_displayname_to_id
+from orchestra.web.api.evaluators.views import build_displayname_to_id
 
 
 # TODO: Less hacky way for this?

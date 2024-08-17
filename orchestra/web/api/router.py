@@ -9,10 +9,11 @@ from orchestra.web.api import (  # noqa: WPS235
     logging,
     custom_endpoints,
     custom_api_keys,
+    dataset,
+    evaluators,
+    evaluations,
     admin,
     benchmarks,
-    dataset,
-    dataset_evaluation,
     docs,
     eval_batch,
     monitoring,
@@ -58,7 +59,12 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    dataset_evaluation.router,
+    evaluators.router,
+    tags=["Evaluators"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    evaluations.router,
     tags=["Evaluations"],
     dependencies=API_KEY_AUTH,
 )
