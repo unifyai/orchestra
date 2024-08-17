@@ -19,11 +19,8 @@ router = APIRouter()
 ALLOWED_METRICS = [
     "input-cost",
     "output-cost",
-    "tokens-per-second",
     "time-to-first-token",
     "inter-token-latency",
-    "end-2-end-latency",
-    "cold-start",
 ]
 ALLOWED_METRICS_STR = ""
 for metric in ALLOWED_METRICS:
@@ -277,7 +274,7 @@ def upload_benchmark(
     ),
     measured_at: datetime = Query(
         ...,
-        description="The timestamp to associate with the submission."
+        description="The timestamp to associate with the submission. "
                     "Defaults to current time if unspecified.",
         example="2024-08-12T04:20:32.808410",
     ),
