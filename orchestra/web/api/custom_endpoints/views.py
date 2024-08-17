@@ -1,11 +1,8 @@
-import datetime
 from typing import List, Optional
-
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
-from orchestra.db.dao.custom_endpoint_benchmark_dao import CustomEndpointBenchmarkDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.models.orchestra_models import CustomEndpoint
 from orchestra.web.api.custom_endpoints.schema import CustomEndpointModelResponse
@@ -51,12 +48,14 @@ def create_custom_endpoint(
     request_fastapi: Request,
     name: str = Query(
         ...,
-        description="Alias for the custom endpoint. This will be the name used to call the endpoint.",
+        description="Alias for the custom endpoint."
+                    "This will be the name used to call the endpoint.",
         example="endpoint1",
     ),
     url: str = Query(
         ...,
-        description="Base URL of the endpoint being called. Must support the OpenAI format.",
+        description="Base URL of the endpoint being called."
+                    "Must support the OpenAI format.",
         example="https://api.url1.com",
     ),
     key_name: str = Query(
@@ -77,8 +76,8 @@ def create_custom_endpoint(
 ) -> None:
     """
     Creates a custom endpoint. This endpoint must support the OpenAI `/chat/completions`
-    format. To query your custom endpoint, replace your endpoint string with `<name>@custom`
-    when querying the unified API.
+    format. To query your custom endpoint, replace your endpoint string with
+    `<name>@custom` when querying the unified API.
 
     """
     user_id = request_fastapi.state.user_id
@@ -187,142 +186,3 @@ def delete_custom_endpoint(
         name=name,
     )
     return {"info": "Custom endpoint deleted succesfully!"}
-
-
-ALLOWED_METRICS = [
-    "input-cost",
-    "output-cost",
-    "tokens-per-second",
-    "time-to-first-token",
-    "inter-token-latency",
-    "end-2-end-latency",
-    "cold-start",
-]
-ALLOWED_METRICS_STR = ""
-for metric in ALLOWED_METRICS:
-    ALLOWED_METRICS_STR += f'"{metric}", '
-ALLOWED_METRICS_STR = ALLOWED_METRICS_STR[:-2]
-
-
-@router.post(
-    "/custom_endpoint/benchmark",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "info": "Custom endpoint benchmark uploaded succesfully!",
-                    },
-                },
-            },
-        },
-        400: {
-            "description": "Benchmark not valid",
-            "content": {
-                "application/json": {
-                    "example": {"detail": "Invalid data submitted"},
-                },
-            },
-        },
-    },
-)
-def upload_custom_benchmark(
-    request_fastapi: Request,
-    endpoint_name: str = Query(
-        ...,
-        description="Name of the custom endpoint to submit a benchmark for.",
-        example="endpoint1",
-    ),
-    metric_name: str = Query(
-        ...,
-        description=f"""Name of the metric to submit. Allowed metrics are: {ALLOWED_METRICS_STR}.""",
-        example="tokens-per-second",
-    ),
-    value: float = Query(
-        ...,
-        description="Value of the metric to submit.",
-        example=10,
-    ),
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
-    custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
-):
-    if metric_name not in ALLOWED_METRICS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"{metric_name} not one of the allowed metrics. Allowed metrics are: {ALLOWED_METRICS_STR}.",
-        )
-    # check if the endpoint is valid
-    user_id = request_fastapi.state.user_id
-    available_endpoints = custom_endpoint_dao.filter(
-        user_id=user_id,
-        name=endpoint_name,
-    )
-    for endpoint in available_endpoints:
-        if endpoint_name == endpoint.name:
-            endpoint_id = endpoint.id
-            break
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail=f"""The endpoint: {endpoint_name} was not found in your account.""",
-        )
-    custom_endpoint_benchmark_dao.upload_benchmark(
-        endpoint_id=endpoint_id,
-        metric_name=metric_name,
-        value=value,
-        measured_at=datetime.datetime.now(),
-    )
-    return {"info": "Benchmark uploaded!"}
-
-
-@router.get(
-    "/custom_endpoint/get_benchmark",
-)
-def get_custom_benchmarks(
-    request_fastapi: Request,
-    endpoint_name: str = Query(
-        ...,
-        description="Name of the custom endpoint to get a benchmark for.",
-        example="endpoint1",
-    ),
-    metric_name: str = Query(
-        ...,
-        description="Name of the metric to get the benchmark of.",
-        example="tokens-per-second",
-    ),
-    start_time: str = Query(
-        default="2024-01-01",
-        description="Start time of window to get benchmarks between. Format YYYY-MM-DD",
-        example="2024-01-01",
-    ),
-    end_time: str = Query(
-        default="2024-12-12",
-        description="End time of window to get benchmarks between. Format YYYY-MM-DD",
-        example="2024-12-12",
-    ),
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
-    custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
-):
-    user_id = request_fastapi.state.user_id
-    available_endpoints = custom_endpoint_dao.filter(
-        user_id=user_id,
-        name=endpoint_name,
-    )
-    for endpoint in available_endpoints:
-        if endpoint_name == endpoint.name:
-            endpoint_id = endpoint.id
-            break
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail=f"""The endpoint: {endpoint_name} was not found in your account.""",
-        )
-
-    ret = custom_endpoint_benchmark_dao.benchmarks_between(
-        endpoint_id=endpoint_id,
-        metric_name=metric_name,
-        start_time=start_time,
-        end_time=end_time,
-    )
-    return ret

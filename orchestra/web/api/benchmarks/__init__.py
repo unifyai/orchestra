@@ -1,4 +1,4 @@
-"""Dataset evaluation API."""
+"""Benchmarking API."""
 
 from orchestra.web.api.benchmarks.views import router
 

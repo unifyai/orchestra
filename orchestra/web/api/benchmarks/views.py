@@ -3,8 +3,6 @@ Includes endpoints related to benchmarks.
 """
 
 import datetime
-from typing import Optional
-
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
@@ -13,11 +11,24 @@ from orchestra.db.dao.custom_endpoint_benchmark_dao import CustomEndpointBenchma
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.latest_benchmark_dao import LatestBenchmarkDAO
-from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.web.api.utils.http_responses import benchmark_not_found, model_not_found
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
+
+ALLOWED_METRICS = [
+    "input-cost",
+    "output-cost",
+    "tokens-per-second",
+    "time-to-first-token",
+    "inter-token-latency",
+    "end-2-end-latency",
+    "cold-start",
+]
+ALLOWED_METRICS_STR = ""
+for metric in ALLOWED_METRICS:
+    ALLOWED_METRICS_STR += f'"{metric}", '
+ALLOWED_METRICS_STR = ALLOWED_METRICS_STR[:-2]
 
 
 def _get_endpoint_from_model_provider(
@@ -44,12 +55,14 @@ def get_latest_benchmark(
     regime: str = Query(default="concurrent-1", example="concurrent-1"),
     region: str = Query(
         default="Belgium",
-        description="""Region where the benchmark is run. Options are: "Belgium", "Hong Kong", "Iowa".""",
+        description="""Region where the benchmark is run.
+        Options are: "Belgium", "Hong Kong", "Iowa".""",
         example="Belgium",
     ),
     seq_len: str = Query(
         default="short",
-        description="Length of the sequence used for benchmarking, can be short or long",
+        description="Length of the sequence used for benchmarking,"
+                    "can be short or long",
         example="short",
     ),
     endpoint_dao: EndpointDAO = Depends(),
@@ -137,12 +150,14 @@ def filter_benchmark(
     regime: str = Query(default="concurrent-1", example="concurrent-1"),
     region: str = Query(
         default="Belgium",
-        description="""Region where the benchmark is run. Options are: "Belgium", "Hong Kong", "Iowa".""",
+        description="""Region where the benchmark is run. Options are:
+        "Belgium", "Hong Kong", "Iowa".""",
         example="Belgium",
     ),
     seq_len: str = Query(
         default="short",
-        description="""Length of the sequence used for benchmarking. Options are: "short", "long".""",
+        description="""Length of the sequence used for benchmarking.
+        Options are: "short", "long".""",
         example="short",
     ),
     endpoint_dao: EndpointDAO = Depends(),
@@ -161,3 +176,129 @@ def filter_benchmark(
         return result
     except:
         raise benchmark_not_found(f"{model}@{provider}")
+
+
+@router.post(
+    "/custom_endpoint/benchmark",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Custom endpoint benchmark uploaded succesfully!",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Benchmark not valid",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid data submitted"},
+                },
+            },
+        },
+    },
+)
+def upload_custom_benchmark(
+    request_fastapi: Request,
+    endpoint_name: str = Query(
+        ...,
+        description="Name of the custom endpoint to submit a benchmark for.",
+        example="endpoint1",
+    ),
+    metric_name: str = Query(
+        ...,
+        description=f"""Name of the metric to submit. Allowed metrics are:
+        {ALLOWED_METRICS_STR}.""",
+        example="tokens-per-second",
+    ),
+    value: float = Query(
+        ...,
+        description="Value of the metric to submit.",
+        example=10,
+    ),
+    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+    custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
+):
+    if metric_name not in ALLOWED_METRICS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{metric_name} not one of the allowed metrics."
+                   f"Allowed metrics are: {ALLOWED_METRICS_STR}.",
+        )
+    # check if the endpoint is valid
+    user_id = request_fastapi.state.user_id
+    available_endpoints = custom_endpoint_dao.filter(
+        user_id=user_id,
+        name=endpoint_name,
+    )
+    for endpoint in available_endpoints:
+        if endpoint_name == endpoint.name:
+            endpoint_id = endpoint.id
+            break
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"""The endpoint: {endpoint_name} was not found in your account.""",
+        )
+    custom_endpoint_benchmark_dao.upload_benchmark(
+        endpoint_id=endpoint_id,
+        metric_name=metric_name,
+        value=value,
+        measured_at=datetime.datetime.now(),
+    )
+    return {"info": "Benchmark uploaded!"}
+
+
+@router.get(
+    "/custom_endpoint/get_benchmark",
+)
+def get_custom_benchmarks(
+    request_fastapi: Request,
+    endpoint_name: str = Query(
+        ...,
+        description="Name of the custom endpoint to get a benchmark for.",
+        example="endpoint1",
+    ),
+    metric_name: str = Query(
+        ...,
+        description="Name of the metric to get the benchmark of.",
+        example="tokens-per-second",
+    ),
+    start_time: str = Query(
+        default="2024-01-01",
+        description="Start time of window to get benchmarks between. Format YYYY-MM-DD",
+        example="2024-01-01",
+    ),
+    end_time: str = Query(
+        default="2024-12-12",
+        description="End time of window to get benchmarks between. Format YYYY-MM-DD",
+        example="2024-12-12",
+    ),
+    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+    custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
+):
+    user_id = request_fastapi.state.user_id
+    available_endpoints = custom_endpoint_dao.filter(
+        user_id=user_id,
+        name=endpoint_name,
+    )
+    for endpoint in available_endpoints:
+        if endpoint_name == endpoint.name:
+            endpoint_id = endpoint.id
+            break
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"""The endpoint: {endpoint_name} was not found in your account.""",
+        )
+
+    ret = custom_endpoint_benchmark_dao.benchmarks_between(
+        endpoint_id=endpoint_id,
+        metric_name=metric_name,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    return ret
