@@ -11,10 +11,9 @@ from orchestra.web.api import (  # noqa: WPS235
     dataset,
     dataset_evaluation,
     docs,
-    endpoint,
+    supported_endpoints,
     eval_batch,
     inference,
-    model,
     monitoring,
     provider,
     routing,
@@ -29,12 +28,6 @@ api_router = APIRouter()
 api_router.include_router(
     credits.router,
     tags=["Credits"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    model.router,
-    tags=["Model and Endpoints"],
-    include_in_schema=True,
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
@@ -68,8 +61,8 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    endpoint.router,
-    tags=["Model and Endpoints"],
+    supported_endpoints.router,
+    tags=["Supported Endpoints"],
     include_in_schema=True,
     dependencies=API_KEY_AUTH,
 )
