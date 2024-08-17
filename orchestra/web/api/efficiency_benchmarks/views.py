@@ -2,7 +2,7 @@
 Includes endpoints related to benchmarks.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Union, List, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
@@ -47,6 +47,86 @@ def _get_endpoint_from_model_provider(
         raise model_not_found
 
 
+def _get_custom_endpoint_benchmark(
+    request_fastapi: Request,
+    model: str,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+    custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
+):
+    start_time_provided = start_time is not None
+    end_time_provided = end_time is not None
+    try:
+        user_id = request_fastapi.state.user_id
+        available_endpoints = custom_endpoint_dao.filter(
+            user_id=user_id,
+            name=model,
+        )
+        for endpoint in available_endpoints:
+            if model == endpoint.name:
+                endpoint_id = endpoint.id
+                break
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"""The endpoint: {model} was not found in your account.""",
+            )
+
+        short_name_to_db_name = {
+            "ttft": "time-to-first-token",
+            "itl": "inter-token-latency",
+            "input-cost": "input-cost",
+            "output-cost": "output-cost",
+        }
+        rets = dict()
+        latest_only = not start_time_provided and not end_time_provided
+        num_items = 0
+        if latest_only:
+            start_time = "2024-01-01"
+            end_time = str(datetime.now())
+        elif not start_time_provided and end_time_provided:
+            raise Exception("`start_time` must be provided when"
+                            "`end_time` is provided.")
+        elif start_time_provided and not end_time_provided:
+            end_time = str(datetime.now())
+        for short_name, db_name in short_name_to_db_name.items():
+            inner_rets = custom_endpoint_benchmark_dao.benchmarks_between(
+                endpoint_id=endpoint_id,
+                metric_name=db_name,
+                start_time=start_time,
+                end_time=end_time,
+            )
+            if inner_rets:
+                num_items = len(inner_rets)
+                inner_rets.sort(key=lambda x: x.measured_at)
+                rets[short_name] = [item.value for item in inner_rets]
+            else:
+                rets[short_name] = None
+        # ToDo: implement measured_at in the database
+        rets["measured_at"] = None
+        if latest_only:
+            single_return = dict()
+            for key in rets.keys():
+                if rets[key] is None:
+                    single_return[key] = None
+                else:
+                    single_return[key] = rets[key][-1]
+            return single_return
+        returns = list()
+        for i in range(num_items):
+            val = dict()
+            for key in rets.keys():
+                if rets[key] is None:
+                    val[key] = None
+                else:
+                    val[key] = rets[key][i]
+            returns.append(val)
+        return rets
+    except:
+        raise Exception
+
+
 @router.get(
     "/benchmark",
     response_model=List[Dict[str, Union[str, float]]],
@@ -85,12 +165,15 @@ def get_benchmark(
     ),
     start_time: Optional[str] = Query(
         ...,
-        description="Window start time",
+        description="Window start time."
+                    "Only returns the latest benchmark if unspecified",
         example="2024-07-12T04:20:32.808410",
     ),
     end_time: Optional[str] = Query(
         ...,
-        description="Window end time",
+        description="Window end time. Assumed to be the current time if this is"
+                    "unspecified *and* start_time *is* specified."
+                    "Only the latest benchmark is returned if both are unspecified.",
         example="2024-08-12T04:20:32.808410",
     ),
     endpoint_dao: EndpointDAO = Depends(),
@@ -102,61 +185,32 @@ def get_benchmark(
     """
     Extracts cost and speed data for the provided endpoint via our standardized
     efficiency benchmarks, in the specified region, with the specified sequence length,
-    and returning the specified number of data points, or only the latest data if
-    preferred.
+    with all benchmark values returned within the specified time window.
+    If neither `start_time` nor `end_time` are provided, then only the *latest*
+    benchmark data is returned. If only `start_time` is provided, then `end_time` is
+    assumed to be the current time. An exception is raised if only `end_time` is
+    provided.
     """
+    start_time_provided = start_time is not None
+    end_time_provided = end_time is not None
+    latest_only = not start_time_provided and not end_time_provided
     if provider == "custom":
-        try:
-            user_id = request_fastapi.state.user_id
-            available_endpoints = custom_endpoint_dao.filter(
-                user_id=user_id,
-                name=model,
-            )
-            for endpoint in available_endpoints:
-                if model == endpoint.name:
-                    endpoint_id = endpoint.id
-                    break
-            else:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"""The endpoint: {model} was not found in your account.""",
-                )
-
-            short_name_to_db_name = {
-                "ttft": "time-to-first-token",
-                "itl": "inter-token-latency",
-                "input-cost": "input-cost",
-                "output-cost": "output-cost",
-            }
-            ret = {}
-            for short_name, db_name in short_name_to_db_name.items():
-                results = custom_endpoint_benchmark_dao.benchmarks_between(
-                    endpoint_id=endpoint_id,
-                    metric_name=db_name,
-                    start_time="2024-01-01",
-                    end_time=str(datetime.now()),
-                )
-                if results:
-                    results.sort(key=lambda x: x.measured_at)
-                    result = results[-1].value
-                else:
-                    result = None
-                ret[short_name] = result
-            ret["measured_at"] = None
-            return ret
-        except:
-            raise Exception
+        return _get_custom_endpoint_benchmark(
+            request_fastapi,
+            model,
+            custom_endpoint_dao,
+            custom_endpoint_benchmark_dao
+        )
     try:
         endpoint_id = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
-        start_time_provided = start_time is not None
-        end_time_provided = end_time is not None
-        if not start_time_provided and not end_time_provided:
+        if latest_only:
             result = latest_benchmark_dao.get_latest_benchmarks(
                 endpoint_id=endpoint_id,
                 regime="concurrent-1",
                 region=region,
                 seq_len=seq_len,
-            )[0]
+            )
+            result = result[0]
             return {
                 "ttft": result.ttft,
                 "itl": result.itl,
@@ -164,10 +218,11 @@ def get_benchmark(
                 "output_cost": result.output_cost,
                 "measured_at": result.measured_at,
             }
-        if not end_time_provided:
-            end_time = str(datetime.now() + timedelta(days=-7))
-        if not start_time_provided:
-            start_time = str(datetime.now())
+        elif not start_time_provided and end_time_provided:
+            raise Exception("`start_time` must be provided when"
+                            "`end_time` is provided.")
+        elif start_time_provided and not end_time_provided:
+            end_time = str(datetime.now())
         return benchmark_run_dao.benchmarks_between(
             endpoint_id=endpoint_id,
             start_time=start_time,
