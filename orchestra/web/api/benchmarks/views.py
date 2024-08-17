@@ -161,18 +161,3 @@ def filter_benchmark(
         return result
     except:
         raise benchmark_not_found(f"{model}@{provider}")
-
-
-@router.get("/prompt_history")
-def get_prompt_history(
-    request_fastapi: Request,
-    tag: Optional[str] = Query(
-        default=None,
-        description="Provide a tag to filter by prompts that are marked with this tag.",
-    ),
-    query_dao: QueryDAO = Depends(),
-):
-    if tag:
-        raise HTTPException(status_code=501, detail="Not Implemented Yet")
-    ret = query_dao.filter(user_id=request_fastapi.state.user_id)
-    return ret

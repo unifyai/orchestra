@@ -1,9 +1,9 @@
 import json
 import os
 import time
-from typing import Any, Dict, Optional, Union
+from typing import Union
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.param_functions import Depends
 from fastapi.responses import StreamingResponse
 from providers.completion import PROVIDER_CLASSES
@@ -17,7 +17,7 @@ from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.web.api.chat_completion.schema import (
+from orchestra.web.api.llm_queries.schema import (
     ChatCompletionRequest,
     ChatCompletionResponse,
     RouterScoresResponse,
@@ -36,7 +36,6 @@ from orchestra.web.api.utils.http_responses import (
     invalid_messages,
     invalid_model_str,
 )
-from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 
@@ -277,81 +276,3 @@ def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     rc = RouterConfig(request.model, endpoint_dao, benchmark_run_dao)
     scores = rc(request.messages[-1]["content"], debug=True)
     return RouterScoresResponse(scores=scores)
-
-
-@router.get("/metrics")
-@handle_on_prem(endpoint="/metrics", method="none")
-def get_query_metrics(
-    request_fastapi: Request,
-    start_time: Optional[str] = Query(
-        None,
-        description="Timestamp of the earliest query to aggregate. Format is `YYYY-MM-DD hh:mm:ss`.",
-        example="2024-07-12 04:20:32",
-    ),
-    end_time: Optional[str] = Query(
-        None,
-        description="Timestamp of the latest query to aggregate. Format is `YYYY-MM-DD hh:mm:ss`.",
-        example="2024-08-12 04:20:32",
-    ),
-    models: Optional[str] = Query(
-        None,
-        description=(
-            "Models to fetch metrics from. The list must be a set of comma-sparated strings. "
-            "i.e. `gpt-3.5-turbo,gpt-4o`"
-        ),
-        example="gpt-4o,llama-3.1-405b-chat,claude-3.5-sonnet",
-    ),
-    providers: Optional[str] = Query(
-        None,
-        description=(
-            "Providers to fetch metrics from. The list must be a set of comma-sparated strings. "
-            "i.e. `openai,together-ai`"
-        ),
-        example="openai,anthropic,fireworks-ai",
-    ),
-    interval: Optional[str] = Query(
-        300,
-        description="Number of seconds in the aggregation interval.",
-        example=300,
-    ),
-    secondary_user_id: Optional[str] = Query(
-        None,
-        description=(
-            "Secondary user id. The secondary user id will match any string "
-            "previously sent in the `user` attribute of `/chat/completions`."
-        ),
-        example="sample_user_id",
-    ),
-) -> Dict[str, Any]:
-    """
-    Returns aggregated telemetry data from previous queries to the `/chat/completions`
-    endpoint.
-    """
-    import requests
-
-    if secondary_user_id is None:
-        secondary_user_id = ""
-
-    response = requests.get(
-        "https://api.airfold.co/v1/pipes/queries_metrics.json",
-        # TODO: mb will rotate this tomorrow
-        headers={
-            "Authorization": f"Bearer {os.environ.get('AIRFOLD_KEY')}",
-        },
-        params={
-            "user_id": request_fastapi.state.user_id,
-            "secondary_user_id": secondary_user_id,
-            "start_time": start_time,
-            "end_time": end_time,
-            "models": models,
-            "providers": providers,
-            "interval": interval,
-        },
-    )
-
-    if response.status_code == 200:
-        data = response.json()
-        return data
-    else:
-        # TODO: meaningful errors
-        print("Error:", response.status_code, response.text)

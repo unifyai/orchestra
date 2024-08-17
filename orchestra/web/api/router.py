@@ -4,14 +4,15 @@ from fastapi import Depends
 from fastapi.routing import APIRouter
 
 from orchestra.web.api import (  # noqa: WPS235
+    supported_endpoints,
+    llm_queries,
+    logging,
     admin,
     benchmarks,
-    chat_completion,
     custom_endpoint,
     dataset,
     dataset_evaluation,
     docs,
-    supported_endpoints,
     eval_batch,
     monitoring,
     provider,
@@ -31,8 +32,13 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    chat_completion.router,
+    llm_queries.router,
     tags=["LLM Queries"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    logging.router,
+    tags=["Logging"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
