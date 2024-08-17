@@ -59,7 +59,7 @@ def get_credits(
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": {"info": "Code {code} activated succesfully!"},
+                    "example": {"info": "Code {code} activated successfully!"},
                 },
             },
         },
@@ -173,4 +173,4 @@ def promo_code(
         type=code,
     )
     users_dao.recharge_credit(user_id, qty)
-    return {"info": f"Code {code} activated succesfully!"}
+    return {"info": f"Code {code} activated successfully!"}

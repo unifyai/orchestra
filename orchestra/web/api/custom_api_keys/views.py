@@ -29,7 +29,7 @@ def get_custom_api_keys(
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": {"info": "API key created succesfully!"},
+                    "example": {"info": "API key created successfully!"},
                 },
             },
         },
@@ -56,7 +56,7 @@ def create_custom_api_key(
         key=key,
         value=value,
     )
-    return {"info": "API key created succesfully!"}
+    return {"info": "API key created successfully!"}
 
 
 @router.post(
@@ -66,7 +66,7 @@ def create_custom_api_key(
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": {"info": "API key renamed succesfully!"},
+                    "example": {"info": "API key renamed successfully!"},
                 },
             },
         },
@@ -109,7 +109,7 @@ def rename_custom_api_key(
         name=key,
         new_name=new_key,
     )
-    return {"info": "API key renamed succesfully!"}
+    return {"info": "API key renamed successfully!"}
 
 
 @router.delete(
@@ -119,7 +119,7 @@ def rename_custom_api_key(
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": {"info": "API key deleted succesfully!"},
+                    "example": {"info": "API key deleted successfully!"},
                 },
             },
         },
@@ -156,7 +156,7 @@ def delete_custom_api_key(
         user_id=user_id,
         name=key,
     )
-    return {"info": "API key deleted succesfully!"}
+    return {"info": "API key deleted successfully!"}
 
 
 ALLOWED_METRICS = [

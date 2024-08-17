@@ -186,7 +186,7 @@ def filter_benchmark(
             "content": {
                 "application/json": {
                     "example": {
-                        "info": "Custom endpoint benchmark uploaded succesfully!",
+                        "info": "Custom endpoint benchmark uploaded successfully!",
                     },
                 },
             },

@@ -87,9 +87,9 @@ def check_file_content(file_content: str):
         dicts = [json.loads(d) for d in dicts if d != ""]
         if not isinstance(dicts, List):
             raise ValueError
-        for i, dict in enumerate(dicts):
+        for i, dct in enumerate(dicts):
             prompt_present = False
-            for kw in dict.keys():
+            for kw in dct.keys():
                 if kw == "prompt":
                     prompt_present = True
                 if kw not in ["prompt", "ref_answer"]:
@@ -171,7 +171,8 @@ def _store_metadata(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Invalid name for a dataset. Please, choose a different one.",
+                        "detail": "Invalid name for a dataset."
+                                  "Please, choose a different one.",
                     },
                 },
             },
@@ -181,7 +182,8 @@ def _store_metadata(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "A dataset with this name already exists. Please, choose a different one.",
+                        "detail": "A dataset with this name already exists."
+                                  "Please, choose a different one.",
                     },
                 },
             },
@@ -223,7 +225,7 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     num_tokens = get_tokens_in_dataset(file_content)
     _store_num_tokens(request_fastapi.state.user_id, internal_id, num_tokens)
     _store_metadata(request_fastapi.state.user_id, internal_id, name)
-    return {"info": "Dataset uploaded succesfully!"}
+    return {"info": "Dataset uploaded successfully!"}
 
 
 # delete dataset
@@ -234,7 +236,7 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": {"info": "Dataset deleted succesfully!"},
+                    "example": {"info": "Dataset deleted successfully!"},
                 },
             },
         },
@@ -243,7 +245,8 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Invalid name for a dataset. Please, choose a different one.",
+                        "detail": "Invalid name for a dataset."
+                                  "Please, choose a different one.",
                     },
                 },
             },
@@ -266,7 +269,7 @@ def delete_dataset(
     name_to_id = {name: id_ for id_, name in id_to_name.items()}
     internal_id = name_to_id.get(name, name)
     _delete_dataset(request_fastapi.state.user_id, internal_id)
-    return {"info": "Dataset deleted succesfully!"}
+    return {"info": "Dataset deleted successfully!"}
 
 
 # list datasets
@@ -385,7 +388,8 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Invalid name for a dataset. Please, choose a different one.",
+                        "detail": "Invalid name for a dataset."
+                                  "Please, choose a different one.",
                     },
                 },
             },
@@ -395,7 +399,8 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "A dataset with this name already exists. Please, choose a different one.",
+                        "detail": "A dataset with this name already exists."
+                                  "Please, choose a different one.",
                     },
                 },
             },
@@ -439,4 +444,4 @@ def rename_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     _store_metadata(user_id, internal_id, new_name, alredy_exists=True)
 
-    return {"info": "Dataset name updated succesfully!"}
+    return {"info": "Dataset name updated successfully!"}

@@ -30,7 +30,7 @@ def get_custom_endpoints(
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": {"info": "Custom endpoint created succesfully!"},
+                    "example": {"info": "Custom endpoint created successfully!"},
                 },
             },
         },
@@ -93,7 +93,7 @@ def create_custom_endpoint(
         url=url,
         key_id=key_id,
     )
-    return {"info": "Custom endpoint created succesfully!"}
+    return {"info": "Custom endpoint created successfully!"}
 
 
 @router.post(
@@ -103,7 +103,7 @@ def create_custom_endpoint(
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": {"info": "Custom endpoint renamed succesfully!"},
+                    "example": {"info": "Custom endpoint renamed successfully!"},
                 },
             },
         },
@@ -146,7 +146,7 @@ def rename_custom_endpoint(
         name=name,
         new_name=new_name,
     )
-    return {"info": "Custom endpoint renamed succesfully!"}
+    return {"info": "Custom endpoint renamed successfully!"}
 
 
 @router.delete(
@@ -156,7 +156,7 @@ def rename_custom_endpoint(
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": {"info": "Custom endpoint deleted succesfully!"},
+                    "example": {"info": "Custom endpoint deleted successfully!"},
                 },
             },
         },
@@ -185,4 +185,4 @@ def delete_custom_endpoint(
         user_id=user_id,
         name=name,
     )
-    return {"info": "Custom endpoint deleted succesfully!"}
+    return {"info": "Custom endpoint deleted successfully!"}
