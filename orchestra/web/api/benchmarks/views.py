@@ -3,6 +3,7 @@ Includes endpoints related to benchmarks.
 """
 
 import datetime
+from typing import Dict, Union
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
@@ -47,12 +48,30 @@ def _get_endpoint_from_model_provider(
         raise model_not_found
 
 
-@router.get("/benchmarks")
+@router.get(
+    "/benchmark",
+    response_model=Dict[str, Union[str, float]],
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "ttft": 440.2323939998496,
+                        "itl": 8.797065147959705,
+                        "input_cost": 0.15,
+                        "output_cost": 0.6,
+                        "measured_at": "2024-08-17T19:19:37.289937"
+                    },
+                },
+            },
+        },
+    },
+)
 def get_latest_benchmark(
     request_fastapi: Request,
-    model: str = Query(..., description="Model name", example="gpt-4o-mini"),
-    provider: str = Query(..., description="Provider name", example="openai"),
-    regime: str = Query(default="concurrent-1", example="concurrent-1"),
+    model: str = Query(..., description="Name of the model.", example="gpt-4o-mini"),
+    provider: str = Query(..., description="Name of the provider.", example="openai"),
     region: str = Query(
         default="Belgium",
         description="""Region where the benchmark is run.
@@ -115,7 +134,7 @@ def get_latest_benchmark(
         endpoint_id = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
         result = latest_benchmark_dao.get_latest_benchmarks(
             endpoint_id=endpoint_id,
-            regime=regime,
+            regime="concurrent-1",
             region=region,
             seq_len=seq_len,
         )
