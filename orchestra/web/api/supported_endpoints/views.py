@@ -38,7 +38,7 @@ def get_providers(
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
 ):
     """
-    Lists available providers. If a model is specified,
+    Lists available providers. If `model` is specified,
     returns the providers that support that model.
     """
     user_id = request_fastapi.state.user_id
@@ -84,7 +84,7 @@ def get_models(
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
 ) -> List[Model]:
     """
-    Lists available models. If a provider is specified,
+    Lists available models. If `provider` is specified,
     returns the models that the provider supports.
     """
     user_id = fastapi_request.state.user_id
