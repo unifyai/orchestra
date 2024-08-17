@@ -28,7 +28,7 @@ ADMIN_AUTH = [Depends(auth_admin_key)] if not os.environ.get("ON_PREM") else Non
 api_router = APIRouter()
 api_router.include_router(
     credits.router,
-    tags=["User"],
+    tags=["Credits"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
