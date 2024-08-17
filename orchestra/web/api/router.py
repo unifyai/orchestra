@@ -70,7 +70,7 @@ api_router.include_router(
 )
 api_router.include_router(
     efficiency.router,
-    tags=["Efficiency"],
+    tags=["Efficiency Benchmarks"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
