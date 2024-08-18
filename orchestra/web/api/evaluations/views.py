@@ -309,20 +309,29 @@ def get_evaluation(
         description="Name of the dataset to fetch evaluation from.",
         example="dataset1",
     ),
-    eval_name: Optional[str] = Query(
+    endpoint: str = Query(
+        description="The endpoint to fetch the evaluation for.",
+        example="gpt-4o-mini@openai",
+    ),
+    evaluator: str = Query(
         default=None,
-        description="Name of the eval to fetch evaluation from. If `None`, returns all available evaluations for the dataset.",
+        description="Name of the evaluator to fetch the evaluation from. "
+                    "If `None`, returns all available evaluations for the dataset and "
+                    "endpoint pair.",
         example="eval1",
     ),
     per_prompt: bool = Query(
         default=False,
-        description="If `True`, returns the scores on a per-prompt level. By default set to `False`.",
+        description="If `True`, returns the scores on a per-prompt level. "
+                    "By default set to `False`.",
         example=False,
     ),
 ) -> Dict:
     """
-    Fetches the results of an eval on a given dataset. If no `eval_name` is provided, returns scores for all completed evals on that dataset.
+    Fetches the results of an eval on a given dataset. If no `eval_name` is provided,
+    returns scores for all completed evals on that dataset.
     """
+    # ToDo: implement the logic where the endpoint (required) is considered in the input
     user_id = request_fastapi.state.user_id
     if not dataset_exists(user_id, dataset):
         raise dataset_does_not_exist(dataset)
@@ -337,9 +346,9 @@ def get_evaluation(
     if per_prompt:
         raise HTTPException(status_code=501, detail="Not implemented yet")
 
-    return_single_eval = eval_name is not None
+    return_single_eval = evaluator is not None
     requested_eval_id = (
-        eval_name_to_eval_id(user_id, eval_name) if return_single_eval else None
+        eval_name_to_eval_id(user_id, evaluator) if return_single_eval else None
     )
 
     # format of scores is {eval_id: {endpoint : {judge : score}}}
@@ -367,3 +376,22 @@ def get_evaluation(
     ret["output_tokens"] = output_tokens
 
     return ret
+
+
+@router.delete(
+    "/evaluation",
+)
+def delete_evaluation(
+    request_fastapi: Request,
+    dataset: str = Query(
+        description="Name of the dataset to fetch evaluation from.",
+        example="dataset1",
+    ),
+    eval_name: Optional[str] = Query(
+        default=None,
+        description="Name of the eval to fetch evaluation from. "
+                    "If `None`, returns all available evaluations for the dataset.",
+        example="eval1",
+    ),
+):
+    raise NotImplemented  # ToDo: Implement this
