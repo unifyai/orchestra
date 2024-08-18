@@ -46,10 +46,10 @@ def router_training_exists(user_id, name):
     # TODO: The router directory with files needs a
     # metadata.json with the datasets it has been trained on
     bucket_name = "custom_router_data"
-    dir = f"custom_router/{user_id}/{name}/"
+    dr = f"custom_router/{user_id}/{name}/"
     files = ["config.yaml", "model_mapping.json", "model.pth"]
     for f in files:
-        if not blob_exists(bucket_name, dir + f):
+        if not blob_exists(bucket_name, dr + f):
             return False
     return True
 
@@ -111,7 +111,8 @@ def send_to_train_server(action, **data):
             "content": {
                 "application/json": {
                     "example": {
-                        "info": "Router training started! You will receive an email soon!",
+                        "info": "Router training started! "
+                                "You will receive an email soon!",
                     },
                 },
             },
@@ -193,7 +194,7 @@ def train_router(
 
 
 @router.get(
-    "/router/train/list",
+    "/router/list",
     responses={
         200: {
             "description": "Successful Response",
@@ -211,26 +212,27 @@ def train_router(
         },
     },
 )
-@handle_on_prem(endpoint="/router/train/list", method="get")
-def get_trained_routers(
+@handle_on_prem(endpoint="/router/list", method="get")
+def get_routers(
     request_fastapi: Request,
 ) -> Dict[str, Dict[str, Union[str, List[str]]]]:
     """
-    Fetches a list of the trained routers and relevant metadata. These routers are training
-    artifacts and therefore don't imply an active, deployed router. To fetch a list of
-    deployed routers, you can use the /router/deploy/list GET endpoint.
+    Fetches a list of the trained routers and relevant metadata.
+    These routers are training artifacts and therefore don't imply an active,
+    deployed router. To fetch a list of deployed routers, you can use the
+    /router/deploy/list GET endpoint.
     """
     user_id = request_fastapi.state.user_id
     routers = _list_trained_routers(user_id)
     # TODO: Do this correctly
     routers_metadata = {}
-    for router in routers:
-        routers_metadata[router] = {"dataset": "", "endpoints": [""]}
+    for rtr in routers:
+        routers_metadata[rtr] = {"dataset": "", "endpoints": [""]}
     return routers_metadata
 
 
 @router.delete(
-    "/router/train",
+    "/router",
     responses={
         200: {
             "description": "Successful Response",
@@ -245,7 +247,8 @@ def get_trained_routers(
                     "example": {
                         "detail": (
                             "This router training doesn't exist. "
-                            "Please, choose a different one or trigger the training first."
+                            "Please, choose a different one or "
+                            "trigger the training first."
                         ),
                     },
                 },
@@ -253,8 +256,8 @@ def get_trained_routers(
         },
     },
 )
-@handle_on_prem(endpoint="/router/train", method="delete")
-def delete_router_train(
+@handle_on_prem(endpoint="/router", method="delete")
+def delete_router(
     request_fastapi: Request,
     name: str = Query(
         description="Name of the router to delete.",
@@ -262,7 +265,7 @@ def delete_router_train(
     ),
 ) -> Dict[str, str]:
     """
-    Deletes the training files of a specific router.
+    Deletes a specific router, as well as all the training files etc.
     """
     user_id = request_fastapi.state.user_id
     # Check if the router files exist

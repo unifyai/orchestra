@@ -146,7 +146,7 @@ def deploy_router(
     },
 )
 @handle_on_prem(endpoint="/router/deploy", method="delete")
-def delete_router(
+def undeploy_router(
     request_fastapi: Request,
     name: str = Query(
         description="Name of the router to un-deploy.",
