@@ -31,3 +31,34 @@ def create_router_config(
     configuration name, such as `my_router_config@routers`.
     """
     raise NotImplemented  # ToDo: implement
+
+
+@router.get(
+    "/router/config"
+)
+def get_router_config(
+    config_name: str = Query(
+        description="The name of the router configuration to retrieve the "
+                    "full endpoint string for.",
+        example="cost_and_speed_optimized",
+    ),
+):
+    """
+    Returns the full router endpoint string for a given router configuration name.
+    """
+    raise NotImplemented  # ToDo: implement
+
+
+@router.delete(
+    "/router/config"
+)
+def delete_router_config(
+    config_name: str = Query(
+        description="The name of the router configuration to delete.",
+        example="cost_and_speed_optimized",
+    ),
+):
+    """
+    Deletes the specified router configuration.
+    """
+    raise NotImplemented  # ToDo: implement
