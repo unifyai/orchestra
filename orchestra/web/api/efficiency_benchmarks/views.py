@@ -159,16 +159,16 @@ def get_benchmark(
                     "can be short or long",
         example="short",
     ),
-    start_time: Optional[str] = Query(
-        ...,
-        description="Window start time."
+    start_time: str = Query(
+        default=None,
+        description="Window start time. "
                     "Only returns the latest benchmark if unspecified",
         example="2024-07-12T04:20:32.808410",
     ),
-    end_time: Optional[str] = Query(
-        ...,
-        description="Window end time. Assumed to be the current time if this is"
-                    "unspecified *and* start_time *is* specified."
+    end_time: str = Query(
+        default=None,
+        description="Window end time. Assumed to be the current time if this is "
+                    "unspecified *and* start_time *is* specified. "
                     "Only the latest benchmark is returned if both are unspecified.",
         example="2024-08-12T04:20:32.808410",
     ),
@@ -257,23 +257,20 @@ def get_benchmark(
 def upload_benchmark(
     request_fastapi: Request,
     endpoint_name: str = Query(
-        ...,
         description="Name of the *custom* endpoint to submit a benchmark for.",
         example="endpoint1",
     ),
     metric_name: str = Query(
-        ...,
         description=f"""Name of the metric to submit. Allowed metrics are:
         {ALLOWED_METRICS_STR}.""",
         example="tokens-per-second",
     ),
     value: float = Query(
-        ...,
         description="Value of the metric to submit.",
         example=10,
     ),
     measured_at: datetime = Query(
-        ...,
+        default=None,
         description="The timestamp to associate with the submission. "
                     "Defaults to current time if unspecified.",
         example="2024-08-12T04:20:32.808410",
