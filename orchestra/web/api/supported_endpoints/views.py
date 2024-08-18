@@ -27,7 +27,7 @@ router = APIRouter()
     },
 )
 @handle_on_prem(endpoint="/providers", method="get")
-def get_providers(
+def list_providers(
     request_fastapi: Request,
     model: str = Query(
         default=None,
@@ -73,7 +73,7 @@ def get_providers(
     },
 )
 @handle_on_prem(endpoint="/models", method="get")
-def get_models(
+def list_models(
     fastapi_request: Request,
     provider: str = Query(
         default=None,
@@ -117,7 +117,7 @@ def get_models(
     },
 )
 @handle_on_prem(endpoint="/endpoints", method="get")
-def get_endpoints(
+def list_endpoints(
     request_fastapi: Request,
     model: str = Query(
         default=None,

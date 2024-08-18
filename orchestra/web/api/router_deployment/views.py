@@ -187,7 +187,7 @@ def undeploy_router(
     },
 )
 @handle_on_prem(endpoint="/router/deploy/list", method="get")
-def get_deployed_routers(
+def list_deployed_routers(
     request_fastapi: Request,
 ) -> Dict[str, Dict[str, Union[str, List[str]]]]:
     """

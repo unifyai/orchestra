@@ -213,7 +213,7 @@ def train_router(
     },
 )
 @handle_on_prem(endpoint="/router/list", method="get")
-def get_routers(
+def list_routers(
     request_fastapi: Request,
 ) -> Dict[str, Dict[str, Union[str, List[str]]]]:
     """
