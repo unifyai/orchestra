@@ -1,4 +1,3 @@
-from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
@@ -48,7 +47,7 @@ def create_custom_endpoint(
         description="Name of the API key that will be passed as part of the query.",
         example="key1",
     ),
-    mdl_name: Optional[str] = Query(
+    mdl_name: str = Query(
         None,
         description=(
             "Named passed to the custom endpoint as model name. "

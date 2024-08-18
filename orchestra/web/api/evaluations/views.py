@@ -3,7 +3,7 @@ Includes endpoints related to dataset evaluations.
 """
 import os
 import json
-from typing import Dict, Optional
+from typing import Dict
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from google.cloud import storage
 
@@ -221,7 +221,7 @@ def trigger_evaluation(
         ),
         example="gpt-4o-mini@openai",
     ),
-    client_side_scores: Optional[UploadFile] = File(
+    client_side_scores: UploadFile = File(
         default=None,
         description="An optional file upload for client-side scores. The file must be in JSONL format and the prompts must match the order of the `dataset`. "
         "Each entry should include `prompt` and `score` keys, with `score` being a float between 0 and 1. The evaluation corresponding to the `eval_name` must have `client_side=True`.",
@@ -387,7 +387,7 @@ def delete_evaluation(
         description="Name of the dataset to fetch evaluation from.",
         example="dataset1",
     ),
-    eval_name: Optional[str] = Query(
+    eval_name: str = Query(
         default=None,
         description="Name of the eval to fetch evaluation from. "
                     "If `None`, returns all available evaluations for the dataset.",

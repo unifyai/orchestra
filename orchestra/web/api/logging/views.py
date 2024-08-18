@@ -2,7 +2,7 @@
 Includes endpoints related to logging.
 """
 import os
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
@@ -15,7 +15,7 @@ router = APIRouter()
 @router.get("/prompt_history")
 def get_prompt_history(
     request_fastapi: Request,
-    tag: Optional[str] = Query(
+    tag: str = Query(
         default=None,
         description="Provide a tag to filter by prompts that are marked with this tag.",
     ),
@@ -31,17 +31,17 @@ def get_prompt_history(
 @handle_on_prem(endpoint="/metrics", method="none")
 def get_query_metrics(
     request_fastapi: Request,
-    start_time: Optional[str] = Query(
+    start_time: str = Query(
         None,
         description="Timestamp of the earliest query to aggregate. Format is `YYYY-MM-DD hh:mm:ss`.",
         example="2024-07-12 04:20:32",
     ),
-    end_time: Optional[str] = Query(
+    end_time: str = Query(
         None,
         description="Timestamp of the latest query to aggregate. Format is `YYYY-MM-DD hh:mm:ss`.",
         example="2024-08-12 04:20:32",
     ),
-    models: Optional[str] = Query(
+    models: str = Query(
         None,
         description=(
             "Models to fetch metrics from. The list must be a set of comma-sparated strings. "
@@ -49,7 +49,7 @@ def get_query_metrics(
         ),
         example="gpt-4o,llama-3.1-405b-chat,claude-3.5-sonnet",
     ),
-    providers: Optional[str] = Query(
+    providers: str = Query(
         None,
         description=(
             "Providers to fetch metrics from. The list must be a set of comma-sparated strings. "
@@ -57,12 +57,12 @@ def get_query_metrics(
         ),
         example="openai,anthropic,fireworks-ai",
     ),
-    interval: Optional[str] = Query(
+    interval: str = Query(
         300,
         description="Number of seconds in the aggregation interval.",
         example=300,
     ),
-    secondary_user_id: Optional[str] = Query(
+    secondary_user_id: str = Query(
         None,
         description=(
             "Secondary user id. The secondary user id will match any string "

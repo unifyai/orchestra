@@ -3,7 +3,7 @@ Includes endpoints related to benchmarks.
 """
 
 from datetime import datetime
-from typing import Dict, Union, List, Optional
+from typing import Dict, Union, List
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
@@ -47,8 +47,8 @@ def _get_endpoint_from_model_provider(
 def _get_custom_endpoint_benchmark(
     request_fastapi: Request,
     model: str,
-    start_time: Optional[str] = None,
-    end_time: Optional[str] = None,
+    start_time: str = None,
+    end_time: str = None,
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
     custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
 ):

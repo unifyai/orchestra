@@ -1,6 +1,6 @@
 import datetime
 import logging
-from typing import Dict, Optional
+from typing import Dict
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
@@ -84,7 +84,7 @@ def promo_code(
         description="Promo code to be activated.",
         example="sample_code",
     ),
-    user: Optional[str] = Query(
+    user: str = Query(
         None,
         description=(
             "ID of the user that receives the credits,"
