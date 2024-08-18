@@ -303,19 +303,21 @@ def trigger_evaluation(
 @router.get(
     "/evaluation",
 )
-def get_evaluation(
+def get_evaluations(
     request_fastapi: Request,
     dataset: str = Query(
         description="Name of the dataset to fetch evaluation from.",
         example="dataset1",
     ),
     endpoint: str = Query(
-        description="The endpoint to fetch the evaluation for.",
+        default=None,
+        description="The endpoint to fetch the evaluation for. "
+                    "If `None`, returns evaluations for all endpoints.",
         example="gpt-4o-mini@openai",
     ),
     evaluator: str = Query(
         default=None,
-        description="Name of the evaluator to fetch the evaluation from. "
+        description="Name of the evaluator to fetch the evaluation for. "
                     "If `None`, returns all available evaluations for the dataset and "
                     "endpoint pair.",
         example="eval1",
@@ -363,6 +365,9 @@ def get_evaluation(
             continue
 
         displayname = id_to_displayname[eval_id]
+
+        if endpoint:
+            eval_scores = {endpoint: eval_scores[endpoint]}
 
         ret[displayname] = eval_scores
         for endpoint in eval_scores:
