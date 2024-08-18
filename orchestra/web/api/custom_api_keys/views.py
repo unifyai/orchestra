@@ -10,18 +10,6 @@ from orchestra.web.api.utils.http_responses import custom_api_key_not_found
 router = APIRouter()
 
 
-@router.get("/custom_api_key", response_model=List[CustomApiKeyModelResponse])
-def get_custom_api_keys(
-    request_fastapi: Request,
-    custom_api_key_dao: CustomApiKeyDAO = Depends(),
-) -> List[CustomApiKey]:
-    """
-    Returns a list of the available custom API keys.
-    """
-    user_id = request_fastapi.state.user_id
-    return custom_api_key_dao.get_user_keys(user_id=user_id)
-
-
 @router.put(
     "/custom_api_key",
     responses={
@@ -57,6 +45,64 @@ def create_custom_api_key(
         value=value,
     )
     return {"info": "API key created successfully!"}
+
+
+@router.get("/custom_api_key", response_model=List[CustomApiKeyModelResponse])
+def get_custom_api_keys(
+    request_fastapi: Request,
+    custom_api_key_dao: CustomApiKeyDAO = Depends(),
+) -> List[CustomApiKey]:
+    """
+    Returns a list of the available custom API keys.
+    """
+    user_id = request_fastapi.state.user_id
+    return custom_api_key_dao.get_user_keys(user_id=user_id)
+
+
+@router.delete(
+    "/custom_api_key",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "API key deleted successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Custom API key Not Found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "API key not found."},
+                },
+            },
+        },
+    },
+)
+def delete_custom_api_key(
+    request_fastapi: Request,
+    key: str = Query(
+        description="Name of the custom API key to delete.",
+        example="key1",
+    ),
+    custom_api_key_dao: CustomApiKeyDAO = Depends(),
+) -> None:
+    """
+    Deletes a custom API key in your account.
+
+    """
+    user_id = request_fastapi.state.user_id
+
+    existing_key = custom_api_key_dao.filter(user_id=user_id, key=key)
+    if not existing_key:
+        raise custom_api_key_not_found
+
+    custom_api_key_dao.delete(
+        user_id=user_id,
+        name=key,
+    )
+    return {"info": "API key deleted successfully!"}
 
 
 @router.post(
@@ -108,52 +154,6 @@ def rename_custom_api_key(
         new_name=new_key,
     )
     return {"info": "API key renamed successfully!"}
-
-
-@router.delete(
-    "/custom_api_key",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {"info": "API key deleted successfully!"},
-                },
-            },
-        },
-        404: {
-            "description": "Custom API key Not Found",
-            "content": {
-                "application/json": {
-                    "example": {"detail": "API key not found."},
-                },
-            },
-        },
-    },
-)
-def delete_custom_api_key(
-    request_fastapi: Request,
-    key: str = Query(
-        description="Name of the custom API key to delete.",
-        example="key1",
-    ),
-    custom_api_key_dao: CustomApiKeyDAO = Depends(),
-) -> None:
-    """
-    Deletes a custom API key in your account.
-
-    """
-    user_id = request_fastapi.state.user_id
-
-    existing_key = custom_api_key_dao.filter(user_id=user_id, key=key)
-    if not existing_key:
-        raise custom_api_key_not_found
-
-    custom_api_key_dao.delete(
-        user_id=user_id,
-        name=key,
-    )
-    return {"info": "API key deleted successfully!"}
 
 
 ALLOWED_METRICS = [
