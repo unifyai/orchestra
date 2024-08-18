@@ -113,7 +113,7 @@ def load_eval_config_blob(user_id, eval_id):
 ###########################
 
 
-@router.post("/evaluator/create")
+@router.post("/evaluator")
 def create_evaluator(
     request_fastapi: Request,
     request: EvalConfig,
@@ -151,17 +151,6 @@ def create_evaluator(
     return {"info": "Eval created!"}
 
 
-@router.get("/evaluator/list")
-def list_evaluators(
-    request_fastapi: Request,
-):
-    """
-    Returns the names of the eval configurations you have created.
-    """
-    displayname_to_id = build_displayname_to_id(request_fastapi.state.user_id)
-    return sorted(displayname_to_id.keys())
-
-
 @router.get("/evaluator")
 def get_evaluator(
     request_fastapi: Request,
@@ -178,6 +167,22 @@ def get_evaluator(
     blob = load_eval_config_blob(user_id, eval_id)
     contents = json.loads(blob.download_as_bytes().decode("utf-8"))
     return contents
+
+
+@router.delete("/evaluator")
+def delete_evaluator(
+    request_fastapi: Request,
+    eval_name: str = Query(description="Name of the eval to delete", example="eval1"),
+):
+    """
+    Deletes a named eval from your account.
+    """
+    user_id = request_fastapi.state.user_id
+    eval_id = eval_name_to_eval_id(user_id, eval_name)
+    blob = load_eval_config_blob(user_id, eval_id)
+    blob.delete()
+    refresh_scores_json(user_id)
+    # TODO: remove all corresponding model judgements?
 
 
 @router.post("/evaluator/rename")
@@ -203,17 +208,12 @@ def rename_evaluator(
     return {"info": "Evaluation successfully renamed"}
 
 
-@router.delete("/evaluator/delete")
-def delete_evaluator(
+@router.get("/evaluator/list")
+def list_evaluators(
     request_fastapi: Request,
-    eval_name: str = Query(description="Name of the eval to delete", example="eval1"),
 ):
     """
-    Deletes a named eval from your account.
+    Returns the names of the eval configurations you have created.
     """
-    user_id = request_fastapi.state.user_id
-    eval_id = eval_name_to_eval_id(user_id, eval_name)
-    blob = load_eval_config_blob(user_id, eval_id)
-    blob.delete()
-    refresh_scores_json(user_id)
-    # TODO: remove all corresponding model judgements?
+    displayname_to_id = build_displayname_to_id(request_fastapi.state.user_id)
+    return sorted(displayname_to_id.keys())
