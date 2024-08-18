@@ -62,3 +62,22 @@ def delete_router_config(
     Deletes the specified router configuration.
     """
     raise NotImplemented  # ToDo: implement
+
+
+@router.post(
+    "/router/config/rename"
+)
+def rename_router_config(
+    name: str = Query(
+        description="The original name of the router configuration.",
+        example="original_name",
+    ),
+    new_name: str = Query(
+        description="The new name for the router configuration.",
+        example="new_name",
+    ),
+):
+    """
+    Renames the specified router configuration.
+    """
+    raise NotImplemented  # ToDo: implement
