@@ -207,17 +207,14 @@ def load_eval_config_blob(user_id, eval_id):
 def trigger_evaluation(
     request_fastapi: Request,
     eval_name: str = Query(
-        ...,
         description="Name of the eval to use.",
         example="eval1",
     ),
     dataset: str = Query(
-        ...,
         description="Name of the uploaded dataset to evaluate.",
         example="dataset1",
     ),
     endpoint: str = Query(
-        ...,
         description=(
             "Name of the endpoint to evaluate."
             " Endpoints must be specified using the `model@provider` format."
@@ -309,7 +306,6 @@ def trigger_evaluation(
 def get_evaluation(
     request_fastapi: Request,
     dataset: str = Query(
-        ...,
         description="Name of the dataset to fetch evaluation from.",
         example="dataset1",
     ),

@@ -37,8 +37,8 @@ def get_custom_api_keys(
 )
 def create_custom_api_key(
     request_fastapi: Request,
-    key: str = Query(..., description="Name of the API key.", example="key1"),
-    value: str = Query(..., description="Value of the API key.", example="value1"),
+    key: str = Query(description="Name of the API key.", example="key1"),
+    value: str = Query(description="Value of the API key.", example="value1"),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
 ) -> None:
     """
@@ -83,12 +83,10 @@ def create_custom_api_key(
 def rename_custom_api_key(
     request_fastapi: Request,
     key: str = Query(
-        ...,
         description="Name of the custom API key to be updated.",
         example="key1",
     ),
     new_key: str = Query(
-        ...,
         description="New name for the custom API key.",
         example="key2",
     ),
@@ -136,7 +134,6 @@ def rename_custom_api_key(
 def delete_custom_api_key(
     request_fastapi: Request,
     key: str = Query(
-        ...,
         description="Name of the custom API key to delete.",
         example="key1",
     ),

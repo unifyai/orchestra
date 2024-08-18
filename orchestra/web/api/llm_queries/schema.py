@@ -18,9 +18,8 @@ class ChatCompletionRequest(BaseModel):
     # This allows extra arguments through.
     model_config = ConfigDict(extra="allow")
 
-    model: str = Field(..., json_schema_extra={"example": "gpt-4o-mini@openai"})
+    model: str = Field(json_schema_extra={"example": "gpt-4o-mini@openai"})
     messages: List[Dict[str, Any]] = Field(
-        ...,
         json_schema_extra={
             "example": [
                 {

@@ -145,8 +145,8 @@ def _get_custom_endpoint_benchmark(
 )
 def get_benchmark(
     request_fastapi: Request,
-    model: str = Query(..., description="Name of the model.", example="gpt-4o-mini"),
-    provider: str = Query(..., description="Name of the provider.", example="openai"),
+    model: str = Query(description="Name of the model.", example="gpt-4o-mini"),
+    provider: str = Query(description="Name of the provider.", example="openai"),
     region: str = Query(
         default="Belgium",
         description="""Region where the benchmark is run.

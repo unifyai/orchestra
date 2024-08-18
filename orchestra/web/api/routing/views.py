@@ -173,9 +173,8 @@ def send_to_deploy_server(action, **data):
 @handle_on_prem(endpoint="/router/train", method="post")
 def train_router(
     request_fastapi: Request,
-    name: str = Query(..., description="Name of the router.", example="router1"),
+    name: str = Query(description="Name of the router.", example="router1"),
     dataset: str = Query(
-        ...,
         description=(
             "Name of the dataset to train the router on."
             " To use a dataset, you need to first upload it to your account"
@@ -184,7 +183,6 @@ def train_router(
         example="dataset1",
     ),
     endpoints: List[str] = Query(
-        ...,
         description=(
             "List of endpoints to include in the router."
             " Endpoints must be specified using the `model@provider` format."
@@ -288,7 +286,6 @@ def get_trained_routers(
 def delete_router_train(
     request_fastapi: Request,
     name: str = Query(
-        ...,
         description="Name of the router to delete.",
         example="router1",
     ),
@@ -343,7 +340,6 @@ def delete_router_train(
 def deploy_router(
     request_fastapi: Request,
     name: str = Query(
-        ...,
         description="Name of the router to deploy.",
         example="router1",
     ),
@@ -395,7 +391,6 @@ def deploy_router(
 def delete_router(
     request_fastapi: Request,
     name: str = Query(
-        ...,
         description="Name of the router to un-deploy.",
         example="router1",
     ),

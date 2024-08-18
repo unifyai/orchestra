@@ -47,19 +47,16 @@ def get_custom_endpoints(
 def create_custom_endpoint(
     request_fastapi: Request,
     name: str = Query(
-        ...,
         description="Alias for the custom endpoint."
                     "This will be the name used to call the endpoint.",
         example="endpoint1",
     ),
     url: str = Query(
-        ...,
         description="Base URL of the endpoint being called."
                     "Must support the OpenAI format.",
         example="https://api.url1.com",
     ),
     key_name: str = Query(
-        ...,
         description="Name of the API key that will be passed as part of the query.",
         example="key1",
     ),
@@ -120,12 +117,10 @@ def create_custom_endpoint(
 def rename_custom_endpoint(
     request_fastapi: Request,
     name: str = Query(
-        ...,
         description="Name of the custom endpoint to be updated.",
         example="name1",
     ),
     new_name: str = Query(
-        ...,
         description="New name for the custom endpoint.",
         example="name2",
     ),
@@ -165,7 +160,6 @@ def rename_custom_endpoint(
 def delete_custom_endpoint(
     request_fastapi: Request,
     name: str = Query(
-        ...,
         description="Name of the custom endpoint to delete.",
         example="endpoint1",
     ),

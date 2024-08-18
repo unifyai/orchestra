@@ -255,7 +255,7 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 )
 def delete_dataset(
     request_fastapi: Request,
-    name: str = Query(..., description="Name of the dataset.", example="dataset1"),
+    name: str = Query(description="Name of the dataset.", example="dataset1"),
 ) -> Dict[str, str]:
     """
     Deletes a previously updated dataset and any relevant artifacts from the platform.
@@ -340,7 +340,7 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 )
 def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
-    name: str = Query(..., description="Name of the dataset.", example="dataset1"),
+    name: str = Query(description="Name of the dataset.", example="dataset1"),
 ):
     """
     Downloads a specific dataset from the platform.
@@ -410,12 +410,10 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 def rename_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
     name: str = Query(
-        ...,
         description="Name of the dataset to be updated.",
         example="dataset1",
     ),
     new_name: str = Query(
-        ...,
         description="New name for the dataset.",
         example="dataset2",
     ),

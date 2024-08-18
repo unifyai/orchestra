@@ -81,7 +81,6 @@ def get_credits(
 def promo_code(
     request_fastapi: Request,
     code: str = Query(
-        ...,
         description="Promo code to be activated.",
         example="sample_code",
     ),
