@@ -148,11 +148,11 @@ def _get_custom_endpoint_benchmark(
         },
     },
 )
-def upload_benchmark(
+def append_to_benchmark(
     request_fastapi: Request,
     endpoint_name: str = Query(
-        description="Name of the *custom* endpoint to submit a benchmark for.",
-        example="endpoint1",
+        description="Name of the *custom* endpoint to append benchmark data for.",
+        example="my_endpoint",
     ),
     metric_name: str = Query(
         description=f"""Name of the metric to submit. Allowed metrics are:
@@ -172,6 +172,10 @@ def upload_benchmark(
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
     custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
 ):
+    """
+    Append to the live benchmark data for a custom endpoint (only custom endpoints are
+    publishable by end users).
+    """
     if metric_name not in ALLOWED_METRICS:
         raise HTTPException(
             status_code=400,
@@ -309,3 +313,18 @@ def get_benchmark(
         )
     except:
         raise benchmark_not_found(f"{model}@{provider}")
+
+
+@router.delete(
+    "/benchmark",
+)
+def delete_benchmark(
+    endpoint_name: str = Query(
+        description="Name of the *custom* endpoint to submit a benchmark for.",
+        example="my_endpoint",
+    ),
+):
+    """
+    Delete *all* benchmark time-series data for a given custom endpoint.
+    """
+    raise NotImplemented  # ToDo: implement
