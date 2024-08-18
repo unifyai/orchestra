@@ -1,6 +1,7 @@
 """
 Includes endpoints for creating router configurations.
 """
+from typing import List
 from fastapi import APIRouter, Query
 
 router = APIRouter()
@@ -42,7 +43,7 @@ def get_router_config(
                     "full endpoint string for.",
         example="cost_and_speed_optimized",
     ),
-):
+) -> str:
     """
     Returns the full router endpoint string for a given router configuration name.
     """
@@ -79,5 +80,15 @@ def rename_router_config(
 ):
     """
     Renames the specified router configuration.
+    """
+    raise NotImplemented  # ToDo: implement
+
+
+@router.get(
+    "/router/config/list"
+)
+def list_router_configs() -> List[str]:
+    """
+    Lists all saved router configurations by name.
     """
     raise NotImplemented  # ToDo: implement
