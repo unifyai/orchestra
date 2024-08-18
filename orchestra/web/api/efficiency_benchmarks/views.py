@@ -266,6 +266,11 @@ def get_benchmark(
     Extracts cost and speed data for the provided endpoint via our standardized
     efficiency benchmarks, in the specified region, with the specified sequence length,
     with all benchmark values returned within the specified time window.
+
+    When extracting data for a *custom* endpoint, then `model` is the endpoint name, and
+    `provider` must be set as `"custom"`. The arguments `region` and `seq_len` are
+    ignored for custom endpoints (they are not publishable).
+
     If neither `start_time` nor `end_time` are provided, then only the *latest*
     benchmark data is returned. If only `start_time` is provided, then `end_time` is
     assumed to be the current time. An exception is raised if only `end_time` is
