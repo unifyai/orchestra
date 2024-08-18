@@ -330,8 +330,11 @@ def get_evaluations(
     ),
 ) -> Dict:
     """
-    Fetches the results of an eval on a given dataset. If no `eval_name` is provided,
-    returns scores for all completed evals on that dataset.
+    Fetches the results of an evaluation on a given dataset,
+    for a specific endpoint (optional) based on a specific evaluator (optional).
+    If no `evaluator` is provided, then scores are returned for all valid evaluators.
+    Similarly, if no `endpoint` is provided, then scores are returned for all valid
+    endpoints.
     """
     # ToDo: implement the logic where the endpoint (required) is considered in the input
     user_id = request_fastapi.state.user_id
