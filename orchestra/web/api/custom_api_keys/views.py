@@ -25,7 +25,7 @@ router = APIRouter()
 )
 def create_custom_api_key(
     request_fastapi: Request,
-    key: str = Query(description="Name of the API key.", example="key1"),
+    name: str = Query(description="Name of the API key.", example="key1"),
     value: str = Query(description="Value of the API key.", example="value1"),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
 ) -> None:
@@ -41,22 +41,28 @@ def create_custom_api_key(
     user_id = request_fastapi.state.user_id
     custom_api_key_dao.create_custom_api_key(
         user_id=user_id,
-        key=key,
+        key=name,
         value=value,
     )
     return {"info": "API key created successfully!"}
 
 
 @router.get("/custom_api_key", response_model=List[CustomApiKeyModelResponse])
-def get_custom_api_keys(
+def get_custom_api_key(
     request_fastapi: Request,
+    name: str = Query(description="Name of the API key to get the value for.",
+                      example="key1"),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
-) -> List[CustomApiKey]:
+) -> CustomApiKey:
     """
     Returns a list of the available custom API keys.
     """
     user_id = request_fastapi.state.user_id
-    return custom_api_key_dao.get_user_keys(user_id=user_id)
+    all_keys = custom_api_key_dao.get_user_keys(user_id=user_id)
+    for api_key in all_keys:
+        if api_key.key == name:
+            return api_key
+    raise Exception("No API key found with name '{}'".format(name))
 
 
 @router.delete(
@@ -82,7 +88,7 @@ def get_custom_api_keys(
 )
 def delete_custom_api_key(
     request_fastapi: Request,
-    key: str = Query(
+    name: str = Query(
         description="Name of the custom API key to delete.",
         example="key1",
     ),
@@ -100,7 +106,7 @@ def delete_custom_api_key(
 
     custom_api_key_dao.delete(
         user_id=user_id,
-        name=key,
+        name=name,
     )
     return {"info": "API key deleted successfully!"}
 
@@ -128,11 +134,11 @@ def delete_custom_api_key(
 )
 def rename_custom_api_key(
     request_fastapi: Request,
-    key: str = Query(
+    name: str = Query(
         description="Name of the custom API key to be updated.",
         example="key1",
     ),
-    new_key: str = Query(
+    new_name: str = Query(
         description="New name for the custom API key.",
         example="key2",
     ),
@@ -150,7 +156,19 @@ def rename_custom_api_key(
 
     custom_api_key_dao.rename(
         user_id=user_id,
-        name=key,
-        new_name=new_key,
+        name=name,
+        new_name=new_name,
     )
     return {"info": "API key renamed successfully!"}
+
+
+@router.get("/custom_api_key/list", response_model=List[CustomApiKeyModelResponse])
+def list_custom_api_keys(
+    request_fastapi: Request,
+    custom_api_key_dao: CustomApiKeyDAO = Depends(),
+) -> List[CustomApiKey]:
+    """
+    Returns a list of the available custom API keys.
+    """
+    user_id = request_fastapi.state.user_id
+    return custom_api_key_dao.get_user_keys(user_id=user_id)
