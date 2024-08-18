@@ -1,15 +1,14 @@
 """
-Includes endpoints related to dataset evaluations.
+Includes endpoints related to evaluators.
 """
 import os
 import json
 import hashlib
-
-from fastapi import APIRouter, HTTPException, Query, Request
 from google.cloud import storage
-from providers.completion import PROVIDER_CLASSES
+from fastapi import APIRouter, HTTPException, Query, Request
 
-from orchestra.web.api.evaluators.schema import EvalConfig
+from providers.completion import PROVIDER_CLASSES
+from orchestra.web.api.evaluators.schema import EvaluatorConfig
 from orchestra.web.api.utils import gcp, on_prem
 
 router = APIRouter()
@@ -71,7 +70,7 @@ def build_id_to_displayname(user_id):
         assert ".config" in id_
         id_ = id_.replace(".config", "")
         # get display_name
-        display_name = json.loads(blob.download_as_bytes().decode("utf-8"))["eval_name"]
+        display_name = json.loads(blob.download_as_bytes().decode("utf-8"))["name"]
         id_to_displayname[id_] = display_name
     return id_to_displayname
 
@@ -81,22 +80,22 @@ def build_displayname_to_id(user_id):
     return {v: k for k, v in id_to_displayname.items()}
 
 
-def eval_name_to_eval_id(user_id, eval_name):
+def name_to_eval_id(user_id, name):
     displayname_to_id = build_displayname_to_id(user_id)
-    if eval_name not in displayname_to_id:
+    if name not in displayname_to_id:
         raise HTTPException(
             status_code=400,
-            detail=f"You don't have an eval with the name {eval_name}.",
+            detail=f"You don't have an eval with the name {name}.",
         )
-    return displayname_to_id[eval_name]
+    return displayname_to_id[name]
 
 
-def check_if_eval_name_free(user_id, eval_name):
+def check_if_name_free(user_id, name):
     displayname_to_id = build_displayname_to_id(user_id)
-    if eval_name in displayname_to_id:
+    if name in displayname_to_id:
         raise HTTPException(
             status_code=400,
-            detail=f"You already have an eval with the name {eval_name}!",
+            detail=f"You already have an eval with the name {name}!",
         )
     return True
 
@@ -116,7 +115,7 @@ def load_eval_config_blob(user_id, eval_id):
 @router.post("/evaluator")
 def create_evaluator(
     request_fastapi: Request,
-    request: EvalConfig,
+    request: EvaluatorConfig,
 ):
     """
     Create a re-usable, named evaluator.
@@ -143,8 +142,8 @@ def create_evaluator(
     eval_id = hashlib.shake_128(config_str.encode("utf-8")).hexdigest(8)
 
     # check if name is not already in use
-    eval_name = request.eval_name
-    check_if_eval_name_free(user_id, eval_name)
+    name = request.name
+    check_if_name_free(user_id, name)
 
     blob = load_eval_config_blob(user_id, eval_id)
     blob.upload_from_string(config_str, content_type="application/json")
@@ -154,16 +153,16 @@ def create_evaluator(
 @router.get("/evaluator")
 def get_evaluator(
     request_fastapi: Request,
-    eval_name: str = Query(
+    name: str = Query(
         description="Name of the eval to return the configuration of",
         example="eval1",
     ),
 ):
     """
-    Returns the configuration JSON for a named eval.
+    Returns the configuration JSON for an evaluator.
     """
     user_id = request_fastapi.state.user_id
-    eval_id = eval_name_to_eval_id(user_id, eval_name)
+    eval_id = name_to_eval_id(user_id, name)
     blob = load_eval_config_blob(user_id, eval_id)
     contents = json.loads(blob.download_as_bytes().decode("utf-8"))
     return contents
@@ -172,13 +171,13 @@ def get_evaluator(
 @router.delete("/evaluator")
 def delete_evaluator(
     request_fastapi: Request,
-    eval_name: str = Query(description="Name of the eval to delete", example="eval1"),
+    name: str = Query(description="Name of the eval to delete", example="eval1"),
 ):
     """
-    Deletes a named eval from your account.
+    Deletes an evaluator from your account.
     """
     user_id = request_fastapi.state.user_id
-    eval_id = eval_name_to_eval_id(user_id, eval_name)
+    eval_id = name_to_eval_id(user_id, name)
     blob = load_eval_config_blob(user_id, eval_id)
     blob.delete()
     refresh_scores_json(user_id)
@@ -188,20 +187,20 @@ def delete_evaluator(
 @router.post("/evaluator/rename")
 def rename_evaluator(
     request_fastapi: Request,
-    eval_name: str = Query(
+    name: str = Query(
         description="Name of the existing eval to rename",
         example="eval1",
     ),
-    new_eval_name: str = Query(description="New name for the eval", example="eval2"),
+    new_name: str = Query(description="New name for the eval", example="eval2"),
 ):
     """
-    Renames a named eval from `eval_name` to `new_eval_name`.
+    Renames an evaluator from `name` to `new_name`.
     """
     user_id = request_fastapi.state.user_id
-    eval_id = eval_name_to_eval_id(user_id, eval_name)
+    eval_id = name_to_eval_id(user_id, name)
     blob = load_eval_config_blob(user_id, eval_id)
     contents = json.loads(blob.download_as_bytes().decode("utf-8"))
-    contents["eval_name"] = new_eval_name
+    contents["name"] = new_name
     config_str = json.dumps(contents, sort_keys=True)
     blob.upload_from_string(config_str, content_type="application/json")
     refresh_scores_json(user_id)
@@ -213,7 +212,7 @@ def list_evaluators(
     request_fastapi: Request,
 ):
     """
-    Returns the names of the eval configurations you have created.
+    Returns the names of the evaluators you have created.
     """
     displayname_to_id = build_displayname_to_id(request_fastapi.state.user_id)
     return sorted(displayname_to_id.keys())

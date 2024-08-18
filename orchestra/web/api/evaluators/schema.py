@@ -3,8 +3,8 @@ from typing import Union
 from pydantic import BaseModel, Field
 
 
-class EvalConfig(BaseModel):
-    eval_name: str = Field(
+class EvaluatorConfig(BaseModel):
+    name: str = Field(
         description="A unique, user-defined name used when referencing and triggering the eval.",
         json_schema_extra={"example": "eval1"},
     )
