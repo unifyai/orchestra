@@ -33,24 +33,24 @@ class ChatCompletionRequest(BaseModel):
     # openai args
     temperature: float = Field(0.9, json_schema_extra={"example": 0.9})
     stream: bool = Field(False, json_schema_extra={"example": False})
-    max_tokens: int = Field(None, json_schema_extra={"example": 1024})
-    frequency_penalty: float = None
-    logit_bias: Dict[str, float] = None
-    logprobs: bool = None
-    top_logprobs: int = None
-    n: int = None
-    presence_penalty: float = None
-    response_format: Dict[str, str] = None
-    seed: int = None
-    stop: Union[str, List[str]] = None
-    top_p: float = None
-    tools: List[Any] = None
-    tool_choice: Any = None
-    user: str = None
+    max_tokens: Optional[int] = Field(None, json_schema_extra={"example": 1024})
+    frequency_penalty: Optional[float] = None
+    logit_bias: Optional[Dict[str, float]] = None
+    logprobs: Optional[bool] = None
+    top_logprobs: Optional[int] = None
+    n: Optional[int] = None
+    presence_penalty: Optional[float] = None
+    response_format: Optional[Dict[str, str]] = None
+    seed: Optional[int] = None
+    stop: Optional[Union[str, List[str]]] = None
+    top_p: Optional[float] = None
+    tools: Optional[List[Any]] = None
+    tool_choice: Optional[Any] = None
+    user: Optional[str] = None
 
     # args that are for orchestra use only
-    signature: str = None
-    use_custom_keys: bool = False
+    signature: Optional[str] = None
+    use_custom_keys: Optional[bool] = False
 
 
 class ChatCompletionResponse(BaseModel):
@@ -67,8 +67,8 @@ class ChatCompletionResponse(BaseModel):
     """
 
     model: str
-    created: int = None
-    id: str = None
+    created: Optional[int] = None
+    id: Optional[str] = None
     object: str = "chat.completion"
     usage: Dict[str, Any]
     choices: List[Dict[str, Any]]

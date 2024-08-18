@@ -4,23 +4,22 @@ import json
 def get_property_details(schema_properties, files=[]):
     properties = []
     for property_name in schema_properties:
-        property = schema_properties[property_name]
-
-        if property_name in files and "format" in property:
-            property_type = property["format"]
+        prop = schema_properties[property_name]
+        if property_name in files and "format" in prop:
+            property_type = prop["format"]
         else:
-            if "type" in property:
-                property_type = property["type"]
-                if property_type == "array" and "items" in property:
-                    property_type = property["items"]["type"]
+            if "type" in prop:
+                property_type = prop["type"]
+                if property_type == "array" and "items" in prop:
+                    property_type = prop["items"]["type"]
                     property_type = f"[{property_type}]"
             else:  # in case multiple types are defined
                 property_type = " | ".join(
-                    [prop_type.get("type", "any") for prop_type in property["anyOf"]],
+                    [prop_type.get("type", "any") for prop_type in prop["anyOf"]],
                 )
 
-        example = property.get("example")  # example
-        description = property.get("description")  # description
+        example = prop.get("example")  # example
+        description = prop.get("description")  # description
         properties.append(
             {
                 "title": property_name,
