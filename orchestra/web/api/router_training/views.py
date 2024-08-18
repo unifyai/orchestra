@@ -193,44 +193,6 @@ def train_router(
     return {"info": "Router training started! You will receive an email soon!"}
 
 
-@router.get(
-    "/router/list",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "router_1": {
-                            "dataset": "dataset_1",
-                            "endpoints": ["model@provider", "..."],
-                        },
-                        "...": {"..."},
-                    },
-                },
-            },
-        },
-    },
-)
-@handle_on_prem(endpoint="/router/list", method="get")
-def list_routers(
-    request_fastapi: Request,
-) -> Dict[str, Dict[str, Union[str, List[str]]]]:
-    """
-    Fetches a list of the trained routers and relevant metadata.
-    These routers are training artifacts and therefore don't imply an active,
-    deployed router. To fetch a list of deployed routers, you can use the
-    /router/deploy/list GET endpoint.
-    """
-    user_id = request_fastapi.state.user_id
-    routers = _list_trained_routers(user_id)
-    # TODO: Do this correctly
-    routers_metadata = {}
-    for rtr in routers:
-        routers_metadata[rtr] = {"dataset": "", "endpoints": [""]}
-    return routers_metadata
-
-
 @router.delete(
     "/router",
     responses={
@@ -277,3 +239,41 @@ def delete_router(
     #   set_router_training_status("deleted")
     #   router training -> id, user_id, name, dataset, status
     return {"info": "Trained router deleted!"}
+
+
+@router.get(
+    "/router/list",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "router_1": {
+                            "dataset": "dataset_1",
+                            "endpoints": ["model@provider", "..."],
+                        },
+                        "...": {"..."},
+                    },
+                },
+            },
+        },
+    },
+)
+@handle_on_prem(endpoint="/router/list", method="get")
+def list_routers(
+    request_fastapi: Request,
+) -> Dict[str, Dict[str, Union[str, List[str]]]]:
+    """
+    Fetches a list of the trained routers and relevant metadata.
+    These routers are training artifacts and therefore don't imply an active,
+    deployed router. To fetch a list of deployed routers, you can use the
+    /router/deploy/list GET endpoint.
+    """
+    user_id = request_fastapi.state.user_id
+    routers = _list_trained_routers(user_id)
+    # TODO: Do this correctly
+    routers_metadata = {}
+    for rtr in routers:
+        routers_metadata[rtr] = {"dataset": "", "endpoints": [""]}
+    return routers_metadata
