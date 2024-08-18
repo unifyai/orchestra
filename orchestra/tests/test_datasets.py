@@ -5,7 +5,7 @@ import pytest
 from httpx import AsyncClient
 
 from orchestra.tests.utils import HEADERS
-from orchestra.web.api.dataset.views import bucket_name
+from orchestra.web.api.datasets.views import bucket_name
 from orchestra.web.api.utils.gcp import (
     blob_exists,
     delete_dir,

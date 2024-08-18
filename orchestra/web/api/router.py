@@ -8,7 +8,7 @@ from orchestra.web.api import (  # noqa: WPS235
     logging,
     custom_endpoints,
     custom_api_keys,
-    dataset,
+    datasets,
     evaluators,
     evaluations,
     efficiency_benchmarks,
@@ -53,7 +53,7 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    dataset.router,
+    datasets.router,
     tags=["Datasets"],
     dependencies=API_KEY_AUTH,
 )
