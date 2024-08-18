@@ -299,33 +299,48 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         return json.loads(string)
 
 
-# list datasets
-@router.get(
-    "/dataset/list",
+# delete dataset
+@router.delete(
+    "/dataset",
     responses={
         200: {
             "description": "Successful Response",
             "content": {
-                "application/json": {"example": ["dataset_1", "dataset_2", "..."]},
+                "application/json": {
+                    "example": {"info": "Dataset deleted successfully!"},
+                },
+            },
+        },
+        400: {
+            "description": "Invalid dataset name",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid name for a dataset."
+                                  "Please, choose a different one.",
+                    },
+                },
             },
         },
     },
 )
-def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
+def delete_dataset(
     request_fastapi: Request,
-) -> List[str]:
+    name: str = Query(description="Name of the dataset.", example="dataset1"),
+) -> Dict[str, str]:
     """
-    Lists all the custom datasets uploaded by the user to the platform.
+    Deletes a previously updated dataset and any relevant artifacts from the platform.
     """
-    datasets = _list_datasets(request_fastapi.state.user_id)
+    if "../" in name or name[0] == "/":
+        raise invalid_dataset_name
     if os.environ.get("ON_PREM"):
         id_to_name = on_prem.internal_id_to_displayname(request_fastapi.state.user_id)
     else:
         id_to_name = gcp.internal_id_to_displayname(request_fastapi.state.user_id)
-    dataset_names = []
-    for d in datasets:
-        dataset_names.append(id_to_name.get(d, d))
-    return dataset_names
+    name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    internal_id = name_to_id.get(name, name)
+    _delete_dataset(request_fastapi.state.user_id, internal_id)
+    return {"info": "Dataset deleted successfully!"}
 
 
 @router.post(
@@ -401,45 +416,30 @@ def rename_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     return {"info": "Dataset name updated successfully!"}
 
 
-# delete dataset
-@router.delete(
-    "/dataset",
+# list datasets
+@router.get(
+    "/dataset/list",
     responses={
         200: {
             "description": "Successful Response",
             "content": {
-                "application/json": {
-                    "example": {"info": "Dataset deleted successfully!"},
-                },
-            },
-        },
-        400: {
-            "description": "Invalid dataset name",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Invalid name for a dataset."
-                                  "Please, choose a different one.",
-                    },
-                },
+                "application/json": {"example": ["dataset_1", "dataset_2", "..."]},
             },
         },
     },
 )
-def delete_dataset(
+def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
-    name: str = Query(description="Name of the dataset.", example="dataset1"),
-) -> Dict[str, str]:
+) -> List[str]:
     """
-    Deletes a previously updated dataset and any relevant artifacts from the platform.
+    Lists all the custom datasets uploaded by the user to the platform.
     """
-    if "../" in name or name[0] == "/":
-        raise invalid_dataset_name
+    datasets = _list_datasets(request_fastapi.state.user_id)
     if os.environ.get("ON_PREM"):
         id_to_name = on_prem.internal_id_to_displayname(request_fastapi.state.user_id)
     else:
         id_to_name = gcp.internal_id_to_displayname(request_fastapi.state.user_id)
-    name_to_id = {name: id_ for id_, name in id_to_name.items()}
-    internal_id = name_to_id.get(name, name)
-    _delete_dataset(request_fastapi.state.user_id, internal_id)
-    return {"info": "Dataset deleted successfully!"}
+    dataset_names = []
+    for d in datasets:
+        dataset_names.append(id_to_name.get(d, d))
+    return dataset_names

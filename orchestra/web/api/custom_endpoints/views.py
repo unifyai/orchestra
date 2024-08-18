@@ -82,6 +82,44 @@ def create_custom_endpoint(
     return {"info": "Custom endpoint created successfully!"}
 
 
+@router.delete(
+    "/custom_endpoint",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Custom endpoint deleted successfully!"},
+                },
+            },
+        },
+    },
+)
+def delete_custom_endpoint(
+    request_fastapi: Request,
+    name: str = Query(
+        description="Name of the custom endpoint to delete.",
+        example="endpoint1",
+    ),
+    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+) -> None:
+    """
+    Deletes a custom endpoint in your account.
+
+    """
+    user_id = request_fastapi.state.user_id
+
+    existing_endpoint = custom_endpoint_dao.filter(user_id=user_id, name=name)
+    if not existing_endpoint:
+        raise custom_endpoint_not_found
+
+    custom_endpoint_dao.delete(
+        user_id=user_id,
+        name=name,
+    )
+    return {"info": "Custom endpoint deleted successfully!"}
+
+
 @router.post(
     "/custom_endpoint/rename",
     responses={
@@ -131,41 +169,3 @@ def rename_custom_endpoint(
         new_name=new_name,
     )
     return {"info": "Custom endpoint renamed successfully!"}
-
-
-@router.delete(
-    "/custom_endpoint",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {"info": "Custom endpoint deleted successfully!"},
-                },
-            },
-        },
-    },
-)
-def delete_custom_endpoint(
-    request_fastapi: Request,
-    name: str = Query(
-        description="Name of the custom endpoint to delete.",
-        example="endpoint1",
-    ),
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
-) -> None:
-    """
-    Deletes a custom endpoint in your account.
-
-    """
-    user_id = request_fastapi.state.user_id
-
-    existing_endpoint = custom_endpoint_dao.filter(user_id=user_id, name=name)
-    if not existing_endpoint:
-        raise custom_endpoint_not_found
-
-    custom_endpoint_dao.delete(
-        user_id=user_id,
-        name=name,
-    )
-    return {"info": "Custom endpoint deleted successfully!"}
