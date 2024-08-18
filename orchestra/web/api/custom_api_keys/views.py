@@ -47,7 +47,7 @@ def create_custom_api_key(
     return {"info": "API key created successfully!"}
 
 
-@router.get("/custom_api_key", response_model=List[CustomApiKeyModelResponse])
+@router.get("/custom_api_key", response_model=CustomApiKeyModelResponse)
 def get_custom_api_key(
     request_fastapi: Request,
     name: str = Query(description="Name of the API key to get the value for.",
@@ -55,7 +55,7 @@ def get_custom_api_key(
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
 ) -> CustomApiKey:
     """
-    Returns a list of the available custom API keys.
+    Returns the value of the key for the specified custom API key name.
     """
     user_id = request_fastapi.state.user_id
     all_keys = custom_api_key_dao.get_user_keys(user_id=user_id)
@@ -95,7 +95,7 @@ def delete_custom_api_key(
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
 ) -> None:
     """
-    Deletes a custom API key in your account.
+    Deletes the custom API key from your account.
 
     """
     user_id = request_fastapi.state.user_id
@@ -145,7 +145,7 @@ def rename_custom_api_key(
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
 ) -> None:
     """
-    Renames a custom API key from a LLM provider in your account.
+    Renames the custom API key in your account.
 
     """
     user_id = request_fastapi.state.user_id
@@ -168,7 +168,7 @@ def list_custom_api_keys(
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
 ) -> List[CustomApiKey]:
     """
-    Returns a list of the available custom API keys.
+    Returns a list of all custom API keys in your account.
     """
     user_id = request_fastapi.state.user_id
     return custom_api_key_dao.get_user_keys(user_id=user_id)
