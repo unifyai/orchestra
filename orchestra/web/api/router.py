@@ -14,6 +14,7 @@ from orchestra.web.api import (  # noqa: WPS235
     efficiency_benchmarks,
     router_training,
     router_deployment,
+    router_configurations,
     credits,
     eval_batch,
     admin,
@@ -81,6 +82,11 @@ api_router.include_router(
 api_router.include_router(
     router_deployment.router,
     tags=["Router Deployment"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    router_configurations.router,
+    tags=["Router Configurations"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
