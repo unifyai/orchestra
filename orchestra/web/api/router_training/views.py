@@ -241,6 +241,25 @@ def delete_router(
     return {"info": "Trained router deleted!"}
 
 
+@router.post(
+    "/router/rename"
+)
+def rename_router(
+    name: str = Query(
+        description="The original name of the router.",
+        example="original_name",
+    ),
+    new_name: str = Query(
+        description="The new name for the router.",
+        example="new_name",
+    ),
+):
+    """
+    Renames the specified router.
+    """
+    raise NotImplemented  # ToDo: implement
+
+
 @router.get(
     "/router/list",
     responses={
