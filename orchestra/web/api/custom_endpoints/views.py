@@ -11,18 +11,6 @@ from orchestra.web.api.utils.http_responses import custom_endpoint_not_found
 router = APIRouter()
 
 
-@router.get("/custom_endpoint", response_model=List[CustomEndpointModelResponse])
-def get_custom_endpoints(
-    request_fastapi: Request,
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
-) -> List[CustomEndpoint]:
-    """
-    Returns a list of the available custom endpoints.
-    """
-    user_id = request_fastapi.state.user_id
-    return custom_endpoint_dao.get_user_endpoints(user_id=user_id)
-
-
 @router.put(
     "/custom_endpoint",
     responses={
@@ -74,7 +62,8 @@ def create_custom_endpoint(
     """
     Creates a custom endpoint. This endpoint must support the OpenAI `/chat/completions`
     format. To query your custom endpoint, replace your endpoint string with
-    `<name>@custom` when querying the unified API.
+    `<name>@custom` when querying the unified API. You can show all *custom* endpoints
+    by querying `/v0/endpoints` and passing `custom` as the `provider` argument.
 
     """
     user_id = request_fastapi.state.user_id
