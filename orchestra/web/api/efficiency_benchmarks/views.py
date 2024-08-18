@@ -123,6 +123,86 @@ def _get_custom_endpoint_benchmark(
         raise Exception
 
 
+# endpoints
+
+@router.post(
+    "/benchmark",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Custom endpoint benchmark uploaded successfully!",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Benchmark not valid",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid data submitted"},
+                },
+            },
+        },
+    },
+)
+def upload_benchmark(
+    request_fastapi: Request,
+    endpoint_name: str = Query(
+        description="Name of the *custom* endpoint to submit a benchmark for.",
+        example="endpoint1",
+    ),
+    metric_name: str = Query(
+        description=f"""Name of the metric to submit. Allowed metrics are:
+        {ALLOWED_METRICS_STR}.""",
+        example="tokens-per-second",
+    ),
+    value: float = Query(
+        description="Value of the metric to submit.",
+        example=10,
+    ),
+    measured_at: datetime = Query(
+        default=None,
+        description="The timestamp to associate with the submission. "
+                    "Defaults to current time if unspecified.",
+        example="2024-08-12T04:20:32.808410",
+    ),
+    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+    custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
+):
+    if metric_name not in ALLOWED_METRICS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{metric_name} not one of the allowed metrics."
+                   f"Allowed metrics are: {ALLOWED_METRICS_STR}.",
+        )
+    # check if the endpoint is valid
+    user_id = request_fastapi.state.user_id
+    available_endpoints = custom_endpoint_dao.filter(
+        user_id=user_id,
+        name=endpoint_name,
+    )
+    for endpoint in available_endpoints:
+        if endpoint_name == endpoint.name:
+            endpoint_id = endpoint.id
+            break
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"""The endpoint: {endpoint_name} was not found in your account.""",
+        )
+    measured_at = datetime.now() if measured_at is None else measured_at
+    custom_endpoint_benchmark_dao.upload_benchmark(
+        endpoint_id=endpoint_id,
+        metric_name=metric_name,
+        value=value,
+        measured_at=measured_at,
+    )
+    return {"info": "Benchmark uploaded!"}
+
+
 @router.get(
     "/benchmark",
     response_model=List[Dict[str, Union[str, float]]],
@@ -229,81 +309,3 @@ def get_benchmark(
         )
     except:
         raise benchmark_not_found(f"{model}@{provider}")
-
-
-@router.post(
-    "/benchmark",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "info": "Custom endpoint benchmark uploaded successfully!",
-                    },
-                },
-            },
-        },
-        400: {
-            "description": "Benchmark not valid",
-            "content": {
-                "application/json": {
-                    "example": {"detail": "Invalid data submitted"},
-                },
-            },
-        },
-    },
-)
-def upload_benchmark(
-    request_fastapi: Request,
-    endpoint_name: str = Query(
-        description="Name of the *custom* endpoint to submit a benchmark for.",
-        example="endpoint1",
-    ),
-    metric_name: str = Query(
-        description=f"""Name of the metric to submit. Allowed metrics are:
-        {ALLOWED_METRICS_STR}.""",
-        example="tokens-per-second",
-    ),
-    value: float = Query(
-        description="Value of the metric to submit.",
-        example=10,
-    ),
-    measured_at: datetime = Query(
-        default=None,
-        description="The timestamp to associate with the submission. "
-                    "Defaults to current time if unspecified.",
-        example="2024-08-12T04:20:32.808410",
-    ),
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
-    custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
-):
-    if metric_name not in ALLOWED_METRICS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"{metric_name} not one of the allowed metrics."
-                   f"Allowed metrics are: {ALLOWED_METRICS_STR}.",
-        )
-    # check if the endpoint is valid
-    user_id = request_fastapi.state.user_id
-    available_endpoints = custom_endpoint_dao.filter(
-        user_id=user_id,
-        name=endpoint_name,
-    )
-    for endpoint in available_endpoints:
-        if endpoint_name == endpoint.name:
-            endpoint_id = endpoint.id
-            break
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail=f"""The endpoint: {endpoint_name} was not found in your account.""",
-        )
-    measured_at = datetime.now() if measured_at is None else measured_at
-    custom_endpoint_benchmark_dao.upload_benchmark(
-        endpoint_id=endpoint_id,
-        metric_name=metric_name,
-        value=value,
-        measured_at=measured_at,
-    )
-    return {"info": "Benchmark uploaded!"}
