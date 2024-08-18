@@ -330,11 +330,10 @@ def get_evaluations(
     ),
 ) -> Dict:
     """
-    Fetches the results of an evaluation on a given dataset,
-    for a specific endpoint (optional) based on a specific evaluator (optional).
-    If no `evaluator` is provided, then scores are returned for all valid evaluators.
-    Similarly, if no `endpoint` is provided, then scores are returned for all valid
-    endpoints.
+    Fetches evaluation results on a given dataset, for a specific endpoint (optional)
+    based on a specific evaluator (optional). If no `evaluator` is provided, then scores
+    are returned for all valid evaluators. Similarly, if no `endpoint` is provided, then
+    scores are returned for all valid endpoints.
     """
     # ToDo: implement the logic where the endpoint (required) is considered in the input
     user_id = request_fastapi.state.user_id
@@ -389,17 +388,30 @@ def get_evaluations(
 @router.delete(
     "/evaluation",
 )
-def delete_evaluation(
+def delete_evaluations(
     request_fastapi: Request,
     dataset: str = Query(
-        description="Name of the dataset to fetch evaluation from.",
+        description="Name of the dataset to delete the evaluation for.",
         example="dataset1",
     ),
-    eval_name: str = Query(
+    endpoint: str = Query(
         default=None,
-        description="Name of the eval to fetch evaluation from. "
-                    "If `None`, returns all available evaluations for the dataset.",
+        description="The endpoint to delete the evaluation for. "
+                    "If `None`, deletes the evaluations for all endpoints.",
+        example="gpt-4o-mini@openai",
+    ),
+    evaluator: str = Query(
+        default=None,
+        description="Name of the evaluator to delete the evaluation for. "
+                    "If `None`, deletes all available evaluations for the dataset and "
+                    "endpoint pair.",
         example="eval1",
     ),
 ):
-    raise NotImplemented  # ToDo: Implement this
+    """
+    Deletes evaluations on a given dataset, for a specific endpoint (optional) based on
+    a specific evaluator (optional). If no `evaluator` is provided, then evaluations for
+    all valid evaluators are deleted. Similarly, if no `endpoint` is provided, then
+    evaluations for all valid endpoints are deleted.
+    """
+    raise NotImplemented
