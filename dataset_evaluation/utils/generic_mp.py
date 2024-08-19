@@ -71,7 +71,7 @@ async def process_requests(
             )
             blob.upload_from_filename(response_filename)
             # upload progress
-            num_responses = sum(1 for i in open(response_filename, 'rb'))
+            num_responses = sum(1 for i in open(response_filename, "rb"))
             num_left = len(cur_incomplete) + len(unprocessed_prompts)
             num_failed = len(aborted)
             progress_str = json.dumps(

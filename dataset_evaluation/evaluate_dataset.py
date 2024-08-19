@@ -261,7 +261,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     logging.info(f"Begin getting queries")
     await asyncio.gather(*tasks)
     logging.info(f"End getting queries")
-    
+
     def create_judgement_blob_filename(endpoint, eval_id, judge_tag):
         blob_name = os.path.join(
             cfg.user_id,
@@ -272,7 +272,6 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
             f"{judge_tag.replace('@', '___')}_judged.jsonl",
         )
         return blob_name
-
 
     async def process_judgements(
         endpoint,
@@ -289,8 +288,12 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
             endpoint, judge_model_tag, cfg.eval_id
         )
 
-        response_blob_name = create_judgement_blob_filename(endpoint, cfg.eval_id, judge_model_tag)
-        progress_blob_name = response_blob_name.replace("_judged.jsonl", "_progress.log")
+        response_blob_name = create_judgement_blob_filename(
+            endpoint, cfg.eval_id, judge_model_tag
+        )
+        progress_blob_name = response_blob_name.replace(
+            "_judged.jsonl", "_progress.log"
+        )
         await generate_judgements(
             asst_response_file=os.path.join(model_responses_path, f"{model_str}.jsonl"),
             judge_response_file=os.path.join(

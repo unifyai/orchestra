@@ -648,7 +648,12 @@ def eval_status(
 
     requested_eval_id = eval_name_to_eval_id(user_id, eval_name)
 
-    ret = _get_status(user_id=user_id, dataset=internal_id, endpoint=endpoint, eval_id=requested_eval_id)
+    ret = _get_status(
+        user_id=user_id,
+        dataset=internal_id,
+        endpoint=endpoint,
+        eval_id=requested_eval_id,
+    )
     # format of scores is {eval_id: {endpoint : {judge : score}}}
 
     return ret
