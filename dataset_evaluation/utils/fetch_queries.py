@@ -26,6 +26,7 @@ async def generate_queries(
     batch_size,
     api_key,
     client,
+    gcp_config=None,
 ):
     model_name = endpoint.split("@")[0]
 
@@ -57,4 +58,5 @@ async def generate_queries(
         response_filename=response_file,
         batch_size=batch_size,
         tries=5,
+        gcp_config=gcp_config,
     )
