@@ -368,15 +368,20 @@ def _format_kwargs_for_converse(kwargs):
 
 
 supported_models = {
-    "mistral-7b-instruct-v0.2": {
-        "endpoint": "mistral.mistral-7b-instruct-v0:2",
-        "context_window": 32768,
-        "cost": {"prompt": 0.15, "completion": 0.2},
+    "llama-3.1-8b-chat": {
+        "endpoint": "meta.llama3-1-8b-instruct-v1:0",
+        "context_window": 128000,
+        "cost": {"prompt": 0.22, "completion": 0.22},
     },
-    "mixtral-8x7b-instruct-v0.1": {
-        "endpoint": "mistral.mixtral-8x7b-instruct-v0:1",
-        "context_window": 32768,
-        "cost": {"prompt": 0.45, "completion": 0.7},
+    "llama-3.1-70b-chat": {
+        "endpoint": "meta.llama3-1-70b-instruct-v1:0",
+        "context_window": 128000,
+        "cost": {"prompt": 0.99, "completion": 0.99},
+    },
+    "llama-3.1-405b-chat": {
+        "endpoint": "meta.llama3-1-405b-instruct-v1:0",
+        "context_window": 128000,
+        "cost": {"prompt": 5.32, "completion": 16},
     },
     "llama-3-8b-chat": {
         "endpoint": "meta.llama3-8b-instruct-v1:0",
@@ -388,6 +393,16 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 2.65, "completion": 3.5},
     },
+    "mistral-7b-instruct-v0.2": {
+        "endpoint": "mistral.mistral-7b-instruct-v0:2",
+        "context_window": 32768,
+        "cost": {"prompt": 0.15, "completion": 0.2},
+    },
+    "mixtral-8x7b-instruct-v0.1": {
+        "endpoint": "mistral.mixtral-8x7b-instruct-v0:1",
+        "context_window": 32768,
+        "cost": {"prompt": 0.45, "completion": 0.7},
+    },
     "mistral-large": {
         "endpoint": "mistral.mistral-large-2402-v1:0",
         "context_window": 32000,
@@ -397,21 +412,6 @@ supported_models = {
         "endpoint": "cohere.command-r-plus-v1:0",
         "context_window": 128000,
         "cost": {"prompt": 3, "completion": 15},
-    },
-    "llama-3.1-8b-chat": {
-        "endpoint": "meta.llama3-1-8b-instruct-v1:0",
-        "context_window": 128000,
-        "cost": {"prompt": 0.3, "completion": 0.6},
-    },
-    "llama-3.1-70b-chat": {
-        "endpoint": "meta.llama3-1-70b-instruct-v1:0",
-        "context_window": 128000,
-        "cost": {"prompt": 2.65, "completion": 3.5},
-    },
-    "llama-3.1-405b-chat": {
-        "endpoint": "meta.llama3-1-405b-instruct-v1:0",
-        "context_window": 128000,
-        "cost": {"prompt": 5.32, "completion": 16},
     },
     "claude-3-haiku": {
         "endpoint": "anthropic.claude-3-haiku-20240307-v1:0",
