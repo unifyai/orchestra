@@ -160,7 +160,7 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        client = kwargs.pop("client")
+        client = kwargs.pop("client", None)
         client = (
             client
             if client is not None
@@ -208,7 +208,7 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        client = kwargs.pop("client")
+        client = kwargs.pop("client", None)
         client = (
             client
             if client is not None
