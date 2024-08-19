@@ -44,7 +44,7 @@ supported_models = {
     "gemini-1.5-flash": {
         "endpoint": "google/gemini-1.5-flash",
         "context_window": 128000,
-        "cost": {"prompt": 0.35, "completion": 1.05},
+        "cost": {"prompt": 0.075, "completion": 0.3},
     },
     # "gemma-2-9b-it": {
     #     "endpoint": "google/gemma2-9b-it",
