@@ -216,6 +216,20 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
         endpoint, prompts_path, model_responses_path, api_key, client
     ):
         model_str = _format_model_tag(endpoint)
+        response_blob_name = os.path.join(
+            cfg.user_id,
+            cfg.dataset,
+            "0",
+            endpoint,
+            "responses.jsonl",
+        )
+        progress_blob_name = os.path.join(
+            cfg.user_id,
+            cfg.dataset,
+            "0",
+            endpoint,
+            "progress.log",
+        )
         await generate_queries(
             prompt_file=prompts_path,
             response_file=os.path.join(model_responses_path, f"{model_str}.jsonl"),
@@ -223,6 +237,12 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
             batch_size=5,
             api_key=api_key,
             client=client,
+            gcp_config={
+                "bucket_name": "uploaded_datasets",
+                "response_blob_name": response_blob_name,
+                "progress_blob_name": progress_blob_name,
+                "num_prompts": len(prompts),
+            },
         )
 
     tasks = [
@@ -242,6 +262,17 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     await asyncio.gather(*tasks)
     logging.info(f"End getting queries")
 
+    def create_judgement_blob_filename(endpoint, eval_id, judge_tag):
+        blob_name = os.path.join(
+            cfg.user_id,
+            cfg.dataset,
+            "0",
+            endpoint,
+            f"{eval_id}",
+            f"{judge_tag.replace('@', '___')}_judged.jsonl",
+        )
+        return blob_name
+
     async def process_judgements(
         endpoint,
         judge_model_tag,
@@ -256,6 +287,13 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
         judgements_file_str = _format_judgements_file(
             endpoint, judge_model_tag, cfg.eval_id
         )
+
+        response_blob_name = create_judgement_blob_filename(
+            endpoint, cfg.eval_id, judge_model_tag
+        )
+        progress_blob_name = response_blob_name.replace(
+            "_judged.jsonl", "_progress.log"
+        )
         await generate_judgements(
             asst_response_file=os.path.join(model_responses_path, f"{model_str}.jsonl"),
             judge_response_file=os.path.join(
@@ -268,6 +306,12 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
             api_key=api_key,
             client=client,
             eval_config=eval_config,
+            gcp_config={
+                "bucket_name": "uploaded_datasets",
+                "response_blob_name": response_blob_name,
+                "progress_blob_name": progress_blob_name,
+                "num_prompts": len(prompts),
+            },
         )
 
     judge_models = eval_config["judge_models"]
@@ -340,20 +384,10 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
         blob.upload_from_filename(model_responses_formatted_path)
 
     ## upload judgements
-    def create_judgement_blob_filename(eval_id, judge_tag):
-        blob_name = os.path.join(
-            cfg.user_id,
-            cfg.dataset,
-            "0",
-            cfg.endpoint,
-            f"{eval_id}",
-            f"{judge_tag.replace('@', '___')}_judged.jsonl",
-        )
-        return blob_name
 
     for judge_tag in judge_models:
         fmtd_judge_tag = _format_model_tag(judge_tag)
-        blob_name = create_judgement_blob_filename(cfg.eval_id, judge_tag)
+        blob_name = create_judgement_blob_filename(cfg.endpoint, cfg.eval_id, judge_tag)
 
         model_judgements_formatted_path = os.path.join(
             model_judgements_path,
