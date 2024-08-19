@@ -46,7 +46,7 @@ supported_models = {
     "mistral-large": {
         "endpoint": "mistral-large-latest",
         "context_window": 32768,
-        "cost": {"prompt": 4, "completion": 12},
+        "cost": {"prompt": 3, "completion": 9},
     },
     "mistral-nemo": {
         "endpoint": "open-mistral-nemo-2407",
