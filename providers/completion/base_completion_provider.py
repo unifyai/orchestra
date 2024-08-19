@@ -160,8 +160,12 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-
+        client = kwargs.pop("client")
+        client = (
+            client
+            if client is not None
+            else OpenAI(api_key=self.api_key, base_url=self.base_url)
+        )
         kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
         try:  # noqa: WPS225
             response = client.chat.completions.create(
@@ -204,7 +208,12 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+        client = kwargs.pop("client")
+        client = (
+            client
+            if client is not None
+            else AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+        )
         kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
         try:  # noqa: WPS225
             response = client.chat.completions.create(

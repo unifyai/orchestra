@@ -23,6 +23,7 @@ INSERT INTO provider VALUES (11, 'aws-bedrock', '', '');
 INSERT INTO provider VALUES (12, 'anthropic', '', '');
 INSERT INTO provider VALUES (35, 'groq', '', '');
 INSERT INTO provider VALUES (36, 'vertex-ai', '', '');
+INSERT INTO PROVIDER VALUES (37, "azure-ai", '', '')
 
 INSERT INTO provider VALUES (13, 'lowest-input-cost-per-token-provider', '', '');
 INSERT INTO provider VALUES (14, 'lowest-output-cost-per-token-provider', '', '');
@@ -76,6 +77,7 @@ INSERT INTO endpoint VALUES (16, 8, 12, NOW());
 INSERT INTO endpoint VALUES (35, 10, 36, NOW());
 INSERT INTO endpoint VALUES (34, 9, 35, NOW());
 INSERT INTO endpoint VALUES (36, 12, 12, NOW());
+INSERT INTO endpoint VALUES (37, 13, 37, NOW());
 
 -- Runtime Dynamic routing
 INSERT INTO model VALUES (4, 'pbr-model', NOW(), 'dummy_task', true);
