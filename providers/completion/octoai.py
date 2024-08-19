@@ -33,11 +33,6 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.45, "completion": 0.45},
     },
-    "mixtral-8x22b-instruct-v0.1": {
-        "endpoint": "mixtral-8x22b-instruct",
-        "context_window": 65536,
-        "cost": {"prompt": 1.2, "completion": 1.2},
-    },
     "llama-3-8b-chat": {
         "endpoint": "meta-llama-3-8b-instruct",
         "context_window": 8192,
@@ -62,10 +57,5 @@ supported_models = {
         "endpoint": "meta-llama-3.1-405b-instruct",
         "context_window": 131072,
         "cost": {"prompt": 3, "completion": 9},
-    },
-    "qwen-2-7b-instruct": {
-        "endpoint": "qwen2-7b-instruct",
-        "context_window": 32768,
-        "cost": {"prompt": 0.15, "completion": 0.15},
     },
 }

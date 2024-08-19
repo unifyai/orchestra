@@ -48,20 +48,30 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
-    "mixtral-8x22b-instruct-v0.1": {
-        "endpoint": "accounts/fireworks/models/mixtral-8x22b-instruct",
-        "context_window": 65536,
-        "cost": {"prompt": 1.2, "completion": 1.2},
+    "gemma-2-9b-it": {
+        "endpoint": "accounts/fireworks/models/gemma2-9b-it",
+        "context_window": 8192,
+        "cost": {"prompt": 0.2, "completion": 0.2},
     },
     "gemma-7b-it": {
         "endpoint": "accounts/fireworks/models/gemma-7b-it",
         "context_window": 8192,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
-    "mistral-7b-instruct-v0.3": {
-        "endpoint": "accounts/fireworks/models/mistral-7b-instruct-v3",
+    "mistral-7b-instruct-v0.2": {
+        "endpoint": "accounts/fireworks/models/mistral-7b-v0p2",
         "context_window": 32768,
         "cost": {"prompt": 0.2, "completion": 0.2},
+    },
+    "mistral-nemo": {
+        "endpoint": "accounts/fireworks/models/mistral-nemo-instruct-2407",
+        "context_window": 128000,
+        "cost": {"prompt": 0.2, "completion": 0.2},
+    },
+    "mixtral-8x22b-instruct-v0.1": {
+        "endpoint": "accounts/fireworks/models/mixtral-8x22b-instruct",
+        "context_window": 65536,
+        "cost": {"prompt": 1.2, "completion": 1.2},
     },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "accounts/fireworks/models/mixtral-8x7b-instruct",
@@ -88,9 +98,4 @@ supported_models = {
     #     "context_window": 4096,
     #     "cost": {"prompt": 0.9, "completion": 0.9},
     # },
-    "gemma-2-9b-it": {
-        "endpoint": "accounts/fireworks/models/gemma2-9b-it",
-        "context_window": 8192,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
 }
