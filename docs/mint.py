@@ -12,6 +12,11 @@ def update_mint(pages):
     results = []
     for group in pages:
         results.append({"group": group, "pages": pages[group]})
-    mint["navigation"] = mint["navigation"][:start_idx] + results
+    mint["navigation"] = mint["navigation"][:start_idx] + [
+        {
+            "group": "API Reference",
+            "pages": results,
+        },
+    ]
     with open("mint.json", "w") as f:
         json.dump(mint, f, indent=4)
