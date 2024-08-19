@@ -542,9 +542,14 @@ def get_eval_scores(
         description="Name of the eval to fetch evaluation from. If `None`, returns all available evaluations for the dataset.",
         example="eval1",
     ),
+    endpoint: Optional[str] = Query(
+        default=None,
+        description="Name of endpoint to fetch eval from. If not set returns evals for all endpoints",
+        example=None,
+    ),
     per_prompt: bool = Query(
         default=False,
-        description="If `True`, returns the scores on a per-prompt level. By default set to `False`.",
+        description="If `True`, returns the scores on a per-prompt level. By default set to `False`. If `True` requires an eval name and endpoint to be set.",
         example=False,
     ),
 ) -> Dict:
@@ -562,13 +567,66 @@ def get_eval_scores(
     name_to_id = {name: id_ for id_, name in id_to_name.items()}
     internal_id = name_to_id.get(dataset, dataset)
 
-    if per_prompt:
-        raise HTTPException(status_code=501, detail="Not implemented yet")
+    if endpoint:
+        invalid_endpoints = find_invalid_endpoints([endpoint])
+        if invalid_endpoints:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not find endpoint: {'.'.join(invalid_endpoints)}",
+            )
 
     return_single_eval = eval_name is not None
     requested_eval_id = (
         eval_name_to_eval_id(user_id, eval_name) if return_single_eval else None
     )
+
+    if per_prompt:
+        if not eval_name:
+            raise HTTPException(
+                status_code=400,
+                detail="You need to specify an eval name to return per-prompt scores.",
+            )
+        if not endpoint:
+            raise HTTPException(
+                status_code=400,
+                detail="You need to specify an endpoint to return per-prompt scores.",
+            )
+        blob = load_eval_config_blob(user_id, requested_eval_id)
+        eval_config = json.loads(blob.download_as_bytes().decode("utf-8"))
+        if eval_config.get("client_side", False) == True:
+            judge_models = ["client_side"]
+        else:
+            judge_models = eval_config.get(
+                "judge_models", ["claude-3.5-sonnet@aws-bedrock"]
+            )
+        if isinstance(judge_models, str):
+            judge_models = [judge_models,]
+
+        bucket_name = "uploaded_datasets"
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(bucket_name)
+        
+        ret = {}
+        for jm in judge_models:
+            judge_blob_name = f"{user_id}/{internal_id}/0/{endpoint}/{requested_eval_id}/{jm.replace('@','___')}_judged.jsonl"
+            try:
+                judge_blob = bucket.blob(judge_blob_name)
+                contents = judge_blob.download_as_bytes().decode("utf-8").split("\n")
+                cleaned_scores = []
+                for entry in contents:
+                    if not entry:
+                        continue
+                    data = json.loads(entry)
+                    cleaned_scores.append(
+                        {
+                            "prompt": data.get("prompt", ""),
+                            "score": data.get("score", None),
+                        }
+                    )
+                ret[jm] = cleaned_scores
+            except Exception as e:
+                pass
+        return ret
 
     # format of scores is {eval_id: {endpoint : {judge : score}}}
     scores = _get_scores(user_id, internal_id)
