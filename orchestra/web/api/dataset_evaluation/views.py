@@ -603,7 +603,6 @@ def get_eval_scores(
 def eval_status(
     request_fastapi: Request,
     dataset: str = Query(
-        ...,
         description="Name of the dataset to get evaluation status of.",
         example="dataset1",
     ),
