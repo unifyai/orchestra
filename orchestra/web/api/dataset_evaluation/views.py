@@ -66,6 +66,43 @@ def _list_evaluations(user_id: str, dataset: str):
     return endpoints
 
 
+def _get_status(user_id, dataset, endpoint, eval_id):
+    bucket_name = "uploaded_datasets"
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+
+    blob = bucket.blob(f"{user_id}/{dataset}/0/{endpoint}/progress.log")
+    try:
+        content = blob.download_as_bytes().decode("utf-8")
+        responses = json.loads(content)
+    except:
+        raise HTTPException(
+            status_code=400, detail=f"We didn't find any evaluations run for {dataset}"
+        )
+
+    id_to_displayname = build_id_to_displayname(user_id=user_id)
+
+    judge_progress = {}
+    blob = load_eval_config_blob(user_id, eval_id)
+    judge_models = json.loads(blob.download_as_bytes().decode("utf-8")).get(
+        "judge_models", ["claude-3.5-sonnet@aws-bedrock"]
+    )
+    if isinstance(judge_models, str):
+        judge_models = [
+            judge_models,
+        ]
+    for jm in judge_models:
+        print(jm)
+        blob = bucket.blob(
+            f"{user_id}/{dataset}/0/{endpoint}/{eval_id}/{jm.replace('@','___')}_progress.log"
+        )
+        print(blob)
+        jp = json.loads(blob.download_as_bytes().decode("utf-8"))
+        judge_progress[jm] = jp
+
+    return {"responses": responses, "judgements": judge_progress}
+
+
 def _get_scores(user_id: str, dataset: str):
     if os.environ.get("ON_PREM"):
         id_to_name = on_prem.internal_id_to_displayname(user_id)
@@ -556,5 +593,62 @@ def get_eval_scores(
 
     ret["input_tokens"] = _get_input_tokens(user_id, dataset)
     ret["output_tokens"] = output_tokens
+
+    return ret
+
+
+@router.get(
+    "/evals/status",
+)
+def eval_status(
+    request_fastapi: Request,
+    dataset: str = Query(
+        ...,
+        description="Name of the dataset to get evaluation status of.",
+        example="dataset1",
+    ),
+    endpoint: str = Query(
+        description="Endpoint to get evaluation status of",
+        example="llama-3-8b-chat@aws-bedrock",
+    ),
+    eval_name: str = Query(
+        description="Name of the eval to get evaluation status of.",
+        example="eval1",
+    ),
+):
+    """
+        Fetches the eval status on a given dataset. Returns object of the form:
+    {
+        "responses": {
+            "last_updated": "2024-08-19 13:58:20.866092",
+            "num_failed": 0,
+            "num_processed": 3,
+            "num_remaining": 0,
+        },
+        "judgements": {
+            "judge_model_a": {
+                "last_updated": "2024-08-19 13:58:20.866092",
+                "num_failed": 0,
+                "num_processed": 3,
+                "num_remaining": 0,
+            }
+        },
+    }
+    """
+    user_id = request_fastapi.state.user_id
+    if not dataset_exists(user_id, dataset):
+        raise dataset_does_not_exist(dataset)
+
+    if os.environ.get("ON_PREM"):
+        id_to_name = on_prem.internal_id_to_displayname(user_id)
+    else:
+        id_to_name = gcp.internal_id_to_displayname(user_id)
+    name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    internal_id = name_to_id.get(dataset, dataset)
+
+    requested_eval_id = eval_name_to_eval_id(user_id, eval_name)
+
+    ret = _get_status(user_id=user_id, dataset=internal_id, endpoint=endpoint, eval_id=requested_eval_id)
+    # format of scores is {eval_id: {endpoint : {judge : score}}}
 
     return ret

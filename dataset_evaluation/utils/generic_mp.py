@@ -1,7 +1,12 @@
 import json
+import os
 import asyncio
 
 from utils.request_handling import generic_call
+
+if not os.environ.get("ON_PREM"):
+    import datetime
+    from google.cloud import storage
 
 
 async def call_model(payload):
@@ -14,9 +19,11 @@ async def process_requests(
     response_filename,
     batch_size=5,
     tries=5,
+    gcp_config=None,
 ):
     # prompts are a Request object
 
+    aborted = []
     failed = {}
     in_progress = []
 
@@ -39,6 +46,7 @@ async def process_requests(
                 if prompt.id_ in failed:
                     if failed[prompt.id_] >= tries:
                         print(f"failed {prompt.id_}")
+                        aborted.append(prompt.id_)
                         try:
                             print(result)
                         except:
@@ -54,5 +62,31 @@ async def process_requests(
             for result in complete_results:
                 file.write(json.dumps(result) + "\n")
 
+        if not os.environ.get("ON_PREM") and gcp_config:
+            # upload responses
+            blob = (
+                storage.Client()
+                .bucket(gcp_config["bucket_name"])
+                .blob(gcp_config["response_blob_name"])
+            )
+            blob.upload_from_filename(response_filename)
+            # upload progress
+            num_responses = sum(1 for i in open(response_filename, 'rb'))
+            num_left = len(cur_incomplete) + len(unprocessed_prompts)
+            num_failed = len(aborted)
+            progress_str = json.dumps(
+                {
+                    "num_processed": num_responses,
+                    "num_remaining": num_left,
+                    "num_failed": num_failed,
+                    "last_updated": str(datetime.datetime.now()),
+                }
+            )
+            blob = (
+                storage.Client()
+                .bucket(gcp_config["bucket_name"])
+                .blob(gcp_config["progress_blob_name"])
+            )
+            blob.upload_from_string(progress_str)
         # retry incomplete results
         in_progress = cur_incomplete
