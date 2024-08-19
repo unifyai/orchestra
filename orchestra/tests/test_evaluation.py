@@ -203,7 +203,11 @@ async def test_trigger_eval(
     assert endpoint in scores[eval_name]
     assert judge_model in scores[eval_name][endpoint]
 
-    # TODO: add cleanup_triggered_eval (this might need work in dataset_evaluation script)
+    url = "/v0/evals/status"
+    params = {"dataset": dataset, "eval_name": eval_name, "endpoint": endpoint}
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    assert "responses" in response.json()
 
 
 # evals/get_scores is implicitly tested
