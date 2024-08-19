@@ -11,7 +11,7 @@ chat_completions_groups = {
     },
     "signature": {
         "header": "Platform Arguments",
-        "url": "https://docs.unify.ai/universal_api/arguments#partially-unified-arguments",
+        "url": "https://docs.unify.ai/universal_api/arguments#platform-arguments",
     },
 }
 
