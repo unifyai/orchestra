@@ -600,12 +600,14 @@ def get_eval_scores(
                 "judge_models", ["claude-3.5-sonnet@aws-bedrock"]
             )
         if isinstance(judge_models, str):
-            judge_models = [judge_models,]
+            judge_models = [
+                judge_models,
+            ]
 
         bucket_name = "uploaded_datasets"
         storage_client = storage.Client()
         bucket = storage_client.bucket(bucket_name)
-        
+
         ret = {}
         for jm in judge_models:
             judge_blob_name = f"{user_id}/{internal_id}/0/{endpoint}/{requested_eval_id}/{jm.replace('@','___')}_judged.jsonl"
