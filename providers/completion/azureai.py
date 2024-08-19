@@ -17,6 +17,7 @@ class AzureAI(BaseCompletionProvider):
         super().__init__(hub_model, custom_api_key=custom_api_key)
         self.supported_models = supported_models
         self.project = os.environ.get("AZURE_PROJECT")
+        self.region = os.environ.get("AZURE_REGION")
 
     @property
     def api_key_var(self) -> str:
@@ -28,7 +29,7 @@ class AzureAI(BaseCompletionProvider):
 
     @property
     def base_url(self):
-        return f"https://{self.provider_endpoint}.eastus.models.ai.azure.com"
+        return f"https://{self.provider_endpoint}.{self.region}.models.ai.azure.com"
 
     def get_endpoint_details(self):
         version = self.supported_models[self.hub_model].get("version")
