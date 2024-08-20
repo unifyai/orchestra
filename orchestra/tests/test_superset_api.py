@@ -51,12 +51,13 @@ async def test_extra_headers_anthropic(client: AsyncClient):
 
     oai_client = create_oai_client(client)
 
-    with pytest.raises(Exception):
-        res = await oai_client.chat.completions.create(
-            model="claude-3.5-sonnet@anthropic",
-            messages=[{"role": "user", "content": "What is 1+1? Answer concisely"}],
-            max_tokens=8192,
-        )
+    # Anthropic allows this now...
+    # with pytest.raises(Exception):
+    #     res = await oai_client.chat.completions.create(
+    #         model="claude-3.5-sonnet@anthropic",
+    #         messages=[{"role": "user", "content": "What is 1+1? Answer concisely"}],
+    #         max_tokens=8192,
+    #     )
 
     # now with the added header
     res = await oai_client.chat.completions.create(
