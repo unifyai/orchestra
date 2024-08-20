@@ -50,9 +50,8 @@ class AzureAI(BaseCompletionProvider):
                 azure_endpoint=endpoint,
                 api_version=version,
             )
-        else:
-            client = None
-        return super().__call__(messages, stream=stream, **kwargs, client=client)
+            kwargs["client"] = client
+        return super().__call__(messages, stream=stream, **kwargs)
 
     def __call_async__(
         self,
