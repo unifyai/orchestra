@@ -63,6 +63,12 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
+    dataset_evaluation.admin_router,
+    tags=["Dataset Evaluation"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
     routing.router,
     tags=["Routing"],
     dependencies=API_KEY_AUTH,
