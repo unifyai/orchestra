@@ -1,6 +1,7 @@
 """providers.completion package."""
 
 from providers.completion.anthropic import Anthropic
+from providers.completion.azureai import AzureAI
 from providers.completion.bedrock import AWSBedrock
 from providers.completion.custom_provider import CustomProvider
 from providers.completion.deepinfra import Deepinfra
@@ -29,5 +30,6 @@ PROVIDER_CLASSES = {
     "deepinfra": Deepinfra,
     "aws-bedrock": AWSBedrock,
     "vertex-ai": VertexAI,
+    "azure-ai": AzureAI,
     "custom": CustomProvider,
 }
