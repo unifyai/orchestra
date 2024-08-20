@@ -58,4 +58,9 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.15, "completion": 0.6},
     },
+    "chatgpt-4o-latest": {
+        "endpoint": "chatgpt-4o-latest",
+        "context_window": 128000,
+        "cost": {"prompt": 5, "completion": 15},
+    },
 }
