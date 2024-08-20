@@ -20,6 +20,7 @@ class EndpointDAO:
         mdl_id: int,
         provider_id: int,
         created_at: datetime.datetime,
+        active: bool,
     ) -> None:
         """
         Add single endpoint to session.
@@ -27,12 +28,14 @@ class EndpointDAO:
         :param mdl_id: mdl_id of a endpoint.
         :param provider_id: provider_id of a endpoint.
         :param created_at: created_at of a endpoint.
+        :param active: is endpoint active.
         """
         self.session.add(
             Endpoint(
                 mdl_id=mdl_id,
                 provider_id=provider_id,
                 created_at=created_at,
+                active=active,
             ),
         )
 
@@ -70,6 +73,7 @@ class EndpointDAO:
         mdl_id: Optional[int] = None,
         provider_id: Optional[int] = None,
         created_at: Optional[datetime.datetime] = None,
+        active: Optional[bool] = None,
     ) -> List[Endpoint]:
         """
         Get specific endpoint model.
@@ -78,6 +82,7 @@ class EndpointDAO:
         :param mdl_id: mdl_id of endpoint instance.
         :param provider_id: provider_id of endpoint instance.
         :param created_at: created_at of endpoint instance.
+        :param active: is model instance active.
         :return: endpoint models.
         """
         query = select(Endpoint)
@@ -89,5 +94,7 @@ class EndpointDAO:
             query = query.where(Endpoint.provider_id == provider_id)
         if created_at:
             query = query.where(Endpoint.created_at == created_at)
+        if active:
+            query = query.where(Endpoint.active == active)
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())
