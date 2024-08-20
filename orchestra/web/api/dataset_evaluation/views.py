@@ -20,6 +20,7 @@ from orchestra.web.api.utils.http_responses import (
 )
 
 router = APIRouter()
+admin_router = APIRouter()
 
 # utils
 
@@ -77,7 +78,8 @@ def _get_status(user_id, dataset, endpoint, eval_id):
         responses = json.loads(content)
     except:
         raise HTTPException(
-            status_code=400, detail=f"We didn't find any evaluations run for {dataset}"
+            status_code=400,
+            detail=f"We didn't find any evaluations run for {dataset}",
         )
 
     id_to_displayname = build_id_to_displayname(user_id=user_id)
@@ -85,7 +87,8 @@ def _get_status(user_id, dataset, endpoint, eval_id):
     judge_progress = {}
     blob = load_eval_config_blob(user_id, eval_id)
     judge_models = json.loads(blob.download_as_bytes().decode("utf-8")).get(
-        "judge_models", ["claude-3.5-sonnet@aws-bedrock"]
+        "judge_models",
+        ["claude-3.5-sonnet@aws-bedrock"],
     )
     if isinstance(judge_models, str):
         judge_models = [
@@ -94,7 +97,7 @@ def _get_status(user_id, dataset, endpoint, eval_id):
     for jm in judge_models:
         print(jm)
         blob = bucket.blob(
-            f"{user_id}/{dataset}/0/{endpoint}/{eval_id}/{jm.replace('@','___')}_progress.log"
+            f"{user_id}/{dataset}/0/{endpoint}/{eval_id}/{jm.replace('@','___')}_progress.log",
         )
         print(blob)
         jp = json.loads(blob.download_as_bytes().decode("utf-8"))
@@ -391,7 +394,6 @@ def delete_eval(
     # TODO: remove all corresponding model judgements?
 
 
-#
 @router.post(
     "/evals/trigger",
     responses={
@@ -527,6 +529,66 @@ def trigger_eval(
     return {"info": "Dataset evaluation started! You will receive an email soon!"}
 
 
+@admin_router.post("/evals/admin_trigger")
+def admin_trigger_eval(
+    request_fastapi: Request,
+    user_id: str = Query(
+        ...,
+        description="ID of the user that will own the triggered eval.",
+        example="clb5hxxxxxxxxx601hooxp3ct",
+    ),
+    eval_name: str = Query(
+        ...,
+        description="Name of the eval to use.",
+        example="eval1",
+    ),
+    dataset: str = Query(
+        ...,
+        description="Name of the uploaded dataset to evaluate.",
+        example="dataset1",
+    ),
+    endpoint: str = Query(
+        ...,
+        description=(
+            "Name of the endpoint to evaluate."
+            " Endpoints must be specified using the `model@provider` format."
+        ),
+        example="gpt-4o-mini@openai",
+    ),
+) -> Dict[str, str]:
+    """
+    Behaves like the user-specific endpoint but can be triggered as an admin on behalf of a given user.
+    """
+
+    api_key = os.getenv("UNIFY_API_KEY")
+
+    # Check if the dataset exists
+    if not dataset_exists(user_id, dataset):
+        raise dataset_does_not_exist(dataset)
+
+    # Check that the endpoints are valid
+    invalid_endpoints = find_invalid_endpoints([endpoint])
+    if invalid_endpoints:
+        raise invalid_training_endpoints(invalid_endpoints)
+    id_to_name = gcp.internal_id_to_displayname(user_id)
+    name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    internal_id = name_to_id.get(dataset, dataset)
+    # check if the eval name is valid
+    eval_id = eval_name_to_eval_id(user_id, eval_name)
+
+    # Send train job to the dataset_evaluation server
+    send_to_dataset_evaluation_server(
+        action="evaluate",
+        user_id=user_id,
+        user_email="",
+        api_key=api_key,
+        dataset=internal_id,
+        endpoint=endpoint,
+        eval_id=eval_id,
+    )
+    return {"info": "Dataset evaluation started!"}
+
+
 @router.get(
     "/evals/get_scores",
 )
@@ -597,7 +659,8 @@ def get_eval_scores(
             judge_models = ["client_side"]
         else:
             judge_models = eval_config.get(
-                "judge_models", ["claude-3.5-sonnet@aws-bedrock"]
+                "judge_models",
+                ["claude-3.5-sonnet@aws-bedrock"],
             )
         if isinstance(judge_models, str):
             judge_models = [
@@ -623,7 +686,7 @@ def get_eval_scores(
                         {
                             "prompt": data.get("prompt", ""),
                             "score": data.get("score", None),
-                        }
+                        },
                     )
                 ret[jm] = cleaned_scores
             except Exception as e:
