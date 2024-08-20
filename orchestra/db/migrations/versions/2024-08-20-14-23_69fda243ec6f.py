@@ -1,15 +1,15 @@
 """empty message
 
-Revision ID: f45672bc228b
+Revision ID: 69fda243ec6f
 Revises: 1da512aae00c
-Create Date: 2024-08-20 13:01:21.213180
+Create Date: 2024-08-20 14:23:19.901943
 
 """
 import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "f45672bc228b"
+revision = "69fda243ec6f"
 down_revision = "1da512aae00c"
 branch_labels = None
 depends_on = None
@@ -30,7 +30,6 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.drop_table("userstemp")
     op.drop_constraint(
         "uq_dataset_eval_user_id",
         "dataset_evaluation_task",
@@ -50,31 +49,6 @@ def downgrade() -> None:
         "uq_dataset_eval_user_id",
         "dataset_evaluation_task",
         ["user_id", "name"],
-    )
-    op.create_table(
-        "userstemp",
-        sa.Column("id", sa.VARCHAR(length=255), autoincrement=False, nullable=True),
-        sa.Column(
-            "credits",
-            sa.NUMERIC(),
-            server_default=sa.text("0"),
-            autoincrement=False,
-            nullable=True,
-        ),
-        sa.Column(
-            "credits2",
-            sa.NUMERIC(),
-            server_default=sa.text("0"),
-            autoincrement=False,
-            nullable=True,
-        ),
-        sa.Column(
-            "credits3",
-            sa.NUMERIC(),
-            server_default=sa.text("0.0"),
-            autoincrement=False,
-            nullable=True,
-        ),
     )
     op.drop_table("custom_endpoint_benchmark")
     # ### end Alembic commands ###
