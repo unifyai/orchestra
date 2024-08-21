@@ -154,7 +154,9 @@ def undeploy_router(
     ),
 ) -> Dict[str, str]:
     """
-    Deactivates and deletes a previously deployed router.
+    Deactivates and deletes a previously deployed router, but keeps the training
+    artifacts for this router, such that it can be redeployed if desired without needing
+    to retrain.
     """
     user_id = request_fastapi.state.user_id
     # Check if the router exists
@@ -191,9 +193,9 @@ def list_deployed_routers(
     request_fastapi: Request,
 ) -> Dict[str, Dict[str, Union[str, List[str]]]]:
     """
-    Fetches a list of the deployed routers and relevant metadata. These routers only
-    include deployed routers. To fetch a list of all trained routers,
-    you can use the /router/train/list GET endpoint.
+    Fetches a list of the *deployed* routers and relevant metadata (excluding the
+    trained but undeployed routers). To fetch a list of *all* trained routers (both
+    deployed and undeployed), you can use the `/router/list` `GET` endpoint.
 
     To use any of these routers, replace the model in the endpoint string with the
     router name. E.g. you can use `router-abc` with the endpoint `router-abc@q:1`.
