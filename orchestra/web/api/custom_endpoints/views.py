@@ -115,7 +115,7 @@ def delete_custom_endpoint(
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
 ) -> None:
     """
-    Deletes a custom endpoint in your account.
+    Deletes a custom endpoint from your account.
 
     """
     user_id = request_fastapi.state.user_id

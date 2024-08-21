@@ -30,12 +30,16 @@ def create_custom_api_key(
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
 ) -> None:
     """
-    Stores a custom API key from a LLM provider in your account. This can be used in two ways:
-    1. As part of a custom endpoint. If you define a custom endpoint, you can reference a custom API
-    key. This will be sent to the endpoint as part of the request.
-    2. To use your own API keys in standard providers. If any of your custom API keys matches a provider
-    name and you pass `use_custom_keys=True` to the `/chat/completions` endpoint, this API key will
-    be used, charging your account directly instead of consuming Unify credits.
+    Stores a custom API key from an LLM provider in your account. This can be done in
+    one of two ways:
+
+    1. As part of a custom endpoint. If you define a custom endpoint, you can reference
+    a custom API key. This will be sent to the endpoint as part of the request.
+
+    2. To use your own API keys with the standard providers. If any of your custom API
+    keys match a provider name and you pass `use_custom_keys=True` to the
+    `/chat/completions` endpoint, then this API key will be used, using your own
+    account with the provider directly.
 
     """
     user_id = request_fastapi.state.user_id
@@ -168,7 +172,7 @@ def list_custom_api_keys(
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
 ) -> List[CustomApiKey]:
     """
-    Returns a list of all custom API keys in your account.
+    Returns a list of the names for all custom API keys in your account.
     """
     user_id = request_fastapi.state.user_id
     return custom_api_key_dao.get_user_keys(user_id=user_id)
