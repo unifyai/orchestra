@@ -227,6 +227,9 @@ def _delete_evaluation(user_id: str, dataset: str, endpoint: str):
 def send_to_dataset_evaluation_server(action, **data):
     topic = "projects/gcp-project-saas/topics/dataset_evaluation"
     url = "https://api.unify.ai"
+    if os.getenv("STAGING"):
+        topic = "projects/gcp-project-saas/topics/staging_dataset_evaluation"
+        url = "https://service.a.run.app"
     if os.environ.get("ON_PREM"):
         on_prem.send_pubsub_msg(topic, {"action": action, **data, "orchestra_url": url})
     else:
