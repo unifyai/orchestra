@@ -167,9 +167,9 @@ def train_router(
     ),
 ) -> Dict[str, str]:
     """
-    Trains a router based on a dataset and a set of endpoints. To use a
-    custom-trained router, you will need to deploy the resulting artifacts to
-    a live endpoint. To do this, use the `/router/deploy` POST endpoint.
+    Train a router based on a specified training dataset and a set of endpoints to route
+    across. To *use* a custom-trained router, you will need to deploy the resulting
+    artifacts to a live endpoint, via the `/router/deploy` `POST` endpoint.
     """
     user_id = request_fastapi.state.user_id
     # Check if the router already exists
@@ -227,7 +227,7 @@ def delete_router(
     ),
 ) -> Dict[str, str]:
     """
-    Deletes a specific router, as well as all the training files etc.
+    Deletes a specific trained router, as well as all the training files etc.
     """
     user_id = request_fastapi.state.user_id
     # Check if the router files exist
@@ -255,7 +255,7 @@ def rename_router(
     ),
 ):
     """
-    Renames the specified router.
+    Renames the specified router from `name` to `new_name`.
     """
     raise NotImplemented  # ToDo: implement
 
@@ -284,10 +284,10 @@ def list_routers(
     request_fastapi: Request,
 ) -> Dict[str, Dict[str, Union[str, List[str]]]]:
     """
-    Fetches a list of the trained routers and relevant metadata.
+    Lists all the trained routers and the relevant metadata.
     These routers are training artifacts and therefore don't imply an active,
     deployed router. To fetch a list of deployed routers, you can use the
-    /router/deploy/list GET endpoint.
+    `/router/deploy/list` `GET` endpoint.
     """
     user_id = request_fastapi.state.user_id
     routers = _list_trained_routers(user_id)
