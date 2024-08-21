@@ -1,4 +1,4 @@
-name: Deploy dataset_evaluation to Google Cloud VM
+name: (Staging) Deploy dataset_evaluation to Google Cloud VM
 
 env:
   GH_WORKDIR: dataset_evaluation # Dir name in the orchestra repo
