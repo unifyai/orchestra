@@ -30,6 +30,10 @@ n = sdnotify.SystemdNotifier()
 
 # Pub/Sub subscription
 subscription_name = "projects/saas-368716/subscriptions/dataset_evaluation-sub"
+if os.getenv("STAGING"):
+    subscription_name = (
+        "projects/saas-368716/subscriptions/staging-dataset_evaluation-sub"
+    )
 
 
 # Function to handle graceful shutdown
