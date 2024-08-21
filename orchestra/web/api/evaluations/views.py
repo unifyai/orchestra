@@ -229,9 +229,11 @@ def trigger_evaluation(
     ),
 ) -> Dict[str, str]:
     """
-    Uses the named `eval` to begin an evaluation of quality scores for the selected LLM `endpoint`, on the given `dataset`.
-    You can upload custom scores (and bypass the LLM judge) by uploading a file via the `client_side_scores` argument.
-    Once the evaluation has finished, you can access the scores using the `evals/get_scores` endpoint.
+    Uses the named `evaluator` to trigger an evaluation of quality scores for the
+    selected LLM `endpoint` on the selected `dataset`. You can upload custom scores (and
+    bypass the LLM judge entirely) by uploading a file via the `client_side_scores`
+    argument. Once the evaluation has finished, you can access the scores using the
+    `/v0/evaluation` endpoint.
     """
 
     user_id = request_fastapi.state.user_id
