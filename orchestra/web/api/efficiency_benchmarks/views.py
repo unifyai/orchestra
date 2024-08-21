@@ -173,8 +173,8 @@ def append_to_benchmark(
     custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
 ):
     """
-    Append to the live benchmark data for a custom endpoint (only custom endpoints are
-    publishable by end users).
+    Append speed or cost data to the standardized time-series benchmarks for a custom
+    endpoint (only custom endpoints are publishable by end users).
     """
     if metric_name not in ALLOWED_METRICS:
         raise HTTPException(
@@ -330,6 +330,7 @@ def delete_benchmark(
     ),
 ):
     """
-    Delete *all* benchmark time-series data for a given custom endpoint.
+    Delete *all* benchmark time-series data for a given *custom* endpoint.
+    The time-series benchmark data for *public* endpoints are not deletable.
     """
     raise NotImplemented  # ToDo: implement
