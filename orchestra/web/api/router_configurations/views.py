@@ -60,7 +60,7 @@ def delete_router_config(
     ),
 ):
     """
-    Deletes the specified router configuration.
+    Deletes the specified router configuration from your account.
     """
     raise NotImplemented  # ToDo: implement
 
@@ -79,7 +79,7 @@ def rename_router_config(
     ),
 ):
     """
-    Renames the specified router configuration.
+    Renames the specified router configuration in your account.
     """
     raise NotImplemented  # ToDo: implement
 
