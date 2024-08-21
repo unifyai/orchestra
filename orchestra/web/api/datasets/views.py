@@ -196,9 +196,10 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     name: Annotated[str, Form(json_schema_extra={"example": "dataset1"})],
 ) -> Dict[str, str]:
     """
-    Uploads a custom dataset to the platform.
+    Uploads a custom dataset to your account.
 
-    The uploaded file must be a JSONL file with **at least** a `prompt` key:
+    The uploaded file must be a JSONL file with **at least** a `prompt` key for
+    each prompt each:
 
     ```
     {"prompt": "This is the first prompt"}
@@ -206,15 +207,15 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     {"prompt": "This is the third prompt"}
     ```
 
-    Additionally, you can include a `ref_answer` key, which will be accounted
-    during the evaluations.
+    Additionally, you can include any extra keys as desired, depending on the use case
+    for the dataset, and how it will be used by the evaluators and/or router training.
+    For example, you could include a reference answer to each prompt as follows:
 
     ```
     {"prompt": "This is the first prompt", "ref_answer": "First reference answer"}
     {"prompt": "This is the second prompt", "ref_answer": "Second reference answer"}
     {"prompt": "This is the third prompt", "ref_answer": "Third reference answer"}
     ```
-
     """
     if "../" in name or name[0] == "/":
         raise invalid_dataset_name
@@ -270,7 +271,7 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     name: str = Query(description="Name of the dataset.", example="dataset1"),
 ):
     """
-    Downloads a specific dataset from the platform.
+    Downloads a specific dataset from your account.
     """
     if "../" in name or name[0] == "/":
         raise invalid_dataset_name
@@ -329,7 +330,7 @@ def delete_dataset(
     name: str = Query(description="Name of the dataset.", example="dataset1"),
 ) -> Dict[str, str]:
     """
-    Deletes a previously updated dataset and any relevant artifacts from the platform.
+    Deletes a previously updated dataset and any relevant artifacts from your account.
     """
     if "../" in name or name[0] == "/":
         raise invalid_dataset_name
@@ -390,7 +391,7 @@ def rename_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     ),
 ) -> Dict[str, str]:
     """
-    Renames a previously updated dataset.
+    Renames a previously uploaded dataset.
 
     """
     if "../" in name or name[0] == "/":
@@ -432,7 +433,7 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
 ) -> List[str]:
     """
-    Lists all the custom datasets uploaded by the user to the platform.
+    Lists all the datasets stored in the user account by name.
     """
     datasets = _list_datasets(request_fastapi.state.user_id)
     if os.environ.get("ON_PREM"):
