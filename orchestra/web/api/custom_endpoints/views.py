@@ -3,8 +3,6 @@ from fastapi.param_functions import Depends
 
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
-from orchestra.db.models.orchestra_models import CustomEndpoint
-from orchestra.web.api.custom_endpoints.schema import CustomEndpointModelResponse
 from orchestra.web.api.utils.http_responses import custom_endpoint_not_found
 
 router = APIRouter()
@@ -39,7 +37,7 @@ def create_custom_endpoint(
         example="endpoint1",
     ),
     url: str = Query(
-        description="Base URL of the endpoint being called."
+        description="Base URL of the endpoint being called. "
                     "Must support the OpenAI format.",
         example="https://api.url1.com",
     ),
@@ -47,7 +45,7 @@ def create_custom_endpoint(
         description="Name of the API key that will be passed as part of the query.",
         example="key1",
     ),
-    mdl_name: str = Query(
+    model_name: str = Query(
         None,
         description=(
             "Named passed to the custom endpoint as model name. "
@@ -55,16 +53,30 @@ def create_custom_endpoint(
         ),
         example="llama-3.1-8b-finetuned",
     ),
+    provider: str = Query(
+        None,
+        description=(
+            "The provider used, if a fine-tuned model was trained directly via one of "
+            "the supported providers. The unification logic will be used for this "
+            "custom fine-tuned model behind the scenes, in the same manner as used for "
+            "the foundation models with the same provider."
+        ),
+        example="llama-3.1-8b-finetuned",
+    ),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
 ) -> None:
     """
-    Creates a custom endpoint. This endpoint must support the OpenAI `/chat/completions`
-    format. To query your custom endpoint, replace your endpoint string with
-    `<name>@custom` when querying the unified API. You can show all *custom* endpoints
-    by querying `/v0/endpoints` and passing `custom` as the `provider` argument.
+    Creates a custom endpoint. This endpoint must either be a fine-tuned model from one
+    of the supported providers (`/v0/providers`), in which case the "provider" argument
+    must be set accordingly. Otherwise, the endpoint must support the OpenAI
+    `/chat/completions` format. To query your custom endpoint, replace your endpoint
+    string with `<name>@custom` when querying any general custom endpoint. You can show
+    all *custom* endpoints by querying `/v0/endpoints` and passing `custom` as the
+    `provider` argument.
 
     """
+    # ToDo: add support for provider argument
     user_id = request_fastapi.state.user_id
     try:
         key_id = custom_api_key_dao.filter(user_id=user_id, key=key_name)[0].id
@@ -74,7 +86,7 @@ def create_custom_endpoint(
     custom_endpoint_dao.create_custom_endpoint(
         user_id=user_id,
         name=name,
-        mdl_name=mdl_name if mdl_name else name,
+        mdl_name=model_name if model_name else name,
         url=url,
         key_id=key_id,
     )
