@@ -2,9 +2,9 @@
 Includes endpoints related to logging.
 """
 import os
-from typing import Dict, Any
-from fastapi import APIRouter, HTTPException, Query, Request
+from typing import Dict, Any, List, Union
 from fastapi.param_functions import Depends
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.web.api.utils.on_prem import handle_on_prem
@@ -15,13 +15,16 @@ router = APIRouter()
 @router.get("/prompt_history")
 def get_prompt_history(
     request_fastapi: Request,
-    tag: str = Query(
+    tags: Union[str, List[str]] = Query(
         default=None,
         description="Provide a tag to filter by prompts that are marked with this tag.",
     ),
     query_dao: QueryDAO = Depends(),
 ):
-    if tag:
+    """
+    Get the prompt history, optionally for a given set of tags for a narrowed search.
+    """
+    if tags:
         raise HTTPException(status_code=501, detail="Not Implemented Yet")
     ret = query_dao.filter(user_id=request_fastapi.state.user_id)
     return ret
@@ -33,18 +36,21 @@ def get_query_metrics(
     request_fastapi: Request,
     start_time: str = Query(
         None,
-        description="Timestamp of the earliest query to aggregate. Format is `YYYY-MM-DD hh:mm:ss`.",
+        description="Timestamp of the earliest query to aggregate. "
+                    "Format is `YYYY-MM-DD hh:mm:ss`.",
         example="2024-07-12 04:20:32",
     ),
     end_time: str = Query(
         None,
-        description="Timestamp of the latest query to aggregate. Format is `YYYY-MM-DD hh:mm:ss`.",
+        description="Timestamp of the latest query to aggregate. "
+                    "Format is `YYYY-MM-DD hh:mm:ss`.",
         example="2024-08-12 04:20:32",
     ),
     models: str = Query(
         None,
         description=(
-            "Models to fetch metrics from. The list must be a set of comma-sparated strings. "
+            "Models to fetch metrics from. "
+            "The list must be a set of comma-separated strings. "
             "i.e. `gpt-3.5-turbo,gpt-4o`"
         ),
         example="gpt-4o,llama-3.1-405b-chat,claude-3.5-sonnet",
@@ -52,7 +58,8 @@ def get_query_metrics(
     providers: str = Query(
         None,
         description=(
-            "Providers to fetch metrics from. The list must be a set of comma-sparated strings. "
+            "Providers to fetch metrics from. "
+            "The list must be a set of comma-separated strings. "
             "i.e. `openai,together-ai`"
         ),
         example="openai,anthropic,fireworks-ai",
