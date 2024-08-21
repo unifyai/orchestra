@@ -80,7 +80,9 @@ def get_query_metrics(
 ) -> Dict[str, Any]:
     """
     Returns aggregated telemetry data from previous queries to the `/chat/completions`
-    endpoint.
+    endpoint, specifically the p50 and p95 for generation time and tokens per second,
+    and also the total prompt and completion tokens processed within the interval. The
+    user id and total request count within the interval are also returned.
     """
     import requests
 

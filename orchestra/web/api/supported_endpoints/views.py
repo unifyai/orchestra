@@ -135,7 +135,7 @@ def list_endpoints(
     """
     Lists available endpoints in `model@provider` format.
     If `model` or `provider` are specified, only the matching endpoints will be listed.
-    You can also show all *custom* models by passing `custom` as the provider.
+    You can also show all *custom* endpoints by passing `custom` as the provider.
     """
     user_id = request_fastapi.state.user_id
     if model and provider:
