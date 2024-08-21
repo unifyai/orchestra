@@ -118,9 +118,8 @@ def create_evaluator(
     request: EvaluatorConfig,
 ):
     """
-    Create a re-usable, named evaluator.
-    This can be used to trigger an evaluation via POST requests to the
-    `/evaluation` endpoint.
+    Create a re-usable, named evaluator, and adds this to your account. This can be used
+    to trigger an evaluation via `POST` requests to the `/evaluation` endpoint.
     """
     user_id = request_fastapi.state.user_id
 
@@ -159,7 +158,9 @@ def get_evaluator(
     ),
 ):
     """
-    Returns the configuration JSON for an evaluator.
+    Returns the configuration JSON for an evaluator from your account. The configuration
+    contains the same information as the arguments passed to the `POST` function for the
+    same endpoint `/v0/evaluator`
     """
     user_id = request_fastapi.state.user_id
     eval_id = name_to_eval_id(user_id, name)
@@ -194,7 +195,7 @@ def rename_evaluator(
     new_name: str = Query(description="New name for the eval", example="eval2"),
 ):
     """
-    Renames an evaluator from `name` to `new_name`.
+    Renames an evaluator from `name` to `new_name` in your account.
     """
     user_id = request_fastapi.state.user_id
     eval_id = name_to_eval_id(user_id, name)
@@ -212,7 +213,7 @@ def list_evaluators(
     request_fastapi: Request,
 ):
     """
-    Returns the names of the evaluators you have created.
+    Returns the names of all evaluators stored in your account.
     """
     displayname_to_id = build_displayname_to_id(request_fastapi.state.user_id)
     return sorted(displayname_to_id.keys())
