@@ -20,7 +20,7 @@ router = APIRouter()
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": ["provider_1", "provider_2", "..."],
+                    "example": ["openai", "anthropic", "together-ai", "..."],
                 },
             },
         },
@@ -66,7 +66,7 @@ def list_providers(
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": ["model_a", "model_b", "..."],
+                    "example": ["gpt-3.5-turbo", "gpt-4", "claude-3-haiku", "..."],
                 },
             },
         },
@@ -110,7 +110,8 @@ def list_models(
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": ["model_a@provider_1", "model_a@provider_2", "..."],
+                    "example": ["claude-3-haiku@anthropic", "llama-3-70b-chat@groq",
+                                "..."],
                 },
             },
         },
