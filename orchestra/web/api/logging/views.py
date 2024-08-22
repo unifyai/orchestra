@@ -17,7 +17,7 @@ def get_prompt_history(
     request_fastapi: Request,
     tags: Union[str, List[str]] = Query(
         default=None,
-        description="Provide a tag to filter by prompts that are marked with this tag.",
+        description="Tags to filter for prompts that are marked with these tags.",
     ),
     query_dao: QueryDAO = Depends(),
 ):

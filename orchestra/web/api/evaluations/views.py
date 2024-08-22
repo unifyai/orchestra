@@ -176,7 +176,8 @@ def load_eval_config_blob(user_id, eval_id):
             "content": {
                 "application/json": {
                     "example": {
-                        "info": "Dataset evaluation started! You will receive an email soon!",
+                        "info": "Dataset evaluation started! "
+                                "You will receive an email soon!",
                     },
                 },
             },
@@ -206,8 +207,8 @@ def load_eval_config_blob(user_id, eval_id):
 )
 def trigger_evaluation(
     request_fastapi: Request,
-    eval_name: str = Query(
-        description="Name of the eval to use.",
+    evaluator: str = Query(
+        description="Name of the evaluator to use.",
         example="eval1",
     ),
     dataset: str = Query(
@@ -252,8 +253,8 @@ def trigger_evaluation(
         id_to_name = gcp.internal_id_to_displayname(user_id)
     name_to_id = {name: id_ for id_, name in id_to_name.items()}
     internal_id = name_to_id.get(dataset, dataset)
-    # check if the eval name is valid
-    eval_id = eval_name_to_eval_id(user_id, eval_name)
+    # check if the evaluator is valid
+    eval_id = eval_name_to_eval_id(user_id, evaluator)
     if client_side_scores:
         file = client_side_scores.file.read()
         # TODO: check whether matches dataset
@@ -272,10 +273,11 @@ def trigger_evaluation(
         # check whether the eval name is a client side one:
         blob = load_eval_config_blob(user_id, eval_id)
         contents = json.loads(blob.download_as_bytes().decode("utf-8"))
-        if "client_side" not in contents or contents.get("client_side", "") != True:
+        if "client_side" not in contents or contents.get("client_side", "") is not True:
             raise HTTPException(
                 status_code=400,
-                detail=f"The eval {eval_name} is not a client-side eval (as client_side != True)",
+                detail=f"The evaluator {evaluator} is not a client-side evaluator "
+                       f"(as client_side != True)",
             )
 
         # put everything in the bucket

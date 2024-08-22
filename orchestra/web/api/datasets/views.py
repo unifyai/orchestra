@@ -192,8 +192,11 @@ def _store_metadata(
 )
 def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
-    file: Annotated[UploadFile, Form(json_schema_extra={"example": "dataset.jsonl"})],
-    name: Annotated[str, Form(json_schema_extra={"example": "dataset1"})],
+    file: Annotated[UploadFile, Form(
+        description="The contents of the `.jsonl` file being uploaded.",
+        json_schema_extra={"example": "dataset.jsonl"})],
+    name: Annotated[str, Form(description="The name to give to this dataset.",
+                              json_schema_extra={"example": "dataset1"})],
 ) -> Dict[str, str]:
     """
     Uploads a custom dataset to your account.

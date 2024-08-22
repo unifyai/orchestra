@@ -153,14 +153,14 @@ def create_evaluator(
 def get_evaluator(
     request_fastapi: Request,
     name: str = Query(
-        description="Name of the eval to return the configuration of",
+        description="Name of the evaluator to return the configuration of.",
         example="eval1",
     ),
 ):
     """
     Returns the configuration JSON for an evaluator from your account. The configuration
     contains the same information as the arguments passed to the `POST` function for the
-    same endpoint `/v0/evaluator`
+    same endpoint `/v0/evaluator`.
     """
     user_id = request_fastapi.state.user_id
     eval_id = name_to_eval_id(user_id, name)
@@ -172,7 +172,7 @@ def get_evaluator(
 @router.delete("/evaluator")
 def delete_evaluator(
     request_fastapi: Request,
-    name: str = Query(description="Name of the eval to delete", example="eval1"),
+    name: str = Query(description="Name of the evaluator to delete.", example="eval1"),
 ):
     """
     Deletes an evaluator from your account.
@@ -189,10 +189,10 @@ def delete_evaluator(
 def rename_evaluator(
     request_fastapi: Request,
     name: str = Query(
-        description="Name of the existing eval to rename",
+        description="Name of the evaluator to rename.",
         example="eval1",
     ),
-    new_name: str = Query(description="New name for the eval", example="eval2"),
+    new_name: str = Query(description="New name for the evaluator.", example="eval2"),
 ):
     """
     Renames an evaluator from `name` to `new_name` in your account.

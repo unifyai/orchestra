@@ -31,7 +31,7 @@ def list_providers(
     request_fastapi: Request,
     model: str = Query(
         default=None,
-        description="Model to get available providers from.",
+        description="Model to get available providers for.",
         example="llama-3.1-405b-chat",
     ),
     endpoint_dao: EndpointDAO = Depends(),
@@ -121,12 +121,12 @@ def list_endpoints(
     request_fastapi: Request,
     model: str = Query(
         default=None,
-        description="Model to get available endpoints from.",
+        description="Model to get available endpoints for.",
         example="llama-3.1-405b-chat",
     ),
     provider: str = Query(
         default=None,
-        description="Provider to get available endpoints from.",
+        description="Provider to get available endpoints for.",
         example="openai",
     ),
     endpoint_dao: EndpointDAO = Depends(),

@@ -32,7 +32,7 @@ router = APIRouter()
 def create_custom_endpoint(
     request_fastapi: Request,
     name: str = Query(
-        description="Alias for the custom endpoint."
+        description="Alias for the custom endpoint. "
                     "This will be the name used to call the endpoint.",
         example="endpoint1",
     ),
@@ -56,12 +56,13 @@ def create_custom_endpoint(
     provider: str = Query(
         None,
         description=(
-            "The provider used, if a fine-tuned model was trained directly via one of "
-            "the supported providers. The unification logic will be used for this "
-            "custom fine-tuned model behind the scenes, in the same manner as used for "
-            "the foundation models with the same provider."
+            "If the custom endpoint is for a fine-tuned model which is hosted "
+            "directly via one of the supported providers, then this argument should be "
+            "specified as the provider used. The unification logic will be used for "
+            "this custom fine-tuned model behind the scenes, in the same manner as "
+            "used for the foundation models with the same provider."
         ),
-        example="llama-3.1-8b-finetuned",
+        example="together-ai",
     ),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
