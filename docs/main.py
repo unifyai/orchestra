@@ -1,7 +1,7 @@
-import os
-import json
-import shutil
 import argparse
+import json
+import os
+import shutil
 
 from docs.body import get_body, get_property_details
 from docs.form import get_form
@@ -147,7 +147,7 @@ def write_pages(paths, openapi_config):
             # get the details of the route
             route_config = openapi_config["paths"][path][route]
             tag = route_config["tags"][0]
-            summary = route_config["summary"]
+            summary = route_config["summary"].replace("Api", "API")
             description = route_config.get("description", "")
 
             # get the folder and file name of the mdx file
@@ -190,8 +190,9 @@ if __name__ == "__main__":
 
     # parse args
     parser = argparse.ArgumentParser(
-        prog='Orchestra Doc Builder',
-        description='Build the Orchestra REST API Documentation')
+        prog="Orchestra Doc Builder",
+        description="Build the Orchestra REST API Documentation",
+    )
     parser.add_argument("-w", "--write", action="store_true")
     parser.add_argument("-dd", "--docs_dir", type=str, help="directory for docs")
     args = parser.parse_args()
@@ -210,7 +211,8 @@ if __name__ == "__main__":
     else:
         raise Exception(
             "No mint.json found locally,"
-            "and {} also does not exist for retrieval".format(docs_mint_filepath))
+            "and {} also does not exist for retrieval".format(docs_mint_filepath),
+        )
 
     # build docs
     openapi_config = write_openapi_file()

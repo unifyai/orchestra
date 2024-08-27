@@ -1,13 +1,15 @@
 """
 Includes endpoints related to dataset evaluations.
 """
-import os
+
 import json
+import os
 from typing import Dict
+
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from google.cloud import storage
-
 from providers.completion import PROVIDER_CLASSES
+
 from orchestra.web.api.utils import gcp, on_prem
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
@@ -15,6 +17,7 @@ from orchestra.web.api.utils.http_responses import (
 )
 
 router = APIRouter()
+admin_router = APIRouter()
 
 # utils
 
@@ -115,6 +118,9 @@ def find_invalid_endpoints(endpoints):
 def send_to_dataset_evaluation_server(action, **data):
     topic = "projects/saas-368716/topics/dataset_evaluation"
     url = "https://api.unify.ai"
+    if os.getenv("STAGING"):
+        topic = "projects/saas-368716/topics/staging_dataset_evaluation"
+        url = "https://orchestra-staging-lz5fmz6i7q-ew.a.run.app"
     if os.environ.get("ON_PREM"):
         on_prem.send_pubsub_msg(topic, {"action": action, **data, "orchestra_url": url})
     else:
@@ -168,6 +174,7 @@ def load_eval_config_blob(user_id, eval_id):
 # endpoints
 ###########################
 
+
 @router.post(
     "/evaluation",
     responses={
@@ -177,7 +184,7 @@ def load_eval_config_blob(user_id, eval_id):
                 "application/json": {
                     "example": {
                         "info": "Dataset evaluation started! "
-                                "You will receive an email soon!",
+                        "You will receive an email soon!",
                     },
                 },
             },
@@ -277,7 +284,7 @@ def trigger_evaluation(
             raise HTTPException(
                 status_code=400,
                 detail=f"The evaluator {evaluator} is not a client-side evaluator "
-                       f"(as client_side != True)",
+                f"(as client_side != True)",
             )
 
         # put everything in the bucket
@@ -304,6 +311,66 @@ def trigger_evaluation(
     return {"info": "Dataset evaluation started! You will receive an email soon!"}
 
 
+@admin_router.post("/evals/admin_trigger")
+def admin_trigger_eval(
+    request_fastapi: Request,
+    user_id: str = Query(
+        ...,
+        description="ID of the user that will own the triggered eval.",
+        example="clb5hxxxxxxxxx601hooxp3ct",
+    ),
+    eval_name: str = Query(
+        ...,
+        description="Name of the eval to use.",
+        example="eval1",
+    ),
+    dataset: str = Query(
+        ...,
+        description="Name of the uploaded dataset to evaluate.",
+        example="dataset1",
+    ),
+    endpoint: str = Query(
+        ...,
+        description=(
+            "Name of the endpoint to evaluate."
+            " Endpoints must be specified using the `model@provider` format."
+        ),
+        example="gpt-4o-mini@openai",
+    ),
+) -> Dict[str, str]:
+    """
+    Behaves like the user-specific endpoint but can be triggered as an admin on behalf of a given user.
+    """
+
+    api_key = os.getenv("UNIFY_API_KEY")
+
+    # Check if the dataset exists
+    if not dataset_exists(user_id, dataset):
+        raise dataset_does_not_exist(dataset)
+
+    # Check that the endpoints are valid
+    invalid_endpoints = find_invalid_endpoints([endpoint])
+    if invalid_endpoints:
+        raise invalid_training_endpoints(invalid_endpoints)
+    id_to_name = gcp.internal_id_to_displayname(user_id)
+    name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    internal_id = name_to_id.get(dataset, dataset)
+    # check if the eval name is valid
+    eval_id = eval_name_to_eval_id(user_id, eval_name)
+
+    # Send train job to the dataset_evaluation server
+    send_to_dataset_evaluation_server(
+        action="evaluate",
+        user_id=user_id,
+        user_email="",
+        api_key=api_key,
+        dataset=internal_id,
+        endpoint=endpoint,
+        eval_id=eval_id,
+    )
+    return {"info": "Dataset evaluation started!"}
+
+
 @router.get(
     "/evaluation",
 )
@@ -316,20 +383,21 @@ def get_evaluations(
     endpoint: str = Query(
         default=None,
         description="The endpoint to fetch the evaluation for. "
-                    "If `None`, returns evaluations for all endpoints.",
+        "If `None`, returns evaluations for all endpoints.",
         example="gpt-4o-mini@openai",
     ),
     evaluator: str = Query(
         default=None,
         description="Name of the evaluator to fetch the evaluation for. "
-                    "If `None`, returns all available evaluations for the dataset and "
-                    "endpoint pair.",
+        "If `None`, returns all available evaluations for the dataset and "
+        "endpoint pair.",
         example="eval1",
     ),
     per_prompt: bool = Query(
         default=False,
         description="If `True`, returns the scores on a per-prompt level. "
-                    "By default set to `False`.",
+        "By default set to `False`. If `True` requires an eval "
+        "name and endpoint to be set.",
         example=False,
     ),
 ) -> Dict:
@@ -351,13 +419,69 @@ def get_evaluations(
     name_to_id = {name: id_ for id_, name in id_to_name.items()}
     internal_id = name_to_id.get(dataset, dataset)
 
-    if per_prompt:
-        raise HTTPException(status_code=501, detail="Not implemented yet")
+    if endpoint:
+        invalid_endpoints = find_invalid_endpoints([endpoint])
+        if invalid_endpoints:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not find endpoint: {'.'.join(invalid_endpoints)}",
+            )
 
     return_single_eval = evaluator is not None
     requested_eval_id = (
         eval_name_to_eval_id(user_id, evaluator) if return_single_eval else None
     )
+
+    if per_prompt:
+        if not evaluator:
+            raise HTTPException(
+                status_code=400,
+                detail="You need to specify an eval name to return per-prompt scores.",
+            )
+        if not endpoint:
+            raise HTTPException(
+                status_code=400,
+                detail="You need to specify an endpoint to return per-prompt scores.",
+            )
+        blob = load_eval_config_blob(user_id, requested_eval_id)
+        eval_config = json.loads(blob.download_as_bytes().decode("utf-8"))
+        if eval_config.get("client_side", False) == True:
+            judge_models = ["client_side"]
+        else:
+            judge_models = eval_config.get(
+                "judge_models",
+                ["claude-3.5-sonnet@aws-bedrock"],
+            )
+        if isinstance(judge_models, str):
+            judge_models = [
+                judge_models,
+            ]
+
+        bucket_name = "uploaded_datasets"
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(bucket_name)
+
+        ret = {}
+        for jm in judge_models:
+            judge_blob_name = f"{user_id}/{internal_id}/0/{endpoint}/{requested_eval_id}/{jm.replace('@','___')}_judged.jsonl"
+            try:
+                judge_blob = bucket.blob(judge_blob_name)
+                contents = judge_blob.download_as_bytes().decode("utf-8").split("\n")
+                cleaned_scores = []
+                for entry in contents:
+                    if not entry:
+                        continue
+                    data = json.loads(entry)
+                    cleaned_scores.append(
+                        {
+                            "prompt": data.get("prompt", ""),
+                            "score": data.get("score", None),
+                        },
+                    )
+                ret[jm] = cleaned_scores
+            except Exception as e:
+                pass
+        return ret
 
     # format of scores is {eval_id: {endpoint : {judge : score}}}
     scores = _get_scores(user_id, internal_id)
@@ -401,14 +525,14 @@ def delete_evaluations(
     endpoint: str = Query(
         default=None,
         description="The endpoint to delete the evaluation for. "
-                    "If `None`, deletes the evaluations for all endpoints.",
+        "If `None`, deletes the evaluations for all endpoints.",
         example="gpt-4o-mini@openai",
     ),
     evaluator: str = Query(
         default=None,
         description="Name of the evaluator to delete the evaluation for. "
-                    "If `None`, deletes all available evaluations for the dataset and "
-                    "endpoint pair.",
+        "If `None`, deletes all available evaluations for the dataset and "
+        "endpoint pair.",
         example="eval1",
     ),
 ):

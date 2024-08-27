@@ -1,18 +1,14 @@
 import asyncio
 import json
 import os
-import requests
-import subprocess
 import sys
-import time
 
 import pytest
-from httpx import AsyncClient
 from google.cloud import storage
+from httpx import AsyncClient
 
 import orchestra
 from orchestra.web.api.evaluators.views import build_displayname_to_id
-
 
 # TODO: Less hacky way for this?
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -42,7 +38,9 @@ def _upload_dataset(client, dataset_name, data_path):
 
 def _delete_dataset_evaluation(client, dataset_name):
     response = client.delete(
-        "/v0/dataset", params={"name": dataset_name}, headers=HEADERS
+        "/v0/dataset",
+        params={"name": dataset_name},
+        headers=HEADERS,
     )
     return response
 
@@ -153,8 +151,11 @@ async def test_trigger_eval(
         if action == "evaluate":
             asyncio.run(
                 evaluate_dataset(
-                    message_data, save_dir, shared_volume="", client=client
-                )
+                    message_data,
+                    save_dir,
+                    shared_volume="",
+                    client=client,
+                ),
             )
         elif action == "refresh_scores":
             user_id = data["user_id"]
@@ -203,7 +204,11 @@ async def test_trigger_eval(
     assert endpoint in scores[eval_name]
     assert judge_model in scores[eval_name][endpoint]
 
-    # TODO: add cleanup_triggered_eval (this might need work in dataset_evaluation script)
+    url = "/v0/evals/status"
+    params = {"dataset": dataset, "eval_name": eval_name, "endpoint": endpoint}
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    assert "responses" in response.json()
 
 
 # evals/get_scores is implicitly tested
@@ -232,7 +237,7 @@ async def test_client_side_scores(
     with open(file_path, "rb") as f:
         file_content = f.read()
     files = {
-        "client_side_scores": ("test.jsonl", file_content, "application/x-jsonlines")
+        "client_side_scores": ("test.jsonl", file_content, "application/x-jsonlines"),
     }
 
     params = {

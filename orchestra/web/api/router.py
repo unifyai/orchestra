@@ -1,26 +1,27 @@
 import os
+
 from fastapi import Depends
 from fastapi.routing import APIRouter
 
 from orchestra.web.api import (  # noqa: WPS235
-    supported_endpoints,
+    admin,
+    credits,
+    custom_api_keys,
+    custom_endpoints,
+    datasets,
+    docs,
+    efficiency_benchmarks,
+    eval_batch,
+    evaluations,
+    evaluators,
     llm_queries,
     logging,
-    custom_endpoints,
-    custom_api_keys,
-    datasets,
-    evaluators,
-    evaluations,
-    efficiency_benchmarks,
-    router_training,
-    router_deployment,
-    router_configurations,
-    credits,
-    eval_batch,
-    admin,
-    provider,
     monitoring,
-    docs,
+    provider,
+    router_configurations,
+    router_deployment,
+    router_training,
+    supported_endpoints,
 )
 from orchestra.web.api.dependencies import auth_admin_key, auth_api_key
 

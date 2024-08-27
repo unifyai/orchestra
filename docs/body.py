@@ -1,5 +1,20 @@
 import json
 
+chat_completions_groups = {
+    "model": {
+        "header": "Unified Arguments",
+        "url": "https://docs.unify.ai/universal_api/arguments#unified-arguments",
+    },
+    "frequency_penalty": {
+        "header": "Partially Unified Arguments",
+        "url": "https://docs.unify.ai/universal_api/arguments#partially-unified-arguments",
+    },
+    "signature": {
+        "header": "Platform Arguments",
+        "url": "https://docs.unify.ai/universal_api/arguments#platform-arguments",
+    },
+}
+
 
 def get_property_details(schema_properties, files=[]):
     properties = []
@@ -20,27 +35,40 @@ def get_property_details(schema_properties, files=[]):
 
         example = prop.get("example")  # example
         description = prop.get("description")  # description
+        default = json.dumps(prop["default"]) if "default" in prop else None
         properties.append(
             {
                 "title": property_name,
                 "type": property_type,
                 "example": example,
+                "default": default,
                 "description": description,
             },
         )
     return properties
 
 
-def get_param_fields(properties, required_props):
+def get_param_fields(properties, required_props, chat_completions=False):
     body_str = ""
     for property in properties:
-        required_str = 'required="true"' if property["title"] in required_props else ""
+        title = property.get("title")
+        if chat_completions and title in chat_completions_groups:
+            url = chat_completions_groups[title]["url"]
+            header = chat_completions_groups[title]["header"]
+            body_str += f"\n\n<br />\n\n[{header}]({url})\n\n"
+        required_str = 'required="true"' if title in required_props else ""
         description = property.get("description", "")
+        default = property.get("default")
+        if default is not None:
+            default = "{" + default + "}"
+            default_str = f" default={default}"
+        else:
+            default_str = ""
         if not description:
             description = ""
         body_str += (
-            f'<ParamField body="{property["title"]}" type="{property["type"]}" '
-            f"{required_str}>\n{description}\n</ParamField>\n\n"
+            f'<ParamField body="{title}" type="{property["type"]}" '
+            f"{required_str}{default_str}>\n{description}\n</ParamField>\n\n"
         )
     return body_str
 
@@ -130,7 +158,12 @@ def get_body(path, route, schemas, route_config, curl_example, python_example):
     properties = get_property_details(schema_details["properties"])
 
     # create param field tags
-    body_str += get_param_fields(properties, required_props)
+    chat_completions = path == "/v0/chat/completions"
+    body_str += get_param_fields(
+        properties,
+        required_props,
+        chat_completions=chat_completions,
+    )
 
     # generate curl and python example for the endpoint
     curl_example, python_example = get_request_code(
