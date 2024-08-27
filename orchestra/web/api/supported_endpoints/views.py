@@ -111,7 +111,7 @@ def list_models(
             "content": {
                 "application/json": {
                     "example": ["claude-3-haiku@anthropic", "llama-3-70b-chat@groq",
-                                "..."],
+                                "mistral-large@mistral-ai", "..."],
                 },
             },
         },

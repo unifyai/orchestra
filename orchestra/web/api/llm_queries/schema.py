@@ -18,10 +18,7 @@ class ChatCompletionRequest(BaseModel):
     # This allows extra arguments through.
     model_config = ConfigDict(extra="allow")
 
-    model: str = Field(description="The endpoint to use, in the format "
-                       "`{model}@{provider}`, based on any of the supported "
-                       "endpoints as per the list returned by `/v0/endpoints`",
-                       json_schema_extra={"example": "gpt-4o-mini@openai"})
+    # unified arguments
     messages: List[Dict[str, Any]] = Field(
         description="A list of messages comprising the conversation so far.",
         json_schema_extra={
@@ -33,22 +30,30 @@ class ChatCompletionRequest(BaseModel):
             ],
         },
     )
-
-    # openai args
-    temperature: float = Field(
-        1.0, description="What sampling temperature to use, between 0 and 2. Higher "
-        "values like 0.8 will make the output more random, while lower values like 0.2 "
-        "will make it more focused and deterministic.\n\nGenerally recommended to "
-        "alter this or `top_p`, but not both.", json_schema_extra={"example": 0.9})
+    model: str = Field(description="The endpoint to use, in the format "
+                       "`{model}@{provider}`, based on any of the supported "
+                       "endpoints as per the list returned by `/v0/endpoints`",
+                       json_schema_extra={"example": "gpt-4o-mini@openai"})
+    max_tokens: int = Field(
+        None, description="The maximum number of tokens that can be generated in the "
+        "chat completion.\n\nThe total length of input tokens and generated tokens is "
+        "limited by the model's context length.", json_schema_extra={"example": 1024})
+    stop: Union[str, List[str]] = Field(
+        None, description="Up to 4 sequences where the API will stop generating "
+        "further tokens.", json_schema_extra=
+        {"example": ["The End.", " is the answer."]})
     stream: bool = Field(
         False, description="If set, partial message deltas will be sent. Tokens will "
         "be sent as data-only server-sent events as they become available, with the "
         "stream terminated by a `data: [DONE]` message.",
         json_schema_extra={"example": False})
-    max_tokens: int = Field(
-        None, description="The maximum number of tokens that can be generated in the "
-        "chat completion.\n\nThe total length of input tokens and generated tokens is "
-        "limited by the model's context length.", json_schema_extra={"example": 1024})
+    temperature: float = Field(
+        1.0, description="What sampling temperature to use, between 0 and 2. Higher "
+        "values like 0.8 will make the output more random, while lower values like 0.2 "
+        "will make it more focused and deterministic.\n\nGenerally recommended to "
+        "alter this or `top_p`, but not both.", json_schema_extra={"example": 0.9})
+
+    # partially unified arguments
     frequency_penalty: float = Field(
         None, description="Number between -2.0 and 2.0. Positive values penalize new "
         "tokens based on their existing frequency in the text so far, decreasing the "
@@ -86,26 +91,25 @@ class ChatCompletionRequest(BaseModel):
         None, description='An object specifying the format that the model must output.'
         '\n\nSetting to `{ "type": "json_schema", "json_schema": {...} }` enables '
         'Structured Outputs which ensures the model will match your supplied JSON '
-        'schema. Learn more in the Structured Outputs guide.\n\nSetting to `{ "type": '
-        '"json_object" }` enables JSON mode, which ensures the message the model '
-        'generates is valid JSON.\n\n**Important:** when using JSON mode, you **must**'
-        'also instruct the model to produce JSON yourself via a system or user '
-        'message. Without this, the model may generate an unending stream of '
-        'whitespace until the generation reaches the token limit, resulting in a '
-        'long-running and seemingly "stuck" request. Also note that the message '
-        'content may be partially cut off if `finish_reason="length"`, which indicates '
-        'the generation exceeded `max_tokens` or the conversation exceeded the max '
-        'context length.', json_schema_extra={"example": '{ "type": "json_mode"}'})
+        'schema.\n\nSetting to `{ "type": "json_object" }` enables JSON mode, which '
+        'ensures the message the model generates is valid JSON.\n\n**Important:** when '
+        'using JSON mode, you **must** also instruct the model to produce JSON '
+        'yourself via a system or user message. Without this, the model may generate '
+        'an unending stream of whitespace until the generation reaches the token '
+        'limit, resulting in a long-running and seemingly "stuck" request. Also note '
+        'that the message content may be partially cut off if `finish_reason="length"`'
+        ', which indicates the generation exceeded `max_tokens` or the conversation '
+        'exceeded the max context length.',
+        json_schema_extra={"example": '{ "type": "json_mode"}'})
     seed: int = Field(
         None, description="If specified, the system will make a best effort to sample "
         "deterministically, such that repeated requests with the same `seed` and "
         "parameters should return the same result. Determinism is not guaranteed, and "
         "you should refer to the `system_fingerprint` response parameter to monitor "
         "changes in the backend.", json_schema_extra={"example": 11})
-    stop: Union[str, List[str]] = Field(
-        None, description="Up to 4 sequences where the API will stop generating "
-        "further tokens.", json_schema_extra=
-        {"example": ["The End.", " is the answer."]})
+    stream_options: Dict[str, bool] = Field(
+        None, description="Options for streaming response. Only set this when you set "
+        "`stream: true`.", json_schema_extra={"example": {"include_usage", True}})
     top_p: float = Field(
         None, description="An alternative to sampling with temperature, called nucleus "
         "sampling, where the model considers the results of the tokens with top_p "
@@ -135,13 +139,17 @@ class ChatCompletionRequest(BaseModel):
         None, description="A unique identifier representing your end-user.",
         json_schema_extra={"example": "some_user"})
 
-    # args that are for orchestra use only
+    # platform arguments
     signature: str = Field(
         None, description="A string used to represent where the request came from, for "
         "examples, did it come via the Python package, the NodeJS package, the chat "
         "interface etc. This should *not* be set by the user.",
         json_schema_extra={"example": "python"})
     use_custom_keys: bool = Field(
+        None, description="Whether or not to use custom API keys with the specified "
+        "provider, meaning that you will be using your own account with that provider "
+        "in the backend.", json_schema_extra={"example": True})
+    tags: List[str] = Field(
         None, description="Whether or not to use custom API keys with the specified "
         "provider, meaning that you will be using your own account with that provider "
         "in the backend.", json_schema_extra={"example": True})

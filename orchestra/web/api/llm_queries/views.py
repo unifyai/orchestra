@@ -58,6 +58,11 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 ) -> Union[ChatCompletionResponse, StreamingResponse]:
     """
     OpenAI compatible `/chat/completions` endpoint for LLM inference.
+    Check the OpenAI
+    [API reference](https://platform.openai.com/docs/api-reference/chat)
+    for the most updated documentation. The ground truth is always the latest OpenAI API
+    Reference. The arguments below are copied for convenience, but might not be fully
+    up-to-date at all times.
     \f
     :param background_tasks: FastAPI background tasks.
     :param request_fastapi: FastAPI request object.
