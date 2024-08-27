@@ -59,7 +59,7 @@ class EndpointDAO:
         only_from: Optional[Tuple[str, ...]] = None,
     ) -> List[str]:
         query = select(Endpoint, Model, Provider).join(Model).join(Provider)
-        query = query.where(Model.active == True)
+        query = query.where(Model.active == True).where(Endpoint.active == True)
         if models and models[0] is not None:
             query = query.where(Model.mdl_code.in_(models))
         if only_from and only_from[0] is not None:
