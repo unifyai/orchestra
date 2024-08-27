@@ -1,4 +1,4 @@
-name: Deploy dataset_evaluation to Google Cloud VM
+name: (Staging) Deploy dataset_evaluation to Google Cloud VM
 
 env:
   GH_WORKDIR: dataset_evaluation # Dir name in the orchestra repo
@@ -6,13 +6,13 @@ env:
   GCLOUD_PROJECT: saas-368716
   GCLOUD_ZONE: europe-west1-b
   GCLOUD_WORKDIR: /opt/dataset_evaluation
-  GCLOUD_INSTANCE: dataset-evaluation
+  GCLOUD_INSTANCE: staging-dataset-evaluation
   GCLOUD_USERNAME: serviceuser
 
 on:
   push:
     branches:
-    - main
+    - staging
 
 jobs:
   deploy:
