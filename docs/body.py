@@ -36,11 +36,13 @@ def get_property_details(schema_properties, files=[]):
 
         example = property.get("example")  # example
         description = property.get("description")  # description
+        default = json.dumps(property["default"]) if "default" in property else None
         properties.append(
             {
                 "title": property_name,
                 "type": property_type,
                 "example": example,
+                "default": default,
                 "description": description,
             },
         )
@@ -57,11 +59,17 @@ def get_param_fields(properties, required_props, chat_completions=False):
             body_str += f"\n\n<br />\n\n[{header}]({url})\n\n"
         required_str = 'required="true"' if title in required_props else ""
         description = property.get("description", "")
+        default = property.get("default")
+        if default is not None:
+            default = "{" + default + "}"
+            default_str = f" default={default}"
+        else:
+            default_str = ""
         if not description:
             description = ""
         body_str += (
             f'<ParamField body="{title}" type="{property["type"]}" '
-            f"{required_str}>\n{description}\n</ParamField>\n\n"
+            f"{required_str}{default_str}>\n{description}\n</ParamField>\n\n"
         )
     return body_str
 
