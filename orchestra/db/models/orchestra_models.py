@@ -46,6 +46,11 @@ class Endpoint(Base):
     mdl_id = sa.Column(sa.Integer(), sa.ForeignKey("model.id"), nullable=False)
     provider_id = sa.Column(sa.Integer(), sa.ForeignKey("provider.id"), nullable=False)
     created_at = sa.Column(sa.TIMESTAMP(), nullable=False)
+    active = sa.Column(
+        sa.Boolean(),
+        server_default="f",
+        nullable=False,
+    )  # type: ignore
 
 
 class Provider(Base):
