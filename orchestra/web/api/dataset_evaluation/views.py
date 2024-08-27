@@ -742,7 +742,9 @@ def eval_status(
     ),
 ):
     """
-        Fetches the eval status on a given dataset. Returns object of the form:
+    Fetches the eval status on a given dataset. Returns object of the form:
+
+    ```
     {
         "responses": {
             "last_updated": "2024-08-19 13:58:20.866092",
@@ -759,6 +761,8 @@ def eval_status(
             }
         },
     }
+    ```
+
     """
     user_id = request_fastapi.state.user_id
     if not dataset_exists(user_id, dataset):
