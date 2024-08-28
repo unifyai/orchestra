@@ -21,6 +21,10 @@ class LeptonAI(BaseCompletionProvider):
         return "ORCHESTRA_LEPTON_AI_API_KEY"
 
     @property
+    def litellm_api_key_var(self) -> str:
+        return ""
+
+    @property
     def base_url(self):
         return "https://{0}.lepton.run/api/v1/".format(self.provider_endpoint)
 

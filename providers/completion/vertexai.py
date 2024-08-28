@@ -1,8 +1,4 @@
-import google.auth.transport.requests
-from google.auth import default
 from providers.completion.base_completion_provider import BaseCompletionProvider
-
-from orchestra.settings import settings
 
 
 class VertexAI(BaseCompletionProvider):
@@ -18,31 +14,22 @@ class VertexAI(BaseCompletionProvider):
         self.supported_models = supported_models
 
     @property
-    def api_key(self) -> str:
-        # TODO: check if this doesn't add TTFT, prob does
-        creds, _ = default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        )
-        auth_req = google.auth.transport.requests.Request()
-        creds.refresh(auth_req)
-        return creds.token
+    def api_key_var(self) -> str:
+        return "ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON"
 
     @property
-    def base_url(self):
-        return (
-            "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/"
-            f"{settings.vertexai_project}/locations/{settings.vertexai_location}/endpoints/openapi"
-        )
+    def litellm_api_key_var(self) -> str:
+        return "GOOGLE_APPLICATION_CREDENTIALS"
 
 
 supported_models = {
     "gemini-1.5-pro": {
-        "endpoint": "google/gemini-1.5-pro",
+        "endpoint": "vertex_ai/gemini-1.5-pro",
         "context_window": 128000,
         "cost": {"prompt": 3.5, "completion": 10.5},
     },
     "gemini-1.5-flash": {
-        "endpoint": "google/gemini-1.5-flash",
+        "endpoint": "vertex_ai/gemini-1.5-flash",
         "context_window": 128000,
         "cost": {"prompt": 0.075, "completion": 0.3},
     },

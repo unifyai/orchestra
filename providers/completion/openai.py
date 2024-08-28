@@ -23,8 +23,8 @@ class OpenAI(BaseCompletionProvider):
         return "ORCHESTRA_OPENAI_API_KEY"
 
     @property
-    def base_url(self):
-        return "https://api.openai.com/v1"
+    def litellm_api_key_var(self) -> str:
+        return "OPENAI_API_KEY"
 
 
 supported_models = {

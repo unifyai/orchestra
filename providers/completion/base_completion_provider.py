@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 
 import tiktoken
 from fastapi import HTTPException
+from litellm import acompletion, completion
 from openai import (
     APIError,
     APITimeoutError,
@@ -40,6 +41,15 @@ class BaseCompletionProvider:
     def api_key_var(self) -> str:
         """
         Get the provider api key var NAME.
+
+        :raises NotImplementedError: This method should be implemented in a subclass.
+        """
+        raise NotImplementedError("This method should be implemented in a subclass")
+
+    @property
+    def litellm_api_key_var(self) -> str:
+        """
+        Get the provider api key var NAME for using litellm.
 
         :raises NotImplementedError: This method should be implemented in a subclass.
         """
@@ -160,19 +170,37 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        client = kwargs.pop(
-            "client",
-            OpenAI(api_key=self.api_key, base_url=self.base_url),
-        )
         kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
         try:  # noqa: WPS225
-            response = client.chat.completions.create(
-                model=self.provider_endpoint,
-                messages=messages,
-                stream=stream,
-                extra_body=extra_body,
-                **kwargs,
-            )
+            if not self.litellm_api_key_var:
+                client = kwargs.pop(
+                    "client",
+                    OpenAI(api_key=self.api_key, base_url=self.base_url),
+                )
+                response = client.chat.completions.create(
+                    model=self.provider_endpoint,
+                    messages=messages,
+                    stream=stream,
+                    extra_body=extra_body,
+                    **kwargs,
+                )
+            else:
+                # extra_body can't be passed to anthropic or vertex_ai
+                if self.provider_endpoint.split("/")[0] not in [
+                    "anthropic",
+                    "bedrock",
+                    "vertex_ai",
+                ]:
+                    kwargs["extra_body"] = extra_body
+                os.environ[self.litellm_api_key_var] = self.api_key
+                response = completion(
+                    model=self.provider_endpoint,
+                    messages=messages,
+                    stream=stream,
+                    **kwargs,
+                )
+                os.environ.pop(self.litellm_api_key_var)
+
             if isinstance(response, Stream) or stream:
                 return (SyncGeneratorWrapper(self, response, messages), None)
 
@@ -206,19 +234,35 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        client = kwargs.pop(
-            "client",
-            AsyncOpenAI(api_key=self.api_key, base_url=self.base_url),
-        )
         kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
         try:  # noqa: WPS225
-            response = client.chat.completions.create(
-                model=self.provider_endpoint,
-                messages=messages,
-                stream=stream,
-                extra_body=extra_body,
-                **kwargs,
-            )
+            if not self.litellm_api_key_var:
+                client = kwargs.pop(
+                    "client",
+                    AsyncOpenAI(api_key=self.api_key, base_url=self.base_url),
+                )
+                response = client.chat.completions.create(
+                    model=self.provider_endpoint,
+                    messages=messages,
+                    stream=stream,
+                    extra_body=extra_body,
+                    **kwargs,
+                )
+            else:
+                # extra_body can't be passed to anthropic or vertex_ai
+                if self.provider_endpoint.split("/")[0] not in [
+                    "anthropic",
+                    "vertex_ai",
+                ]:
+                    kwargs["extra_body"] = extra_body
+                os.environ[self.litellm_api_key_var] = self.api_key
+                response = acompletion(
+                    model=self.provider_endpoint,
+                    messages=messages,
+                    stream=stream,
+                    **kwargs,
+                )
+                os.environ.pop(self.litellm_api_key_var)
             if isinstance(response, AsyncStream) or stream:
                 return (AsyncGeneratorWrapper(self, response, messages), None)
 
