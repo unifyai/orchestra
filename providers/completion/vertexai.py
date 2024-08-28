@@ -15,7 +15,7 @@ class VertexAI(BaseCompletionProvider):
 
     @property
     def api_key_var(self) -> str:
-        return "ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON"
+        return "GOOGLE_APPLICATION_CREDENTIALS"
 
     @property
     def litellm_api_key_var(self) -> str:
