@@ -204,7 +204,7 @@ async def test_trigger_eval(
     assert endpoint in scores[eval_name]
     assert judge_model in scores[eval_name][endpoint]
 
-    url = "/v0/evals/status"
+    url = "/v0/evaluation/status"
     params = {"dataset": dataset, "evaluator": eval_name, "endpoint": endpoint}
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
