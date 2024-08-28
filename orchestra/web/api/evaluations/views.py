@@ -143,7 +143,7 @@ def build_id_to_displayname(user_id):
         assert ".config" in id_
         id_ = id_.replace(".config", "")
         # get display_name
-        display_name = json.loads(blob.download_as_bytes().decode("utf-8"))["eval_name"]
+        display_name = json.loads(blob.download_as_bytes().decode("utf-8"))["name"]
         id_to_displayname[id_] = display_name
     return id_to_displayname
 
@@ -232,7 +232,7 @@ def trigger_evaluation(
     client_side_scores: UploadFile = File(
         default=None,
         description="An optional file upload for client-side scores. The file must be in JSONL format and the prompts must match the order of the `dataset`. "
-        "Each entry should include `prompt` and `score` keys, with `score` being a float between 0 and 1. The evaluation corresponding to the `eval_name` must have `client_side=True`.",
+        "Each entry should include `prompt` and `score` keys, with `score` being a float between 0 and 1. The evaluation corresponding to the `evaluator` must have `client_side=True`.",
         json_schema_extra={"example": "client_scores.jsonl"},
     ),
 ) -> Dict[str, str]:
@@ -319,7 +319,7 @@ def admin_trigger_eval(
         description="ID of the user that will own the triggered eval.",
         example="clb5hxxxxxxxxx601hooxp3ct",
     ),
-    eval_name: str = Query(
+    name: str = Query(
         ...,
         description="Name of the eval to use.",
         example="eval1",
@@ -356,7 +356,7 @@ def admin_trigger_eval(
     name_to_id = {name: id_ for id_, name in id_to_name.items()}
     internal_id = name_to_id.get(dataset, dataset)
     # check if the eval name is valid
-    eval_id = eval_name_to_eval_id(user_id, eval_name)
+    eval_id = eval_name_to_eval_id(user_id, name)
 
     # Send train job to the dataset_evaluation server
     send_to_dataset_evaluation_server(
