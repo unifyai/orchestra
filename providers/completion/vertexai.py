@@ -1,3 +1,5 @@
+import google.auth.transport.requests
+from google.auth import default
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
@@ -13,9 +15,14 @@ class VertexAI(BaseCompletionProvider):
         super().__init__(hub_model, custom_api_key=custom_api_key)
         self.supported_models = supported_models
 
-    @property
-    def api_key_var(self) -> str:
-        return "GOOGLE_APPLICATION_CREDENTIALS"
+    def api_key(self) -> str:
+        # TODO: check if this doesn't add TTFT, prob does
+        creds, _ = default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+        auth_req = google.auth.transport.requests.Request()
+        creds.refresh(auth_req)
+        return creds.token
 
     @property
     def litellm_api_key_var(self) -> str:
