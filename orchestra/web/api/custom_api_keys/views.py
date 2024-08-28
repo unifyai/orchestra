@@ -11,7 +11,7 @@ from orchestra.web.api.utils.http_responses import custom_api_key_not_found
 router = APIRouter()
 
 
-@router.put(
+@router.post(
     "/custom_api_key",
     responses={
         200: {

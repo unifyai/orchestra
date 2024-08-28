@@ -50,8 +50,8 @@ def _get_custom_endpoint_benchmark(
     model: str,
     start_time: str = None,
     end_time: str = None,
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
-    custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
+    custom_endpoint_dao: CustomEndpointDAO = None,
+    custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = None,
 ):
     start_time_provided = start_time is not None
     end_time_provided = end_time is not None
@@ -110,7 +110,9 @@ def _get_custom_endpoint_benchmark(
                     single_return[key] = None
                 else:
                     single_return[key] = rets[key][-1]
-            return single_return
+            return [
+                single_return,
+            ]
         returns = list()
         for i in range(num_items):
             val = dict()
@@ -120,9 +122,9 @@ def _get_custom_endpoint_benchmark(
                 else:
                     val[key] = rets[key][i]
             returns.append(val)
-        return rets
-    except:
-        raise Exception
+        return returns
+    except Exception as e:
+        raise e
 
 
 # endpoints
@@ -212,7 +214,7 @@ def append_to_benchmark(
 
 @router.get(
     "/benchmark",
-    response_model=List[Dict[str, Union[str, float]]],
+    response_model=List[Dict[str, Union[float, None]]],
     responses={
         200: {
             "description": "Successful Response",
@@ -286,8 +288,10 @@ def get_benchmark(
         return _get_custom_endpoint_benchmark(
             request_fastapi,
             model,
-            custom_endpoint_dao,
-            custom_endpoint_benchmark_dao,
+            start_time=start_time,
+            end_time=end_time,
+            custom_endpoint_dao=custom_endpoint_dao,
+            custom_endpoint_benchmark_dao=custom_endpoint_benchmark_dao,
         )
     try:
         endpoint_id = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
@@ -299,13 +303,15 @@ def get_benchmark(
                 seq_len=seq_len,
             )
             result = result[0]
-            return {
-                "ttft": result.ttft,
-                "itl": result.itl,
-                "input_cost": result.input_cost,
-                "output_cost": result.output_cost,
-                "measured_at": result.measured_at,
-            }
+            return [
+                {
+                    "ttft": result.ttft,
+                    "itl": result.itl,
+                    "input_cost": result.input_cost,
+                    "output_cost": result.output_cost,
+                    "measured_at": result.measured_at,
+                },
+            ]
         elif not start_time_provided and end_time_provided:
             raise Exception(
                 "`start_time` must be provided when" "`end_time` is provided.",

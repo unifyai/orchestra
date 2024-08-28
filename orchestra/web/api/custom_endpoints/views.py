@@ -8,7 +8,7 @@ from orchestra.web.api.utils.http_responses import custom_endpoint_not_found
 router = APIRouter()
 
 
-@router.put(
+@router.post(
     "/custom_endpoint",
     responses={
         200: {
