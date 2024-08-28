@@ -1,13 +1,14 @@
 """
 Includes endpoints related to evaluators.
 """
-import os
-import json
 import hashlib
-from google.cloud import storage
-from fastapi import APIRouter, HTTPException, Query, Request
+import json
+import os
 
+from fastapi import APIRouter, HTTPException, Query, Request
+from google.cloud import storage
 from providers.completion import PROVIDER_CLASSES
+
 from orchestra.web.api.evaluators.schema import EvaluatorConfig
 from orchestra.web.api.utils import gcp, on_prem
 
@@ -132,7 +133,7 @@ def create_evaluator(
         raise HTTPException(
             status_code=400,
             detail=f"Could not find {'.'.join(invalid_endpoints)}"
-                   f"to use as a judge model.",
+            f"to use as a judge model.",
         )
 
     # create evaluation id

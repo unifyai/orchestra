@@ -33,12 +33,12 @@ def create_custom_endpoint(
     request_fastapi: Request,
     name: str = Query(
         description="Alias for the custom endpoint. "
-                    "This will be the name used to call the endpoint.",
+        "This will be the name used to call the endpoint.",
         example="endpoint1",
     ),
     url: str = Query(
         description="Base URL of the endpoint being called. "
-                    "Must support the OpenAI format.",
+        "Must support the OpenAI format.",
         example="https://api.url1.com",
     ),
     key_name: str = Query(

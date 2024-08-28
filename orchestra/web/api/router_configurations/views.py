@@ -2,6 +2,7 @@
 Includes endpoints for creating router configurations.
 """
 from typing import List
+
 from fastapi import APIRouter, Query
 
 router = APIRouter()
@@ -10,9 +11,7 @@ router = APIRouter()
 # endpoints
 
 
-@router.post(
-    "/router/config"
-)
+@router.post("/router/config")
 def create_router_config(
     config_name: str = Query(
         description="The name of the router configuration to create.",
@@ -20,11 +19,11 @@ def create_router_config(
     ),
     router_endpoint: str = Query(
         description="The raw string which fully defines the router endpoint, "
-                    "with all constraints applied, including the router name and any "
-                    "extra arguments.",
+        "with all constraints applied, including the router name and any "
+        "extra arguments.",
         example="router1|models:llama-3.1-8b-chat,mixtral-8x22b-instruct-v0.1|"
-                "providers:fireworks-ai,together-ai|"
-                "q:1|c:4.65e-03|t:2.08e-05|i:2.07e-03@routers",
+        "providers:fireworks-ai,together-ai|"
+        "q:1|c:4.65e-03|t:2.08e-05|i:2.07e-03@routers",
     ),
 ):
     """
@@ -34,13 +33,11 @@ def create_router_config(
     raise NotImplemented  # ToDo: implement
 
 
-@router.get(
-    "/router/config"
-)
+@router.get("/router/config")
 def get_router_config(
     config_name: str = Query(
         description="The name of the router configuration to retrieve the "
-                    "full endpoint string for.",
+        "full endpoint string for.",
         example="cost_and_speed_optimized",
     ),
 ) -> str:
@@ -50,9 +47,7 @@ def get_router_config(
     raise NotImplemented  # ToDo: implement
 
 
-@router.delete(
-    "/router/config"
-)
+@router.delete("/router/config")
 def delete_router_config(
     config_name: str = Query(
         description="The name of the router configuration to delete.",
@@ -65,9 +60,7 @@ def delete_router_config(
     raise NotImplemented  # ToDo: implement
 
 
-@router.post(
-    "/router/config/rename"
-)
+@router.post("/router/config/rename")
 def rename_router_config(
     name: str = Query(
         description="The original name of the router configuration.",
@@ -84,9 +77,7 @@ def rename_router_config(
     raise NotImplemented  # ToDo: implement
 
 
-@router.get(
-    "/router/config/list"
-)
+@router.get("/router/config/list")
 def list_router_configs() -> List[str]:
     """
     Lists all saved router configurations by name.

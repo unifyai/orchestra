@@ -2,9 +2,10 @@
 Includes endpoints related to logging.
 """
 import os
-from typing import Dict, Any, List, Union
-from fastapi.param_functions import Depends
+from typing import Any, Dict, List, Union
+
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.param_functions import Depends
 
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.web.api.utils.on_prem import handle_on_prem
@@ -37,13 +38,13 @@ def get_query_metrics(
     start_time: str = Query(
         None,
         description="Timestamp of the earliest query to aggregate. "
-                    "Format is `YYYY-MM-DD hh:mm:ss`.",
+        "Format is `YYYY-MM-DD hh:mm:ss`.",
         example="2024-07-12 04:20:32",
     ),
     end_time: str = Query(
         None,
         description="Timestamp of the latest query to aggregate. "
-                    "Format is `YYYY-MM-DD hh:mm:ss`.",
+        "Format is `YYYY-MM-DD hh:mm:ss`.",
         example="2024-08-12 04:20:32",
     ),
     models: str = Query(

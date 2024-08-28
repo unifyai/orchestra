@@ -4,15 +4,12 @@ Includes endpoints for router training.
 
 import os
 from typing import Dict, List, Union
-from fastapi import APIRouter, Query, Request
 
+from fastapi import APIRouter, Query, Request
 from providers.completion import PROVIDER_CLASSES
+
 from orchestra.web.api.utils import gcp, on_prem
-from orchestra.web.api.utils.gcp import (
-    blob_exists,
-    list_dir,
-    send_pubsub_msg,
-)
+from orchestra.web.api.utils.gcp import blob_exists, list_dir, send_pubsub_msg
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
     invalid_training_endpoints,
@@ -112,7 +109,7 @@ def send_to_train_server(action, **data):
                 "application/json": {
                     "example": {
                         "info": "Router training started! "
-                                "You will receive an email soon!",
+                        "You will receive an email soon!",
                     },
                 },
             },
@@ -241,9 +238,7 @@ def delete_router(
     return {"info": "Trained router deleted!"}
 
 
-@router.post(
-    "/router/rename"
-)
+@router.post("/router/rename")
 def rename_router(
     name: str = Query(
         description="The original name of the router.",

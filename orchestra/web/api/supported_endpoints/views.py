@@ -110,8 +110,12 @@ def list_models(
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": ["claude-3-haiku@anthropic", "llama-3-70b-chat@groq",
-                                "mistral-large@mistral-ai", "..."],
+                    "example": [
+                        "claude-3-haiku@anthropic",
+                        "llama-3-70b-chat@groq",
+                        "mistral-large@mistral-ai",
+                        "...",
+                    ],
                 },
             },
         },

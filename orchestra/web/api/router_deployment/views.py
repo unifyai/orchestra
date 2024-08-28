@@ -2,6 +2,7 @@
 Includes endpoints for router deployment.
 """
 from typing import Dict, List, Union
+
 from fastapi import APIRouter, Query, Request
 
 from orchestra.web.api.utils.gcp import (
@@ -72,7 +73,7 @@ def send_to_deploy_server(action, **data):
                 "application/json": {
                     "example": {
                         "info": "Router deployment started! "
-                                "You will receive an email soon!",
+                        "You will receive an email soon!",
                     },
                 },
             },
@@ -130,7 +131,7 @@ def deploy_router(
                 "application/json": {
                     "example": {
                         "info": "Router deletion started! "
-                                "You will receive an email soon!",
+                        "You will receive an email soon!",
                     },
                 },
             },

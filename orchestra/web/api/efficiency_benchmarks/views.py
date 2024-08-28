@@ -3,7 +3,8 @@ Includes endpoints related to benchmarks.
 """
 
 from datetime import datetime
-from typing import Dict, Union, List
+from typing import Dict, List, Union
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
@@ -75,7 +76,7 @@ def _get_custom_endpoint_benchmark(
             "itl": "inter-token-latency",
             "input-cost": "input-cost",
             "output-cost": "output-cost",
-            "measured-at": "measured-at"
+            "measured-at": "measured-at",
         }
         rets = dict()
         latest_only = not start_time_provided and not end_time_provided
@@ -84,8 +85,9 @@ def _get_custom_endpoint_benchmark(
             start_time = "2024-01-01"
             end_time = str(datetime.now())
         elif not start_time_provided and end_time_provided:
-            raise Exception("`start_time` must be provided when"
-                            "`end_time` is provided.")
+            raise Exception(
+                "`start_time` must be provided when" "`end_time` is provided.",
+            )
         elif start_time_provided and not end_time_provided:
             end_time = str(datetime.now())
         for short_name, db_name in short_name_to_db_name.items():
@@ -124,6 +126,7 @@ def _get_custom_endpoint_benchmark(
 
 
 # endpoints
+
 
 @router.post(
     "/benchmark",
@@ -166,7 +169,7 @@ def append_to_benchmark(
     measured_at: datetime = Query(
         default=None,
         description="The timestamp to associate with the submission. "
-                    "Defaults to current time if unspecified.",
+        "Defaults to current time if unspecified.",
         example="2024-08-12T04:20:32.808410",
     ),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
@@ -180,7 +183,7 @@ def append_to_benchmark(
         raise HTTPException(
             status_code=400,
             detail=f"{metric_name} not one of the allowed metrics."
-                   f"Allowed metrics are: {ALLOWED_METRICS_STR}.",
+            f"Allowed metrics are: {ALLOWED_METRICS_STR}.",
         )
     # check if the endpoint is valid
     user_id = request_fastapi.state.user_id
@@ -220,7 +223,7 @@ def append_to_benchmark(
                         "itl": 8.797065147959705,
                         "input_cost": 0.15,
                         "output_cost": 0.6,
-                        "measured_at": "2024-08-17T19:19:37.289937"
+                        "measured_at": "2024-08-17T19:19:37.289937",
                     },
                 },
             },
@@ -240,20 +243,20 @@ def get_benchmark(
     seq_len: str = Query(
         default="short",
         description="Length of the sequence used for benchmarking, "
-                    "can be short or long",
+        "can be short or long",
         example="short",
     ),
     start_time: str = Query(
         default=None,
         description="Window start time. "
-                    "Only returns the latest benchmark if unspecified",
+        "Only returns the latest benchmark if unspecified",
         example="2024-07-12T04:20:32.808410",
     ),
     end_time: str = Query(
         default=None,
         description="Window end time. Assumed to be the current time if this is "
-                    "unspecified *and* start_time *is* specified. "
-                    "Only the latest benchmark is returned if both are unspecified.",
+        "unspecified *and* start_time *is* specified. "
+        "Only the latest benchmark is returned if both are unspecified.",
         example="2024-08-12T04:20:32.808410",
     ),
     endpoint_dao: EndpointDAO = Depends(),
@@ -284,7 +287,7 @@ def get_benchmark(
             request_fastapi,
             model,
             custom_endpoint_dao,
-            custom_endpoint_benchmark_dao
+            custom_endpoint_benchmark_dao,
         )
     try:
         endpoint_id = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
@@ -304,8 +307,9 @@ def get_benchmark(
                 "measured_at": result.measured_at,
             }
         elif not start_time_provided and end_time_provided:
-            raise Exception("`start_time` must be provided when"
-                            "`end_time` is provided.")
+            raise Exception(
+                "`start_time` must be provided when" "`end_time` is provided.",
+            )
         elif start_time_provided and not end_time_provided:
             end_time = str(datetime.now())
         return benchmark_run_dao.benchmarks_between(

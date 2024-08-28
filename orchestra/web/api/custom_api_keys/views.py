@@ -1,9 +1,10 @@
 from typing import List
-from fastapi.param_functions import Depends
-from fastapi import APIRouter, Query, Request
 
-from orchestra.db.models.orchestra_models import CustomApiKey
+from fastapi import APIRouter, Query, Request
+from fastapi.param_functions import Depends
+
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
+from orchestra.db.models.orchestra_models import CustomApiKey
 from orchestra.web.api.custom_api_keys.schema import CustomApiKeyModelResponse
 from orchestra.web.api.utils.http_responses import custom_api_key_not_found
 
@@ -54,8 +55,10 @@ def create_custom_api_key(
 @router.get("/custom_api_key", response_model=CustomApiKeyModelResponse)
 def get_custom_api_key(
     request_fastapi: Request,
-    name: str = Query(description="Name of the API key to get the value for.",
-                      example="key1"),
+    name: str = Query(
+        description="Name of the API key to get the value for.",
+        example="key1",
+    ),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
 ) -> CustomApiKey:
     """
