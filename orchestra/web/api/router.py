@@ -71,6 +71,12 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
+    evaluations.admin_router,
+    tags=["Evaluations"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
     efficiency_benchmarks.router,
     tags=["Efficiency Benchmarks"],
     dependencies=API_KEY_AUTH,
