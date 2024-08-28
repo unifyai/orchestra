@@ -15,6 +15,7 @@ class VertexAI(BaseCompletionProvider):
         super().__init__(hub_model, custom_api_key=custom_api_key)
         self.supported_models = supported_models
 
+    @property
     def api_key(self) -> str:
         # TODO: check if this doesn't add TTFT, prob does
         creds, _ = default(
