@@ -17,12 +17,12 @@ from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.web.api.credits.views import get_credits
 from orchestra.web.api.llm_queries.schema import (
     ChatCompletionRequest,
     ChatCompletionResponse,
     RouterScoresResponse,
 )
-from orchestra.web.api.credits.views import get_credits
 from orchestra.web.api.utils.bg_tasks import db_operations
 from orchestra.web.api.utils.dynamic_routing import (
     RouterConfig,
@@ -77,6 +77,9 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     :raises HTTPException: when user has insufficient credits.
     """
+
+    if not request.tools:
+        request.parallel_tool_calls = None
 
     try:
         # TODO: Check that model exists
