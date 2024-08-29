@@ -1,3 +1,5 @@
+import os
+
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
@@ -22,6 +24,13 @@ class VertexAI(BaseCompletionProvider):
     #     auth_req = google.auth.transport.requests.Request()
     #     creds.refresh(auth_req)
     #     return creds.token
+
+    @property
+    def api_key(self) -> str:
+        key = os.getenv(self.api_key_var)
+        if key is None:
+            raise ValueError("ENV VAR {self.api_key_var} not found.")
+        return key
 
     @property
     def api_key_var(self) -> str:
