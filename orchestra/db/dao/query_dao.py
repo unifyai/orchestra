@@ -4,9 +4,13 @@ from typing import List, Optional
 from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+
+from sqlalchemy import select, and_, func
+from sqlalchemy.orm import aliased
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Query
+from orchestra.db.models.orchestra_models import Query, Tag, QueryTagAssociation
 
 
 class QueryDAO:
@@ -25,6 +29,7 @@ class QueryDAO:
         signature: Optional[str] = None,
         used_router: Optional[bool] = None,
         router: Optional[str] = None,
+        tags: Optional[list[str]] = None,
     ) -> None:
         """
         Add single query to session.
@@ -34,18 +39,41 @@ class QueryDAO:
         :param endpoint_id: endpoint_id of a query.
         :param credits: credits of a query.
         """
-        self.session.add(
-            Query(
-                user_id=user_id,
-                at=at,
-                endpoint_id=endpoint_id,
-                credits=credits,
-                prompt=prompt,
-                signature=signature,
-                used_router=used_router,
-                router=router,
-            ),
+
+        new_query = Query(
+            user_id=user_id,
+            at=at,
+            endpoint_id=endpoint_id,
+            credits=credits,
+            prompt=prompt,
+            signature=signature,
+            used_router=used_router,
+            router=router,
         )
+        self.session.add(new_query)
+
+        # handles tags
+        for tag_name in tags:
+            tag = (
+                self.session.query(Tag)
+                .filter_by(user_id=user_id, tag_name=tag_name)
+                .first()
+            )
+
+            if not tag:
+                tag = Tag(user_id=user_id, tag_name=tag_name)
+                self.session.add(tag)
+                self.session.flush()
+
+            query_tag_association = QueryTagAssociation(
+                user_id=user_id, query_id=new_query.id, tag_id=tag.id
+            )
+
+            try:
+                self.session.add(query_tag_association)
+                self.session.commit()
+            except IntegrityError:
+                self.session.rollback()
 
     def get_all_queries(self, limit: int, offset: int) -> List[Query]:
         """
@@ -70,6 +98,7 @@ class QueryDAO:
         signature: Optional[str] = None,
         used_router: Optional[str] = None,
         router: Optional[str] = None,
+        tags: Optional[list[str]] = None,
     ) -> List[Query]:
         """
         Get specific query model.
@@ -95,6 +124,17 @@ class QueryDAO:
             query = query.where(Query.used_router == used_router)
         if router:
             query = query.where(Query.router == router)
+        
+        if tags:
+            tag_alias = aliased(Tag)
+            query = query.join(QueryTagAssociation, Query.id == QueryTagAssociation.query_id)
+            query = query.join(tag_alias, QueryTagAssociation.tag_id == tag_alias.id)
+            tag_filters = [tag_alias.tag_name == tag for tag in tags]
+            query = query.where(and_(*tag_filters))
+
+            # # Ensure that the number of matching tags equals the length of the tag list
+            # query = query.group_by(Query.id)
+            # query = query.having(func.count(func.distinct(tag_alias.tag_name)) == len(tags))
 
         raw_queries = self.session.execute(query)
 

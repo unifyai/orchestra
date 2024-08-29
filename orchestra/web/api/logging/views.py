@@ -16,7 +16,7 @@ router = APIRouter()
 @router.get("/prompt_history")
 def get_prompt_history(
     request_fastapi: Request,
-    tags: Union[str, List[str]] = Query(
+    tags: Union[None, str, List[str]] = Query(
         default=None,
         description="Tags to filter for prompts that are marked with these tags.",
     ),
@@ -25,9 +25,9 @@ def get_prompt_history(
     """
     Get the prompt history, optionally for a given set of tags for a narrowed search.
     """
-    if tags:
-        raise HTTPException(status_code=501, detail="Not Implemented Yet")
-    ret = query_dao.filter(user_id=request_fastapi.state.user_id)
+    if tags and isinstance(tags, str):
+        tags = list(tags)
+    ret = query_dao.filter(user_id=request_fastapi.state.user_id, tags=tags)
     return ret
 
 

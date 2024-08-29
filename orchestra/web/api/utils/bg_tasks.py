@@ -66,6 +66,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     router: Optional[str] = None,
     processing_time: Optional[float] = 0,
     usage: Optional[Dict] = None,
+    tags: Optional[list[str]] = None,
 ):
     """
     Perform database operations.
@@ -104,6 +105,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         signature=signature,
         used_router=used_router,
         router=router,
+        tags=tags,
     )
     users_dao.recharge_credit(user_id, -cost)
     create_query_model(query_model_request, query_dao=query_dao)

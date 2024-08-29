@@ -1,6 +1,7 @@
 import sqlalchemy as sa
 
 from orchestra.db.base import Base
+from sqlalchemy.orm import relationship
 
 
 class Model(Base):
@@ -153,14 +154,20 @@ class Query(Base):
     __tablename__ = "query"
 
     id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
+    user_id = sa.Column(
+        sa.String(), sa.ForeignKey("users.id"), nullable=False, index=True
+    )
     at = sa.Column(sa.TIMESTAMP(), nullable=False)
-    endpoint_id = sa.Column(sa.Integer(), sa.ForeignKey("endpoint.id"), nullable=False)
+    endpoint_id = sa.Column(
+        sa.Integer(), sa.ForeignKey("endpoint.id"), nullable=False, index=True
+    )
     credits = sa.Column(sa.Numeric(), nullable=False)
     prompt = sa.Column(sa.String(), nullable=True)
     signature = sa.Column(sa.String(), nullable=True)
     used_router = sa.Column(sa.Boolean(), nullable=True)
     router = sa.Column(sa.String, nullable=True)
+    tags = relationship("QueryTagAssociation", back_populates="query")
+    __table_args__ = (sa.Index("ix_user_endpoint", "user_id", "endpoint_id"),)
 
 
 class Users(Base):
@@ -315,3 +322,33 @@ class CustomEndpointBenchmark(Base):
     metric_name = sa.Column(sa.String(), nullable=False)
     value = sa.Column(sa.Numeric(), nullable=False)
     measured_at = sa.Column(sa.TIMESTAMP(), nullable=False)
+
+
+class Tag(Base):
+    """Model class for query tags table"""
+
+    __tablename__ = "tags"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False, index=True)
+    tag_name = sa.Column(sa.String(), nullable=False)
+    queries = relationship("QueryTagAssociation", back_populates="tag")
+    sa.UniqueConstraint("user_id", "tag_name", name="uq_user_tag")
+
+
+class QueryTagAssociation(Base):
+    """Model class for map between tags and queries"""
+
+    __tablename__ = "query_tag_association"
+    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), primary_key=True, index=True)
+    query_id = sa.Column(sa.Integer(), sa.ForeignKey("query.id"), primary_key=True, index=True)
+    tag_id = sa.Column(sa.Integer(), sa.ForeignKey("tags.id"), primary_key=True, index=True)
+
+    tag = relationship("Tag", back_populates="queries")
+    query = relationship("Query", back_populates="tags")
+
+    sa.ForeignKeyConstraint(
+        ["user_id", "tag_id"],
+        ["tags.user_id", "tags.id"],
+        name="fk_user_tag_association",
+    )

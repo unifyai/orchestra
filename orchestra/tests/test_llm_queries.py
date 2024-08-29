@@ -133,3 +133,47 @@ async def test_n_1(model, client: AsyncClient):
     data["n"] = 1
     response = await client.post(endpoint, headers=HEADERS, json=data)
     assert response.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.anyio
+async def test_tags(client: AsyncClient):
+    endpoint = "/v0/chat/completions"
+    data = get_chat_completions_payload("llama-3-8b-chat", "aws-bedrock", stream=False)
+    data["tags"] = ["dummy_tag"]
+    response = await client.post(endpoint, headers=HEADERS, json=data)
+    assert response.status_code == status.HTTP_200_OK
+
+    endpoint = "/v0/prompt_history"
+    data = {"tags": ["dummy_tag"]}
+    response = await client.get(endpoint, headers=HEADERS, params=data)
+    assert response.status_code == 200, response.json()
+    assert len(response.json()) == 1, response.json()
+
+@pytest.mark.anyio
+async def test_tags_str_only(client: AsyncClient):
+    endpoint = "/v0/chat/completions"
+    data = get_chat_completions_payload("llama-3-8b-chat", "aws-bedrock", stream=False)
+    data["tags"] = "dummy_tag_str"
+    response = await client.post(endpoint, headers=HEADERS, json=data)
+    assert response.status_code == status.HTTP_200_OK
+
+    endpoint = "/v0/prompt_history"
+    data = {"tags": ["dummy_tag_str"]}
+    response = await client.get(endpoint, headers=HEADERS, params=data)
+    assert response.status_code == 200, response.json()
+    assert len(response.json()) == 1, response.json()
+
+
+@pytest.mark.anyio
+async def test_fake_tags(client: AsyncClient):
+    endpoint = "/v0/chat/completions"
+    data = get_chat_completions_payload("llama-3-8b-chat", "aws-bedrock", stream=False)
+    data["tags"] = ["dummy_tag1"]
+    response = await client.post(endpoint, headers=HEADERS, json=data)
+    assert response.status_code == status.HTTP_200_OK
+
+    endpoint = "/v0/prompt_history"
+    data = {"tags": ["dummy_tag_FAKE"]}
+    response = await client.get(endpoint, headers=HEADERS, params=data)
+    assert response.status_code == 200, response.json()
+    assert len(response.json()) == 0, response.json()

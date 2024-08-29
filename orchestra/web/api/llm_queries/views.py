@@ -216,6 +216,11 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     db_operations_kwargs = {}
 
+    # convert str to list
+    tags = request.tags
+    if tags and isinstance(request.tags, str):
+        tags = [tags]
+
     if not on_prem:
         db_operations_kwargs = {
             "user_id": user_id,
@@ -226,6 +231,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             "signature": request.signature,
             "used_router": using_router,
             "router": router_str,
+            "tags": tags,
             "model_dao": model_dao,
             "provider_dao": provider_dao,
             "endpoint_dao": endpoint_dao,

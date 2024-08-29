@@ -22,6 +22,7 @@ class QueryModelRequest(BaseModel):
     signature: Optional[str]
     used_router: Optional[bool]
     router: Optional[str]
+    tags: Optional[list[str]]
 
 
 class QueryModelResponse(BaseModel):
