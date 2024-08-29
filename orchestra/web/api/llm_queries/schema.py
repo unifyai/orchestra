@@ -36,7 +36,7 @@ class ChatCompletionRequest(BaseModel):
         "endpoints as per the list returned by `/v0/endpoints`",
         json_schema_extra={"example": "gpt-4o-mini@openai"},
     )
-    max_tokens: int = Field(
+    max_tokens: Optional[int] = Field(
         None,
         description="The maximum number of tokens that can be generated in the "
         "chat completion.\n\nThe total length of input tokens and generated tokens is "
@@ -66,14 +66,14 @@ class ChatCompletionRequest(BaseModel):
     )
 
     # partially unified arguments
-    frequency_penalty: float = Field(
+    frequency_penalty: Optional[float] = Field(
         None,
         description="Number between -2.0 and 2.0. Positive values penalize new "
         "tokens based on their existing frequency in the text so far, decreasing the "
         "model's likelihood to repeat the same line verbatim.",
         json_schema_extra={"example": 1.5},
     )
-    logit_bias: Dict[str, float] = Field(
+    logit_bias: Optional[Dict[str, float]] = Field(
         None,
         description="Modify the likelihood of specified tokens appearing in the "
         "completion.\n\nAccepts a JSON object that maps tokens (specified by their "
@@ -84,35 +84,35 @@ class ChatCompletionRequest(BaseModel):
         "100 should result in a ban or exclusive selection of the relevant token.",
         json_schema_extra={"example": {0: 10, 1: -75, 2: 90}},
     )
-    logprobs: bool = Field(
+    logprobs: Optional[bool] = Field(
         None,
         description="Whether to return log probabilities of the output tokens or "
         "not. If true, returns the log probabilities of each output token returned in "
         "the `content` of `message`.",
         json_schema_extra={"example": False},
     )
-    top_logprobs: int = Field(
+    top_logprobs: Optional[int] = Field(
         None,
         description="An integer between 0 and 20 specifying the number of most "
         "likely tokens to return at each token position, each with an associated log "
         "probability. `logprobs` must be set to `true` if this parameter is used.",
         json_schema_extra={"example": 15},
     )
-    n: int = Field(
+    n: Optional[int] = Field(
         None,
         description="How many chat completion choices to generate for each input "
         "message. Note that you will be charged based on the number of generated "
         "tokens across all of the choices. Keep `n` as `1` to minimize costs.",
         json_schema_extra={"example": 15},
     )
-    presence_penalty: float = Field(
+    presence_penalty: Optional[float] = Field(
         None,
         description="Number between -2.0 and 2.0. Positive values penalize new "
         "tokens based on whether they appear in the text so far, increasing the "
         "model's likelihood to talk about new topics.",
         json_schema_extra={"example": -1.1},
     )
-    response_format: Dict[str, str] = Field(
+    response_format: Optional[Dict[str, str]] = Field(
         None,
         description="An object specifying the format that the model must output."
         '\n\nSetting to `{ "type": "json_schema", "json_schema": {...} }` enables '
@@ -128,7 +128,7 @@ class ChatCompletionRequest(BaseModel):
         "exceeded the max context length.",
         json_schema_extra={"example": '{ "type": "json_mode"}'},
     )
-    seed: int = Field(
+    seed: Optional[int] = Field(
         None,
         description="If specified, the system will make a best effort to sample "
         "deterministically, such that repeated requests with the same `seed` and "
@@ -137,13 +137,13 @@ class ChatCompletionRequest(BaseModel):
         "changes in the backend.",
         json_schema_extra={"example": 11},
     )
-    stream_options: Dict[str, bool] = Field(
+    stream_options: Optional[Dict[str, bool]] = Field(
         None,
         description="Options for streaming response. Only set this when you set "
         "`stream: true`.",
         json_schema_extra={"example": {"include_usage", True}},
     )
-    top_p: float = Field(
+    top_p: Optional[float] = Field(
         None,
         description="An alternative to sampling with temperature, called nucleus "
         "sampling, where the model considers the results of the tokens with top_p "
@@ -178,32 +178,30 @@ class ChatCompletionRequest(BaseModel):
         description="Whether to enable parallel function calling during tool " "use.",
         json_schema_extra={"example": True},
     )
-    user: str = Field(
+    user: Optional[str] = Field(
         None,
         description="A unique identifier representing your end-user.",
         json_schema_extra={"example": "some_user"},
     )
 
     # platform arguments
-    signature: str = Field(
+    signature: Optional[str] = Field(
         None,
         description="A string used to represent where the request came from, for "
         "examples, did it come via the Python package, the NodeJS package, the chat "
         "interface etc. This should *not* be set by the user.",
         json_schema_extra={"example": "python"},
     )
-    use_custom_keys: bool = Field(
+    use_custom_keys: Optional[bool] = Field(
         None,
         description="Whether or not to use custom API keys with the specified "
         "provider, meaning that you will be using your own account with that provider "
         "in the backend.",
         json_schema_extra={"example": True},
     )
-    tags: List[str] = Field(
+    tags: Optional[List[str]] = Field(
         None,
-        description="Whether or not to use custom API keys with the specified "
-        "provider, meaning that you will be using your own account with that provider "
-        "in the backend.",
+        description="Comma-separated list of tags to associate with the corresponding prompt.",
         json_schema_extra={"example": True},
     )
 
