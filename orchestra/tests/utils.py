@@ -76,7 +76,7 @@ tools = [
 
 
 async def get_credits(client):
-    response = await client.get("/v0/get_credits", headers=HEADERS)
+    response = await client.get("/v0/credits", headers=HEADERS)
     return response.json()["credits"]
 
 

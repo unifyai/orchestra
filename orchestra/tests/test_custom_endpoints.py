@@ -1,10 +1,11 @@
+import asyncio
 import datetime
+import os
+
 import pytest
 from httpx import AsyncClient
-import asyncio
 
 from orchestra.tests.utils import HEADERS
-import os
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 
@@ -15,7 +16,7 @@ HEADERS = {
 
 
 def upload_benchmark(client, endpoint_name, metric_name, value):
-    url = "/v0/custom_endpoint/benchmark"
+    url = "/v0/benchmark"
     params = {
         "endpoint_name": endpoint_name,
         "metric_name": metric_name,
@@ -32,10 +33,10 @@ async def test_custom_benchmark(  # noqa: WPS218, E501
 
     url = "v0/custom_api_key"
     params = {
-        "key": "dummy_key",
+        "name": "dummy_key",
         "value": "1234",
     }
-    response = await client.put(url, params=params, headers=HEADERS)
+    response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
     # create custom endpoint
@@ -45,11 +46,11 @@ async def test_custom_benchmark(  # noqa: WPS218, E501
         "url": "https://",
         "key_name": "dummy_key",
     }
-    response = await client.put(url, params=params, headers=HEADERS)
+    response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
     endpoint_name = "test_custom_endpoint"
-    url = "/v0/custom_endpoint/benchmark"
+    url = "/v0/benchmark"
     params = {
         "endpoint_name": endpoint_name,
         "metric_name": "time-to-first-token",
@@ -62,17 +63,18 @@ async def test_custom_benchmark(  # noqa: WPS218, E501
     # now list them
     endpoint_name = "test_custom_endpoint"
 
-    url = "/v0/custom_endpoint/get_benchmark"
+    url = "/v0/benchmark"
     params = {
-        "endpoint_name": endpoint_name,
-        "metric_name": "time-to-first-token",
+        "model": endpoint_name,
+        "provider": "custom",
         "start_time": "2024-01-01",
         "end_time": str(datetime.datetime.now()),
     }
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     assert len(response.json()) > 0
-    assert "value" in response.json()[0]
+    assert "ttft" in response.json()[0]
+    assert response.json()[0]["ttft"] == 135
 
 
 async def test_custom_benchmark_get_latest(  # noqa: WPS218, E501
@@ -81,10 +83,10 @@ async def test_custom_benchmark_get_latest(  # noqa: WPS218, E501
 
     url = "v0/custom_api_key"
     params = {
-        "key": "dummy_key",
+        "name": "dummy_key",
         "value": "1234",
     }
-    response = await client.put(url, params=params, headers=HEADERS)
+    response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
     # create custom endpoint
@@ -95,7 +97,7 @@ async def test_custom_benchmark_get_latest(  # noqa: WPS218, E501
         "url": "https://",
         "key_name": "dummy_key",
     }
-    response = await client.put(url, params=params, headers=HEADERS)
+    response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
     # upload benchmarks
@@ -110,12 +112,12 @@ async def test_custom_benchmark_get_latest(  # noqa: WPS218, E501
     assert response.status_code == 200, response.json()
 
     # check we return latest
-    url = "/v0/benchmarks"
+    url = "/v0/benchmark"
     params = {
         "model": endpoint_name,
         "provider": "custom",
     }
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
-    assert response.json()["ttft"] == 133
-    assert response.json()["itl"] == 500
+    assert response.json()[0]["ttft"] == 133
+    assert response.json()[0]["itl"] == 500

@@ -1,5 +1,7 @@
+import argparse
 import json
 import os
+import shutil
 
 from docs.body import get_body, get_property_details
 from docs.form import get_form
@@ -185,7 +187,44 @@ def write_pages(paths, openapi_config):
 
 
 if __name__ == "__main__":
+
+    # parse args
+    parser = argparse.ArgumentParser(
+        prog="Orchestra Doc Builder",
+        description="Build the Orchestra REST API Documentation",
+    )
+    parser.add_argument("-w", "--write", action="store_true")
+    parser.add_argument("-dd", "--docs_dir", type=str, help="directory for docs")
+    args = parser.parse_args()
+
+    # docs mint filepath
+    local_mint_filepath = "mint.json"
+    if args.docs_dir is not None:
+        docs_dir = args.docs_dir
+    else:
+        docs_dir = "../unify-docs"
+    docs_mint_filepath = os.path.join(docs_dir, "mint.json")
+
+    # copy mint.json
+    if os.path.exists(docs_mint_filepath):
+        shutil.copyfile(docs_mint_filepath, local_mint_filepath)
+    else:
+        raise Exception(
+            "No mint.json found locally,"
+            "and {} also does not exist for retrieval".format(docs_mint_filepath),
+        )
+
+    # build docs
     openapi_config = write_openapi_file()
     paths = list(openapi_config["paths"].keys())
     pages = write_pages(paths, openapi_config)
     update_mint(pages)
+
+    # write to docs if specified
+    if args.write:
+        # write or overwrite mint.json in docs repo
+        shutil.copyfile(local_mint_filepath, docs_mint_filepath)
+        # write or overwrite the api-reference folder in docs repo
+        api_ref_docs_dir = os.path.join(docs_dir, "api-reference")
+        shutil.rmtree(api_ref_docs_dir)
+        shutil.copytree("api-reference", api_ref_docs_dir)

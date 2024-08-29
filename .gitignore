@@ -155,3 +155,7 @@ application_default_credentials.json
 # tmp test files
 save_files
 scores.json
+
+# docs
+mint.json
+api-reference/
