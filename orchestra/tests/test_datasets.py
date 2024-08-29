@@ -5,7 +5,7 @@ import pytest
 from httpx import AsyncClient
 
 from orchestra.tests.utils import HEADERS
-from orchestra.web.api.dataset.views import bucket_name
+from orchestra.web.api.datasets.views import bucket_name
 from orchestra.web.api.utils.gcp import (
     blob_exists,
     delete_dir,
@@ -33,7 +33,7 @@ def cleanup():
 
 def assert_correct_upload(response, name):
     assert response.status_code == 200
-    assert response.json()["info"] == "Dataset uploaded succesfully!"
+    assert response.json()["info"] == "Dataset uploaded successfully!"
     lut = internal_id_to_displayname(user_id)
     lut = {name: id_ for id_, name in lut.items()}
     blob_name = f"{user_id}/{lut.get(name, name)}/0/dataset.jsonl"
@@ -42,7 +42,7 @@ def assert_correct_upload(response, name):
 
 def assert_delete(response, name):
     assert response.status_code == 200
-    assert response.json()["info"] == "Dataset deleted succesfully!"
+    assert response.json()["info"] == "Dataset deleted successfully!"
     lut = internal_id_to_displayname(user_id)
     lut = {name: id_ for id_, name in lut.items()}
     dir_name = f"{user_id}/{lut.get(name, name)}/"
