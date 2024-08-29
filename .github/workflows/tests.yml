@@ -79,7 +79,7 @@ jobs:
       run: |
         cp ${{ env.GOOGLE_APPLICATION_CREDENTIALS }} credentials.json
         export GOOGLE_APPLICATION_CREDENTIALS=credentials.json
-        poetry run pytest -vv -n 4 orchestra/tests/test_text_generation.py::test_text_generation
+        poetry run pytest -s -vv orchestra/tests/test_text_generation.py::test_text_generation
       env:
         ORCHESTRA_HOST: "0.0.0.0"
         ORCHESTRA_DB_HOST: localhost

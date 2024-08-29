@@ -193,6 +193,7 @@ class BaseCompletionProvider:
                 ]:
                     kwargs["extra_body"] = extra_body
                 os.environ[self.litellm_api_key_var] = self.api_key
+                print(f"{self.litellm_api_key_var}={self.api_key}")
                 response = completion(
                     model=self.provider_endpoint,
                     messages=messages,
