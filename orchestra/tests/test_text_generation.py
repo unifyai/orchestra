@@ -17,20 +17,20 @@ from orchestra.tests.utils import (
 )
 
 MODELS = [
-    # "gpt-3.5-turbo@openai",
-    # "claude-3-haiku@anthropic",
-    # "llama-3-8b-chat@deepinfra",
-    # "llama-3-8b-chat@fireworks-ai",
-    # "llama-3-8b-chat@lepton-ai",
-    # "llama-3-8b-chat@replicate",
-    # "llama-3-8b-chat@together-ai",
-    # "llama-3-8b-chat@aws-bedrock",
-    # "mistral-7b-instruct-v0.3@mistral-ai",
-    # "mistral-7b-instruct-v0.3@octoai",
+    "gpt-3.5-turbo@openai",
+    "claude-3-haiku@anthropic",
+    "llama-3-8b-chat@deepinfra",
+    "llama-3-8b-chat@fireworks-ai",
+    "llama-3-8b-chat@lepton-ai",
+    "llama-3-8b-chat@replicate",
+    "llama-3-8b-chat@together-ai",
+    "llama-3-8b-chat@aws-bedrock",
+    "mistral-7b-instruct-v0.3@mistral-ai",
+    "mistral-7b-instruct-v0.3@octoai",
     "gemini-1.5-flash@vertex-ai",
-    # "llama-3.1-8b-chat@perplexity-ai",
-    # "llama-3-8b-chat@groq",
-    # "llama-3.1-8b-chat@azure-ai",
+    "llama-3.1-8b-chat@perplexity-ai",
+    "llama-3-8b-chat@groq",
+    "llama-3.1-8b-chat@azure-ai",
 ]
 
 payload_fn = {
@@ -41,8 +41,8 @@ payload_fn = {
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("model", MODELS)
-@pytest.mark.parametrize("endpoint", ["/v0/chat/completions"])  # , "/v0/inference"])
-@pytest.mark.parametrize("stream_str", ["stream"])  # , "standard"])
+@pytest.mark.parametrize("endpoint", ["/v0/chat/completions", "/v0/inference"])
+@pytest.mark.parametrize("stream_str", ["stream", "standard"])
 async def test_text_generation(  # noqa: WPS218, E501
     model: str,
     endpoint: str,
