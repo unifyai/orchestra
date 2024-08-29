@@ -149,6 +149,7 @@ async def test_tags(client: AsyncClient):
     assert response.status_code == 200, response.json()
     assert len(response.json()) == 1, response.json()
 
+
 @pytest.mark.anyio
 async def test_tags_str_only(client: AsyncClient):
     endpoint = "/v0/chat/completions"

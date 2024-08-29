@@ -124,14 +124,15 @@ class QueryDAO:
             query = query.where(Query.used_router == used_router)
         if router:
             query = query.where(Query.router == router)
-        
+
         if tags:
             tag_alias = aliased(Tag)
-            query = query.join(QueryTagAssociation, Query.id == QueryTagAssociation.query_id)
+            query = query.join(
+                QueryTagAssociation, Query.id == QueryTagAssociation.query_id
+            )
             query = query.join(tag_alias, QueryTagAssociation.tag_id == tag_alias.id)
             tag_filters = [tag_alias.tag_name == tag for tag in tags]
             query = query.where(and_(*tag_filters))
-
 
         raw_queries = self.session.execute(query)
 

@@ -330,7 +330,9 @@ class Tag(Base):
     __tablename__ = "tags"
 
     id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False, index=True)
+    user_id = sa.Column(
+        sa.String(), sa.ForeignKey("users.id"), nullable=False, index=True
+    )
     tag_name = sa.Column(sa.String(), nullable=False)
     queries = relationship("QueryTagAssociation", back_populates="tag")
     sa.UniqueConstraint("user_id", "tag_name", name="uq_user_tag")
@@ -340,9 +342,15 @@ class QueryTagAssociation(Base):
     """Model class for map between tags and queries"""
 
     __tablename__ = "query_tag_association"
-    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), primary_key=True, index=True)
-    query_id = sa.Column(sa.Integer(), sa.ForeignKey("query.id"), primary_key=True, index=True)
-    tag_id = sa.Column(sa.Integer(), sa.ForeignKey("tags.id"), primary_key=True, index=True)
+    user_id = sa.Column(
+        sa.String(), sa.ForeignKey("users.id"), primary_key=True, index=True
+    )
+    query_id = sa.Column(
+        sa.Integer(), sa.ForeignKey("query.id"), primary_key=True, index=True
+    )
+    tag_id = sa.Column(
+        sa.Integer(), sa.ForeignKey("tags.id"), primary_key=True, index=True
+    )
 
     tag = relationship("Tag", back_populates="queries")
     query = relationship("Query", back_populates="tags")

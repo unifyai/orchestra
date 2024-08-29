@@ -1,6 +1,7 @@
 """
 Includes endpoints related to logging.
 """
+
 import os
 from typing import Any, Dict, List, Union
 
@@ -24,12 +25,12 @@ def get_prompt_history(
     models: Union[None, str, list[str]] = Query(
         default=None,
         description="Optionally specify a model or list of models to filter for",
-        example="gpt-4o"
+        example="gpt-4o",
     ),
     providers: Union[None, str, list[str]] = Query(
         default=None,
         description="Optionally specify a provider or list of providers to filter for",
-        example="openai"
+        example="openai",
     ),
     start_time: Optional[str] = Query(
         None,
@@ -42,7 +43,7 @@ def get_prompt_history(
         description="Timestamp of the latest query to aggregate. "
         "Format is `YYYY-MM-DD hh:mm:ss`.",
         example="2024-08-12 04:20:32",
-    ), 
+    ),
     query_dao: QueryDAO = Depends(),
 ):
     """
@@ -59,7 +60,14 @@ def get_prompt_history(
     # @custom
     # things that don't even go through orchestra
     # @external
-    ret = query_dao.filter(user_id=request_fastapi.state.user_id, tags=tags, models=models, providers=providers, start_time=start_time, end_time=end_time)
+    ret = query_dao.filter(
+        user_id=request_fastapi.state.user_id,
+        tags=tags,
+        models=models,
+        providers=providers,
+        start_time=start_time,
+        end_time=end_time,
+    )
     return ret
 
 
