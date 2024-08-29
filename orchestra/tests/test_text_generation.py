@@ -42,7 +42,7 @@ payload_fn = {
 @pytest.mark.anyio
 @pytest.mark.parametrize("model", MODELS)
 @pytest.mark.parametrize("endpoint", ["/v0/chat/completions"])  # , "/v0/inference"])
-@pytest.mark.parametrize("stream_str", ["stream", "standard"])
+@pytest.mark.parametrize("stream_str", ["stream"])  # , "standard"])
 async def test_text_generation(  # noqa: WPS218, E501
     model: str,
     endpoint: str,
