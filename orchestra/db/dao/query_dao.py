@@ -132,9 +132,6 @@ class QueryDAO:
             tag_filters = [tag_alias.tag_name == tag for tag in tags]
             query = query.where(and_(*tag_filters))
 
-            # # Ensure that the number of matching tags equals the length of the tag list
-            # query = query.group_by(Query.id)
-            # query = query.having(func.count(func.distinct(tag_alias.tag_name)) == len(tags))
 
         raw_queries = self.session.execute(query)
 
