@@ -178,4 +178,7 @@ def list_custom_api_keys(
     Returns a list of the names for all custom API keys in your account.
     """
     user_id = request_fastapi.state.user_id
-    return custom_api_key_dao.get_user_keys(user_id=user_id)
+    raw_response = custom_api_key_dao.get_user_keys(user_id=user_id)
+    return [
+        CustomApiKeyModelResponse(name=rr.key, value=rr.value) for rr in raw_response
+    ]
