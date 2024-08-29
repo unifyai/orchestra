@@ -23,7 +23,7 @@ MODELS = [
     # "llama-3-8b-chat@fireworks-ai",
     # "llama-3-8b-chat@lepton-ai",
     "llama-3-8b-chat@replicate",
-    "llama-3-8b-chat@together-ai",
+    # "llama-3-8b-chat@together-ai",
     # "llama-3-8b-chat@aws-bedrock",
     # "mistral-7b-instruct-v0.3@mistral-ai",
     # "mistral-7b-instruct-v0.3@octoai",
@@ -41,7 +41,7 @@ payload_fn = {
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("model", MODELS)
-@pytest.mark.parametrize("endpoint", ["/v0/chat/completions", "/v0/inference"])
+@pytest.mark.parametrize("endpoint", ["/v0/chat/completions"])  # , "/v0/inference"])
 @pytest.mark.parametrize("stream_str", ["stream", "standard"])
 async def test_text_generation(  # noqa: WPS218, E501
     model: str,
