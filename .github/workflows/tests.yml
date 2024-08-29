@@ -64,6 +64,7 @@ jobs:
       # This service account also needs pub/sub
       with:
         credentials_json: '${{ secrets.ORCHESTRA_VERTEXAI_CREDENTIALS }}'
+
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
