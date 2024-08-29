@@ -186,11 +186,8 @@ class BaseCompletionProvider:
                 )
             else:
                 # extra_body can't be passed to anthropic or vertex_ai
-                if self.provider_endpoint.split("/")[0] not in [
-                    "anthropic",
-                    "bedrock",
-                    "vertex_ai",
-                ]:
+                provider_prefix = self.provider_endpoint.split("/")[0]
+                if provider_prefix not in ["anthropic", "bedrock", "vertex_ai"]:
                     kwargs["extra_body"] = extra_body
                 os.environ[self.litellm_api_key_var] = self.api_key
                 print(f"{self.litellm_api_key_var}={self.api_key}")
@@ -200,7 +197,8 @@ class BaseCompletionProvider:
                     stream=stream,
                     **kwargs,
                 )
-                os.environ.pop(self.litellm_api_key_var)
+                if provider_prefix != "vertex_ai":
+                    os.environ.pop(self.litellm_api_key_var)
 
             if isinstance(response, Stream) or stream:
                 return (SyncGeneratorWrapper(self, response, messages), None)
