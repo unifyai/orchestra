@@ -76,11 +76,7 @@ jobs:
         POETRY_VIRTUALENVS_CREATE: false
 
     - name: Run pytest check
-      run: |
-        cp ${{ env.GOOGLE_APPLICATION_CREDENTIALS }} credentials.json
-        export GOOGLE_APPLICATION_CREDENTIALS=credentials.json
-        ls
-        poetry run pytest -s -vv orchestra/tests/test_text_generation.py::test_text_generation
+      run: poetry run pytest -s -vv orchestra/tests/test_text_generation.py::test_text_generation
       env:
         ORCHESTRA_HOST: "0.0.0.0"
         ORCHESTRA_DB_HOST: localhost
@@ -107,4 +103,4 @@ jobs:
         AZURE_AI_LLAMA_3_1_8B_CHAT_API_KEY: ${{ secrets.AZURE_AI_LLAMA_3_1_8B_CHAT_API_KEY }}
         AZURE_AI_LLAMA_3_1_70B_CHAT_API_KEY: ${{ secrets.AZURE_AI_LLAMA_3_1_70B_CHAT_API_KEY }}
         AZURE_AI_LLAMA_3_1_405B_CHAT_API_KEY: ${{ secrets.AZURE_AI_LLAMA_3_1_405B_CHAT_API_KEY }}
-        GOOGLE_APPLICATION_CREDENTIALS: ${{ env.GOOGLE_APPLICATION_CREDENTIALS }}
+        ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON: ${{ env.GOOGLE_APPLICATION_CREDENTIALS }}
