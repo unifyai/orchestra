@@ -43,7 +43,7 @@ class ChatCompletionRequest(BaseModel):
         "limited by the model's context length.",
         json_schema_extra={"example": 1024},
     )
-    stop: Union[str, List[str]] = Field(
+    stop: Optional[Union[str, List[str]]] = Field(
         None,
         description="Up to 4 sequences where the API will stop generating "
         "further tokens.",
