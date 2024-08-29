@@ -16,10 +16,33 @@ router = APIRouter()
 @router.get("/prompt_history")
 def get_prompt_history(
     request_fastapi: Request,
-    tags: Union[None, str, List[str]] = Query(
+    tags: Union[None, str, list[str]] = Query(
         default=None,
         description="Tags to filter for prompts that are marked with these tags.",
+        example="my_tag",
     ),
+    models: Union[None, str, list[str]] = Query(
+        default=None,
+        description="Optionally specify a model or list of models to filter for",
+        example="gpt-4o"
+    ),
+    providers: Union[None, str, list[str]] = Query(
+        default=None,
+        description="Optionally specify a provider or list of providers to filter for",
+        example="openai"
+    ),
+    start_time: Optional[str] = Query(
+        None,
+        description="Timestamp of the earliest query to aggregate. "
+        "Format is `YYYY-MM-DD hh:mm:ss`.",
+        example="2024-07-12 04:20:32",
+    ),
+    end_time: Optional[str] = Query(
+        None,
+        description="Timestamp of the latest query to aggregate. "
+        "Format is `YYYY-MM-DD hh:mm:ss`.",
+        example="2024-08-12 04:20:32",
+    ), 
     query_dao: QueryDAO = Depends(),
 ):
     """
@@ -27,7 +50,16 @@ def get_prompt_history(
     """
     if tags and isinstance(tags, str):
         tags = list(tags)
-    ret = query_dao.filter(user_id=request_fastapi.state.user_id, tags=tags)
+    if models or providers or start_time or end_time:
+        raise HTTPException(status_code=501, detail="Not implemented yet")
+    # need logic for
+    # standard models
+    # model@provider
+    # custom endpoints
+    # @custom
+    # things that don't even go through orchestra
+    # @external
+    ret = query_dao.filter(user_id=request_fastapi.state.user_id, tags=tags, models=models, providers=providers, start_time=start_time, end_time=end_time)
     return ret
 
 
