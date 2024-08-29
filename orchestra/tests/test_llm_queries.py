@@ -149,6 +149,14 @@ async def test_tags(client: AsyncClient):
     assert response.status_code == 200, response.json()
     assert len(response.json()) == 1, response.json()
 
+    endpoint = "/v0/prompt_tags"
+    response = await client.get(endpoint, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    tags = response.json()
+    assert isinstance(tags, list)
+    assert len(tags) == 1
+    assert "dummy_tag" in tags
+
 
 @pytest.mark.anyio
 async def test_tags_str_only(client: AsyncClient):

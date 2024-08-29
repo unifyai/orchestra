@@ -53,27 +53,28 @@ class QueryDAO:
         self.session.add(new_query)
 
         # handles tags
-        for tag_name in tags:
-            tag = (
-                self.session.query(Tag)
-                .filter_by(user_id=user_id, tag_name=tag_name)
-                .first()
-            )
+        if tags:
+            for tag_name in tags:
+                tag = (
+                    self.session.query(Tag)
+                    .filter_by(user_id=user_id, tag_name=tag_name)
+                    .first()
+                )
 
-            if not tag:
-                tag = Tag(user_id=user_id, tag_name=tag_name)
-                self.session.add(tag)
-                self.session.flush()
+                if not tag:
+                    tag = Tag(user_id=user_id, tag_name=tag_name)
+                    self.session.add(tag)
+                    self.session.flush()
 
-            query_tag_association = QueryTagAssociation(
-                user_id=user_id, query_id=new_query.id, tag_id=tag.id
-            )
+                query_tag_association = QueryTagAssociation(
+                    user_id=user_id, query_id=new_query.id, tag_id=tag.id
+                )
 
-            try:
-                self.session.add(query_tag_association)
-                self.session.commit()
-            except IntegrityError:
-                self.session.rollback()
+                try:
+                    self.session.add(query_tag_association)
+                    self.session.commit()
+                except IntegrityError:
+                    self.session.rollback()
 
     def get_all_queries(self, limit: int, offset: int) -> List[Query]:
         """

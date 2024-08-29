@@ -3,16 +3,24 @@ Includes endpoints related to logging.
 """
 
 import os
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.query_dao import QueryDAO
+from orchestra.db.dao.tag_dao import TagDAO
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 
+@router.get("/prompt_tags")
+def get_prompt_tags(
+    request_fastapi: Request,
+    tag_dao: TagDAO = Depends(),
+):
+    """Gets all tags in your account"""
+    return tag_dao.get_all_tags(request_fastapi.state.user_id)
 
 @router.get("/prompt_history")
 def get_prompt_history(
@@ -63,10 +71,10 @@ def get_prompt_history(
     ret = query_dao.filter(
         user_id=request_fastapi.state.user_id,
         tags=tags,
-        models=models,
-        providers=providers,
-        start_time=start_time,
-        end_time=end_time,
+        # models=models,
+        # providers=providers,
+        # start_time=start_time,
+        # end_time=end_time,
     )
     return ret
 
