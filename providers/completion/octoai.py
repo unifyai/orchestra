@@ -18,6 +18,10 @@ class OctoAI(BaseCompletionProvider):
         return "ORCHESTRA_OCTOAI_API_KEY"
 
     @property
+    def litellm_api_key_var(self) -> str:
+        return ""
+
+    @property
     def base_url(self):
         return "https://text.octoai.run/v1/"
 
