@@ -182,7 +182,11 @@ def build_id_to_displayname(user_id):
         assert ".config" in id_
         id_ = id_.replace(".config", "")
         # get display_name
-        display_name = json.loads(blob.download_as_bytes().decode("utf-8"))["name"]
+        blob_dict = json.loads(blob.download_as_bytes().decode("utf-8"))
+        if "name" in blob_dict:
+            display_name = blob_dict["name"]
+        else:
+            display_name = blob_dict["eval_name"]
         id_to_displayname[id_] = display_name
     return id_to_displayname
 
