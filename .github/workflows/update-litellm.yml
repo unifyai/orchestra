@@ -5,6 +5,8 @@ on:
     # runs everyday at 23:00 UTC
   - cron: '0 23 * * *'
   workflow_dispatch:
+permissions:
+  contents: write
 
 jobs:
   update_litellm:
