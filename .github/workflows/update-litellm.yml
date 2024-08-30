@@ -23,7 +23,7 @@ jobs:
     - name: Install deps
       uses: knowsuchagency/poetry-install@v1
       env:
-        POETRY_VIRTUALENVS_CREATE: true
+        POETRY_VIRTUALENVS_CREATE: false
 
     - name: Update LiteLLM
       run: |
@@ -32,4 +32,4 @@ jobs:
         git config --global user.email "vedpat3@gmail.com"
         git add .
         git commit -m "litellm update"
-        git push origin main
+        git push origin litellm_cron_test
