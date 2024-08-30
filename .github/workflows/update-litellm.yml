@@ -39,4 +39,4 @@ jobs:
         git config --global user.email "vedpat3@gmail.com"
         git add .
         git commit -m "litellm update"
-        git push origin litellm_cron_test
+        git push origin main
