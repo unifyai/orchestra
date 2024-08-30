@@ -1,8 +1,12 @@
+from typing import List
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
+from orchestra.db.models.orchestra_models import CustomEndpoint
+from orchestra.web.api.custom_endpoints.schema import CustomEndpointModelResponse
 from orchestra.web.api.utils.http_responses import custom_endpoint_not_found
 
 router = APIRouter()
@@ -181,3 +185,43 @@ def rename_custom_endpoint(
         new_name=new_name,
     )
     return {"info": "Custom endpoint renamed successfully!"}
+
+
+@router.get(
+    "/custom_endpoint/list",
+    response_model=List[CustomEndpointModelResponse],
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        [
+                            {
+                                "name": "endpoint_1",
+                                "mdl_name": "llama_finetune",
+                                "url": "https://...",
+                                "key": "custom_key_1",
+                            },
+                            {
+                                "name": "endpoint_2",
+                                "mdl_name": "mixtral_finetune",
+                                "url": "https://...",
+                                "key": "custom_key_2",
+                            },
+                        ],
+                    },
+                },
+            },
+        },
+    },
+)
+def get_custom_endpoint_list(
+    request_fastapi: Request,
+    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+) -> List[CustomEndpoint]:
+    """
+    Returns a list of the available custom endpoints.
+    """
+    user_id = request_fastapi.state.user_id
+    return custom_endpoint_dao.get_user_endpoints(user_id=user_id)
