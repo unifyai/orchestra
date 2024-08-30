@@ -29,6 +29,5 @@ jobs:
       run: |
         pwd
         ls
-        poetry shell
         poetry add litellm@latest
         git status
