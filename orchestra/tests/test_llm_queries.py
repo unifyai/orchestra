@@ -143,13 +143,13 @@ async def test_tags(client: AsyncClient):
     response = await client.post(endpoint, headers=HEADERS, json=data)
     assert response.status_code == status.HTTP_200_OK
 
-    endpoint = "/v0/prompt_history"
+    endpoint = "/v0/queries"
     data = {"tags": ["dummy_tag"]}
     response = await client.get(endpoint, headers=HEADERS, params=data)
     assert response.status_code == 200, response.json()
     assert len(response.json()) == 1, response.json()
 
-    endpoint = "/v0/prompt_tags"
+    endpoint = "/v0/tags"
     response = await client.get(endpoint, headers=HEADERS)
     assert response.status_code == 200, response.json()
     tags = response.json()
@@ -166,7 +166,7 @@ async def test_tags_str_only(client: AsyncClient):
     response = await client.post(endpoint, headers=HEADERS, json=data)
     assert response.status_code == status.HTTP_200_OK
 
-    endpoint = "/v0/prompt_history"
+    endpoint = "/v0/queries"
     data = {"tags": ["dummy_tag_str"]}
     response = await client.get(endpoint, headers=HEADERS, params=data)
     assert response.status_code == 200, response.json()
@@ -181,7 +181,7 @@ async def test_fake_tags(client: AsyncClient):
     response = await client.post(endpoint, headers=HEADERS, json=data)
     assert response.status_code == status.HTTP_200_OK
 
-    endpoint = "/v0/prompt_history"
+    endpoint = "/v0/queries"
     data = {"tags": ["dummy_tag_FAKE"]}
     response = await client.get(endpoint, headers=HEADERS, params=data)
     assert response.status_code == 200, response.json()

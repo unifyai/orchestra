@@ -10,24 +10,27 @@ from fastapi.param_functions import Depends
 
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.tag_dao import TagDAO
+from orchestra.db.dao.endpoint_dao import EndpointDAO
+from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
+from orchestra.db.dao.local_endpoint_dao import LocalEndpointDAO
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 
-@router.get("/prompt_tags")
-def get_prompt_tags(
+@router.get("/tags")
+def get_query_tags(
     request_fastapi: Request,
     tag_dao: TagDAO = Depends(),
-):
-    """Gets all tags in your account"""
+) -> list[str]:
+    """Returns a list of the tags in your account"""
     return tag_dao.get_all_tags(request_fastapi.state.user_id)
 
-@router.get("/prompt_history")
-def get_prompt_history(
+@router.get("/queries")
+def get_query_history(
     request_fastapi: Request,
     tags: Union[None, str, list[str]] = Query(
         default=None,
-        description="Tags to filter for prompts that are marked with these tags.",
+        description="Tags to filter for queries that are marked with these tags.",
         example="my_tag",
     ),
     models: Union[None, str, list[str]] = Query(
@@ -53,17 +56,22 @@ def get_prompt_history(
         example="2024-08-12 04:20:32",
     ),
     query_dao: QueryDAO = Depends(),
+    endpoint_dao: EndpointDAO = Depends(),
+    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+    local_endpoint_dao: LocalEndpointDAO = Depends(),
 ):
     """
-    Get the prompt history, optionally for a given set of tags for a narrowed search.
+    Get the queries history, optionally for a given set of tags for a narrowed search.
     """
     if tags and isinstance(tags, str):
         tags = list(tags)
     if models or providers or start_time or end_time:
         raise HTTPException(status_code=501, detail="Not implemented yet")
+    ## filter 
     # need logic for
     # standard models
     # model@provider
+    
     # custom endpoints
     # @custom
     # things that don't even go through orchestra
