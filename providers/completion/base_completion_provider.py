@@ -302,7 +302,6 @@ class BaseCompletionProvider:
                     stream=stream,
                     **kwargs,
                 )
-                os.environ.pop(self.litellm_api_key_var)
             if isinstance(response, AsyncStream) or stream:
                 return (
                     AsyncGeneratorWrapper(self, response, messages, using_litellm),
