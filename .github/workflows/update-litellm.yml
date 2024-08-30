@@ -27,7 +27,7 @@ jobs:
 
     - name: Update LiteLLM
       run: |
-        pwd
-        ls
         poetry add litellm@latest
-        git status
+        git add .
+        git commit -m "litellm update"
+        git push origin litellm_cron_test
