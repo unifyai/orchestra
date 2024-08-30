@@ -14,7 +14,7 @@ def update_mint(pages):
         results.append({"group": group, "pages": pages[group]})
     mint["navigation"] = mint["navigation"][:start_idx] + [
         {
-            "group": "API Reference",
+            "group": "",
             "pages": results,
         },
     ]
