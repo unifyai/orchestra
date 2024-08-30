@@ -1,5 +1,3 @@
-from typing import Dict
-
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
@@ -20,25 +18,18 @@ class Perplexity(BaseCompletionProvider):
         return "ORCHESTRA_PERPLEXITY_AI_API_KEY"
 
     @property
-    def base_url(self):
-        return "https://api.perplexity.ai/"
-
-    def _modify_output(self, out: Dict, **kwargs) -> Dict:
-        stream = kwargs.get("stream", False)
-        output = super()._modify_output(out, **kwargs)
-        if stream:
-            output["object"] = "chat.completion.chunk"
-        return output
+    def litellm_api_key_var(self) -> str:
+        return "PERPLEXITY_API_KEY"
 
 
 supported_models = {
     "llama-3.1-8b-chat": {
-        "endpoint": "llama-3.1-8b-instruct",
+        "endpoint": "perplexity/llama-3.1-8b-instruct",
         "context_window": 8192,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
     "llama-3.1-70b-chat": {
-        "endpoint": "llama-3.1-70b-instruct",
+        "endpoint": "perplexity/llama-3.1-70b-instruct",
         "context_window": 8192,
         "cost": {"prompt": 1, "completion": 1},
     },

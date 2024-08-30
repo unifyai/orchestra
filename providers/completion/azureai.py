@@ -1,7 +1,6 @@
 import os
 from typing import Any, List
 
-from openai import AzureOpenAI
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
@@ -18,6 +17,13 @@ class AzureAI(BaseCompletionProvider):
         self.supported_models = supported_models
         self.project = os.environ.get("AZURE_PROJECT")
         self.region = os.environ.get("AZURE_REGION")
+        self.model_api_key = (
+            os.environ.get(
+                f'AZURE_AI_{hub_model.replace(".", "_").replace("-", "_").upper()}_API_KEY',
+            )
+            if "gpt" not in hub_model
+            else None
+        )
 
     @property
     def api_key_var(self) -> str:
@@ -28,13 +34,30 @@ class AzureAI(BaseCompletionProvider):
         )
 
     @property
-    def base_url(self):
-        return f"https://{self.provider_endpoint}.{self.region}.models.ai.azure.com"
+    def litellm_api_key_var(self) -> str:
+        return (
+            "AZURE_API_KEY" if "gpt" in self.provider_endpoint else "AZURE_AI_API_KEY"
+        )
 
-    def get_endpoint_details(self):
+    def get_azure_ai_url(self):
+        return (
+            f'https://{self.provider_endpoint.lstrip("azure_ai/")}'
+            f".{self.region}.models.ai.azure.com/"
+        )
+
+    def get_azure_openai_details(self):
         version = self.supported_models[self.hub_model].get("version")
         endpoint = f"https://{self.project}.openai.azure.com"
-        return self.provider_endpoint, version, endpoint
+        return version, endpoint
+
+    def set_env_variables(self):
+        if "gpt" in self.provider_endpoint:
+            version, endpoint = self.get_azure_openai_details()
+            os.environ["AZURE_API_BASE"] = endpoint
+            os.environ["AZURE_API_VERSION"] = version
+        else:
+            os.environ["AZURE_AI_API_BASE"] = self.get_azure_ai_url()
+            os.environ["AZURE_AI_API_KEY"] = self.model_api_key
 
     def __call__(
         self,
@@ -42,15 +65,7 @@ class AzureAI(BaseCompletionProvider):
         stream: bool = False,
         **kwargs: Any,
     ):
-        if "gpt" in self.provider_endpoint:
-            deployment, version, endpoint = self.get_endpoint_details()
-            client = AzureOpenAI(
-                api_key=self.api_key,
-                azure_deployment=deployment,
-                azure_endpoint=endpoint,
-                api_version=version,
-            )
-            kwargs["client"] = client
+        self.set_env_variables()
         return super().__call__(messages, stream=stream, **kwargs)
 
     def __call_async__(
@@ -59,44 +74,35 @@ class AzureAI(BaseCompletionProvider):
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        if "gpt" in self.provider_endpoint:
-            deployment, version, endpoint = self.get_endpoint_details()
-            client = AzureOpenAI(
-                api_key=self.api_key,
-                azure_deployment=deployment,
-                azure_endpoint=endpoint,
-                api_version=version,
-            )
-        else:
-            client = None
-        return super().__call_async__(messages, stream, **kwargs, client=client)
+        self.set_env_variables()
+        return super().__call_async__(messages, stream, **kwargs)
 
 
 supported_models = {
     "gpt-4o": {
-        "endpoint": "gpt-4o_deployment_1723186259915",
+        "endpoint": "azure/gpt-4o_deployment_1723186259915",
         "version": "2023-03-15-preview",
         "context_window": 128000,
         "cost": {"prompt": 5, "completion": 15},
     },
     "gpt-4o-mini": {
-        "endpoint": "gpt-4o-mini_deployment_1723185451601",
+        "endpoint": "azure/gpt-4o-mini_deployment_1723185451601",
         "version": "2023-03-15-preview",
         "context_window": 128000,
         "cost": {"prompt": 0.15, "completion": 0.6},
     },
     "llama-3.1-405b-chat": {
-        "endpoint": "Meta-Llama-3-1-405B-Instruct-aog",
+        "endpoint": "azure_ai/Meta-Llama-3-1-405B-Instruct-aog",
         "context_window": 128000,
         "cost": {"prompt": 5.33, "completion": 1.6},
     },
     "llama-3.1-70b-chat": {
-        "endpoint": "Meta-Llama-3-1-70B-Instruct-srdw",
+        "endpoint": "azure_ai/Meta-Llama-3-1-70B-Instruct-srdw",
         "context_window": 128000,
         "cost": {"prompt": 2.68, "completion": 3.54},
     },
     "llama-3.1-8b-chat": {
-        "endpoint": "Meta-Llama-3-1-8B-Instruct-vjwtr",
+        "endpoint": "azure_ai/Meta-Llama-3-1-8B-Instruct-vjwtr",
         "context_window": 128000,
         "cost": {"prompt": 0.61, "completion": 0.61},
     },
