@@ -26,8 +26,15 @@ jobs:
         POETRY_VIRTUALENVS_CREATE: false
 
     - name: Update LiteLLM
+      id: update_litellm
       run: |
         poetry add litellm@latest
+        git add .
+        git diff --cached --quiet || echo "output_value=changes" >> $GITHUB_OUTPUT
+
+    - name: Push the changes if required
+      if: steps.update_litellm.outputs.output_value == 'changes'
+      run: |
         git config --global user.name "vedpatwardhan"
         git config --global user.email "vedpat3@gmail.com"
         git add .
