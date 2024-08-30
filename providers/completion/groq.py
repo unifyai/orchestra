@@ -18,33 +18,33 @@ class Groq(BaseCompletionProvider):
         return "ORCHESTRA_GROQ_API_KEY"
 
     @property
-    def base_url(self):
-        return "https://api.groq.com/openai/v1"
+    def litellm_api_key_var(self) -> str:
+        return "GROQ_API_KEY"
 
 
 supported_models = {
     "gemma-2-9b-it": {
-        "endpoint": "gemma2-9b-it",
+        "endpoint": "groq/gemma2-9b-it",
         "context_window": 8192,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
     "gemma-7b-it": {
-        "endpoint": "gemma-7b-it",
+        "endpoint": "groq/gemma-7b-it",
         "context_window": 8192,
         "cost": {"prompt": 0.07, "completion": 0.07},
     },
     "mixtral-8x7b-instruct-v0.1": {
-        "endpoint": "mixtral-8x7b-32768",
+        "endpoint": "groq/mixtral-8x7b-32768",
         "context_window": 32768,
         "cost": {"prompt": 0.24, "completion": 0.24},
     },
     "llama-3-8b-chat": {
-        "endpoint": "llama3-8b-8192",
+        "endpoint": "groq/llama3-8b-8192",
         "context_window": 8192,
         "cost": {"prompt": 0.05, "completion": 0.08},
     },
     "llama-3-70b-chat": {
-        "endpoint": "llama3-70b-8192",
+        "endpoint": "groq/llama3-70b-8192",
         "context_window": 8192,
         "cost": {"prompt": 0.59, "completion": 0.79},
     },
