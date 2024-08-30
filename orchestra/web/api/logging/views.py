@@ -67,7 +67,11 @@ def get_query_history(
         tags = list(tags)
     if models or providers or start_time or end_time:
         raise HTTPException(status_code=501, detail="Not implemented yet")
-    ## filter 
+    ## filter
+    # logic to get a list of endpoints, custom_endpoints, local_endpoints
+    endpoints = []
+    custom_endpoints = []
+    local_endpoints = []
     # need logic for
     # standard models
     # model@provider
@@ -76,6 +80,7 @@ def get_query_history(
     # @custom
     # things that don't even go through orchestra
     # @external
+    
     ret = query_dao.filter(
         user_id=request_fastapi.state.user_id,
         tags=tags,

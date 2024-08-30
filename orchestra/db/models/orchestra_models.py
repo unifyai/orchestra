@@ -154,20 +154,14 @@ class Query(Base):
     __tablename__ = "query"
 
     id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(
-        sa.String(), sa.ForeignKey("users.id"), nullable=False, index=True
-    )
+    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
     at = sa.Column(sa.TIMESTAMP(), nullable=False)
-    endpoint_id = sa.Column(
-        sa.Integer(), sa.ForeignKey("endpoint.id"), nullable=False, index=True
-    )
+    endpoint_id = sa.Column(sa.Integer(), sa.ForeignKey("endpoint.id"), nullable=False)
     credits = sa.Column(sa.Numeric(), nullable=False)
     prompt = sa.Column(sa.String(), nullable=True)
     signature = sa.Column(sa.String(), nullable=True)
     used_router = sa.Column(sa.Boolean(), nullable=True)
     router = sa.Column(sa.String, nullable=True)
-    tags = relationship("QueryTagAssociation", back_populates="query")
-    __table_args__ = (sa.Index("ix_user_endpoint", "user_id", "endpoint_id"),)
 
 
 class Users(Base):
@@ -371,3 +365,32 @@ class LocalEndpoint(Base):
     user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
     name = sa.Column(sa.String(), nullable=False)
     sa.UniqueConstraint('user_id', 'name', name='uq_user_endpoint')
+
+
+class QueryNew(Base):
+    """Model class for the new query table."""
+
+    __tablename__ = "query_new"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    user_id = sa.Column(
+        sa.String(), sa.ForeignKey("users.id"), nullable=False, index=True
+    )
+    at = sa.Column(sa.TIMESTAMP(), nullable=False)
+    endpoint_id = sa.Column(
+        sa.Integer(), sa.ForeignKey("endpoint.id"), index=True
+    )
+    custom_endpoint_id= sa.Column(
+        sa.Integer(), sa.ForeignKey("custom_endpoint.id"), index=True
+    )
+    local_endpoint_id = sa.Column(
+        sa.Integer(), sa.ForeignKey("local_endpoint.id"), index=True
+    )
+    credits = sa.Column(sa.Numeric(), nullable=False)
+    query_body = sa.Column(sa.String(), nullable=False)
+    response_body = sa.Column(sa.String(), nullable=False)
+    signature = sa.Column(sa.String(), nullable=True)
+    used_router = sa.Column(sa.Boolean(), nullable=True)
+    router = sa.Column(sa.String, nullable=True)
+    tags = relationship("QueryTagAssociation", back_populates="query")
+    __table_args__ = (sa.Index("ix_user_endpoint", "user_id", "endpoint_id"),)
