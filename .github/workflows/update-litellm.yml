@@ -28,6 +28,8 @@ jobs:
     - name: Update LiteLLM
       run: |
         poetry add litellm@latest
+        git config --global user.name "vedpatwardhan"
+        git config --global user.email "vedpat3@gmail.com"
         git add .
         git commit -m "litellm update"
         git push origin litellm_cron_test
