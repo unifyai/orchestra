@@ -195,22 +195,20 @@ def rename_custom_endpoint(
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": {
-                        [
-                            {
-                                "name": "endpoint_1",
-                                "mdl_name": "llama_finetune",
-                                "url": "https://...",
-                                "key": "custom_key_1",
-                            },
-                            {
-                                "name": "endpoint_2",
-                                "mdl_name": "mixtral_finetune",
-                                "url": "https://...",
-                                "key": "custom_key_2",
-                            },
-                        ],
-                    },
+                    "example": [
+                        {
+                            "name": "endpoint_1",
+                            "mdl_name": "llama_finetune",
+                            "url": "https://...",
+                            "key": "custom_key_1",
+                        },
+                        {
+                            "name": "endpoint_2",
+                            "mdl_name": "mixtral_finetune",
+                            "url": "https://...",
+                            "key": "custom_key_2",
+                        },
+                    ],
                 },
             },
         },
