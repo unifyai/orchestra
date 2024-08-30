@@ -360,3 +360,13 @@ class QueryTagAssociation(Base):
         ["tags.user_id", "tags.id"],
         name="fk_user_tag_association",
     )
+
+
+class LocalEndpoint(Base):
+    """Model class for the local endpoints table."""
+
+    __tablename__ = "local_endpoint"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
+    name = sa.Column(sa.String(), nullable=False)
