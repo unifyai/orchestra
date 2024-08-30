@@ -27,6 +27,7 @@ jobs:
 
     - name: Update LiteLLM
       run: |
+        pwd
         cd orchestra
         poetry shell
         poetry add litellm@latest
