@@ -112,7 +112,7 @@ class ChatCompletionRequest(BaseModel):
         "model's likelihood to talk about new topics.",
         json_schema_extra={"example": -1.1},
     )
-    response_format: Optional[Dict[str, str]] = Field(
+    response_format: Optional[Dict[str, Any]] = Field(
         None,
         description="An object specifying the format that the model must output."
         '\n\nSetting to `{ "type": "json_schema", "json_schema": {...} }` enables '
