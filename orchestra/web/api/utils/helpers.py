@@ -88,6 +88,7 @@ def check_litellm_supported_args(kwargs, provider_endpoint):
         provider_endpoint,
     )
     if supported_params:
+        supported_params = set(supported_params)
         for arg_name in kwargs:
             if arg_name not in supported_params:
                 logging.warning(
