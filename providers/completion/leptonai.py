@@ -39,8 +39,8 @@ class LeptonAI(BaseCompletionProvider):
 
 
 supported_models = {
-    "gemma-7b-it": {
-        "endpoint": "gemma-7b",
+    "gemma-2-9b-it": {
+        "endpoint": "gemma2-9b",
         "context_window": 8192,
         "cost": {"prompt": 0.07, "completion": 0.07},
     },
@@ -48,6 +48,11 @@ supported_models = {
         "endpoint": "mixtral-8x7b",
         "context_window": 32768,
         "cost": {"prompt": 0.5, "completion": 0.5},
+    },
+    "mistral-7b-instruct-v0.3": {
+        "endpoint": "mistral-7b",
+        "context_window": 32768,
+        "cost": {"prompt": 0.07, "completion": 0.07},
     },
     "llama-3-8b-chat": {
         "endpoint": "llama3-8b",
@@ -59,24 +64,19 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 0.8, "completion": 0.8},
     },
-    "mistral-7b-instruct-v0.3": {
-        "endpoint": "mistral-7b",
-        "context_window": 32768,
-        "cost": {"prompt": 0.07, "completion": 0.07},
-    },
     "llama-3.1-8b-chat": {
         "endpoint": "llama3-1-8b",
-        "context_window": 128000,
+        "context_window": 131072,
         "cost": {"prompt": 0.07, "completion": 0.07},
     },
     "llama-3.1-70b-chat": {
         "endpoint": "llama3-1-70b",
-        "context_window": 128000,
+        "context_window": 131072,
         "cost": {"prompt": 0.8, "completion": 0.8},
     },
     "llama-3.1-405b-chat": {
         "endpoint": "llama-3-1-405b",
-        "context_window": 128000,
+        "context_window": 131072,
         "cost": {"prompt": 2.8, "completion": 2.8},
     },
 }

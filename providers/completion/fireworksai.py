@@ -53,11 +53,6 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
-    "gemma-7b-it": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/gemma-7b",
-        "context_window": 8192,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
     "mistral-7b-instruct-v0.2": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/mistral-7b-v0p2",
         "context_window": 32768,
@@ -78,24 +73,4 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.5, "completion": 0.5},
     },
-    "qwen-2-72b-instruct": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/qwen2-72b-instruct",
-        "context_window": 32768,
-        "cost": {"prompt": 0.9, "completion": 0.9},
-    },
-    # "codellama-13b-instruct": {
-    #     "endpoint": "fireworks_ai/accounts/fireworks/models/code-llama-13b-instruct",
-    #     "context_window": 32768,
-    #     "cost": {"prompt": 0.2, "completion": 0.2},
-    # },
-    # "phind-codellama-34b-v2": {
-    #     "endpoint": "fireworks_ai/accounts/fireworks/models/phind-code-llama-34b-v2",
-    #     "context_window": 16384,
-    #     "cost": {"prompt": 0.9, "completion": 0.9},
-    # },
-    # "codellama-70b-instruct": {
-    #     "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v2-70b-code-instruct",
-    #     "context_window": 4096,
-    #     "cost": {"prompt": 0.9, "completion": 0.9},
-    # },
 }

@@ -28,11 +28,6 @@ class Replicate(BaseCompletionProvider):
 
 
 supported_models = {
-    "mistral-7b-instruct-v0.2": {
-        "endpoint": "replicate/mistralai/mistral-7b-instruct-v0.2",
-        "context_window": 16384,
-        "cost": {"prompt": 0.05, "completion": 0.25},
-    },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "replicate/mistralai/mixtral-8x7b-instruct-v0.1",
         "context_window": 16384,
@@ -50,7 +45,7 @@ supported_models = {
     },
     "llama-3.1-405b-chat": {
         "endpoint": "replicate/meta/meta-llama-3.1-405b-instruct",
-        "context_window": 128000,
+        "context_window": 131072,
         "cost": {"prompt": 9.5, "completion": 9.5},
     },
 }
