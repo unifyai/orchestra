@@ -94,7 +94,7 @@ supported_models = {
     "llama-3.1-405b-chat": {
         "endpoint": "azure_ai/Meta-Llama-3-1-405B-Instruct-aog",
         "context_window": 128000,
-        "cost": {"prompt": 5.33, "completion": 1.6},
+        "cost": {"prompt": 5.33, "completion": 16},
     },
     "llama-3.1-70b-chat": {
         "endpoint": "azure_ai/Meta-Llama-3-1-70B-Instruct-srdw",
@@ -104,6 +104,6 @@ supported_models = {
     "llama-3.1-8b-chat": {
         "endpoint": "azure_ai/Meta-Llama-3-1-8B-Instruct-vjwtr",
         "context_window": 128000,
-        "cost": {"prompt": 0.61, "completion": 0.61},
+        "cost": {"prompt": 0.3, "completion": 0.61},
     },
 }
