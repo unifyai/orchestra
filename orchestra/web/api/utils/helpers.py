@@ -84,9 +84,7 @@ def filter_request_params(arguments):
 
 
 def check_litellm_supported_args(kwargs, provider_endpoint):
-    supported_params = litellm.get_supported_openai_params(
-        provider_endpoint,
-    )
+    supported_params = litellm.get_supported_openai_params(provider_endpoint)
     if supported_params:
         supported_params = set(supported_params)
         for arg_name in kwargs:

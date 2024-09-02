@@ -18,7 +18,10 @@ from openai import (
     Stream,
 )
 
-from orchestra.web.api.utils.helpers import filter_kwargs_for_openai_client
+from orchestra.web.api.utils.helpers import (
+    check_litellm_supported_args,
+    filter_kwargs_for_openai_client,
+)
 from orchestra.web.api.utils.http_responses import server_error_with_digest
 
 logger = logging.getLogger(__name__)
@@ -222,6 +225,7 @@ class BaseCompletionProvider:
                 )
             else:
                 # extra_body can't be passed to anthropic or vertex_ai
+                check_litellm_supported_args(kwargs, self.provider_endpoint)
                 provider_prefix = self.provider_endpoint.split("/")[0]
                 if provider_prefix not in ["anthropic", "bedrock", "vertex_ai"]:
                     kwargs["extra_body"] = extra_body
@@ -290,6 +294,7 @@ class BaseCompletionProvider:
                 )
             else:
                 # extra_body can't be passed to anthropic or vertex_ai
+                check_litellm_supported_args(kwargs, self.provider_endpoint)
                 provider_prefix = self.provider_endpoint.split("/")[0]
                 if provider_prefix not in ["anthropic", "bedrock", "vertex_ai"]:
                     kwargs["extra_body"] = extra_body
