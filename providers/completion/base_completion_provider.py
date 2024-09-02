@@ -205,10 +205,10 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
+        kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
         using_litellm = bool(self.litellm_api_key_var)
         try:  # noqa: WPS225
             if not using_litellm:
-                kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
                 client = kwargs.pop(
                     "client",
                     OpenAI(api_key=self.api_key, base_url=self.base_url),
@@ -225,7 +225,6 @@ class BaseCompletionProvider:
                 provider_prefix = self.provider_endpoint.split("/")[0]
                 if provider_prefix not in ["anthropic", "bedrock", "vertex_ai"]:
                     kwargs["extra_body"] = extra_body
-                # check_litellm_supported_args(kwargs, self.provider_endpoint)
                 os.environ[self.litellm_api_key_var] = self.api_key
                 drop_params = extra_body.pop("drop_params", True)
                 response = litellm.completion(
@@ -274,10 +273,10 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
+        kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
         using_litellm = bool(self.litellm_api_key_var)
         try:  # noqa: WPS225
             if not using_litellm:
-                kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
                 client = kwargs.pop(
                     "client",
                     AsyncOpenAI(api_key=self.api_key, base_url=self.base_url),
@@ -294,7 +293,6 @@ class BaseCompletionProvider:
                 provider_prefix = self.provider_endpoint.split("/")[0]
                 if provider_prefix not in ["anthropic", "bedrock", "vertex_ai"]:
                     kwargs["extra_body"] = extra_body
-                # check_litellm_supported_args(kwargs, self.provider_endpoint)
                 os.environ[self.litellm_api_key_var] = self.api_key
                 drop_params = extra_body.pop("drop_params", True)
                 response = litellm.acompletion(
