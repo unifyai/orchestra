@@ -18,7 +18,10 @@ from openai import (
     Stream,
 )
 
-from orchestra.web.api.utils.helpers import filter_kwargs_for_openai_client
+from orchestra.web.api.utils.helpers import (
+    check_litellm_supported_args,
+    filter_kwargs_for_openai_client,
+)
 from orchestra.web.api.utils.http_responses import server_error_with_digest
 
 logger = logging.getLogger(__name__)
@@ -222,15 +225,7 @@ class BaseCompletionProvider:
                 )
             else:
                 # extra_body can't be passed to anthropic or vertex_ai
-                supported_params = litellm.get_supported_openai_params(
-                    self.provider_endpoint,
-                )
-                if supported_params:
-                    for arg_name in kwargs:
-                        if arg_name not in supported_params:
-                            logging.warning(
-                                f"{arg_name} not supported by {self.provider_endpoint}",
-                            )
+                check_litellm_supported_args(kwargs, self.provider_endpoint)
                 os.environ[self.litellm_api_key_var] = self.api_key
                 drop_params = extra_body.pop("drop_params", True)
                 response = litellm.completion(
@@ -296,15 +291,7 @@ class BaseCompletionProvider:
                 )
             else:
                 # extra_body can't be passed to anthropic or vertex_ai
-                supported_params = litellm.get_supported_openai_params(
-                    self.provider_endpoint,
-                )
-                if supported_params:
-                    for arg_name in kwargs:
-                        if arg_name not in supported_params:
-                            logging.warning(
-                                f"{arg_name} not supported by {self.provider_endpoint}",
-                            )
+                check_litellm_supported_args(kwargs, self.provider_endpoint)
                 os.environ[self.litellm_api_key_var] = self.api_key
                 drop_params = extra_body.pop("drop_params", True)
                 response = litellm.acompletion(
