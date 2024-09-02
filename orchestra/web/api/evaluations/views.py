@@ -558,6 +558,16 @@ def get_evaluations(
 
 @router.delete(
     "/evaluation",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Evaluation deleted successfully!"},
+                },
+            },
+        },
+    },
 )
 def delete_evaluations(
     request_fastapi: Request,
@@ -590,6 +600,31 @@ def delete_evaluations(
 
 @router.get(
     "/evaluation/status",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "responses": {
+                            "last_updated": "2024-08-19 13:58:20.866092",
+                            "num_failed": 0,
+                            "num_processed": 3,
+                            "num_remaining": 0,
+                        },
+                        "judgements": {
+                            "judge_model_a": {
+                                "last_updated": "2024-08-19 13:58:20.866092",
+                                "num_failed": 0,
+                                "num_processed": 3,
+                                "num_remaining": 0,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
 )
 def eval_status(
     request_fastapi: Request,
