@@ -48,4 +48,14 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 0.59, "completion": 0.79},
     },
+    "llama-3.1-8b-chat": {
+        "endpoint": "groq/llama-3.1-8b-instant",
+        "context_window": 131072,
+        "cost": {"prompt": 0.05, "completion": 0.08},
+    },
+    "llama-3.1-70b-chat": {
+        "endpoint": "groq/llama-3.1-70b-versatile",
+        "context_window": 131072,
+        "cost": {"prompt": 0.59, "completion": 0.79},
+    },
 }

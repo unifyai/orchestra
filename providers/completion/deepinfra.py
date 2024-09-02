@@ -26,12 +26,12 @@ supported_models = {
     "llama-3.1-8b-chat": {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3.1-8B-Instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.06, "completion": 0.06},
+        "cost": {"prompt": 0.055, "completion": 0.055},
     },
     "llama-3.1-70b-chat": {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3.1-70B-Instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.52, "completion": 0.75},
+        "cost": {"prompt": 0.35, "completion": 0.4},
     },
     "llama-3.1-405b-chat": {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3.1-405B-Instruct",
@@ -41,27 +41,22 @@ supported_models = {
     "llama-3-8b-chat": {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3-8B-Instruct",
         "context_window": 8000,
-        "cost": {"prompt": 0.06, "completion": 0.06},
+        "cost": {"prompt": 0.055, "completion": 0.055},
     },
     "llama-3-70b-chat": {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3-70B-Instruct",
         "context_window": 8000,
-        "cost": {"prompt": 0.52, "completion": 0.75},
+        "cost": {"prompt": 0.35, "completion": 0.4},
     },
     "gemma-2-9b-it": {
         "endpoint": "deepinfra/google/gemma-2-9b-it",
         "context_window": 4000,
-        "cost": {"prompt": 0.09, "completion": 0.09},
+        "cost": {"prompt": 0.06, "completion": 0.06},
     },
     "gemma-2-27b-it": {
         "endpoint": "deepinfra/google/gemma-2-27b-it",
         "context_window": 4000,
         "cost": {"prompt": 0.27, "completion": 0.27},
-    },
-    "gemma-7b-it": {
-        "endpoint": "deepinfra/google/gemma-7b-it",
-        "context_window": 8192,
-        "cost": {"prompt": 0.07, "completion": 0.07},
     },
     "mixtral-8x22b-instruct-v0.1": {
         "endpoint": "deepinfra/mistralai/Mixtral-8x22B-Instruct-v0.1",
@@ -76,31 +71,16 @@ supported_models = {
     "mistral-7b-instruct-v0.3": {
         "endpoint": "deepinfra/mistralai/Mistral-7B-Instruct-v0.3",
         "context_window": 32768,
-        "cost": {"prompt": 0.06, "completion": 0.06},
-    },
-    "phind-codellama-34b-v2": {
-        "endpoint": "deepinfra/Phind/Phind-CodeLlama-34B-v2",
-        "context_window": 16384,
-        "cost": {"prompt": 0.6, "completion": 0.6},
+        "cost": {"prompt": 0.055, "completion": 0.055},
     },
     "qwen-2-7b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2-72B-Instruct",
         "context_window": 32000,
-        "cost": {"prompt": 0.07, "completion": 0.07},
+        "cost": {"prompt": 0.055, "completion": 0.055},
     },
     "qwen-2-72b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2-7B-Instruct",
         "context_window": 32000,
-        "cost": {"prompt": 0.56, "completion": 0.77},
-    },
-    "phi-3-medium-4k-instruct": {
-        "endpoint": "deepinfra/microsoft/Phi-3-medium-4k-instruct",
-        "context_window": 4000,
-        "cost": {"prompt": 0.14, "completion": 0.14},
-    },
-    "nemotron-4-340b-instruct": {
-        "endpoint": "deepinfra/nvidia/Nemotron-4-340B-Instruct",
-        "context_window": 4000,
-        "cost": {"prompt": 4.2, "completion": 4.2},
+        "cost": {"prompt": 0.35, "completion": 0.40},
     },
 }

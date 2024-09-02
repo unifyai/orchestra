@@ -37,10 +37,10 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.45, "completion": 0.45},
     },
-    "llama-3-8b-chat": {
-        "endpoint": "meta-llama-3-8b-instruct",
-        "context_window": 8192,
-        "cost": {"prompt": 0.15, "completion": 0.15},
+    "mistral-nemo": {
+        "endpoint": "mistral-nemo-instruct",
+        "context_window": 128000,
+        "cost": {"prompt": 0.3, "completion": 0.3},
     },
     "llama-3-70b-chat": {
         "endpoint": "meta-llama-3-70b-instruct",
