@@ -171,7 +171,6 @@ async def main():
         "llama-3-70b-chat@together-ai",
         "mistral-small@mistral-ai",
         "mistral-large@mistral-ai",
-        "deepseek-coder-33b-instruct@together-ai",
         "gemma-7b-it@together-ai",
     ]
     judge_model = "gpt-4o@openai"

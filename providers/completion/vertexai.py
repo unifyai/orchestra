@@ -33,14 +33,4 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.075, "completion": 0.3},
     },
-    # "gemma-2-9b-it": {
-    #     "endpoint": "google/gemma2-9b-it",
-    #     "context_window": 8192,
-    #     "cost": {"prompt": 0.2, "completion": 0.2},
-    # },
-    # "gemma-2-27b-it": {
-    #     "endpoint": "google/gemma2-27b-it",
-    #     "context_window": 8192,
-    #     "cost": {}
-    # }
 }

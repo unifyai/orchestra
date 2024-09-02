@@ -53,36 +53,6 @@ supported_models = {
         "context_window": 65536,
         "cost": {"prompt": 1.2, "completion": 1.2},
     },
-    "gemma-2b-it": {
-        "endpoint": "together_ai/google/gemma-2b-it",
-        "context_window": 8192,
-        "cost": {"prompt": 0.1, "completion": 0.1},
-    },
-    "gemma-7b-it": {
-        "endpoint": "together_ai/google/gemma-7b-it",
-        "context_window": 8192,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
-    "codellama-13b-instruct": {
-        "endpoint": "together_ai/togethercomputer/CodeLlama-13b-Instruct",
-        "context_window": 16384,
-        "cost": {"prompt": 0.3, "completion": 0.3},
-    },
-    "codellama-7b-instruct": {
-        "endpoint": "together_ai/togethercomputer/CodeLlama-7b-Instruct",
-        "context_window": 16384,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
-    "codellama-70b-instruct": {
-        "endpoint": "together_ai/codellama/CodeLlama-70b-Instruct-hf",
-        "content": 4096,
-        "cost": {"prompt": 0.9, "completion": 0.9},
-    },
-    "deepseek-coder-33b-instruct": {
-        "endpoint": "together_ai/deepseek-ai/deepseek-coder-33b-instruct",
-        "context_window": 16384,
-        "cost": {"prompt": 0.8, "completion": 0.8},
-    },
     "mistral-7b-instruct-v0.3": {
         "endpoint": "together_ai/mistralai/Mistral-7B-Instruct-v0.3",
         "context_window": 32768,
@@ -92,11 +62,6 @@ supported_models = {
         "endpoint": "together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
         "context_window": 32768,
         "cost": {"prompt": 0.6, "completion": 0.6},
-    },
-    "phind-codellama-34b-v2": {
-        "endpoint": "together_ai/Phind/Phind-CodeLlama-34B-v2",
-        "context_window": 16384,
-        "cost": {"prompt": 0.8, "completion": 0.8},
     },
     "qwen-2-72b-instruct": {
         "endpoint": "together_ai/Qwen/Qwen2-72B-Instruct",
