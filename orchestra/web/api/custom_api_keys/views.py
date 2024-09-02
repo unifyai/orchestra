@@ -169,7 +169,23 @@ def rename_custom_api_key(
     return {"info": "API key renamed successfully!"}
 
 
-@router.get("/custom_api_key/list", response_model=List[CustomApiKeyModelResponse])
+@router.get(
+    "/custom_api_key/list",
+    response_model=List[CustomApiKeyModelResponse],
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {"name": "custom_key_1", "value": "****alue_1"},
+                        {"name": "custom_key_2", "value": "****alue_2"},
+                    ],
+                },
+            },
+        },
+    },
+)
 def list_custom_api_keys(
     request_fastapi: Request,
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
