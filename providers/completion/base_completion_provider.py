@@ -222,6 +222,9 @@ class BaseCompletionProvider:
                 )
             else:
                 # extra_body can't be passed to anthropic or vertex_ai
+                provider_prefix = self.provider_endpoint.split("/")[0]
+                if provider_prefix not in ["anthropic", "bedrock", "vertex_ai"]:
+                    kwargs["extra_body"] = extra_body
                 # check_litellm_supported_args(kwargs, self.provider_endpoint)
                 os.environ[self.litellm_api_key_var] = self.api_key
                 drop_params = extra_body.pop("drop_params", True)
@@ -288,6 +291,9 @@ class BaseCompletionProvider:
                 )
             else:
                 # extra_body can't be passed to anthropic or vertex_ai
+                provider_prefix = self.provider_endpoint.split("/")[0]
+                if provider_prefix not in ["anthropic", "bedrock", "vertex_ai"]:
+                    kwargs["extra_body"] = extra_body
                 # check_litellm_supported_args(kwargs, self.provider_endpoint)
                 os.environ[self.litellm_api_key_var] = self.api_key
                 drop_params = extra_body.pop("drop_params", True)
