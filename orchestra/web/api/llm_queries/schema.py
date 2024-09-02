@@ -204,6 +204,14 @@ class ChatCompletionRequest(BaseModel):
         description="Comma-separated list of tags to associate with the corresponding prompt.",
         json_schema_extra={"example": True},
     )
+    drop_params: bool = Field(
+        True,
+        description=(
+            "Whether or not to drop unsupported OpenAI params by the provider "
+            "you're using"
+        ),
+        json_schema_extra={"example": True},
+    )
 
 
 class ChatCompletionResponse(BaseModel):

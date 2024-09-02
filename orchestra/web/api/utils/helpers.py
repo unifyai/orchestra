@@ -2,9 +2,10 @@ import inspect
 import logging
 import os
 
+import litellm
 import stripe
-from openai import OpenAI
 from anthropic import Anthropic
+from openai import OpenAI
 
 oai_func = OpenAI(api_key="").chat.completions.create
 OPENAI_ALLOWED_ARGS = set(inspect.signature(oai_func).parameters.keys())
@@ -80,6 +81,17 @@ def filter_request_params(arguments):
         for param in openai_params
         if arguments.get(param) is not None
     }
+
+
+def check_litellm_supported_args(kwargs, provider_endpoint):
+    supported_params = litellm.get_supported_openai_params(provider_endpoint)
+    if supported_params:
+        supported_params = set(supported_params)
+        for arg_name in kwargs:
+            if arg_name not in supported_params:
+                logging.warning(
+                    f"ArgumentWarning: {arg_name} not supported by {provider_endpoint}",
+                )
 
 
 def recharge_and_generate_invoice(user, users_dao):
