@@ -332,6 +332,16 @@ def get_benchmark(
 
 @router.delete(
     "/benchmark",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Benchmark deleted successfully!"},
+                },
+            },
+        },
+    },
 )
 def delete_benchmark(
     endpoint_name: str = Query(

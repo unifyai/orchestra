@@ -118,7 +118,19 @@ def load_eval_config_blob(user_id, eval_id):
 ###########################
 
 
-@router.post("/evaluator")
+@router.post(
+    "/evaluator",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Evaluator created successfully!"},
+                },
+            },
+        },
+    },
+)
 def create_evaluator(
     request_fastapi: Request,
     request: EvaluatorConfig,
@@ -152,10 +164,28 @@ def create_evaluator(
 
     blob = load_eval_config_blob(user_id, eval_id)
     blob.upload_from_string(config_str, content_type="application/json")
-    return {"info": "Eval created!"}
+    return {"info": "Evaluator created successfully!"}
 
 
-@router.get("/evaluator")
+@router.get(
+    "/evaluator",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "class_config": "...",
+                        "client_side": "false",
+                        "eval_name": "evaluator",
+                        "judge_models": "claude-3.5-sonnet@aws-bedrock",
+                        "system_prompt": "...",
+                    },
+                },
+            },
+        },
+    },
+)
 def get_evaluator(
     request_fastapi: Request,
     name: str = Query(
@@ -175,7 +205,19 @@ def get_evaluator(
     return contents
 
 
-@router.delete("/evaluator")
+@router.delete(
+    "/evaluator",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Evaluator deleted successfully!"},
+                },
+            },
+        },
+    },
+)
 def delete_evaluator(
     request_fastapi: Request,
     name: str = Query(description="Name of the evaluator to delete.", example="eval1"),
@@ -188,10 +230,23 @@ def delete_evaluator(
     blob = load_eval_config_blob(user_id, eval_id)
     blob.delete()
     refresh_scores_json(user_id)
+    return {"info": "Evaluator deleted successfully!"}
     # TODO: remove all corresponding model judgements?
 
 
-@router.post("/evaluator/rename")
+@router.post(
+    "/evaluator/rename",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Evaluator renamed successfully!"},
+                },
+            },
+        },
+    },
+)
 def rename_evaluator(
     request_fastapi: Request,
     name: str = Query(
@@ -211,10 +266,22 @@ def rename_evaluator(
     config_str = json.dumps(contents, sort_keys=True)
     blob.upload_from_string(config_str, content_type="application/json")
     refresh_scores_json(user_id)
-    return {"info": "Evaluation successfully renamed"}
+    return {"info": "Evaluator renamed successfully!"}
 
 
-@router.get("/evaluator/list")
+@router.get(
+    "/evaluator/list",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": ["evaluator_a", "evaluator_b", "evaluator_c"],
+                },
+            },
+        },
+    },
+)
 def list_evaluators(
     request_fastapi: Request,
 ):
