@@ -222,15 +222,14 @@ class BaseCompletionProvider:
                 )
             else:
                 # extra_body can't be passed to anthropic or vertex_ai
-                arguments = kwargs.keys()
                 supported_params = litellm.get_supported_openai_params(
                     self.provider_endpoint,
                 )
                 if supported_params:
-                    for argument in arguments:
-                        if argument not in supported_params:
+                    for arg_name in kwargs:
+                        if arg_name not in supported_params:
                             logging.warning(
-                                f"{argument} not supported by {self.provider_endpoint}",
+                                f"{arg_name} not supported by {self.provider_endpoint}",
                             )
                 os.environ[self.litellm_api_key_var] = self.api_key
                 drop_params = extra_body.pop("drop_params", True)
