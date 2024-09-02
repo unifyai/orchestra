@@ -205,10 +205,10 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
         using_litellm = bool(self.litellm_api_key_var)
         try:  # noqa: WPS225
             if not using_litellm:
+                kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
                 client = kwargs.pop(
                     "client",
                     OpenAI(api_key=self.api_key, base_url=self.base_url),
@@ -222,9 +222,16 @@ class BaseCompletionProvider:
                 )
             else:
                 # extra_body can't be passed to anthropic or vertex_ai
-                provider_prefix = self.provider_endpoint.split("/")[0]
-                if provider_prefix not in ["anthropic", "bedrock", "vertex_ai"]:
-                    kwargs["extra_body"] = extra_body
+                arguments = kwargs.keys()
+                supported_params = litellm.get_supported_openai_params(
+                    self.provider_endpoint,
+                )
+                if supported_params:
+                    for argument in arguments:
+                        if argument not in supported_params:
+                            logging.warning(
+                                f"{argument} not supported by {self.provider_endpoint}",
+                            )
                 os.environ[self.litellm_api_key_var] = self.api_key
                 drop_params = extra_body.pop("drop_params", True)
                 response = litellm.completion(
@@ -234,8 +241,6 @@ class BaseCompletionProvider:
                     drop_params=drop_params,
                     **kwargs,
                 )
-                if provider_prefix != "vertex_ai":
-                    os.environ.pop(self.litellm_api_key_var)
 
             if isinstance(response, Stream) or stream:
                 return (
