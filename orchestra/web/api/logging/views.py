@@ -4,6 +4,7 @@ Includes endpoints related to logging.
 
 import os
 from typing import Any, Dict, List, Union, Optional
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
@@ -114,11 +115,37 @@ def log_query(
     query_body: str = Query(
         description="A string containing the body of the request", example=""
     ),
-    response_body: Optional[str] = Query(None, description="An optional string containing the response to the request"),
-    tags: Optional[str] = Query(None, description="Tags for later filtering."),
-    timestamp: Optional[str] = Query(None, description="A timestamp (if left blank will be the time of sending)")
+    response_body: Optional[str] = Query(
+        None, description="An optional string containing the response to the request"
+    ),
+    tags: Optional[list[str]] = Query(None, description="Tags for later filtering."),
+    timestamp: Optional[str] = Query(
+        None,
+        description="A timestamp (if not set, will be the time of sending)",
+        example="2024-07-12T04:20:32.808410",
+    ),
+    query_dao: QueryDAO = Depends(),
 ):
-    pass
+    if not timestamp:
+        timestamp = str(datetime.now())
+
+    local_endpoint_id = LOGIC
+
+    try:
+        query_dao.create_query(
+            user_id=user_id,
+            at=timestamp,
+            model_provider_str=endpoint,
+            endpoint_id=None,
+            custom_endpoint_id=None,
+            local_endpoint_id=local_endpoint_id,
+            query_body=query_body,
+            response_body=response_body,
+            tags=tags,
+        )
+        return {"info": "Query logged successfully"}
+    except:
+        raise HTTPException(status_code=404, detail="Error in logging query")
 
 
 @router.get("/metrics")
