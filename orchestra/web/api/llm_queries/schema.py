@@ -199,7 +199,7 @@ class ChatCompletionRequest(BaseModel):
         "in the backend.",
         json_schema_extra={"example": True},
     )
-    tags: Optional[List[str]] = Field(
+    tags: Union[None, str, List[str]] = Field(
         None,
         description="Comma-separated list of tags to associate with the corresponding prompt.",
         json_schema_extra={"example": True},
