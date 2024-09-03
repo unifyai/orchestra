@@ -22,6 +22,7 @@ async def test_logging_queries(client: AsyncClient):
     response = await client.get(endpoint, headers=HEADERS)
     assert response.status_code == 200, response.json()
     assert len(response.json()) == 1, response.json()
+    print(response.json())
 
 
 async def test_queries_filter_endpoint(client: AsyncClient):
@@ -110,3 +111,21 @@ async def test_fake_tags(client: AsyncClient):
     response = await client.get(endpoint, headers=HEADERS, params=data)
     assert response.status_code == 200, response.json()
     assert len(response.json()) == 0, response.json()
+
+
+@pytest.mark.anyio
+async def test_external_logging(client: AsyncClient):
+    endpoint = "/v0/queries"
+    data = {
+        "endpoint": "local_model_test@external",
+        "query_body": "a",
+        "response_body": "b",
+    }
+    response = await client.post(endpoint, headers=HEADERS, params=data)
+    assert response.status_code == 200, response.json()
+
+    endpoint = "/v0/queries"
+    data = {"endpoints": ["local_model_test@external"]}
+    response = await client.get(endpoint, headers=HEADERS, params=data)
+    assert response.status_code == 200, response.json()
+    assert len(response.json()) == 1, response.json()
