@@ -5,6 +5,7 @@ Revises: 69fda243ec6f
 Create Date: 2024-09-03 12:27:15.827936
 
 """
+
 import sqlalchemy as sa
 from alembic import op
 
@@ -16,8 +17,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.rename_table('query', 'query_old')
+    op.rename_table("query", "query_old")
 
 
 def downgrade() -> None:
-    op.rename_table('query_old', 'query')
+    op.rename_table("query_old", "query")
