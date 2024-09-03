@@ -112,6 +112,7 @@ async def test_fake_tags(client: AsyncClient):
     assert response.status_code == 200, response.json()
     assert len(response.json()) == 0, response.json()
 
+
 @pytest.mark.anyio
 async def test_external_logging(client: AsyncClient):
     endpoint = "/v0/queries"

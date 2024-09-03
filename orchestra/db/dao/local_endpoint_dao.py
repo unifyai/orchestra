@@ -48,7 +48,7 @@ class LocalEndpointDAO:
         query = select(LocalEndpoint.name).where(LocalEndpoint.user_id == user_id)
         raw_local_endpoints = self.session.execute(query)
         return list(raw_local_endpoints.fetchall())
-    
+
     def filter(self, user_id, name):
         query = (
             select(LocalEndpoint)
