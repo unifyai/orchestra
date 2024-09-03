@@ -74,9 +74,10 @@ def get_query_history(
             try:
                 _model, _provider = e_str.split("@")
                 if _provider == "external":
-                    raise HTTPException(status_code=501)
-                    # id_ = local_endpoint_dao.filter(user_id=request_fastapi.state.user_id, name=_model)[0].id
-                    # local_endpoint_ids.append(id_)
+                    id_ = local_endpoint_dao.filter(
+                        user_id=request_fastapi.state.user_id, name=_model
+                    )[0].id
+                    local_endpoint_ids.append(id_)
                 elif _provider == "custom":
                     _id = custom_endpoint_dao.filter(
                         user_id=request_fastapi.state.user_id, name=_model
@@ -105,47 +106,56 @@ def get_query_history(
     return ret
 
 
-# @router.post("/queries")
-# def log_query(
-#     request_fastapi: Request,
-#     endpoint: str = Query(
-#         description="Endpoint to log query for.",
-#         example="llama-3.1-8b-chat_ollama@external",
-#     ),
-#     query_body: str = Query(
-#         description="A string containing the body of the request", example=""
-#     ),
-#     response_body: Optional[str] = Query(
-#         None, description="An optional string containing the response to the request"
-#     ),
-#     tags: Optional[list[str]] = Query(None, description="Tags for later filtering."),
-#     timestamp: Optional[str] = Query(
-#         None,
-#         description="A timestamp (if not set, will be the time of sending)",
-#         example="2024-07-12T04:20:32.808410",
-#     ),
-#     query_dao: QueryDAO = Depends(),
-# ):
-#     if not timestamp:
-#         timestamp = str(datetime.now())
+@router.post("/queries")
+def log_query(
+    request_fastapi: Request,
+    endpoint: str = Query(
+        description="Endpoint to log query for.",
+        example="llama-3.1-8b-chat_ollama@external",
+    ),
+    query_body: str = Query(
+        description="A string containing the body of the request",
+        example="""'{"messages": [{"role": "system", "content": "You are an useful assistant"}, {"role": "user", "content": "Explain who Newton was."}], "model": "llama-3-8b-chat@aws-bedrock", "max_tokens": 100,"stream": false, "temperature": 0.5,}'""",
+    ),
+    response_body: Optional[str] = Query(
+        None,
+        description="An optional string containing the response to the request",
+        example="""'{"model": "meta.llama3-8b-instruct-v1:0", "created": 1725396241, "id": "chatcmpl-92d3b36e-7b64-4ae8-8102-9b7e3f5dd30f", "object": "chat.completion", "usage": {"completion_tokens": 100, "prompt_tokens": 44, "total_tokens": 144}, "choices": [{"finish_reason": "stop", "index": 0, "message": {"content": "Sir Isaac Newton was an English mathematician, physicist, and astronomer who lived from 1643 to 1727.\\n\\nHe is widely recognized as one of the most influential scientists in history, and his work laid the foundation for the Scientific Revolution of the 17th century.\\n\\nNewton\'s most famous achievement is his theory of universal gravitation, which he presented in his groundbreaking book \\"Philosophi\\u00e6 Naturalis Principia Mathematica\\" in 1687.\\n\\nAccording to Newton\'s theory, every", "role": "assistant", "tool_calls": null, "function_call": null}}]}'""",
+    ),
+    tags: Optional[list[str]] = Query(None, description="Tags for later filtering."),
+    timestamp: Optional[str] = Query(
+        None,
+        description="A timestamp (if not set, will be the time of sending)",
+        example="2024-07-12T04:20:32.808410",
+    ),
+    query_dao: QueryDAO = Depends(),
+    local_endpoint_dao: LocalEndpointDAO = Depends(),
+):
+    if not timestamp:
+        timestamp = str(datetime.now())
 
-#     local_endpoint_id = LOGIC
+    _model_name = endpoint.split("@")[0]
+    local_endpoint_id = local_endpoint_dao.get_local_endpoint(
+        user_id=request_fastapi.state.user_id, name=_model_name
+    )
 
-#     try:
-#         query_dao.create_query(
-#             user_id=user_id,
-#             at=timestamp,
-#             model_provider_str=endpoint,
-#             endpoint_id=None,
-#             custom_endpoint_id=None,
-#             local_endpoint_id=local_endpoint_id,
-#             query_body=query_body,
-#             response_body=response_body,
-#             tags=tags,
-#         )
-#         return {"info": "Query logged successfully"}
-#     except:
-#         raise HTTPException(status_code=404, detail="Error in logging query")
+    try:
+        query_dao.create_query(
+            user_id=request_fastapi.state.user_id,
+            at=timestamp,
+            model_provider_str=endpoint,
+            endpoint_id=None,
+            custom_endpoint_id=None,
+            local_endpoint_id=local_endpoint_id,
+            credits=0,
+            query_body=query_body,
+            response_body=response_body,
+            tags=tags,
+        )
+        return {"info": "Query logged successfully"}
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=404, detail="Error in logging query")
 
 
 @router.get("/metrics")
