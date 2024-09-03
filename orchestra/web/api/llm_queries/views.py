@@ -242,9 +242,6 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     processing_time = (time.time() - t0) * 1000
 
-    response["model"] = f"{model}@{provider}"
-    response["usage"]["cost"] = cost
-
     if stream:
 
         def stream_and_update_db():  # noqa: WPS430 # TODO: Should this be async?
@@ -277,6 +274,9 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 response_body=json.dumps(response),
                 **db_operations_kwargs,
             )
+
+    response["model"] = f"{model}@{provider}"
+    response["usage"]["cost"] = cost
 
     processing_time = (time.time() - t0) * 1000
     response_fastapi.headers["openai-processing-ms"] = f"{processing_time:.0f}"
