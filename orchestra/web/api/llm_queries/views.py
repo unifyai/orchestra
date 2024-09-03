@@ -216,19 +216,26 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     db_operations_kwargs = {}
 
+    # convert str to list
+    tags = request.tags
+    if tags and isinstance(request.tags, str):
+        tags = [tags]
+
     if not on_prem:
         db_operations_kwargs = {
             "user_id": user_id,
             "secondary_user_id": request.user,
             "model": model,
             "provider": provider,
-            "prompt": messages if store_prompt else [],
+            "query_body": json.dumps(request.model_dump()),
             "signature": request.signature,
             "used_router": using_router,
             "router": router_str,
+            "tags": tags,
             "model_dao": model_dao,
             "provider_dao": provider_dao,
             "endpoint_dao": endpoint_dao,
+            "custom_endpoint_dao": custom_endpoint_dao,
             "query_dao": query_dao,
             "users_dao": users_dao,
         }
@@ -249,6 +256,9 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     cost=response.total_cost if not use_custom_keys else 0,
                     processing_time=processing_time,
                     usage=chat_response.usage,
+                    response_body=json.dumps(
+                        chat_response.model_dump()
+                    ),  # TODO this isn't the whole response
                     **db_operations_kwargs,
                 )
 
@@ -261,11 +271,13 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 cost=cost if not use_custom_keys else 0,
                 processing_time=processing_time,
                 usage=response["usage"],
+                response_body=json.dumps(response),
                 **db_operations_kwargs,
             )
 
     response["model"] = f"{model}@{provider}"
     response["usage"]["cost"] = cost
+
     processing_time = (time.time() - t0) * 1000
     response_fastapi.headers["openai-processing-ms"] = f"{processing_time:.0f}"
     return ChatCompletionResponse(**response)

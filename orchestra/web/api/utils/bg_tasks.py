@@ -3,6 +3,7 @@ import json
 from typing import Dict, List, Optional
 
 from orchestra.db.dao.endpoint_dao import EndpointDAO
+from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.query_dao import QueryDAO
@@ -54,10 +55,12 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     cost: float,
     model: str,
     provider: str,
-    prompt: List[Dict[str, str]],
+    query_body: str,
+    response_body: str,
     model_dao: ModelDAO,
     provider_dao: ProviderDAO,
     endpoint_dao: EndpointDAO,
+    custom_endpoint_dao: CustomEndpointDAO,
     query_dao: QueryDAO,
     users_dao: UsersDAO,
     secondary_user_id: Optional[str] = None,
@@ -66,6 +69,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     router: Optional[str] = None,
     processing_time: Optional[float] = 0,
     usage: Optional[Dict] = None,
+    tags: Optional[list[str]] = None,
 ):
     """
     Perform database operations.
@@ -88,22 +92,40 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         secondary_user_id = ""
     if router is None:
         router = ""
-    model_id = int(model_dao.filter(mdl_code=model)[0].id)
-    provider_id = int(provider_dao.filter(name=provider)[0].id)
-    try:
-        endpoint_id = int(
-            endpoint_dao.filter(mdl_id=model_id, provider_id=provider_id)[0].id,
-        )
-    except IndexError:
-        raise internal_endpoint_not_found
+
+    if provider == "custom":
+        endpoint_id = None
+        try:
+            custom_endpoint_id = int(
+                custom_endpoint_dao.filter(
+                    user_id=request_fastapi.state_user_id, name=model
+                )[0].id
+            )
+        except IndexError:
+            raise internal_endpoint_not_found
+    else:
+        model_id = int(model_dao.filter(mdl_code=model)[0].id)
+        provider_id = int(provider_dao.filter(name=provider)[0].id)
+        try:
+            endpoint_id = int(
+                endpoint_dao.filter(mdl_id=model_id, provider_id=provider_id)[0].id,
+            )
+            custom_endpoint_id = None
+        except IndexError:
+            raise internal_endpoint_not_found
     query_model_request = QueryModelRequest(
         user_id=user_id,
+        model_provider_str=f"{model}@{provider}",
         endpoint_id=endpoint_id,
+        custom_endpoint_id=custom_endpoint_id,
+        local_endpoint_id=None,
         credits=cost,  # type: ignore
-        prompt=json.dumps(prompt),
+        query_body=query_body,
+        response_body=response_body,
         signature=signature,
         used_router=used_router,
         router=router,
+        tags=tags,
     )
     users_dao.recharge_credit(user_id, -cost)
     create_query_model(query_model_request, query_dao=query_dao)
@@ -125,5 +147,5 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         processing_time,
         usage,
         signature,
-        json.dumps(prompt),
+        json.dumps(query_body),
     )

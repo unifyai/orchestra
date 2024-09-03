@@ -16,12 +16,17 @@ class QueryModelRequest(BaseModel):
     """
 
     user_id: str
-    endpoint_id: int
+    model_provider_str: str
+    endpoint_id: Optional[int]
+    custom_endpoint_id: Optional[int]
+    local_endpoint_id: Optional[int]
     credits: float
-    prompt: Optional[str]
+    query_body: Optional[str]
+    response_body: Optional[str]
     signature: Optional[str]
     used_router: Optional[bool]
     router: Optional[str]
+    tags: Optional[list[str]]
 
 
 class QueryModelResponse(BaseModel):
@@ -39,9 +44,11 @@ class QueryModelResponse(BaseModel):
     id: int
     user_id: str
     at: datetime.datetime
+    model_provider_str: str
     endpoint_id: int
     credits: float
-    prompt: str
+    query_body: Optional[str]
+    response_body: Optional[str]
     signature: Optional[str]
     used_router: Optional[bool]
     router: Optional[str]
