@@ -59,19 +59,6 @@ async def test_query_timestamped(client: AsyncClient):
     assert len(response.json()) == 0, response.json()
 
 
-async def test_logging_custom_endpoint(client: AsyncClient):
-    assert False  # not done proper logic yet
-    endpoint = "/v0/chat/completions"
-    data = get_chat_completions_payload("llama-3-8b-chat", "aws-bedrock", stream=False)
-    response = await client.post(endpoint, headers=HEADERS, json=data)
-    assert response.status_code == 200
-
-    endpoint = "/v0/queries"
-    response = await client.get(endpoint, headers=HEADERS)
-    assert response.status_code == 200, response.json()
-    assert len(response.json()) == 1, response.json()
-
-
 @pytest.mark.anyio
 async def test_tags(client: AsyncClient):
     endpoint = "/v0/chat/completions"
