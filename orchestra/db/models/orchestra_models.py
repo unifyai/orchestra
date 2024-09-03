@@ -148,10 +148,10 @@ class Metric(Base):
     plottable = sa.Column(sa.Boolean(), nullable=False)  # type: ignore
 
 
-class Query(Base):
-    """Model class for the query table."""
+class QueryOld(Base):
+    """Model class for the old query table."""
 
-    __tablename__ = "query"
+    __tablename__ = "query_old"
 
     id = sa.Column(sa.Integer(), primary_key=True)
     user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
@@ -367,16 +367,17 @@ class LocalEndpoint(Base):
     sa.UniqueConstraint('user_id', 'name', name='uq_user_endpoint')
 
 
-class QueryNew(Base):
-    """Model class for the new query table."""
+class Query(Base):
+    """Model class for the query table."""
 
-    __tablename__ = "query_new"
+    __tablename__ = "query"
 
     id = sa.Column(sa.Integer(), primary_key=True)
     user_id = sa.Column(
         sa.String(), sa.ForeignKey("users.id"), nullable=False, index=True
     )
     at = sa.Column(sa.TIMESTAMP(), nullable=False)
+    model_provider_str = sa.Column(sa.String(), nullable=False)
     endpoint_id = sa.Column(
         sa.Integer(), sa.ForeignKey("endpoint.id"), index=True
     )

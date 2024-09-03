@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, func, or_
 from sqlalchemy.orm import aliased
 
 from orchestra.db.dependencies import get_db_session
@@ -23,9 +23,13 @@ class QueryDAO:
         self,
         user_id: str,
         at: datetime.datetime,
-        endpoint_id: int,
+        model_provider_str: str,
+        endpoint_id: Optional[int],
+        custom_endpoint_id: Optional[int],
+        local_endpoint_id: Optional[int],
         credits: float,
-        prompt: Optional[str] = None,
+        query_body: str,
+        response_body: str,
         signature: Optional[str] = None,
         used_router: Optional[bool] = None,
         router: Optional[str] = None,
@@ -43,16 +47,20 @@ class QueryDAO:
         new_query = Query(
             user_id=user_id,
             at=at,
+            model_provider_str=model_provider_str,
             endpoint_id=endpoint_id,
+            custom_endpoint_id=custom_endpoint_id,
+            local_endpoint_id=local_endpoint_id,
             credits=credits,
-            prompt=prompt,
+            query_body=query_body,
+            response_body=response_body,
             signature=signature,
             used_router=used_router,
             router=router,
         )
         self.session.add(new_query)
 
-        # handles tags
+        # adds tags & avoids race conditions
         if tags:
             for tag_name in tags:
                 tag = (
@@ -93,30 +101,37 @@ class QueryDAO:
     def filter(
         self,
         user_id: Optional[str] = None,
-        at: Optional[datetime.datetime] = None,
-        endpoint_id: Optional[int] = None,
+        start_time: Optional[datetime.datetime] = None,
+        end_time: Optional[datetime.datetime] = None,
+        endpoint_ids: Optional[list[int]] = None,
+        custom_endpoint_ids: Optional[list[int]] = None,
+        local_endpoint_ids: Optional[list[int]] = None,
         credits: Optional[float] = None,
         signature: Optional[str] = None,
         used_router: Optional[str] = None,
         router: Optional[str] = None,
         tags: Optional[list[str]] = None,
     ) -> List[Query]:
-        """
-        Get specific query model.
-
-        :param user_id: user_id of query instance.
-        :param at: at of query instance.
-        :param endpoint_id: endpoint_id of query instance.
-        :param credits: credits of query instance.
-        :return: query instance.
-        """
         query = select(Query)
         if user_id:
             query = query.where(Query.user_id == user_id)
-        if at:
-            query = query.where(Query.at == at)
-        if endpoint_id:
-            query = query.where(Query.endpoint_id == endpoint_id)
+
+        if start_time:
+            query = query.filter(Query.at > start_time)
+        if end_time:
+            query = query.filter(Query.at < end_time)
+
+        endpoint_filters = []
+        if endpoint_ids:
+            endpoint_filters.append(Query.endpoint_id.in_(endpoint_ids))
+        if custom_endpoint_ids:
+            endpoint_filters.append(Query.custom_endpoint_id.in_(custom_endpoint_ids))
+        if local_endpoint_ids:
+            endpoint_filters.append(Query.local_endpoint_id.in_(local_endpoint_ids))
+
+        if endpoint_filters:
+            query = query.where(or_(*endpoint_filters))
+
         if credits:
             query = query.where(Query.credits == credits)
         if signature:
@@ -137,4 +152,16 @@ class QueryDAO:
 
         raw_queries = self.session.execute(query)
 
-        return list(raw_queries.scalars().fetchall())
+        results = list(raw_queries.scalars().fetchall())
+        ret = []
+        for q in results:
+            ret.append(
+                {
+                    "endpoint": q.model_provider_str,
+                    "query_body": q.query_body,
+                    "response_body": q.response_body,
+                    "at": q.at,
+                    "credits": q.credits,
+                }
+            )
+        return ret

@@ -17,6 +17,7 @@ from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 
+
 @router.get("/tags")
 def get_query_tags(
     request_fastapi: Request,
@@ -24,6 +25,7 @@ def get_query_tags(
 ) -> list[str]:
     """Returns a list of the tags in your account"""
     return tag_dao.get_all_tags(request_fastapi.state.user_id)
+
 
 @router.get("/queries")
 def get_query_history(
@@ -33,15 +35,10 @@ def get_query_history(
         description="Tags to filter for queries that are marked with these tags.",
         example="my_tag",
     ),
-    models: Union[None, str, list[str]] = Query(
+    endpoints: Union[None, str, list[str]] = Query(
         default=None,
-        description="Optionally specify a model or list of models to filter for",
-        example="gpt-4o",
-    ),
-    providers: Union[None, str, list[str]] = Query(
-        default=None,
-        description="Optionally specify a provider or list of providers to filter for",
-        example="openai",
+        description="Optionally specify an endpoint, or a list of endpoints to filter for",
+        example="gpt-4o@openai",
     ),
     start_time: Optional[str] = Query(
         None,
@@ -64,32 +61,64 @@ def get_query_history(
     Get the queries history, optionally for a given set of tags for a narrowed search.
     """
     if tags and isinstance(tags, str):
-        tags = list(tags)
-    if models or providers or start_time or end_time:
-        raise HTTPException(status_code=501, detail="Not implemented yet")
-    ## filter
-    # logic to get a list of endpoints, custom_endpoints, local_endpoints
-    endpoints = []
-    custom_endpoints = []
-    local_endpoints = []
-    # need logic for
-    # standard models
-    # model@provider
-    
-    # custom endpoints
-    # @custom
-    # things that don't even go through orchestra
-    # @external
-    
+        tags = [tags]
+    if endpoints and isinstance(endpoints, str):
+        endpoints = [endpoints]
+
+    global_endpoint_ids = []
+    custom_endpoint_ids = []
+    local_endpoint_ids = []
+    if endpoints:
+        for e_str in endpoints:
+            try:
+                _model, _provider = e_str.split("@")
+                if _provider == "external":
+                    raise HTTPException(status_code=501)
+                    # id_ = local_endpoint_dao.filter(user_id=request_fastapi.state.user_id, name=_model)[0].id
+                    # local_endpoint_ids.append(id_)
+                elif _provider == "custom":
+                    _id = custom_endpoint_dao.filter(
+                        user_id=request_fastapi.state.user_id, name=_model
+                    )[0].id
+                    custom_endpoint_ids.append(_id)
+                else:
+                    _id = endpoint_dao.get_endpoints_of(
+                        models=[_model], only_from=[_provider]
+                    )[0][0].id
+                    global_endpoint_ids.append(_id)
+            except Exception as e:
+                print(e)
+                raise HTTPException(
+                    status_code=404, detail=f"Could not find endpoint: {e_str}"
+                )
+
     ret = query_dao.filter(
         user_id=request_fastapi.state.user_id,
         tags=tags,
-        # models=models,
-        # providers=providers,
-        # start_time=start_time,
-        # end_time=end_time,
+        endpoint_ids=global_endpoint_ids,
+        custom_endpoint_ids=custom_endpoint_ids,
+        local_endpoint_ids=local_endpoint_ids,
+        start_time=start_time,
+        end_time=end_time,
     )
     return ret
+
+
+@router.post("/queries")
+def log_query(
+    request_fastapi: Request,
+    endpoint: str = Query(
+        description="Endpoint to log query for.",
+        example="llama-3.1-8b-chat_ollama@external",
+    ),
+    query_body: str = Query(
+        description="A string containing the body of the request", example=""
+    ),
+    response_body: Optional[str] = Query(None, description="An optional string containing the response to the request"),
+    tags: Optional[str] = Query(None, description="Tags for later filtering."),
+    timestamp: Optional[str] = Query(None, description="A timestamp (if left blank will be the time of sending)")
+):
+    pass
 
 
 @router.get("/metrics")
