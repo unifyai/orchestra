@@ -177,4 +177,3 @@ async def test_download_datasets(client: AsyncClient, cleanup):
     # Clean-up
     response = await delete_dataset(client, name)
     assert_delete(response, name)
-
