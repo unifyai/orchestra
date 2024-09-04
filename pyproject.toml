@@ -52,7 +52,7 @@ google-cloud-pubsub = "^2.21.5"
 google-cloud-secret-manager = "^2.20.1"
 pytest-xdist = {extras = ["psutils"], version = "^3.6.1"}
 redis = "^5.0.7"
-litellm = "^1.44.15"
+litellm = "^1.44.16"
 
 
 [tool.poetry.dev-dependencies]
