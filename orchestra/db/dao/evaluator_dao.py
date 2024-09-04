@@ -60,3 +60,23 @@ class EvaluatorDAO:
         if entry is not None:
             if name:
                 setattr(entry, "name", name)  # noqa: B010
+    
+    def rename(self, user_id, name, new_name):
+        try:
+            evaluator_id = self.filter(user_id=user_id, name=name)[0].id
+        except:
+            return {"error": f"No evaluator with the name {name}"}
+
+        self.update(id=evaluator_id, name=new_name)
+
+    def delete_evaluator(self, user_id, name):
+        try:
+            evaluator = (
+                self.session.query(Evaluator).filter_by(user_id=user_id, name=name).one()
+            )
+            self.session.delete(evaluator)
+            self.session.commit()
+            return {"info": "Evaluator deleted successfully"}
+        except:
+            self.session.rollback()
+            return {"info": "Unable to delete evaluator"}
