@@ -26,64 +26,6 @@ from orchestra.db.dao.dataset_dao import DatasetDAO
 
 router = APIRouter()
 
-bucket_name = "uploaded_datasets"
-
-
-# utils
-# TODO: Remove duplication in batch_eval endpoints
-
-
-def _upload_dataset(user_id: str, internal_id: str, file_content: bytes):
-    # TODO: 0 will need to be accounted when introducing dynamic datasets
-    blob_name = f"{user_id}/{internal_id}/0/dataset.jsonl"
-    check_file_content(file_content)
-    exists = (
-        on_prem.file_exists(bucket_name, blob_name)
-        if os.environ.get("ON_PREM")
-        else gcp.blob_exists(bucket_name, blob_name)
-    )
-    if exists:
-        raise dataset_already_exists
-    elif os.environ.get("ON_PREM"):
-        on_prem.write_to_folder(file_content, bucket_name, blob_name)
-    else:
-        gcp.upload_to_bucket(file_content, bucket_name, blob_name)
-
-
-def _delete_dataset(user_id: str, internal_id: str):
-    # TODO: This needs to ensure that no evaluations exist before
-    # deleting the whole directory
-    # TODO: 0 will need to be accounted when introducing dynamic datasets
-    if internal_id == "":
-        raise dataset_does_not_exist(internal_id)
-    dir_name = f"{user_id}/{internal_id}/"
-    exists = (
-        on_prem.dir_exists(bucket_name, dir_name)
-        if os.environ.get("ON_PREM")
-        else gcp.dir_exists(bucket_name, dir_name)
-    )
-    if not exists:
-        raise dataset_does_not_exist(internal_id)
-    elif os.environ.get("ON_PREM"):
-        on_prem.delete(bucket_name, dir_name)
-    else:
-        gcp.delete(bucket_name, dir_name)
-
-
-def _list_datasets(user_id: str):
-    blobs = (
-        on_prem.list_dir(bucket_name, user_id)
-        if os.environ.get("ON_PREM")
-        else gcp.list_dir(bucket_name, user_id)
-    )
-    dirs = set(
-        [(b if os.environ.get("ON_PREM") else b.id).split("/")[2] for b in blobs],
-    )
-    # Clean legacy datasets
-    dirs = {d for d in dirs if not d.endswith(".jsonl")}
-    dirs.discard("evaluation_configs")
-    return list(dirs)
-
 
 def check_file_content(file_content: str):
     valid = True
@@ -134,27 +76,6 @@ def _store_num_tokens(user_id: str, internal_id: str, num_tokens: int):
     )
     string = json.dumps({"num_tokens": num_tokens}).encode()
     if exists:
-        raise dataset_already_exists
-    elif os.environ.get("ON_PREM"):
-        on_prem.write_to_folder(string, bucket_name, blob_name)
-    else:
-        gcp.upload_to_bucket(string, bucket_name, blob_name)
-
-
-def _store_metadata(
-    user_id: str,
-    internal_id: str,
-    name: str,
-    alredy_exists: bool = False,
-):
-    blob_name = f"{user_id}/{internal_id}/metadata.json"
-    exists = (
-        on_prem.file_exists(bucket_name, blob_name)
-        if os.environ.get("ON_PREM")
-        else gcp.blob_exists(bucket_name, blob_name)
-    )
-    string = json.dumps({"display_name": name}).encode()
-    if exists and not alredy_exists:
         raise dataset_already_exists
     elif os.environ.get("ON_PREM"):
         on_prem.write_to_folder(string, bucket_name, blob_name)
@@ -242,7 +163,8 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     """
     if "../" in name or name[0] == "/":
         raise invalid_dataset_name
-    file_content = file.file.readlines()
+    file_content = file.file.read()
+    check_file_content(file_content)
 
     user_datasets = dataset_dao.filter(user_id=request_fastapi.state.user_id, name=name)
     if user_datasets:
@@ -251,10 +173,10 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     dataset_dao.create(user_id=request_fastapi.state.user_id, name=name)
 
     try:
-        for entry in file_content:
+        for entry in file_content.decode().split("\n"):
+            if not entry.strip():
+                continue
             prompt_data = json.loads(entry.strip())
-            if "prompt" not in prompt_data:
-                raise Exception
             dataset_dao.add_prompt_to_dataset(
                 user_id=request_fastapi.state.user_id,
                 dataset_name=name,
@@ -262,7 +184,6 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             )
     except:
         raise HTTPException(400, detail=f"Incorrect data format")
-
 
     return {"info": "Dataset uploaded successfully!"}
 

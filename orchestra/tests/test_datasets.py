@@ -33,6 +33,7 @@ def fetch_datasets(client):
     url = "/v0/dataset/list"
     return client.get(url, headers=headers)
 
+
 @pytest.mark.anyio
 async def test_upload_dataset(client: AsyncClient):
     # Upload dataset
@@ -52,6 +53,7 @@ async def test_upload_duplicate_dataset(client: AsyncClient):
     response = await upload_dataset(client, file_path, name)
     response = await upload_dataset(client, file_path, name)
     assert response.status_code == 400
+
 
 @pytest.mark.anyio
 async def test_upload_incorrect_dataset(client: AsyncClient):
@@ -135,7 +137,7 @@ async def test_download_datasets(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_add_one_prompt(client: AsyncClient):
+async def test_atomic_prompt_fns(client: AsyncClient):
     file_path = "./orchestra/tests/sample_datasets/prompts.jsonl"
     name = "test_add_one_prompt"
     response = await upload_dataset(client, file_path, name)
@@ -150,3 +152,17 @@ async def test_add_one_prompt(client: AsyncClient):
     response = await client.get("/v0/dataset", headers=headers, params=params)
     jsonl = response.json()
     assert len(jsonl) == 4
+
+    _id = jsonl[0]["id"]
+
+    data = {"name": name, "prompt_id": _id}
+    response = await client.delete(
+        "/v0/dataset/delete_prompt", headers=headers, params=data
+    )
+    assert response.status_code == 200, response.json()
+
+    params = {"name": name}
+    response = await client.get("/v0/dataset", headers=headers, params=params)
+    jsonl = response.json()
+    assert len(jsonl) == 3
+    assert jsonl[0]["prompt"] == "This is the second prompt"
