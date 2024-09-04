@@ -11,7 +11,7 @@ user_id = os.getenv("AUTH_ACCOUNT_USER_ID")
 headers = copy.copy(HEADERS)
 headers.pop("Content-Type", None)
 
-
+    
 def upload_dataset(client, file_path, name):
 
     with open(file_path, "rb") as f:

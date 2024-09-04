@@ -6,7 +6,8 @@ import json
 import os
 from typing import Dict
 
-from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, Depends
+from google.cloud import storage
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.web.api.utils import gcp, on_prem
@@ -14,6 +15,11 @@ from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
     invalid_training_endpoints,
 )
+
+from orchestra.db.dao.dataset_dao import DatasetDAO
+from orchestra.db.dao.evaluator_dao import EvaluatorDAO
+from orchestra.db.dao.evaluation_dao import EvaluationDAO
+from orchestra.db.dao.stored_prompt_response_dao import StoredPromptResponseDAO
 
 router = APIRouter()
 admin_router = APIRouter()
@@ -103,25 +109,18 @@ def _get_response_tokens(user_id: str, dataset: str, endpoint: str):
 
 
 # TODO: Move to utils (duplicated in routing)
-def dataset_exists(user_id, name):
-    # TODO: This needs to take public datasets into account as
-    # well.
-    bucket_name = "uploaded_datasets"
-    if os.environ.get("ON_PREM"):
-        id_to_name = on_prem.internal_id_to_displayname(user_id)
-    else:
-        id_to_name = gcp.internal_id_to_displayname(user_id)
-    name_to_id = {name: id_ for id_, name in id_to_name.items()}
-    internal_id = name_to_id.get(name, name)
-    blob_name = f"{user_id}/{internal_id}/0/dataset.jsonl"
-    exists = (
-        on_prem.file_exists(bucket_name, blob_name)
-        if os.environ.get("ON_PREM")
-        else gcp.blob_exists(bucket_name, blob_name)
-    )
-    if exists:
-        return True
+def dataset_exists(dataset_dao, user_id, name):
+    raw_datasets = dataset_dao.filter(user_id=user_id, name=name)
+    if raw_datasets:
+        return raw_datasets[0].id
     return False
+
+
+def get_dataset_id(dataset_dao, user_id, name):
+    raw_datasets = dataset_dao.filter(user_id=user_id, name=name)
+    if raw_datasets:
+        return raw_datasets[0].id
+    return None
 
 
 # TODO: Move to utils (duplicated in routing)
@@ -288,6 +287,9 @@ def trigger_evaluation(
         "Each entry should include `prompt` and `score` keys, with `score` being a float between 0 and 1. The evaluation corresponding to the `evaluator` must have `client_side=True`.",
         json_schema_extra={"example": "client_scores.jsonl"},
     ),
+    dataset_dao: DatasetDAO = Depends(),
+    evaluator_dao: EvaluatorDAO = Depends(),
+    evaluation_dao: EvaluationDAO = Depends(),
 ) -> Dict[str, str]:
     """
     Uses the named `evaluator` to trigger an evaluation of quality scores for the
@@ -300,64 +302,61 @@ def trigger_evaluation(
     user_id = request_fastapi.state.user_id
     user_email = request_fastapi.state.user_email
     api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
-    # Check if the dataset exists
-    if not dataset_exists(user_id, dataset):
-        raise dataset_does_not_exist(dataset)
+
     # Check that the endpoints are valid
     invalid_endpoints = find_invalid_endpoints([endpoint])
     if invalid_endpoints:
         raise invalid_training_endpoints(invalid_endpoints)
-    if os.environ.get("ON_PREM"):
-        id_to_name = on_prem.internal_id_to_displayname(user_id)
-    else:
-        id_to_name = gcp.internal_id_to_displayname(user_id)
-    name_to_id = {name: id_ for id_, name in id_to_name.items()}
-    internal_id = name_to_id.get(dataset, dataset)
-    # check if the evaluator is valid
-    eval_id = eval_name_to_eval_id(user_id, evaluator)
-    if client_side_scores:
-        file = client_side_scores.file.read()
-        # TODO: check whether matches dataset
-        try:
-            lines = file.decode().split("\n")
-            lines = [json.loads(l) for l in lines if l != ""]
-            for ix, line in enumerate(lines):
-                if set(line.keys()) != set(["prompt", "score"]):
-                    raise HTTPException(status_code=400, detail=f"Error in line {ix}")
-        except:
-            raise HTTPException(
-                status_code=400,
-                detail="Error processing uploaded scores",
-            )
 
-        # check whether the eval name is a client side one:
-        bucket_name = "uploaded_datasets"
-        blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
-        contents = load_eval_config_blob(bucket_name, blob_name)
-        if "client_side" not in contents or contents.get("client_side", "") is not True:
-            raise HTTPException(
-                status_code=400,
-                detail=f"The evaluator {evaluator} is not a client-side evaluator "
-                f"(as client_side != True)",
-            )
+    # dataset_id
+    dataset_id = get_dataset_id(dataset_dao, user_id, dataset)
+    if dataset_id is None:
+        raise dataset_does_not_exist(dataset)
 
-        # put everything in the bucket
-        bucket_name = "uploaded_datasets"
-        blob_name = (
-            f"{user_id}/{internal_id}/0/{endpoint}/{eval_id}/client_side_judged.jsonl"
+    # evaluator_id
+    raw_evaluators = evaluator_dao.filter(user_id=user_id, name=evaluator)
+    if not raw_evaluators:
+        raise HTTPException(
+            400, detail=f"The evaluator {evaluator} does not exist in your account"
         )
-        if os.environ.get("ON_PREM"):
-            on_prem.write_to_folder(file, bucket_name, blob_name)
-        else:
-            gcp.upload_to_bucket(
-                file,
-                bucket_name,
-                blob_name,
-                "application/octet-stream",
-            )
-        refresh_scores_json(user_id)
+    evaluator_id = raw_evaluators[0].id
 
-        return {"info": "Evaluation uploaded!"}
+    if client_side_scores:
+        raise NotImplementedError
+        # file = client_side_scores.file.read()
+        # # TODO: check whether matches dataset
+        # try:
+        #     lines = file.decode().split("\n")
+        #     lines = [json.loads(l) for l in lines if l != ""]
+        #     for ix, line in enumerate(lines):
+        #         if set(line.keys()) != set(["prompt", "score"]):
+        #             raise HTTPException(status_code=400, detail=f"Error in line {ix}")
+        # except:
+        #     raise HTTPException(
+        #         status_code=400,
+        #         detail="Error processing uploaded scores",
+        #     )
+
+        # # check whether the eval name is a client side one:
+        # blob = load_eval_config_blob(user_id, eval_id)
+        # contents = json.loads(blob.download_as_bytes().decode("utf-8"))
+        # if "client_side" not in contents or contents.get("client_side", "") is not True:
+        #     raise HTTPException(
+        #         status_code=400,
+        #         detail=f"The evaluator {evaluator} is not a client-side evaluator "
+        #         f"(as client_side != True)",
+        #     )
+
+        # # put everything in the bucket
+        # bucket_name = "uploaded_datasets"
+        # blob_name = (
+        #     f"{user_id}/{internal_id}/0/{endpoint}/{eval_id}/client_side_judged.jsonl"
+        # )
+        # blob = storage.Client().bucket(bucket_name).blob(blob_name)
+        # blob.upload_from_string(file, content_type="application/octet-stream")
+        # refresh_scores_json(user_id)
+
+        # return {"info": "Evaluation uploaded!"}
 
     # Send train job to the dataset_evaluation server
     send_to_dataset_evaluation_server(
@@ -365,9 +364,9 @@ def trigger_evaluation(
         user_id=user_id,
         user_email=user_email,
         api_key=api_key,
-        dataset=internal_id,
+        dataset=dataset,
         endpoint=endpoint,
-        eval_id=eval_id,
+        evaluator=evaluator,
     )
     return {"info": "Dataset evaluation started! You will receive an email soon!"}
 
@@ -720,3 +719,32 @@ def eval_status(
     # format of scores is {eval_id: {endpoint : {judge : score}}}
 
     return ret
+
+
+@admin_router.post("/upload_responses")
+def upload_responses(
+    request_fastapi: Request,
+    name: str,
+    prompt_id: int,
+    endpoint_str: str,
+    response: str,
+    num_tokens: int,
+    stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
+):
+    stored_prompt_response_dao.create(
+        prompt_id=prompt_id,
+        endpoint_str=endpoint_str,
+        response=response,
+        num_tokens=num_tokens,
+    )
+    
+@admin_router.get("/get_responses")
+def download_responses(
+    request_fastapi: Request,
+    name: str,
+    prompt_id: int,
+    endpoint_str: str,
+):
+    pass
+    return response, timestamp
+    #TODO: log the timestamp in a prompt response (models aren't static!)

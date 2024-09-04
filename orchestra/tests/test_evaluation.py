@@ -8,7 +8,7 @@ from google.cloud import storage
 from httpx import AsyncClient
 
 import orchestra
-from orchestra.web.api.evaluators.views import build_displayname_to_id
+from .test_datasets import upload_dataset
 
 # TODO: Less hacky way for this?
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -50,7 +50,6 @@ sample_path = "./orchestra/tests/sample_datasets/with_ref.jsonl"
 
 async def test_trigger_eval(
     client: AsyncClient,
-    cleanup_eval_config,
     tmp_path,
     monkeypatch,
 ):
@@ -79,10 +78,10 @@ async def test_trigger_eval(
         mock_send_to_dataset_evaluation_server,
     )
 
+    # create evaluator
     eval_name = "test_eval"
     system_prompt = "dummy system prompt"
     judge_model = "llama-3-8b-chat@aws-bedrock"
-    cleanup_eval_config.append(eval_name)
 
     url = "/v0/evaluator"
     params = {
@@ -93,8 +92,15 @@ async def test_trigger_eval(
     response = await client.post(url, json=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
+    # create dataset
+
+    file_path = "./orchestra/tests/sample_datasets/prompts.jsonl"
+    dataset = "test_dataset_eval"
+    response = await upload_dataset(client, file_path, dataset)
+    assert response.status_code == 200, response.json()
+
+    # create trigger evaluation
     url = "/v0/evaluation"
-    dataset = "test_dataset"
     endpoint = "llama-3-8b-chat@aws-bedrock"
     params = {
         "url": url,

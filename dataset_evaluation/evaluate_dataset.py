@@ -21,7 +21,7 @@ class BenchmarkConfig:
     action: str
     dataset: str
     endpoint: str
-    eval_id: str
+    evaluator: str
     user_id: str
     api_key: str
     orchestra_url: str
@@ -138,6 +138,46 @@ def send_email(user_email, endpoint, dataset):
     email_server.quit()
 
 
+async def fetch_evaluator_config(client, cfg):
+    url = cfg.orchestra_url + "/v0/evaluator"
+    HEADERS = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {cfg.api_key}",
+        "Content-Type": "application/json",
+    }
+    params = {"name": cfg.evaluator}
+    response = await client.get(url, headers=HEADERS, params=params)
+    eval_cfg = response.json()
+    return eval_cfg
+
+# TODO:
+async def fetch_dataset(client, cfg):
+    url = cfg.orchestra_url + "/v0/dataset"
+    HEADERS = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {cfg.api_key}",
+        "Content-Type": "application/json",
+    }
+    params = {"name": cfg.dataset}
+    response = await client.get(url, headers=HEADERS, params=params)
+    prompts = response.json()
+    return prompts
+
+async def upload_responses(client, cfg, responses_path):
+    url = cfg.orchestra_url + "/v0/evaluations/responses"
+    HEADERS = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {cfg.api_key}",
+        "Content-Type": "application/json",
+    }
+    params = {"name": cfg.dataset}
+    response = await client.get(url, headers=HEADERS, params=params)
+    prompts = response.json()
+    pass
+
+async def upload_judgements(client, cfg, judgements_path):
+    pass
+
 async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     """msg is a json object with two fields: config and prompts
     prompts is a list of json objects of the form {"prompt", "reference_answer"}.
@@ -145,6 +185,12 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     cfg = json.loads(msg)
     user_email = cfg.pop("user_email", None)
     cfg = BenchmarkConfig(**cfg)
+
+    if client is None:
+        limits = Limits(
+            max_keepalive_connections=None, max_connections=None, keepalive_expiry=30
+        )
+        client = AsyncClient(base_url=cfg.orchestra_url, limits=limits, timeout=60)
 
     # create root folder
     run_save_path = os.path.join(shared_volume, data_dir, cfg.user_id, cfg.dataset)
@@ -156,23 +202,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     prompts_path = os.path.join(run_save_path, "prompts.jsonl")
 
     # load prompts
-
-    bucket_name = "uploaded_datasets"
-    blob_name = os.path.join(cfg.user_id, cfg.dataset, "0", "dataset.jsonl")
-    folder = os.path.dirname(prompts_path)
-    folder = os.path.join(folder, "tmp")
-    os.makedirs(folder, exist_ok=True)
-    tmp_prompts_path = os.path.join(folder, f"{cfg.endpoint}_tmp_prompts.jsonl")
-    if os.environ.get("ON_PREM"):
-        blob_name = os.path.join(shared_volume, bucket_name, blob_name)
-        os.makedirs(os.sep.join(blob_name.split(os.sep)[:-1]), exist_ok=True)
-        with open(tmp_prompts_path, "w") as f:
-            f.write(open(blob_name).read())
-    else:
-        blob = storage.Client().bucket(bucket_name).blob(blob_name)
-        blob.download_to_filename(tmp_prompts_path)
-    with open(tmp_prompts_path) as f:
-        prompts = [json.loads(l) for l in f]
+    prompts = await fetch_dataset(client, cfg)
 
     os.makedirs(model_responses_path, exist_ok=True)
     os.makedirs(model_judgements_path, exist_ok=True)
@@ -184,22 +214,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
                 f.write(json.dumps(entry) + "\n")
 
     # load eval_config
-    bucket_name = "uploaded_datasets"
-    blob_name = os.path.join(cfg.user_id, "evaluation_configs", f"{cfg.eval_id}.config")
-    if os.environ.get("ON_PREM"):
-        with open(os.path.join(shared_volume, bucket_name, blob_name), "rb") as f:
-            eval_config = json.loads(f.read().decode("utf-8"))
-    else:
-        blob = storage.Client().bucket(bucket_name).blob(blob_name)
-        eval_config = json.loads(blob.download_as_bytes().decode("utf-8"))
-
-    if client is None:
-        limits = Limits(
-            max_keepalive_connections=None,
-            max_connections=None,
-            keepalive_expiry=30,
-        )
-        client = AsyncClient(base_url=cfg.orchestra_url, limits=limits, timeout=60)
+    eval_config = await fetch_evaluator_config(client, cfg)
 
     def _format_model_tag(model_tag):
         return model_tag.replace("@", "___")
@@ -212,6 +227,9 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
             + "___"
             + _format_model_tag(judge_model_tag)
         )
+
+
+    # TODO :: CHANGE THE IN PROGRESS BLOB STUFF to use the db
 
     async def process_queries(
         endpoint,
@@ -372,6 +390,12 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     print("Done collecting data")
     # upload to cloud storage buckets
 
+
+    model_responses_formatted_path = os.path.join(
+        model_responses_path,
+        _format_model_tag(cfg.endpoint) + ".jsonl",
+    )
+
     ## upload responses
     blob_name = os.path.join(
         cfg.user_id,
@@ -379,10 +403,6 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
         "0",
         cfg.endpoint,
         "responses.jsonl",
-    )
-    model_responses_formatted_path = os.path.join(
-        model_responses_path,
-        _format_model_tag(cfg.endpoint) + ".jsonl",
     )
     if os.environ.get("ON_PREM"):
         blob_name = os.path.join(shared_volume, bucket_name, blob_name)
@@ -392,6 +412,10 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     else:
         blob = storage.Client().bucket(bucket_name).blob(blob_name)
         blob.upload_from_filename(model_responses_formatted_path)
+
+    ## todo: uploads
+    response = await upload_responses(client, cfg, model_responses_formatted_path)
+
 
     ## upload judgements
 
