@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import Depends
@@ -5,7 +6,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Dataset
+from orchestra.db.models.orchestra_models import (
+    Dataset,
+    StoredPrompt,
+    StoredPromptExtraField,
+    DatasetPrompt,
+)
 
 
 class DatasetDAO:
@@ -52,3 +58,110 @@ class DatasetDAO:
         if entry is not None:
             if name:
                 setattr(entry, "name", name)  # noqa: B010
+
+    def rename(self, user_id, name, new_name):
+        try:
+            dataset_id = self.filter(user_id=user_id, name=name)[0].id
+        except:
+            return {"error": f"No dataset with the name {name}"}
+
+        self.update(id=dataset_id, name=new_name)
+
+    def fetch_dataset(self, user_id: str, name: str) -> list[dict]:
+        try:
+            dataset_id = self.filter(user_id=user_id, name=name)[0].id
+        except:
+            return
+
+        query = (
+            select(StoredPrompt, DatasetPrompt)
+            .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
+            .where(DatasetPrompt.dataset_id == dataset_id)
+        )
+
+        result = self.session.execute(query).fetchall()
+        dataset_prompts = []
+        for stored_prompt, _ in result:
+            prompt_data = {
+                "id": stored_prompt.id,
+                "prompt": stored_prompt.prompt,
+                "ref_answer": stored_prompt.ref_answer,
+                "num_tokens": stored_prompt.num_tokens,
+                "timestamp": stored_prompt.timestamp,
+            }
+            # Query to get extra fields for this prompt
+            extra_fields_query = select(StoredPromptExtraField).where(
+                StoredPromptExtraField.prompt_id == stored_prompt.id
+            )
+            extra_fields = self.session.execute(extra_fields_query).fetchall()
+
+            for extra_field in extra_fields:
+                prompt_data[extra_field.field] = extra_field.value
+
+            dataset_prompts.append(prompt_data)
+
+        return dataset_prompts
+
+    def add_prompt_to_dataset(self, user_id, dataset_name, prompt_data):
+        try:
+            dataset_id = self.filter(user_id=user_id, name=dataset_name)[0].id
+        except:
+            return {"error": f"Dataset {dataset_name} not found"}
+
+        new_prompt = StoredPrompt(
+            user_id=user_id,
+            prompt=prompt_data["prompt"],
+            ref_answer=prompt_data.get("ref_answer"),
+            num_tokens=prompt_data.get("num_tokens", 0),
+            timestamp=prompt_data.get("timestamp", datetime.utcnow()),
+        )
+        self.session.add(new_prompt)
+        self.session.flush()
+
+        # add extra fields
+        for field, value in prompt_data.items():
+            if field in ["prompt", "ref_answer", "num_tokens", "timestamp"]:
+                continue
+            extra_field = StoredPromptExtraField(
+                prompt_id=new_prompt.id,
+                field=field,
+                value=value,
+            )
+            self.session.add(extra_field)
+            self.session.flush()
+
+        dataset_prompt = DatasetPrompt(dataset_id=dataset_id, prompt_id=new_prompt.id)
+        self.session.add(dataset_prompt)
+        self.session.commit()
+
+    def remove_prompt_from_dataset(self, user_id, dataset_name, prompt_id):
+        try:
+            dataset_id = self.filter(user_id=user_id, name=dataset_name)[0].id
+        except:
+            return {"error": f"Dataset {dataset_name} not found"}
+
+        try:
+            dataset_prompt = (
+                self.session.query(DatasetPrompt)
+                .filter_by(dataset_id=dataset_id, prompt_id=prompt_id)
+                .one()
+            )
+
+            self.session.delete(dataset_prompt)
+            self.session.commit()
+            return {"message": "Dataset prompt deleted successfully"}
+        except:
+            self.session.rollback()
+            return {"error": "Dataset prompt not found"}
+
+    def delete_dataset(self, user_id, name):
+        try:
+            dataset = (
+                self.session.query(Dataset).filter_by(user_id=user_id, name=name).one()
+            )
+            self.session.delete(dataset)
+            self.session.commit()
+            return {"message": "Dataset deleted successfully"}
+        except:
+            self.session.rollback()
+            return {"message": "Unable to delete dataset"}

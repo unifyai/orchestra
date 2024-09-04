@@ -404,6 +404,7 @@ class Dataset(Base):
         nullable=True,
     )
     name = sa.Column(sa.String(), nullable=False)
+    __table_args__ = (sa.UniqueConstraint("user_id", "name", name="uq_userid_name"),)
 
 
 class StoredPrompt(Base):
