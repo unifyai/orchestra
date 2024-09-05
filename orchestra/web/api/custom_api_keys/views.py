@@ -107,7 +107,7 @@ def delete_custom_api_key(
     """
     user_id = request_fastapi.state.user_id
 
-    existing_key = custom_api_key_dao.filter(user_id=user_id, key=key)
+    existing_key = custom_api_key_dao.filter(user_id=user_id, key=name)
     if not existing_key:
         raise custom_api_key_not_found
 
@@ -157,7 +157,7 @@ def rename_custom_api_key(
     """
     user_id = request_fastapi.state.user_id
 
-    existing_key = custom_api_key_dao.filter(user_id=user_id, name=name)
+    existing_key = custom_api_key_dao.filter(user_id=user_id, key=name)
     if not existing_key:
         raise custom_api_key_not_found
 
