@@ -14,11 +14,12 @@ shared_volume = os.environ.get("SHARED_VOLUME")
 
 
 class OnPremModel:
-    def __init__(self, model_class: object, table_name: str):
+    def __init__(self, model_class: object, table_name: str, id_field: str = "id"):
         self.model_class = model_class
         self.table_name = table_name
         self.shared_volume = shared_volume
         self.json_path = os.path.join(self.shared_volume, "db", f"{table_name}.json")
+        self.id_field = id_field
         if not os.path.exists(self.json_path):
             os.makedirs(os.path.join(self.shared_volume, "db"), exist_ok=True)
             with open(self.json_path, "w") as f:
@@ -27,8 +28,8 @@ class OnPremModel:
     def create(self, **data):
         with open(self.json_path) as f:
             entries = json.load(f)["data"]
-        id = (entries[-1]["id"] + 1) if len(entries) else 0
-        data["id"] = id
+        id = (entries[-1][self.id_field] + 1) if len(entries) else 0
+        data[self.id_field] = id
         with open(self.json_path, "w") as f:
             json.dump({"data": [*entries, data]}, f, indent=4)
 
@@ -76,14 +77,20 @@ class OnPremModel:
             for table_name in filters:
                 fields = list(filters[table_name].keys())
                 for field in fields:
-                    if (
-                        filters[table_name][field] is not None
-                        and filters[table_name][field]
-                        != final_entries[table_name][i][field]
-                    ):
-                        [entry.pop(i) for entry in final_entries.values()]
-                        filtered = True
-                        break
+                    if filters[table_name][field] is not None:
+                        if isinstance(filters[table_name][field], (str, int)):
+                            check = (
+                                filters[table_name][field]
+                                == final_entries[table_name][i][field]
+                            )
+                        else:
+                            check = filters[table_name][field](
+                                final_entries[table_name][i][field],
+                            )
+                        if not check:
+                            [entry.pop(i) for entry in final_entries.values()]
+                            filtered = True
+                            break
                 if filtered:
                     break
 
@@ -113,7 +120,11 @@ class OnPremModel:
         with open(self.json_path) as f:
             entries = json.load(f)["data"]
         relevant_entry = self.read(filters, return_raw=True)[0]
-        entries = [entry for entry in entries if entry["id"] != relevant_entry["id"]]
+        entries = [
+            entry
+            for entry in entries
+            if entry[self.id_field] != relevant_entry[self.id_field]
+        ]
         for field, value in updates.items():
             relevant_entry[field] = value
         with open(self.json_path, "w") as f:
@@ -123,7 +134,11 @@ class OnPremModel:
         with open(self.json_path) as f:
             entries = json.load(f)["data"]
         relevant_entry = self.read(filters, return_raw=True)[0]
-        entries = [entry for entry in entries if entry["id"] != relevant_entry["id"]]
+        entries = [
+            entry
+            for entry in entries
+            if entry[self.id_field] != relevant_entry[self.id_field]
+        ]
         with open(self.json_path, "w") as f:
             json.dump({"data": entries}, f, indent=4)
 
