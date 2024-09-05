@@ -67,6 +67,13 @@ class CustomApiKeyDAO:
         return copied
 
     def rename(self, user_id: str, name: str, new_name: str):
+        if self.on_prem:
+            self.on_prem_model.update(
+                {"custom_api_key": {"user_id": user_id, "key": name}},
+                {"key": new_name},
+            )
+            return
+
         query = select(CustomApiKey)
         query = query.where(CustomApiKey.user_id == user_id)
         query = query.where(CustomApiKey.key == name)

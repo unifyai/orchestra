@@ -38,6 +38,7 @@ class OnPremModel:
         join_table: str = None,
         join_columns: Tuple[str, str] = None,
         select_columns: Dict[str, List[str]] = None,
+        return_raw: bool = False,
     ):
         # getting the entries for the primary table
         with open(self.json_path) as f:
@@ -89,7 +90,8 @@ class OnPremModel:
         # we do have select columns almost always when doing joins, so don't need to deal with joins here
         if not select_columns:
             return [
-                self.model_class(**entry) for entry in final_entries[self.table_name]
+                self.model_class(**entry) if not return_raw else entry
+                for entry in final_entries[self.table_name]
             ]
 
         # select needed columns
@@ -102,6 +104,20 @@ class OnPremModel:
             final_results.append(result)
 
         return final_results
+
+    def update(
+        self,
+        filters: Dict[str, Dict[str, Union[str, int]]],
+        updates: Dict[str, Union[str, int]],
+    ):
+        with open(self.json_path) as f:
+            entries = json.load(f)["data"]
+        relevant_entry = self.read(filters, return_raw=True)[0]
+        entries = [entry for entry in entries if entry["id"] != relevant_entry["id"]]
+        for field, value in updates.items():
+            relevant_entry[field] = value
+        with open(self.json_path, "w") as f:
+            json.dump({"data": [*entries, relevant_entry]}, f)
 
 
 def send_pubsub_msg(topic: str, msg: Dict[str, str]) -> None:
