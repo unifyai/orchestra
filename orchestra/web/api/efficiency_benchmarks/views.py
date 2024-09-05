@@ -2,9 +2,11 @@
 Includes endpoints related to benchmarks.
 """
 
+import os
 from datetime import datetime
 from typing import Dict, List, Union
 
+import requests
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
@@ -293,6 +295,29 @@ def get_benchmark(
             custom_endpoint_dao=custom_endpoint_dao,
             custom_endpoint_benchmark_dao=custom_endpoint_benchmark_dao,
         )
+    elif os.environ.get("ON_PREM"):
+        request_url = os.environ.get("PUBLIC_ORCHESTRA_URL", "") + "/benchmark"
+        kwargs = {
+            "model": model,
+            "provider": provider,
+            "region": region,
+            "seq_len": seq_len,
+            "start_time": start_time,
+            "end_time": end_time,
+        }
+        for key, value in list(kwargs.items()):
+            if not value:
+                kwargs.pop(key)
+        headers = {
+            key: value
+            for key, value in request_fastapi._headers.items()
+            if key in ["content-type", "authorization"]
+        }
+        return requests.get(
+            request_url,
+            params=kwargs,
+            headers=headers,
+        ).json()
     try:
         endpoint_id = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
         if latest_only:
