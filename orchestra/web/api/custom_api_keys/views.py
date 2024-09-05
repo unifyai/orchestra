@@ -52,7 +52,31 @@ def create_custom_api_key(
     return {"info": "API key created successfully!"}
 
 
-@router.get("/custom_api_key", response_model=CustomApiKeyModelResponse)
+@router.get(
+    "/custom_api_key",
+    response_model=CustomApiKeyModelResponse,
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "name": "custom_api_key_name",
+                        "value": "custom_api_key_value",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Custom API key Not Found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "API key not found."},
+                },
+            },
+        },
+    },
+)
 def get_custom_api_key(
     request_fastapi: Request,
     name: str = Query(
@@ -68,8 +92,8 @@ def get_custom_api_key(
     all_keys = custom_api_key_dao.get_user_keys(user_id=user_id)
     for api_key in all_keys:
         if api_key.key == name:
-            return api_key
-    raise Exception("No API key found with name '{}'".format(name))
+            return CustomApiKeyModelResponse(name=api_key.key, value=api_key.value)
+    raise custom_api_key_not_found
 
 
 @router.delete(

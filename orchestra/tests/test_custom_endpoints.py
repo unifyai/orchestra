@@ -47,6 +47,11 @@ async def test_custom_api_keys(  # noqa: WPS218, E501
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
+    # get custom api key
+    url = "v0/custom_api_key"
+    response = await client.get(url, params={"name": "key_1_test"}, headers=HEADERS)
+    assert json.loads(response.text) == {"name": "key_1_test", "value": "****1234"}
+
     # list custom api key
     url = "v0/custom_api_key/list"
     response = await client.get(url, headers=HEADERS)
