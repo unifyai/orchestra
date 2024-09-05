@@ -721,10 +721,9 @@ def eval_status(
     return ret
 
 
-@admin_router.post("/upload_responses")
+@admin_router.post("/evaluations/upload_responses")
 def upload_responses(
     request_fastapi: Request,
-    name: str,
     prompt_id: int,
     endpoint_str: str,
     response: str,
@@ -738,13 +737,39 @@ def upload_responses(
         num_tokens=num_tokens,
     )
     
-@admin_router.get("/get_responses")
+@admin_router.get("/evaluations/get_responses")
 def download_responses(
     request_fastapi: Request,
     name: str,
     prompt_id: int,
     endpoint_str: str,
+    stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
 ):
     pass
-    return response, timestamp
-    #TODO: log the timestamp in a prompt response (models aren't static!)
+    # return response, timestamp
+    # TODO: log the timestamp in a prompt response (models aren't static!)
+
+
+@admin_router.post("/evaluations/upload_judgements")
+def upload_judgements(
+    request_fastapi: Request,
+    name: str,
+    prompt_id: int,
+    endpoint_str: str,
+    judge_endpoint_id: str,
+    judgement: str,
+    stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
+    judgement_dao: JudgementDAO = Depends(),
+):
+
+    try:
+        raw_ids = stored_prompt_response_dao.filter(prompt_id=prompt_id, endpoint_str=endpoint_str)
+        response_id = raw_ids[0].id
+    except:
+        raise Exception
+
+    judgement_dao.create(
+        response_id=repsonse_id,
+        judge_endpoint_id=judge_endpoint_id,
+        judgement=judgement,
+    )

@@ -150,7 +150,7 @@ async def fetch_evaluator_config(client, cfg):
     eval_cfg = response.json()
     return eval_cfg
 
-# TODO:
+
 async def fetch_dataset(client, cfg):
     url = cfg.orchestra_url + "/v0/dataset"
     HEADERS = {
@@ -163,20 +163,50 @@ async def fetch_dataset(client, cfg):
     prompts = response.json()
     return prompts
 
+
+## IN PROGRESS
+# TODO: make the response data have the right format (num tokns etc)
+
 async def upload_responses(client, cfg, responses_path):
-    url = cfg.orchestra_url + "/v0/evaluations/responses"
+    to_upload = []
+    with open(responses_path) as f:
+        for line in f:
+            to_upload.append(json.loads(line))
+
+    # TODO: async over this
+    for resp in to_upload:
+        await upload_single_response(client, cfg, resp)
+
+
+async def upload_single_response(client, cfg, data):
+    url = cfg.orchestra_url + "/v0/evaluations/upload_responses"
+    HEADERS = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {cfg.api_key}",
+        "Content-Type": "application/json",
+    }
+    params = {
+        "prompt_id": data["prompt_id"],
+        "endpoint_str": data["endpoint_str"],
+        "response": data["response"],
+        "num_tokens": data["num_tokens"],
+    }
+    response = await client.post(url, headers=HEADERS, params=params)
+
+
+async def upload_single_judgement(client, cfg, judgements_path):
+    url = cfg.orchestra_url + "/v0/evaluations/upload_judgements"
     HEADERS = {
         "accept": "application/json",
         "Authorization": f"Bearer {cfg.api_key}",
         "Content-Type": "application/json",
     }
     params = {"name": cfg.dataset}
-    response = await client.get(url, headers=HEADERS, params=params)
-    prompts = response.json()
-    pass
+    response = await client.post(url, headers=HEADERS, params=params)
 
-async def upload_judgements(client, cfg, judgements_path):
-    pass
+
+##
+
 
 async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     """msg is a json object with two fields: config and prompts
@@ -227,7 +257,6 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
             + "___"
             + _format_model_tag(judge_model_tag)
         )
-
 
     # TODO :: CHANGE THE IN PROGRESS BLOB STUFF to use the db
 
@@ -390,7 +419,6 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     print("Done collecting data")
     # upload to cloud storage buckets
 
-
     model_responses_formatted_path = os.path.join(
         model_responses_path,
         _format_model_tag(cfg.endpoint) + ".jsonl",
@@ -415,7 +443,6 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
 
     ## todo: uploads
     response = await upload_responses(client, cfg, model_responses_formatted_path)
-
 
     ## upload judgements
 

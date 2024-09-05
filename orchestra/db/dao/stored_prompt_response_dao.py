@@ -32,11 +32,14 @@ class StoredPromptResponseDAO:
         self,
         id: Optional[int] = None,  # noqa: WPS125
         prompt_id: Optional[int] = None,
+        endpoint_str: Optional[str] = None,
     ) -> List[StoredPromptResponse]:
         query = select(StoredPromptResponse)
         if id:
             query = query.where(StoredPromptResponse.id == id)
         if prompt_id:
             query = query.where(StoredPromptResponse.prompt_id == prompt_id)
+        if endpoint_str:
+            query = query.where(StoredPromptREsponse.endpoint_str == endpoint_str)
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())
