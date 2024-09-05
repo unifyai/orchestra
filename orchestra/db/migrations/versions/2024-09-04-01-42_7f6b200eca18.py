@@ -102,10 +102,10 @@ def upgrade() -> None:
         "evaluation",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("prompt_id", sa.Integer(), nullable=True),
-        sa.Column("devaluator_id", sa.Integer(), nullable=True),
+        sa.Column("evaluator_id", sa.Integer(), nullable=True),
         sa.Column("score", sa.Numeric(), nullable=False),
         sa.ForeignKeyConstraint(
-            ["devaluator_id"],
+            ["evaluator_id"],
             ["evaluator.id"],
         ),
         sa.ForeignKeyConstraint(
@@ -115,9 +115,9 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        op.f("ix_evaluation_devaluator_id"),
+        op.f("ix_evaluation_evaluator_id"),
         "evaluation",
-        ["devaluator_id"],
+        ["evaluator_id"],
         unique=False,
     )
     op.create_index(
@@ -235,7 +235,7 @@ def downgrade() -> None:
     )
     op.drop_table("stored_prompt_extra_field")
     op.drop_index(op.f("ix_evaluation_prompt_id"), table_name="evaluation")
-    op.drop_index(op.f("ix_evaluation_devaluator_id"), table_name="evaluation")
+    op.drop_index(op.f("ix_evaluation_evaluator_id"), table_name="evaluation")
     op.drop_table("evaluation")
     op.drop_index(op.f("ix_dataset_prompt_prompt_id"), table_name="dataset_prompt")
     op.drop_index(op.f("ix_dataset_prompt_dataset_id"), table_name="dataset_prompt")

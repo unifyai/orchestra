@@ -419,7 +419,9 @@ class StoredPrompt(Base):
         index=True,
         nullable=True,
     )
-    prompt = sa.Column(sa.String(), nullable=False)
+    system_msg = sa.Column(sa.String(), index=True, nullable=True)
+    messages = sa.Column(sa.String(), index=True, nullable=False)
+    prompt_kwargs = sa.Column(sa.String(), nullable=False)
     ref_answer = sa.Column(sa.String(), nullable=True)
     num_tokens = sa.Column(sa.Integer(), nullable=False)
     timestamp = sa.Column(sa.TIMESTAMP(), nullable=False)
