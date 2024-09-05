@@ -2122,13 +2122,13 @@ referencing = ">=0.31.0"
 
 [[package]]
 name = "litellm"
-version = "1.44.16"
+version = "1.44.18"
 description = "Library to easily interface with LLM API providers"
 optional = false
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 files = [
-    {file = "litellm-1.44.16-py3-none-any.whl", hash = "sha256:8fc583b8531739dfe743f21dc077a742d6b2b219c3d4491f6f06418c18dbba70"},
-    {file = "litellm-1.44.16.tar.gz", hash = "sha256:db1c76027c6fdf428df5d40d96dc92024d9f23997988cd6406cc1825d688ed37"},
+    {file = "litellm-1.44.18-py3-none-any.whl", hash = "sha256:9611b87e426fec904793e1f26248f8776e6f448595902fadf2f0a85b0d0ce2d2"},
+    {file = "litellm-1.44.18.tar.gz", hash = "sha256:74fa7075f3c80bdaec384da41c7e153c23b6fa4cfa6923ee972bc8eaf2464938"},
 ]
 
 [package.dependencies]
@@ -4977,4 +4977,4 @@ test = ["big-O", "importlib-resources", "jaraco.functools", "jaraco.itertools", 
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.9"
-content-hash = "41be47f61ddf2c68ec89354566cd90407b8047ac9ddd87dfa12aba1145247b13"
+content-hash = "d98053c1f2c53de324fa6b1e4dab0b2e6dada03bc1ea2ea275e6ca3872e75ffd"
