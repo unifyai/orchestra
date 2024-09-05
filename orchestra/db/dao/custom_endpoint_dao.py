@@ -82,6 +82,12 @@ class CustomEndpointDAO:
         return list(raw_custom_endpoints.fetchall())
 
     def rename(self, user_id: str, name: str, new_name: str):
+        if self.on_prem:
+            self.on_prem_model.update(
+                {"custom_endpoint": {"user_id": user_id, "name": name}},
+                {"name": new_name},
+            )
+            return
         query = select(CustomEndpoint)
         query = query.where(CustomEndpoint.user_id == user_id)
         query = query.where(CustomEndpoint.name == name)
@@ -92,6 +98,11 @@ class CustomEndpointDAO:
             setattr(custom_endpoint, "name", new_name)
 
     def delete(self, user_id: str, name: str):
+        if self.on_prem:
+            self.on_prem_model.delete(
+                {"custom_endpoint": {"user_id": user_id, "name": name}},
+            )
+            return
         query = delete(CustomEndpoint).where(
             and_(CustomEndpoint.user_id == user_id, CustomEndpoint.name == name),
         )
