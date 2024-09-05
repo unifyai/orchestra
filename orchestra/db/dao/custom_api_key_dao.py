@@ -73,7 +73,6 @@ class CustomApiKeyDAO:
                 {"key": new_name},
             )
             return
-
         query = select(CustomApiKey)
         query = query.where(CustomApiKey.user_id == user_id)
         query = query.where(CustomApiKey.key == name)
