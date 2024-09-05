@@ -13,13 +13,16 @@ OPENAI_ALLOWED_ARGS = set(inspect.signature(oai_func).parameters.keys())
 anth_func = Anthropic(api_key="").messages.create
 ANTHROPIC_ALLOWED_ARGS = set(inspect.signature(anth_func).parameters.keys())
 
+ADDITIONAL_ALLOWED_ARGS = {"aws_region_name", "vertex_location"}
+
 
 def filter_kwargs_for_openai_client(kwargs: dict) -> tuple[dict, dict]:
     extra_body = kwargs.get("extra_body", {})
     new_kwargs = {}
+    allowed_args = OPENAI_ALLOWED_ARGS.union(ADDITIONAL_ALLOWED_ARGS)
 
     for k, v in kwargs.items():
-        if k not in OPENAI_ALLOWED_ARGS:
+        if k not in allowed_args:
             extra_body[k] = v
         else:
             new_kwargs[k] = v

@@ -1,3 +1,5 @@
+from typing import Any, List
+
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
@@ -21,16 +23,80 @@ class VertexAI(BaseCompletionProvider):
     def litellm_api_key_var(self) -> str:
         return "GOOGLE_APPLICATION_CREDENTIALS"
 
+    def __call__(
+        self,
+        messages: List,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> Any:  # noqa: WPS210
+        region = self.supported_models[self.hub_model]["region"]
+        kwargs["vertex_location"] = region
+        return super().__call__(messages, stream, **kwargs)
+
+    def __call_async__(
+        self,
+        messages: List,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        region = self.supported_models[self.hub_model]["region"]
+        kwargs["vertex_location"] = region
+        return super().__call__(messages, stream, **kwargs)
+
 
 supported_models = {
     "gemini-1.5-pro": {
         "endpoint": "vertex_ai/gemini-1.5-pro",
+        "region": "us-west1",
         "context_window": 128000,
         "cost": {"prompt": 3.5, "completion": 10.5},
     },
     "gemini-1.5-flash": {
         "endpoint": "vertex_ai/gemini-1.5-flash",
+        "region": "us-west1",
         "context_window": 128000,
         "cost": {"prompt": 0.075, "completion": 0.3},
+    },
+    "claude-3-haiku": {
+        "endpoint": "vertex_ai/claude-3-haiku@20240307",
+        "region": "us-east5",
+        "context_window": 200000,
+        "cost": {"prompt": 0.25, "completion": 1.25},
+    },
+    "claude-3-sonnet": {
+        "endpoint": "vertex_ai/claude-3-sonnet@20240229",
+        "region": "us-east5",
+        "context_window": 200000,
+        "cost": {"prompt": 3, "completion": 15},
+    },
+    "claude-3-opus": {
+        "endpoint": "vertex_ai/claude-3-opus@20240229",
+        "region": "us-east5",
+        "context_window": 200000,
+        "cost": {"prompt": 15, "completion": 75},
+    },
+    "claude-3.5-sonnet": {
+        "endpoint": "vertex_ai/claude-3-5-sonnet@20240620",
+        "region": "us-east5",
+        "context_window": 200000,
+        "cost": {"prompt": 3, "completion": 15},
+    },
+    "llama-3.1-405b-chat": {
+        "endpoint": "vertex_ai/meta/llama3-405b-instruct-maas",
+        "region": "us-central1",
+        "context_window": 128000,
+        "cost": {"prompt": 5.32, "completion": 16},
+    },
+    "mistral-large": {
+        "endpoint": "vertex_ai/mistral-large",
+        "region": "europe-west4",
+        "context_window": 32768,
+        "cost": {"prompt": 3, "completion": 9},
+    },
+    "mistral-nemo": {
+        "endpoint": "vertex_ai/mistral-nemo",
+        "region": "europe-west4",
+        "context_window": 128000,
+        "cost": {"prompt": 0.3, "completion": 0.3},
     },
 }
