@@ -30,7 +30,7 @@ class OnPremModel:
         id = (entries[-1]["id"] + 1) if len(entries) else 0
         data["id"] = id
         with open(self.json_path, "w") as f:
-            json.dump({"data": [*entries, data]}, f)
+            json.dump({"data": [*entries, data]}, f, indent=4)
 
     def read(
         self,
@@ -117,7 +117,15 @@ class OnPremModel:
         for field, value in updates.items():
             relevant_entry[field] = value
         with open(self.json_path, "w") as f:
-            json.dump({"data": [*entries, relevant_entry]}, f)
+            json.dump({"data": [*entries, relevant_entry]}, f, indent=4)
+
+    def delete(self, filters: Dict[str, Dict[str, Union[str, int]]]):
+        with open(self.json_path) as f:
+            entries = json.load(f)["data"]
+        relevant_entry = self.read(filters, return_raw=True)[0]
+        entries = [entry for entry in entries if entry["id"] != relevant_entry["id"]]
+        with open(self.json_path, "w") as f:
+            json.dump({"data": entries}, f, indent=4)
 
 
 def send_pubsub_msg(topic: str, msg: Dict[str, str]) -> None:
