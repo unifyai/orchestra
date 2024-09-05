@@ -260,17 +260,13 @@ def internal_id_to_displayname(user_id):
     blobs = []
     for root, _, files in os.walk(dir_path):
         for file in files:
-            blobs.append(
-                os.path.join(root, file).replace(
-                    os.path.join(shared_volume, bucket_name),
-                    "",
-                ),
-            )
+            blobs.append(os.path.join(root, file))
     for blob in blobs:
         if not blob.endswith("metadata.json"):
             continue
         internal_id = blob.split("/")[-2]
-        display_name = json.loads(blob.read().decode("utf-8"))["display_name"]
+        with open(blob, "rb") as f:
+            display_name = json.loads(f.read().decode("utf-8"))["display_name"]
         id_to_displayname[internal_id] = display_name
 
     return id_to_displayname
