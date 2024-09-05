@@ -84,6 +84,11 @@ class CustomApiKeyDAO:
             setattr(custom_api_key, "key", new_name)
 
     def delete(self, user_id: str, name: str):
+        if self.on_prem:
+            self.on_prem_model.delete(
+                {"custom_api_key": {"user_id": user_id, "key": name}},
+            )
+            return
         query = delete(CustomApiKey).where(
             and_(CustomApiKey.user_id == user_id, CustomApiKey.key == name),
         )
