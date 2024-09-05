@@ -18,11 +18,11 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
 
     @property
     def api_key_var(self) -> str:
-        return "AWS_REGION_NAME"
+        return "AWS_SECRET_ACCESS_KEY"
 
     @property
     def litellm_api_key_var(self) -> str:
-        return "AWS_REGION_NAME"
+        return "AWS_SECRET_ACCESS_KEY"
 
     def get_region(self):
         region = os.environ.get("AWS_REGION")
@@ -42,7 +42,7 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
         **kwargs: Any,
     ) -> Any:  # noqa: WPS210
         region = self.get_region()
-        os.environ["AWS_REGION_NAME"] = region
+        kwargs["aws_region_name"] = region
         return super().__call__(messages, stream, **kwargs)
 
     def __call_async__(
@@ -52,7 +52,7 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
         **kwargs: Any,
     ) -> Any:
         region = self.get_region()
-        os.environ["AWS_REGION_NAME"] = region
+        kwargs["aws_region_name"] = region
         return super().__call__(messages, stream, **kwargs)
 
 

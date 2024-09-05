@@ -230,7 +230,7 @@ class BaseCompletionProvider:
                 if provider_prefix not in ["anthropic", "bedrock", "vertex_ai"]:
                     kwargs["extra_body"] = extra_body
                 os.environ[self.litellm_api_key_var] = self.api_key
-                drop_params = extra_body.pop("drop_params", True)
+                drop_params = kwargs.pop("drop_params", True)
                 response = litellm.completion(
                     model=self.provider_endpoint,
                     messages=messages,
@@ -299,7 +299,7 @@ class BaseCompletionProvider:
                 if provider_prefix not in ["anthropic", "bedrock", "vertex_ai"]:
                     kwargs["extra_body"] = extra_body
                 os.environ[self.litellm_api_key_var] = self.api_key
-                drop_params = extra_body.pop("drop_params", True)
+                drop_params = kwargs.pop("drop_params", True)
                 response = litellm.acompletion(
                     model=self.provider_endpoint,
                     messages=messages,
