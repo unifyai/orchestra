@@ -11,8 +11,8 @@ def refresh_scores_for_dataset(
     user_id,
     dataset,
     root_path="save_files/",
-    shared_volume=None,
 ):
+    shared_volume = os.environ.get("SHARED_VOLUME")
     os.makedirs(root_path, exist_ok=True)
     bucket_name = "uploaded_datasets"
     prefix = os.path.join(user_id, dataset, "0")
@@ -69,6 +69,7 @@ def refresh_scores_for_dataset(
 
 
 def list_datasets(user_id, shared_volume):
+    shared_volume = os.environ.get("SHARED_VOLUME")
     bucket_name = "uploaded_datasets"
     prefix = user_id
     if os.environ.get("ON_PREM"):
@@ -98,13 +99,11 @@ def list_datasets(user_id, shared_volume):
 
 def refresh_scores_for_user(user_id, root_path="save_files/"):
     # TODO: Fix this
-    shared_volume = os.environ.get("SHARED_VOLUME")
-    for dataset in list_datasets(user_id, shared_volume):
+    for dataset in list_datasets(user_id):
         refresh_scores_for_dataset(
             user_id,
             dataset,
             root_path=root_path,
-            shared_volume=shared_volume,
         )
 
 

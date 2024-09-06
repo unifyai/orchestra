@@ -188,7 +188,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     blob_name = os.path.join(cfg.user_id, "evaluation_configs", f"{cfg.eval_id}.config")
     if os.environ.get("ON_PREM"):
         with open(os.path.join(shared_volume, bucket_name, blob_name), "rb") as f:
-            eval_config = json.load(f.read().decode("utf-8"))
+            eval_config = json.loads(f.read().decode("utf-8"))
     else:
         blob = storage.Client().bucket(bucket_name).blob(blob_name)
         eval_config = json.loads(blob.download_as_bytes().decode("utf-8"))

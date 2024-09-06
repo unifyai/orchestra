@@ -37,7 +37,9 @@ def _get_status(user_id, dataset, endpoint, eval_id):
         )
     id_to_displayname = build_id_to_displayname(user_id=user_id)
     judge_progress = {}
-    contents = load_eval_config_blob(user_id, eval_id)
+    bucket_name = "uploaded_datasets"
+    blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
+    contents = load_eval_config_blob(bucket_name, blob_name)
     judge_models = contents.get(
         "judge_models",
         ["claude-3.5-sonnet@aws-bedrock"],
@@ -371,6 +373,7 @@ def trigger_evaluation(
 
 
 @admin_router.post("/evals/admin_trigger")
+@on_prem.handle_on_prem("/evals/admin_trigger", "none")
 def admin_trigger_eval(
     request_fastapi: Request,
     user_id: str = Query(
