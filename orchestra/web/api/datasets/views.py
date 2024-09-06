@@ -35,9 +35,9 @@ def _upload_dataset(user_id: str, internal_id: str, file_content: bytes):
     if exists:
         raise dataset_already_exists
     elif os.environ.get("ON_PREM"):
-        on_prem.write_json_to_folder(file_content, bucket_name, blob_name)
+        on_prem.write_to_folder(file_content, bucket_name, blob_name)
     else:
-        gcp.upload_json_to_bucket(file_content, bucket_name, blob_name)
+        gcp.upload_to_bucket(file_content, bucket_name, blob_name)
 
 
 def _delete_dataset(user_id: str, internal_id: str):
@@ -126,9 +126,9 @@ def _store_num_tokens(user_id: str, internal_id: str, num_tokens: int):
     if exists:
         raise dataset_already_exists
     elif os.environ.get("ON_PREM"):
-        on_prem.write_json_to_folder(string, bucket_name, blob_name)
+        on_prem.write_to_folder(string, bucket_name, blob_name)
     else:
-        gcp.upload_json_to_bucket(string, bucket_name, blob_name)
+        gcp.upload_to_bucket(string, bucket_name, blob_name)
 
 
 def _store_metadata(
@@ -147,9 +147,9 @@ def _store_metadata(
     if exists and not alredy_exists:
         raise dataset_already_exists
     elif os.environ.get("ON_PREM"):
-        on_prem.write_json_to_folder(string, bucket_name, blob_name)
+        on_prem.write_to_folder(string, bucket_name, blob_name)
     else:
-        gcp.upload_json_to_bucket(string, bucket_name, blob_name)
+        gcp.upload_to_bucket(string, bucket_name, blob_name)
 
 
 # endpoints

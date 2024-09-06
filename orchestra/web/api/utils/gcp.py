@@ -115,7 +115,7 @@ def upload_to_bucket(
     data: Union[str, Dict[str, str]],
     bucket_name: str,
     blob_name: str,
-    content_type: str,
+    content_type: str = "application/json",
 ):
     blob = storage.Client().bucket(bucket_name).blob(blob_name)
     blob.upload_from_string(data, content_type=content_type)
