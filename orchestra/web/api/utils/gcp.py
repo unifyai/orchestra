@@ -80,7 +80,7 @@ def dir_exists(bucket_name: str, dir_name: str) -> bool:
     return len(blobs) > 0
 
 
-def delete_dir(bucket_name: str, dir_name: str) -> None:
+def delete(bucket_name: str, dir_name: str) -> None:
     bucket = storage.Client().bucket(bucket_name)
 
     # Ensure the directory_name ends with a slash
@@ -101,10 +101,12 @@ def list_dir(bucket_name: str, prefix: str):
     return list(bucket.list_blobs(prefix=prefix))
 
 
-def read_json_from_bucket(bucket_name, blob_name, raw=False):
+def read_json_from_bucket(bucket_name, blob_name, raw=False, decode=False):
     blob = storage.Client().bucket(bucket_name).blob(blob_name)
     json_data = blob.download_as_bytes()
     if raw:
+        if decode:
+            return json_data.decode("utf-8")
         return json_data
     return json.loads(json_data.decode("utf-8"))
 

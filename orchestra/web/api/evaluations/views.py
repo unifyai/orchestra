@@ -173,16 +173,26 @@ def refresh_scores_json(user_id):
 
 def build_id_to_displayname(user_id):
     bucket_name = "uploaded_datasets"
-    bucket = storage.Client().bucket(bucket_name)
     id_to_displayname = {}
-    for blob in bucket.list_blobs(prefix=f"{user_id}/evaluation_configs"):
-        if not blob.name.endswith(".config"):
+    prefix = f"{user_id}/evaluation_configs"
+    blobs = (
+        on_prem.list_dir(bucket_name, prefix)
+        if os.environ.get("ON_PREM")
+        else gcp.list_dir(bucket_name, prefix)
+    )
+    for blob in blobs:
+        name = blob if os.environ.get("ON_PREM") else blob.name
+        if not name.endswith(".config"):
             continue
-        id_ = blob.name.split("/")[-1]
+        id_ = name.split("/")[-1]
         assert ".config" in id_
         id_ = id_.replace(".config", "")
         # get display_name
-        blob_dict = json.loads(blob.download_as_bytes().decode("utf-8"))
+        blob_dict = (
+            on_prem.read_json_from_folder(bucket_name, name)
+            if os.environ.get("ON_PREM")
+            else gcp.read_json_from_bucket(bucket_name, name)
+        )
         if "name" in blob_dict:
             display_name = blob_dict["name"]
         else:
@@ -209,8 +219,11 @@ def eval_name_to_eval_id(user_id, eval_name):
 def load_eval_config_blob(user_id, eval_id):
     bucket_name = "uploaded_datasets"
     blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
-    blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    return blob
+    return (
+        on_prem.read_json_from_folder(bucket_name, blob_name)
+        if os.environ.get("ON_PREM")
+        else gcp.read_json_from_bucket(bucket_name, blob_name)
+    )
 
 
 ###########################
@@ -321,8 +334,7 @@ def trigger_evaluation(
             )
 
         # check whether the eval name is a client side one:
-        blob = load_eval_config_blob(user_id, eval_id)
-        contents = json.loads(blob.download_as_bytes().decode("utf-8"))
+        contents = load_eval_config_blob(user_id, eval_id)
         if "client_side" not in contents or contents.get("client_side", "") is not True:
             raise HTTPException(
                 status_code=400,
@@ -335,8 +347,11 @@ def trigger_evaluation(
         blob_name = (
             f"{user_id}/{internal_id}/0/{endpoint}/{eval_id}/client_side_judged.jsonl"
         )
-        blob = storage.Client().bucket(bucket_name).blob(blob_name)
-        blob.upload_from_string(file, content_type="application/octet-stream")
+        json_data = json.loads(file)
+        if os.environ.get("ON_PREM"):
+            on_prem.write_json_to_folder(json_data, bucket_name, blob_name)
+        else:
+            gcp.upload_json_to_bucket(json_data, bucket_name, blob_name)
         refresh_scores_json(user_id)
 
         return {"info": "Evaluation uploaded!"}
@@ -395,7 +410,11 @@ def admin_trigger_eval(
     invalid_endpoints = find_invalid_endpoints([endpoint])
     if invalid_endpoints:
         raise invalid_training_endpoints(invalid_endpoints)
-    id_to_name = gcp.internal_id_to_displayname(user_id)
+    id_to_name = (
+        on_prem.internal_id_to_displayname(user_id)
+        if os.environ.get("ON_PREM")
+        else gcp.internal_id_to_displayname(user_id)
+    )
     name_to_id = {name: id_ for id_, name in id_to_name.items()}
     internal_id = name_to_id.get(dataset, dataset)
     # check if the eval name is valid
@@ -486,8 +505,7 @@ def get_evaluations(
                 status_code=400,
                 detail="You need to specify an endpoint to return per-prompt scores.",
             )
-        blob = load_eval_config_blob(user_id, requested_eval_id)
-        eval_config = json.loads(blob.download_as_bytes().decode("utf-8"))
+        eval_config = load_eval_config_blob(user_id, requested_eval_id)
         if eval_config.get("client_side", False) == True:
             judge_models = ["client_side"]
         else:
@@ -501,15 +519,25 @@ def get_evaluations(
             ]
 
         bucket_name = "uploaded_datasets"
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(bucket_name)
-
         ret = {}
         for jm in judge_models:
             judge_blob_name = f"{user_id}/{internal_id}/0/{endpoint}/{requested_eval_id}/{jm.replace('@','___')}_judged.jsonl"
             try:
-                judge_blob = bucket.blob(judge_blob_name)
-                contents = judge_blob.download_as_bytes().decode("utf-8").split("\n")
+                contents = (
+                    on_prem.read_json_from_folder(
+                        bucket_name,
+                        judge_blob_name,
+                        raw=True,
+                        decode=True,
+                    )
+                    if not os.environ.get("ON_PREM")
+                    else gcp.read_json_from_bucket(
+                        bucket_name,
+                        judge_blob_name,
+                        raw=True,
+                        decode=True,
+                    )
+                ).split("\n")
                 cleaned_scores = []
                 for entry in contents:
                     if not entry:

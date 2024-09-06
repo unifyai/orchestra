@@ -55,9 +55,9 @@ def _delete_dataset(user_id: str, internal_id: str):
     if not exists:
         raise dataset_does_not_exist(internal_id)
     elif os.environ.get("ON_PREM"):
-        on_prem.delete_dir(bucket_name, dir_name)
+        on_prem.delete(bucket_name, dir_name)
     else:
-        gcp.delete_dir(bucket_name, dir_name)
+        gcp.delete(bucket_name, dir_name)
 
 
 def _list_datasets(user_id: str):

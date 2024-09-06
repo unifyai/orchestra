@@ -7,7 +7,6 @@ import json
 import os
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from google.cloud import storage
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.web.api.evaluators.schema import EvaluatorConfig
@@ -63,16 +62,29 @@ def refresh_scores_json(user_id):
 
 def build_id_to_displayname(user_id):
     bucket_name = "uploaded_datasets"
-    bucket = storage.Client().bucket(bucket_name)
     id_to_displayname = {}
-    for blob in bucket.list_blobs(prefix=f"{user_id}/evaluation_configs"):
-        if not blob.name.endswith(".config"):
+    prefix = f"{user_id}/evaluation_configs"
+    blobs = (
+        on_prem.list_dir(bucket_name, prefix)
+        if os.environ.get("ON_PREM")
+        else gcp.list_dir(bucket_name, prefix)
+    )
+    print(f"blobs {blobs}")
+    for blob in blobs:
+        name = blob if os.environ.get("ON_PREM") else blob.name
+        if not name.endswith(".config"):
             continue
-        id_ = blob.name.split("/")[-1]
+        id_ = name.split("/")[-1]
         assert ".config" in id_
         id_ = id_.replace(".config", "")
+        print(f"bucket_name {bucket_name}")
+        print(f"name {name}")
         # get display_name
-        blob_dict = json.loads(blob.download_as_bytes().decode("utf-8"))
+        blob_dict = (
+            on_prem.read_json_from_folder(bucket_name, name)
+            if os.environ.get("ON_PREM")
+            else gcp.read_json_from_bucket(bucket_name, name)
+        )
         if "name" in blob_dict:
             display_name = blob_dict["name"]
         else:
@@ -106,11 +118,29 @@ def check_if_name_free(user_id, name):
     return True
 
 
-def load_eval_config_blob(user_id, eval_id):
-    bucket_name = "uploaded_datasets"
-    blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
-    blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    return blob
+def load_eval_config_blob(bucket_name, blob_name):
+    return (
+        on_prem.read_json_from_folder(bucket_name, blob_name)
+        if os.environ.get("ON_PREM")
+        else gcp.read_json_from_bucket(bucket_name, blob_name)
+    )
+
+
+def delete_eval_config_blob(bucket_name, blob_name):
+    if os.environ.get("ON_PREM"):
+        on_prem.delete(bucket_name, blob_name)
+    else:
+        gcp.delete(bucket_name, blob_name)
+
+
+def rename_eval_config_blob(bucket_name, blob_name, new_name):
+    contents = load_eval_config_blob(bucket_name, blob_name)
+    contents["name"] = new_name
+    config_str = json.dumps(contents, sort_keys=True)
+    if os.environ.get("ON_PREM"):
+        on_prem.write_json_to_folder(config_str, bucket_name, blob_name)
+    else:
+        gcp.upload_json_to_bucket(config_str, bucket_name, blob_name)
 
 
 ###########################
@@ -162,8 +192,12 @@ def create_evaluator(
     name = request.name
     check_if_name_free(user_id, name)
 
-    blob = load_eval_config_blob(user_id, eval_id)
-    blob.upload_from_string(config_str, content_type="application/json")
+    bucket_name = "uploaded_datasets"
+    file_path = f"{user_id}/evaluation_configs/{eval_id}.config"
+    if os.environ.get("ON_PREM"):
+        on_prem.write_json_to_folder(config_str, bucket_name, file_path)
+    else:
+        gcp.upload_json_to_bucket(config_str, bucket_name, file_path)
     return {"info": "Evaluator created successfully!"}
 
 
@@ -200,8 +234,9 @@ def get_evaluator(
     """
     user_id = request_fastapi.state.user_id
     eval_id = name_to_eval_id(user_id, name)
-    blob = load_eval_config_blob(user_id, eval_id)
-    contents = json.loads(blob.download_as_bytes().decode("utf-8"))
+    bucket_name = "uploaded_datasets"
+    blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
+    contents = load_eval_config_blob(bucket_name, blob_name)
     return contents
 
 
@@ -227,8 +262,9 @@ def delete_evaluator(
     """
     user_id = request_fastapi.state.user_id
     eval_id = name_to_eval_id(user_id, name)
-    blob = load_eval_config_blob(user_id, eval_id)
-    blob.delete()
+    bucket_name = "uploaded_datasets"
+    blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
+    delete_eval_config_blob(bucket_name, blob_name)
     refresh_scores_json(user_id)
     return {"info": "Evaluator deleted successfully!"}
     # TODO: remove all corresponding model judgements?
@@ -260,11 +296,9 @@ def rename_evaluator(
     """
     user_id = request_fastapi.state.user_id
     eval_id = name_to_eval_id(user_id, name)
-    blob = load_eval_config_blob(user_id, eval_id)
-    contents = json.loads(blob.download_as_bytes().decode("utf-8"))
-    contents["name"] = new_name
-    config_str = json.dumps(contents, sort_keys=True)
-    blob.upload_from_string(config_str, content_type="application/json")
+    bucket_name = "uploaded_datasets"
+    blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
+    rename_eval_config_blob(bucket_name, blob_name, new_name)
     refresh_scores_json(user_id)
     return {"info": "Evaluator renamed successfully!"}
 

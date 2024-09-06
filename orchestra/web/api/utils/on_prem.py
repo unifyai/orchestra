@@ -210,7 +210,7 @@ def dir_exists(bucket_name: str, dir_name: str) -> bool:
     return len(os.listdir(dir_path)) > 0
 
 
-def delete_dir(bucket_name: str, dir_name: str) -> None:
+def delete(bucket_name: str, dir_name: str) -> None:
     dir_path = os.path.join(shared_volume, bucket_name, dir_name)
     shutil.rmtree(dir_path)
 
@@ -229,11 +229,21 @@ def list_dir(bucket_name: str, prefix: str):
     return blobs
 
 
-def read_json_from_folder(bucket_name: str, file_name: str, raw: bool = False):
+def read_json_from_folder(
+    bucket_name: str,
+    file_name: str,
+    raw: bool = False,
+    decode: bool = False,
+):
     file_path = os.path.join(shared_volume, bucket_name, file_name)
+    print(f"shared_volume {shared_volume}")
+    print(f"file_path {file_path}")
+    print(os.path.join(shared_volume, bucket_name, file_name))
     with open(file_path, "rb") as f:
         json_data = f.read()
     if raw:
+        if decode:
+            return json_data.decode("utf-8")
         return json_data
     return json.loads(json_data.decode("utf-8"))
 
@@ -241,6 +251,7 @@ def read_json_from_folder(bucket_name: str, file_name: str, raw: bool = False):
 def write_json_to_folder(json_data: Dict[str, str], bucket_name: str, file_name: str):
     file_path = os.path.join(shared_volume, bucket_name, file_name)
     os.makedirs(os.sep.join(file_path.split(os.sep)[:-1]), exist_ok=True)
+    print(f"json_data {json_data}")
     with open(file_path, "wb") as f:
         f.write(json_data)
 
