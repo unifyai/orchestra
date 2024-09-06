@@ -2,23 +2,18 @@ import asyncio
 import json
 import logging
 import os
-import shutil
 import smtplib
 import sys
 from dataclasses import dataclass
 from email.message import EmailMessage
-from typing import Optional
 
-from httpx import AsyncClient
-from httpx import Limits
 import tiktoken
 from google.cloud import secretmanager, storage
+from httpx import AsyncClient, Limits
+from refresh_scores import refresh_scores_for_dataset
 from utils.automatic_judgements import automatic_judgements
 from utils.fetch_judgements import generate_judgements
 from utils.fetch_queries import generate_queries
-from utils.parsing_judge import ratings_from_sample
-
-from refresh_scores import refresh_scores_for_dataset
 
 
 @dataclass
@@ -191,12 +186,18 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     # load eval_config
     bucket_name = "uploaded_datasets"
     blob_name = os.path.join(cfg.user_id, "evaluation_configs", f"{cfg.eval_id}.config")
-    blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    eval_config = json.loads(blob.download_as_bytes().decode("utf-8"))
+    if os.environ.get("ON_PREM"):
+        with open(os.path.join(shared_volume, bucket_name, blob_name), "rb") as f:
+            eval_config = json.load(f.read().decode("utf-8"))
+    else:
+        blob = storage.Client().bucket(bucket_name).blob(blob_name)
+        eval_config = json.loads(blob.download_as_bytes().decode("utf-8"))
 
     if client is None:
         limits = Limits(
-            max_keepalive_connections=None, max_connections=None, keepalive_expiry=30
+            max_keepalive_connections=None,
+            max_connections=None,
+            keepalive_expiry=30,
         )
         client = AsyncClient(base_url=cfg.orchestra_url, limits=limits, timeout=60)
 
@@ -213,7 +214,11 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
         )
 
     async def process_queries(
-        endpoint, prompts_path, model_responses_path, api_key, client
+        endpoint,
+        prompts_path,
+        model_responses_path,
+        api_key,
+        client,
     ):
         model_str = _format_model_tag(endpoint)
         response_blob_name = os.path.join(
@@ -285,14 +290,19 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     ):
         model_str = _format_model_tag(endpoint)
         judgements_file_str = _format_judgements_file(
-            endpoint, judge_model_tag, cfg.eval_id
+            endpoint,
+            judge_model_tag,
+            cfg.eval_id,
         )
 
         response_blob_name = create_judgement_blob_filename(
-            endpoint, cfg.eval_id, judge_model_tag
+            endpoint,
+            cfg.eval_id,
+            judge_model_tag,
         )
         progress_blob_name = response_blob_name.replace(
-            "_judged.jsonl", "_progress.log"
+            "_judged.jsonl",
+            "_progress.log",
         )
         await generate_judgements(
             asst_response_file=os.path.join(model_responses_path, f"{model_str}.jsonl"),

@@ -212,7 +212,10 @@ def dir_exists(bucket_name: str, dir_name: str) -> bool:
 
 def delete(bucket_name: str, dir_name: str) -> None:
     dir_path = os.path.join(shared_volume, bucket_name, dir_name)
-    shutil.rmtree(dir_path)
+    if os.path.isdir(dir_path):
+        shutil.rmtree(dir_path)
+    else:
+        os.remove(dir_path)
 
 
 def list_dir(bucket_name: str, prefix: str):

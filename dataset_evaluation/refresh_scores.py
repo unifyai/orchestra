@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import sys
 from collections import defaultdict
 
@@ -7,7 +8,10 @@ from google.cloud import storage
 
 
 def refresh_scores_for_dataset(
-    user_id, dataset, root_path="save_files/", shared_volume=None
+    user_id,
+    dataset,
+    root_path="save_files/",
+    shared_volume=None,
 ):
     os.makedirs(root_path, exist_ok=True)
     bucket_name = "uploaded_datasets"
@@ -59,28 +63,49 @@ def refresh_scores_for_dataset(
     if os.environ.get("ON_PREM"):
         file_path = os.path.join(shared_volume, bucket_name, blob_name)
         shutil.copy(save_path, file_path)
-        shutil.rmtree(os.path.join(shared_volume, data_dir))
     else:
         blob = storage.Client().bucket(bucket_name).blob(blob_name)
         blob.upload_from_filename(save_path)
 
 
-def list_datasets(user_id):
-    bucket = storage.Client().bucket("uploaded_datasets")
-    blobs = list(bucket.list_blobs(prefix=user_id))
+def list_datasets(user_id, shared_volume):
+    bucket_name = "uploaded_datasets"
+    prefix = user_id
+    if os.environ.get("ON_PREM"):
+        dir_path = os.path.join(shared_volume, bucket_name, prefix)
+        blobs = []
+        for root, _, files in os.walk(dir_path):
+            for file in files:
+                blobs.append(
+                    os.path.join(root, file).replace(
+                        os.path.join(shared_volume, bucket_name),
+                        "",
+                    ),
+                )
+        dirs = set([b.split("/")[2] for b in blobs])
+        dirs = {d for d in dirs if not d.endswith(".jsonl")}
+    else:
+        bucket = storage.Client().bucket(bucket_name)
+        blobs = list(bucket.list_blobs(prefix=prefix))
 
-    dirs = set(
-        [b.id.split("/")[2] for b in blobs],
-    )
-    dirs = {d for d in dirs if not d.endswith(".jsonl")}
+        dirs = set(
+            [b.id.split("/")[2] for b in blobs],
+        )
+        dirs = {d for d in dirs if not d.endswith(".jsonl")}
     dirs.discard("evaluation_configs")
     return list(dirs)
 
 
 def refresh_scores_for_user(user_id, root_path="save_files/"):
     # TODO: Fix this
-    for dataset in list_datasets(user_id):
-        refresh_scores_for_dataset(user_id, dataset, root_path=root_path)
+    shared_volume = os.environ.get("SHARED_VOLUME")
+    for dataset in list_datasets(user_id, shared_volume):
+        refresh_scores_for_dataset(
+            user_id,
+            dataset,
+            root_path=root_path,
+            shared_volume=shared_volume,
+        )
 
 
 if __name__ == "__main__":
