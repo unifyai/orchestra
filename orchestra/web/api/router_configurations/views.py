@@ -5,6 +5,8 @@ from typing import List
 
 from fastapi import APIRouter, Query
 
+from orchestra.web.api.utils.on_prem import handle_on_prem
+
 router = APIRouter()
 
 
@@ -12,6 +14,7 @@ router = APIRouter()
 
 
 @router.post("/router/config")
+@handle_on_prem(endpoint="/router/config", route="post")
 def create_router_config(
     config_name: str = Query(
         description="The name of the router configuration to create.",
@@ -34,6 +37,7 @@ def create_router_config(
 
 
 @router.get("/router/config")
+@handle_on_prem(endpoint="/router/config", route="get")
 def get_router_config(
     config_name: str = Query(
         description="The name of the router configuration to retrieve the "
@@ -48,6 +52,7 @@ def get_router_config(
 
 
 @router.delete("/router/config")
+@handle_on_prem(endpoint="/router/config", route="delete")
 def delete_router_config(
     config_name: str = Query(
         description="The name of the router configuration to delete.",
@@ -61,6 +66,7 @@ def delete_router_config(
 
 
 @router.post("/router/config/rename")
+@handle_on_prem(endpoint="/router/config/rename", route="post")
 def rename_router_config(
     name: str = Query(
         description="The original name of the router configuration.",
@@ -78,6 +84,7 @@ def rename_router_config(
 
 
 @router.get("/router/config/list")
+@handle_on_prem(endpoint="/router/config/list", route="get")
 def list_router_configs() -> List[str]:
     """
     Lists all saved router configurations by name.

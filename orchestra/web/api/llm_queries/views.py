@@ -36,6 +36,7 @@ from orchestra.web.api.utils.http_responses import (
     invalid_messages,
     invalid_model_str,
 )
+from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 
@@ -257,7 +258,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     processing_time=processing_time,
                     usage=chat_response.usage,
                     response_body=json.dumps(
-                        chat_response.model_dump()
+                        chat_response.model_dump(),
                     ),  # TODO this isn't the whole response
                     **db_operations_kwargs,
                 )
@@ -288,6 +289,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     include_in_schema=False,
     response_model=RouterScoresResponse,
 )
+@handle_on_prem("/router/scores", "none")
 def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request: ChatCompletionRequest,
     endpoint_dao: EndpointDAO = Depends(),
