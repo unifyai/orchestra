@@ -7,7 +7,6 @@ import os
 from typing import Dict
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
-from google.cloud import storage
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.web.api.utils import gcp, on_prem
@@ -24,24 +23,22 @@ admin_router = APIRouter()
 
 def _get_status(user_id, dataset, endpoint, eval_id):
     bucket_name = "uploaded_datasets"
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-
-    blob = bucket.blob(f"{user_id}/{dataset}/0/{endpoint}/progress.log")
+    file_path = f"{user_id}/{dataset}/0/{endpoint}/progress.log"
     try:
-        content = blob.download_as_bytes().decode("utf-8")
-        responses = json.loads(content)
+        responses = (
+            on_prem.read_from_folder(bucket_name, file_path)
+            if os.environ.get("ON_PREM")
+            else gcp.read_from_bucket(bucket_name, file_path)
+        )
     except:
         raise HTTPException(
             status_code=400,
             detail=f"We didn't find any evaluations run for {dataset}",
         )
-
     id_to_displayname = build_id_to_displayname(user_id=user_id)
-
     judge_progress = {}
-    blob = load_eval_config_blob(user_id, eval_id)
-    judge_models = json.loads(blob.download_as_bytes().decode("utf-8")).get(
+    contents = load_eval_config_blob(user_id, eval_id)
+    judge_models = contents.get(
         "judge_models",
         ["claude-3.5-sonnet@aws-bedrock"],
     )
@@ -51,13 +48,13 @@ def _get_status(user_id, dataset, endpoint, eval_id):
         ]
     for jm in judge_models:
         print(jm)
-        blob = bucket.blob(
-            f"{user_id}/{dataset}/0/{endpoint}/{eval_id}/{jm.replace('@','___')}_progress.log",
+        file_path = f"{user_id}/{dataset}/0/{endpoint}/{eval_id}/{jm.replace('@','___')}_progress.log"
+        jp = (
+            on_prem.read_from_folder(bucket_name, file_path)
+            if os.environ.get("ON_PREM")
+            else gcp.read_from_bucket(bucket_name, file_path)
         )
-        print(blob)
-        jp = json.loads(blob.download_as_bytes().decode("utf-8"))
         judge_progress[jm] = jp
-
     return {"responses": responses, "judgements": judge_progress}
 
 

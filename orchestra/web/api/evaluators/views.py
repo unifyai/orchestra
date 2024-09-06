@@ -138,9 +138,9 @@ def rename_eval_config_blob(bucket_name, blob_name, new_name):
     contents["name"] = new_name
     config_str = json.dumps(contents, sort_keys=True)
     if os.environ.get("ON_PREM"):
-        on_prem.write_json_to_folder(config_str, bucket_name, blob_name)
+        on_prem.write_to_folder(config_str, bucket_name, blob_name)
     else:
-        gcp.upload_json_to_bucket(config_str, bucket_name, blob_name)
+        gcp.upload_to_bucket(config_str, bucket_name, blob_name)
 
 
 ###########################
@@ -195,9 +195,9 @@ def create_evaluator(
     bucket_name = "uploaded_datasets"
     file_path = f"{user_id}/evaluation_configs/{eval_id}.config"
     if os.environ.get("ON_PREM"):
-        on_prem.write_json_to_folder(config_str, bucket_name, file_path)
+        on_prem.write_to_folder(config_str, bucket_name, file_path)
     else:
-        gcp.upload_json_to_bucket(config_str, bucket_name, file_path)
+        gcp.upload_to_bucket(config_str, bucket_name, file_path)
     return {"info": "Evaluator created successfully!"}
 
 
