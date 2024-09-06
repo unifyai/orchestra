@@ -303,9 +303,9 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         raise dataset_does_not_exist(name)
     else:
         string = (
-            on_prem.read_json_from_folder(bucket_name, blob_name, raw=True)
+            on_prem.read_from_folder(bucket_name, blob_name, raw=True)
             if os.environ.get("ON_PREM")
-            else gcp.read_json_from_bucket(bucket_name, blob_name, raw=True)
+            else gcp.read_from_bucket(bucket_name, blob_name, raw=True)
         )
         string = "[".encode() + string + "]".encode()
         string = string.replace("}\n{".encode(), "},{".encode())

@@ -189,9 +189,9 @@ def build_id_to_displayname(user_id):
         id_ = id_.replace(".config", "")
         # get display_name
         blob_dict = (
-            on_prem.read_json_from_folder(bucket_name, name)
+            on_prem.read_from_folder(bucket_name, name)
             if os.environ.get("ON_PREM")
-            else gcp.read_json_from_bucket(bucket_name, name)
+            else gcp.read_from_bucket(bucket_name, name)
         )
         if "name" in blob_dict:
             display_name = blob_dict["name"]
@@ -218,9 +218,9 @@ def eval_name_to_eval_id(user_id, eval_name):
 
 def load_eval_config_blob(bucket_name, blob_name):
     return (
-        on_prem.read_json_from_folder(bucket_name, blob_name)
+        on_prem.read_from_folder(bucket_name, blob_name)
         if os.environ.get("ON_PREM")
-        else gcp.read_json_from_bucket(bucket_name, blob_name)
+        else gcp.read_from_bucket(bucket_name, blob_name)
     )
 
 
@@ -347,11 +347,15 @@ def trigger_evaluation(
         blob_name = (
             f"{user_id}/{internal_id}/0/{endpoint}/{eval_id}/client_side_judged.jsonl"
         )
-        json_data = json.loads(file)
         if os.environ.get("ON_PREM"):
-            on_prem.write_json_to_folder(json_data, bucket_name, blob_name)
+            on_prem.write_to_folder(file, bucket_name, blob_name)
         else:
-            gcp.upload_json_to_bucket(json_data, bucket_name, blob_name)
+            gcp.upload_to_bucket(
+                file,
+                bucket_name,
+                blob_name,
+                "application/octet-stream",
+            )
         refresh_scores_json(user_id)
 
         return {"info": "Evaluation uploaded!"}
@@ -526,14 +530,14 @@ def get_evaluations(
             judge_blob_name = f"{user_id}/{internal_id}/0/{endpoint}/{requested_eval_id}/{jm.replace('@','___')}_judged.jsonl"
             try:
                 contents = (
-                    on_prem.read_json_from_folder(
+                    on_prem.read_from_folder(
                         bucket_name,
                         judge_blob_name,
                         raw=True,
                         decode=True,
                     )
                     if not os.environ.get("ON_PREM")
-                    else gcp.read_json_from_bucket(
+                    else gcp.read_from_bucket(
                         bucket_name,
                         judge_blob_name,
                         raw=True,

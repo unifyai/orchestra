@@ -81,9 +81,9 @@ def build_id_to_displayname(user_id):
         print(f"name {name}")
         # get display_name
         blob_dict = (
-            on_prem.read_json_from_folder(bucket_name, name)
+            on_prem.read_from_folder(bucket_name, name)
             if os.environ.get("ON_PREM")
-            else gcp.read_json_from_bucket(bucket_name, name)
+            else gcp.read_from_bucket(bucket_name, name)
         )
         if "name" in blob_dict:
             display_name = blob_dict["name"]
@@ -120,9 +120,9 @@ def check_if_name_free(user_id, name):
 
 def load_eval_config_blob(bucket_name, blob_name):
     return (
-        on_prem.read_json_from_folder(bucket_name, blob_name)
+        on_prem.read_from_folder(bucket_name, blob_name)
         if os.environ.get("ON_PREM")
-        else gcp.read_json_from_bucket(bucket_name, blob_name)
+        else gcp.read_from_bucket(bucket_name, blob_name)
     )
 
 

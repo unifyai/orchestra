@@ -12,7 +12,7 @@ from orchestra.db.models.orchestra_models import DatasetEvaluationTask
 from orchestra.web.api.eval_batch.schema import EvalBatchResponse, EvalBatchTaskResponse
 from orchestra.web.api.utils.gcp import (
     blob_exists,
-    read_json_from_bucket,
+    read_from_bucket,
     upload_json_to_bucket,
 )
 from orchestra.web.api.utils.generate_points import generate_and_prune_points
@@ -173,7 +173,7 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             detail="This dataset does not exist.",
         )
     else:
-        string = read_json_from_bucket(bucket_name, blob_name, raw=True)
+        string = read_from_bucket(bucket_name, blob_name, raw=True)
         string = "[".encode() + string + "]".encode()
         string = string.replace("}\n{".encode(), "},{".encode())
         return json.loads(string)
@@ -235,7 +235,7 @@ def get_dataset_evaluation(
     generate_points = False
     exists = blob_exists(bucket_name, blob_name)
     if exists:
-        points = read_json_from_bucket(bucket_name, blob_name)
+        points = read_from_bucket(bucket_name, blob_name)
         # If stored points is empty, try to regenerate
         if points == {}:
             generate_points = True
