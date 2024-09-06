@@ -216,9 +216,7 @@ def eval_name_to_eval_id(user_id, eval_name):
     return displayname_to_id[eval_name]
 
 
-def load_eval_config_blob(user_id, eval_id):
-    bucket_name = "uploaded_datasets"
-    blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
+def load_eval_config_blob(bucket_name, blob_name):
     return (
         on_prem.read_json_from_folder(bucket_name, blob_name)
         if os.environ.get("ON_PREM")
@@ -334,7 +332,9 @@ def trigger_evaluation(
             )
 
         # check whether the eval name is a client side one:
-        contents = load_eval_config_blob(user_id, eval_id)
+        bucket_name = "uploaded_datasets"
+        blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
+        contents = load_eval_config_blob(bucket_name, blob_name)
         if "client_side" not in contents or contents.get("client_side", "") is not True:
             raise HTTPException(
                 status_code=400,
@@ -505,7 +505,9 @@ def get_evaluations(
                 status_code=400,
                 detail="You need to specify an endpoint to return per-prompt scores.",
             )
-        eval_config = load_eval_config_blob(user_id, requested_eval_id)
+        bucket_name = "uploaded_datasets"
+        blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
+        eval_config = load_eval_config_blob(bucket_name, blob_name)
         if eval_config.get("client_side", False) == True:
             judge_models = ["client_side"]
         else:
