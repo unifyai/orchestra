@@ -1,12 +1,10 @@
+import asyncio
+import datetime
 import json
 import os
-import asyncio
 
+from google.cloud import storage
 from utils.request_handling import generic_call
-
-if not os.environ.get("ON_PREM"):
-    import datetime
-    from google.cloud import storage
 
 
 async def call_model(payload):
@@ -62,14 +60,32 @@ async def process_requests(
             for result in complete_results:
                 file.write(json.dumps(result) + "\n")
 
-        if not os.environ.get("ON_PREM") and gcp_config:
+        if gcp_config:
+            bucket_name = gcp_config.get("bucket_name")
+            response_blob_name = gcp_config.get("response_blob_name")
+            progress_blob_name = gcp_config.get("progress_blob_name")
+            on_prem = os.environ.get("ON_PREM")
+            shared_volume = os.environ.get("SHARED_VOLUME")
+
             # upload responses
-            blob = (
-                storage.Client()
-                .bucket(gcp_config["bucket_name"])
-                .blob(gcp_config["response_blob_name"])
-            )
-            blob.upload_from_filename(response_filename)
+            if on_prem:
+                response_file_path = os.path.join(
+                    shared_volume,
+                    bucket_name,
+                    response_blob_name,
+                )
+                os.makedirs(
+                    os.sep.join(response_file_path.split(os.sep)[:-1]),
+                    exist_ok=True,
+                )
+                with open(response_filename, "rb") as f:
+                    response = f.read()
+                with open(response_file_path, "wb") as f:
+                    f.write(response)
+            else:
+                blob = storage.Client().bucket(bucket_name).blob(response_blob_name)
+                blob.upload_from_filename(response_filename)
+
             # upload progress
             num_responses = sum(1 for i in open(response_filename, "rb"))
             num_left = len(cur_incomplete) + len(unprocessed_prompts)
@@ -80,13 +96,23 @@ async def process_requests(
                     "num_remaining": num_left,
                     "num_failed": num_failed,
                     "last_updated": str(datetime.datetime.now()),
-                }
+                },
             )
-            blob = (
-                storage.Client()
-                .bucket(gcp_config["bucket_name"])
-                .blob(gcp_config["progress_blob_name"])
-            )
-            blob.upload_from_string(progress_str)
+            if on_prem:
+                progress_file_path = os.path.join(
+                    shared_volume,
+                    bucket_name,
+                    progress_blob_name,
+                )
+                os.makedirs(
+                    os.sep.join(progress_file_path.split(os.sep)[:-1]),
+                    exist_ok=True,
+                )
+                with open(progress_file_path, "w") as f:
+                    f.write(progress_str)
+            else:
+                blob = storage.Client().bucket(bucket_name).blob(progress_blob_name)
+                blob.upload_from_string(progress_str)
+
         # retry incomplete results
         in_progress = cur_incomplete

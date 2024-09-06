@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List
+from typing import Dict, List, Union
 
 from google.cloud import aiplatform, pubsub_v1, storage
 from google.cloud.exceptions import NotFound
@@ -80,7 +80,7 @@ def dir_exists(bucket_name: str, dir_name: str) -> bool:
     return len(blobs) > 0
 
 
-def delete_dir(bucket_name: str, dir_name: str) -> None:
+def delete(bucket_name: str, dir_name: str) -> None:
     bucket = storage.Client().bucket(bucket_name)
 
     # Ensure the directory_name ends with a slash
@@ -101,17 +101,24 @@ def list_dir(bucket_name: str, prefix: str):
     return list(bucket.list_blobs(prefix=prefix))
 
 
-def read_json_from_bucket(bucket_name, blob_name, raw=False):
+def read_from_bucket(bucket_name, blob_name, raw=False, decode=False):
     blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    json_data = blob.download_as_bytes()
+    data = blob.download_as_bytes()
     if raw:
-        return json_data
-    return json.loads(json_data.decode("utf-8"))
+        if decode:
+            return data.decode("utf-8")
+        return data
+    return json.loads(data.decode("utf-8"))
 
 
-def upload_json_to_bucket(json_data: Dict[str, str], bucket_name: str, blob_name: str):
+def upload_to_bucket(
+    data: Union[str, Dict[str, str]],
+    bucket_name: str,
+    blob_name: str,
+    content_type: str = "application/json",
+):
     blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    blob.upload_from_string(json_data, content_type="application/json")
+    blob.upload_from_string(data, content_type=content_type)
 
 
 # VertexAI

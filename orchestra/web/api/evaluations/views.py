@@ -7,7 +7,6 @@ import os
 from typing import Dict
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
-from google.cloud import storage
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.web.api.utils import gcp, on_prem
@@ -24,24 +23,24 @@ admin_router = APIRouter()
 
 def _get_status(user_id, dataset, endpoint, eval_id):
     bucket_name = "uploaded_datasets"
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-
-    blob = bucket.blob(f"{user_id}/{dataset}/0/{endpoint}/progress.log")
+    file_path = f"{user_id}/{dataset}/0/{endpoint}/progress.log"
     try:
-        content = blob.download_as_bytes().decode("utf-8")
-        responses = json.loads(content)
+        responses = (
+            on_prem.read_from_folder(bucket_name, file_path)
+            if os.environ.get("ON_PREM")
+            else gcp.read_from_bucket(bucket_name, file_path)
+        )
     except:
         raise HTTPException(
             status_code=400,
             detail=f"We didn't find any evaluations run for {dataset}",
         )
-
     id_to_displayname = build_id_to_displayname(user_id=user_id)
-
     judge_progress = {}
-    blob = load_eval_config_blob(user_id, eval_id)
-    judge_models = json.loads(blob.download_as_bytes().decode("utf-8")).get(
+    bucket_name = "uploaded_datasets"
+    blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
+    contents = load_eval_config_blob(bucket_name, blob_name)
+    judge_models = contents.get(
         "judge_models",
         ["claude-3.5-sonnet@aws-bedrock"],
     )
@@ -51,13 +50,13 @@ def _get_status(user_id, dataset, endpoint, eval_id):
         ]
     for jm in judge_models:
         print(jm)
-        blob = bucket.blob(
-            f"{user_id}/{dataset}/0/{endpoint}/{eval_id}/{jm.replace('@','___')}_progress.log",
+        file_path = f"{user_id}/{dataset}/0/{endpoint}/{eval_id}/{jm.replace('@','___')}_progress.log"
+        jp = (
+            on_prem.read_from_folder(bucket_name, file_path)
+            if os.environ.get("ON_PREM")
+            else gcp.read_from_bucket(bucket_name, file_path)
         )
-        print(blob)
-        jp = json.loads(blob.download_as_bytes().decode("utf-8"))
         judge_progress[jm] = jp
-
     return {"responses": responses, "judgements": judge_progress}
 
 
@@ -173,16 +172,26 @@ def refresh_scores_json(user_id):
 
 def build_id_to_displayname(user_id):
     bucket_name = "uploaded_datasets"
-    bucket = storage.Client().bucket(bucket_name)
     id_to_displayname = {}
-    for blob in bucket.list_blobs(prefix=f"{user_id}/evaluation_configs"):
-        if not blob.name.endswith(".config"):
+    prefix = f"{user_id}/evaluation_configs"
+    blobs = (
+        on_prem.list_dir(bucket_name, prefix)
+        if os.environ.get("ON_PREM")
+        else gcp.list_dir(bucket_name, prefix)
+    )
+    for blob in blobs:
+        name = blob if os.environ.get("ON_PREM") else blob.name
+        if not name.endswith(".config"):
             continue
-        id_ = blob.name.split("/")[-1]
+        id_ = name.split("/")[-1]
         assert ".config" in id_
         id_ = id_.replace(".config", "")
         # get display_name
-        blob_dict = json.loads(blob.download_as_bytes().decode("utf-8"))
+        blob_dict = (
+            on_prem.read_from_folder(bucket_name, name)
+            if os.environ.get("ON_PREM")
+            else gcp.read_from_bucket(bucket_name, name)
+        )
         if "name" in blob_dict:
             display_name = blob_dict["name"]
         else:
@@ -206,11 +215,12 @@ def eval_name_to_eval_id(user_id, eval_name):
     return displayname_to_id[eval_name]
 
 
-def load_eval_config_blob(user_id, eval_id):
-    bucket_name = "uploaded_datasets"
-    blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
-    blob = storage.Client().bucket(bucket_name).blob(blob_name)
-    return blob
+def load_eval_config_blob(bucket_name, blob_name):
+    return (
+        on_prem.read_from_folder(bucket_name, blob_name)
+        if os.environ.get("ON_PREM")
+        else gcp.read_from_bucket(bucket_name, blob_name)
+    )
 
 
 ###########################
@@ -321,8 +331,9 @@ def trigger_evaluation(
             )
 
         # check whether the eval name is a client side one:
-        blob = load_eval_config_blob(user_id, eval_id)
-        contents = json.loads(blob.download_as_bytes().decode("utf-8"))
+        bucket_name = "uploaded_datasets"
+        blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
+        contents = load_eval_config_blob(bucket_name, blob_name)
         if "client_side" not in contents or contents.get("client_side", "") is not True:
             raise HTTPException(
                 status_code=400,
@@ -335,8 +346,15 @@ def trigger_evaluation(
         blob_name = (
             f"{user_id}/{internal_id}/0/{endpoint}/{eval_id}/client_side_judged.jsonl"
         )
-        blob = storage.Client().bucket(bucket_name).blob(blob_name)
-        blob.upload_from_string(file, content_type="application/octet-stream")
+        if os.environ.get("ON_PREM"):
+            on_prem.write_to_folder(file, bucket_name, blob_name)
+        else:
+            gcp.upload_to_bucket(
+                file,
+                bucket_name,
+                blob_name,
+                "application/octet-stream",
+            )
         refresh_scores_json(user_id)
 
         return {"info": "Evaluation uploaded!"}
@@ -355,6 +373,7 @@ def trigger_evaluation(
 
 
 @admin_router.post("/evals/admin_trigger")
+@on_prem.handle_on_prem("/evals/admin_trigger", "none")
 def admin_trigger_eval(
     request_fastapi: Request,
     user_id: str = Query(
@@ -395,7 +414,11 @@ def admin_trigger_eval(
     invalid_endpoints = find_invalid_endpoints([endpoint])
     if invalid_endpoints:
         raise invalid_training_endpoints(invalid_endpoints)
-    id_to_name = gcp.internal_id_to_displayname(user_id)
+    id_to_name = (
+        on_prem.internal_id_to_displayname(user_id)
+        if os.environ.get("ON_PREM")
+        else gcp.internal_id_to_displayname(user_id)
+    )
     name_to_id = {name: id_ for id_, name in id_to_name.items()}
     internal_id = name_to_id.get(dataset, dataset)
     # check if the eval name is valid
@@ -486,8 +509,9 @@ def get_evaluations(
                 status_code=400,
                 detail="You need to specify an endpoint to return per-prompt scores.",
             )
-        blob = load_eval_config_blob(user_id, requested_eval_id)
-        eval_config = json.loads(blob.download_as_bytes().decode("utf-8"))
+        bucket_name = "uploaded_datasets"
+        blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
+        eval_config = load_eval_config_blob(bucket_name, blob_name)
         if eval_config.get("client_side", False) == True:
             judge_models = ["client_side"]
         else:
@@ -501,15 +525,25 @@ def get_evaluations(
             ]
 
         bucket_name = "uploaded_datasets"
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(bucket_name)
-
         ret = {}
         for jm in judge_models:
             judge_blob_name = f"{user_id}/{internal_id}/0/{endpoint}/{requested_eval_id}/{jm.replace('@','___')}_judged.jsonl"
             try:
-                judge_blob = bucket.blob(judge_blob_name)
-                contents = judge_blob.download_as_bytes().decode("utf-8").split("\n")
+                contents = (
+                    on_prem.read_from_folder(
+                        bucket_name,
+                        judge_blob_name,
+                        raw=True,
+                        decode=True,
+                    )
+                    if not os.environ.get("ON_PREM")
+                    else gcp.read_from_bucket(
+                        bucket_name,
+                        judge_blob_name,
+                        raw=True,
+                        decode=True,
+                    )
+                ).split("\n")
                 cleaned_scores = []
                 for entry in contents:
                     if not entry:

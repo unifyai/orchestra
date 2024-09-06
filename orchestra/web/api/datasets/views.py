@@ -35,9 +35,9 @@ def _upload_dataset(user_id: str, internal_id: str, file_content: bytes):
     if exists:
         raise dataset_already_exists
     elif os.environ.get("ON_PREM"):
-        on_prem.write_json_to_folder(file_content, bucket_name, blob_name)
+        on_prem.write_to_folder(file_content, bucket_name, blob_name)
     else:
-        gcp.upload_json_to_bucket(file_content, bucket_name, blob_name)
+        gcp.upload_to_bucket(file_content, bucket_name, blob_name)
 
 
 def _delete_dataset(user_id: str, internal_id: str):
@@ -55,9 +55,9 @@ def _delete_dataset(user_id: str, internal_id: str):
     if not exists:
         raise dataset_does_not_exist(internal_id)
     elif os.environ.get("ON_PREM"):
-        on_prem.delete_dir(bucket_name, dir_name)
+        on_prem.delete(bucket_name, dir_name)
     else:
-        gcp.delete_dir(bucket_name, dir_name)
+        gcp.delete(bucket_name, dir_name)
 
 
 def _list_datasets(user_id: str):
@@ -126,9 +126,9 @@ def _store_num_tokens(user_id: str, internal_id: str, num_tokens: int):
     if exists:
         raise dataset_already_exists
     elif os.environ.get("ON_PREM"):
-        on_prem.write_json_to_folder(string, bucket_name, blob_name)
+        on_prem.write_to_folder(string, bucket_name, blob_name)
     else:
-        gcp.upload_json_to_bucket(string, bucket_name, blob_name)
+        gcp.upload_to_bucket(string, bucket_name, blob_name)
 
 
 def _store_metadata(
@@ -147,9 +147,9 @@ def _store_metadata(
     if exists and not alredy_exists:
         raise dataset_already_exists
     elif os.environ.get("ON_PREM"):
-        on_prem.write_json_to_folder(string, bucket_name, blob_name)
+        on_prem.write_to_folder(string, bucket_name, blob_name)
     else:
-        gcp.upload_json_to_bucket(string, bucket_name, blob_name)
+        gcp.upload_to_bucket(string, bucket_name, blob_name)
 
 
 # endpoints
@@ -303,9 +303,9 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         raise dataset_does_not_exist(name)
     else:
         string = (
-            on_prem.read_json_from_folder(bucket_name, blob_name, raw=True)
+            on_prem.read_from_folder(bucket_name, blob_name, raw=True)
             if os.environ.get("ON_PREM")
-            else gcp.read_json_from_bucket(bucket_name, blob_name, raw=True)
+            else gcp.read_from_bucket(bucket_name, blob_name, raw=True)
         )
         string = "[".encode() + string + "]".encode()
         string = string.replace("}\n{".encode(), "},{".encode())
