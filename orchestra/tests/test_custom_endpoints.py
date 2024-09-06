@@ -76,6 +76,61 @@ async def test_custom_api_keys(  # noqa: WPS218, E501
 
 
 @pytest.mark.anyio
+async def test_custom_endpoints(  # noqa: WPS218, E501
+    client: AsyncClient,
+):
+
+    # create custom api key
+    url = "v0/custom_api_key"
+    params = {"name": "key_2_test", "value": "1234"}
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # create custom endpoint
+    # TODO: Finetuned providers are not implemented
+    url = "v0/custom_endpoint"
+    params = {
+        "name": "endpoint_name",
+        "url": "https://url.com",
+        "key_name": "key_2_test",
+        "model_name": "model_name",
+        # "provider": "existing_provider",
+    }
+    endpoint_info = {
+        "name": "endpoint_name",
+        "url": "https://url.com",
+        "key": "key_2_test",
+        "mdl_name": "model_name",
+        # "provider": "existing_provider",
+    }
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # list custom endpoints
+    url = "v0/custom_endpoint/list"
+    response = await client.get(url, headers=HEADERS)
+    assert endpoint_info in json.loads(response.text)
+
+    # rename the endpoint
+    url = "v0/custom_endpoint/rename"
+    params = {"name": "endpoint_name", "new_name": "new_endpoint_name"}
+    response = await client.post(url, params=params, headers=HEADERS)
+    url = "v0/custom_endpoint/list"
+    response = await client.get(url, headers=HEADERS)
+    assert endpoint_info not in json.loads(response.text)
+    endpoint_info["name"] = "new_endpoint_name"
+    assert endpoint_info in json.loads(response.text)
+
+    # delete the endpoint
+    url = "v0/custom_endpoint"
+    params = {"name": "new_endpoint_name"}
+    response = await client.delete(url, params=params, headers=HEADERS)
+    url = "v0/custom_endpoint/list"
+    response = await client.get(url, headers=HEADERS)
+    assert endpoint_info not in json.loads(response.text)
+
+
+@pytest.mark.anyio
 async def test_custom_benchmark(  # noqa: WPS218, E501
     client: AsyncClient,
 ):
