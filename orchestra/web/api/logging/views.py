@@ -20,7 +20,7 @@ router = APIRouter()
 
 
 @router.get("/tags")
-@handle_on_prem(endpoint="/tags", route="none")
+@handle_on_prem(endpoint="/tags", method="none")
 def get_query_tags(
     request_fastapi: Request,
     tag_dao: TagDAO = Depends(),
@@ -30,7 +30,7 @@ def get_query_tags(
 
 
 @router.get("/queries")
-@handle_on_prem(endpoint="/queries", route="none")
+@handle_on_prem(endpoint="/queries", method="none")
 def get_query_history(
     request_fastapi: Request,
     tags: Union[None, str, list[str]] = Query(
