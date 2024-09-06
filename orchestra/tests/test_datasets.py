@@ -8,7 +8,7 @@ from orchestra.tests.utils import HEADERS
 from orchestra.web.api.datasets.views import bucket_name
 from orchestra.web.api.utils.gcp import (
     blob_exists,
-    delete_dir,
+    delete,
     dir_exists,
     internal_id_to_displayname,
 )
@@ -28,7 +28,7 @@ def cleanup():
         internal_id = lut.get(name, name)
         dir_name = f"{user_id}/{internal_id}/"
         if dir_exists(bucket_name, dir_name):
-            delete_dir(bucket_name, dir_name)
+            delete(bucket_name, dir_name)
 
 
 def assert_correct_upload(response, name):
