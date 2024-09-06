@@ -239,6 +239,7 @@ def delete_router(
 
 
 @router.post("/router/rename")
+@handle_on_prem(endpoint="/router/rename", method="post")
 def rename_router(
     name: str = Query(
         description="The original name of the router.",

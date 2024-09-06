@@ -3,23 +3,24 @@ Includes endpoints related to logging.
 """
 
 import os
-from typing import Any, Dict, List, Union, Optional
 from datetime import datetime
+from typing import Any, Dict, Optional, Union
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
+from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
+from orchestra.db.dao.endpoint_dao import EndpointDAO
+from orchestra.db.dao.local_endpoint_dao import LocalEndpointDAO
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.tag_dao import TagDAO
-from orchestra.db.dao.endpoint_dao import EndpointDAO
-from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
-from orchestra.db.dao.local_endpoint_dao import LocalEndpointDAO
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 
 
 @router.get("/tags")
+@handle_on_prem(endpoint="/tags", route="none")
 def get_query_tags(
     request_fastapi: Request,
     tag_dao: TagDAO = Depends(),
@@ -29,6 +30,7 @@ def get_query_tags(
 
 
 @router.get("/queries")
+@handle_on_prem(endpoint="/queries", route="none")
 def get_query_history(
     request_fastapi: Request,
     tags: Union[None, str, list[str]] = Query(
@@ -75,23 +77,27 @@ def get_query_history(
                 _model, _provider = e_str.split("@")
                 if _provider == "external":
                     id_ = local_endpoint_dao.filter(
-                        user_id=request_fastapi.state.user_id, name=_model
+                        user_id=request_fastapi.state.user_id,
+                        name=_model,
                     )[0].id
                     local_endpoint_ids.append(id_)
                 elif _provider == "custom":
                     _id = custom_endpoint_dao.filter(
-                        user_id=request_fastapi.state.user_id, name=_model
+                        user_id=request_fastapi.state.user_id,
+                        name=_model,
                     )[0].id
                     custom_endpoint_ids.append(_id)
                 else:
                     _id = endpoint_dao.get_endpoints_of(
-                        models=[_model], only_from=[_provider]
+                        models=[_model],
+                        only_from=[_provider],
                     )[0][0].id
                     global_endpoint_ids.append(_id)
             except Exception as e:
                 print(e)
                 raise HTTPException(
-                    status_code=404, detail=f"Could not find endpoint: {e_str}"
+                    status_code=404,
+                    detail=f"Could not find endpoint: {e_str}",
                 )
 
     ret = query_dao.filter(
@@ -107,6 +113,7 @@ def get_query_history(
 
 
 @router.post("/queries")
+@handle_on_prem(endpoint="/queries", method="none")
 def log_query(
     request_fastapi: Request,
     endpoint: str = Query(
@@ -136,7 +143,8 @@ def log_query(
 
     _model_name = endpoint.split("@")[0]
     local_endpoint_id = local_endpoint_dao.get_local_endpoint(
-        user_id=request_fastapi.state.user_id, name=_model_name
+        user_id=request_fastapi.state.user_id,
+        name=_model_name,
     )
 
     try:
