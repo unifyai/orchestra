@@ -10,11 +10,7 @@ from orchestra.db.dao.dataset_evaluation_dao import DatasetEvaluationDAO
 from orchestra.db.dao.dataset_evaluation_task_dao import DatasetEvaluationTaskDAO
 from orchestra.db.models.orchestra_models import DatasetEvaluationTask
 from orchestra.web.api.eval_batch.schema import EvalBatchResponse, EvalBatchTaskResponse
-from orchestra.web.api.utils.gcp import (
-    blob_exists,
-    read_from_bucket,
-    upload_json_to_bucket,
-)
+from orchestra.web.api.utils.gcp import blob_exists, read_from_bucket, upload_to_bucket
 from orchestra.web.api.utils.generate_points import generate_and_prune_points
 
 router = APIRouter()
@@ -112,8 +108,8 @@ def training(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             detail="A training dataset with this name already exists. Please, choose a different one.",
         )
     else:
-        upload_json_to_bucket(train_file_content, bucket_name, train_blob_name)
-        upload_json_to_bucket(test_file_content, bucket_name, test_blob_name)
+        upload_to_bucket(train_file_content, bucket_name, train_blob_name)
+        upload_to_bucket(test_file_content, bucket_name, test_blob_name)
 
     return EvalBatchResponse(
         info="Training data uploaded successfully. You will receive an email soon!",
@@ -134,7 +130,7 @@ def _upload_dataset(request, file_content, name):
             detail="A dataset with this name already exists. Please, choose a different one.",
         )
     else:
-        upload_json_to_bucket(file_content, bucket_name, blob_name)
+        upload_to_bucket(file_content, bucket_name, blob_name)
 
 
 # TODO: Remove
@@ -246,6 +242,6 @@ def get_dataset_evaluation(
         raw_data = dataset_evaluation_dao.filter(dataset_name=dataset_name)
         points = generate_and_prune_points(dataset_name, raw_data)
         json_str = json.dumps(points)
-        upload_json_to_bucket(json_str, bucket_name, blob_name)
+        upload_to_bucket(json_str, bucket_name, blob_name)
 
     return points

@@ -69,7 +69,6 @@ def build_id_to_displayname(user_id):
         if os.environ.get("ON_PREM")
         else gcp.list_dir(bucket_name, prefix)
     )
-    print(f"blobs {blobs}")
     for blob in blobs:
         name = blob if os.environ.get("ON_PREM") else blob.name
         if not name.endswith(".config"):
@@ -77,8 +76,6 @@ def build_id_to_displayname(user_id):
         id_ = name.split("/")[-1]
         assert ".config" in id_
         id_ = id_.replace(".config", "")
-        print(f"bucket_name {bucket_name}")
-        print(f"name {name}")
         # get display_name
         blob_dict = (
             on_prem.read_from_folder(bucket_name, name)

@@ -235,7 +235,7 @@ def read_from_folder(
     raw: bool = False,
     decode: bool = False,
 ):
-    file_path = os.path.join(shared_volume, bucket_name, file_name)
+    file_path = os.path.join(shared_volume, bucket_name, file_name.strip("/"))
     with open(file_path, "rb") as f:
         data = f.read()
     if raw:
