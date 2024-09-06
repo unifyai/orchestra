@@ -249,7 +249,7 @@ def write_to_folder(data: Union[str, Dict[str, str]], bucket_name: str, file_nam
     file_path = os.path.join(shared_volume, bucket_name, file_name)
     os.makedirs(os.sep.join(file_path.split(os.sep)[:-1]), exist_ok=True)
     with open(file_path, "wb") as f:
-        f.write(data)
+        f.write(str(data).encode("utf-8"))
 
 
 def handle_on_prem(endpoint: str, method: str):
