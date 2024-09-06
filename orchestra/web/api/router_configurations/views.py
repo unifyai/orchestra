@@ -14,7 +14,7 @@ router = APIRouter()
 
 
 @router.post("/router/config")
-@handle_on_prem(endpoint="/router/config", route="post")
+@handle_on_prem(endpoint="/router/config", method="post")
 def create_router_config(
     config_name: str = Query(
         description="The name of the router configuration to create.",
@@ -37,7 +37,7 @@ def create_router_config(
 
 
 @router.get("/router/config")
-@handle_on_prem(endpoint="/router/config", route="get")
+@handle_on_prem(endpoint="/router/config", method="get")
 def get_router_config(
     config_name: str = Query(
         description="The name of the router configuration to retrieve the "
@@ -52,7 +52,7 @@ def get_router_config(
 
 
 @router.delete("/router/config")
-@handle_on_prem(endpoint="/router/config", route="delete")
+@handle_on_prem(endpoint="/router/config", method="delete")
 def delete_router_config(
     config_name: str = Query(
         description="The name of the router configuration to delete.",
@@ -66,7 +66,7 @@ def delete_router_config(
 
 
 @router.post("/router/config/rename")
-@handle_on_prem(endpoint="/router/config/rename", route="post")
+@handle_on_prem(endpoint="/router/config/rename", method="post")
 def rename_router_config(
     name: str = Query(
         description="The original name of the router configuration.",
@@ -84,7 +84,7 @@ def rename_router_config(
 
 
 @router.get("/router/config/list")
-@handle_on_prem(endpoint="/router/config/list", route="get")
+@handle_on_prem(endpoint="/router/config/list", method="get")
 def list_router_configs() -> List[str]:
     """
     Lists all saved router configurations by name.
