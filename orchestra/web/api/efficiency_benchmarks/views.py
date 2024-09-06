@@ -317,7 +317,7 @@ def get_benchmark(
             request_url,
             params=kwargs,
             headers=headers,
-        ).json()
+        )
     try:
         endpoint_id = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
         if latest_only:
