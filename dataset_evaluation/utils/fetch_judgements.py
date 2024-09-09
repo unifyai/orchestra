@@ -106,7 +106,7 @@ async def generate_judgements(
     api_key,
     client,
     eval_config,
-    gcp_config=None,
+    db_config=None,
 ):
     url = f"/v0/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}"}
@@ -147,5 +147,5 @@ async def generate_judgements(
         response_filename=judge_response_file,
         batch_size=batch_size,
         tries=5,
-        gcp_config=gcp_config,
+        db_config=db_config,
     )

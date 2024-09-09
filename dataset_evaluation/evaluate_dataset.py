@@ -182,7 +182,10 @@ async def upload_responses(client, cfg, responses_path):
         await upload_single_response(client, cfg, resp)
 
 
-ADMIN_KEY = ""
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv())
+ADMIN_KEY = os.get_environ("ORCHESTRA_ADMIN_KEY")
+
 async def upload_single_response(client, cfg, data):
     url = cfg.orchestra_url + "/v0/evaluations/upload_responses"
     HEADERS = {
@@ -236,6 +239,8 @@ async def upload_single_judgement(client, cfg, data):
 
 ##
 
+
+## make it so it takes a prompt_id, eval_id etc and populates the db
 
 async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     """msg is a json object with two fields: config and prompts
@@ -294,20 +299,6 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
         client,
     ):
         model_str = _format_model_tag(endpoint)
-        response_blob_name = os.path.join(
-            cfg.user_id,
-            cfg.dataset,
-            "0",
-            endpoint,
-            "responses.jsonl",
-        )
-        progress_blob_name = os.path.join(
-            cfg.user_id,
-            cfg.dataset,
-            "0",
-            endpoint,
-            "progress.log",
-        )
         await generate_queries(
             prompt_file=prompts_path,
             response_file=os.path.join(model_responses_path, f"{model_str}.jsonl"),
@@ -315,11 +306,8 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
             batch_size=5,
             api_key=api_key,
             client=client,
-            gcp_config={
-                "bucket_name": "uploaded_datasets",
-                "response_blob_name": response_blob_name,
-                "progress_blob_name": progress_blob_name,
-                "num_prompts": len(prompts),
+            db_config={
+                "orchestra_endpoint": "/v0/evaluations/upload_responses",
             },
         )
 
@@ -378,7 +366,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
             api_key=api_key,
             client=client,
             eval_config=eval_config,
-            gcp_config={
+            db_config={
                 "bucket_name": "uploaded_datasets",
                 "response_blob_name": "",
                 "progress_blob_name": "",

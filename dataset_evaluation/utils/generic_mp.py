@@ -17,7 +17,7 @@ async def process_requests(
     response_filename,
     batch_size=5,
     tries=5,
-    gcp_config=None,
+    db_config=None,
 ):
     # prompts are a Request object
 
@@ -60,12 +60,12 @@ async def process_requests(
             for result in complete_results:
                 file.write(json.dumps(result) + "\n")
 
-        # if not os.environ.get("ON_PREM") and gcp_config:
+        # if not os.environ.get("ON_PREM") and db_config:
         #     # upload responses
         #     blob = (
         #         storage.Client()
-        #         .bucket(gcp_config["bucket_name"])
-        #         .blob(gcp_config["response_blob_name"])
+        #         .bucket(db_config["bucket_name"])
+        #         .blob(db_config["response_blob_name"])
         #     )
         #     blob.upload_from_filename(response_filename)
         #     # upload progress
@@ -82,8 +82,8 @@ async def process_requests(
         #     )
         #     # blob = (
         #     #     storage.Client()
-        #     #     .bucket(gcp_config["bucket_name"])
-        #     #     .blob(gcp_config["progress_blob_name"])
+        #     #     .bucket(db_config["bucket_name"])
+        #     #     .blob(db_config["progress_blob_name"])
         #     # )
         #     # blob.upload_from_string(progress_str)
         # retry incomplete results
