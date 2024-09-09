@@ -40,7 +40,7 @@ supported_models = {
     "mistral-nemo": {
         "endpoint": "mistral-nemo-instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.3, "completion": 0.3},
+        "cost": {"prompt": 0.2, "completion": 0.2},
     },
     "llama-3-70b-chat": {
         "endpoint": "meta-llama-3-70b-instruct",
