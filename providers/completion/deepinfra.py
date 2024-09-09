@@ -36,7 +36,7 @@ supported_models = {
     "llama-3.1-405b-chat": {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3.1-405B-Instruct",
         "context_window": 32000,
-        "cost": {"prompt": 2.7, "completion": 2.7},
+        "cost": {"prompt": 1.79, "completion": 1.79},
     },
     "llama-3-8b-chat": {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3-8B-Instruct",
@@ -50,12 +50,12 @@ supported_models = {
     },
     "gemma-2-9b-it": {
         "endpoint": "deepinfra/google/gemma-2-9b-it",
-        "context_window": 4000,
+        "context_window": 8000,
         "cost": {"prompt": 0.06, "completion": 0.06},
     },
     "gemma-2-27b-it": {
         "endpoint": "deepinfra/google/gemma-2-27b-it",
-        "context_window": 4000,
+        "context_window": 8000,
         "cost": {"prompt": 0.27, "completion": 0.27},
     },
     "mixtral-8x22b-instruct-v0.1": {
@@ -72,6 +72,11 @@ supported_models = {
         "endpoint": "deepinfra/mistralai/Mistral-7B-Instruct-v0.3",
         "context_window": 32768,
         "cost": {"prompt": 0.055, "completion": 0.055},
+    },
+    "mistral-nemo": {
+        "endpoint": "mistralai/Mistral-Nemo-Instruct-2407",
+        "context_window": 128000,
+        "cost": {"prompt": 0.13, "completion": 0.13},
     },
     "qwen-2-7b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2-72B-Instruct",
