@@ -427,6 +427,21 @@ class StoredPrompt(Base):
     timestamp = sa.Column(sa.TIMESTAMP(), nullable=False)
 
 
+class StoredPromptVariation(Base):
+    """Model class for variations of stored prompts table."""
+
+    __tablename__ = "stored_prompt_variation"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    prompt_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("stored_prompt.id"),
+        index=True,
+        nullable=True,
+    )
+    prompt_overrides = sa.Column(sa.String(), nullable=True)
+
+
 # TODO: Add StoredPromptExtraField
 # id, prompt_id, field, value
 class StoredPromptExtraField(Base):
@@ -457,6 +472,12 @@ class StoredPromptResponse(Base):
         index=True,
         nullable=True,
     )
+    prompt_variation_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("stored_prompt_variation.id"),
+        index=True,
+        nullable=True,
+    )
     endpoint_str = sa.Column(sa.String(), nullable=False)
     response = sa.Column(sa.String(), nullable=False)
     num_tokens = sa.Column(sa.Integer(), nullable=False)
@@ -479,7 +500,11 @@ class Judgement(Base):
         sa.ForeignKey("endpoint.id"),
         nullable=False,
     )
-    evaluator_id = sa.Column(sa.Integer(), sa.ForeignKey("evaluator.id"), nullable=False)
+    evaluator_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("evaluator.id"),
+        nullable=False,
+    )
     judgement = sa.Column(sa.String(), nullable=False)
 
 
@@ -531,6 +556,12 @@ class Evaluation(Base):
     prompt_id = sa.Column(
         sa.Integer(),
         sa.ForeignKey("stored_prompt.id"),
+        index=True,
+        nullable=True,
+    )
+    prompt_variation_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("stored_prompt_variation.id"),
         index=True,
         nullable=True,
     )
