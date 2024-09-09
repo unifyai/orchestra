@@ -12,13 +12,13 @@ def parse_number(s, gt):
 def automatic_judgements(
     prompt_file, asst_response_file, judge_response_file, parse_type
 ):
-    id_to_gt = {}
+    prompt_idto_gt = {}
     with open(prompt_file) as pf:
         for line in pf:
             data = json.loads(line)
-            id_ = data["id_"]
+            prompt_id = data["prompt_id"]
             gt = data["ref_answer"]
-            id_to_gt[id_] = gt
+            prompt_idto_gt[prompt_id] = gt
 
     if parse_type == "number":
         parse_fn = parse_number
@@ -27,15 +27,15 @@ def automatic_judgements(
     else:
         raise Exception
 
-    id_to_scores = {}
+    prompt_idto_scores = {}
     with open(asst_response_file) as pf:
         for line in pf:
             data = json.loads(line)
-            id_ = data["id_"]
+            prompt_id = data["prompt_id"]
             response = data["model_response"]
-            score = parse_fn(response, id_to_gt[id_])
-            id_to_scores[id_] = score
+            score = parse_fn(response, prompt_idto_gt[prompt_id])
+            id_to_scores[prompt_id] = score
 
     with open(judge_response_file, "w") as jf:
-        for id_, score in id_to_scores.items():
-            jf.write(json.dumps({"id_": id_, "score": score}) + "\n")
+        for prompt_id, score in id_to_scores.items():
+            jf.write(json.dumps({"prompt_id": prompt_id, "score": score}) + "\n")

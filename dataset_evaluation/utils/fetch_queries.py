@@ -8,7 +8,7 @@ from utils.request_handling import Request, create_payload
 def create_request(endpoint: str, url, headers, client, prompt_data):
     payload = create_payload(model_tag=endpoint, prompt=prompt_data["prompt"])
     return Request(
-        id_=prompt_data["id"],
+        id=prompt_data["id"],
         payload=payload,
         url=url,
         headers=headers,
@@ -40,13 +40,12 @@ async def generate_queries(
         with open(response_file) as f:
             for line in f:
                 data = json.loads(line)
-                completed.add(data["id_"])
+                completed.add(data["id"])
 
     unprocessed_prompts = []
     with open(prompt_file, "r") as pf:
         for ix, line in enumerate(pf):
             data = json.loads(line)
-            data["id"] = data["id_"]
             if data["id"] in completed:
                 continue
             req = create_request(endpoint, url, headers, client, data)

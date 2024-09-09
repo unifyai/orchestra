@@ -22,6 +22,7 @@ class BenchmarkConfig:
     dataset: str
     endpoint: str
     evaluator: str
+    evaluator_id: str
     user_id: str
     api_key: str
     orchestra_url: str
@@ -148,6 +149,7 @@ async def fetch_evaluator_config(client, cfg):
     params = {"name": cfg.evaluator}
     response = await client.get(url, headers=HEADERS, params=params)
     eval_cfg = response.json()
+    eval_cfg["judge_models"] = json.loads(eval_cfg["judge_models"])
     return eval_cfg
 
 
@@ -166,6 +168,8 @@ async def fetch_dataset(client, cfg):
 
 ## IN PROGRESS
 # TODO: make the response data have the right format (num tokns etc)
+# TODO: change id_ to id
+
 
 async def upload_responses(client, cfg, responses_path):
     to_upload = []
@@ -178,31 +182,56 @@ async def upload_responses(client, cfg, responses_path):
         await upload_single_response(client, cfg, resp)
 
 
+ADMIN_KEY = ""
 async def upload_single_response(client, cfg, data):
     url = cfg.orchestra_url + "/v0/evaluations/upload_responses"
     HEADERS = {
         "accept": "application/json",
-        "Authorization": f"Bearer {cfg.api_key}",
+        "Authorization": f"Bearer {ADMIN_KEY}",
         "Content-Type": "application/json",
     }
+    encoding = tiktoken.get_encoding("cl100k_base")
+    num_tokens = encoding.encode(data["model_response"])
+
     params = {
-        "prompt_id": data["prompt_id"],
-        "endpoint_str": data["endpoint_str"],
-        "response": data["response"],
-        "num_tokens": data["num_tokens"],
+        "prompt_id": data["id"],
+        "endpoint_str": data["endpoint"],
+        "response": data["model_response"],
+        "num_tokens": num_tokens,
     }
     response = await client.post(url, headers=HEADERS, params=params)
+    assert response.status_code == 200, response.json()
 
 
-async def upload_single_judgement(client, cfg, judgements_path):
+async def upload_judgements(client, cfg, judgements_path):
+    to_upload = []
+    with open(judgements_path) as f:
+        for line in f:
+            to_upload.append(json.loads(line))
+
+    # TODO: async over this
+    for jgmt in to_upload:
+        await upload_single_judgement(client, cfg, jgmt)
+
+
+async def upload_single_judgement(client, cfg, data):
     url = cfg.orchestra_url + "/v0/evaluations/upload_judgements"
     HEADERS = {
         "accept": "application/json",
-        "Authorization": f"Bearer {cfg.api_key}",
+        "Authorization": f"Bearer {ADMIN_KEY}",
         "Content-Type": "application/json",
     }
-    params = {"name": cfg.dataset}
+
+    params = {
+        "prompt_id": data["id"],
+        "endpoint_str": data["endpoint"],
+        "evaluator_id": cfg.evaluator_id,
+        "judge_endpoint_id": data["judge_endpoint"],
+        "judgement": data["judge_response"],
+        "score": data["score"],
+    }
     response = await client.post(url, headers=HEADERS, params=params)
+    assert response.status_code == 200, response.json()
 
 
 ##
@@ -215,7 +244,6 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     cfg = json.loads(msg)
     user_email = cfg.pop("user_email", None)
     cfg = BenchmarkConfig(**cfg)
-
     if client is None:
         limits = Limits(
             max_keepalive_connections=None, max_connections=None, keepalive_expiry=30
@@ -233,14 +261,12 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
 
     # load prompts
     prompts = await fetch_dataset(client, cfg)
-
     os.makedirs(model_responses_path, exist_ok=True)
     os.makedirs(model_judgements_path, exist_ok=True)
     if not os.path.isfile(prompts_path):
         # make prompt file
         with open(prompts_path, "w") as f:
-            for id_, entry in enumerate(prompts):
-                entry["id_"] = id_
+            for entry in prompts:
                 f.write(json.dumps(entry) + "\n")
 
     # load eval_config
@@ -337,20 +363,9 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     ):
         model_str = _format_model_tag(endpoint)
         judgements_file_str = _format_judgements_file(
-            endpoint,
-            judge_model_tag,
-            cfg.eval_id,
+            endpoint, judge_model_tag, cfg.evaluator
         )
 
-        response_blob_name = create_judgement_blob_filename(
-            endpoint,
-            cfg.eval_id,
-            judge_model_tag,
-        )
-        progress_blob_name = response_blob_name.replace(
-            "_judged.jsonl",
-            "_progress.log",
-        )
         await generate_judgements(
             asst_response_file=os.path.join(model_responses_path, f"{model_str}.jsonl"),
             judge_response_file=os.path.join(
@@ -365,8 +380,8 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
             eval_config=eval_config,
             gcp_config={
                 "bucket_name": "uploaded_datasets",
-                "response_blob_name": response_blob_name,
-                "progress_blob_name": progress_blob_name,
+                "response_blob_name": "",
+                "progress_blob_name": "",
                 "num_prompts": len(prompts),
             },
         )
@@ -417,29 +432,11 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
         logging.info(f"End getting judgements")
 
     print("Done collecting data")
-    # upload to cloud storage buckets
 
     model_responses_formatted_path = os.path.join(
         model_responses_path,
         _format_model_tag(cfg.endpoint) + ".jsonl",
     )
-
-    ## upload responses
-    blob_name = os.path.join(
-        cfg.user_id,
-        cfg.dataset,
-        "0",
-        cfg.endpoint,
-        "responses.jsonl",
-    )
-    if os.environ.get("ON_PREM"):
-        blob_name = os.path.join(shared_volume, bucket_name, blob_name)
-        os.makedirs(os.sep.join(blob_name.split(os.sep)[:-1]), exist_ok=True)
-        with open(blob_name, "w") as f:
-            f.write(open(model_responses_formatted_path).read())
-    else:
-        blob = storage.Client().bucket(bucket_name).blob(blob_name)
-        blob.upload_from_filename(model_responses_formatted_path)
 
     ## todo: uploads
     response = await upload_responses(client, cfg, model_responses_formatted_path)
@@ -448,47 +445,14 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
 
     for judge_tag in judge_models:
         fmtd_judge_tag = _format_model_tag(judge_tag)
-        blob_name = create_judgement_blob_filename(cfg.endpoint, cfg.eval_id, judge_tag)
+        blob_name = create_judgement_blob_filename(cfg.endpoint, cfg.evaluator, judge_tag)
 
         model_judgements_formatted_path = os.path.join(
             model_judgements_path,
-            _format_judgements_file(cfg.endpoint, judge_tag, cfg.eval_id) + ".jsonl",
+            _format_judgements_file(cfg.endpoint, judge_tag, cfg.evaluator) + ".jsonl",
         )
-        if os.environ.get("ON_PREM"):
-            blob_name = os.path.join(shared_volume, bucket_name, blob_name)
-            os.makedirs(os.sep.join(blob_name.split(os.sep)[:-1]), exist_ok=True)
-            with open(blob_name, "w") as f:
-                f.write(open(model_judgements_formatted_path).read())
-        else:
-            blob = storage.Client().bucket(bucket_name).blob(blob_name)
-            blob.upload_from_filename(model_judgements_formatted_path)
+        response = await upload_judgements(client, cfg, model_judgements_formatted_path)
 
-    # upload num of tokens in responses
-    model_str = _format_model_tag(cfg.endpoint)
-    asst_response_file = os.path.join(model_responses_path, f"{model_str}.jsonl")
-    encoding = tiktoken.get_encoding("cl100k_base")
-    num_output_tokens = 0
-    with open(asst_response_file) as f:
-        for line in f:
-            data = json.loads(line)
-            model_response = data["model_response"]
-            num_output_tokens += len(encoding.encode(model_response))
-    blob_name = (
-        f"{cfg.user_id}/{cfg.dataset}/0/{cfg.endpoint}/num_tokens_in_responses.json"
-    )
-    string = json.dumps({"num_tokens": num_output_tokens})
-    if os.environ.get("ON_PREM"):
-        blob_name = os.path.join(shared_volume, bucket_name, blob_name)
-        os.makedirs(os.sep.join(blob_name.split(os.sep)[:-1]), exist_ok=True)
-        with open(blob_name, "w") as f:
-            f.write(string)
-    else:
-        blob = storage.Client().bucket(bucket_name).blob(blob_name)
-        blob.upload_from_string(string, content_type="application/json")
-
-    print("refreshing scores")
-    refresh_scores_for_dataset(cfg.user_id, cfg.dataset)
-    print("done refreshing scores")
 
     # send mail
     if not os.environ.get("ON_PREM") and user_email is not None:

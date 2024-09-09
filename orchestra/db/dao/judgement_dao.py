@@ -16,12 +16,14 @@ class JudgementDAO:
         self,
         response_id: int,
         judge_endpoint_id: int,
+        evaluator_id: int,
         judgement: str,
     ) -> None:
         self.session.add(
             Judgement(
                 response_id=response_id,
                 judge_endpoint_id=judge_endpoint_id,
+                evaluator_id=evaluator_id,
                 judgement=judgement,
             ),
         )
@@ -30,11 +32,14 @@ class JudgementDAO:
         self,
         id: Optional[int] = None,  # noqa: WPS125
         response_id: Optional[int] = None,
+        evaluator_id: Optional[int] = None,
     ) -> List[Judgement]:
         query = select(Judgement)
         if id:
             query = query.where(Judgement.id == id)
         if response_id:
             query = query.where(Judgement.response_id == response_id)
+        if evaluator_id:
+            query = query.where(Judgement.evaluator_id == evaluator_id)
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())

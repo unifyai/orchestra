@@ -74,8 +74,8 @@ def create_evaluator(
     user_id = request_fastapi.state.user_id
 
     judge_models = request.judge_models
-    if isinstance(request.judge_models, str):
-        judge_models = [request.judge_models]
+    if isinstance(judge_models, str):
+        judge_models = [judge_models]
 
     invalid_endpoints = find_invalid_endpoints(judge_models)
     if invalid_endpoints:
@@ -85,6 +85,7 @@ def create_evaluator(
             f"to use as a judge model.",
         )
 
+    judge_models = json.dumps(judge_models)
     # TODO: put these defaults somewhere sensible
     system_prompt = request.system_prompt
     if system_prompt is None:

@@ -18,7 +18,7 @@ def count_tokens(root_dir, save=False):
         with open(model_response_path) as f:
             for line in f:
                 entry = json.loads(line)
-                id_ = entry["id_"]
+                id = entry["id"]
                 prompt = entry["prompt"]
                 response = entry["model_response"]
 
@@ -26,13 +26,13 @@ def count_tokens(root_dir, save=False):
                 num_response_toks = len(enc.encode(response, disallowed_special=()))
 
                 data = {
-                    "id_": id_,
+                    "id": id,
                     "model": model_str,
                     "num_toks_in": num_prompt_toks,
                     "num_toks_out": num_response_toks,
                 }
                 lines.append(data)
-                id_model_to_tokens[id_, model_str] = {
+                idmodel_to_tokens[id, model_str] = {
                     "num_toks_in": num_prompt_toks,
                     "num_toks_out": num_response_toks,
                 }
@@ -47,7 +47,7 @@ def count_tokens(root_dir, save=False):
             for line in lines:
                 f.write(json.dumps(line) + "\n")
 
-    return id_model_to_tokens
+    return idmodel_to_tokens
 
 
 if __name__ == "__main__":

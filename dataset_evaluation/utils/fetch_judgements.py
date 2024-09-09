@@ -81,7 +81,7 @@ def create_request(
     payload = create_payload(model_tag=judge_endpoint, prompt=prompt)
     score_fn = partial(ratings_from_sample, cfg=eval_config.get("class_config", None))
     return Request(
-        id_=prompt_data["id_"],
+        id=prompt_data["id"],
         payload=payload,
         url=url,
         headers=headers,
@@ -121,13 +121,13 @@ async def generate_judgements(
         with open(judge_response_file) as f:
             for line in f:
                 data = json.loads(line)
-                completed.add(data["id_"])
+                completed.add(data["id"])
 
     unprocessed_prompts = []
     with open(asst_response_file) as f:
         for ix, line in enumerate(f):
             data = json.loads(line)
-            if data["id_"] in completed:
+            if data["id"] in completed:
                 continue
             req = create_request(
                 model_endpoint=asst_model_tag,

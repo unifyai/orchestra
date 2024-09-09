@@ -40,6 +40,6 @@ class StoredPromptResponseDAO:
         if prompt_id:
             query = query.where(StoredPromptResponse.prompt_id == prompt_id)
         if endpoint_str:
-            query = query.where(StoredPromptREsponse.endpoint_str == endpoint_str)
+            query = query.where(StoredPromptResponse.endpoint_str == endpoint_str)
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())

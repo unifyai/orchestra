@@ -111,15 +111,18 @@ async def test_trigger_eval(
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
+    ############################
+
     url = "/v0/evaluation"
-    params = {"dataset": dataset, "evaluator": eval_name}
+    params = {"dataset": dataset, "evaluator": eval_name, "endpoint": endpoint}
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     scores = response.json()
     assert eval_name in scores
     assert endpoint in scores[eval_name]
-    assert judge_model in scores[eval_name][endpoint]
+    assert isinstance(scores[eval_name][endpoint], float)
 
+    # TODO: fix this endpoint
     url = "/v0/evaluation/status"
     params = {"dataset": dataset, "evaluator": eval_name, "endpoint": endpoint}
     response = await client.get(url, params=params, headers=HEADERS)

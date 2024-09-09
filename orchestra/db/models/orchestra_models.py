@@ -479,6 +479,7 @@ class Judgement(Base):
         sa.ForeignKey("endpoint.id"),
         nullable=False,
     )
+    evaluator_id = sa.Column(sa.Integer(), sa.ForeignKey("evaluator.id"), nullable=False)
     judgement = sa.Column(sa.String(), nullable=False)
 
 
@@ -539,4 +540,5 @@ class Evaluation(Base):
         index=True,
         nullable=True,
     )
+    endpoint_str = sa.Column(sa.String(), nullable=False)
     score = sa.Column(sa.Numeric(), nullable=False)

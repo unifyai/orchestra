@@ -16,12 +16,14 @@ class EvaluationDAO:
         self,
         prompt_id: int,
         evaluator_id: int,
+        endpoint_str: str,
         score: float,
     ) -> None:
         self.session.add(
             Evaluation(
                 prompt_id=prompt_id,
                 evaluator_id=evaluator_id,
+                endpoint_str=endpoint_str,
                 score=score,
             ),
         )
@@ -31,6 +33,7 @@ class EvaluationDAO:
         id: Optional[int] = None,  # noqa: WPS125
         prompt_id: Optional[int] = None,
         evaluator_id: Optional[int] = None,
+        endpoint_str: Optional[str] = None,
     ) -> List[Evaluation]:
         query = select(Evaluation)
         if id:
@@ -39,6 +42,8 @@ class EvaluationDAO:
             query = query.where(Evaluation.prompt_id == prompt_id)
         if evaluator_id:
             query = query.where(Evaluation.evaluator_id == evaluator_id)
+        if endpoint_str:
+            query = query.where(Evaluation.endpoint_str == endpoint_str)
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())
 
@@ -54,3 +59,11 @@ class EvaluationDAO:
         if entry is not None:
             if score:
                 setattr(entry, "score", score)  # noqa: B010
+
+    def fetch_evaluation_scores(self, prompt_ids, evaluator_id, endpoint_str):
+        query = select(Evaluation)
+        # query = query.where(Evaluation.evaluator_id == evaluator_id)
+        # query = query.where(endpoint_str == endpoint_str)
+        # query = query.filter(Evaluation.prompt_id.in_(prompt_ids))
+        rows = self.session.execute(query)
+        return list(rows.scalars().fetchall())

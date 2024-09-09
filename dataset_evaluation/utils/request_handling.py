@@ -8,7 +8,7 @@ import requests
 class Request:
     def __init__(
         self,
-        id_: int,
+        id: int,
         payload: dict,
         url,
         headers,
@@ -18,7 +18,7 @@ class Request:
         extra_kwargs={},
         score_fn=None,
     ):
-        self.id_ = id_
+        self.id = id
         self.payload = payload
         self.url = url
         self.headers = headers
@@ -45,7 +45,7 @@ async def generic_call(request: Request):
             return (
                 True,
                 {
-                    "id_": request.id_,
+                    "id": request.id,
                     "prompt": request.prompt,
                     request.response_type: model_response,
                     **request.extra_kwargs,
