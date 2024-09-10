@@ -427,6 +427,22 @@ class StoredPrompt(Base):
     timestamp = sa.Column(sa.TIMESTAMP(), nullable=False)
 
 
+class DefaultPrompt(Base):
+    """Model class for the default prompt table."""
+
+    __tablename__ = "default_prompt"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    user_id = sa.Column(
+        sa.String(),
+        sa.ForeignKey("users.id"),
+        index=True,
+        nullable=True,
+    )
+    name = sa.Column(sa.String(), nullable=False)
+    prompt = sa.Column(sa.String(), nullable=True)
+
+
 class StoredPromptVariation(Base):
     """Model class for variations of stored prompts table."""
 
@@ -437,9 +453,14 @@ class StoredPromptVariation(Base):
         sa.Integer(),
         sa.ForeignKey("stored_prompt.id"),
         index=True,
-        nullable=True,
+        nullable=False,
     )
-    prompt_overrides = sa.Column(sa.String(), nullable=True)
+    default_prompt_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("default_prompt.id"),
+        index=True,
+        nullable=False,
+    )
 
 
 # TODO: Add StoredPromptExtraField
