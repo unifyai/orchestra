@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 from typing import List, Optional
 
 from fastapi import Depends
@@ -84,7 +85,9 @@ class DatasetDAO:
         for stored_prompt, _ in result:
             prompt_data = {
                 "id": stored_prompt.id,
-                "prompt": stored_prompt.prompt,
+                "system_msg": json.loads(stored_prompt.system_msg),
+                "messages": json.loads(stored_prompt.messages),
+                "prompt_kwargs": json.loads(stored_prompt.prompt_kwargs),
                 "ref_answer": stored_prompt.ref_answer,
                 "num_tokens": stored_prompt.num_tokens,
                 "timestamp": stored_prompt.timestamp,
@@ -108,9 +111,15 @@ class DatasetDAO:
         except:
             return {"error": f"Dataset {dataset_name} not found"}
 
+        system_msg = prompt_data["prompt"].get("system_msg")
+        messages = prompt_data["prompt"]["messages"]
+        prompt_kwargs = {k:v for k,v in prompt_data["prompt"].items() if k not in ["system_msg", "messages"]}
+
         new_prompt = StoredPrompt(
             user_id=user_id,
-            prompt=prompt_data["prompt"],
+            system_msg=json.dumps(system_msg),
+            messages=json.dumps(messages),
+            prompt_kwargs=json.dumps(prompt_kwargs),
             ref_answer=prompt_data.get("ref_answer"),
             num_tokens=prompt_data.get("num_tokens", 0),
             timestamp=prompt_data.get("timestamp", datetime.utcnow()),

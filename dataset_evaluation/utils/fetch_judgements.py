@@ -2,8 +2,8 @@ import json
 import os
 from functools import partial
 
-from utils.generic_mp import process_requests
-from utils.request_handling import Request, create_payload
+from httpx import AsyncClient
+
 from utils.judge_templates import template_with_ref
 from utils.parsing_judge import ratings_from_sample
 
@@ -65,87 +65,121 @@ def create_judge_prompt(prompt_data, eval_config):
     return final_prompt
 
 
-def create_request(
-    model_endpoint: str,
-    judge_endpoint: str,
-    url,
-    headers,
-    client,
-    prompt_data: dict,
-    eval_config,
+async def load_prompt(prompt_id: int, admin_key: str, client: AsyncClient):
+    url = "/v0/dataset/load_prompt"
+    HEADERS = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {admin_key}",
+        "Content-Type": "application/json",
+    }
+    params = {"prompt_id": prompt_id}
+    ret = await client.get(url, params=params, headers=HEADERS)
+    return ret.json()[0]
+
+
+async def load_response(
+    prompt_id: int, endpoint_str: str, admin_key: str, client: AsyncClient
 ):
-    prompt = create_judge_prompt(
-        prompt_data,
-        eval_config,
-    )
-    payload = create_payload(model_tag=judge_endpoint, prompt=prompt)
-    score_fn = partial(ratings_from_sample, cfg=eval_config.get("class_config", None))
-    return Request(
-        id=prompt_data["id"],
-        payload=payload,
-        url=url,
-        headers=headers,
-        client=client,
-        prompt=prompt_data["prompt"],
-        response_type="judge_response",
-        extra_kwargs={
-            "endpoint": model_endpoint,
-            "judge_endpoint": judge_endpoint,
-            "model_response": prompt_data["model_response"],
-        },
-        score_fn=score_fn,
-    )
+    url = "/v0/dataset/load_response"
+    HEADERS = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {admin_key}",
+        "Content-Type": "application/json",
+    }
+    params = {"prompt_id": prompt_id, "endpoint_str": endpoint_str}
+    ret = await client.get(url, params=params, headers=HEADERS)
+    return ret.json()[0]
 
 
-async def generate_judgements(
-    asst_response_file,
-    judge_response_file,
-    asst_model_tag,
-    judge_model_tag,
-    batch_size,
-    api_key,
-    client,
-    eval_config,
-    db_config=None,
+async def get_llm_response(payload, url, headers, client):
+    ret = await client.post(url, json=payload, headers=headers)
+    return ret.json()
+
+
+async def calc_score(eval_config, judgement_str):
+    score = ratings_from_sample(
+        sample=judgement_str, cfg=json.loads(eval_config.get("class_config", None))
+    )
+    return score
+
+
+async def send_judgement_to_db(
+    prompt_id, endpoint_str, judge_str, admin_key, client, judgement, cfg, eval_config
 ):
-    url = f"/v0/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}"}
+    url = "/v0/evaluations/upload_judgements"
+    HEADERS = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {admin_key}",
+        "Content-Type": "application/json",
+    }
+    judgement_str = judgement["choices"][0]["message"]["content"]
+    score = await calc_score(eval_config, judgement_str)
+    params = {
+        "prompt_id": prompt_id,
+        "endpoint_str": endpoint_str,
+        "evaluator_id": cfg.evaluator_id,
+        "judge_endpoint_id": judge_str,
+        "judgement": json.dumps(judgement),
+        "score": score,
+    }
+    response = await client.post(url, headers=HEADERS, params=params)
+    return response.status_code
 
-    asst_model_name = asst_model_tag.split("@")[0]
-    judge_model_name = judge_model_tag.split("@")[0]
 
-    print(f"Generating judgements for: {asst_model_tag}")
+async def generate_judgement(
+    prompt_id,
+    endpoint_str,
+    cfg,
+    eval_config,
+    client,
+    semaphore,
+):
+    async with semaphore:
+        # get the prompt from the db
+        prompt_data = await load_prompt(prompt_id, cfg.admin_key, client)
+        # get the response from the db
+        response_data = await load_response(
+            prompt_id, endpoint_str, cfg.admin_key, client
+        )
 
-    completed = set()
-    if os.path.isfile(judge_response_file):
-        with open(judge_response_file) as f:
-            for line in f:
-                data = json.loads(line)
-                completed.add(data["id"])
+        # create the judge prompt
+        prompt = json.loads(prompt_data["messages"])[0]["content"]
+        sys_prompt = json.loads(prompt_data["system_msg"])
+        if sys_prompt:
+            prompt = sys_prompt + prompt
+        data = {}
+        data["prompt"] = prompt
+        data["ref_answer"] = prompt_data["ref_answer"]
+        data["model_response"] = json.loads(response_data["response"])["choices"][0][
+            "message"
+        ]["content"]
+        judge_prompt = create_judge_prompt(data, eval_config)
+        messages = [
+            {"role": "user", "content": judge_prompt},
+        ]
 
-    unprocessed_prompts = []
-    with open(asst_response_file) as f:
-        for ix, line in enumerate(f):
-            data = json.loads(line)
-            if data["id"] in completed:
-                continue
-            req = create_request(
-                model_endpoint=asst_model_tag,
-                judge_endpoint=judge_model_tag,
-                url=url,
-                headers=headers,
-                client=client,
-                prompt_data=data,
-                eval_config=eval_config,
-            )
-            unprocessed_prompts.append(req)
+        # get the response to the judge prompt
 
-    print(f"{len(unprocessed_prompts)=}")
+        # TODO: what if more than one judge
+        judge_model = eval_config["judge_models"][0]
+        payload = {"model": judge_model, "messages": messages, "temperature": 0.3}
 
-    await process_requests(
-        unprocessed_prompts,
-        response_filename=judge_response_file,
-        batch_size=batch_size,
-        tries=5,
-        db_config=db_config,
-    )
+        url = f"/v0/chat/completions"
+        headers = {"Authorization": f"Bearer {cfg.api_key}"}
+        response = await get_llm_response(
+            payload=payload, url=url, headers=headers, client=client
+        )
+
+        # log it in the db
+        db_upload_msg = await send_judgement_to_db(
+            prompt_id=prompt_id,
+            endpoint_str=endpoint_str,
+            judge_str=judge_model,
+            admin_key=cfg.admin_key,
+            client=client,
+            judgement=response,
+            cfg=cfg,
+            eval_config=eval_config,
+        )
+        if db_upload_msg != 200:
+            raise Exception

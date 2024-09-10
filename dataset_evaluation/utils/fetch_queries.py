@@ -1,61 +1,79 @@
 import json
 import os
 
+from httpx import AsyncClient
+import tiktoken
+
 from utils.generic_mp import process_requests
-from utils.request_handling import Request, create_payload
 
 
-def create_request(endpoint: str, url, headers, client, prompt_data):
-    payload = create_payload(model_tag=endpoint, prompt=prompt_data["prompt"])
-    return Request(
-        id=prompt_data["id"],
-        payload=payload,
-        url=url,
-        headers=headers,
-        client=client,
-        prompt=prompt_data["prompt"],
-        response_type="model_response",
-        extra_kwargs={"endpoint": endpoint},
-    )
+async def load_prompt(prompt_id: int, admin_key: str, client: AsyncClient):
+    url = "/v0/dataset/load_prompt"
+    HEADERS = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {admin_key}",
+        "Content-Type": "application/json",
+    }
+    params = {"prompt_id": prompt_id}
+    ret = await client.get(url, params=params, headers=HEADERS)
+    return ret.json()[0]
 
 
-async def generate_queries(
-    prompt_file,
-    response_file,
-    endpoint,
-    batch_size,
-    api_key,
+async def get_llm_response(payload, url, headers, client):
+    ret = await client.post(url, json=payload, headers=headers)
+    return ret.json()
+
+
+async def send_response_to_db(prompt_id, endpoint_str, admin_key, client, response):
+    url = "/v0/evaluations/upload_responses"
+    HEADERS = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {admin_key}",
+        "Content-Type": "application/json",
+    }
+    encoding = tiktoken.get_encoding("cl100k_base")
+    num_tokens = encoding.encode(response["choices"][0]["message"]["content"])
+
+    params = {
+        "prompt_id": prompt_id,
+        "endpoint_str": endpoint_str,
+        "response": json.dumps(response),
+        "num_tokens": num_tokens,
+    }
+    response = await client.post(url, headers=HEADERS, params=params)
+    return response.status_code
+
+
+async def generate_response(
+    prompt_id,
+    endpoint_str,
+    cfg,
     client,
-    db_config=None,
+    semaphore,
 ):
-    model_name = endpoint.split("@")[0]
+    async with semaphore:
+        # get the prompt from the db
+        prompt_data = await load_prompt(prompt_id, cfg.admin_key, client)
 
-    print(f"Generating queries for: {endpoint}")
+        # run the query
+        system_msg = json.loads(prompt_data.get("system_msg"))
+        messages = json.loads(prompt_data.get("messages"))
+        prompt_kwargs = json.loads(prompt_data.get("prompt_kwargs"))
+        if system_msg:
+            messages = system_msg + messages
+        payload = {"model": endpoint_str, "messages": messages, **prompt_kwargs}
 
-    url = f"/v0/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}"}
+        url = f"/v0/chat/completions"
+        headers = {"Authorization": f"Bearer {cfg.api_key}"}
+        response = await get_llm_response(payload, url, headers, client)
 
-    completed = set()
-    if os.path.isfile(response_file):
-        with open(response_file) as f:
-            for line in f:
-                data = json.loads(line)
-                completed.add(data["id"])
-
-    unprocessed_prompts = []
-    with open(prompt_file, "r") as pf:
-        for ix, line in enumerate(pf):
-            data = json.loads(line)
-            if data["id"] in completed:
-                continue
-            req = create_request(endpoint, url, headers, client, data)
-            unprocessed_prompts.append(req)
-
-    print(len(unprocessed_prompts))
-    await process_requests(
-        unprocessed_prompts,
-        response_filename=response_file,
-        batch_size=batch_size,
-        tries=5,
-        db_config=db_config,
-    )
+        # upload the response
+        db_upload_msg = await send_response_to_db(
+            prompt_id=prompt_id,
+            endpoint_str=endpoint_str,
+            admin_key=cfg.admin_key,
+            client=client,
+            response=response,
+        )
+        if db_upload_msg != 200:
+            raise Exception

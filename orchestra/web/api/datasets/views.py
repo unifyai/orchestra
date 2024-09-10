@@ -182,7 +182,8 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 dataset_name=name,
                 prompt_data=prompt_data,
             )
-    except:
+    except Exception as e:
+        print(e)
         raise HTTPException(400, detail=f"Incorrect data format")
 
     return {"info": "Dataset uploaded successfully!"}

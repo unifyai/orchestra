@@ -19,6 +19,7 @@ from orchestra.web.api.utils.http_responses import (
 from orchestra.db.dao.dataset_dao import DatasetDAO
 from orchestra.db.dao.evaluator_dao import EvaluatorDAO
 from orchestra.db.dao.evaluation_dao import EvaluationDAO
+from orchestra.db.dao.stored_prompt_dao import StoredPromptDAO
 from orchestra.db.dao.stored_prompt_response_dao import StoredPromptResponseDAO
 from orchestra.db.dao.judgement_dao import JudgementDAO
 
@@ -26,6 +27,7 @@ router = APIRouter()
 admin_router = APIRouter()
 
 # utils
+
 
 # TODO: Move to utils (duplicated in routing)
 def dataset_exists(dataset_dao, user_id, name):
@@ -82,8 +84,6 @@ def send_to_dataset_evaluation_server(action, **data):
     else:
         gcp.send_pubsub_msg(topic, {"action": action, **data, "orchestra_url": url})
     print(f"Published: {str({'action': action, **data, 'orchestra_url': url})}")
-
-
 
 
 ###########################
@@ -313,20 +313,23 @@ def get_single_evaluation(
     evaluation_dao: EvaluationDAO,
     per_prompt: bool,
 ):
-    """Get the score for one endpoint + evaluator + dataset (optionally per_prompt)"""
-    dataset_prompts = dataset_dao.filter(user_id=user_id, name=dataset)
+    """Get the score for one endpoint + evaluator + dataset (optionally per_prompt)
+    returns (score, progress) on the dataset"""
+    # dataset_prompts = dataset_dao.filter(user_id=user_id, name=dataset)
+    dataset_prompts = dataset_dao.fetch_dataset(user_id=user_id, name=dataset)
 
-    prompt_ids = [prompt.id for prompt in dataset_prompts]
+    prompt_ids = [prompt["id"] for prompt in dataset_prompts]
     evaluator_id = evaluator_dao.filter(user_id=user_id, name=evaluator)[0].id
     scores = evaluation_dao.fetch_evaluation_scores(
         prompt_ids=prompt_ids, evaluator_id=evaluator_id, endpoint_str=endpoint
     )
+    mean_score = 100 * sum(float(s.score) for s in scores) / len(scores)
+    progress = 100 * len(scores) / len(prompt_ids)
+    result = {"score": mean_score, "progress": progress}
     if per_prompt:
-        ret = []
-        for _s in scores:
-            ret.append({"id": _s.id, "score": float(_s.score)})
-        return ret
-    return sum(float(s.score) for s in scores) / len(scores)
+        per_prompt_scores = [{"id": _s.id, "score": float(_s.score)} for _s in scores]
+        result["per_prompt"] = per_prompt_scores
+    return result
 
 
 @router.get(
@@ -387,17 +390,6 @@ def get_evaluations(
                 detail=f"Could not find endpoint: {'.'.join(invalid_endpoints)}",
             )
 
-    score = get_single_evaluation(
-        user_id=user_id,
-        dataset=dataset,
-        endpoint=endpoint,
-        evaluator=evaluator,
-        dataset_dao=dataset_dao,
-        evaluator_dao=evaluator_dao,
-        evaluation_dao=evaluation_dao,
-        per_prompt=per_prompt,
-    )
-
     #### TODO: properly handle multiple endpoint,evaluator things
     #### also multiple judges stuff
     #### also token counts
@@ -408,7 +400,7 @@ def get_evaluations(
     ret = {}
     for endpoint in endpoints:
         for evaluator in evaluators:
-            score = get_single_evaluation(
+            eval_result = get_single_evaluation(
                 user_id=user_id,
                 dataset=dataset,
                 endpoint=endpoint,
@@ -419,9 +411,9 @@ def get_evaluations(
                 per_prompt=per_prompt,
             )
             if evaluator in ret:
-                ret[evaluator][endpoint] = score
+                ret[evaluator][endpoint] = eval_result
             else:
-                ret[evaluator] = {endpoint: score}
+                ret[evaluator] = {endpoint: (eval_result)}
 
     return ret
 
@@ -466,100 +458,6 @@ def delete_evaluations(
     evaluations for all valid endpoints are deleted.
     """
     raise NotImplemented
-
-
-@router.get(
-    "/evaluation/status",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "responses": {
-                            "last_updated": "2024-08-19 13:58:20.866092",
-                            "num_failed": 0,
-                            "num_processed": 3,
-                            "num_remaining": 0,
-                        },
-                        "judgements": {
-                            "judge_model_a": {
-                                "last_updated": "2024-08-19 13:58:20.866092",
-                                "num_failed": 0,
-                                "num_processed": 3,
-                                "num_remaining": 0,
-                            },
-                        },
-                    },
-                },
-            },
-        },
-    },
-)
-def eval_status(
-    request_fastapi: Request,
-    dataset: str = Query(
-        description="Name of the dataset to get evaluation status of.",
-        example="dataset1",
-    ),
-    endpoint: str = Query(
-        description="Endpoint to get evaluation status of",
-        example="llama-3-8b-chat@aws-bedrock",
-    ),
-    evaluator: str = Query(
-        description="Name of the evaluator to get status of.",
-        example="eval1",
-    ),
-):
-    """
-    Fetches the eval status on a given dataset. Returns object of the form:
-
-    ```
-    {
-        "responses": {
-            "last_updated": "2024-08-19 13:58:20.866092",
-            "num_failed": 0,
-            "num_processed": 3,
-            "num_remaining": 0,
-        },
-        "judgements": {
-            "judge_model_a": {
-                "last_updated": "2024-08-19 13:58:20.866092",
-                "num_failed": 0,
-                "num_processed": 3,
-                "num_remaining": 0,
-            }
-        },
-    }
-    ```
-
-    """
-
-    ## TODO:
-    # migrate this + need work on the microservice to update responses realtime
-
-    user_id = request_fastapi.state.user_id
-    if not dataset_exists(user_id, dataset):
-        raise dataset_does_not_exist(dataset)
-
-    if os.environ.get("ON_PREM"):
-        id_to_name = on_prem.internal_id_to_displayname(user_id)
-    else:
-        id_to_name = gcp.internal_id_to_displayname(user_id)
-    name_to_id = {name: id_ for id_, name in id_to_name.items()}
-    internal_id = name_to_id.get(dataset, dataset)
-
-    requested_eval_id = eval_name_to_eval_id(user_id, evaluator)
-
-    ret = _get_status(
-        user_id=user_id,
-        dataset=internal_id,
-        endpoint=endpoint,
-        eval_id=requested_eval_id,
-    )
-    # format of scores is {eval_id: {endpoint : {judge : score}}}
-
-    return ret
 
 
 @admin_router.post("/evaluations/upload_responses")
@@ -627,3 +525,24 @@ def upload_judgements(
         endpoint_str=endpoint_str,
         score=score,
     )
+
+
+@admin_router.get("/dataset/load_prompt")
+def load_prompt(
+    request_fastapi: Request,
+    prompt_id: str,
+    stored_prompt_dao: StoredPromptDAO = Depends(),
+):
+    ret = stored_prompt_dao.filter(id=prompt_id)
+    return ret
+
+
+@admin_router.get("/dataset/load_response")
+def load_prompt(
+    request_fastapi: Request,
+    prompt_id: str,
+    endpoint_str: str,
+    stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
+):
+    ret = stored_prompt_response_dao.filter(id=prompt_id, endpoint_str=endpoint_str)
+    return ret
