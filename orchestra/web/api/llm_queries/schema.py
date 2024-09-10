@@ -212,6 +212,15 @@ class ChatCompletionRequest(BaseModel):
         ),
         json_schema_extra={"example": True},
     )
+    region: Optional[str] = Field(
+        None,
+        description=(
+            "A string used to represent the region where the endpoint is accessed. "
+            "This is only relevant for certain providers like `vertex-ai`, `azure-ai` "
+            "and `aws-bedrock`, where the endpoint is being accessed through a "
+            "specified region."
+        ),
+    )
 
 
 class ChatCompletionResponse(BaseModel):
