@@ -1,11 +1,17 @@
 from typing import List, Optional
 
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import select, join
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Evaluation
+from orchestra.db.models.orchestra_models import (
+    Evaluator,
+    Evaluation,
+    Dataset,
+    StoredPrompt,
+    DatasetPrompt,
+)
 
 
 class EvaluationDAO:
@@ -67,9 +73,44 @@ class EvaluationDAO:
         query = query.filter(Evaluation.prompt_id.in_(prompt_ids))
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())
-    
-    # def find_evaluators(self, user_id, dataset, endpoint_str):
-    #     query = select(Evaluation)
-    #     query = query.where(
-        
 
+    def get_evaluator_names(self, dataset_id: int, endpoint_str: str):
+
+        query = (
+            select(Evaluator.name)
+            .distinct()
+            .select_from(
+                join(Dataset, DatasetPrompt, Dataset.id == DatasetPrompt.dataset_id)
+                .join(StoredPrompt, DatasetPrompt.prompt_id == StoredPrompt.id)
+                .join(Evaluation, StoredPrompt.id == Evaluation.prompt_id)
+                .join(Evaluator, Evaluator.id == Evaluation.evaluator_id)
+            )
+            .where(Dataset.id == dataset_id)
+            .where(Evaluation.endpoint_str == endpoint_str)
+        )
+
+        result = self.session.execute(query)
+
+        evaluator_ids = [row[0] for row in result]
+
+        return evaluator_ids
+
+    def get_endpoints(self, dataset_id: int, evaluator_id: str):
+
+        query = (
+            select(Evaluation.endpoint_str)
+            .distinct()
+            .select_from(
+                join(Dataset, DatasetPrompt, Dataset.id == DatasetPrompt.dataset_id)
+                .join(StoredPrompt, DatasetPrompt.prompt_id == StoredPrompt.id)
+                .join(Evaluation, StoredPrompt.id == Evaluation.prompt_id)
+            )
+            .where(Dataset.id == dataset_id)
+            .where(Evaluation.evaluator_id == evaluator_id)
+        )
+
+        result = self.session.execute(query)
+
+        endpoints = [row[0] for row in result]
+
+        return endpoints

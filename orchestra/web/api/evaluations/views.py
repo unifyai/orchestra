@@ -389,15 +389,19 @@ def get_evaluations(
             )
 
     if evaluator:
-        # TODO: add logic to check it's valid
+        evaluator_id = evaluator_dao.filter(user_id=user_id, name=evaluator)
+        if not evaluator_id:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Could not find an evaluator with the name {evaluator}",
+            )
+        evaluator_id = evaluator_id[0].id
         evaluators = [evaluator]
     else:
-        raise NotImplementedError
-        # find the evaluators in evaluations table
-        evaluators = evaluation_dao.find_evaluators(
-            user_id=user_id, dataset=dataset, endpoint_str=endpoint
+        dataset_id = dataset_dao.filter(user_id=user_id, name=dataset)[0].id
+        evaluators = evaluation_dao.get_evaluator_names(
+            dataset_id=dataset_id, endpoint_str=endpoint
         )
-        # TODO:
 
     if endpoint:
         invalid_endpoints = find_invalid_endpoints([endpoint])
@@ -408,11 +412,11 @@ def get_evaluations(
             )
         endpoints = [endpoint]
     else:
-        raise NotImplementedError
-        # find the endpoints in evaluations table
-        endpoints = ...
+        dataset_id = dataset_dao.filter(user_id=user_id, name=dataset)[0].id
+        endpoints = evaluation_dao.get_endpoints(
+            dataset_id=dataset_id, evaluator_id=evaluator_id
+        )
 
-    #### TODO: properly handle multiple endpoint,evaluator things
     # multiple judges
     # exception handling
 
@@ -477,6 +481,9 @@ def delete_evaluations(
     evaluations for all valid endpoints are deleted.
     """
     raise NotImplemented
+
+
+### admin functions
 
 
 @admin_router.post("/evaluations/upload_responses")
@@ -552,6 +559,7 @@ def load_prompt(
     ret = stored_prompt_response_dao.filter(id=prompt_id, endpoint_str=endpoint_str)
     return ret
 
+
 @admin_router.get("/dataset/load_judgement")
 def load_judgement(
     request_fastapi: Request,
@@ -560,5 +568,7 @@ def load_judgement(
     evaluator_id,
     evaluation_dao: EvaluationDAO = Depends(),
 ):
-    ret = evaluation_dao.filter(prompt_id=prompt_id, evaluator_id=evaluator_id, endpoint_str=endpoint_str)
+    ret = evaluation_dao.filter(
+        prompt_id=prompt_id, evaluator_id=evaluator_id, endpoint_str=endpoint_str
+    )
     return ret
