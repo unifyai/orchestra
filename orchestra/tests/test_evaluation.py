@@ -16,7 +16,6 @@ sys.path.insert(0, project_root)
 dataset_eval_path = os.path.join(project_root, "dataset_evaluation")
 sys.path.insert(0, dataset_eval_path)
 from dataset_evaluation.evaluate_dataset import evaluate_dataset
-from dataset_evaluation.refresh_scores import refresh_scores_for_user
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 test_user_id = os.getenv("AUTH_ACCOUNT_USER_ID")
@@ -142,7 +141,6 @@ async def test_trigger_eval(
 
 async def test_client_side_scores(
     client: AsyncClient,
-    cleanup_eval_config,
     tmp_path,
 ):
     eval_name = "test_eval_clientside"

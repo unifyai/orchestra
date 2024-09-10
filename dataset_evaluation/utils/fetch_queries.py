@@ -4,7 +4,6 @@ import os
 from httpx import AsyncClient
 import tiktoken
 
-from utils.generic_mp import process_requests
 from utils.helpers import load_prompt, get_llm_response
 
 
