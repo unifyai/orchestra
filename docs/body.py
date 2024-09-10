@@ -149,7 +149,10 @@ def get_body(path, route, schemas, route_config, curl_example, python_example):
     body_str = "#### Body\n\n"  # body header
     request_body = route_config["requestBody"]
     schema = list(request_body["content"].values())[0]["schema"]
-    schema_name = schema["$ref"]
+    if "$ref" in schema:
+        schema_name = schema["$ref"]
+    else:
+        schema_name = schema["anyOf"][0]["$ref"]
 
     # get schema details
     schema_name = schema_name.split("#/components/schemas/")[-1]
