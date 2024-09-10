@@ -32,38 +32,42 @@ async def generate_response(
     client,
     semaphore,
 ):
-    async with semaphore:
-        # check we haven't already got the response:
-        response = await load_response(
-            prompt_id=prompt_id,
-            endpoint_str=endpoint_str,
-            admin_key=cfg.admin_key,
-            client=client,
-        )
-        if response:
-            return
-        # get the prompt from the db
-        prompt_data = await load_prompt(prompt_id, cfg.admin_key, client)
+    try:
+        async with semaphore:
+            # check we haven't already got the response:
+            response = await load_response(
+                prompt_id=prompt_id,
+                endpoint_str=endpoint_str,
+                admin_key=cfg.admin_key,
+                client=client,
+            )
+            if response:
+                return (True, prompt_id)
+            # get the prompt from the db
+            prompt_data = await load_prompt(prompt_id, cfg.admin_key, client)
 
-        # run the query
-        system_msg = json.loads(prompt_data.get("system_msg"))
-        messages = json.loads(prompt_data.get("messages"))
-        prompt_kwargs = json.loads(prompt_data.get("prompt_kwargs"))
-        if system_msg:
-            messages = system_msg + messages
-        payload = {"model": endpoint_str, "messages": messages, **prompt_kwargs}
+            # run the query
+            system_msg = json.loads(prompt_data.get("system_msg"))
+            messages = json.loads(prompt_data.get("messages"))
+            prompt_kwargs = json.loads(prompt_data.get("prompt_kwargs"))
+            if system_msg:
+                messages = system_msg + messages
+            payload = {"model": endpoint_str, "messages": messages, **prompt_kwargs}
 
-        url = f"/v0/chat/completions"
-        headers = {"Authorization": f"Bearer {cfg.api_key}"}
-        response = await get_llm_response(payload, url, headers, client)
+            url = f"/v0/chat/completions"
+            headers = {"Authorization": f"Bearer {cfg.api_key}"}
+            response = await get_llm_response(payload, url, headers, client)
 
-        # upload the response
-        db_upload_msg = await send_response_to_db(
-            prompt_id=prompt_id,
-            endpoint_str=endpoint_str,
-            admin_key=cfg.admin_key,
-            client=client,
-            response=response,
-        )
-        if db_upload_msg != 200:
-            raise Exception
+            # upload the response
+            db_upload_msg = await send_response_to_db(
+                prompt_id=prompt_id,
+                endpoint_str=endpoint_str,
+                admin_key=cfg.admin_key,
+                client=client,
+                response=response,
+            )
+            if db_upload_msg != 200:
+                raise Exception
+            return (True, prompt_id)
+    except:
+        return (False, prompt_id)

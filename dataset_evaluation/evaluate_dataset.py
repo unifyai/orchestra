@@ -187,13 +187,13 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     semaphore = asyncio.Semaphore(BATCH_SIZE)
 
     ## TODO: add exception handling of some sort
-    # the generate_* functions should return success/fail, and we can either retry them here,
-    # or at least not error the whole script out.
+    # the generate_* functions return success/fail, and we could retry them here,
     tasks = [
         generate_response(p["id"], cfg.endpoint, cfg, client, semaphore)
         for p in prompts
     ]
-    await asyncio.gather(*tasks)
+    successful_responses = await asyncio.gather(*tasks)
+    
     semaphore = asyncio.Semaphore(BATCH_SIZE)
     tasks = [
         generate_judgement(
@@ -206,7 +206,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
         )
         for p in prompts
     ]
-    await asyncio.gather(*tasks)
+    sucessful_judgements = await asyncio.gather(*tasks)
 
     # send mail
     if not os.environ.get("ON_PREM") and user_email is not None:

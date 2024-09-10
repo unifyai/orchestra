@@ -134,7 +134,6 @@ async def test_trigger_eval(
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     scores = response.json()
-    print(scores)
     assert eval_name in scores
     assert endpoint in scores[eval_name]
     assert "score" in scores[eval_name][endpoint]

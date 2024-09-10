@@ -104,71 +104,74 @@ async def generate_judgement(
     client,
     semaphore,
 ):
-    async with semaphore:
-        # check we haven't already generated this one
-        judgement = await load_judgement(
-            prompt_id=prompt_id,
-            endpoint_str=endpoint_str,
-            evaluator_id=cfg.evaluator_id,
-            admin_key=cfg.admin_key,
-            client=client,
-        )
-        if judgement:
-            return
-
-        # get the prompt from the db
-        prompt_data = await load_prompt(
-            prompt_id=prompt_id, admin_key=cfg.admin_key, client=client
-        )
-        # get the response from the db
-        # TODO: exception handling if the response isn't there for some reason
-        response_data = (
-            await load_response(
+    try:
+        async with semaphore:
+            # check we haven't already generated this one
+            judgement = await load_judgement(
                 prompt_id=prompt_id,
                 endpoint_str=endpoint_str,
+                evaluator_id=cfg.evaluator_id,
                 admin_key=cfg.admin_key,
                 client=client,
             )
-        )[0]
+            if judgement:
+                return (True, prompt_id)
 
-        # create the judge prompt
-        prompt = json.loads(prompt_data["messages"])[0]["content"]
-        sys_prompt = json.loads(prompt_data["system_msg"])
-        if sys_prompt:
-            prompt = sys_prompt + prompt
-        data = {}
-        data["prompt"] = prompt
-        data["ref_answer"] = prompt_data["ref_answer"]
-        data["model_response"] = json.loads(response_data["response"])["choices"][0][
-            "message"
-        ]["content"]
-        judge_prompt = create_judge_prompt(data, eval_config)
-        messages = [
-            {"role": "user", "content": judge_prompt},
-        ]
+            # get the prompt from the db
+            prompt_data = await load_prompt(
+                prompt_id=prompt_id, admin_key=cfg.admin_key, client=client
+            )
+            # get the response from the db
+            # TODO: exception handling if the response isn't there for some reason
+            response_data = (
+                await load_response(
+                    prompt_id=prompt_id,
+                    endpoint_str=endpoint_str,
+                    admin_key=cfg.admin_key,
+                    client=client,
+                )
+            )[0]
+            # create the judge prompt
+            prompt = json.loads(prompt_data["messages"])[0]["content"]
+            sys_prompt = json.loads(prompt_data["system_msg"])
+            if sys_prompt:
+                prompt = sys_prompt + prompt
+            data = {}
+            data["prompt"] = prompt
+            data["ref_answer"] = prompt_data["ref_answer"]
+            data["model_response"] = json.loads(response_data["response"])["choices"][
+                0
+            ]["message"]["content"]
+            judge_prompt = create_judge_prompt(data, eval_config)
+            messages = [
+                {"role": "user", "content": judge_prompt},
+            ]
 
-        # get the response to the judge prompt
+            # get the response to the judge prompt
 
-        # TODO: what if more than one judge
-        judge_model = eval_config["judge_models"][0]
-        payload = {"model": judge_model, "messages": messages, "temperature": 0.3}
+            # TODO: what if more than one judge
+            judge_model = eval_config["judge_models"][0]
+            payload = {"model": judge_model, "messages": messages, "temperature": 0.3}
 
-        url = f"/v0/chat/completions"
-        headers = {"Authorization": f"Bearer {cfg.api_key}"}
-        response = await get_llm_response(
-            payload=payload, url=url, headers=headers, client=client
-        )
+            url = f"/v0/chat/completions"
+            headers = {"Authorization": f"Bearer {cfg.api_key}"}
+            response = await get_llm_response(
+                payload=payload, url=url, headers=headers, client=client
+            )
 
-        # log it in the db
-        db_upload_msg = await send_judgement_to_db(
-            prompt_id=prompt_id,
-            endpoint_str=endpoint_str,
-            judge_str=judge_model,
-            admin_key=cfg.admin_key,
-            client=client,
-            judgement=response,
-            cfg=cfg,
-            eval_config=eval_config,
-        )
-        if db_upload_msg != 200:
-            raise Exception
+            # log it in the db
+            db_upload_msg = await send_judgement_to_db(
+                prompt_id=prompt_id,
+                endpoint_str=endpoint_str,
+                judge_str=judge_model,
+                admin_key=cfg.admin_key,
+                client=client,
+                judgement=response,
+                cfg=cfg,
+                eval_config=eval_config,
+            )
+            if db_upload_msg != 200:
+                raise Exception
+            return (True, prompt_id)
+    except:
+        return (False, prompt_id)
