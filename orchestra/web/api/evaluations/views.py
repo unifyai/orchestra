@@ -342,7 +342,7 @@ def get_evaluations(
     endpoint: str = Query(
         default=None,
         description="The endpoint to fetch the evaluation for. "
-        "If `None`, returns evaluations for all endpoints.",
+        "If `None`, returns all available evaluations for the dataset and evaluator pair.",
         example="gpt-4o-mini@openai",
     ),
     evaluator: str = Query(
@@ -374,10 +374,16 @@ def get_evaluations(
     if not dataset_exists(dataset_dao, user_id, dataset):
         raise dataset_does_not_exist(dataset)
 
-    if not endpoint:
+    if not endpoint and not evaluator:
+        raise HTTPException(status_code=404, detail="You need to specify at least one of (endpoint, evaluator)")
+    
+
+    if evaluator:
+        evaluators = [evaluator]
+    else:
         raise NotImplementedError
-    if not evaluator:
-        raise NotImplementedError
+        # find the evaluators in evaluations table
+        evaluators = ... 
 
     if endpoint:
         invalid_endpoints = find_invalid_endpoints([endpoint])
@@ -386,12 +392,17 @@ def get_evaluations(
                 status_code=400,
                 detail=f"Could not find endpoint: {'.'.join(invalid_endpoints)}",
             )
+        endpoints = [endpoint]
+    else:
+        raise NotImplementedError
+        # find the endpoints in evaluations table
+        endpoints = ...
+
 
     #### TODO: properly handle multiple endpoint,evaluator things
-    # also multiple judges stuff
-    # token counts
+    # multiple judges
+    # exception handling
 
-    endpoints = [endpoint]
     evaluators = [evaluator]
     ret = {}
     for endpoint in endpoints:
