@@ -186,6 +186,7 @@ def trigger_evaluation(
     evaluator_id = raw_evaluators[0].id
 
     if client_side_scores:
+        #
         raise NotImplementedError
         # file = client_side_scores.file.read()
         # # TODO: check whether matches dataset
@@ -375,11 +376,17 @@ def get_evaluations(
         raise dataset_does_not_exist(dataset)
 
     if not endpoint and not evaluator:
-        raise HTTPException(status_code=404, detail="You need to specify at least one of (endpoint, evaluator)")
-    
+        raise HTTPException(
+            status_code=404,
+            detail="You need to specify at least one of (endpoint, evaluator)",
+        )
+
     if per_prompt:
         if not endpoint or not evaluator:
-            raise HTTPException(status_code=404, detail="If per_prompt=True, need to specify both endpoint and evaluator")
+            raise HTTPException(
+                status_code=404,
+                detail="If per_prompt=True, need to specify both endpoint and evaluator",
+            )
 
     if evaluator:
         # TODO: add logic to check it's valid
@@ -387,7 +394,7 @@ def get_evaluations(
     else:
         raise NotImplementedError
         # find the evaluators in evaluations table
-        evaluators = ... 
+        evaluators = ...
 
     if endpoint:
         invalid_endpoints = find_invalid_endpoints([endpoint])
@@ -401,7 +408,6 @@ def get_evaluations(
         raise NotImplementedError
         # find the endpoints in evaluations table
         endpoints = ...
-
 
     #### TODO: properly handle multiple endpoint,evaluator things
     # multiple judges
