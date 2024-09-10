@@ -29,7 +29,12 @@ class VertexAI(BaseCompletionProvider):
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:  # noqa: WPS210
-        region = self.supported_models[self.hub_model]["region"]
+        kwargs_region = kwargs.pop("region", None)
+        region = (
+            kwargs_region
+            if kwargs_region
+            else self.supported_models[self.hub_model]["region"]
+        )
         kwargs["vertex_location"] = region
         return super().__call__(messages, stream, **kwargs)
 
@@ -39,7 +44,12 @@ class VertexAI(BaseCompletionProvider):
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        region = self.supported_models[self.hub_model]["region"]
+        kwargs_region = kwargs.pop("region", None)
+        region = (
+            kwargs_region
+            if kwargs_region
+            else self.supported_models[self.hub_model]["region"]
+        )
         kwargs["vertex_location"] = region
         return super().__call__(messages, stream, **kwargs)
 
