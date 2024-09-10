@@ -48,7 +48,15 @@ def filter_orchestra_only_args(arguments):
         k: v
         for k, v in arguments.items()
         if v is not None
-        and k not in ["model", "messages", "signature", "use_custom_keys", "tags"]
+        and k
+        not in [
+            "model",
+            "messages",
+            "signature",
+            "use_custom_keys",
+            "tags",
+            "region",
+        ]
     }
 
 
