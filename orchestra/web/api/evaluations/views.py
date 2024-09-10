@@ -394,7 +394,10 @@ def get_evaluations(
     else:
         raise NotImplementedError
         # find the evaluators in evaluations table
-        evaluators = ...
+        evaluators = evaluation_dao.find_evaluators(
+            user_id=user_id, dataset=dataset, endpoint_str=endpoint
+        )
+        # TODO:
 
     if endpoint:
         invalid_endpoints = find_invalid_endpoints([endpoint])
@@ -493,19 +496,6 @@ def upload_responses(
     )
 
 
-@admin_router.get("/evaluations/get_responses")
-def download_responses(
-    request_fastapi: Request,
-    name: str,
-    prompt_id: int,
-    endpoint_str: str,
-    stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
-):
-    pass
-    # return response, timestamp
-    # TODO: log the timestamp in a prompt response (models aren't static!)
-
-
 @admin_router.post("/evaluations/upload_judgements")
 def upload_judgements(
     request_fastapi: Request,
@@ -560,4 +550,15 @@ def load_prompt(
     stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
 ):
     ret = stored_prompt_response_dao.filter(id=prompt_id, endpoint_str=endpoint_str)
+    return ret
+
+@admin_router.get("/dataset/load_judgement")
+def load_judgement(
+    request_fastapi: Request,
+    prompt_id: str,
+    endpoint_str: str,
+    evaluator_id,
+    evaluation_dao: EvaluationDAO = Depends(),
+):
+    ret = evaluation_dao.filter(prompt_id=prompt_id, evaluator_id=evaluator_id, endpoint_str=endpoint_str)
     return ret

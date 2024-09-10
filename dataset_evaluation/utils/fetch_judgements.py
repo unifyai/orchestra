@@ -6,7 +6,7 @@ from httpx import AsyncClient
 
 from utils.judge_templates import template_with_ref
 from utils.parsing_judge import ratings_from_sample
-from utils.helpers import load_prompt, get_llm_response
+from utils.helpers import load_prompt, load_response, load_judgement, get_llm_response
 
 default_cfg = [
     {"label": "excellent", "score": 1.0},
@@ -66,20 +66,6 @@ def create_judge_prompt(prompt_data, eval_config):
     return final_prompt
 
 
-async def load_response(
-    prompt_id: int, endpoint_str: str, admin_key: str, client: AsyncClient
-):
-    url = "/v0/dataset/load_response"
-    HEADERS = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {admin_key}",
-        "Content-Type": "application/json",
-    }
-    params = {"prompt_id": prompt_id, "endpoint_str": endpoint_str}
-    ret = await client.get(url, params=params, headers=HEADERS)
-    return ret.json()[0]
-
-
 async def calc_score(eval_config, judgement_str):
     score = ratings_from_sample(
         sample=judgement_str, cfg=json.loads(eval_config.get("class_config", None))
@@ -107,7 +93,6 @@ async def send_judgement_to_db(
         "score": score,
     }
     response = await client.post(url, headers=HEADERS, params=params)
-    print(response.json())
     return response.status_code
 
 
@@ -120,12 +105,30 @@ async def generate_judgement(
     semaphore,
 ):
     async with semaphore:
-        # get the prompt from the db
-        prompt_data = await load_prompt(prompt_id, cfg.admin_key, client)
-        # get the response from the db
-        response_data = await load_response(
-            prompt_id, endpoint_str, cfg.admin_key, client
+        # check we haven't already generated this one
+        judgement = await load_judgement(
+            prompt_id=prompt_id,
+            endpoint_str=endpoint_str,
+            evaluator_id=cfg.evaluator_id,
+            admin_key=cfg.admin_key,
+            client=client,
         )
+        if judgement:
+            return
+
+        # get the prompt from the db
+        prompt_data = await load_prompt(
+            prompt_id=prompt_id, admin_key=cfg.admin_key, client=client
+        )
+        # get the response from the db
+        response_data = (
+            await load_response(
+                prompt_id=prompt_id,
+                endpoint_str=endpoint_str,
+                admin_key=cfg.admin_key,
+                client=client,
+            )
+        )[0]
 
         # create the judge prompt
         prompt = json.loads(prompt_data["messages"])[0]["content"]

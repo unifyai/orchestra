@@ -4,7 +4,7 @@ import os
 from httpx import AsyncClient
 import tiktoken
 
-from utils.helpers import load_prompt, get_llm_response
+from utils.helpers import load_prompt, load_response, get_llm_response
 
 
 async def send_response_to_db(prompt_id, endpoint_str, admin_key, client, response):
@@ -35,6 +35,15 @@ async def generate_response(
     semaphore,
 ):
     async with semaphore:
+        # check we haven't already got the response:
+        response = await load_response(
+            prompt_id=prompt_id,
+            endpoint_str=endpoint_str,
+            admin_key=cfg.admin_key,
+            client=client,
+        )
+        if response:
+            return
         # get the prompt from the db
         prompt_data = await load_prompt(prompt_id, cfg.admin_key, client)
 

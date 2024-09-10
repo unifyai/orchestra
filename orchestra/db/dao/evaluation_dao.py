@@ -67,3 +67,9 @@ class EvaluationDAO:
         query = query.filter(Evaluation.prompt_id.in_(prompt_ids))
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())
+    
+    # def find_evaluators(self, user_id, dataset, endpoint_str):
+    #     query = select(Evaluation)
+    #     query = query.where(
+        
+
