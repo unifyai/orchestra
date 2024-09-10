@@ -110,12 +110,12 @@ class DatasetDAO:
             dataset_id = self.filter(user_id=user_id, name=dataset_name)[0].id
         except:
             return {"error": f"Dataset {dataset_name} not found"}
-
-        system_msg = prompt_data["prompt"].get("system_msg")
-        messages = prompt_data["prompt"]["messages"]
+        prompt = prompt_data["prompt"]
+        system_msg = prompt.get("system_msg")
+        messages = prompt["messages"]
         prompt_kwargs = {
             k: v
-            for k, v in prompt_data["prompt"].items()
+            for k, v in prompt.items()
             if k not in ["system_msg", "messages"]
         }
 
@@ -124,9 +124,9 @@ class DatasetDAO:
             system_msg=json.dumps(system_msg),
             messages=json.dumps(messages),
             prompt_kwargs=json.dumps(prompt_kwargs),
-            ref_answer=prompt_data.get("ref_answer"),
-            num_tokens=prompt_data.get("num_tokens", 0),
-            timestamp=prompt_data.get("timestamp", datetime.utcnow()),
+            ref_answer=prompt.get("ref_answer"),
+            num_tokens=prompt.get("num_tokens", 0),
+            timestamp=prompt.get("timestamp", datetime.utcnow()),
         )
         self.session.add(new_prompt)
         self.session.flush()

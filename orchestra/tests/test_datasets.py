@@ -37,7 +37,7 @@ def fetch_datasets(client):
 @pytest.mark.anyio
 async def test_upload_dataset(client: AsyncClient):
     # Upload dataset
-    file_path = "./orchestra/tests/sample_datasets/prompts.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
     name = "test_upload_dataset"
     response = await upload_dataset(client, file_path, name)
     assert response.status_code == 200, response.json()
@@ -48,7 +48,7 @@ async def test_upload_dataset(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_upload_duplicate_dataset(client: AsyncClient):
-    file_path = "./orchestra/tests/sample_datasets/prompts.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
     name = "test_upload_dataset"
     response = await upload_dataset(client, file_path, name)
     response = await upload_dataset(client, file_path, name)
@@ -83,7 +83,7 @@ async def test_upload_incorrect_dataset(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_rename_dataset(client: AsyncClient):
-    file_path = "./orchestra/tests/sample_datasets/prompts.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
     name = "test_old_name"
     response = await upload_dataset(client, file_path, name)
     assert response.status_code == 200, response.json()
@@ -98,7 +98,7 @@ async def test_rename_dataset(client: AsyncClient):
 @pytest.mark.anyio
 async def test_list_datasets(client: AsyncClient):
 
-    file_path = "./orchestra/tests/sample_datasets/prompts.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
     names = [f"test_list_dataset_{i}" for i in range(3)]
 
     for name in names:
@@ -121,7 +121,7 @@ async def test_list_datasets(client: AsyncClient):
 @pytest.mark.anyio
 async def test_download_datasets(client: AsyncClient):
 
-    file_path = "./orchestra/tests/sample_datasets/prompts.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
     name = "test_download_dataset"
 
     # Upload dataset
@@ -132,18 +132,21 @@ async def test_download_datasets(client: AsyncClient):
     params = {"name": name}
     response = await client.get("/v0/dataset", headers=headers, params=params)
     jsonl = response.json()
-    assert jsonl[0]["prompt"] == "This is the first prompt"
-    assert len(jsonl) == 3
+    assert jsonl[0]["messages"][0]["content"] == "What is the capital of Spain?"
+    assert len(jsonl) == 2
 
 
 @pytest.mark.anyio
 async def test_atomic_prompt_fns(client: AsyncClient):
-    file_path = "./orchestra/tests/sample_datasets/prompts.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
     name = "test_add_one_prompt"
     response = await upload_dataset(client, file_path, name)
     assert response.status_code == 200, response.json()
 
-    data = {"name": name, "prompt_data": {"prompt": "hello world"}}
+    new_prompt = {
+        "messages": [{"role": "user", "content": "What is the powerhouse of the cell?"}]
+    }
+    data = {"name": name, "prompt_data": {"prompt": new_prompt}}
     response = await client.put("/v0/dataset/add_prompt", headers=headers, json=data)
     assert response.status_code == 200, response.json()
 
@@ -151,7 +154,7 @@ async def test_atomic_prompt_fns(client: AsyncClient):
     params = {"name": name}
     response = await client.get("/v0/dataset", headers=headers, params=params)
     jsonl = response.json()
-    assert len(jsonl) == 4
+    assert len(jsonl) == 3
 
     _id = jsonl[0]["id"]
 
@@ -164,5 +167,10 @@ async def test_atomic_prompt_fns(client: AsyncClient):
     params = {"name": name}
     response = await client.get("/v0/dataset", headers=headers, params=params)
     jsonl = response.json()
-    assert len(jsonl) == 3
-    assert jsonl[0]["prompt"] == "This is the second prompt"
+    assert len(jsonl) == 2
+    assert jsonl[0]["messages"] == [
+        {
+            "role": "user",
+            "content": "What is the square root of 1009 to 1 decimal place",
+        }
+    ]
