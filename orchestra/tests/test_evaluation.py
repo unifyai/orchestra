@@ -3,9 +3,10 @@ import json
 import os
 import sys
 
-import pytest
+from dotenv import load_dotenv, find_dotenv
 from google.cloud import storage
 from httpx import AsyncClient
+import pytest
 
 import orchestra
 from .test_datasets import upload_dataset
@@ -46,7 +47,6 @@ def _delete_dataset_evaluation(client, dataset_name):
 
 sample_path = "./orchestra/tests/sample_datasets/with_ref.jsonl"
 
-from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
 admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
