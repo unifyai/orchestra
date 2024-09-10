@@ -32,6 +32,7 @@ from orchestra.web.api.utils.dynamic_routing import (
 )
 from orchestra.web.api.utils.helpers import filter_orchestra_only_args
 from orchestra.web.api.utils.http_responses import (
+    custom_api_key_not_found,
     insufficient_credits_error,
     invalid_messages,
     invalid_model_str,
@@ -126,7 +127,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     key=provider,
                 )[0].value
             except IndexError:
-                raise HTTPException(status_code=404, detail="Custom API key not found.")
+                raise custom_api_key_not_found
 
         if not on_prem and using_router:
             # parse router string
@@ -167,6 +168,8 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                         num_tokens_est * 1.25,
                         endpoint_id,
                     )
+                    # The below was removed on 10/09/24 when getting the fallbacks working
+                    # model_priority_list = router_choices
             else:  # Non model routing, TODO: clean up to simplify
                 target_metric, metrics_thresholds = parse_endpoint(provider)
                 model, provider = dynamic_routing(
