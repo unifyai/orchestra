@@ -148,7 +148,7 @@ def trigger_evaluation(
     client_side_scores: UploadFile = File(
         default=None,
         description="An optional file upload for client-side scores. The file must be in JSONL format and the prompts must match the order of the `dataset`. "
-        "Each entry should include `prompt` and `score` keys, with `score` being a float between 0 and 1. The evaluation corresponding to the `evaluator` must have `client_side=True`.",
+        "Each entry should include `prompt_id` and `score` keys, with `score` being a float between 0 and 1. The evaluation corresponding to the `evaluator` must have `client_side=True`.",
         json_schema_extra={"example": "client_scores.jsonl"},
     ),
     dataset_dao: DatasetDAO = Depends(),
@@ -186,42 +186,47 @@ def trigger_evaluation(
     evaluator_id = raw_evaluators[0].id
 
     if client_side_scores:
-        #
-        raise NotImplementedError
-        # file = client_side_scores.file.read()
-        # # TODO: check whether matches dataset
-        # try:
-        #     lines = file.decode().split("\n")
-        #     lines = [json.loads(l) for l in lines if l != ""]
-        #     for ix, line in enumerate(lines):
-        #         if set(line.keys()) != set(["prompt", "score"]):
-        #             raise HTTPException(status_code=400, detail=f"Error in line {ix}")
-        # except:
-        #     raise HTTPException(
-        #         status_code=400,
-        #         detail="Error processing uploaded scores",
-        #     )
+        file = client_side_scores.file.read()
+        # TODO: check whether matches dataset
+        try:
+            lines = file.decode().split("\n")
+            lines = [json.loads(l) for l in lines if l != ""]
+            for ix, line in enumerate(lines):
+                if set(line.keys()) != set(["prompt_id", "score"]):
+                    raise HTTPException(status_code=400, detail=f"Error in line {ix}")
+        except:
+            raise HTTPException(
+                status_code=400,
+                detail="Error processing uploaded scores",
+            )
 
-        # # check whether the eval name is a client side one:
-        # blob = load_eval_config_blob(user_id, eval_id)
-        # contents = json.loads(blob.download_as_bytes().decode("utf-8"))
-        # if "client_side" not in contents or contents.get("client_side", "") is not True:
-        #     raise HTTPException(
-        #         status_code=400,
-        #         detail=f"The evaluator {evaluator} is not a client-side evaluator "
-        #         f"(as client_side != True)",
-        #     )
-
-        # # put everything in the bucket
-        # bucket_name = "uploaded_datasets"
-        # blob_name = (
-        #     f"{user_id}/{internal_id}/0/{endpoint}/{eval_id}/client_side_judged.jsonl"
-        # )
-        # blob = storage.Client().bucket(bucket_name).blob(blob_name)
-        # blob.upload_from_string(file, content_type="application/octet-stream")
-        # refresh_scores_json(user_id)
-
-        # return {"info": "Evaluation uploaded!"}
+        # check whether the evaluator is a client side one:
+        if (
+            not hasattr(raw_evaluators[0], "client_side")
+            or raw_evaluators[0].client_side is not True
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"The evaluator {evaluator} is not a client-side evaluator "
+                f"(as client_side != True)",
+            )
+        # dataset_prompts = dataset_dao.fetch_dataset(user_id=user_id, name=dataset)
+        # upload the data
+        for l in lines:
+            prompt_id = l["prompt_id"]
+            score = l["score"]
+            if not isinstance(score, float) or score < 0 or score > 1.0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Error with score from prompt_id: {prompt_id}, score: {score}",
+                )
+            evaluation_dao.create(
+                prompt_id=prompt_id,
+                evaluator_id=evaluator_id,
+                endpoint_str=endpoint,
+                score=score,
+            )
+        return {"info": "Evaluation uploaded!"}
 
     # Send train job to the dataset_evaluation server
     send_to_dataset_evaluation_server(

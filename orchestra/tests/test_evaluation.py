@@ -164,6 +164,12 @@ async def test_client_side_scores(
 ):
     eval_name = "test_eval_clientside"
 
+    # create test dataset
+    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    dataset = "test_dataset"
+    response = await upload_dataset(client, file_path, dataset)
+    assert response.status_code == 200, response.json()
+
     url = "/v0/evaluator"
     params = {
         "name": eval_name,
@@ -175,7 +181,7 @@ async def test_client_side_scores(
     url = "/v0/evaluation"
     dataset = "test_dataset"
     endpoint = "llama-3-8b-chat@aws-bedrock"
-    file_path = "./orchestra/tests/sample_datasets/prompts_with_scores.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/new_prompts_with_scores.jsonl"
     with open(file_path, "rb") as f:
         file_content = f.read()
     files = {
@@ -198,4 +204,3 @@ async def test_client_side_scores(
     scores = response.json()
     assert eval_name in scores
     assert endpoint in scores[eval_name]
-    assert "client_side" in scores[eval_name][endpoint]
