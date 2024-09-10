@@ -313,9 +313,7 @@ def get_single_evaluation(
     evaluation_dao: EvaluationDAO,
     per_prompt: bool,
 ):
-    """Get the score for one endpoint + evaluator + dataset (optionally per_prompt)
-    returns (score, progress) on the dataset"""
-    # dataset_prompts = dataset_dao.filter(user_id=user_id, name=dataset)
+    """Get the score for one endpoint + evaluator + dataset (optionally per_prompt)"""
     dataset_prompts = dataset_dao.fetch_dataset(user_id=user_id, name=dataset)
 
     prompt_ids = [prompt["id"] for prompt in dataset_prompts]
@@ -390,9 +388,8 @@ def get_evaluations(
             )
 
     #### TODO: properly handle multiple endpoint,evaluator things
-    #### also multiple judges stuff
-    #### also token counts
-    #### also per_prompt when you ask for lots of things?
+    # also multiple judges stuff
+    # token counts
 
     endpoints = [endpoint]
     evaluators = [evaluator]

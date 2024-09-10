@@ -6,6 +6,7 @@ from httpx import AsyncClient
 
 from utils.judge_templates import template_with_ref
 from utils.parsing_judge import ratings_from_sample
+from utils.helpers import load_prompt, get_llm_response
 
 default_cfg = [
     {"label": "excellent", "score": 1.0},
@@ -65,18 +66,6 @@ def create_judge_prompt(prompt_data, eval_config):
     return final_prompt
 
 
-async def load_prompt(prompt_id: int, admin_key: str, client: AsyncClient):
-    url = "/v0/dataset/load_prompt"
-    HEADERS = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {admin_key}",
-        "Content-Type": "application/json",
-    }
-    params = {"prompt_id": prompt_id}
-    ret = await client.get(url, params=params, headers=HEADERS)
-    return ret.json()[0]
-
-
 async def load_response(
     prompt_id: int, endpoint_str: str, admin_key: str, client: AsyncClient
 ):
@@ -89,11 +78,6 @@ async def load_response(
     params = {"prompt_id": prompt_id, "endpoint_str": endpoint_str}
     ret = await client.get(url, params=params, headers=HEADERS)
     return ret.json()[0]
-
-
-async def get_llm_response(payload, url, headers, client):
-    ret = await client.post(url, json=payload, headers=headers)
-    return ret.json()
 
 
 async def calc_score(eval_config, judgement_str):
