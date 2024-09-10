@@ -39,10 +39,10 @@ class AzureAI(BaseCompletionProvider):
             "AZURE_API_KEY" if "gpt" in self.provider_endpoint else "AZURE_AI_API_KEY"
         )
 
-    def get_azure_ai_url(self):
+    def get_azure_ai_url(self, region):
         return (
             f'https://{self.provider_endpoint.lstrip("azure_ai/")}'
-            f".{self.region}.models.ai.azure.com/"
+            f".{region}.models.ai.azure.com/"
         )
 
     def get_azure_openai_details(self):
@@ -50,13 +50,14 @@ class AzureAI(BaseCompletionProvider):
         endpoint = f"https://{self.project}.openai.azure.com"
         return version, endpoint
 
-    def set_env_variables(self):
+    def set_env_variables(self, kwargs_region):
         if "gpt" in self.provider_endpoint:
             version, endpoint = self.get_azure_openai_details()
             os.environ["AZURE_API_BASE"] = endpoint
             os.environ["AZURE_API_VERSION"] = version
         else:
-            os.environ["AZURE_AI_API_BASE"] = self.get_azure_ai_url()
+            region = kwargs_region if kwargs_region else self.region
+            os.environ["AZURE_AI_API_BASE"] = self.get_azure_ai_url(region)
             os.environ["AZURE_AI_API_KEY"] = self.model_api_key
 
     def __call__(
@@ -65,7 +66,8 @@ class AzureAI(BaseCompletionProvider):
         stream: bool = False,
         **kwargs: Any,
     ):
-        self.set_env_variables()
+        kwargs_region = kwargs.pop("region", None)
+        self.set_env_variables(kwargs_region)
         return super().__call__(messages, stream=stream, **kwargs)
 
     def __call_async__(
@@ -74,7 +76,8 @@ class AzureAI(BaseCompletionProvider):
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        self.set_env_variables()
+        kwargs_region = kwargs.pop("region", None)
+        self.set_env_variables(kwargs_region)
         return super().__call_async__(messages, stream, **kwargs)
 
 
