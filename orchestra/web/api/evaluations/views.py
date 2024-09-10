@@ -376,7 +376,6 @@ def get_evaluations(
     if not dataset_exists(dataset_dao, user_id, dataset):
         raise dataset_does_not_exist(dataset)
 
-    per_prompt = False
     if not endpoint:
         raise NotImplementedError
     if not evaluator:
@@ -496,7 +495,7 @@ def upload_judgements(
     prompt_id: int,
     endpoint_str: str,
     evaluator_id: str,
-    judge_endpoint_id: str,
+    judge_endpoint_str: str,
     judgement: str,
     score: str,
     stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
@@ -512,13 +511,12 @@ def upload_judgements(
     except Exception as e:
         raise e
 
-    # TODO::
-    # judgement_dao.create(
-    #     response_id=response_id,
-    #     judge_endpoint_id=judge_endpoint_id,
-    #     evaluator_id=evaluator_id,
-    #     judgement=judgement,
-    # )
+    judgement_dao.create(
+        response_id=response_id,
+        judge_endpoint_str=judge_endpoint_str,
+        evaluator_id=evaluator_id,
+        judgement=judgement,
+    )
     evaluation_dao.create(
         prompt_id=prompt_id,
         evaluator_id=evaluator_id,

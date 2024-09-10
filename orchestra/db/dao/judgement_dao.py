@@ -15,14 +15,14 @@ class JudgementDAO:
     def create(  # noqa: WPS211
         self,
         response_id: int,
-        judge_endpoint_id: int,
+        judge_endpoint_str: int,
         evaluator_id: int,
         judgement: str,
     ) -> None:
         self.session.add(
             Judgement(
                 response_id=response_id,
-                judge_endpoint_id=judge_endpoint_id,
+                judge_endpoint_str=judge_endpoint_str,
                 evaluator_id=evaluator_id,
                 judgement=judgement,
             ),

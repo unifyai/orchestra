@@ -495,9 +495,8 @@ class Judgement(Base):
         index=True,
         nullable=True,
     )
-    judge_endpoint_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("endpoint.id"),
+    judge_endpoint_str = sa.Column(
+        sa.String(),
         nullable=False,
     )
     evaluator_id = sa.Column(

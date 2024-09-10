@@ -128,18 +128,16 @@ async def test_trigger_eval(
     #################################
     # per prompt
     url = "/v0/evaluation"
-    params = {"dataset": dataset, "evaluator": eval_name, "endpoint": endpoint, per_prompt:True}
+    params = {"dataset": dataset, "evaluator": eval_name, "endpoint": endpoint, "per_prompt":True}
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     scores = response.json()
-    print(scores)
-    breakpoint()
     assert eval_name in scores
     assert endpoint in scores[eval_name]
     assert "score" in scores[eval_name][endpoint]
     assert "progress" in scores[eval_name][endpoint]
     assert "per_prompt" in scores[eval_name][endpoint]
-# evals/get_scores is implicitly tested
+
 
 
 async def test_client_side_scores(

@@ -118,11 +118,12 @@ async def send_judgement_to_db(
         "prompt_id": prompt_id,
         "endpoint_str": endpoint_str,
         "evaluator_id": cfg.evaluator_id,
-        "judge_endpoint_id": judge_str,
-        "judgement": json.dumps(judgement),
+        "judge_endpoint_str": judge_str,
+        "judgement": judgement_str,
         "score": score,
     }
     response = await client.post(url, headers=HEADERS, params=params)
+    print(response.json())
     return response.status_code
 
 
