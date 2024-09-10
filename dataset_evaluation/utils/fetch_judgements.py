@@ -121,6 +121,7 @@ async def generate_judgement(
             prompt_id=prompt_id, admin_key=cfg.admin_key, client=client
         )
         # get the response from the db
+        # TODO: exception handling if the response isn't there for some reason
         response_data = (
             await load_response(
                 prompt_id=prompt_id,

@@ -107,7 +107,7 @@ async def test_trigger_eval(
 
     # create trigger evaluation
     url = "/v0/evaluation"
-    endpoint = "llama-3-8b-chat@aws-bedrock"
+    endpoint = "gpt-3.5-turbo@openai"
     params = {
         "url": url,
         "dataset": dataset,
@@ -117,13 +117,24 @@ async def test_trigger_eval(
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
+    url = "/v0/evaluation"
+    endpoint = "llama-3-8b-chat@aws-bedrock"
+    params = {
+        "url": url,
+        "dataset": dataset,
+        "endpoint": endpoint,
+        "evaluator": eval_name,
+    }
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
     ############################
 
     url = "/v0/evaluation"
-    params = {"dataset": dataset, "evaluator": eval_name, "endpoint": endpoint}
+    params = {"dataset": dataset, "evaluator": eval_name}
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     scores = response.json()
+    print(scores)
     assert eval_name in scores
     assert endpoint in scores[eval_name]
     assert "score" in scores[eval_name][endpoint]

@@ -2,7 +2,6 @@ import json
 import os
 
 from httpx import AsyncClient
-import tiktoken
 
 from utils.helpers import load_prompt, load_response, get_llm_response
 
@@ -14,8 +13,7 @@ async def send_response_to_db(prompt_id, endpoint_str, admin_key, client, respon
         "Authorization": f"Bearer {admin_key}",
         "Content-Type": "application/json",
     }
-    encoding = tiktoken.get_encoding("cl100k_base")
-    num_tokens = encoding.encode(response["choices"][0]["message"]["content"])
+    num_tokens = response["usage"]["completion_tokens"]
 
     params = {
         "prompt_id": prompt_id,

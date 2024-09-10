@@ -69,7 +69,7 @@ class EvaluationDAO:
     def fetch_evaluation_scores(self, prompt_ids, evaluator_id, endpoint_str):
         query = select(Evaluation)
         query = query.where(Evaluation.evaluator_id == evaluator_id)
-        query = query.where(endpoint_str == endpoint_str)
+        query = query.where(Evaluation.endpoint_str == endpoint_str)
         query = query.filter(Evaluation.prompt_id.in_(prompt_ids))
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())

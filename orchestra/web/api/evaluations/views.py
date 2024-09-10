@@ -550,13 +550,16 @@ def load_prompt(
 
 
 @admin_router.get("/dataset/load_response")
-def load_prompt(
+def load_response(
     request_fastapi: Request,
     prompt_id: str,
     endpoint_str: str,
     stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
 ):
-    ret = stored_prompt_response_dao.filter(id=prompt_id, endpoint_str=endpoint_str)
+
+    ret = stored_prompt_response_dao.filter(
+        prompt_id=prompt_id, endpoint_str=endpoint_str
+    )
     return ret
 
 

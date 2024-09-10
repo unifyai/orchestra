@@ -60,7 +60,7 @@ class EvaluatorDAO:
         if entry is not None:
             if name:
                 setattr(entry, "name", name)  # noqa: B010
-    
+
     def rename(self, user_id, name, new_name):
         try:
             evaluator_id = self.filter(user_id=user_id, name=name)[0].id
@@ -72,7 +72,9 @@ class EvaluatorDAO:
     def delete_evaluator(self, user_id, name):
         try:
             evaluator = (
-                self.session.query(Evaluator).filter_by(user_id=user_id, name=name).one()
+                self.session.query(Evaluator)
+                .filter_by(user_id=user_id, name=name)
+                .one()
             )
             self.session.delete(evaluator)
             self.session.commit()

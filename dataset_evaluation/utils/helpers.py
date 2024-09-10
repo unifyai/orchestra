@@ -1,5 +1,6 @@
 from httpx import AsyncClient
 
+
 async def load_prompt(prompt_id: int, admin_key: str, client: AsyncClient):
     url = "/v0/dataset/load_prompt"
     HEADERS = {
@@ -10,6 +11,7 @@ async def load_prompt(prompt_id: int, admin_key: str, client: AsyncClient):
     params = {"prompt_id": prompt_id}
     ret = await client.get(url, params=params, headers=HEADERS)
     return ret.json()[0]
+
 
 async def load_response(
     prompt_id: int, endpoint_str: str, admin_key: str, client: AsyncClient
@@ -26,7 +28,11 @@ async def load_response(
 
 
 async def load_judgement(
-    prompt_id: int, endpoint_str: str, evaluator_id: str, admin_key: str, client: AsyncClient
+    prompt_id: int,
+    endpoint_str: str,
+    evaluator_id: str,
+    admin_key: str,
+    client: AsyncClient,
 ):
     url = "/v0/dataset/load_judgement"
     HEADERS = {
@@ -34,10 +40,13 @@ async def load_judgement(
         "Authorization": f"Bearer {admin_key}",
         "Content-Type": "application/json",
     }
-    params = {"prompt_id": prompt_id, "endpoint_str": endpoint_str, "evaluator_id": evaluator_id}
+    params = {
+        "prompt_id": prompt_id,
+        "endpoint_str": endpoint_str,
+        "evaluator_id": evaluator_id,
+    }
     ret = await client.get(url, params=params, headers=HEADERS)
     return ret.json()
-
 
 
 async def get_llm_response(payload, url, headers, client):
