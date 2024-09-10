@@ -61,6 +61,12 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 3.5, "completion": 10.5},
     },
+    "gemini-1.5-pro-001": {
+        "endpoint": "vertex_ai/gemini-1.5-pro-001",
+        "region": "us-west1",
+        "context_window": 128000,
+        "cost": {"prompt": 3.5, "completion": 10.5},
+    },
     "gemini-1.5-flash": {
         "endpoint": "vertex_ai/gemini-1.5-flash",
         "region": "us-west1",
