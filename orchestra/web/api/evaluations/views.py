@@ -355,8 +355,8 @@ def get_evaluations(
     per_prompt: bool = Query(
         default=False,
         description="If `True`, returns the scores on a per-prompt level. "
-        "By default set to `False`. If `True` requires an eval "
-        "name and endpoint to be set.",
+        "By default set to `False`. If `True` requires an endpoint "
+        "and evaluator to be set.",
         example=False,
     ),
     dataset_dao: DatasetDAO = Depends(),
@@ -377,8 +377,12 @@ def get_evaluations(
     if not endpoint and not evaluator:
         raise HTTPException(status_code=404, detail="You need to specify at least one of (endpoint, evaluator)")
     
+    if per_prompt:
+        if not endpoint or not evaluator:
+            raise HTTPException(status_code=404, detail="If per_prompt=True, need to specify both endpoint and evaluator")
 
     if evaluator:
+        # TODO: add logic to check it's valid
         evaluators = [evaluator]
     else:
         raise NotImplementedError
@@ -403,7 +407,6 @@ def get_evaluations(
     # multiple judges
     # exception handling
 
-    evaluators = [evaluator]
     ret = {}
     for endpoint in endpoints:
         for evaluator in evaluators:
