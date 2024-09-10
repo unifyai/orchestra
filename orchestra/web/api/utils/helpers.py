@@ -55,7 +55,6 @@ def filter_orchestra_only_args(arguments):
             "signature",
             "use_custom_keys",
             "tags",
-            "region",
         ]
     }
 
