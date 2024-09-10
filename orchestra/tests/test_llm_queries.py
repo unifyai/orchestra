@@ -83,9 +83,9 @@ async def test_text_generation(  # noqa: WPS218, E501
 async def test_fallback_parse(
     client: AsyncClient,
 ) -> None:
-    model_str = "claude-3-haiku@anthropic->mistral-7b-instruct-v0.3@octoai"
+    models = ["claude-3-haiku@anthropic", "mistral-7b-instruct-v0.3@octoai"]
     endpoint = "/v0/chat/completions"
-    data = get_chat_completions_payload_fallback(model_str, stream=False)
+    data = get_chat_completions_payload_fallback(models, stream=False)
     response = await client.post(endpoint, headers=HEADERS, json=data)
     assert response.status_code == status.HTTP_200_OK
     response_json = json.loads(response.text)
@@ -98,9 +98,9 @@ async def test_fallback_parse(
 async def test_fallback_after_fail(
     client: AsyncClient,
 ) -> None:
-    model_str = "FAKE_MODEL@anthropic->mistral-7b-instruct-v0.3@octoai"
+    models = ["FAKE_MODEL@anthropic", "mistral-7b-instruct-v0.3@octoai"]
     endpoint = "/v0/chat/completions"
-    data = get_chat_completions_payload_fallback(model_str, stream=False)
+    data = get_chat_completions_payload_fallback(models, stream=False)
     response = await client.post(endpoint, headers=HEADERS, json=data)
     assert response.status_code == status.HTTP_200_OK
     response_json = json.loads(response.text)
