@@ -114,9 +114,7 @@ class DatasetDAO:
         system_msg = prompt.get("system_msg")
         messages = prompt["messages"]
         prompt_kwargs = {
-            k: v
-            for k, v in prompt.items()
-            if k not in ["system_msg", "messages"]
+            k: v for k, v in prompt.items() if k not in ["system_msg", "messages"]
         }
 
         new_prompt = StoredPrompt(
