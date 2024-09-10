@@ -1,7 +1,7 @@
 import json
 import os
 import time
-from typing import Union
+from typing import List, Union
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.param_functions import Depends
@@ -45,7 +45,7 @@ router = APIRouter()
 def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     background_tasks: BackgroundTasks,
     request_fastapi: Request,
-    request: ChatCompletionRequest,
+    request: Union[ChatCompletionRequest, List[ChatCompletionRequest]],
     response_fastapi: Response,
     users_dao: UsersDAO = Depends(),
     model_dao: ModelDAO = Depends(),
@@ -78,75 +78,79 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     :raises HTTPException: when user has insufficient credits.
     """
+    if isinstance(request, list):
+        request_priority_list = request
+    else:
+        request_priority_list = [request]
 
-    if not request.tools:
-        request.parallel_tool_calls = None
+    try_request = 0
+    num_tries = min(5, len(request_priority_list))
 
-    try:
-        # TODO: Check that model exists
-        model_priority_list = []
-        for model_tag in request.model.split("->"):
-            model_provider = model_tag.split("@")
-            assert len(model_provider) == 2
-            model_priority_list.append(model_provider)
-    except Exception:
-        raise invalid_model_str
+    while try_request >= 0 and try_request < num_tries:
+        request = request_priority_list[try_request]
 
-    try:
-        messages = request.messages
-    except Exception:
-        raise invalid_messages
+        if not request.tools:
+            request.parallel_tool_calls = None
 
-    # TODO: Add validation of the other parameters if mandatory
-    on_prem = os.environ.get("ON_PREM")
-    user_id = request_fastapi.state.user_id
-    use_custom_keys = request.use_custom_keys
-    if not on_prem:
-        user = get_credits(request_fastapi, users_dao=users_dao)
-        available_credits = float(user.credits if user else 0)
-        store_prompt = user.store_prompts if user else True
-        store_prompt = True if store_prompt is None else store_prompt
-
-    model, provider = model_priority_list[0]
-    try_provider = 0
-    router_choices = None
-    using_router = model.startswith("router")
-    router_str = provider if using_router else None
-    num_tries = 5
-
-    custom_api_key = None
-    if use_custom_keys:
         try:
-            custom_api_key = custom_api_key_dao.filter(user_id=user_id, key=provider)[
-                0
-            ].value
-        except IndexError:
-            raise HTTPException(status_code=404, detail="Custom API key not found.")
+            model_provider = request.model.split("@")
+            assert len(model_provider) == 2
+        except Exception:
+            raise invalid_model_str
 
-    if not on_prem and using_router:
-        # parse router string
-        tmp = model.split("_", 1)
-        if len(tmp) == 1:
-            endpoint_id = get_router_endpoint_id(
-                custom_router_dao,
-                user_id=None,
-                router_name="foundation_router",
-            )
-        else:
-            router_name = tmp[1]
+        try:
+            messages = request.messages
+        except Exception:
+            raise invalid_messages
+
+        # TODO: Add validation of the other parameters if mandatory
+        on_prem = os.environ.get("ON_PREM")
+        user_id = request_fastapi.state.user_id
+        use_custom_keys = request.use_custom_keys
+        if not on_prem:
+            user = get_credits(request_fastapi, users_dao=users_dao)
+            available_credits = float(user.credits if user else 0)
+            store_prompt = user.store_prompts if user else True
+            store_prompt = True if store_prompt is None else store_prompt
+
+        model, provider = model_provider
+        router_choices = None
+        using_router = model.startswith("router")
+        router_str = provider if using_router else None
+
+        custom_api_key = None
+        if use_custom_keys:
             try:
+                custom_api_key = custom_api_key_dao.filter(
+                    user_id=user_id,
+                    key=provider,
+                )[0].value
+            except IndexError:
+                raise HTTPException(status_code=404, detail="Custom API key not found.")
+
+        if not on_prem and using_router:
+            # parse router string
+            tmp = model.split("_", 1)
+            if len(tmp) == 1:
                 endpoint_id = get_router_endpoint_id(
                     custom_router_dao,
-                    user_id,
-                    router_name,
+                    user_id=None,
+                    router_name="foundation_router",
                 )
-            except:
-                # TODO: add proper error message for this
-                raise invalid_model_str
+            else:
+                router_name = tmp[1]
+                try:
+                    endpoint_id = get_router_endpoint_id(
+                        custom_router_dao,
+                        user_id,
+                        router_name,
+                    )
+                except:
+                    # TODO: add proper error message for this
+                    raise invalid_model_str
 
-    t0 = time.time()
+        t0 = time.time()
 
-    while try_provider >= 0 and try_provider < num_tries:
         if not on_prem and provider not in PROVIDER_CLASSES or using_router:
             # Dynamic routing
             if using_router:
@@ -163,7 +167,6 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                         num_tokens_est * 1.25,
                         endpoint_id,
                     )
-                    model_priority_list = router_choices
             else:  # Non model routing, TODO: clean up to simplify
                 target_metric, metrics_thresholds = parse_endpoint(provider)
                 model, provider = dynamic_routing(
@@ -175,10 +178,6 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 )
                 # TODO: this is probably still buggye with corner cases,
                 # more exhaustive testing is needed.
-                model_priority_list[try_provider] = (model, provider)
-        if try_provider >= len(model_priority_list):
-            break
-        model, provider = model_priority_list[try_provider]
 
         extra_args = tuple()
         if not on_prem and provider == "custom":
@@ -195,11 +194,11 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
         try:
             response, cost = lm(messages=messages, **filtered_params)
-            try_provider = -1
+            try_request = -1
         except HTTPException as e:
-            if e.status_code == 429 or e.status_code >= 500:
-                try_provider += 1
-                if try_provider >= num_tries:
+            if e.status_code in [400, 403, 404, 429] or e.status_code >= 500:
+                try_request += 1
+                if try_request >= num_tries:
                     raise e
             else:
                 raise e
