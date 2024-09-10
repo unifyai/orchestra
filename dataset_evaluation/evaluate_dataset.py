@@ -180,13 +180,15 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     # load eval_config
     eval_config = await fetch_evaluator_config(client, cfg)
 
-    # TODO: remove this
+    # TODO: change this, we only need the ids
     prompts = await fetch_dataset(client, cfg)
 
-    BATCH_SIZE = 1  # TODO: change
+    BATCH_SIZE = 5  # TODO: change
     semaphore = asyncio.Semaphore(BATCH_SIZE)
 
     ## TODO: add exception handling of some sort
+    # the generate_* functions should return success/fail, and we can either retry them here,
+    # or at least not error the whole script out.
     tasks = [
         generate_response(p["id"], cfg.endpoint, cfg, client, semaphore)
         for p in prompts
