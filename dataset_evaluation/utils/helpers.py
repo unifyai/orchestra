@@ -30,9 +30,10 @@ async def load_response(
     }
     params = {
         "prompt_id": prompt_id,
-        "prompt_variation_id": prompt_variation_id,
         "endpoint_str": endpoint_str,
     }
+    if prompt_variation_id:
+        params["prompt_variation_id"] = prompt_variation_id
     ret = await client.get(url, params=params, headers=HEADERS)
     return ret.json()
 

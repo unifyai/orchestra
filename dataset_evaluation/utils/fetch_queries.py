@@ -27,11 +27,12 @@ async def send_response_to_db(
 
     params = {
         "prompt_id": prompt_id,
-        "prompt_variation_id": prompt_variation_id,
         "endpoint_str": endpoint_str,
         "response": json.dumps(response),
         "num_tokens": num_tokens,
     }
+    if prompt_variation_id:
+        params["prompt_variation_id"] = prompt_variation_id
     response = await client.post(url, headers=HEADERS, params=params)
     return response.status_code
 

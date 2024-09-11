@@ -18,10 +18,12 @@ class StoredPromptResponseDAO:
         endpoint_str: str,
         response: str,
         num_tokens: int,
+        prompt_variation_id: Optional[int] = None,
     ) -> None:
         self.session.add(
             StoredPromptResponse(
                 prompt_id=prompt_id,
+                prompt_variation_id=prompt_variation_id,
                 endpoint_str=endpoint_str,
                 response=response,
                 num_tokens=num_tokens,

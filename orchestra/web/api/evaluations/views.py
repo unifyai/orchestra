@@ -529,10 +529,12 @@ def upload_responses(
     endpoint_str: str,
     response: str,
     num_tokens: int,
+    prompt_variation_id: Optional[int] = None,
     stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
 ):
     stored_prompt_response_dao.create(
         prompt_id=prompt_id,
+        prompt_variation_id=prompt_variation_id,
         endpoint_str=endpoint_str,
         response=response,
         num_tokens=num_tokens,
@@ -580,7 +582,6 @@ def upload_judgements(
 
 @admin_router.get("/dataset/load_prompt")
 def load_prompt(
-    request_fastapi: Request,
     prompt_id: str,
     stored_prompt_dao: StoredPromptDAO = Depends(),
 ):
@@ -590,10 +591,9 @@ def load_prompt(
 
 @admin_router.get("/dataset/load_response")
 def load_response(
-    request_fastapi: Request,
     prompt_id: str,
-    prompt_variation_id: Optional[str],
     endpoint_str: str,
+    prompt_variation_id: Optional[str] = None,
     stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
 ):
 
