@@ -118,13 +118,15 @@ async def generate_judgement(
 ):
     try:
         async with semaphore:
-            response = await load_prompt_variation(
-                prompt_id=prompt_id,
-                default_prompt_id=cfg.default_prompt_id,
-                admin_key=cfg.admin_key,
-                client=client,
-            )
-            prompt_variation_id = response["id"]
+            prompt_variation_id = None
+            if cfg.default_prompt:
+                response = await load_prompt_variation(
+                    prompt_id=prompt_id,
+                    default_prompt_id=cfg.default_prompt_id,
+                    admin_key=cfg.admin_key,
+                    client=client,
+                )
+                prompt_variation_id = response[0]["id"]
 
             # check we haven't already generated this one
             judgement = await load_judgement(

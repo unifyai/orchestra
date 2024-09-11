@@ -195,7 +195,7 @@ def trigger_evaluation(
 
     # default_prompt_id
     default_prompt_dict = ""
-    default_prompt_id
+    default_prompt_id = None
     if default_prompt:
         raw_default_prompt = default_prompt_dao.filter(
             user_id=user_id,

@@ -78,7 +78,7 @@ async def load_prompt_variation(
         "default_prompt_id": default_prompt_id,
     }
     ret = await client.get(url, params=params, headers=HEADERS)
-    return ret.json()[0]
+    return ret.json()
 
 
 async def store_prompt_variation(
@@ -103,7 +103,7 @@ async def store_prompt_variation(
 
     # Get the entry to fetch the id
     ret = await client.get(url, params=params, headers=HEADERS)
-    return ret.json()[0]
+    return ret.json()
 
 
 async def get_llm_response(payload, url, headers, client):
