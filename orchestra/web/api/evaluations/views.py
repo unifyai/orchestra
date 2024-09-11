@@ -4,11 +4,19 @@ Includes endpoints related to dataset evaluations.
 
 import json
 import os
-from typing import Dict
+from typing import Dict, Optional
 
-from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from providers.completion import PROVIDER_CLASSES
 
+from orchestra.db.dao.dataset_dao import DatasetDAO
+from orchestra.db.dao.default_prompt_dao import DefaultPromptDAO
+from orchestra.db.dao.evaluation_dao import EvaluationDAO
+from orchestra.db.dao.evaluator_dao import EvaluatorDAO
+from orchestra.db.dao.judgement_dao import JudgementDAO
+from orchestra.db.dao.stored_prompt_dao import StoredPromptDAO
+from orchestra.db.dao.stored_prompt_response_dao import StoredPromptResponseDAO
+from orchestra.db.dao.stored_prompt_variation_dao import StoredPromptVariationDAO
 from orchestra.web.api.utils import gcp, on_prem
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
@@ -21,107 +29,19 @@ admin_router = APIRouter()
 # utils
 
 
-def _get_status(user_id, dataset, endpoint, eval_id):
-    bucket_name = "uploaded_datasets"
-    file_path = f"{user_id}/{dataset}/0/{endpoint}/progress.log"
-    try:
-        responses = (
-            on_prem.read_from_folder(bucket_name, file_path)
-            if os.environ.get("ON_PREM")
-            else gcp.read_from_bucket(bucket_name, file_path)
-        )
-    except:
-        raise HTTPException(
-            status_code=400,
-            detail=f"We didn't find any evaluations run for {dataset}",
-        )
-    id_to_displayname = build_id_to_displayname(user_id=user_id)
-    judge_progress = {}
-    bucket_name = "uploaded_datasets"
-    blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
-    contents = load_eval_config_blob(bucket_name, blob_name)
-    judge_models = contents.get(
-        "judge_models",
-        ["claude-3.5-sonnet@aws-bedrock"],
-    )
-    if isinstance(judge_models, str):
-        judge_models = [
-            judge_models,
-        ]
-    for jm in judge_models:
-        print(jm)
-        file_path = f"{user_id}/{dataset}/0/{endpoint}/{eval_id}/{jm.replace('@','___')}_progress.log"
-        jp = (
-            on_prem.read_from_folder(bucket_name, file_path)
-            if os.environ.get("ON_PREM")
-            else gcp.read_from_bucket(bucket_name, file_path)
-        )
-        judge_progress[jm] = jp
-    return {"responses": responses, "judgements": judge_progress}
-
-
-def _get_scores(user_id: str, dataset: str):
-    if os.environ.get("ON_PREM"):
-        id_to_name = on_prem.internal_id_to_displayname(user_id)
-    else:
-        id_to_name = gcp.internal_id_to_displayname(user_id)
-    name_to_id = {name: id_ for id_, name in id_to_name.items()}
-    internal_id = name_to_id.get(dataset, dataset)
-    return (
-        on_prem.get_scores(user_id, internal_id)
-        if os.environ.get("ON_PREM")
-        else gcp.get_scores(user_id, internal_id)
-    )
-
-
-def _get_input_tokens(user_id: str, dataset: str):
-    if os.environ.get("ON_PREM"):
-        id_to_name = on_prem.internal_id_to_displayname(user_id)
-    else:
-        id_to_name = gcp.internal_id_to_displayname(user_id)
-    name_to_id = {name: id_ for id_, name in id_to_name.items()}
-    internal_id = name_to_id.get(dataset, dataset)
-    return (
-        on_prem.get_input_tokens(user_id, internal_id)
-        if os.environ.get("ON_PREM")
-        else gcp.get_input_tokens(user_id, internal_id)
-    )
-
-
-def _get_response_tokens(user_id: str, dataset: str, endpoint: str):
-    if os.environ.get("ON_PREM"):
-        id_to_name = on_prem.internal_id_to_displayname(user_id)
-    else:
-        id_to_name = gcp.internal_id_to_displayname(user_id)
-    name_to_id = {name: id_ for id_, name in id_to_name.items()}
-    internal_id = name_to_id.get(dataset, dataset)
-    return (
-        on_prem.get_response_tokens(user_id, internal_id, endpoint)
-        if os.environ.get("ON_PREM")
-        else gcp.get_response_tokens(user_id, internal_id, endpoint)
-    )
-
-
 # TODO: Move to utils (duplicated in routing)
-def dataset_exists(user_id, name):
-    # TODO: This needs to take public datasets into account as
-    # well.
-    bucket_name = "uploaded_datasets"
-    if os.environ.get("ON_PREM"):
-        id_to_name = on_prem.internal_id_to_displayname(user_id)
-    else:
-        id_to_name = gcp.internal_id_to_displayname(user_id)
-    name_to_id = {name: id_ for id_, name in id_to_name.items()}
-    internal_id = name_to_id.get(name, name)
-    blob_name = f"{user_id}/{internal_id}/0/dataset.jsonl"
-    exists = (
-        on_prem.file_exists(bucket_name, blob_name)
-        if os.environ.get("ON_PREM")
-        else gcp.blob_exists(bucket_name, blob_name)
-    )
-    if exists:
-        return True
+def dataset_exists(dataset_dao, user_id, name):
+    raw_datasets = dataset_dao.filter(user_id=user_id, name=name)
+    if raw_datasets:
+        return raw_datasets[0].id
     return False
+
+
+def get_dataset_id(dataset_dao, user_id, name):
+    raw_datasets = dataset_dao.filter(user_id=user_id, name=name)
+    if raw_datasets:
+        return raw_datasets[0].id
+    return None
 
 
 # TODO: Move to utils (duplicated in routing)
@@ -164,63 +84,6 @@ def send_to_dataset_evaluation_server(action, **data):
     else:
         gcp.send_pubsub_msg(topic, {"action": action, **data, "orchestra_url": url})
     print(f"Published: {str({'action': action, **data, 'orchestra_url': url})}")
-
-
-def refresh_scores_json(user_id):
-    send_to_dataset_evaluation_server(action="refresh_scores", user_id=user_id)
-
-
-def build_id_to_displayname(user_id):
-    bucket_name = "uploaded_datasets"
-    id_to_displayname = {}
-    prefix = f"{user_id}/evaluation_configs"
-    blobs = (
-        on_prem.list_dir(bucket_name, prefix)
-        if os.environ.get("ON_PREM")
-        else gcp.list_dir(bucket_name, prefix)
-    )
-    for blob in blobs:
-        name = blob if os.environ.get("ON_PREM") else blob.name
-        if not name.endswith(".config"):
-            continue
-        id_ = name.split("/")[-1]
-        assert ".config" in id_
-        id_ = id_.replace(".config", "")
-        # get display_name
-        blob_dict = (
-            on_prem.read_from_folder(bucket_name, name)
-            if os.environ.get("ON_PREM")
-            else gcp.read_from_bucket(bucket_name, name)
-        )
-        if "name" in blob_dict:
-            display_name = blob_dict["name"]
-        else:
-            display_name = blob_dict["eval_name"]
-        id_to_displayname[id_] = display_name
-    return id_to_displayname
-
-
-def build_displayname_to_id(user_id):
-    id_to_displayname = build_id_to_displayname(user_id)
-    return {v: k for k, v in id_to_displayname.items()}
-
-
-def eval_name_to_eval_id(user_id, eval_name):
-    displayname_to_id = build_displayname_to_id(user_id)
-    if eval_name not in displayname_to_id:
-        raise HTTPException(
-            status_code=400,
-            detail=f"You don't have an eval with the name {eval_name}.",
-        )
-    return displayname_to_id[eval_name]
-
-
-def load_eval_config_blob(bucket_name, blob_name):
-    return (
-        on_prem.read_from_folder(bucket_name, blob_name)
-        if os.environ.get("ON_PREM")
-        else gcp.read_from_bucket(bucket_name, blob_name)
-    )
 
 
 ###########################
@@ -271,6 +134,11 @@ def trigger_evaluation(
         description="Name of the evaluator to use.",
         example="eval1",
     ),
+    default_prompt: str = Query(
+        default=None,
+        description="Name of the default prompt to use.",
+        example="default_prompt1",
+    ),
     dataset: str = Query(
         description="Name of the uploaded dataset to evaluate.",
         example="dataset1",
@@ -285,36 +153,62 @@ def trigger_evaluation(
     client_side_scores: UploadFile = File(
         default=None,
         description="An optional file upload for client-side scores. The file must be in JSONL format and the prompts must match the order of the `dataset`. "
-        "Each entry should include `prompt` and `score` keys, with `score` being a float between 0 and 1. The evaluation corresponding to the `evaluator` must have `client_side=True`.",
+        "Each entry should include `prompt_id` and `score` keys, with `score` being a float between 0 and 1. The evaluation corresponding to the `evaluator` must have `client_side=True`.",
         json_schema_extra={"example": "client_scores.jsonl"},
     ),
+    dataset_dao: DatasetDAO = Depends(),
+    evaluator_dao: EvaluatorDAO = Depends(),
+    default_prompt_dao: DefaultPromptDAO = Depends(),
+    evaluation_dao: EvaluationDAO = Depends(),
 ) -> Dict[str, str]:
     """
     Uses the named `evaluator` to trigger an evaluation of quality scores for the
     selected LLM `endpoint` on the selected `dataset`. You can upload custom scores (and
     bypass the LLM judge entirely) by uploading a file via the `client_side_scores`
     argument. Once the evaluation has finished, you can access the scores using the
-    `/v0/evaluation` endpoint.
+    `/v0/evaluation` endpoint. If a custom prompt is specified, its fields will overwrite
+    the corresponding fields in each one of the evaluated prompts.
     """
 
     user_id = request_fastapi.state.user_id
     user_email = request_fastapi.state.user_email
     api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
-    # Check if the dataset exists
-    if not dataset_exists(user_id, dataset):
-        raise dataset_does_not_exist(dataset)
+
     # Check that the endpoints are valid
     invalid_endpoints = find_invalid_endpoints([endpoint])
     if invalid_endpoints:
         raise invalid_training_endpoints(invalid_endpoints)
-    if os.environ.get("ON_PREM"):
-        id_to_name = on_prem.internal_id_to_displayname(user_id)
-    else:
-        id_to_name = gcp.internal_id_to_displayname(user_id)
-    name_to_id = {name: id_ for id_, name in id_to_name.items()}
-    internal_id = name_to_id.get(dataset, dataset)
-    # check if the evaluator is valid
-    eval_id = eval_name_to_eval_id(user_id, evaluator)
+
+    # dataset_id
+    dataset_id = get_dataset_id(dataset_dao, user_id, dataset)
+    if dataset_id is None:
+        raise dataset_does_not_exist(dataset)
+
+    # evaluator_id
+    raw_evaluators = evaluator_dao.filter(user_id=user_id, name=evaluator)
+    if not raw_evaluators:
+        raise HTTPException(
+            400,
+            detail=f"The evaluator {evaluator} does not exist in your account",
+        )
+    evaluator_id = raw_evaluators[0].id
+
+    # default_prompt_id
+    default_prompt_dict = ""
+    default_prompt_id = None
+    if default_prompt:
+        raw_default_prompt = default_prompt_dao.filter(
+            user_id=user_id,
+            name=default_prompt,
+        )
+        if not raw_default_prompt:
+            raise HTTPException(
+                400,
+                detail=f"The default prompt {default_prompt} does not exist in your account",
+            )
+        default_prompt_dict = raw_default_prompt[0].prompt
+        default_prompt_id = raw_default_prompt[0].id
+
     if client_side_scores:
         file = client_side_scores.file.read()
         # TODO: check whether matches dataset
@@ -322,7 +216,7 @@ def trigger_evaluation(
             lines = file.decode().split("\n")
             lines = [json.loads(l) for l in lines if l != ""]
             for ix, line in enumerate(lines):
-                if set(line.keys()) != set(["prompt", "score"]):
+                if set(line.keys()) != set(["prompt_id", "score"]):
                     raise HTTPException(status_code=400, detail=f"Error in line {ix}")
         except:
             raise HTTPException(
@@ -330,33 +224,33 @@ def trigger_evaluation(
                 detail="Error processing uploaded scores",
             )
 
-        # check whether the eval name is a client side one:
-        bucket_name = "uploaded_datasets"
-        blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
-        contents = load_eval_config_blob(bucket_name, blob_name)
-        if "client_side" not in contents or contents.get("client_side", "") is not True:
+        # check whether the evaluator is a client side one:
+        if (
+            not hasattr(raw_evaluators[0], "client_side")
+            or raw_evaluators[0].client_side is not True
+        ):
             raise HTTPException(
                 status_code=400,
                 detail=f"The evaluator {evaluator} is not a client-side evaluator "
                 f"(as client_side != True)",
             )
-
-        # put everything in the bucket
-        bucket_name = "uploaded_datasets"
-        blob_name = (
-            f"{user_id}/{internal_id}/0/{endpoint}/{eval_id}/client_side_judged.jsonl"
-        )
-        if os.environ.get("ON_PREM"):
-            on_prem.write_to_folder(file, bucket_name, blob_name)
-        else:
-            gcp.upload_to_bucket(
-                file,
-                bucket_name,
-                blob_name,
-                "application/octet-stream",
+        # dataset_prompts = dataset_dao.fetch_dataset(user_id=user_id, name=dataset)
+        # upload the data
+        for l in lines:
+            prompt_id = l["prompt_id"]
+            score = l["score"]
+            if not isinstance(score, float) or score < 0 or score > 1.0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Error with score from prompt_id: {prompt_id}, score: {score}",
+                )
+            evaluation_dao.create(
+                prompt_id=prompt_id,
+                prompt_variation_id=None,
+                evaluator_id=evaluator_id,
+                endpoint_str=endpoint,
+                score=score,
             )
-        refresh_scores_json(user_id)
-
         return {"info": "Evaluation uploaded!"}
 
     # Send train job to the dataset_evaluation server
@@ -365,9 +259,12 @@ def trigger_evaluation(
         user_id=user_id,
         user_email=user_email,
         api_key=api_key,
-        dataset=internal_id,
+        dataset=dataset,
         endpoint=endpoint,
-        eval_id=eval_id,
+        evaluator=evaluator,
+        evaluator_id=evaluator_id,
+        default_prompt=default_prompt_dict,
+        default_prompt_id=default_prompt_id,
     )
     return {"info": "Dataset evaluation started! You will receive an email soon!"}
 
@@ -404,6 +301,8 @@ def admin_trigger_eval(
     Behaves like the user-specific endpoint but can be triggered as an admin on behalf of a given user.
     """
 
+    raise NotImplementedError
+
     api_key = os.getenv("UNIFY_API_KEY")
 
     # Check if the dataset exists
@@ -437,6 +336,35 @@ def admin_trigger_eval(
     return {"info": "Dataset evaluation started!"}
 
 
+def get_single_evaluation(
+    user_id: str,
+    dataset: str,
+    endpoint: str,
+    evaluator: str,
+    dataset_dao: DatasetDAO,
+    evaluator_dao: EvaluatorDAO,
+    evaluation_dao: EvaluationDAO,
+    per_prompt: bool,
+):
+    """Get the score for one endpoint + evaluator + dataset (optionally per_prompt)"""
+    dataset_prompts = dataset_dao.fetch_dataset(user_id=user_id, name=dataset)
+
+    prompt_ids = [prompt["id"] for prompt in dataset_prompts]
+    evaluator_id = evaluator_dao.filter(user_id=user_id, name=evaluator)[0].id
+    scores = evaluation_dao.fetch_evaluation_scores(
+        prompt_ids=prompt_ids,
+        evaluator_id=evaluator_id,
+        endpoint_str=endpoint,
+    )
+    mean_score = 100 * sum(float(s.score) for s in scores) / len(scores)
+    progress = 100 * len(scores) / len(prompt_ids)
+    result = {"score": mean_score, "progress": progress}
+    if per_prompt:
+        per_prompt_scores = [{"id": _s.id, "score": float(_s.score)} for _s in scores]
+        result["per_prompt"] = per_prompt_scores
+    return result
+
+
 @router.get(
     "/evaluation",
 )
@@ -449,7 +377,7 @@ def get_evaluations(
     endpoint: str = Query(
         default=None,
         description="The endpoint to fetch the evaluation for. "
-        "If `None`, returns evaluations for all endpoints.",
+        "If `None`, returns all available evaluations for the dataset and evaluator pair.",
         example="gpt-4o-mini@openai",
     ),
     evaluator: str = Query(
@@ -462,10 +390,13 @@ def get_evaluations(
     per_prompt: bool = Query(
         default=False,
         description="If `True`, returns the scores on a per-prompt level. "
-        "By default set to `False`. If `True` requires an eval "
-        "name and endpoint to be set.",
+        "By default set to `False`. If `True` requires an endpoint "
+        "and evaluator to be set.",
         example=False,
     ),
+    dataset_dao: DatasetDAO = Depends(),
+    evaluator_dao: EvaluatorDAO = Depends(),
+    evaluation_dao: EvaluationDAO = Depends(),
 ) -> Dict:
     """
     Fetches evaluation results on a given dataset, for a specific endpoint (optional)
@@ -475,15 +406,37 @@ def get_evaluations(
     """
     # ToDo: implement the logic where the endpoint (required) is considered in the input
     user_id = request_fastapi.state.user_id
-    if not dataset_exists(user_id, dataset):
+    if not dataset_exists(dataset_dao, user_id, dataset):
         raise dataset_does_not_exist(dataset)
 
-    if os.environ.get("ON_PREM"):
-        id_to_name = on_prem.internal_id_to_displayname(user_id)
+    if not endpoint and not evaluator:
+        raise HTTPException(
+            status_code=404,
+            detail="You need to specify at least one of (endpoint, evaluator)",
+        )
+
+    if per_prompt:
+        if not endpoint or not evaluator:
+            raise HTTPException(
+                status_code=404,
+                detail="If per_prompt=True, need to specify both endpoint and evaluator",
+            )
+
+    if evaluator:
+        evaluator_id = evaluator_dao.filter(user_id=user_id, name=evaluator)
+        if not evaluator_id:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Could not find an evaluator with the name {evaluator}",
+            )
+        evaluator_id = evaluator_id[0].id
+        evaluators = [evaluator]
     else:
-        id_to_name = gcp.internal_id_to_displayname(user_id)
-    name_to_id = {name: id_ for id_, name in id_to_name.items()}
-    internal_id = name_to_id.get(dataset, dataset)
+        dataset_id = dataset_dao.filter(user_id=user_id, name=dataset)[0].id
+        evaluators = evaluation_dao.get_evaluator_names(
+            dataset_id=dataset_id,
+            endpoint_str=endpoint,
+        )
 
     if endpoint:
         invalid_endpoints = find_invalid_endpoints([endpoint])
@@ -492,100 +445,34 @@ def get_evaluations(
                 status_code=400,
                 detail=f"Could not find endpoint: {'.'.join(invalid_endpoints)}",
             )
+        endpoints = [endpoint]
+    else:
+        dataset_id = dataset_dao.filter(user_id=user_id, name=dataset)[0].id
+        endpoints = evaluation_dao.get_endpoints(
+            dataset_id=dataset_id,
+            evaluator_id=evaluator_id,
+        )
 
-    return_single_eval = evaluator is not None
-    requested_eval_id = (
-        eval_name_to_eval_id(user_id, evaluator) if return_single_eval else None
-    )
-
-    if per_prompt:
-        if not evaluator:
-            raise HTTPException(
-                status_code=400,
-                detail="You need to specify an eval name to return per-prompt scores.",
-            )
-        if not endpoint:
-            raise HTTPException(
-                status_code=400,
-                detail="You need to specify an endpoint to return per-prompt scores.",
-            )
-        bucket_name = "uploaded_datasets"
-        blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
-        eval_config = load_eval_config_blob(bucket_name, blob_name)
-        if eval_config.get("client_side", False) == True:
-            judge_models = ["client_side"]
-        else:
-            judge_models = eval_config.get(
-                "judge_models",
-                ["claude-3.5-sonnet@aws-bedrock"],
-            )
-        if isinstance(judge_models, str):
-            judge_models = [
-                judge_models,
-            ]
-
-        bucket_name = "uploaded_datasets"
-        ret = {}
-        for jm in judge_models:
-            judge_blob_name = f"{user_id}/{internal_id}/0/{endpoint}/{requested_eval_id}/{jm.replace('@','___')}_judged.jsonl"
-            try:
-                contents = (
-                    on_prem.read_from_folder(
-                        bucket_name,
-                        judge_blob_name,
-                        raw=True,
-                        decode=True,
-                    )
-                    if not os.environ.get("ON_PREM")
-                    else gcp.read_from_bucket(
-                        bucket_name,
-                        judge_blob_name,
-                        raw=True,
-                        decode=True,
-                    )
-                ).split("\n")
-                cleaned_scores = []
-                for entry in contents:
-                    if not entry:
-                        continue
-                    data = json.loads(entry)
-                    cleaned_scores.append(
-                        {
-                            "prompt": data.get("prompt", ""),
-                            "score": data.get("score", None),
-                        },
-                    )
-                ret[jm] = cleaned_scores
-            except Exception as e:
-                pass
-        return ret
-
-    # format of scores is {eval_id: {endpoint : {judge : score}}}
-    scores = _get_scores(user_id, internal_id)
-
-    output_tokens = {}
-    id_to_displayname = build_id_to_displayname(user_id)
+    # multiple judges
+    # exception handling
 
     ret = {}
-    for eval_id, eval_scores in scores.items():
-        if return_single_eval and eval_id != requested_eval_id:
-            continue
-
-        displayname = id_to_displayname[eval_id]
-
-        if endpoint:
-            eval_scores = {endpoint: eval_scores[endpoint]}
-
-        ret[displayname] = eval_scores
-        for endpoint in eval_scores:
-            output_tokens[endpoint] = _get_response_tokens(
-                user_id,
-                internal_id,
-                endpoint,
+    for endpoint in endpoints:
+        for evaluator in evaluators:
+            eval_result = get_single_evaluation(
+                user_id=user_id,
+                dataset=dataset,
+                endpoint=endpoint,
+                evaluator=evaluator,
+                dataset_dao=dataset_dao,
+                evaluator_dao=evaluator_dao,
+                evaluation_dao=evaluation_dao,
+                per_prompt=per_prompt,
             )
-
-    ret["input_tokens"] = _get_input_tokens(user_id, dataset)
-    ret["output_tokens"] = output_tokens
+            if evaluator in ret:
+                ret[evaluator][endpoint] = eval_result
+            else:
+                ret[evaluator] = {endpoint: (eval_result)}
 
     return ret
 
@@ -632,91 +519,130 @@ def delete_evaluations(
     raise NotImplemented
 
 
-@router.get(
-    "/evaluation/status",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "responses": {
-                            "last_updated": "2024-08-19 13:58:20.866092",
-                            "num_failed": 0,
-                            "num_processed": 3,
-                            "num_remaining": 0,
-                        },
-                        "judgements": {
-                            "judge_model_a": {
-                                "last_updated": "2024-08-19 13:58:20.866092",
-                                "num_failed": 0,
-                                "num_processed": 3,
-                                "num_remaining": 0,
-                            },
-                        },
-                    },
-                },
-            },
-        },
-    },
-)
-def eval_status(
+### admin functions
+
+
+@admin_router.post("/evaluations/upload_responses")
+def upload_responses(
     request_fastapi: Request,
-    dataset: str = Query(
-        description="Name of the dataset to get evaluation status of.",
-        example="dataset1",
-    ),
-    endpoint: str = Query(
-        description="Endpoint to get evaluation status of",
-        example="llama-3-8b-chat@aws-bedrock",
-    ),
-    evaluator: str = Query(
-        description="Name of the evaluator to get status of.",
-        example="eval1",
-    ),
+    prompt_id: int,
+    endpoint_str: str,
+    response: str,
+    num_tokens: int,
+    prompt_variation_id: Optional[int] = None,
+    stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
 ):
-    """
-    Fetches the eval status on a given dataset. Returns object of the form:
-
-    ```
-    {
-        "responses": {
-            "last_updated": "2024-08-19 13:58:20.866092",
-            "num_failed": 0,
-            "num_processed": 3,
-            "num_remaining": 0,
-        },
-        "judgements": {
-            "judge_model_a": {
-                "last_updated": "2024-08-19 13:58:20.866092",
-                "num_failed": 0,
-                "num_processed": 3,
-                "num_remaining": 0,
-            }
-        },
-    }
-    ```
-
-    """
-    user_id = request_fastapi.state.user_id
-    if not dataset_exists(user_id, dataset):
-        raise dataset_does_not_exist(dataset)
-
-    if os.environ.get("ON_PREM"):
-        id_to_name = on_prem.internal_id_to_displayname(user_id)
-    else:
-        id_to_name = gcp.internal_id_to_displayname(user_id)
-    name_to_id = {name: id_ for id_, name in id_to_name.items()}
-    internal_id = name_to_id.get(dataset, dataset)
-
-    requested_eval_id = eval_name_to_eval_id(user_id, evaluator)
-
-    ret = _get_status(
-        user_id=user_id,
-        dataset=internal_id,
-        endpoint=endpoint,
-        eval_id=requested_eval_id,
+    stored_prompt_response_dao.create(
+        prompt_id=prompt_id,
+        prompt_variation_id=prompt_variation_id,
+        endpoint_str=endpoint_str,
+        response=response,
+        num_tokens=num_tokens,
     )
-    # format of scores is {eval_id: {endpoint : {judge : score}}}
 
+
+@admin_router.post("/evaluations/upload_judgements")
+def upload_judgements(
+    request_fastapi: Request,
+    prompt_id: int,
+    endpoint_str: str,
+    evaluator_id: str,
+    judge_endpoint_str: str,
+    judgement: str,
+    score: str,
+    prompt_variation_id: Optional[int] = None,
+    stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
+    judgement_dao: JudgementDAO = Depends(),
+    evaluation_dao: EvaluationDAO = Depends(),
+):
+    try:
+        raw_ids = stored_prompt_response_dao.filter(
+            prompt_id=prompt_id,
+            prompt_variation_id=prompt_variation_id,
+            endpoint_str=endpoint_str,
+        )
+        response_id = raw_ids[0].id
+    except Exception as e:
+        raise e
+
+    judgement_dao.create(
+        response_id=response_id,
+        judge_endpoint_str=judge_endpoint_str,
+        evaluator_id=evaluator_id,
+        judgement=judgement,
+    )
+    evaluation_dao.create(
+        prompt_id=prompt_id,
+        prompt_variation_id=prompt_variation_id,
+        evaluator_id=evaluator_id,
+        endpoint_str=endpoint_str,
+        score=score,
+    )
+
+
+@admin_router.get("/dataset/load_prompt")
+def load_prompt(
+    prompt_id: str,
+    stored_prompt_dao: StoredPromptDAO = Depends(),
+):
+    ret = stored_prompt_dao.filter(id=prompt_id)
     return ret
+
+
+@admin_router.get("/dataset/load_response")
+def load_response(
+    prompt_id: str,
+    endpoint_str: str,
+    prompt_variation_id: Optional[str] = None,
+    stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
+):
+
+    ret = stored_prompt_response_dao.filter(
+        prompt_id=prompt_id,
+        prompt_variation_id=prompt_variation_id,
+        endpoint_str=endpoint_str,
+    )
+    return ret
+
+
+@admin_router.get("/dataset/load_judgement")
+def load_judgement(
+    request_fastapi: Request,
+    prompt_id: str,
+    prompt_variation_id: Optional[str],
+    endpoint_str: str,
+    evaluator_id,
+    evaluation_dao: EvaluationDAO = Depends(),
+):
+    ret = evaluation_dao.filter(
+        prompt_id=prompt_id,
+        prompt_variation_id=prompt_variation_id,
+        evaluator_id=evaluator_id,
+        endpoint_str=endpoint_str,
+    )
+    return ret
+
+
+@admin_router.get("/prompt_variation")
+def load_prompt_variation(
+    prompt_id: str,
+    default_prompt_id: str,
+    stored_prompt_variation_dao: StoredPromptVariationDAO = Depends(),
+):
+    ret = stored_prompt_variation_dao.filter(
+        prompt_id=prompt_id,
+        default_prompt_id=default_prompt_id,
+    )
+    return ret
+
+
+@admin_router.post("/prompt_variation")
+def create_prompt_variation(
+    prompt_id: str,
+    default_prompt_id: str,
+    stored_prompt_variation_dao: StoredPromptVariationDAO = Depends(),
+):
+    stored_prompt_variation_dao.create(
+        prompt_id=prompt_id,
+        default_prompt_id=default_prompt_id,
+    )

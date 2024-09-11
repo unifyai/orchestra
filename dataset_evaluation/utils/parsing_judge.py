@@ -46,5 +46,4 @@ def calc_quality(judgements_path, cfg=default_cfg):
             entry = json.loads(line)
             prompt_score = ratings_from_sample(entry["judge_response"], cfg)
             scores.append(prompt_score)
-    print(scores)
     return sum(scores) / len(scores)
