@@ -118,22 +118,26 @@ def log_query(
     request_fastapi: Request,
     endpoint: str = Body(
         description="Endpoint to log query for.",
-        example="llama-3.1-8b-chat_ollama@external",
+        json_schema_extra={"example": "llama-3.1-8b-chat_ollama@external"},
     ),
     query_body: str = Body(
         description="A string containing the body of the request",
-        example="""{"messages": [{"role": "system", "content": "You are an useful assistant"}, {"role": "user", "content": "Explain who Newton was."}], "model": "llama-3-8b-chat@aws-bedrock", "max_tokens": 100,"stream": false, "temperature": 0.5}""",
+        json_schema_extra={
+            "example": """{"messages": [{"role": "system", "content": "You are an useful assistant"}, {"role": "user", "content": "Explain who Newton was."}], "model": "llama-3-8b-chat@aws-bedrock", "max_tokens": 100, "temperature": 0.5}"""
+        },
     ),
     response_body: Optional[str] = Body(
         None,
         description="An optional string containing the response to the request",
-        example="""{"model": "meta.llama3-8b-instruct-v1:0", "created": 1725396241, "id": "chatcmpl-92d3b36e-7b64-4ae8-8102-9b7e3f5dd30f", "object": "chat.completion", "usage": {"completion_tokens": 100, "prompt_tokens": 44, "total_tokens": 144}, "choices": [{"finish_reason": "stop", "index": 0, "message": {"content": "Sir Isaac Newton was an English mathematician, physicist, and astronomer who lived from 1643 to 1727.\\n\\nHe is widely recognized as one of the most influential scientists in history, and his work laid the foundation for the Scientific Revolution of the 17th century.\\n\\nNewton\'s most famous achievement is his theory of universal gravitation, which he presented in his groundbreaking book \\"Philosophi\\u00e6 Naturalis Principia Mathematica\\" in 1687.\\n\\nAccording to Newton\'s theory, every", "role": "assistant", "tool_calls": null, "function_call": null}}]}""",
+        json_schema_extra={
+            "example": """{"model": "meta.llama3-8b-instruct-v1:0", "created": 1725396241, "id": "chatcmpl-92d3b36e-7b64-4ae8-8102-9b7e3f5dd30f", "object": "chat.completion", "usage": {"completion_tokens": 100, "prompt_tokens": 44, "total_tokens": 144}, "choices": [{"finish_reason": "stop", "index": 0, "message": {"content": "Sir Isaac Newton was an English mathematician, physicist, and astronomer who lived from 1643 to 1727.\\n\\nHe is widely recognized as one of the most influential scientists in history, and his work laid the foundation for the Scientific Revolution of the 17th century.\\n\\nNewton\'s most famous achievement is his theory of universal gravitation, which he presented in his groundbreaking book \\"Philosophi\\u00e6 Naturalis Principia Mathematica\\" in 1687.\\n\\nAccording to Newton\'s theory, every", "role": "assistant", "tool_calls": null, "function_call": null}}]}"""
+        },
     ),
     tags: Optional[list[str]] = Body(None, description="Tags for later filtering."),
     timestamp: Optional[str] = Body(
         None,
         description="A timestamp (if not set, will be the time of sending)",
-        example="2024-07-12T04:20:32.808410",
+        json_schema_extra={"example": "2024-07-12T04:20:32.808410"},
     ),
     query_dao: QueryDAO = Depends(),
     local_endpoint_dao: LocalEndpointDAO = Depends(),
