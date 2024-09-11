@@ -3,13 +3,18 @@ Includes endpoints for router training.
 """
 
 import os
-from typing import Dict, List, Union
+from typing import Any, Dict, List, Union
 
 from fastapi import APIRouter, Query, Request
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.web.api.utils import gcp, on_prem
-from orchestra.web.api.utils.gcp import blob_exists, list_dir, send_pubsub_msg
+from orchestra.web.api.utils.gcp import (
+    blob_exists,
+    list_dir,
+    read_from_bucket,
+    send_pubsub_msg,
+)
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
     invalid_training_endpoints,
@@ -292,3 +297,18 @@ def list_routers(
     for rtr in routers:
         routers_metadata[rtr] = {"dataset": "", "endpoints": [""]}
     return routers_metadata
+
+
+@router.get("/get_dataset_evaluation")
+def get_dataset_evaluation(
+    dataset_name: str,
+) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+    """
+    Retrieve specific dataset evaluation object from the database.
+    """
+
+    bucket_name = "plot-points-temp-storage"
+    blob_name = f"{dataset_name}.json"
+    points = read_from_bucket(bucket_name, blob_name)
+
+    return points
