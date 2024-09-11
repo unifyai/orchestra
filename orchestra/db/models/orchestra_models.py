@@ -1,7 +1,7 @@
 import sqlalchemy as sa
+from sqlalchemy.orm import relationship
 
 from orchestra.db.base import Base
-from sqlalchemy.orm import relationship
 
 
 class Model(Base):
@@ -200,32 +200,6 @@ class RechargeType(Base):
     type = sa.Column(sa.String(), primary_key=True)
 
 
-class DatasetEvaluationTask(Base):
-    """Model class for the dataset evaluation task table."""
-
-    __tablename__ = "dataset_evaluation_task"
-
-    id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=True)
-    name = sa.Column(sa.String(), nullable=False)
-    status = sa.Column(sa.String(), nullable=False)
-    sa.UniqueConstraint("user_id", "name", name="uq_dataset_eval_user_id")
-
-
-class DatasetEvaluation(Base):
-    """Model class for the dataset evaluation table."""
-
-    __tablename__ = "dataset_evaluation"
-
-    mdl_name = sa.Column(sa.String(), nullable=False, primary_key=True)
-    dataset_name = sa.Column(sa.String(), nullable=False, primary_key=True)
-    prompt = sa.Column(sa.String(), nullable=False, primary_key=True)
-    gt_score = sa.Column(sa.Numeric(), nullable=False)
-    score = sa.Column(sa.Numeric(), nullable=False)
-    input_tokens = sa.Column(sa.Numeric(), nullable=True)
-    output_tokens = sa.Column(sa.Numeric(), nullable=True)
-
-
 class BetaList(Base):
     """Model class for the beta list table."""
 
@@ -325,7 +299,10 @@ class Tag(Base):
 
     id = sa.Column(sa.Integer(), primary_key=True)
     user_id = sa.Column(
-        sa.String(), sa.ForeignKey("users.id"), nullable=False, index=True
+        sa.String(),
+        sa.ForeignKey("users.id"),
+        nullable=False,
+        index=True,
     )
     tag_name = sa.Column(sa.String(), nullable=False)
     queries = relationship("QueryTagAssociation", back_populates="tag")
@@ -337,13 +314,22 @@ class QueryTagAssociation(Base):
 
     __tablename__ = "query_tag_association"
     user_id = sa.Column(
-        sa.String(), sa.ForeignKey("users.id"), primary_key=True, index=True
+        sa.String(),
+        sa.ForeignKey("users.id"),
+        primary_key=True,
+        index=True,
     )
     query_id = sa.Column(
-        sa.Integer(), sa.ForeignKey("query.id"), primary_key=True, index=True
+        sa.Integer(),
+        sa.ForeignKey("query.id"),
+        primary_key=True,
+        index=True,
     )
     tag_id = sa.Column(
-        sa.Integer(), sa.ForeignKey("tags.id"), primary_key=True, index=True
+        sa.Integer(),
+        sa.ForeignKey("tags.id"),
+        primary_key=True,
+        index=True,
     )
 
     tag = relationship("Tag", back_populates="queries")
@@ -374,16 +360,23 @@ class Query(Base):
 
     id = sa.Column(sa.Integer(), primary_key=True)
     user_id = sa.Column(
-        sa.String(), sa.ForeignKey("users.id"), nullable=False, index=True
+        sa.String(),
+        sa.ForeignKey("users.id"),
+        nullable=False,
+        index=True,
     )
     at = sa.Column(sa.TIMESTAMP(), nullable=False)
     model_provider_str = sa.Column(sa.String(), nullable=False)
     endpoint_id = sa.Column(sa.Integer(), sa.ForeignKey("endpoint.id"), index=True)
     custom_endpoint_id = sa.Column(
-        sa.Integer(), sa.ForeignKey("custom_endpoint.id"), index=True
+        sa.Integer(),
+        sa.ForeignKey("custom_endpoint.id"),
+        index=True,
     )
     local_endpoint_id = sa.Column(
-        sa.Integer(), sa.ForeignKey("local_endpoint.id"), index=True
+        sa.Integer(),
+        sa.ForeignKey("local_endpoint.id"),
+        index=True,
     )
     credits = sa.Column(sa.Numeric(), nullable=False)
     query_body = sa.Column(sa.String(), nullable=False)
@@ -393,3 +386,210 @@ class Query(Base):
     router = sa.Column(sa.String, nullable=True)
     tags = relationship("QueryTagAssociation", back_populates="query")
     __table_args__ = (sa.Index("ix_user_endpoint", "user_id", "endpoint_id"),)
+
+
+# TODO: CASCADE DELETE FOR PROMPTS -> EVALUATIONS
+
+
+class Dataset(Base):
+    """Model class for the dataset table."""
+
+    __tablename__ = "dataset"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    user_id = sa.Column(
+        sa.String(),
+        sa.ForeignKey("users.id"),
+        index=True,
+        nullable=True,
+    )
+    name = sa.Column(sa.String(), nullable=False)
+    __table_args__ = (sa.UniqueConstraint("user_id", "name", name="uq_userid_name"),)
+
+
+class StoredPrompt(Base):
+    """Model class for the stored prompt table."""
+
+    __tablename__ = "stored_prompt"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    user_id = sa.Column(
+        sa.String(),
+        sa.ForeignKey("users.id"),
+        index=True,
+        nullable=True,
+    )
+    system_msg = sa.Column(sa.String(), index=True, nullable=True)
+    messages = sa.Column(sa.String(), index=True, nullable=False)
+    prompt_kwargs = sa.Column(sa.String(), nullable=False)
+    ref_answer = sa.Column(sa.String(), nullable=True)
+    num_tokens = sa.Column(sa.Integer(), nullable=False)
+    timestamp = sa.Column(sa.TIMESTAMP(), nullable=False)
+
+
+class DefaultPrompt(Base):
+    """Model class for the default prompt table."""
+
+    __tablename__ = "default_prompt"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    user_id = sa.Column(
+        sa.String(),
+        sa.ForeignKey("users.id"),
+        index=True,
+        nullable=True,
+    )
+    name = sa.Column(sa.String(), nullable=False)
+    prompt = sa.Column(sa.String(), nullable=True)
+
+
+class StoredPromptVariation(Base):
+    """Model class for variations of stored prompts table."""
+
+    __tablename__ = "stored_prompt_variation"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    prompt_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("stored_prompt.id"),
+        index=True,
+        nullable=False,
+    )
+    default_prompt_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("default_prompt.id"),
+        index=True,
+        nullable=False,
+    )
+
+
+# TODO: Add StoredPromptExtraField
+# id, prompt_id, field, value
+class StoredPromptExtraField(Base):
+    """Model class for the prompt extra field table."""
+
+    __tablename__ = "stored_prompt_extra_field"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    prompt_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("stored_prompt.id"),
+        index=True,
+        nullable=True,
+    )
+    field = sa.Column(sa.String(), nullable=False)
+    value = sa.Column(sa.String(), nullable=False)
+
+
+class StoredPromptResponse(Base):
+    """Model class for the stored prompt response table."""
+
+    __tablename__ = "stored_prompt_response"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    prompt_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("stored_prompt.id"),
+        index=True,
+        nullable=True,
+    )
+    prompt_variation_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("stored_prompt_variation.id"),
+        index=True,
+        nullable=True,
+    )
+    endpoint_str = sa.Column(sa.String(), nullable=False)
+    response = sa.Column(sa.String(), nullable=False)
+    num_tokens = sa.Column(sa.Integer(), nullable=False)
+
+
+class Judgement(Base):
+    """Model class for the judgement table."""
+
+    __tablename__ = "judgement"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    response_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("stored_prompt_response.id"),
+        index=True,
+        nullable=True,
+    )
+    judge_endpoint_str = sa.Column(
+        sa.String(),
+        nullable=False,
+    )
+    evaluator_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("evaluator.id"),
+        nullable=False,
+    )
+    judgement = sa.Column(sa.String(), nullable=False)
+
+
+class DatasetPrompt(Base):
+    """Model class for the dataset prompt table."""
+
+    __tablename__ = "dataset_prompt"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    dataset_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("dataset.id"),
+        index=True,
+        nullable=True,
+    )
+    prompt_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("stored_prompt.id"),
+        index=True,
+        nullable=True,
+    )
+
+
+class Evaluator(Base):
+    """Model class for the evaluator table."""
+
+    __tablename__ = "evaluator"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    user_id = sa.Column(
+        sa.String(),
+        sa.ForeignKey("users.id"),
+        index=True,
+        nullable=True,
+    )
+    name = sa.Column(sa.String(), nullable=False)
+    system_prompt = sa.Column(sa.String(), nullable=False)
+    class_config = sa.Column(sa.String(), nullable=False)
+    judge_models = sa.Column(sa.String(), nullable=False)
+    client_side = sa.Column(sa.Boolean(), nullable=False)
+
+
+class Evaluation(Base):
+    """Model class for the evaluation table."""
+
+    __tablename__ = "evaluation"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    prompt_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("stored_prompt.id"),
+        index=True,
+        nullable=True,
+    )
+    prompt_variation_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("stored_prompt_variation.id"),
+        index=True,
+        nullable=True,
+    )
+    evaluator_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("evaluator.id"),
+        index=True,
+        nullable=True,
+    )
+    endpoint_str = sa.Column(sa.String(), nullable=False)
+    score = sa.Column(sa.Numeric(), nullable=False)

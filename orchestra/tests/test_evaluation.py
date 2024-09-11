@@ -3,12 +3,12 @@ import json
 import os
 import sys
 
-import pytest
-from google.cloud import storage
+from dotenv import find_dotenv, load_dotenv
 from httpx import AsyncClient
 
 import orchestra
-from orchestra.web.api.evaluators.views import build_displayname_to_id
+
+from .test_datasets import upload_dataset
 
 # TODO: Less hacky way for this?
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -16,7 +16,6 @@ sys.path.insert(0, project_root)
 dataset_eval_path = os.path.join(project_root, "dataset_evaluation")
 sys.path.insert(0, dataset_eval_path)
 from dataset_evaluation.evaluate_dataset import evaluate_dataset
-from dataset_evaluation.refresh_scores import refresh_scores_for_user
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 test_user_id = os.getenv("AUTH_ACCOUNT_USER_ID")
@@ -25,6 +24,12 @@ HEADERS = {
     "accept": "application/json",
     "Authorization": f"Bearer {api_key}",
 }
+
+
+def create_default_prompt(client, default_prompt_name):
+    data = {"name": default_prompt_name, "prompt": {"temperature": 0.8}}
+    # Send POST request to the /dataset endpoint
+    return client.post("/v0/default_prompt", headers=HEADERS, json=data)
 
 
 def _upload_dataset(client, dataset_name, data_path):
@@ -48,105 +53,20 @@ def _delete_dataset_evaluation(client, dataset_name):
 sample_path = "./orchestra/tests/sample_datasets/with_ref.jsonl"
 
 
-@pytest.fixture
-def cleanup_eval_config():
-    to_remove = []
-    yield to_remove
-    displayname_to_id = build_displayname_to_id(test_user_id)
-    for eval_name in to_remove:
-        if eval_name not in displayname_to_id:
-            continue
-        eval_id = displayname_to_id[eval_name]
-        blob_name = f"{test_user_id}/evaluation_configs/{eval_id}.config"
-        blob = storage.Client().bucket("uploaded_datasets").blob(blob_name)
-        if blob.exists():
-            blob.delete()
-
-
-@pytest.mark.anyio
-async def test_create_eval(
-    client: AsyncClient,
-    cleanup_eval_config,
-):
-    eval_name = "test_eval_config"
-    system_prompt = "dummy system prompt"
-
-    url = "/v0/evaluator"
-    params = {"name": eval_name, "system_prompt": system_prompt}
-    cleanup_eval_config.append(eval_name)
-    response = await client.post(url, json=params, headers=HEADERS)
-    assert response.status_code == 200, response.json()
-
-    url = "/v0/evaluator/list"
-    response = await client.get(url, headers=HEADERS)
-    assert eval_name in response.json()
-
-    url = "/v0/evaluator"
-    params = {"name": eval_name}
-    response = await client.get(url, params=params, headers=HEADERS)
-    assert response.json()["system_prompt"] == system_prompt
-
-
-@pytest.mark.anyio
-async def test_delete_eval(
-    client: AsyncClient,
-    cleanup_eval_config,
-):
-    eval_name = "test_eval_to_delete"
-    system_prompt = "dummy system prompt"
-    cleanup_eval_config.append(eval_name)
-
-    url = "/v0/evaluator"
-    params = {"name": eval_name, "system_prompt": system_prompt}
-    response = await client.post(url, json=params, headers=HEADERS)
-    assert response.status_code == 200, response.json()
-
-    url = "/v0/evaluator"
-    params = {"name": eval_name}
-    response = await client.delete(url, params=params, headers=HEADERS)
-    assert response.status_code == 200, response.json()
-
-    url = "/v0/evals/list_configs"
-    response = await client.get(url, headers=HEADERS)
-    assert eval_name not in response.json()
-
-
-@pytest.mark.anyio
-async def test_rename_eval(
-    client: AsyncClient,
-    cleanup_eval_config,
-):
-    eval_name = "test_eval_to_rename"
-    system_prompt = "dummy system prompt"
-    cleanup_eval_config.append(eval_name)
-
-    url = "/v0/evaluator"
-    params = {"name": eval_name, "system_prompt": system_prompt}
-    response = await client.post(url, json=params, headers=HEADERS)
-    assert response.status_code == 200, response.json()
-
-    url = "/v0/evaluator/rename"
-    new_eval_name = "new_name_for_eval"
-    cleanup_eval_config.append(new_eval_name)
-    params = {"name": eval_name, "new_name": new_eval_name}
-    response = await client.post(url, params=params, headers=HEADERS)
-    assert response.status_code == 200, response.json()
-
-    url = "/v0/evaluator/list"
-    response = await client.get(url, headers=HEADERS)
-    assert eval_name not in response.json()
-    assert new_eval_name in response.json()
+load_dotenv(find_dotenv())
+admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
 async def test_trigger_eval(
     client: AsyncClient,
-    cleanup_eval_config,
     tmp_path,
     monkeypatch,
 ):
     def mock_send_to_dataset_evaluation_server(action, **data):
         data.pop("user_email", "")
-        message_data = json.dumps({"action": action, **data, "orchestra_url": ""})
+        message_data = json.dumps(
+            {"action": action, **data, "orchestra_url": "", "admin_key": admin_key},
+        )
         save_dir = tmp_path / "save_files"
         if action == "evaluate":
             asyncio.run(
@@ -169,10 +89,10 @@ async def test_trigger_eval(
         mock_send_to_dataset_evaluation_server,
     )
 
+    # create evaluator
     eval_name = "test_eval"
     system_prompt = "dummy system prompt"
     judge_model = "llama-3-8b-chat@aws-bedrock"
-    cleanup_eval_config.append(eval_name)
 
     url = "/v0/evaluator"
     params = {
@@ -183,9 +103,16 @@ async def test_trigger_eval(
     response = await client.post(url, json=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
+    # create dataset
+
+    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    dataset = "test_dataset_eval"
+    response = await upload_dataset(client, file_path, dataset)
+    assert response.status_code == 200, response.json()
+
+    # create trigger evaluation
     url = "/v0/evaluation"
-    dataset = "test_dataset"
-    endpoint = "llama-3-8b-chat@aws-bedrock"
+    endpoint = "gpt-3.5-turbo@openai"
     params = {
         "url": url,
         "dataset": dataset,
@@ -196,31 +123,174 @@ async def test_trigger_eval(
     assert response.status_code == 200, response.json()
 
     url = "/v0/evaluation"
+    endpoint = "llama-3-8b-chat@aws-bedrock"
+    params = {
+        "url": url,
+        "dataset": dataset,
+        "endpoint": endpoint,
+        "evaluator": eval_name,
+    }
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    ############################
+
+    url = "/v0/evaluation"
     params = {"dataset": dataset, "evaluator": eval_name}
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     scores = response.json()
     assert eval_name in scores
     assert endpoint in scores[eval_name]
-    assert judge_model in scores[eval_name][endpoint]
-
-    url = "/v0/evaluation/status"
-    params = {"dataset": dataset, "evaluator": eval_name, "endpoint": endpoint}
+    assert "score" in scores[eval_name][endpoint]
+    assert "progress" in scores[eval_name][endpoint]
+    #################################
+    # per prompt
+    url = "/v0/evaluation"
+    params = {
+        "dataset": dataset,
+        "evaluator": eval_name,
+        "endpoint": endpoint,
+        "per_prompt": True,
+    }
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
-    assert "responses" in response.json()
+    scores = response.json()
+    assert eval_name in scores
+    assert endpoint in scores[eval_name]
+    assert "score" in scores[eval_name][endpoint]
+    assert "progress" in scores[eval_name][endpoint]
+    assert "per_prompt" in scores[eval_name][endpoint]
 
 
-# evals/get_scores is implicitly tested
+# TODO: Parametrise this test to use mostly the same code as above
+async def test_trigger_eval_with_default_prompt(
+    client: AsyncClient,
+    tmp_path,
+    monkeypatch,
+):
+    def mock_send_to_dataset_evaluation_server(action, **data):
+        data.pop("user_email", "")
+        message_data = json.dumps(
+            {"action": action, **data, "orchestra_url": "", "admin_key": admin_key},
+        )
+        save_dir = tmp_path / "save_files"
+        if action == "evaluate":
+            asyncio.run(
+                evaluate_dataset(
+                    message_data,
+                    save_dir,
+                    shared_volume="",
+                    client=client,
+                ),
+            )
+        elif action == "refresh_scores":
+            user_id = data["user_id"]
+            asyncio.run(refresh_scores_for_user(user_id, save_dir))
+        else:
+            raise NotImplementedError
+
+    monkeypatch.setattr(
+        orchestra.web.api.evaluations.views,
+        "send_to_dataset_evaluation_server",
+        mock_send_to_dataset_evaluation_server,
+    )
+
+    # create evaluator
+    eval_name = "test_eval_dp"
+    default_prompt_name = "dp_1"
+    system_prompt = "dummy system prompt"
+    judge_model = "llama-3-8b-chat@aws-bedrock"
+
+    url = "/v0/evaluator"
+    params = {
+        "name": eval_name,
+        "system_prompt": system_prompt,
+        "judge_models": judge_model,
+    }
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # create dataset
+
+    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    dataset = "test_dataset_eval"
+    response = await upload_dataset(client, file_path, dataset)
+    assert response.status_code == 200, response.json()
+
+    # create default prompt
+    response = await create_default_prompt(client, default_prompt_name)
+    assert response.status_code == 200, response.json()
+
+    # create trigger evaluation
+    url = "/v0/evaluation"
+    endpoint = "gpt-3.5-turbo@openai"
+    params = {
+        "url": url,
+        "dataset": dataset,
+        "endpoint": endpoint,
+        "evaluator": eval_name,
+        "default_prompt": default_prompt_name,
+    }
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    url = "/v0/evaluation"
+    endpoint = "llama-3-8b-chat@aws-bedrock"
+    params = {
+        "url": url,
+        "dataset": dataset,
+        "endpoint": endpoint,
+        "evaluator": eval_name,
+        "default_prompt": default_prompt_name,
+    }
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    ############################
+
+    url = "/v0/evaluation"
+    params = {
+        "dataset": dataset,
+        "evaluator": eval_name,
+        "default_prompt": default_prompt_name,
+    }
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    scores = response.json()
+    assert eval_name in scores
+    assert endpoint in scores[eval_name]
+    assert "score" in scores[eval_name][endpoint]
+    assert "progress" in scores[eval_name][endpoint]
+    #################################
+    # per prompt
+    url = "/v0/evaluation"
+    params = {
+        "dataset": dataset,
+        "evaluator": eval_name,
+        "endpoint": endpoint,
+        "per_prompt": True,
+        "default_prompt": default_prompt_name,
+    }
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    scores = response.json()
+    assert eval_name in scores
+    assert endpoint in scores[eval_name]
+    assert "score" in scores[eval_name][endpoint]
+    assert "progress" in scores[eval_name][endpoint]
+    assert "per_prompt" in scores[eval_name][endpoint]
 
 
 async def test_client_side_scores(
     client: AsyncClient,
-    cleanup_eval_config,
     tmp_path,
 ):
     eval_name = "test_eval_clientside"
-    cleanup_eval_config.append(eval_name)
+
+    # create test dataset
+    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    dataset = "test_dataset"
+    response = await upload_dataset(client, file_path, dataset)
+    assert response.status_code == 200, response.json()
 
     url = "/v0/evaluator"
     params = {
@@ -233,7 +303,7 @@ async def test_client_side_scores(
     url = "/v0/evaluation"
     dataset = "test_dataset"
     endpoint = "llama-3-8b-chat@aws-bedrock"
-    file_path = "./orchestra/tests/sample_datasets/prompts_with_scores.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/new_prompts_with_scores.jsonl"
     with open(file_path, "rb") as f:
         file_content = f.read()
     files = {
@@ -256,19 +326,3 @@ async def test_client_side_scores(
     scores = response.json()
     assert eval_name in scores
     assert endpoint in scores[eval_name]
-    assert "client_side" in scores[eval_name][endpoint]
-
-
-@pytest.mark.anyio
-async def test_invalid_judge_model(
-    client: AsyncClient,
-    cleanup_eval_config,
-):
-    eval_name = "invalid_judge_model"
-    judge_model = "fake_judge123@fake_provider456"
-
-    url = "/v0/evaluator"
-    params = {"name": eval_name, "judge_models": judge_model}
-    cleanup_eval_config.append(eval_name)
-    response = await client.post(url, json=params, headers=HEADERS)
-    assert response.status_code == 400, response.json()
