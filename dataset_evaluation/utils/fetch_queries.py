@@ -9,7 +9,14 @@ from utils.helpers import (
 )
 
 
-async def send_response_to_db(prompt_id, endpoint_str, admin_key, client, response):
+async def send_response_to_db(
+    prompt_id,
+    prompt_variation_id,
+    endpoint_str,
+    admin_key,
+    client,
+    response,
+):
     url = "/v0/evaluations/upload_responses"
     HEADERS = {
         "accept": "application/json",
@@ -20,6 +27,7 @@ async def send_response_to_db(prompt_id, endpoint_str, admin_key, client, respon
 
     params = {
         "prompt_id": prompt_id,
+        "prompt_variation_id": prompt_variation_id,
         "endpoint_str": endpoint_str,
         "response": json.dumps(response),
         "num_tokens": num_tokens,

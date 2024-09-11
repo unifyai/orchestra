@@ -246,6 +246,7 @@ def trigger_evaluation(
                 )
             evaluation_dao.create(
                 prompt_id=prompt_id,
+                prompt_variation_id=None,
                 evaluator_id=evaluator_id,
                 endpoint_str=endpoint,
                 score=score,
@@ -542,17 +543,16 @@ def upload_responses(
 def upload_judgements(
     request_fastapi: Request,
     prompt_id: int,
-    prompt_variation_id: Optional[int],
     endpoint_str: str,
     evaluator_id: str,
     judge_endpoint_str: str,
     judgement: str,
     score: str,
+    prompt_variation_id: Optional[int] = None,
     stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
     judgement_dao: JudgementDAO = Depends(),
     evaluation_dao: EvaluationDAO = Depends(),
 ):
-
     try:
         raw_ids = stored_prompt_response_dao.filter(
             prompt_id=prompt_id,

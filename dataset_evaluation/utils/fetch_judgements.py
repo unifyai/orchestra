@@ -97,15 +97,18 @@ async def send_judgement_to_db(
     score = await calc_score(eval_config, judgement_str)
     params = {
         "prompt_id": prompt_id,
-        "prompt_variation_id": prompt_variation_id,
         "endpoint_str": endpoint_str,
         "evaluator_id": cfg.evaluator_id,
         "judge_endpoint_str": judge_str,
         "judgement": judgement_str,
         "score": score,
     }
+
+    if prompt_variation_id:
+        params["prompt_variation_id"] = prompt_variation_id
+
     response = await client.post(url, headers=HEADERS, params=params)
-    return response.status_code
+    return response
 
 
 async def generate_judgement(
@@ -218,7 +221,7 @@ async def generate_judgement(
                 cfg=cfg,
                 eval_config=eval_config,
             )
-            if db_upload_msg != 200:
+            if db_upload_msg.status_code != 200:
                 raise Exception
             return (True, prompt_id, prompt_variation_id)
     except:
