@@ -73,6 +73,30 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.075, "completion": 0.3},
     },
+    "gemini-1.5-flash-001": {
+        "endpoint": "vertex_ai/gemini-1.5-flash-001",
+        "region": "us-west1",
+        "context_window": 128000,
+        "cost": {"prompt": 0.075, "completion": 0.3},
+    },
+    "gemini-1.0-pro": {
+        "endpoint": "vertex_ai/gemini-1.0-pro",
+        "region": "us-west1",
+        "context_window": 32000,
+        "cost": {"prompt": 0.5, "completion": 1.5},
+    },
+    "gemini-1.0-pro-001": {
+        "endpoint": "vertex_ai/gemini-1.0-pro-001",
+        "region": "us-west1",
+        "context_window": 32000,
+        "cost": {"prompt": 0.5, "completion": 1.5},
+    },
+    "gemini-1.0-pro-002": {
+        "endpoint": "vertex_ai/gemini-1.0-pro-002",
+        "region": "us-west1",
+        "context_window": 32000,
+        "cost": {"prompt": 0.5, "completion": 1.5},
+    },
     "claude-3-haiku": {
         "endpoint": "vertex_ai/claude-3-haiku@20240307",
         "region": "us-east5",
