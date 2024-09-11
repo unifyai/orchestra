@@ -94,8 +94,12 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             request.parallel_tool_calls = None
 
         try:
-            model_provider = request.model.split("@")
-            assert len(model_provider) == 2
+            # TODO: Check that model exists
+            model_priority_list = []
+            for model_tag in request.model.split("->"):
+                model_provider = model_tag.split("@")
+                assert len(model_provider) == 2
+                model_priority_list.append(model_provider)
         except Exception:
             raise invalid_model_str
 
@@ -114,10 +118,12 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             store_prompt = user.store_prompts if user else True
             store_prompt = True if store_prompt is None else store_prompt
 
-        model, provider = model_provider
+        model, provider = model_priority_list[0]
+        try_provider = 0
         router_choices = None
         using_router = model.startswith("router")
         router_str = provider if using_router else None
+        num_tries_provider = min(5, len(model_priority_list))
 
         custom_api_key = None
         if use_custom_keys:
@@ -152,52 +158,68 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
         t0 = time.time()
 
-        if not on_prem and provider not in PROVIDER_CLASSES or using_router:
-            # Dynamic routing
-            if using_router:
-                if router_choices is None:
-                    rc = RouterConfig(request.model, endpoint_dao, benchmark_run_dao)
-                    num_tokens_est = 0
-                    for msg in messages:
-                        if msg.get("content") is not None:
-                            num_tokens_est += len(msg["content"])
-                    # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
-                    # TODO: add error message if the router is not deployed
-                    router_choices = rc(
-                        messages[-1]["content"],
-                        num_tokens_est * 1.25,
-                        endpoint_id,
-                    )
-                    # The below was removed on 10/09/24 when getting the fallbacks working
-                    # model_priority_list = router_choices
-            else:  # Non model routing, TODO: clean up to simplify
-                target_metric, metrics_thresholds = parse_endpoint(provider)
-                model, provider = dynamic_routing(
-                    endpoint_dao,
-                    benchmark_run_dao,
-                    target_metric,
-                    models=(model,),
-                    metrics_thresholds=metrics_thresholds,
-                )
-                # TODO: this is probably still buggye with corner cases,
-                # more exhaustive testing is needed.
-
-        extra_args = tuple()
-        if not on_prem and provider == "custom":
-            extra_args = (custom_endpoint_dao, custom_api_key_dao, user_id)
-        lm = PROVIDER_CLASSES[provider](
-            model, *extra_args, custom_api_key=custom_api_key
-        )
-        if not on_prem and available_credits <= 0 and not use_custom_keys:
-            raise insufficient_credits_error
-
-        stream = request.stream
-
-        filtered_params = filter_orchestra_only_args(request.model_dump())
-
         try:
-            response, cost = lm(messages=messages, **filtered_params)
-            try_request = -1
+            while try_provider >= 0 and try_provider < num_tries_provider:
+                print(f"try_provider {try_provider}")
+                if not on_prem and provider not in PROVIDER_CLASSES or using_router:
+                    # Dynamic routing
+                    if using_router:
+                        if router_choices is None:
+                            rc = RouterConfig(
+                                request.model,
+                                endpoint_dao,
+                                benchmark_run_dao,
+                            )
+                            num_tokens_est = 0
+                            for msg in messages:
+                                if msg.get("content") is not None:
+                                    num_tokens_est += len(msg["content"])
+                            # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
+                            # TODO: add error message if the router is not deployed
+                            router_choices = rc(
+                                messages[-1]["content"],
+                                num_tokens_est * 1.25,
+                                endpoint_id,
+                            )
+                            model_priority_list = router_choices
+                    else:  # Non model routing, TODO: clean up to simplify
+                        target_metric, metrics_thresholds = parse_endpoint(provider)
+                        model, provider = dynamic_routing(
+                            endpoint_dao,
+                            benchmark_run_dao,
+                            target_metric,
+                            models=(model,),
+                            metrics_thresholds=metrics_thresholds,
+                        )
+                        # TODO: this is probably still buggye with corner cases,
+                        # more exhaustive testing is needed.
+                        model_priority_list[try_provider] = (model, provider)
+
+                model, provider = model_priority_list[try_provider]
+
+                extra_args = tuple()
+                if not on_prem and provider == "custom":
+                    extra_args = (custom_endpoint_dao, custom_api_key_dao, user_id)
+                lm = PROVIDER_CLASSES[provider](
+                    model, *extra_args, custom_api_key=custom_api_key
+                )
+                if not on_prem and available_credits <= 0 and not use_custom_keys:
+                    raise insufficient_credits_error
+
+                stream = request.stream
+
+                filtered_params = filter_orchestra_only_args(request.model_dump())
+
+                try:
+                    response, cost = lm(messages=messages, **filtered_params)
+                    try_provider = try_request = -1
+                except HTTPException as e:
+                    if e.status_code in [400, 403, 404, 429] or e.status_code >= 500:
+                        try_provider += 1
+                        if try_provider >= num_tries_provider:
+                            raise e
+                    else:
+                        raise e
         except HTTPException as e:
             if e.status_code in [400, 403, 404, 429] or e.status_code >= 500:
                 try_request += 1
