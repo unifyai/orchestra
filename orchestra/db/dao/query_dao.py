@@ -111,6 +111,8 @@ class QueryDAO:
         used_router: Optional[str] = None,
         router: Optional[str] = None,
         tags: Optional[list[str]] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
     ) -> List[Query]:
         query = select(Query)
         if user_id:
@@ -149,6 +151,11 @@ class QueryDAO:
             query = query.join(tag_alias, QueryTagAssociation.tag_id == tag_alias.id)
             tag_filters = [tag_alias.tag_name == tag for tag in tags]
             query = query.where(and_(*tag_filters))
+
+        if limit:
+            query = query.limit(limit)
+        if offset:
+            query = query.limit(offset)
 
         raw_queries = self.session.execute(query)
 

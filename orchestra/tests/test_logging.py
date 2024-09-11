@@ -22,7 +22,22 @@ async def test_logging_queries(client: AsyncClient):
     response = await client.get(endpoint, headers=HEADERS)
     assert response.status_code == 200, response.json()
     assert len(response.json()) == 1, response.json()
-    print(response.json())
+
+
+async def test_logging_queries_NO_LOG(client: AsyncClient):
+    endpoint = "/v0/chat/completions"
+    data = get_chat_completions_payload("llama-3-8b-chat", "aws-bedrock", stream=False)
+    data["store_prompt"] = False
+    response = await client.post(endpoint, headers=HEADERS, json=data)
+    assert response.status_code == 200
+
+    endpoint = "/v0/queries"
+    response = await client.get(endpoint, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    resp_json = response.json()
+    assert len(resp_json) == 1
+    assert resp_json[0]["query_body"] == ""
+    assert resp_json[0]["response_body"] == ""
 
 
 async def test_queries_filter_endpoint(client: AsyncClient):
@@ -118,10 +133,38 @@ async def test_external_logging(client: AsyncClient):
     endpoint = "/v0/queries"
     data = {
         "endpoint": "local_model_test@external",
-        "query_body": "a",
-        "response_body": "b",
+        "query_body": {
+            "messages": [
+                {"role": "system", "content": "You are an useful assistant"},
+                {"role": "user", "content": "Explain who Newton was."},
+            ],
+            "model": "llama-3-8b-chat@aws-bedrock",
+            "max_tokens": 100,
+            "temperature": 0.5,
+        },
+        "response_body": {
+            "model": "meta.llama3-8b-instruct-v1:0",
+            "created": 1725396241,
+            "id": "chatcmpl-92d3b36e-7b64-4ae8-8102-9b7e3f5dd30f",
+            "object": "chat.completion",
+            "usage": {
+                "completion_tokens": 100,
+                "prompt_tokens": 44,
+                "total_tokens": 144,
+            },
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                        "content": "Sir Isaac Newton was an English mathematician, physicist, and astronomer who lived from 1643 to 1727.\\n\\nHe is widely recognized as one of the most influential scientists in history, and his work laid the foundation for the Scientific Revolution of the 17th century.\\n\\nNewton's most famous achievement is his theory of universal gravitation, which he presented in his groundbreaking book \"Philosophi\\u00e6 Naturalis Principia Mathematica\" in 1687.\\n\\nAccording to Newton's theory, every",
+                        "role": "assistant",
+                    },
+                }
+            ],
+        },
     }
-    response = await client.post(endpoint, headers=HEADERS, params=data)
+    response = await client.post(endpoint, headers=HEADERS, json=data)
     assert response.status_code == 200, response.json()
 
     endpoint = "/v0/queries"

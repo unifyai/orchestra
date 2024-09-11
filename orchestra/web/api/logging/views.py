@@ -2,11 +2,12 @@
 Includes endpoints related to logging.
 """
 
+import json
 import os
 from datetime import datetime
 from typing import Any, Dict, Optional, Union
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Body
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
@@ -55,6 +56,11 @@ def get_query_history(
         "Format is `YYYY-MM-DD hh:mm:ss`.",
         example="2024-08-12 04:20:32",
     ),
+    page_number: Optional[int] = Query(
+        1,
+        description="The query history is returned in pages, with up to 100 prompts per page. Increase the page number to see older prompts.",
+        example="1",
+    ),
     query_dao: QueryDAO = Depends(),
     endpoint_dao: EndpointDAO = Depends(),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
@@ -100,6 +106,12 @@ def get_query_history(
                     detail=f"Could not find endpoint: {e_str}",
                 )
 
+    LIMIT = 100
+    if page_number < 1:
+        raise HTTPException(
+            status_code=404, detail=f"Page number: {page_number} must be at least 1."
+        )
+    offset = (page_number - 1) * LIMIT
     ret = query_dao.filter(
         user_id=request_fastapi.state.user_id,
         tags=tags,
@@ -108,6 +120,8 @@ def get_query_history(
         local_endpoint_ids=local_endpoint_ids,
         start_time=start_time,
         end_time=end_time,
+        limit=LIMIT,
+        offset=offset,
     )
     return ret
 
@@ -116,24 +130,56 @@ def get_query_history(
 @handle_on_prem(endpoint="/queries", method="none")
 def log_query(
     request_fastapi: Request,
-    endpoint: str = Query(
+    endpoint: str = Body(
         description="Endpoint to log query for.",
-        example="llama-3.1-8b-chat_ollama@external",
+        json_schema_extra={"example": "llama-3.1-8b-chat_ollama@external"},
     ),
-    query_body: str = Query(
-        description="A string containing the body of the request",
-        example="""'{"messages": [{"role": "system", "content": "You are an useful assistant"}, {"role": "user", "content": "Explain who Newton was."}], "model": "llama-3-8b-chat@aws-bedrock", "max_tokens": 100,"stream": false, "temperature": 0.5,}'""",
+    query_body: dict = Body(
+        description="A JSON object containing the body of the request",
+        json_schema_extra={
+            "example": {
+                "messages": [
+                    {"role": "system", "content": "You are an useful assistant"},
+                    {"role": "user", "content": "Explain who Newton was."},
+                ],
+                "model": "llama-3.1-8b-chat_ollama@external",
+                "max_tokens": 100,
+                "temperature": 0.5,
+            }
+        },
     ),
-    response_body: Optional[str] = Query(
+    response_body: Optional[dict] = Body(
         None,
-        description="An optional string containing the response to the request",
-        example="""'{"model": "meta.llama3-8b-instruct-v1:0", "created": 1725396241, "id": "chatcmpl-92d3b36e-7b64-4ae8-8102-9b7e3f5dd30f", "object": "chat.completion", "usage": {"completion_tokens": 100, "prompt_tokens": 44, "total_tokens": 144}, "choices": [{"finish_reason": "stop", "index": 0, "message": {"content": "Sir Isaac Newton was an English mathematician, physicist, and astronomer who lived from 1643 to 1727.\\n\\nHe is widely recognized as one of the most influential scientists in history, and his work laid the foundation for the Scientific Revolution of the 17th century.\\n\\nNewton\'s most famous achievement is his theory of universal gravitation, which he presented in his groundbreaking book \\"Philosophi\\u00e6 Naturalis Principia Mathematica\\" in 1687.\\n\\nAccording to Newton\'s theory, every", "role": "assistant", "tool_calls": null, "function_call": null}}]}'""",
+        description="An optional JSON object containing the response to the request",
+        json_schema_extra={
+            "example": {
+                "model": "meta.llama3-8b-instruct-v1:0",
+                "created": 1725396241,
+                "id": "chatcmpl-92d3b36e-7b64-4ae8-8102-9b7e3f5dd30f",
+                "object": "chat.completion",
+                "usage": {
+                    "completion_tokens": 100,
+                    "prompt_tokens": 44,
+                    "total_tokens": 144,
+                },
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "index": 0,
+                        "message": {
+                            "content": "Sir Isaac Newton was an English mathematician, physicist, and astronomer who lived from 1643 to 1727.\\n\\nHe is widely recognized as one of the most influential scientists in history, and his work laid the foundation for the Scientific Revolution of the 17th century.\\n\\nNewton's most famous achievement is his theory of universal gravitation, which he presented in his groundbreaking book \"Philosophi\\u00e6 Naturalis Principia Mathematica\" in 1687.\\n\\nAccording to Newton's theory, every",
+                            "role": "assistant",
+                        },
+                    }
+                ],
+            }
+        },
     ),
-    tags: Optional[list[str]] = Query(None, description="Tags for later filtering."),
-    timestamp: Optional[str] = Query(
+    tags: Optional[list[str]] = Body(None, description="Tags for later filtering."),
+    timestamp: Optional[str] = Body(
         None,
         description="A timestamp (if not set, will be the time of sending)",
-        example="2024-07-12T04:20:32.808410",
+        json_schema_extra={"example": "2024-07-12T04:20:32.808410"},
     ),
     query_dao: QueryDAO = Depends(),
     local_endpoint_dao: LocalEndpointDAO = Depends(),
@@ -156,8 +202,8 @@ def log_query(
             custom_endpoint_id=None,
             local_endpoint_id=local_endpoint_id,
             credits=0,
-            query_body=query_body,
-            response_body=response_body,
+            query_body=json.dumps(query_body),
+            response_body=json.dumps(response_body),
             tags=tags,
         )
         return {"info": "Query logged successfully"}
