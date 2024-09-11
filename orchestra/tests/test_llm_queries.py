@@ -9,6 +9,7 @@ from orchestra.tests.utils import (
     check_text_gen_choice,
     check_text_gen_response,
     check_text_gen_usage,
+    get_chat_completions_arrow_payload_fallback,
     get_chat_completions_payload,
     get_chat_completions_payload_fallback,
     get_chat_completions_payload_tool_use,
@@ -101,6 +102,37 @@ async def test_fallback_after_fail(
     models = ["FAKE_MODEL@anthropic", "mistral-7b-instruct-v0.3@octoai"]
     endpoint = "/v0/chat/completions"
     data = get_chat_completions_payload_fallback(models, stream=False)
+    response = await client.post(endpoint, headers=HEADERS, json=data)
+    assert response.status_code == status.HTTP_200_OK
+    response_json = json.loads(response.text)
+    assert response_json["model"] == "mistral-7b-instruct-v0.3@octoai"
+    check_text_gen_response(response_json, "chat.completion")
+    check_text_gen_choice(response_json.get("choices")[0], "message")
+    check_text_gen_usage(response_json.get("usage"))
+
+
+@pytest.mark.anyio
+async def test_arrow_fallback_parse(
+    client: AsyncClient,
+) -> None:
+    model_str = "claude-3-haiku@anthropic->mistral-7b-instruct-v0.3@octoai"
+    endpoint = "/v0/chat/completions"
+    data = get_chat_completions_arrow_payload_fallback(model_str, stream=False)
+    response = await client.post(endpoint, headers=HEADERS, json=data)
+    assert response.status_code == status.HTTP_200_OK
+    response_json = json.loads(response.text)
+    check_text_gen_response(response_json, "chat.completion")
+    check_text_gen_choice(response_json.get("choices")[0], "message")
+    check_text_gen_usage(response_json.get("usage"))
+
+
+@pytest.mark.anyio
+async def test_arrow_fallback_after_fail(
+    client: AsyncClient,
+) -> None:
+    model_str = "FAKE_MODEL@anthropic->mistral-7b-instruct-v0.3@octoai"
+    endpoint = "/v0/chat/completions"
+    data = get_chat_completions_arrow_payload_fallback(model_str, stream=False)
     response = await client.post(endpoint, headers=HEADERS, json=data)
     assert response.status_code == status.HTTP_200_OK
     response_json = json.loads(response.text)
