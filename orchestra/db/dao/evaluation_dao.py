@@ -1,16 +1,16 @@
 from typing import List, Optional
 
 from fastapi import Depends
-from sqlalchemy import select, join
+from sqlalchemy import join, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
-    Evaluator,
-    Evaluation,
     Dataset,
-    StoredPrompt,
     DatasetPrompt,
+    Evaluation,
+    Evaluator,
+    StoredPrompt,
 )
 
 
@@ -21,6 +21,7 @@ class EvaluationDAO:
     def create(  # noqa: WPS211
         self,
         prompt_id: int,
+        prompt_variation_id: Optional[int],
         evaluator_id: int,
         endpoint_str: str,
         score: float,
@@ -28,6 +29,7 @@ class EvaluationDAO:
         self.session.add(
             Evaluation(
                 prompt_id=prompt_id,
+                prompt_variation_id=prompt_variation_id,
                 evaluator_id=evaluator_id,
                 endpoint_str=endpoint_str,
                 score=score,
@@ -38,6 +40,7 @@ class EvaluationDAO:
         self,
         id: Optional[int] = None,  # noqa: WPS125
         prompt_id: Optional[int] = None,
+        prompt_variation_id: Optional[int] = None,
         evaluator_id: Optional[int] = None,
         endpoint_str: Optional[str] = None,
     ) -> List[Evaluation]:
@@ -46,6 +49,8 @@ class EvaluationDAO:
             query = query.where(Evaluation.id == id)
         if prompt_id:
             query = query.where(Evaluation.prompt_id == prompt_id)
+        if prompt_variation_id:
+            query = query.where(Evaluation.prompt_variation_id == prompt_variation_id)
         if evaluator_id:
             query = query.where(Evaluation.evaluator_id == evaluator_id)
         if endpoint_str:
@@ -83,7 +88,7 @@ class EvaluationDAO:
                 join(Dataset, DatasetPrompt, Dataset.id == DatasetPrompt.dataset_id)
                 .join(StoredPrompt, DatasetPrompt.prompt_id == StoredPrompt.id)
                 .join(Evaluation, StoredPrompt.id == Evaluation.prompt_id)
-                .join(Evaluator, Evaluator.id == Evaluation.evaluator_id)
+                .join(Evaluator, Evaluator.id == Evaluation.evaluator_id),
             )
             .where(Dataset.id == dataset_id)
             .where(Evaluation.endpoint_str == endpoint_str)
@@ -103,7 +108,7 @@ class EvaluationDAO:
             .select_from(
                 join(Dataset, DatasetPrompt, Dataset.id == DatasetPrompt.dataset_id)
                 .join(StoredPrompt, DatasetPrompt.prompt_id == StoredPrompt.id)
-                .join(Evaluation, StoredPrompt.id == Evaluation.prompt_id)
+                .join(Evaluation, StoredPrompt.id == Evaluation.prompt_id),
             )
             .where(Dataset.id == dataset_id)
             .where(Evaluation.evaluator_id == evaluator_id)

@@ -2,6 +2,8 @@
 Includes endpoints related to default prompts.
 """
 
+import json
+
 from fastapi import APIRouter, Depends, Query, Request
 
 from orchestra.db.dao.default_prompt_dao import DefaultPromptDAO
@@ -42,7 +44,7 @@ def create_default_prompt(
         default_prompt_dao.create(
             user_id=request_fastapi.state.user_id,
             name=request.name,
-            prompt=request.prompt,
+            prompt=json.dumps(request.prompt),
         )
 
         return {"info": "Default Prompt created successfully!"}

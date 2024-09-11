@@ -4,24 +4,24 @@ Includes endpoints related to dataset evaluations.
 
 import json
 import os
-from typing import Dict
+from typing import Dict, Optional
 
-from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, Depends
-from google.cloud import storage
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from providers.completion import PROVIDER_CLASSES
 
+from orchestra.db.dao.dataset_dao import DatasetDAO
+from orchestra.db.dao.default_prompt_dao import DefaultPromptDAO
+from orchestra.db.dao.evaluation_dao import EvaluationDAO
+from orchestra.db.dao.evaluator_dao import EvaluatorDAO
+from orchestra.db.dao.judgement_dao import JudgementDAO
+from orchestra.db.dao.stored_prompt_dao import StoredPromptDAO
+from orchestra.db.dao.stored_prompt_response_dao import StoredPromptResponseDAO
+from orchestra.db.dao.stored_prompt_variation_dao import StoredPromptVariationDAO
 from orchestra.web.api.utils import gcp, on_prem
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
     invalid_training_endpoints,
 )
-
-from orchestra.db.dao.dataset_dao import DatasetDAO
-from orchestra.db.dao.evaluator_dao import EvaluatorDAO
-from orchestra.db.dao.evaluation_dao import EvaluationDAO
-from orchestra.db.dao.stored_prompt_dao import StoredPromptDAO
-from orchestra.db.dao.stored_prompt_response_dao import StoredPromptResponseDAO
-from orchestra.db.dao.judgement_dao import JudgementDAO
 
 router = APIRouter()
 admin_router = APIRouter()
@@ -134,6 +134,11 @@ def trigger_evaluation(
         description="Name of the evaluator to use.",
         example="eval1",
     ),
+    default_prompt: str = Query(
+        default=None,
+        description="Name of the default prompt to use.",
+        example="default_prompt1",
+    ),
     dataset: str = Query(
         description="Name of the uploaded dataset to evaluate.",
         example="dataset1",
@@ -153,6 +158,7 @@ def trigger_evaluation(
     ),
     dataset_dao: DatasetDAO = Depends(),
     evaluator_dao: EvaluatorDAO = Depends(),
+    default_prompt_dao: DefaultPromptDAO = Depends(),
     evaluation_dao: EvaluationDAO = Depends(),
 ) -> Dict[str, str]:
     """
@@ -160,7 +166,8 @@ def trigger_evaluation(
     selected LLM `endpoint` on the selected `dataset`. You can upload custom scores (and
     bypass the LLM judge entirely) by uploading a file via the `client_side_scores`
     argument. Once the evaluation has finished, you can access the scores using the
-    `/v0/evaluation` endpoint.
+    `/v0/evaluation` endpoint. If a custom prompt is specified, its fields will overwrite
+    the corresponding fields in each one of the evaluated prompts.
     """
 
     user_id = request_fastapi.state.user_id
@@ -181,9 +188,26 @@ def trigger_evaluation(
     raw_evaluators = evaluator_dao.filter(user_id=user_id, name=evaluator)
     if not raw_evaluators:
         raise HTTPException(
-            400, detail=f"The evaluator {evaluator} does not exist in your account"
+            400,
+            detail=f"The evaluator {evaluator} does not exist in your account",
         )
     evaluator_id = raw_evaluators[0].id
+
+    # default_prompt_id
+    default_prompt_dict = ""
+    default_prompt_id
+    if default_prompt:
+        raw_default_prompt = default_prompt_dao.filter(
+            user_id=user_id,
+            name=default_prompt,
+        )
+        if not raw_default_prompt:
+            raise HTTPException(
+                400,
+                detail=f"The default prompt {default_prompt} does not exist in your account",
+            )
+        default_prompt_dict = raw_default_prompt[0].prompt
+        default_prompt_id = raw_default_prompt[0].id
 
     if client_side_scores:
         file = client_side_scores.file.read()
@@ -238,6 +262,8 @@ def trigger_evaluation(
         endpoint=endpoint,
         evaluator=evaluator,
         evaluator_id=evaluator_id,
+        default_prompt=default_prompt_dict,
+        default_prompt_id=default_prompt_id,
     )
     return {"info": "Dataset evaluation started! You will receive an email soon!"}
 
@@ -325,7 +351,9 @@ def get_single_evaluation(
     prompt_ids = [prompt["id"] for prompt in dataset_prompts]
     evaluator_id = evaluator_dao.filter(user_id=user_id, name=evaluator)[0].id
     scores = evaluation_dao.fetch_evaluation_scores(
-        prompt_ids=prompt_ids, evaluator_id=evaluator_id, endpoint_str=endpoint
+        prompt_ids=prompt_ids,
+        evaluator_id=evaluator_id,
+        endpoint_str=endpoint,
     )
     mean_score = 100 * sum(float(s.score) for s in scores) / len(scores)
     progress = 100 * len(scores) / len(prompt_ids)
@@ -405,7 +433,8 @@ def get_evaluations(
     else:
         dataset_id = dataset_dao.filter(user_id=user_id, name=dataset)[0].id
         evaluators = evaluation_dao.get_evaluator_names(
-            dataset_id=dataset_id, endpoint_str=endpoint
+            dataset_id=dataset_id,
+            endpoint_str=endpoint,
         )
 
     if endpoint:
@@ -419,7 +448,8 @@ def get_evaluations(
     else:
         dataset_id = dataset_dao.filter(user_id=user_id, name=dataset)[0].id
         endpoints = evaluation_dao.get_endpoints(
-            dataset_id=dataset_id, evaluator_id=evaluator_id
+            dataset_id=dataset_id,
+            evaluator_id=evaluator_id,
         )
 
     # multiple judges
@@ -512,6 +542,7 @@ def upload_responses(
 def upload_judgements(
     request_fastapi: Request,
     prompt_id: int,
+    prompt_variation_id: Optional[int],
     endpoint_str: str,
     evaluator_id: str,
     judge_endpoint_str: str,
@@ -524,7 +555,9 @@ def upload_judgements(
 
     try:
         raw_ids = stored_prompt_response_dao.filter(
-            prompt_id=prompt_id, endpoint_str=endpoint_str
+            prompt_id=prompt_id,
+            prompt_variation_id=prompt_variation_id,
+            endpoint_str=endpoint_str,
         )
         response_id = raw_ids[0].id
     except Exception as e:
@@ -538,6 +571,7 @@ def upload_judgements(
     )
     evaluation_dao.create(
         prompt_id=prompt_id,
+        prompt_variation_id=prompt_variation_id,
         evaluator_id=evaluator_id,
         endpoint_str=endpoint_str,
         score=score,
@@ -558,12 +592,15 @@ def load_prompt(
 def load_response(
     request_fastapi: Request,
     prompt_id: str,
+    prompt_variation_id: Optional[str],
     endpoint_str: str,
     stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
 ):
 
     ret = stored_prompt_response_dao.filter(
-        prompt_id=prompt_id, endpoint_str=endpoint_str
+        prompt_id=prompt_id,
+        prompt_variation_id=prompt_variation_id,
+        endpoint_str=endpoint_str,
     )
     return ret
 
@@ -572,11 +609,40 @@ def load_response(
 def load_judgement(
     request_fastapi: Request,
     prompt_id: str,
+    prompt_variation_id: Optional[str],
     endpoint_str: str,
     evaluator_id,
     evaluation_dao: EvaluationDAO = Depends(),
 ):
     ret = evaluation_dao.filter(
-        prompt_id=prompt_id, evaluator_id=evaluator_id, endpoint_str=endpoint_str
+        prompt_id=prompt_id,
+        prompt_variation_id=prompt_variation_id,
+        evaluator_id=evaluator_id,
+        endpoint_str=endpoint_str,
     )
     return ret
+
+
+@admin_router.get("/prompt_variation")
+def load_prompt_variation(
+    prompt_id: str,
+    default_prompt_id: str,
+    stored_prompt_variation_dao: StoredPromptVariationDAO = Depends(),
+):
+    ret = stored_prompt_variation_dao.filter(
+        prompt_id=prompt_id,
+        default_prompt_id=default_prompt_id,
+    )
+    return ret
+
+
+@admin_router.post("/prompt_variation")
+def create_prompt_variation(
+    prompt_id: str,
+    default_prompt_id: str,
+    stored_prompt_variation_dao: StoredPromptVariationDAO = Depends(),
+):
+    stored_prompt_variation_dao.create(
+        prompt_id=prompt_id,
+        default_prompt_id=default_prompt_id,
+    )

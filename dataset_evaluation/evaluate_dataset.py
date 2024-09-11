@@ -7,10 +7,8 @@ import sys
 from dataclasses import dataclass
 from email.message import EmailMessage
 
-import tiktoken
-
-from utils.fetch_queries import generate_response
 from utils.fetch_judgements import generate_judgement
+from utils.fetch_queries import generate_response
 
 
 @dataclass
@@ -20,6 +18,8 @@ class BenchmarkConfig:
     endpoint: str
     evaluator: str
     evaluator_id: str
+    default_prompt: str
+    default_prompt_id: str
     user_id: str
     api_key: str
     orchestra_url: str
@@ -173,7 +173,9 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     cfg = BenchmarkConfig(**cfg)
     if client is None:
         limits = Limits(
-            max_keepalive_connections=None, max_connections=None, keepalive_expiry=30
+            max_keepalive_connections=None,
+            max_connections=None,
+            keepalive_expiry=30,
         )
         client = AsyncClient(base_url=cfg.orchestra_url, limits=limits, timeout=60)
 

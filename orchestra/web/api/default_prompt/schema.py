@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Dict
 
 from pydantic import BaseModel, Field
 
@@ -9,7 +9,7 @@ class DefaultPromptConfig(BaseModel):
         "the default prompt.",
         json_schema_extra={"example": "eval1"},
     )
-    prompt: dict[str, Any] = Field(
+    prompt: Dict[str, Any] = Field(
         default=False,
         description="Prompt fields that will override any field in the "
         "prompt to be evaluated when triggering an evaluation.",
