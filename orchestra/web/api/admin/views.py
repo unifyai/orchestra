@@ -9,8 +9,6 @@ from orchestra.db.dao.beta_list_dao import BetaListDAO
 from orchestra.db.dao.credit_card_fingerprint import CreditCardFingerprintDAO
 from orchestra.db.dao.custom_router_dao import CustomRouterDAO
 from orchestra.db.dao.datapoint_dao import DatapointDAO
-from orchestra.db.dao.dataset_evaluation_dao import DatasetEvaluationDAO
-from orchestra.db.dao.dataset_evaluation_task_dao import DatasetEvaluationTaskDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.metric_dao import MetricDAO
 from orchestra.db.dao.modality_dao import ModalityDAO
@@ -644,35 +642,6 @@ def create_beta_list(
     beta_list_dao.create_beta_list(email=email, type=type)
 
 
-@router.put("/create_dataset_evaluation")
-def create_dataset_evaluation_model(
-    new_dataset_evaluation_object: DatasetEvaluationModelRequest,
-    dataset_evaluation_dao: DatasetEvaluationDAO = Depends(),
-) -> None:
-    """
-    Creates database evaluation model in the database.
-    """
-    existing = dataset_evaluation_dao.filter(
-        mdl_name=new_dataset_evaluation_object.mdl_name,
-        dataset_name=new_dataset_evaluation_object.dataset_name,
-        prompt=new_dataset_evaluation_object.prompt,
-    )
-    if existing:
-        raise HTTPException(
-            status_code=400,
-            detail="Dataset evaluation already exists for this model, dataset and prompt.",
-        )
-    dataset_evaluation_dao.create_dataset_evaluation(
-        mdl_name=new_dataset_evaluation_object.mdl_name,
-        dataset_name=new_dataset_evaluation_object.dataset_name,
-        prompt=new_dataset_evaluation_object.prompt,
-        gt_score=new_dataset_evaluation_object.gt_score,
-        score=new_dataset_evaluation_object.score,
-        input_tokens=new_dataset_evaluation_object.input_tokens,
-        output_tokens=new_dataset_evaluation_object.output_tokens,
-    )
-
-
 @router.put("/update_benchmark_run")
 def update_benchmark_run(  # noqa: WPS211
     id: int,  # noqa: WPS125
@@ -801,53 +770,6 @@ def update_user_autorecharge_qty(  # noqa: WPS211
     """
     users_dao.set_autorecharge_qty(user_id=id, qty=qty)
     users_dao.session.commit()
-
-
-@router.put("/update_dataset_evaluation_task")
-def update_dataset_evaluation_task_status(  # noqa: WPS211
-    user_id: str,  # noqa: WPS125
-    name: str,
-    status: str,
-    dataset_evaluation_task: DatasetEvaluationTaskDAO = Depends(),
-) -> None:
-    """
-    Update the status of a dataset evaluation task.
-    """
-    dataset_evaluation_task.update_dataset_evaluation_task(
-        user_id=user_id,
-        name=name,
-        status=status,
-    )
-    dataset_evaluation_task.session.commit()
-
-
-@router.put("/update_dataset_evaluation")
-def update_dataset_evaluation(
-    dataset_evaluation_object: DatasetEvaluationModelRequest,
-    dataset_evaluation_dao: DatasetEvaluationDAO = Depends(),
-) -> None:
-    """
-    Updates database evaluation model in the database.
-    """
-    existing = dataset_evaluation_dao.filter(
-        mdl_name=dataset_evaluation_object.mdl_name,
-        dataset_name=dataset_evaluation_object.dataset_name,
-        prompt=dataset_evaluation_object.prompt,
-    )
-    if not existing:
-        raise HTTPException(
-            status_code=400,
-            detail="Dataset evaluation doesn't exist for this model, dataset and prompt.",
-        )
-    dataset_evaluation_dao.update_dataset_evaluation(
-        mdl_name=dataset_evaluation_object.mdl_name,
-        dataset_name=dataset_evaluation_object.dataset_name,
-        prompt=dataset_evaluation_object.prompt,
-        gt_score=dataset_evaluation_object.gt_score,
-        score=dataset_evaluation_object.score,
-        input_tokens=dataset_evaluation_object.input_tokens,
-        output_tokens=dataset_evaluation_object.output_tokens,
-    )
 
 
 @router.put("/create_custom_router")
