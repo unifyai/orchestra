@@ -284,9 +284,13 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     cost=response.total_cost if not use_custom_keys else 0,
                     processing_time=processing_time,
                     usage=chat_response.usage,
-                    response_body=json.dumps(
-                        chat_response.model_dump(),
-                    ) if store_prompt else "",  # TODO this isn't the whole response
+                    response_body=(
+                        json.dumps(
+                            chat_response.model_dump(),
+                        )
+                        if store_prompt
+                        else ""
+                    ),  # TODO this isn't the whole response
                     **db_operations_kwargs,
                 )
 

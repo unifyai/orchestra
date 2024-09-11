@@ -23,6 +23,7 @@ async def test_logging_queries(client: AsyncClient):
     assert response.status_code == 200, response.json()
     assert len(response.json()) == 1, response.json()
 
+
 async def test_logging_queries_NO_LOG(client: AsyncClient):
     endpoint = "/v0/chat/completions"
     data = get_chat_completions_payload("llama-3-8b-chat", "aws-bedrock", stream=False)
@@ -37,6 +38,7 @@ async def test_logging_queries_NO_LOG(client: AsyncClient):
     assert len(resp_json) == 1
     assert resp_json[0]["query_body"] == ""
     assert resp_json[0]["response_body"] == ""
+
 
 async def test_queries_filter_endpoint(client: AsyncClient):
     endpoint = "/v0/chat/completions"
