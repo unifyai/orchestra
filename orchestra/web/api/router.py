@@ -9,9 +9,9 @@ from orchestra.web.api import (  # noqa: WPS235
     custom_api_keys,
     custom_endpoints,
     datasets,
+    default_prompt,
     docs,
     efficiency_benchmarks,
-    eval_batch,
     evaluations,
     evaluators,
     llm_queries,
@@ -66,6 +66,11 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
+    default_prompt.router,
+    tags=["Default Prompts"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
     evaluations.router,
     tags=["Evaluations"],
     dependencies=API_KEY_AUTH,
@@ -107,11 +112,6 @@ api_router.include_router(
     tags=["provider"],
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
-)
-api_router.include_router(
-    eval_batch.router,
-    include_in_schema=False,
-    dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
     admin.router,

@@ -2,15 +2,13 @@
 Includes endpoints related to evaluators.
 """
 
-import hashlib
 import json
-import os
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Depends
+
 from providers.completion import PROVIDER_CLASSES
-
 from orchestra.web.api.evaluators.schema import EvaluatorConfig
-from orchestra.web.api.utils import gcp, on_prem
+from orchestra.db.dao.evaluator_dao import EvaluatorDAO
 
 router = APIRouter()
 
@@ -46,100 +44,6 @@ def find_invalid_endpoints(endpoints):
     return invalid_endpoints
 
 
-def send_to_dataset_evaluation_server(action, **data):
-    topic = "projects/saas-368716/topics/dataset_evaluation"
-    url = "https://api.unify.ai"
-    if os.environ.get("ON_PREM"):
-        on_prem.send_pubsub_msg(topic, {"action": action, **data, "orchestra_url": url})
-    else:
-        gcp.send_pubsub_msg(topic, {"action": action, **data, "orchestra_url": url})
-    print(f"Published: {str({'action': action, **data, 'orchestra_url': url})}")
-
-
-def refresh_scores_json(user_id):
-    send_to_dataset_evaluation_server(action="refresh_scores", user_id=user_id)
-
-
-def build_id_to_displayname(user_id):
-    bucket_name = "uploaded_datasets"
-    id_to_displayname = {}
-    prefix = f"{user_id}/evaluation_configs"
-    blobs = (
-        on_prem.list_dir(bucket_name, prefix)
-        if os.environ.get("ON_PREM")
-        else gcp.list_dir(bucket_name, prefix)
-    )
-    for blob in blobs:
-        name = blob if os.environ.get("ON_PREM") else blob.name
-        if not name.endswith(".config"):
-            continue
-        id_ = name.split("/")[-1]
-        assert ".config" in id_
-        id_ = id_.replace(".config", "")
-        # get display_name
-        blob_dict = (
-            on_prem.read_from_folder(bucket_name, name)
-            if os.environ.get("ON_PREM")
-            else gcp.read_from_bucket(bucket_name, name)
-        )
-        if "name" in blob_dict:
-            display_name = blob_dict["name"]
-        else:
-            display_name = blob_dict["eval_name"]
-        id_to_displayname[id_] = display_name
-    return id_to_displayname
-
-
-def build_displayname_to_id(user_id):
-    id_to_displayname = build_id_to_displayname(user_id)
-    return {v: k for k, v in id_to_displayname.items()}
-
-
-def name_to_eval_id(user_id, name):
-    displayname_to_id = build_displayname_to_id(user_id)
-    if name not in displayname_to_id:
-        raise HTTPException(
-            status_code=400,
-            detail=f"You don't have an eval with the name {name}.",
-        )
-    return displayname_to_id[name]
-
-
-def check_if_name_free(user_id, name):
-    displayname_to_id = build_displayname_to_id(user_id)
-    if name in displayname_to_id:
-        raise HTTPException(
-            status_code=400,
-            detail=f"You already have an eval with the name {name}!",
-        )
-    return True
-
-
-def load_eval_config_blob(bucket_name, blob_name):
-    return (
-        on_prem.read_from_folder(bucket_name, blob_name)
-        if os.environ.get("ON_PREM")
-        else gcp.read_from_bucket(bucket_name, blob_name)
-    )
-
-
-def delete_eval_config_blob(bucket_name, blob_name):
-    if os.environ.get("ON_PREM"):
-        on_prem.delete(bucket_name, blob_name)
-    else:
-        gcp.delete(bucket_name, blob_name)
-
-
-def rename_eval_config_blob(bucket_name, blob_name, new_name):
-    contents = load_eval_config_blob(bucket_name, blob_name)
-    contents["name"] = new_name
-    config_str = json.dumps(contents, sort_keys=True)
-    if os.environ.get("ON_PREM"):
-        on_prem.write_to_folder(config_str, bucket_name, blob_name)
-    else:
-        gcp.upload_to_bucket(config_str, bucket_name, blob_name)
-
-
 ###########################
 # endpoints
 ###########################
@@ -161,6 +65,7 @@ def rename_eval_config_blob(bucket_name, blob_name, new_name):
 def create_evaluator(
     request_fastapi: Request,
     request: EvaluatorConfig,
+    evaluator_dao: EvaluatorDAO = Depends(),
 ):
     """
     Create a re-usable, named evaluator, and adds this to your account. This can be used
@@ -169,8 +74,8 @@ def create_evaluator(
     user_id = request_fastapi.state.user_id
 
     judge_models = request.judge_models
-    if isinstance(request.judge_models, str):
-        judge_models = [request.judge_models]
+    if isinstance(judge_models, str):
+        judge_models = [judge_models]
 
     invalid_endpoints = find_invalid_endpoints(judge_models)
     if invalid_endpoints:
@@ -180,22 +85,39 @@ def create_evaluator(
             f"to use as a judge model.",
         )
 
-    # create evaluation id
-    eval_cfg_body = request.model_dump()
-    config_str = json.dumps(eval_cfg_body, sort_keys=True)
-    eval_id = hashlib.shake_128(config_str.encode("utf-8")).hexdigest(8)
+    judge_models = json.dumps(judge_models)
+    # TODO: put these defaults somewhere sensible
+    system_prompt = request.system_prompt
+    if system_prompt is None:
+        system_prompt = """[System]
+Please act as an impartial judge and evaluate the quality of the response provided by an assistant to the user question displayed below.
+Your job is to evaluate how good the assistant's answer is.
+Your evaluation should consider correctness and helpfulness. Identify any mistakes.
 
-    # check if name is not already in use
-    name = request.name
-    check_if_name_free(user_id, name)
+Be as objective as possible."""
 
-    bucket_name = "uploaded_datasets"
-    file_path = f"{user_id}/evaluation_configs/{eval_id}.config"
-    if os.environ.get("ON_PREM"):
-        on_prem.write_to_folder(config_str, bucket_name, file_path)
-    else:
-        gcp.upload_to_bucket(config_str, bucket_name, file_path)
-    return {"info": "Evaluator created successfully!"}
+    class_config = request.class_config
+    if class_config is None:
+        class_config = [
+            {"label": "excellent", "score": 1.0},
+            {"label": "very_good", "score": 0.8},
+            {"label": "good", "score": 0.5},
+            {"label": "bad", "score": 0.0},
+            {"label": "irrelevant", "score": 0.0},
+        ]
+    try:
+        evaluator_dao.create(
+            user_id=user_id,
+            name=request.name,
+            system_prompt=system_prompt,
+            class_config=json.dumps(class_config),
+            judge_models=judge_models,
+            client_side=request.client_side,
+        )
+
+        return {"info": "Evaluator created successfully!"}
+    except:
+        return {"info": "Could not create evaluator, please check the format"}
 
 
 @router.get(
@@ -223,18 +145,17 @@ def get_evaluator(
         description="Name of the evaluator to return the configuration of.",
         example="eval1",
     ),
+    evaluator_dao: EvaluatorDAO = Depends(),
 ):
     """
     Returns the configuration JSON for an evaluator from your account. The configuration
     contains the same information as the arguments passed to the `POST` function for the
     same endpoint `/v0/evaluator`.
     """
-    user_id = request_fastapi.state.user_id
-    eval_id = name_to_eval_id(user_id, name)
-    bucket_name = "uploaded_datasets"
-    blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
-    contents = load_eval_config_blob(bucket_name, blob_name)
-    return contents
+    raw_eval_data = evaluator_dao.filter(
+        user_id=request_fastapi.state.user_id, name=name
+    )[0]
+    return raw_eval_data
 
 
 @router.delete(
@@ -253,18 +174,14 @@ def get_evaluator(
 def delete_evaluator(
     request_fastapi: Request,
     name: str = Query(description="Name of the evaluator to delete.", example="eval1"),
+    evaluator_dao: EvaluatorDAO = Depends(),
 ):
     """
     Deletes an evaluator from your account.
     """
-    user_id = request_fastapi.state.user_id
-    eval_id = name_to_eval_id(user_id, name)
-    bucket_name = "uploaded_datasets"
-    blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
-    delete_eval_config_blob(bucket_name, blob_name)
-    refresh_scores_json(user_id)
-    return {"info": "Evaluator deleted successfully!"}
-    # TODO: remove all corresponding model judgements?
+    return evaluator_dao.delete_evaluator(
+        user_id=request_fastapi.state.user_id, name=name
+    )
 
 
 @router.post(
@@ -287,16 +204,14 @@ def rename_evaluator(
         example="eval1",
     ),
     new_name: str = Query(description="New name for the evaluator.", example="eval2"),
+    evaluator_dao: EvaluatorDAO = Depends(),
 ):
     """
     Renames an evaluator from `name` to `new_name` in your account.
     """
-    user_id = request_fastapi.state.user_id
-    eval_id = name_to_eval_id(user_id, name)
-    bucket_name = "uploaded_datasets"
-    blob_name = f"{user_id}/evaluation_configs/{eval_id}.config"
-    rename_eval_config_blob(bucket_name, blob_name, new_name)
-    refresh_scores_json(user_id)
+    evaluator_dao.rename(
+        user_id=request_fastapi.state.user_id, name=name, new_name=new_name
+    )
     return {"info": "Evaluator renamed successfully!"}
 
 
@@ -315,9 +230,10 @@ def rename_evaluator(
 )
 def list_evaluators(
     request_fastapi: Request,
+    evaluator_dao: EvaluatorDAO = Depends(),
 ):
     """
     Returns the names of all evaluators stored in your account.
     """
-    displayname_to_id = build_displayname_to_id(request_fastapi.state.user_id)
-    return sorted(displayname_to_id.keys())
+    raw_evaluators = evaluator_dao.filter(user_id=request_fastapi.state.user_id)
+    return [e.name for e in raw_evaluators]
