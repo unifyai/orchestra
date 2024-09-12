@@ -50,11 +50,7 @@ def _delete_dataset_evaluation(client, dataset_name):
     return response
 
 
-sample_path = "./orchestra/tests/sample_datasets/with_ref.jsonl"
-
-
 load_dotenv(find_dotenv())
-admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
 async def test_trigger_eval(
@@ -65,7 +61,12 @@ async def test_trigger_eval(
     def mock_send_to_dataset_evaluation_server(action, **data):
         data.pop("user_email", "")
         message_data = json.dumps(
-            {"action": action, **data, "orchestra_url": "", "admin_key": admin_key},
+            {
+                "action": action,
+                **data,
+                "orchestra_url": "",
+                "admin_key": os.environ.get("ORCHESTRA_ADMIN_KEY"),
+            },
         )
         save_dir = tmp_path / "save_files"
         if action == "evaluate":
@@ -171,7 +172,12 @@ async def test_trigger_eval_with_default_prompt(
     def mock_send_to_dataset_evaluation_server(action, **data):
         data.pop("user_email", "")
         message_data = json.dumps(
-            {"action": action, **data, "orchestra_url": "", "admin_key": admin_key},
+            {
+                "action": action,
+                **data,
+                "orchestra_url": "",
+                "admin_key": os.environ.get("ORCHESTRA_ADMIN_KEY"),
+            },
         )
         save_dir = tmp_path / "save_files"
         if action == "evaluate":
