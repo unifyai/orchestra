@@ -165,7 +165,9 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     file_content = file.file.read()
     check_file_content(file_content)
 
-    user_datasets = dataset_dao.filter(user_id=request_fastapi.state.user_id, name=name)
+    user_id = request_fastapi.state.user_id
+    user_datasets = dataset_dao.filter()
+    user_datasets = [d for d in user_datasets if d.user_id in [None, user_id]]
     if user_datasets:
         raise HTTPException(400, detail=f"Dataset {name} already exists.")
 
@@ -332,7 +334,9 @@ def rename_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     """
     dataset_dao.rename(
-        user_id=request_fastapi.state.user_id, name=name, new_name=new_name
+        user_id=request_fastapi.state.user_id,
+        name=name,
+        new_name=new_name,
     )
     return {"info": "Dataset name updated successfully!"}
 
@@ -356,8 +360,9 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     """
     Lists all the datasets stored in the user account by name.
     """
-    dataset_info = dataset_dao.filter(user_id=request_fastapi.state.user_id)
-    return [d.name for d in dataset_info]
+    user_id = request_fastapi.state.user_id
+    dataset_info = dataset_dao.filter()
+    return [d.name for d in dataset_info if d.user_id in [None, user_id]]
 
 
 @router.delete(
@@ -368,7 +373,7 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             "content": {
                 "application/json": {
                     "example": {"info": "Dataset prompt deleted successfully"},
-                }
+                },
             },
         },
     },
@@ -417,11 +422,11 @@ def add_prompt(
             "example": {
                 "prompt": {
                     "messages": [
-                        {"role": "user", "content": "What is the capital of Spain?"}
-                    ]
+                        {"role": "user", "content": "What is the capital of Spain?"},
+                    ],
                 },
                 "ref_answer": "Madrid",
-            }
+            },
         },
     ),
     dataset_dao: DatasetDAO = Depends(),
