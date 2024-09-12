@@ -106,19 +106,22 @@ Be as objective as possible."""
             {"label": "bad", "score": 0.0},
             {"label": "irrelevant", "score": 0.0},
         ]
-    try:
-        evaluator_dao.create(
-            user_id=user_id,
-            name=request.name,
-            system_prompt=system_prompt,
-            class_config=json.dumps(class_config),
-            judge_models=judge_models,
-            client_side=request.client_side,
-        )
+    result = evaluator_dao.create(
+        user_id=user_id,
+        name=request.name,
+        system_prompt=system_prompt,
+        class_config=json.dumps(class_config),
+        judge_models=judge_models,
+        client_side=request.client_side,
+    )
 
+    if result is True:
         return {"info": "Evaluator created successfully!"}
-    except:
-        return {"info": "Could not create evaluator, please check the format"}
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Could not create evaluator, please check the format and check the name is unique",
+        )
 
 
 @router.get(

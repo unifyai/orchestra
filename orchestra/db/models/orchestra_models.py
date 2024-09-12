@@ -306,7 +306,7 @@ class Tag(Base):
     )
     tag_name = sa.Column(sa.String(), nullable=False)
     queries = relationship("QueryTagAssociation", back_populates="tag")
-    sa.UniqueConstraint("user_id", "tag_name", name="uq_user_tag")
+    __table_args__ = (sa.UniqueConstraint("user_id", "tag_name", name="uq_user_tag"),)
 
 
 class QueryTagAssociation(Base):
@@ -350,7 +350,7 @@ class LocalEndpoint(Base):
     id = sa.Column(sa.Integer(), primary_key=True)
     user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
     name = sa.Column(sa.String(), nullable=False)
-    sa.UniqueConstraint("user_id", "name", name="uq_user_endpoint")
+    __table_args__ = (sa.UniqueConstraint("user_id", "name", name="uq_user_endpoint"),)
 
 
 class Query(Base):
@@ -502,6 +502,14 @@ class StoredPromptResponse(Base):
     endpoint_str = sa.Column(sa.String(), nullable=False)
     response = sa.Column(sa.String(), nullable=False)
     num_tokens = sa.Column(sa.Integer(), nullable=False)
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "prompt_id",
+            "prompt_variation_id",
+            "endpoint_str",
+            name="uq_prompt_response",
+        ),
+    )
 
 
 class Judgement(Base):
@@ -526,6 +534,11 @@ class Judgement(Base):
         nullable=False,
     )
     judgement = sa.Column(sa.String(), nullable=False)
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "response_id", "judge_endpoint_str", "evaluator_id", name="uq_judgement"
+        ),
+    )
 
 
 class DatasetPrompt(Base):
@@ -565,6 +578,9 @@ class Evaluator(Base):
     class_config = sa.Column(sa.String(), nullable=False)
     judge_models = sa.Column(sa.String(), nullable=False)
     client_side = sa.Column(sa.Boolean(), nullable=False)
+    __table_args__ = (
+        sa.UniqueConstraint("user_id", "name", name="uq_userid_evaluator"),
+    )
 
 
 class Evaluation(Base):
@@ -593,3 +609,12 @@ class Evaluation(Base):
     )
     endpoint_str = sa.Column(sa.String(), nullable=False)
     score = sa.Column(sa.Numeric(), nullable=False)
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "prompt_id",
+            "prompt_variation_id",
+            "evaluator_id",
+            "endpoint_str",
+            name="uq_evaluation",
+        ),
+    )
