@@ -1,28 +1,20 @@
-import hashlib
 import json
-import os
-import time
 from typing import Annotated, Dict, List
 
 import tiktoken
 from fastapi import (
     APIRouter,
+    Body,
+    Depends,
     Form,
     HTTPException,
     Query,
-    Body,
     Request,
     UploadFile,
-    Depends,
 )
 
-from orchestra.web.api.utils import gcp, on_prem
-from orchestra.web.api.utils.http_responses import (
-    dataset_already_exists,
-    dataset_does_not_exist,
-    invalid_dataset_name,
-)
 from orchestra.db.dao.dataset_dao import DatasetDAO
+from orchestra.web.api.utils.http_responses import invalid_dataset_name
 
 router = APIRouter()
 
@@ -65,22 +57,6 @@ def get_tokens_in_dataset(dataset_content: List[Dict[str, str]]):
         prompt = line["prompt"]
         num_tokens += len(encoding.encode(prompt))
     return num_tokens
-
-
-def _store_num_tokens(user_id: str, internal_id: str, num_tokens: int):
-    blob_name = f"{user_id}/{internal_id}/0/num_tokens.json"
-    exists = (
-        on_prem.file_exists(bucket_name, blob_name)
-        if os.environ.get("ON_PREM")
-        else gcp.blob_exists(bucket_name, blob_name)
-    )
-    string = json.dumps({"num_tokens": num_tokens}).encode()
-    if exists:
-        raise dataset_already_exists
-    elif os.environ.get("ON_PREM"):
-        on_prem.write_to_folder(string, bucket_name, blob_name)
-    else:
-        gcp.upload_to_bucket(string, bucket_name, blob_name)
 
 
 # endpoints
@@ -327,7 +303,9 @@ def rename_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     """
     dataset_dao.rename(
-        user_id=request_fastapi.state.user_id, name=name, new_name=new_name
+        user_id=request_fastapi.state.user_id,
+        name=name,
+        new_name=new_name,
     )
     return {"info": "Dataset name updated successfully!"}
 
@@ -363,7 +341,7 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             "content": {
                 "application/json": {
                     "example": {"info": "Dataset prompt deleted successfully"},
-                }
+                },
             },
         },
     },
@@ -412,11 +390,11 @@ def add_prompt(
             "example": {
                 "prompt": {
                     "messages": [
-                        {"role": "user", "content": "What is the capital of Spain?"}
-                    ]
+                        {"role": "user", "content": "What is the capital of Spain?"},
+                    ],
                 },
                 "ref_answer": "Madrid",
-            }
+            },
         },
     ),
     dataset_dao: DatasetDAO = Depends(),
