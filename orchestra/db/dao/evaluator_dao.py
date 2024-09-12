@@ -21,16 +21,22 @@ class EvaluatorDAO:
         judge_models: str,
         client_side: bool,
     ) -> None:
-        self.session.add(
-            Evaluator(
-                user_id=user_id,
-                name=name,
-                system_prompt=system_prompt,
-                class_config=class_config,
-                judge_models=judge_models,
-                client_side=client_side,
-            ),
-        )
+        try:
+            self.session.add(
+                Evaluator(
+                    user_id=user_id,
+                    name=name,
+                    system_prompt=system_prompt,
+                    class_config=class_config,
+                    judge_models=judge_models,
+                    client_side=client_side,
+                ),
+            )
+            self.session.commit()
+            return True
+        except:
+            self.session.rollback()
+            return False
 
     def filter(  # noqa: WPS211, C901
         self,

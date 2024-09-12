@@ -188,7 +188,7 @@ def log_query(
         timestamp = str(datetime.now())
 
     _model_name = endpoint.split("@")[0]
-    local_endpoint_id = local_endpoint_dao.get_local_endpoint(
+    local_endpoint_id = local_endpoint_dao.get_or_create_local_endpoint(
         user_id=request_fastapi.state.user_id,
         name=_model_name,
     )
