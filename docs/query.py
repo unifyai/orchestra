@@ -44,7 +44,7 @@ def get_request_code(route, path, examples, params):
     curl_example = [
         f"curl --request {route.upper()} \\",
         f"  --url 'https://api.unify.ai{path}{params_str}' \\",
-        f"  --header 'Authorization: Bearer <UNIFY_KEY>'",
+        f'  --header "Authorization: Bearer $UNIFY_KEY"',
     ]
 
     # create the python example
