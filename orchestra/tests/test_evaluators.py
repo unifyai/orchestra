@@ -43,6 +43,24 @@ async def test_create_eval(
 
 
 @pytest.mark.anyio
+async def test_create_eval_duplicate(
+    client: AsyncClient,
+):
+    eval_name = "test_eval_config"
+    system_prompt = "dummy system prompt"
+
+    url = "/v0/evaluator"
+    params = {"name": eval_name, "system_prompt": system_prompt}
+
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # make it a second time
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 404, response.json()
+
+
+@pytest.mark.anyio
 async def test_delete_eval(
     client: AsyncClient,
 ):

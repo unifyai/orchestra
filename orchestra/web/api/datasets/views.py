@@ -1,4 +1,5 @@
 import json
+import os
 from typing import Annotated, Dict, List
 
 import tiktoken
@@ -14,7 +15,11 @@ from fastapi import (
 )
 
 from orchestra.db.dao.dataset_dao import DatasetDAO
-from orchestra.web.api.utils.http_responses import invalid_dataset_name
+from orchestra.db.dao.dataset_prompt_dao import DatasetPromptDAO
+from orchestra.web.api.utils.http_responses import (
+    dataset_does_not_exist,
+    invalid_dataset_name,
+)
 
 router = APIRouter()
 
@@ -142,7 +147,9 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     file_content = file.file.read()
     check_file_content(file_content)
 
-    user_datasets = dataset_dao.filter(user_id=request_fastapi.state.user_id, name=name)
+    user_id = request_fastapi.state.user_id
+    user_datasets = dataset_dao.filter()
+    user_datasets = [d for d in user_datasets if d.user_id in [None, user_id]]
     if user_datasets:
         raise HTTPException(400, detail=f"Dataset {name} already exists.")
 
@@ -244,11 +251,17 @@ def delete_dataset(
     request_fastapi: Request,
     name: str = Query(description="Name of the dataset.", example="dataset1"),
     dataset_dao: DatasetDAO = Depends(),
+    dataset_prompt_dao: DatasetPromptDAO = Depends(),
 ) -> Dict[str, str]:
     """
     Deletes a previously updated dataset and any relevant artifacts from your account.
     """
-    return dataset_dao.delete_dataset(user_id=request_fastapi.state.user_id, name=name)
+    user_id = request_fastapi.state.user_id
+    dataset_id = dataset_dao.filter(user_id=user_id, name=name)
+    if not dataset_id:
+        raise dataset_does_not_exist(name)
+    dataset_prompt_dao.delete(dataset_id=dataset_id[0].id)
+    return dataset_dao.delete_dataset(user_id=user_id, name=name)
 
 
 @router.post(
@@ -329,8 +342,9 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     """
     Lists all the datasets stored in the user account by name.
     """
-    dataset_info = dataset_dao.filter(user_id=request_fastapi.state.user_id)
-    return [d.name for d in dataset_info]
+    user_id = request_fastapi.state.user_id
+    dataset_info = dataset_dao.filter()
+    return [d.name for d in dataset_info if d.user_id in [None, user_id]]
 
 
 @router.delete(
