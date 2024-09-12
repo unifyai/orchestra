@@ -306,7 +306,7 @@ class Tag(Base):
     )
     tag_name = sa.Column(sa.String(), nullable=False)
     queries = relationship("QueryTagAssociation", back_populates="tag")
-    sa.UniqueConstraint("user_id", "tag_name", name="uq_user_tag")
+    __table_args__ = (sa.UniqueConstraint("user_id", "tag_name", name="uq_user_tag"),)
 
 
 class QueryTagAssociation(Base):
@@ -350,7 +350,7 @@ class LocalEndpoint(Base):
     id = sa.Column(sa.Integer(), primary_key=True)
     user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
     name = sa.Column(sa.String(), nullable=False)
-    sa.UniqueConstraint("user_id", "name", name="uq_user_endpoint")
+    __table_args__ = (sa.UniqueConstraint("user_id", "name", name="uq_user_endpoint"),)
 
 
 class Query(Base):
