@@ -202,7 +202,7 @@ class ChatCompletionRequest(BaseModel):
     tags: Union[None, str, List[str]] = Field(
         None,
         description="Comma-separated list of tags to associate with the corresponding prompt.",
-        json_schema_extra={"example": True},
+        json_schema_extra={"example": ["user123", "CompanyABC"]},
     )
     drop_params: bool = Field(
         True,
