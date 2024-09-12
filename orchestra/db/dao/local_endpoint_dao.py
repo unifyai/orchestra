@@ -3,6 +3,8 @@ from typing import List, Tuple
 
 from fastapi import Depends
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
@@ -15,34 +17,33 @@ class LocalEndpointDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    def get_local_endpoint(
+    def get_or_create_local_endpoint(
         self,
         user_id: str,
         name: str,
     ) -> int:
-        data = {
-            "user_id": user_id,
-            "name": name,
-        }
-        new_endpoint = LocalEndpoint(**data)
+
+        # try and find the endpoint
+        stmt = select(LocalEndpoint.id).where(
+            LocalEndpoint.user_id == user_id, LocalEndpoint.name == name
+        )
+        endpoint = list(self.session.execute(stmt).fetchall())
+        if endpoint:
+            return endpoint[0].id
+
+        # add if not
         try:
-            self.session.add(new_endpoint)
-            self.session.flush()
-            endpoint_id = new_endpoint.id
-        except IntegrityError:
-            self.session.rollback()
-            stmt = select(LocalEndpoint).where(
-                LocalEndpoint.user_id == user_id, LocalEndpoint.name == name
-            )
-            existing_endpoint = self.session.execute(stmt).scalar_one_or_none()
-            if existing_endpoint:
-                endpoint_id = existing_endpoint.id
-            else:
-                raise ValueError("Failed to create or retrieve local endpoint")
-        else:
+            stmt = insert(LocalEndpoint).values(user_id=user_id, name=name)
+            stmt = stmt.on_conflict_do_nothing(index_elements=["user_id", "name"])
+            result = self.session.execute(stmt)
             self.session.commit()
 
-        return endpoint_id
+            existing_stmt = select(LocalEndpoint.id).where(
+                LocalEndpoint.user_id == user_id, LocalEndpoint.name == name
+            )
+            return self.session.execute(existing_stmt).scalar_one()
+        except:
+            raise ValueError
 
     def get_user_local_endpoints(self, user_id):
         query = select(LocalEndpoint.name).where(LocalEndpoint.user_id == user_id)
