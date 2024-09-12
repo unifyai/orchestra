@@ -7,6 +7,8 @@ import sys
 from dataclasses import dataclass
 from email.message import EmailMessage
 
+from httpx import Limits, AsyncClient
+
 from utils.fetch_judgements import generate_judgement
 from utils.fetch_queries import generate_response
 
