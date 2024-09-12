@@ -1,5 +1,5 @@
-from datetime import datetime
 import json
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import Depends
@@ -9,9 +9,9 @@ from sqlalchemy.orm import Session
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Dataset,
+    DatasetPrompt,
     StoredPrompt,
     StoredPromptExtraField,
-    DatasetPrompt,
 )
 
 
@@ -94,7 +94,7 @@ class DatasetDAO:
             }
             # Query to get extra fields for this prompt
             extra_fields_query = select(StoredPromptExtraField).where(
-                StoredPromptExtraField.prompt_id == stored_prompt.id
+                StoredPromptExtraField.prompt_id == stored_prompt.id,
             )
             extra_fields = self.session.execute(extra_fields_query).fetchall()
 

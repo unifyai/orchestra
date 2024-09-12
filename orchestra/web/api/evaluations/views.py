@@ -32,14 +32,16 @@ admin_router = APIRouter()
 
 # TODO: Move to utils (duplicated in routing)
 def dataset_exists(dataset_dao, user_id, name):
-    raw_datasets = dataset_dao.filter(user_id=user_id, name=name)
+    raw_datasets = dataset_dao.filter(name=name)
+    raw_datasets = [d for d in raw_datasets if d.user_id in [None, user_id]]
     if raw_datasets:
         return raw_datasets[0].id
     return False
 
 
 def get_dataset_id(dataset_dao, user_id, name):
-    raw_datasets = dataset_dao.filter(user_id=user_id, name=name)
+    raw_datasets = dataset_dao.filter(name=name)
+    raw_datasets = [d for d in raw_datasets if d.user_id in [None, user_id]]
     if raw_datasets:
         return raw_datasets[0].id
     return None
@@ -439,7 +441,9 @@ def get_evaluations(
         evaluator_id = raw_evaluators[0].id
         evaluators = [evaluator]
     else:
-        dataset_id = dataset_dao.filter(user_id=user_id, name=dataset)[0].id
+        raw_datasets = dataset_dao.filter(name=dataset)
+        raw_datasets = [d for d in raw_datasets if d.user_id in [None, user_id]]
+        dataset_id = raw_datasets[0].id
         evaluators = evaluation_dao.get_evaluator_names(
             dataset_id=dataset_id,
             endpoint_str=endpoint,
@@ -454,7 +458,9 @@ def get_evaluations(
             )
         endpoints = [endpoint]
     else:
-        dataset_id = dataset_dao.filter(user_id=user_id, name=dataset)[0].id
+        raw_datasets = dataset_dao.filter(name=dataset)
+        raw_datasets = [d for d in raw_datasets if d.user_id in [None, user_id]]
+        dataset_id = raw_datasets[0].id
         endpoints = evaluation_dao.get_endpoints(
             dataset_id=dataset_id,
             evaluator_id=evaluator_id,
