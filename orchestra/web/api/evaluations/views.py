@@ -82,7 +82,7 @@ def send_to_dataset_evaluation_server(action, **data):
     if os.environ.get("ON_PREM"):
         on_prem.send_pubsub_msg(topic, {"action": action, **data, "orchestra_url": url})
     else:
-        gcp.send_pubsub_msg(topic, {"action": action, **data, "orchestra_url": url})
+        gcp.send_pubsub_msg(topic, {"action": action, **data, "orchestra_url": url, "admin_key": os.environ.get("ORCHESTRA_ADMIN_KEY")})
     print(f"Published: {str({'action': action, **data, 'orchestra_url': url})}")
 
 
