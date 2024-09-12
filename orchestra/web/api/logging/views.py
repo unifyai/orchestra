@@ -32,7 +32,7 @@ def get_query_tags(
 
 @router.get("/queries")
 @handle_on_prem(endpoint="/queries", method="none")
-def get_query_history(
+def get_queries(
     request_fastapi: Request,
     tags: Union[None, str, list[str]] = Query(
         default=None,
