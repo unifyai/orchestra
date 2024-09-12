@@ -355,7 +355,19 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     return [d.name for d in dataset_info]
 
 
-@router.delete("/dataset/delete_prompt")
+@router.delete(
+    "/dataset/delete_prompt",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Dataset prompt deleted successfully"},
+                }
+            },
+        },
+    },
+)
 def delete_prompt(
     request_fastapi: Request,
     name: str = Query(
@@ -375,20 +387,45 @@ def delete_prompt(
     )
 
 
-@router.put("/dataset/add_prompt")
+@router.post(
+    "/dataset/add_prompt",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Prompt added sucessfully!"},
+                },
+            },
+        },
+    },
+)
 def add_prompt(
     request_fastapi: Request,
     name: str = Body(
         description="Name of the dataset to add to",
-        example="dataset1",
+        json_schema_extra={"example": "dataset_1"},
     ),
     prompt_data: dict = Body(
         description="JSON object containing the prompt data to upload.",
+        json_schema_extra={
+            "example": {
+                "prompt": {
+                    "messages": [
+                        {"role": "user", "content": "What is the capital of Spain?"}
+                    ]
+                },
+                "ref_answer": "Madrid",
+            }
+        },
     ),
     dataset_dao: DatasetDAO = Depends(),
 ):
-    dataset_dao.add_prompt_to_dataset(
+    ret = dataset_dao.add_prompt_to_dataset(
         user_id=request_fastapi.state.user_id,
         dataset_name=name,
         prompt_data=prompt_data,
     )
+    if isinstance(ret, dict):
+        return ret
+    return {"info": "Prompt added successfully"}
