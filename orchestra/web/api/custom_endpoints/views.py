@@ -214,7 +214,7 @@ def rename_custom_endpoint(
         },
     },
 )
-def get_custom_endpoint_list(
+def list_custom_endpoints(
     request_fastapi: Request,
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
 ) -> List[CustomEndpoint]:
