@@ -313,11 +313,18 @@ def get_benchmark(
             for key, value in request_fastapi._headers.items()
             if key in ["content-type", "authorization"]
         }
-        return requests.get(
+        response = requests.get(
             request_url,
             params=kwargs,
             headers=headers,
         )
+        json_response = response.json()
+        if response.status_code != 200:
+            raise HTTPException(
+                response.status_code,
+                json_response["detail"]
+            )
+        return json_response
     try:
         endpoint_id = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
         if latest_only:
