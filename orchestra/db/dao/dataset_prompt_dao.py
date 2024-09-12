@@ -20,3 +20,11 @@ class DatasetPromptDAO:
                 dataset_id=dataset_id,
             ),
         )
+
+    def delete(self, dataset_id):
+        dataset_prompts = (
+            self.session.query(DatasetPrompt).filter_by(dataset_id=dataset_id).all()
+        )
+        for dp in dataset_prompts:
+            self.session.delete(dp)
+        return {"info": "Dataset deleted successfully"}

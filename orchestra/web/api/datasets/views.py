@@ -1,28 +1,27 @@
-import hashlib
 import json
 import os
-import time
 from typing import Annotated, Dict, List
 
 import tiktoken
 from fastapi import (
     APIRouter,
+    Body,
+    Depends,
     Form,
     HTTPException,
     Query,
-    Body,
     Request,
     UploadFile,
-    Depends,
 )
 
+from orchestra.db.dao.dataset_dao import DatasetDAO
+from orchestra.db.dao.dataset_prompt_dao import DatasetPromptDAO
 from orchestra.web.api.utils import gcp, on_prem
 from orchestra.web.api.utils.http_responses import (
     dataset_already_exists,
     dataset_does_not_exist,
     invalid_dataset_name,
 )
-from orchestra.db.dao.dataset_dao import DatasetDAO
 
 router = APIRouter()
 
@@ -268,11 +267,17 @@ def delete_dataset(
     request_fastapi: Request,
     name: str = Query(description="Name of the dataset.", example="dataset1"),
     dataset_dao: DatasetDAO = Depends(),
+    dataset_prompt_dao: DatasetPromptDAO = Depends(),
 ) -> Dict[str, str]:
     """
     Deletes a previously updated dataset and any relevant artifacts from your account.
     """
-    return dataset_dao.delete_dataset(user_id=request_fastapi.state.user_id, name=name)
+    user_id = request_fastapi.state.user_id
+    dataset_id = dataset_dao.filter(user_id=user_id, name=name)
+    if not dataset_id:
+        raise dataset_does_not_exist(name)
+    dataset_prompt_dao.delete(dataset_id=dataset_id[0].id)
+    return dataset_dao.delete_dataset(user_id=user_id, name=name)
 
 
 @router.post(
