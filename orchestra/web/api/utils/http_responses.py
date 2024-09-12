@@ -142,6 +142,13 @@ def evaluation_does_not_exist(dataset=""):
     )
 
 
+def evaluator_not_found(evaluator):
+    return HTTPException(
+        status.HTTP_404_NOT_FOUND,
+        detail=f"The evaluator {evaluator} does not exist in your account",
+    )
+
+
 provider_not_found_under_conditions = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
     detail="No providers found within the specified thresholds.",

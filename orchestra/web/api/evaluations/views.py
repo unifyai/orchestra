@@ -20,6 +20,7 @@ from orchestra.db.dao.stored_prompt_variation_dao import StoredPromptVariationDA
 from orchestra.web.api.utils import gcp, on_prem
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
+    evaluator_not_found,
     invalid_training_endpoints,
 )
 
@@ -139,7 +140,8 @@ def send_to_dataset_evaluation_server(action, **data):
 def trigger_evaluation(
     request_fastapi: Request,
     evaluator: str = Query(
-        description="Name of the evaluator to use.",
+        default="default_evaluator",
+        description="Name of the evaluator to use. If not specified, 'default_evaluator' will be used.",
         example="eval1",
     ),
     default_prompt: str = Query(
@@ -193,12 +195,9 @@ def trigger_evaluation(
         raise dataset_does_not_exist(dataset)
 
     # evaluator_id
-    raw_evaluators = evaluator_dao.filter(user_id=user_id, name=evaluator)
-    if not raw_evaluators:
-        raise HTTPException(
-            400,
-            detail=f"The evaluator {evaluator} does not exist in your account",
-        )
+    raw_evaluators = evaluator_dao.filter(name=evaluator)
+    if not raw_evaluators or raw_evaluators[0].user_id not in [None, user_id]:
+        raise evaluator_not_found(evaluator)
     evaluator_id = raw_evaluators[0].id
 
     # default_prompt_id
@@ -358,7 +357,10 @@ def get_single_evaluation(
     dataset_prompts = dataset_dao.fetch_dataset(user_id=user_id, name=dataset)
 
     prompt_ids = [prompt["id"] for prompt in dataset_prompts]
-    evaluator_id = evaluator_dao.filter(user_id=user_id, name=evaluator)[0].id
+    raw_evaluators = evaluator_dao.filter(name=evaluator)
+    if not raw_evaluators or raw_evaluators[0].user_id not in [None, user_id]:
+        raise evaluator_not_found(evaluator)
+    evaluator_id = raw_evaluators[0].id
     scores = evaluation_dao.fetch_evaluation_scores(
         prompt_ids=prompt_ids,
         evaluator_id=evaluator_id,
@@ -431,13 +433,10 @@ def get_evaluations(
             )
 
     if evaluator:
-        evaluator_id = evaluator_dao.filter(user_id=user_id, name=evaluator)
-        if not evaluator_id:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Could not find an evaluator with the name {evaluator}",
-            )
-        evaluator_id = evaluator_id[0].id
+        raw_evaluators = evaluator_dao.filter(name=evaluator)
+        if not raw_evaluators or raw_evaluators[0].user_id not in [None, user_id]:
+            raise evaluator_not_found(evaluator)
+        evaluator_id = raw_evaluators[0].id
         evaluators = [evaluator]
     else:
         dataset_id = dataset_dao.filter(user_id=user_id, name=dataset)[0].id
