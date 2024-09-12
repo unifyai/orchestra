@@ -35,7 +35,6 @@ class LocalEndpointDAO:
                 LocalEndpoint.user_id == user_id, LocalEndpoint.name == name
             )
             existing_endpoint = self.session.execute(stmt).scalar_one_or_none()
-            breakpoint()
             if existing_endpoint:
                 endpoint_id = existing_endpoint.id
             else:
