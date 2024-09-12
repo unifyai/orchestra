@@ -7,8 +7,7 @@ import sys
 from dataclasses import dataclass
 from email.message import EmailMessage
 
-from httpx import Limits, AsyncClient
-
+from httpx import AsyncClient, Limits
 from utils.fetch_judgements import generate_judgement
 from utils.fetch_queries import generate_response
 
@@ -120,6 +119,7 @@ def send_email(user_email, endpoint, dataset):
     email_pass = os.getenv("EMAIL_PASS", "")
     if email_pass == "":
         from google.cloud import secretmanager
+
         client = secretmanager.SecretManagerServiceClient()
         name = "projects/saas-368716/secrets/EMAIL_SERVER_PASSWORD/versions/latest"
         response = client.access_secret_version(name=name)
