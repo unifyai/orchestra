@@ -9,6 +9,7 @@ from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.evaluator_dao import EvaluatorDAO
 from orchestra.web.api.evaluators.schema import EvaluatorConfig
+from orchestra.web.api.utils.http_responses import evaluator_not_found
 
 router = APIRouter()
 
@@ -152,11 +153,13 @@ def get_evaluator(
     contains the same information as the arguments passed to the `POST` function for the
     same endpoint `/v0/evaluator`.
     """
-    raw_eval_data = evaluator_dao.filter(
-        user_id=request_fastapi.state.user_id,
-        name=name,
-    )[0]
-    return raw_eval_data
+    evaluators = evaluator_dao.filter(name=name)
+    evaluators = [
+        e for e in evaluators if e.user_id in [None, request_fastapi.state.user_id]
+    ]
+    if not evaluators:
+        raise evaluator_not_found(name)
+    return evaluators[0]
 
 
 @router.delete(
