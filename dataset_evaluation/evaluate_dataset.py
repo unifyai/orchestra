@@ -119,6 +119,7 @@ def send_email(user_email, endpoint, dataset):
     email_addr = os.getenv("EMAIL_ADDR", "auth@unify.ai")
     email_pass = os.getenv("EMAIL_PASS", "")
     if email_pass == "":
+        from google.cloud import secretmanager
         client = secretmanager.SecretManagerServiceClient()
         name = "projects/saas-368716/secrets/EMAIL_SERVER_PASSWORD/versions/latest"
         response = client.access_secret_version(name=name)
