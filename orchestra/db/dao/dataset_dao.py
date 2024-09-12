@@ -172,7 +172,8 @@ class DatasetDAO:
             )
             self.session.delete(dataset)
             self.session.commit()
-            return {"message": "Dataset deleted successfully"}
+            return {"info": "Dataset deleted successfully"}
         except:
             self.session.rollback()
+            # TODO: This should be an exception instead of 200
             return {"message": "Unable to delete dataset"}
