@@ -74,7 +74,7 @@ def list_providers(
 )
 @handle_on_prem(endpoint="/models", method="get")
 def list_models(
-    fastapi_request: Request,
+    request_fastapi: Request,
     provider: str = Query(
         default=None,
         description="Provider to get available models from.",
@@ -82,13 +82,13 @@ def list_models(
     ),
     endpoint_dao: EndpointDAO = Depends(),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
-) -> List[Model]:
+):
     """
     Lists available models. If `provider` is specified,
     returns the models that the provider supports.
     You can also show all *custom* models by passing `custom` as the provider.
     """
-    user_id = fastapi_request.state.user_id
+    user_id = request_fastapi.state.user_id
 
     raw = endpoint_dao.get_endpoints_of((None,), (provider,))
     models = list(set([r.Model.mdl_code for r in raw]))
