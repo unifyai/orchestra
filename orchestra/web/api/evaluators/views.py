@@ -4,11 +4,11 @@ Includes endpoints related to evaluators.
 
 import json
 
-from fastapi import APIRouter, HTTPException, Query, Request, Depends
-
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from providers.completion import PROVIDER_CLASSES
-from orchestra.web.api.evaluators.schema import EvaluatorConfig
+
 from orchestra.db.dao.evaluator_dao import EvaluatorDAO
+from orchestra.web.api.evaluators.schema import EvaluatorConfig
 
 router = APIRouter()
 
@@ -153,7 +153,8 @@ def get_evaluator(
     same endpoint `/v0/evaluator`.
     """
     raw_eval_data = evaluator_dao.filter(
-        user_id=request_fastapi.state.user_id, name=name
+        user_id=request_fastapi.state.user_id,
+        name=name,
     )[0]
     return raw_eval_data
 
@@ -180,7 +181,8 @@ def delete_evaluator(
     Deletes an evaluator from your account.
     """
     return evaluator_dao.delete_evaluator(
-        user_id=request_fastapi.state.user_id, name=name
+        user_id=request_fastapi.state.user_id,
+        name=name,
     )
 
 
@@ -210,7 +212,9 @@ def rename_evaluator(
     Renames an evaluator from `name` to `new_name` in your account.
     """
     evaluator_dao.rename(
-        user_id=request_fastapi.state.user_id, name=name, new_name=new_name
+        user_id=request_fastapi.state.user_id,
+        name=name,
+        new_name=new_name,
     )
     return {"info": "Evaluator renamed successfully!"}
 
@@ -235,5 +239,7 @@ def list_evaluators(
     """
     Returns the names of all evaluators stored in your account.
     """
-    raw_evaluators = evaluator_dao.filter(user_id=request_fastapi.state.user_id)
-    return [e.name for e in raw_evaluators]
+    user_id = request_fastapi.state.user_id
+    evaluators = evaluator_dao.filter()
+    evaluators = [e.name for e in evaluators if e.user_id in [None, user_id]]
+    return evaluators
