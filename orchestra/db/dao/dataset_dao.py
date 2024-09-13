@@ -70,7 +70,9 @@ class DatasetDAO:
 
     def fetch_dataset(self, user_id: str, name: str) -> list[dict]:
         try:
-            dataset_id = self.filter(user_id=user_id, name=name)[0].id
+            datasets = self.filter(name=name)
+            datasets = [d for d in datasets if d.user_id in [user_id, None]]
+            dataset_id = datasets[0].id
         except:
             return
 
