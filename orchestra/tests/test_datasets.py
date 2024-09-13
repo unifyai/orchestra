@@ -6,7 +6,6 @@ from httpx import AsyncClient
 
 from orchestra.tests.utils import HEADERS
 
-
 user_id = os.getenv("AUTH_ACCOUNT_USER_ID")
 headers = copy.copy(HEADERS)
 headers.pop("Content-Type", None)
@@ -132,7 +131,9 @@ async def test_download_datasets(client: AsyncClient):
     params = {"name": name}
     response = await client.get("/v0/dataset", headers=headers, params=params)
     jsonl = response.json()
-    assert jsonl[0]["messages"][0]["content"] == "What is the capital of Spain?"
+    assert (
+        jsonl[0]["prompt"]["messages"][0]["content"] == "What is the capital of Spain?"
+    )
     assert len(jsonl) == 2
 
 
@@ -144,7 +145,9 @@ async def test_atomic_prompt_fns(client: AsyncClient):
     assert response.status_code == 200, response.json()
 
     new_prompt = {
-        "messages": [{"role": "user", "content": "What is the powerhouse of the cell?"}]
+        "messages": [
+            {"role": "user", "content": "What is the powerhouse of the cell?"},
+        ],
     }
     data = {"name": name, "prompt_data": {"prompt": new_prompt}}
     response = await client.post("/v0/dataset/add_prompt", headers=headers, json=data)
@@ -160,7 +163,9 @@ async def test_atomic_prompt_fns(client: AsyncClient):
 
     data = {"name": name, "prompt_id": _id}
     response = await client.delete(
-        "/v0/dataset/delete_prompt", headers=headers, params=data
+        "/v0/dataset/delete_prompt",
+        headers=headers,
+        params=data,
     )
     assert response.status_code == 200, response.json()
 
@@ -168,9 +173,9 @@ async def test_atomic_prompt_fns(client: AsyncClient):
     response = await client.get("/v0/dataset", headers=headers, params=params)
     jsonl = response.json()
     assert len(jsonl) == 2
-    assert jsonl[0]["messages"] == [
+    assert jsonl[0]["prompt"]["messages"] == [
         {
             "role": "user",
             "content": "What is the square root of 1009 to 1 decimal place",
-        }
+        },
     ]
