@@ -63,4 +63,14 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 5, "completion": 15},
     },
+    "o1-preview": {
+        "endpoint": "o1-preview",
+        "context_window": 128000,
+        "cost": {"prompt": 15, "completion": 60},
+    },
+    "o1-mini": {
+        "endpoint": "o1-mini",
+        "context_window": 128000,
+        "cost": {"prompt": 3, "completion": 12},
+    },
 }
