@@ -12,15 +12,6 @@ from orchestra.db.models.orchestra_models import (
 )
 
 
-def get_cloud_sql_data():
-    storage_client = Client()
-    blob = storage_client.bucket("on-prem-data").blob("data.json")
-    return json.loads(blob.download_as_bytes().decode("utf-8"))
-
-
-orchestra_db_host = os.environ.get("ORCHESTRA_DB_HOST")
-database_url = f"postgresql://orchestra:orchestra@{orchestra_db_host}/orchestra"
-local_engine = create_engine(database_url)
 tables = {
     "modality": {"model": Modality},
     "task": {"model": Task},
@@ -29,18 +20,34 @@ tables = {
     "endpoint": {"model": Endpoint},
     "users": {"model": Users},
 }
-data = get_cloud_sql_data()
-data = {
-    table: {"model": tables[table]["model"], "rows": data[table]} for table in tables
-}
-user_id = os.environ.get("USER_ID")
-data["users"] = [[f"{user_id}", 0, "", "f", 0, 0, "t"]]
 
-with local_engine.connect() as conn:
-    for key, content in data.items():
-        print(f"key {key}")
-        model = content["model"]
-        rows = content["rows"]
-        stmt = insert(model)
-        conn.execute(stmt.values(rows))
-        conn.commit()
+
+def get_cloud_sql_data():
+    storage_client = Client()
+    blob = storage_client.bucket("on-prem-data").blob("data.json")
+    return json.loads(blob.download_as_bytes().decode("utf-8"))
+
+
+def write_data_to_db(data, engine):
+    data = {
+        table: {"model": tables[table]["model"], "rows": data[table]} for table in tables
+    }
+    user_id = os.environ.get("USER_ID")
+    data["users"] = [[f"{user_id}", 0, "", "f", 0, 0, "t"]]
+
+    with engine.connect() as conn:
+        for key, content in data.items():
+            print(f"key {key}")
+            model = content["model"]
+            rows = content["rows"]
+            stmt = insert(model)
+            conn.execute(stmt.values(rows))
+            conn.commit()
+
+
+if __name__ == "__main__":
+    orchestra_db_host = os.environ.get("ORCHESTRA_DB_HOST")
+    database_url = f"postgresql://orchestra:orchestra@{orchestra_db_host}/orchestra"
+    engine = create_engine(database_url)
+    data = get_cloud_sql_data()
+    write_data_to_db(data, engine)
