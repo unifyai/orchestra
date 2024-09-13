@@ -420,7 +420,7 @@ class StoredPrompt(Base):
         nullable=True,
     )
     system_msg = sa.Column(sa.String(), index=True, nullable=True)
-    messages = sa.Column(sa.String(), index=True, nullable=False)
+    messages = sa.Column(sa.String(), nullable=False)
     prompt_kwargs = sa.Column(sa.String(), nullable=False)
     ref_answer = sa.Column(sa.String(), nullable=True)
     num_tokens = sa.Column(sa.Integer(), nullable=False)
@@ -536,7 +536,10 @@ class Judgement(Base):
     judgement = sa.Column(sa.String(), nullable=False)
     __table_args__ = (
         sa.UniqueConstraint(
-            "response_id", "judge_endpoint_str", "evaluator_id", name="uq_judgement"
+            "response_id",
+            "judge_endpoint_str",
+            "evaluator_id",
+            name="uq_judgement",
         ),
     )
 

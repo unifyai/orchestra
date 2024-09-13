@@ -422,7 +422,7 @@ def get_evaluations(
 
     if not endpoint and not evaluator:
         raise HTTPException(
-            status_code=404,
+            status_code=400,
             detail="You need to specify at least one of (endpoint, evaluator)",
         )
 
