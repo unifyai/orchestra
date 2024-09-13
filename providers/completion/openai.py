@@ -66,7 +66,7 @@ supported_models = {
     "o1-preview": {
         "endpoint": "o1-preview",
         "context_window": 128000,
-        "cost": {"prompt": 16, "completion": 60},
+        "cost": {"prompt": 15, "completion": 60},
     },
     "o1-mini": {
         "endpoint": "o1-mini",
