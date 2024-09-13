@@ -104,7 +104,7 @@ async def test_list_datasets(client: AsyncClient):
     for name in names:
         # Upload datasets
         response = await upload_dataset(client, file_path, name)
-        assert response.status_code == 200
+        assert response.status_code == 200, response.json()
 
     # List datasets
     response = await fetch_datasets(client)

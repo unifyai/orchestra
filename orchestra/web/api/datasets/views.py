@@ -148,12 +148,12 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     check_file_content(file_content)
 
     user_id = request_fastapi.state.user_id
-    user_datasets = dataset_dao.filter()
+    user_datasets = dataset_dao.filter(name=name)
     user_datasets = [d for d in user_datasets if d.user_id in [None, user_id]]
     if user_datasets:
         raise HTTPException(400, detail=f"Dataset {name} already exists.")
 
-    dataset_dao.create(user_id=request_fastapi.state.user_id, name=name)
+    dataset_dao.create(user_id=user_id, name=name)
 
     try:
         for entry in file_content.decode().split("\n"):
@@ -161,7 +161,7 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 continue
             prompt_data = json.loads(entry.strip())
             dataset_dao.add_prompt_to_dataset(
-                user_id=request_fastapi.state.user_id,
+                user_id=user_id,
                 dataset_name=name,
                 prompt_data=prompt_data,
             )
