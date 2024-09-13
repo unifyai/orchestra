@@ -1,9 +1,10 @@
 import datetime
 import json
-from typing import Dict, List, Optional
+import os
+from typing import Dict, Optional
 
-from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
+from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.query_dao import QueryDAO
@@ -98,8 +99,9 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         try:
             custom_endpoint_id = int(
                 custom_endpoint_dao.filter(
-                    user_id=request_fastapi.state_user_id, name=model
-                )[0].id
+                    user_id=request_fastapi.state_user_id,
+                    name=model,
+                )[0].id,
             )
         except IndexError:
             raise internal_endpoint_not_found
@@ -127,25 +129,27 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         router=router,
         tags=tags,
     )
-    users_dao.recharge_credit(user_id, -cost)
+
     create_query_model(query_model_request, query_dao=query_dao)
-
     user = users_dao.get_user_with_id(user_id)
-    if (
-        user.autorecharge
-        and user.credits <= user.autorecharge_threshold
-        and user.autorecharge_qty > 0
-    ):
-        recharge_and_generate_invoice(user, users_dao)
 
-    telemetry_to_pub_sub(
-        user_id,
-        secondary_user_id,
-        model,
-        provider,
-        router,
-        processing_time,
-        usage,
-        signature,
-        json.dumps(query_body),
-    )
+    if not os.environ.get("ON_PREM"):
+        users_dao.recharge_credit(user_id, -cost)
+        if (
+            user.autorecharge
+            and user.credits <= user.autorecharge_threshold
+            and user.autorecharge_qty > 0
+        ):
+            recharge_and_generate_invoice(user, users_dao)
+
+        telemetry_to_pub_sub(
+            user_id,
+            secondary_user_id,
+            model,
+            provider,
+            router,
+            processing_time,
+            usage,
+            signature,
+            json.dumps(query_body),
+        )

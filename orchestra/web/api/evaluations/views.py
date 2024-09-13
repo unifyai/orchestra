@@ -312,37 +312,37 @@ def admin_trigger_eval(
 
     raise NotImplementedError
 
-    api_key = os.getenv("UNIFY_API_KEY")
+    # api_key = os.getenv("UNIFY_API_KEY")
 
-    # Check if the dataset exists
-    if not dataset_exists(user_id, dataset):
-        raise dataset_does_not_exist(dataset)
+    # # Check if the dataset exists
+    # if not dataset_exists(user_id, dataset):
+    #     raise dataset_does_not_exist(dataset)
 
-    # Check that the endpoints are valid
-    invalid_endpoints = find_invalid_endpoints([endpoint])
-    if invalid_endpoints:
-        raise invalid_training_endpoints(invalid_endpoints)
-    id_to_name = (
-        on_prem.internal_id_to_displayname(user_id)
-        if os.environ.get("ON_PREM")
-        else gcp.internal_id_to_displayname(user_id)
-    )
-    name_to_id = {name: id_ for id_, name in id_to_name.items()}
-    internal_id = name_to_id.get(dataset, dataset)
-    # check if the eval name is valid
-    eval_id = eval_name_to_eval_id(user_id, name)
+    # # Check that the endpoints are valid
+    # invalid_endpoints = find_invalid_endpoints([endpoint])
+    # if invalid_endpoints:
+    #     raise invalid_training_endpoints(invalid_endpoints)
+    # id_to_name = (
+    #     on_prem.internal_id_to_displayname(user_id)
+    #     if os.environ.get("ON_PREM")
+    #     else gcp.internal_id_to_displayname(user_id)
+    # )
+    # name_to_id = {name: id_ for id_, name in id_to_name.items()}
+    # internal_id = name_to_id.get(dataset, dataset)
+    # # check if the eval name is valid
+    # eval_id = eval_name_to_eval_id(user_id, name)
 
-    # Send train job to the dataset_evaluation server
-    send_to_dataset_evaluation_server(
-        action="evaluate",
-        user_id=user_id,
-        user_email="",
-        api_key=api_key,
-        dataset=internal_id,
-        endpoint=endpoint,
-        eval_id=eval_id,
-    )
-    return {"info": "Dataset evaluation started!"}
+    # # Send train job to the dataset_evaluation server
+    # send_to_dataset_evaluation_server(
+    #     action="evaluate",
+    #     user_id=user_id,
+    #     user_email="",
+    #     api_key=api_key,
+    #     dataset=internal_id,
+    #     endpoint=endpoint,
+    #     eval_id=eval_id,
+    # )
+    # return {"info": "Dataset evaluation started!"}
 
 
 def get_single_evaluation(

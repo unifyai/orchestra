@@ -144,7 +144,7 @@ def send_to_train_server(action, **data):
         },
     },
 )
-@handle_on_prem(endpoint="/router/train", method="post")
+@handle_on_prem(endpoint="/router/train", method="none")
 def train_router(
     request_fastapi: Request,
     name: str = Query(description="Name of the router.", example="router1"),
@@ -220,7 +220,7 @@ def train_router(
         },
     },
 )
-@handle_on_prem(endpoint="/router", method="delete")
+@handle_on_prem(endpoint="/router", method="none")
 def delete_router(
     request_fastapi: Request,
     name: str = Query(
@@ -244,7 +244,7 @@ def delete_router(
 
 
 @router.post("/router/rename")
-@handle_on_prem(endpoint="/router/rename", method="post")
+@handle_on_prem(endpoint="/router/rename", method="none")
 def rename_router(
     name: str = Query(
         description="The original name of the router.",
@@ -280,7 +280,7 @@ def rename_router(
         },
     },
 )
-@handle_on_prem(endpoint="/router/list", method="get")
+@handle_on_prem(endpoint="/router/list", method="none")
 def list_routers(
     request_fastapi: Request,
 ) -> Dict[str, Dict[str, Union[str, List[str]]]]:
@@ -300,6 +300,7 @@ def list_routers(
 
 
 @router.get("/get_dataset_evaluation")
+@handle_on_prem(endpoint="/get_dataset_evaluation", method="none")
 def get_dataset_evaluation(
     dataset_name: str,
 ) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:

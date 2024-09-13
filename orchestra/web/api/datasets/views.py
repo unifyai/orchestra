@@ -16,9 +16,7 @@ from fastapi import (
 
 from orchestra.db.dao.dataset_dao import DatasetDAO
 from orchestra.db.dao.dataset_prompt_dao import DatasetPromptDAO
-from orchestra.web.api.utils import gcp, on_prem
 from orchestra.web.api.utils.http_responses import (
-    dataset_already_exists,
     dataset_does_not_exist,
     invalid_dataset_name,
 )
@@ -64,22 +62,6 @@ def get_tokens_in_dataset(dataset_content: List[Dict[str, str]]):
         prompt = line["prompt"]
         num_tokens += len(encoding.encode(prompt))
     return num_tokens
-
-
-def _store_num_tokens(user_id: str, internal_id: str, num_tokens: int):
-    blob_name = f"{user_id}/{internal_id}/0/num_tokens.json"
-    exists = (
-        on_prem.file_exists(bucket_name, blob_name)
-        if os.environ.get("ON_PREM")
-        else gcp.blob_exists(bucket_name, blob_name)
-    )
-    string = json.dumps({"num_tokens": num_tokens}).encode()
-    if exists:
-        raise dataset_already_exists
-    elif os.environ.get("ON_PREM"):
-        on_prem.write_to_folder(string, bucket_name, blob_name)
-    else:
-        gcp.upload_to_bucket(string, bucket_name, blob_name)
 
 
 # endpoints
