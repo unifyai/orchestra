@@ -78,7 +78,11 @@ def find_invalid_endpoints(endpoints):
 
 def send_to_dataset_evaluation_server(action, **data):
     topic = "projects/gcp-project-saas/topics/dataset_evaluation"
-    url = "https://api.unify.ai"
+    url = (
+        "https://api.unify.ai"
+        if not os.environ.get("ON_PREM")
+        else "http://localhost:8000"
+    )
     if os.getenv("STAGING"):
         topic = "projects/gcp-project-saas/topics/staging_dataset_evaluation"
         url = "https://service.a.run.app"
