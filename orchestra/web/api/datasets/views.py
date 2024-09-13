@@ -223,6 +223,8 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         user_id=request_fastapi.state.user_id,
         name=name,
     )
+    if not entries:
+        raise dataset_does_not_exist(name)
     formatted_entries = []
     for e in entries:
         formatted_entry = copy.copy(e)
