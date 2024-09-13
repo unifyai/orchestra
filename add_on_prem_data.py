@@ -1,6 +1,7 @@
+import json
 import os
+from google.cloud.storage import Client
 from sqlalchemy import create_engine, insert
-from get_cloud_data import get_cloud_sql_data
 from orchestra.db.models.orchestra_models import (
     Modality,
     Task,
@@ -11,10 +12,15 @@ from orchestra.db.models.orchestra_models import (
 )
 
 
+def get_cloud_sql_data():
+    storage_client = Client()
+    blob = storage_client.bucket("on-prem-data").blob("data.json")
+    return json.loads(blob.download_as_bytes().decode("utf-8"))
+
+
 orchestra_db_host = os.environ.get("ORCHESTRA_DB_HOST")
 database_url = f"postgresql://orchestra:orchestra@{orchestra_db_host}/orchestra"
 local_engine = create_engine(database_url)
-
 tables = {
     "modality": {"model": Modality},
     "task": {"model": Task},
@@ -23,7 +29,7 @@ tables = {
     "endpoint": {"model": Endpoint},
     "users": {"model": Users},
 }
-data = get_cloud_sql_data(list(tables.keys()))
+data = get_cloud_sql_data()
 data = {
     table: {"model": tables[table]["model"], "rows": data[table]} for table in tables
 }

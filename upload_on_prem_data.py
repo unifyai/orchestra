@@ -1,5 +1,7 @@
+import json
 import os
 from google.cloud.sql.connector import Connector
+from google.cloud.storage import Client
 from sqlalchemy import create_engine, text
 
 
@@ -8,6 +10,7 @@ db_user = os.environ.get("DB_USER")
 db_pass = os.environ.get("DB_PASS")
 db_name = "orchestra"
 connector = Connector()
+tables = ["modality", "task", "model", "provider", "endpoint"]
 
 
 def get_cloud_sql_data(tables):
@@ -33,3 +36,10 @@ def get_cloud_sql_data(tables):
             data[table] = rows
 
     return data
+
+
+if __name__ == "__main__":
+    cloud_data = get_cloud_sql_data()
+    storage_client = Client()
+    blob = storage_client.bucket("on-prem-data").blob("data.json")
+    blob.upload_from_string(json.dumps(cloud_data, indent=4), content_type="application/json")
