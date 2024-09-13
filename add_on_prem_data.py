@@ -1,7 +1,7 @@
 import json
 import os
 from google.cloud.storage import Client
-from sqlalchemy import create_engine, insert
+from sqlalchemy import create_engine, insert, delete
 from orchestra.db.models.orchestra_models import (
     Modality,
     Task,
@@ -38,6 +38,10 @@ def write_data_to_db(data, engine):
     with engine.connect() as conn:
         for key, content in data.items():
             print(f"key {key}")
+            if key not in "users":
+                stmt = delete(model)
+                conn.execute(stmt)
+                conn.commit()
             model = content["model"]
             rows = content["rows"]
             stmt = insert(model)
