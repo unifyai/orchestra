@@ -258,13 +258,18 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             },
         },
         400: {
-            "description": "Invalid dataset name",
+            "description": "Can't Delete Public Dataset",
             "content": {
                 "application/json": {
-                    "example": {
-                        "detail": "Invalid name for a dataset."
-                        "Please, choose a different one.",
-                    },
+                    "example": {"detail": "You can't delete a public dataset."},
+                },
+            },
+        },
+        404: {
+            "description": "Dataset Not Found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "The dataset <dataset> does not exist."},
                 },
             },
         },
@@ -282,6 +287,12 @@ def delete_dataset(
     user_id = request_fastapi.state.user_id
     dataset_id = dataset_dao.filter(user_id=user_id, name=name)
     if not dataset_id:
+        all_datasets = dataset_dao.filter(name=name)
+        if all_datasets and [d for d in all_datasets if d.user_id is None]:
+            raise HTTPException(
+                status_code=400,
+                detail="You can't delete a public dataset.",
+            )
         raise dataset_does_not_exist(name)
     dataset_prompt_dao.delete(dataset_id=dataset_id[0].id)
     return dataset_dao.delete_dataset(user_id=user_id, name=name)
