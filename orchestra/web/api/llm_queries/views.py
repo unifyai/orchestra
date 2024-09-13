@@ -17,7 +17,6 @@ from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.web.api.credits.views import get_credits
 from orchestra.web.api.llm_queries.schema import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -112,14 +111,14 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         on_prem = os.environ.get("ON_PREM")
         user_id = request_fastapi.state.user_id
         use_custom_keys = request.use_custom_keys
+        user = users_dao.get_user_with_id(user_id)
+        store_prompt = user.store_prompts if user else True
+        store_prompt = True if store_prompt is None else store_prompt
+        if hasattr(request, "store_prompt"):
+            if isinstance(request.store_prompt, bool):
+                store_prompt = request.store_prompt
         if not on_prem:
-            user = get_credits(request_fastapi, users_dao=users_dao)
             available_credits = float(user.credits if user else 0)
-            store_prompt = user.store_prompts if user else True
-            store_prompt = True if store_prompt is None else store_prompt
-            if hasattr(request, "store_prompt"):
-                if isinstance(request.store_prompt, bool):
-                    store_prompt = request.store_prompt
 
         model, provider = model_priority_list[0]
         try_provider = 0
@@ -138,7 +137,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             except IndexError:
                 raise custom_api_key_not_found
 
-        if not on_prem and using_router:
+        if using_router:
             # parse router string
             tmp = model.split("_", 1)
             if len(tmp) == 1:
@@ -163,8 +162,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
         try:
             while try_provider >= 0 and try_provider < num_tries_provider:
-                print(f"try_provider {try_provider}")
-                if not on_prem and provider not in PROVIDER_CLASSES or using_router:
+                if provider not in PROVIDER_CLASSES or using_router:
                     # Dynamic routing
                     if using_router:
                         if router_choices is None:
@@ -201,7 +199,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 model, provider = model_priority_list[try_provider]
 
                 extra_args = tuple()
-                if not on_prem and provider == "custom":
+                if provider == "custom":
                     extra_args = (custom_endpoint_dao, custom_api_key_dao, user_id)
                 lm = PROVIDER_CLASSES[provider](
                     model, *extra_args, custom_api_key=custom_api_key
@@ -249,24 +247,23 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     if tags and isinstance(request.tags, str):
         tags = [tags]
 
-    if not on_prem:
-        db_operations_kwargs = {
-            "user_id": user_id,
-            "secondary_user_id": request.user,
-            "model": model,
-            "provider": provider,
-            "query_body": json.dumps(request.model_dump()) if store_prompt else "",
-            "signature": request.signature,
-            "used_router": using_router,
-            "router": router_str,
-            "tags": tags,
-            "model_dao": model_dao,
-            "provider_dao": provider_dao,
-            "endpoint_dao": endpoint_dao,
-            "custom_endpoint_dao": custom_endpoint_dao,
-            "query_dao": query_dao,
-            "users_dao": users_dao,
-        }
+    db_operations_kwargs = {
+        "user_id": user_id,
+        "secondary_user_id": request.user,
+        "model": model,
+        "provider": provider,
+        "query_body": json.dumps(request.model_dump()) if store_prompt else "",
+        "signature": request.signature,
+        "used_router": using_router,
+        "router": router_str,
+        "tags": tags,
+        "model_dao": model_dao,
+        "provider_dao": provider_dao,
+        "endpoint_dao": endpoint_dao,
+        "custom_endpoint_dao": custom_endpoint_dao,
+        "query_dao": query_dao,
+        "users_dao": users_dao,
+    }
 
     processing_time = (time.time() - t0) * 1000
 
@@ -278,34 +275,32 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 chat_response = ChatCompletionResponse(**part_dict)
                 yield f"data: {json.dumps(chat_response.model_dump())}\n\n"  # noqa: WPS237, E501
             processing_time = (time.time() - t0) * 1000
-            if not on_prem:
-                background_tasks.add_task(
-                    db_operations,
-                    cost=response.total_cost if not use_custom_keys else 0,
-                    processing_time=processing_time,
-                    usage=chat_response.usage,
-                    response_body=(
-                        json.dumps(
-                            chat_response.model_dump(),
-                        )
-                        if store_prompt
-                        else ""
-                    ),  # TODO this isn't the whole response
-                    **db_operations_kwargs,
-                )
+            background_tasks.add_task(
+                db_operations,
+                cost=response.total_cost if not use_custom_keys else 0,
+                processing_time=processing_time,
+                usage=chat_response.usage,
+                response_body=(
+                    json.dumps(
+                        chat_response.model_dump(),
+                    )
+                    if store_prompt
+                    else ""
+                ),  # TODO this isn't the whole response
+                **db_operations_kwargs,
+            )
 
         return StreamingResponse(stream_and_update_db())
     else:
         processing_time = (time.time() - t0) * 1000
-        if not on_prem:
-            background_tasks.add_task(
-                db_operations,
-                cost=cost if not use_custom_keys else 0,
-                processing_time=processing_time,
-                usage=response["usage"],
-                response_body=json.dumps(response) if store_prompt else "",
-                **db_operations_kwargs,
-            )
+        background_tasks.add_task(
+            db_operations,
+            cost=cost if not use_custom_keys else 0,
+            processing_time=processing_time,
+            usage=response["usage"],
+            response_body=json.dumps(response) if store_prompt else "",
+            **db_operations_kwargs,
+        )
 
     response["model"] = f"{model}@{provider}"
     response["usage"]["cost"] = cost

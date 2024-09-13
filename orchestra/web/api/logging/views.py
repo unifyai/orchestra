@@ -21,7 +21,6 @@ router = APIRouter()
 
 
 @router.get("/tags")
-@handle_on_prem(endpoint="/tags", method="none")
 def get_query_tags(
     request_fastapi: Request,
     tag_dao: TagDAO = Depends(),
@@ -31,7 +30,6 @@ def get_query_tags(
 
 
 @router.get("/queries")
-@handle_on_prem(endpoint="/queries", method="none")
 def get_queries(
     request_fastapi: Request,
     tags: Union[None, str, list[str]] = Query(
@@ -127,7 +125,6 @@ def get_queries(
 
 
 @router.post("/queries")
-@handle_on_prem(endpoint="/queries", method="none")
 def log_query(
     request_fastapi: Request,
     endpoint: str = Body(
@@ -148,7 +145,7 @@ def log_query(
             }
         },
     ),
-    response_body: Optional[dict] = Body(
+    response_body: Optional[Dict[str, Any]] = Body(
         None,
         description="An optional JSON object containing the response to the request",
         json_schema_extra={
