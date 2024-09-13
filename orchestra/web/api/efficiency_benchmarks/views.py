@@ -320,10 +320,7 @@ def get_benchmark(
         )
         json_response = response.json()
         if response.status_code != 200:
-            raise HTTPException(
-                response.status_code,
-                json_response["detail"]
-            )
+            raise HTTPException(response.status_code, json_response["detail"])
         return json_response
     try:
         endpoint_id = _get_endpoint_from_model_provider(model, provider, endpoint_dao)

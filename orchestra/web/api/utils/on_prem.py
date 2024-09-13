@@ -297,10 +297,7 @@ def handle_on_prem(endpoint: str, method: str):
                     )
                 json_response = response.json()
                 if response.status_code != 200:
-                    raise HTTPException(
-                        response.status_code,
-                       json_response["detail"]
-                    )
+                    raise HTTPException(response.status_code, json_response["detail"])
                 return json_response
             return fn(*args, **kwargs)
 
