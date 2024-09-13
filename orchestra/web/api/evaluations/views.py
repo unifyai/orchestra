@@ -82,18 +82,17 @@ def send_to_dataset_evaluation_server(action, **data):
     if os.getenv("STAGING"):
         topic = "projects/gcp-project-saas/topics/staging_dataset_evaluation"
         url = "https://service.a.run.app"
+
+    msg = {
+        "action": action,
+        **data,
+        "orchestra_url": url,
+        "admin_key": os.environ.get("ORCHESTRA_ADMIN_KEY"),
+    }
     if os.environ.get("ON_PREM"):
-        on_prem.send_pubsub_msg(topic, {"action": action, **data, "orchestra_url": url})
+        on_prem.send_pubsub_msg(topic, msg)
     else:
-        gcp.send_pubsub_msg(
-            topic,
-            {
-                "action": action,
-                **data,
-                "orchestra_url": url,
-                "admin_key": os.environ.get("ORCHESTRA_ADMIN_KEY"),
-            },
-        )
+        gcp.send_pubsub_msg(topic, msg)
     print(f"Published: {str({'action': action, **data, 'orchestra_url': url})}")
 
 
