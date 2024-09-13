@@ -1,5 +1,5 @@
+import copy
 import json
-import os
 from typing import Annotated, Dict, List
 
 import tiktoken
@@ -219,7 +219,28 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     """
     if "../" in name or name[0] == "/":
         raise invalid_dataset_name
-    return dataset_dao.fetch_dataset(user_id=request_fastapi.state.user_id, name=name)
+    entries = dataset_dao.fetch_dataset(
+        user_id=request_fastapi.state.user_id,
+        name=name,
+    )
+    formatted_entries = []
+    for e in entries:
+        formatted_entry = copy.copy(e)
+        if formatted_entry["ref_answer"] is None:
+            formatted_entry.pop("ref_answer")
+
+        system_msg = formatted_entry.pop("system_msg")
+        if system_msg:
+            formatted_entry["messages"].insert(
+                0,
+                {"role": "system", "content": system_msg},
+            )
+
+        formatted_entry["prompt"] = formatted_entry.pop("prompt_kwargs")
+        formatted_entry["prompt"]["messages"] = formatted_entry.pop("messages")
+
+        formatted_entries.append(formatted_entry)
+    return formatted_entries
 
 
 # delete dataset
