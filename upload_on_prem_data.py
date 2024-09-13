@@ -42,4 +42,6 @@ if __name__ == "__main__":
     cloud_data = get_cloud_sql_data()
     storage_client = Client()
     blob = storage_client.bucket("on-prem-data").blob("data.json")
-    blob.upload_from_string(json.dumps(cloud_data, indent=4), content_type="application/json")
+    blob.upload_from_string(
+        json.dumps(cloud_data, indent=4), content_type="application/json"
+    )
