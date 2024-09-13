@@ -38,7 +38,7 @@ def write_data_to_db(data, engine):
     with engine.connect() as conn:
         for key, content in data.items():
             print(f"key {key}")
-            if key not in "users":
+            if key != "users":
                 stmt = delete(model)
                 conn.execute(stmt)
                 conn.commit()
