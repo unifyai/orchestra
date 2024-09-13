@@ -1,4 +1,3 @@
-import os
 from datetime import datetime
 
 from fastapi import Depends
@@ -7,7 +6,6 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import CustomEndpointBenchmark
-from orchestra.web.api.utils.on_prem import OnPremModel
 
 
 class CustomEndpointBenchmarkDAO:
@@ -15,12 +13,6 @@ class CustomEndpointBenchmarkDAO:
 
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
-        self.on_prem = os.environ.get("ON_PREM")
-        if self.on_prem:
-            self.on_prem_model = OnPremModel(
-                model_class=CustomEndpointBenchmark,
-                table_name="custom_endpoint_benchmark",
-            )
 
     def upload_benchmark(
         self,
@@ -29,16 +21,14 @@ class CustomEndpointBenchmarkDAO:
         value: float,
         measured_at: datetime,
     ):
-        data = {
-            "custom_endpoint_id": endpoint_id,
-            "metric_name": metric_name,
-            "value": value,
-            "measured_at": str(measured_at),
-        }
-        if self.on_prem:
-            self.on_prem_model.create(**data)
-        else:
-            self.session.add(CustomEndpointBenchmark(**data))
+        self.session.add(
+            CustomEndpointBenchmark(
+                custom_endpoint_id=endpoint_id,
+                metric_name=metric_name,
+                value=value,
+                measured_at=measured_at,
+            ),
+        )
 
     def benchmarks_between(
         self,
@@ -47,21 +37,6 @@ class CustomEndpointBenchmarkDAO:
         start_time,
         end_time,
     ):
-        if self.on_prem:
-            return self.on_prem_model.read(
-                filters={
-                    "custom_endpoint_benchmark": {
-                        "custom_endpoint_id": endpoint_id,
-                        "metric_name": metric_name,
-                        "measured_at": lambda measured_at: (
-                            datetime.fromisoformat(measured_at)
-                            >= datetime.fromisoformat(start_time)
-                            and datetime.fromisoformat(measured_at)
-                            <= datetime.fromisoformat(end_time)
-                        ),
-                    },
-                },
-            )
         query = (
             select(CustomEndpointBenchmark)
             .where(CustomEndpointBenchmark.custom_endpoint_id == endpoint_id)
