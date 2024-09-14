@@ -6,13 +6,9 @@ from google.cloud.storage import Client
 from sqlalchemy import create_engine, text
 
 
-# instance_connection_name = os.environ.get("INSTANCE_CONNECTION_NAME")
-# db_user = os.environ.get("DB_USER")
-# db_pass = os.environ.get("DB_PASS")
-# db_name = "orchestra"
-instance_connection_name = "saas-368716:europe-west3:dev"
-db_user = "orchestra"
-db_pass = "rxD7wcwWzOvLsnXhb5nDwA"
+instance_connection_name = os.environ.get("INSTANCE_CONNECTION_NAME")
+db_user = os.environ.get("DB_USER")
+db_pass = os.environ.get("DB_PASS")
 db_name = "orchestra"
 connector = Connector()
 tables = ["modality", "task", "model", "provider", "endpoint"]
