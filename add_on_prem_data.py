@@ -1,25 +1,42 @@
 import json
 import os
 from google.cloud.storage import Client
-from sqlalchemy import create_engine, insert, delete
+from sqlalchemy import create_engine, insert, delete, text
 from orchestra.db.models.orchestra_models import (
+    Evaluation,
+    Evaluator,
+    Judgement,
     Modality,
+    StoredPromptResponse,
     Task,
     Model,
     Provider,
     Endpoint,
     Users,
+    Dataset,
+    DatasetPrompt,
+    StoredPrompt
 )
 
 
-tables = {
-    "modality": {"model": Modality},
-    "task": {"model": Task},
-    "model": {"model": Model},
-    "provider": {"model": Provider},
-    "endpoint": {"model": Endpoint},
-    "users": {"model": Users},
-}
+tables = [
+    ("modality", Modality),
+    ("task", Task),
+    ("model", Model),
+    ("provider", Provider),
+    ("endpoint", Endpoint),
+    ("users", Users),
+]
+
+hermes_tables = [
+    ("dataset", Dataset),
+    ("dataset_prompt", DatasetPrompt),
+    ("stored_prompt", StoredPrompt),
+    ("stored_prompt_response", StoredPromptResponse),
+    ("judgement", Judgement),
+    ("evaluator", Evaluator),
+    ("evaluation", Evaluation)
+]
 
 
 def get_cloud_sql_data():
@@ -30,20 +47,32 @@ def get_cloud_sql_data():
 
 def write_data_to_db(data, engine):
     data = {
-        table: {"model": tables[table]["model"], "rows": data[table]} for table in tables
+        table[0]: {"model": table[1], "rows": data[table]}
+        for table in tables + hermes_tables
     }
     user_id = os.environ.get("USER_ID")
     data["users"] = [[f"{user_id}", 0, "", False, 0, 0, True]]
 
     with engine.connect() as conn:
-        for key, content in data.items():
-            print(f"key {key}")
-            model = content["model"]
-            rows = content["rows"]
-            if key != "users":
-                stmt = delete(model)
-                conn.execute(stmt)
-                conn.commit()
+        # check if hermes already exists in the database
+        hermes = conn.execute(text("select * from dataset where name='hermes'")).fetchall()
+
+        # delete the rows from the other tables
+        for table in tables[::-1]:
+            model = data[table]["model"]
+            stmt = delete(model)
+            conn.execute(stmt)
+            conn.commit()
+        
+        # add the data to the other tables
+        for table in (
+            tables + ([] if len(hermes) == 0 else hermes_tables)
+        ):
+            table_name = table[0]
+            model = table[1]
+            print(f"table_name {table_name}")
+            model = data[table_name]["model"]
+            rows = data[table_name]["rows"]
             stmt = insert(model)
             conn.execute(stmt.values(rows))
             conn.commit()

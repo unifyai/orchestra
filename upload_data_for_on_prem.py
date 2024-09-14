@@ -6,12 +6,27 @@ from google.cloud.storage import Client
 from sqlalchemy import create_engine, text
 
 
-instance_connection_name = os.environ.get("INSTANCE_CONNECTION_NAME")
-db_user = os.environ.get("DB_USER")
-db_pass = os.environ.get("DB_PASS")
+# instance_connection_name = os.environ.get("INSTANCE_CONNECTION_NAME")
+# db_user = os.environ.get("DB_USER")
+# db_pass = os.environ.get("DB_PASS")
+# db_name = "orchestra"
+instance_connection_name = "saas-368716:europe-west3:dev"
+db_user = "orchestra"
+db_pass = "rxD7wcwWzOvLsnXhb5nDwA"
 db_name = "orchestra"
 connector = Connector()
 tables = ["modality", "task", "model", "provider", "endpoint"]
+
+
+def get_rows(conn, query):
+    stmt = text(query)
+    return [
+        list(
+            col.isoformat() if isinstance(col, datetime.date) else col
+            for col in row
+        )
+        for row in conn.execute(stmt).fetchall()
+    ]
 
 
 def get_cloud_sql_data():
@@ -24,6 +39,7 @@ def get_cloud_sql_data():
             db=db_name,
         )
 
+    # create engine
     engine = create_engine(
         "postgresql+pg8000://",
         creator=get_conn,
@@ -31,12 +47,49 @@ def get_cloud_sql_data():
     data = dict()
 
     with engine.connect() as conn:
+        hermes = get_rows(conn, "select * from dataset where name='hermes'")[0]
+        hermes_id = hermes[0]
+        print("dataset")
+        dataset_prompts = get_rows(
+            conn, f"select * from dataset_prompt where dataset_id={hermes_id}"
+        )
+        print("dataset_prompt")
+        prompt_ids = [dataset_prompt[-1] for dataset_prompt in dataset_prompts]
+        stored_prompts = get_rows(
+            conn, f"select * from stored_prompt where id in {tuple(prompt_ids)}"
+        )
+        print("stored_prompt")
+        stored_prompt_responses = get_rows(
+            conn, f"select * from stored_prompt_response where prompt_id in {tuple(prompt_ids)}"
+        )
+        print("stored_prompt_response")
+        response_ids = [stored_prompt_response[0] for stored_prompt_response in stored_prompt_responses]
+        default_evaluator = get_rows(
+            conn, "select * from evaluator where name='default_evaluator'"
+        )[0]
+        print("evaluator")
+        evaluator_id = default_evaluator[0]
+        judgements = get_rows(
+            conn, f"select * from judgement where response_id in {tuple(response_ids)} and evaluator_id={evaluator_id}"
+        )
+        print("judgement")
+        evaluations = get_rows(
+            conn, f"select * from evaluation where prompt_id in {tuple(prompt_ids)} and evaluator_id={evaluator_id}"
+        )
+        print("evaluation")
+        data = {
+            "dataset": [hermes],
+            "dataset_prompt": dataset_prompts,
+            "stored_prompt": stored_prompts,
+            "stored_prompt_response": stored_prompt_responses,
+            "judgement": judgements,
+            "evaluator": [default_evaluator],
+            "evaluation": evaluations
+        }
+
         for table in tables:
-            stmt = text(f"select * from {table}")
-            rows = [list(
-                col.isoformat() if isinstance(col, datetime.date) else col
-                for col in row
-            ) for row in conn.execute(stmt).fetchall()]
+            print(table)
+            rows = get_rows(conn, f"select * from {table}")
             data[table] = rows
 
     return data
