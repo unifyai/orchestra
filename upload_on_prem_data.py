@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 from google.cloud.sql.connector import Connector
@@ -13,7 +14,7 @@ connector = Connector()
 tables = ["modality", "task", "model", "provider", "endpoint"]
 
 
-def get_cloud_sql_data(tables):
+def get_cloud_sql_data():
     def get_conn():
         return connector.connect(
             instance_connection_name,
@@ -32,7 +33,10 @@ def get_cloud_sql_data(tables):
     with engine.connect() as conn:
         for table in tables:
             stmt = text(f"select * from {table}")
-            rows = [list(row) for row in conn.execute(stmt).fetchall()]
+            rows = [list(
+                col.isoformat() if isinstance(col, datetime.date) else col
+                for col in row
+            ) for row in conn.execute(stmt).fetchall()]
             data[table] = rows
 
     return data

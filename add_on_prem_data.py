@@ -33,17 +33,17 @@ def write_data_to_db(data, engine):
         table: {"model": tables[table]["model"], "rows": data[table]} for table in tables
     }
     user_id = os.environ.get("USER_ID")
-    data["users"] = [[f"{user_id}", 0, "", "f", 0, 0, "t"]]
+    data["users"] = [[f"{user_id}", 0, "", False, 0, 0, True]]
 
     with engine.connect() as conn:
         for key, content in data.items():
             print(f"key {key}")
+            model = content["model"]
+            rows = content["rows"]
             if key != "users":
                 stmt = delete(model)
                 conn.execute(stmt)
                 conn.commit()
-            model = content["model"]
-            rows = content["rows"]
             stmt = insert(model)
             conn.execute(stmt.values(rows))
             conn.commit()
