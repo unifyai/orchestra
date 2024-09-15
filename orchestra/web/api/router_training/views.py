@@ -304,7 +304,6 @@ def list_routers(
 def get_dataset_evaluation(
     request_fastapi: Request,
     dataset_name: str,
-    request_fastapi: Request,
 ) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
     """
     Retrieve specific dataset evaluation object from the database.
