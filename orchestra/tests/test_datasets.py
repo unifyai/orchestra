@@ -149,7 +149,7 @@ async def test_atomic_prompt_fns(client: AsyncClient):
             {"role": "user", "content": "What is the powerhouse of the cell?"},
         ],
     }
-    data = {"name": name, "prompt_data": {"prompt": new_prompt}}
+    data = {"name": name, "data": {"prompt": new_prompt}}
     response = await client.post("/v0/dataset/data", headers=headers, json=data)
     assert response.status_code == 200, response.json()
 
@@ -161,7 +161,7 @@ async def test_atomic_prompt_fns(client: AsyncClient):
 
     _id = jsonl[0]["id"]
 
-    data = {"name": name, "prompt_id": _id}
+    data = {"name": name, "data_ids": _id}
     response = await client.delete(
         "/v0/dataset/data",
         headers=headers,
