@@ -22,7 +22,8 @@ def get_rows(conn, query):
             col: (
                 val.isoformat()
                 if isinstance(val, datetime.date)
-                else float(val) if isinstance(val, Decimal)
+                else float(val)
+                if isinstance(val, Decimal)
                 else val
             )
             for col, val in row.items()
@@ -62,21 +63,27 @@ def get_cloud_sql_data():
         )
         print("stored_prompt")
         stored_prompt_responses = get_rows(
-            conn, f"select * from stored_prompt_response where prompt_id in {tuple(prompt_ids)}"
+            conn,
+            f"select * from stored_prompt_response where prompt_id in {tuple(prompt_ids)}",
         )
         print("stored_prompt_response")
-        response_ids = [stored_prompt_response["id"] for stored_prompt_response in stored_prompt_responses]
+        response_ids = [
+            stored_prompt_response["id"]
+            for stored_prompt_response in stored_prompt_responses
+        ]
         default_evaluator = get_rows(
             conn, "select * from evaluator where name='default_evaluator'"
         )[0]
         print("evaluator")
         evaluator_id = default_evaluator["id"]
         judgements = get_rows(
-            conn, f"select * from judgement where response_id in {tuple(response_ids)} and evaluator_id={evaluator_id}"
+            conn,
+            f"select * from judgement where response_id in {tuple(response_ids)} and evaluator_id={evaluator_id}",
         )
         print("judgement")
         evaluations = get_rows(
-            conn, f"select * from evaluation where prompt_id in {tuple(prompt_ids)} and evaluator_id={evaluator_id}"
+            conn,
+            f"select * from evaluation where prompt_id in {tuple(prompt_ids)} and evaluator_id={evaluator_id}",
         )
         print("evaluation")
         data = {
@@ -86,7 +93,7 @@ def get_cloud_sql_data():
             "stored_prompt_response": stored_prompt_responses,
             "judgement": judgements,
             "evaluator": [default_evaluator],
-            "evaluation": evaluations
+            "evaluation": evaluations,
         }
 
         for table in tables:

@@ -15,7 +15,7 @@ from orchestra.db.models.orchestra_models import (
     Users,
     Dataset,
     DatasetPrompt,
-    StoredPrompt
+    StoredPrompt,
 )
 
 
@@ -34,7 +34,7 @@ hermes_tables = [
     ("stored_prompt_response", StoredPromptResponse),
     ("evaluator", Evaluator),
     ("judgement", Judgement),
-    ("evaluation", Evaluation)
+    ("evaluation", Evaluation),
 ]
 
 
@@ -54,24 +54,26 @@ def get_cloud_sql_data():
 
 def write_data_to_db(data, engine):
     user_id = os.environ.get("USER_ID")
-    data["users"] = [{
-        "id": user_id,
-        "credits": 0,
-        "stripe_customer_id": "",
-        "autorecharge": False,
-        "autorecharge_threshold": 0,
-        "autorecharge_qty": 0,
-        "store_prompts": True
-    },
-    {
-        "id": "clummoqze00002hdndizy7339",
-        "credits": 0,
-        "stripe_customer_id": "",
-        "autorecharge": False,
-        "autorecharge_threshold": 0,
-        "autorecharge_qty": 0,
-        "store_prompts": True
-    }]
+    data["users"] = [
+        {
+            "id": user_id,
+            "credits": 0,
+            "stripe_customer_id": "",
+            "autorecharge": False,
+            "autorecharge_threshold": 0,
+            "autorecharge_qty": 0,
+            "store_prompts": True,
+        },
+        {
+            "id": "clummoqze00002hdndizy7339",
+            "credits": 0,
+            "stripe_customer_id": "",
+            "autorecharge": False,
+            "autorecharge_threshold": 0,
+            "autorecharge_qty": 0,
+            "store_prompts": True,
+        },
+    ]
     data = {
         table[0]: {"model": table[1], "rows": data[table[0]]}
         for table in tables + hermes_tables
@@ -79,7 +81,9 @@ def write_data_to_db(data, engine):
 
     with engine.connect() as conn:
         # check if hermes already exists in the database
-        hermes = conn.execute(select(Dataset).where(Dataset.name=="hermes")).fetchall()
+        hermes = conn.execute(
+            select(Dataset).where(Dataset.name == "hermes")
+        ).fetchall()
 
         # delete the rows from the other tables
         for table in tables[::-1]:
@@ -87,11 +91,9 @@ def write_data_to_db(data, engine):
             stmt = delete(model)
             conn.execute(stmt)
             conn.commit()
-        
+
         # add the data to the other tables
-        for table in (
-            tables + (hermes_tables if len(hermes) == 0 else [])
-        ):
+        for table in tables + (hermes_tables if len(hermes) == 0 else []):
             table_name = table[0]
             print(f"table_name {table_name}")
             model = data[table_name]["model"]
