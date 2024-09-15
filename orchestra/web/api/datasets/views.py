@@ -382,7 +382,7 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
 
 @router.delete(
-    "/dataset/delete_data",
+    "/dataset/data",
     responses={
         200: {
             "description": "Successful Response",
@@ -422,7 +422,7 @@ def delete_data(
 
 
 @router.post(
-    "/dataset/add_data",
+    "/dataset/data",
     responses={
         200: {
             "description": "Successful Response",
