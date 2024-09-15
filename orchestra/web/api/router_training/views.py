@@ -303,6 +303,7 @@ def list_routers(
 @handle_on_prem(endpoint="/get_dataset_evaluation", method="get")
 def get_dataset_evaluation(
     dataset_name: str,
+    request_fastapi: Request,
 ) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
     """
     Retrieve specific dataset evaluation object from the database.
