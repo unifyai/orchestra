@@ -444,28 +444,26 @@ def add_data(
         description="JSON object containing the Datum dict to upload, "
                     "or a list of Datum dicts to upload",
         json_schema_extra={
-            "example": {
-                [
-                    {
-                        "prompt": {
-                            "messages": [
-                                {"role": "user",
-                                 "content": "What is the capital of Spain?"},
-                            ],
-                        },
-                        "ref_answer": "Madrid",
+            "example": [
+                {
+                    "prompt": {
+                        "messages": [
+                            {"role": "user",
+                             "content": "What is the capital of Spain?"},
+                        ],
                     },
-                    {
-                        "prompt": {
-                            "messages": [
-                                {"role": "user",
-                                 "content": "What is the capital of England?"},
-                            ],
-                        },
-                        "ref_answer": "London",
-                    }
-                ],
-            },
+                    "ref_answer": "Madrid",
+                },
+                {
+                    "prompt": {
+                        "messages": [
+                            {"role": "user",
+                             "content": "What is the capital of England?"},
+                        ],
+                    },
+                    "ref_answer": "London",
+                }
+            ],
         },
     ),
     dataset_dao: DatasetDAO = Depends(),
