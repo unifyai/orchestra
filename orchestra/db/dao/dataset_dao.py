@@ -162,10 +162,10 @@ class DatasetDAO:
 
             self.session.delete(dataset_prompt)
             self.session.commit()
-            return {"message": "Dataset prompt deleted successfully"}
+            return {"info": "Dataset entries deleted successfully"}
         except:
             self.session.rollback()
-            return {"error": "Dataset prompt not found"}
+            return {"error": "Dataset entry {} not found".format(prompt_id)}
 
     def delete_dataset(self, user_id, name):
         try:
