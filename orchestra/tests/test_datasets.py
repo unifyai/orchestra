@@ -1,5 +1,6 @@
-import copy
 import os
+import copy
+import json
 
 import pytest
 from httpx import AsyncClient
@@ -179,3 +180,30 @@ async def test_atomic_prompt_fns(client: AsyncClient):
             "content": "What is the square root of 1009 to 1 decimal place",
         },
     ]
+
+
+@pytest.mark.anyio
+async def test_atomic_prompt_duplicate_add_ignored(client: AsyncClient):
+    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    name = "test_duplicate_prompt_ignored"
+    response = await upload_dataset(client, file_path, name)
+    assert response.status_code == 200, response.json()
+
+    duplicate_data = {
+        "prompt": {
+            "messages": [
+                {
+                    "role": "user", "content": "What is the capital of Spain?"
+                }
+            ]
+        },
+        "ref_answer": "Madrid"
+    }
+
+    data = {"name": name, "data": duplicate_data}
+    response = await client.post("/v0/dataset/data", headers=headers, json=data)
+    assert response.status_code == 200, response.json()
+
+    dataset = await client.get("/v0/dataset", headers=headers, params={"name": name})
+    dataset = json.loads(dataset.text)
+    assert len(dataset) == 2
