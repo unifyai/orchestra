@@ -70,7 +70,9 @@ class DatasetDAO:
 
     def fetch_dataset(self, user_id: str, name: str) -> list[dict]:
         try:
-            dataset_id = self.filter(user_id=user_id, name=name)[0].id
+            datasets = self.filter(name=name)
+            datasets = [d for d in datasets if d.user_id in [user_id, None]]
+            dataset_id = datasets[0].id
         except:
             return
 
@@ -103,7 +105,7 @@ class DatasetDAO:
 
             dataset_prompts.append(prompt_data)
 
-        return dataset_prompts
+        return sorted(dataset_prompts, key=lambda p: p["id"])
 
     def add_prompt_to_dataset(self, user_id, dataset_name, prompt_data):
         try:
