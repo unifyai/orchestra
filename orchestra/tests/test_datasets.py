@@ -150,7 +150,7 @@ async def test_atomic_prompt_fns(client: AsyncClient):
         ],
     }
     data = {"name": name, "prompt_data": {"prompt": new_prompt}}
-    response = await client.post("/v0/dataset/add_prompt", headers=headers, json=data)
+    response = await client.post("/v0/dataset/data", headers=headers, json=data)
     assert response.status_code == 200, response.json()
 
     # Download dataset
@@ -163,7 +163,7 @@ async def test_atomic_prompt_fns(client: AsyncClient):
 
     data = {"name": name, "prompt_id": _id}
     response = await client.delete(
-        "/v0/dataset/delete_prompt",
+        "/v0/dataset/data",
         headers=headers,
         params=data,
     )
