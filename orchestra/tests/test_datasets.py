@@ -189,16 +189,9 @@ async def test_atomic_prompt_duplicate_add_ignored(client: AsyncClient):
     response = await upload_dataset(client, file_path, name)
     assert response.status_code == 200, response.json()
 
-    duplicate_data = {
-        "prompt": {
-            "messages": [
-                {
-                    "role": "user", "content": "What is the capital of Spain?"
-                }
-            ]
-        },
-        "ref_answer": "Madrid"
-    }
+    with open(file_path) as file:
+        duplicate_data = file.read()
+    duplicate_data = json.loads(duplicate_data.split("\n")[0])
 
     data = {"name": name, "data": duplicate_data}
     response = await client.post("/v0/dataset/data", headers=headers, json=data)
