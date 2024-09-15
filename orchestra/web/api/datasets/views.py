@@ -406,6 +406,8 @@ def delete_data(
     ),
     dataset_dao: DatasetDAO = Depends(),
 ):
+    if (isinstance(data_ids, list) and not data_ids) or data_ids == "":
+        return {"info": "data_ids argument was empty. Nothing to delete."}
     rets = list()
     for datum_id in data_ids:
         rets.append(
