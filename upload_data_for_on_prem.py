@@ -1,4 +1,5 @@
 import datetime
+from decimal import Decimal
 import json
 import os
 from google.cloud.sql.connector import Connector
@@ -17,11 +18,16 @@ tables = ["modality", "task", "model", "provider", "endpoint"]
 def get_rows(conn, query):
     stmt = text(query)
     return [
-        list(
-            col.isoformat() if isinstance(col, datetime.date) else col
-            for col in row
-        )
-        for row in conn.execute(stmt).fetchall()
+        {
+            col: (
+                val.isoformat()
+                if isinstance(val, datetime.date)
+                else float(val) if isinstance(val, Decimal)
+                else val
+            )
+            for col, val in row.items()
+        }
+        for row in conn.execute(stmt).mappings()
     ]
 
 
@@ -44,13 +50,13 @@ def get_cloud_sql_data():
 
     with engine.connect() as conn:
         hermes = get_rows(conn, "select * from dataset where name='hermes'")[0]
-        hermes_id = hermes[0]
+        hermes_id = hermes["id"]
         print("dataset")
         dataset_prompts = get_rows(
             conn, f"select * from dataset_prompt where dataset_id={hermes_id}"
         )
         print("dataset_prompt")
-        prompt_ids = [dataset_prompt[-1] for dataset_prompt in dataset_prompts]
+        prompt_ids = [dataset_prompt["prompt_id"] for dataset_prompt in dataset_prompts]
         stored_prompts = get_rows(
             conn, f"select * from stored_prompt where id in {tuple(prompt_ids)}"
         )
@@ -59,12 +65,12 @@ def get_cloud_sql_data():
             conn, f"select * from stored_prompt_response where prompt_id in {tuple(prompt_ids)}"
         )
         print("stored_prompt_response")
-        response_ids = [stored_prompt_response[0] for stored_prompt_response in stored_prompt_responses]
+        response_ids = [stored_prompt_response["id"] for stored_prompt_response in stored_prompt_responses]
         default_evaluator = get_rows(
             conn, "select * from evaluator where name='default_evaluator'"
         )[0]
         print("evaluator")
-        evaluator_id = default_evaluator[0]
+        evaluator_id = default_evaluator["id"]
         judgements = get_rows(
             conn, f"select * from judgement where response_id in {tuple(response_ids)} and evaluator_id={evaluator_id}"
         )
@@ -93,8 +99,11 @@ def get_cloud_sql_data():
 
 if __name__ == "__main__":
     cloud_data = get_cloud_sql_data()
-    storage_client = Client()
-    blob = storage_client.bucket("on-prem-data").blob("data.json")
-    blob.upload_from_string(
-        json.dumps(cloud_data, indent=4), content_type="application/json"
-    )
+    print(cloud_data.keys())
+    bucket = Client().bucket("on-prem-data")
+    for key in cloud_data:
+        data = cloud_data[key]
+        with open(f"{key}.json", "w") as f:
+            json.dump(data, f, indent=4)
+        blob = bucket.blob(f"{key}.json")
+        blob.upload_from_filename(f"{key}.json")
