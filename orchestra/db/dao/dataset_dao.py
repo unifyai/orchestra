@@ -105,7 +105,7 @@ class DatasetDAO:
 
             dataset_prompts.append(prompt_data)
 
-        return dataset_prompts
+        return sorted(dataset_prompts, key=lambda p: p["id"])
 
     def add_prompt_to_dataset(self, user_id, dataset_name, prompt_data):
         try:
