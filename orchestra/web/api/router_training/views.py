@@ -302,6 +302,7 @@ def list_routers(
 @router.get("/get_dataset_evaluation")
 @handle_on_prem(endpoint="/get_dataset_evaluation", method="get")
 def get_dataset_evaluation(
+    request_fastapi: Request,
     dataset_name: str,
 ) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
     """
