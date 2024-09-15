@@ -486,7 +486,7 @@ def add_data(
                     prompt_data=datum,
                 )
             )
-    error_rets = [ret["error"] for ret in rets if "error" in ret]
+    error_rets = [ret["error"] for ret in rets if (ret is not None and "error" in ret)]
     if error_rets:
         return {"error": "\n".join(error_rets)}
     return {"info": "Data added successfully"}
