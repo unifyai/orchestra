@@ -200,3 +200,15 @@ async def test_atomic_prompt_duplicate_add_ignored(client: AsyncClient):
     dataset = await client.get("/v0/dataset", headers=headers, params={"name": name})
     dataset = json.loads(dataset.text)
     assert len(dataset) == 2
+
+
+@pytest.mark.anyio
+async def test_dataset_extra_fields_added(client: AsyncClient):
+    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    name = "test_extra_fields_stored"
+    response = await upload_dataset(client, file_path, name)
+    assert response.status_code == 200, response.json()
+
+    dataset = await client.get("/v0/dataset", headers=headers, params={"name": name})
+    dataset = json.loads(dataset.text)
+    assert "ref_answer" in dataset[0]
