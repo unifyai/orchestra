@@ -39,12 +39,12 @@ supported_models = {
         "cost": {"prompt": 5, "completion": 5},
     },
     "llama-3-70b-chat": {
-        "endpoint": "together_ai/meta-llama/Llama-3-70b-chat-hf",
+        "endpoint": "together_ai/meta-llama/Meta-Llama-3-70B-Instruct-Turbo",
         "context_window": 8192,
         "cost": {"prompt": 0.9, "completion": 0.9},
     },
     "llama-3-8b-chat": {
-        "endpoint": "together_ai/meta-llama/Llama-3-8b-chat-hf",
+        "endpoint": "together_ai/meta-llama/Meta-Llama-3-8B-Instruct-Turbo",
         "context_window": 8192,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },

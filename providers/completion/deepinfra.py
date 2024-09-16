@@ -58,11 +58,6 @@ supported_models = {
         "context_window": 8000,
         "cost": {"prompt": 0.27, "completion": 0.27},
     },
-    "mixtral-8x22b-instruct-v0.1": {
-        "endpoint": "deepinfra/mistralai/Mixtral-8x22B-Instruct-v0.1",
-        "context_window": 65536,
-        "cost": {"prompt": 0.65, "completion": 0.65},
-    },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "deepinfra/mistralai/Mixtral-8x7B-Instruct-v0.1",
         "context_window": 32768,
