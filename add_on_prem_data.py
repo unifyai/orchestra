@@ -75,7 +75,7 @@ def write_data_to_db(data, engine):
     ]
     data = {
         table[0]: {"model": table[1], "rows": data[table[0]]}
-        for table in tables + hermes_tables
+        for table in tables# + hermes_tables
     }
 
     with engine.connect() as conn:
