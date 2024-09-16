@@ -31,7 +31,13 @@ RUN apt-get purge -y \
 COPY . /app/src/
 RUN poetry install --only main
 
-CMD ["/usr/local/bin/python", "-m", "orchestra"]
+CMD if [ "$ON_PREM" = "true" ]; then \
+  echo "Running on prem"; \
+  bash ./on_prem_setup.sh; \
+  else \
+  echo "Running on cloud"; \
+  /usr/local/bin/python -m orchestra; \
+  fi
 
 FROM prod as dev
 
