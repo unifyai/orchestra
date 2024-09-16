@@ -72,7 +72,6 @@ async def test_create_data_trigger_eval(
     tmp_path,
     monkeypatch,
 ):
-
     @event.listens_for(Engine, "before_cursor_execute")
     def receive_before_cursor_execute(
         conn, cursor, statement, parameters, context, executemany
