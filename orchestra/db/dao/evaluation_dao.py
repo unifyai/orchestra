@@ -15,6 +15,15 @@ from orchestra.db.models.orchestra_models import (
 )
 
 
+class EvaluationScore:
+    def __init__(self, evaluator, endpoint_str, score, prompt_id=None, num_scores=None):
+        self.evaluator = evaluator
+        self.endpoint_str = endpoint_str
+        self.score = score
+        self.prompt_id = prompt_id
+        self.num_scores = num_scores
+
+
 class EvaluationDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
@@ -98,7 +107,19 @@ class EvaluationDAO:
 
         rows = self.session.execute(query)
 
-        return rows.fetchall()
+        # Manually map each result row to an EvaluationScore object
+        results = []
+        for row in rows:
+            score = EvaluationScore(
+                evaluator=row[0],
+                endpoint_str=row[1],
+                score=row[2],
+                prompt_id=row[3] if per_prompt else None,
+                num_scores=row[3] if not per_prompt else None,
+            )
+            results.append(score)
+
+        return results
 
     def get_evaluator_names(self, dataset_id: int, endpoint_str: str):
 
