@@ -81,7 +81,7 @@ def send_to_dataset_evaluation_server(action, **data):
     url = (
         "https://api.unify.ai"
         if not os.environ.get("ON_PREM")
-        else "http://localhost:8000"
+        else os.environ.get("ORCHESTRA_HOST")
     )
     if os.getenv("STAGING"):
         topic = "projects/saas-368716/topics/staging_dataset_evaluation"
