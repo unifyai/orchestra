@@ -348,18 +348,19 @@ def admin_trigger_eval(
     # return {"info": "Dataset evaluation started!"}
 
 
+# TODO: Delete this
 def get_single_evaluation(
     user_id: str,
     dataset: str,
     endpoint: str,
     evaluator: str,
+    dataset_prompts,
     dataset_dao: DatasetDAO,
     evaluator_dao: EvaluatorDAO,
     evaluation_dao: EvaluationDAO,
     per_prompt: bool,
 ):
     """Get the score for one endpoint + evaluator + dataset (optionally per_prompt)"""
-    dataset_prompts = dataset_dao.fetch_dataset(user_id=user_id, name=dataset)
 
     prompt_ids = [prompt["id"] for prompt in dataset_prompts]
     raw_evaluators = evaluator_dao.filter(name=evaluator)
@@ -371,6 +372,31 @@ def get_single_evaluation(
         evaluator_id=evaluator_id,
         endpoint_str=endpoint,
     )
+    mean_score = 100 * sum(float(s.score) for s in scores) / len(scores)
+    progress = 100 * len(scores) / len(prompt_ids)
+    result = {"score": mean_score, "progress": progress}
+    if per_prompt:
+        per_prompt_scores = [{"id": _s.id, "score": float(_s.score)} for _s in scores]
+        result["per_prompt"] = per_prompt_scores
+    return result
+
+
+def get_grouped_evaluations(
+    user_id: str,
+    dataset: str,
+    dataset_prompts,
+    per_prompt: bool,
+    dataset_dao: DatasetDAO,
+    evaluator_dao: EvaluatorDAO,
+    evaluation_dao: EvaluationDAO,
+):
+    """Get the score for one dataset grouped by endpoint + evaluator (optionally per_prompt)"""
+
+    prompt_ids = [prompt["id"] for prompt in dataset_prompts]
+
+    scores = evaluation_dao.fetch_evaluation_scores(prompt_ids=prompt_ids)
+    return scores
+    print(scores)
     mean_score = 100 * sum(float(s.score) for s in scores) / len(scores)
     progress = 100 * len(scores) / len(prompt_ids)
     result = {"score": mean_score, "progress": progress}
@@ -441,16 +467,6 @@ def get_evaluations(
         raw_evaluators = evaluator_dao.filter(name=evaluator)
         if not raw_evaluators or raw_evaluators[0].user_id not in [None, user_id]:
             raise evaluator_not_found(evaluator)
-        evaluator_id = raw_evaluators[0].id
-        evaluators = [evaluator]
-    else:
-        raw_datasets = dataset_dao.filter(name=dataset)
-        raw_datasets = [d for d in raw_datasets if d.user_id in [None, user_id]]
-        dataset_id = raw_datasets[0].id
-        evaluators = evaluation_dao.get_evaluator_names(
-            dataset_id=dataset_id,
-            endpoint_str=endpoint,
-        )
 
     if endpoint:
         invalid_endpoints = find_invalid_endpoints([endpoint])
@@ -459,36 +475,38 @@ def get_evaluations(
                 status_code=400,
                 detail=f"Could not find endpoint: {'.'.join(invalid_endpoints)}",
             )
-        endpoints = [endpoint]
-    else:
-        raw_datasets = dataset_dao.filter(name=dataset)
-        raw_datasets = [d for d in raw_datasets if d.user_id in [None, user_id]]
-        dataset_id = raw_datasets[0].id
-        endpoints = evaluation_dao.get_endpoints(
-            dataset_id=dataset_id,
-            evaluator_id=evaluator_id,
-        )
 
     # multiple judges
     # exception handling
 
     ret = {}
-    for endpoint in endpoints:
-        for evaluator in evaluators:
-            eval_result = get_single_evaluation(
-                user_id=user_id,
-                dataset=dataset,
-                endpoint=endpoint,
-                evaluator=evaluator,
-                dataset_dao=dataset_dao,
-                evaluator_dao=evaluator_dao,
-                evaluation_dao=evaluation_dao,
-                per_prompt=per_prompt,
-            )
-            if evaluator in ret:
-                ret[evaluator][endpoint] = eval_result
-            else:
-                ret[evaluator] = {endpoint: (eval_result)}
+
+    dataset_prompts = dataset_dao.fetch_dataset(
+        user_id=user_id,
+        name=dataset,
+        per_prompt=per_prompt,
+    )
+
+    eval_results = get_grouped_evaluations(
+        user_id=user_id,
+        dataset=dataset,
+        dataset_prompts=dataset_prompts,
+        per_prompt=per_prompt,  # TODO
+        dataset_dao=dataset_dao,
+        evaluator_dao=evaluator_dao,
+        evaluation_dao=evaluation_dao,
+    )
+
+    for er in eval_results:
+        if evaluator is not None and er[0] != evaluator:
+            continue
+        if endpoint is not None and er[1] != endpoint:
+            continue
+        if er[0] not in ret:  # check evaluator_name
+            ret[er[0]] = {}
+        if er[1] not in ret[er[0]]:  # check endpoint_str
+            ret[er[0]][er[1]] = {}
+        ret[er[0]][er[1]] = float(er[2]) * 100  # add score
 
     return ret
 
