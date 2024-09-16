@@ -3,8 +3,9 @@
 # if you want to generate different seed data, add a new test
 # with a corresponding @event.listens_for part
 
-# warning: sometimes it doesn't log all sql queries if you don't do another
-# api call, haven't figured out what causes it to get cut off
+# warning: sometimes the @event.listens doesn't log all sql queries
+# temp fix by doing an extra api call
+# haven't figured out what causes it to get cut off
 
 
 import asyncio
