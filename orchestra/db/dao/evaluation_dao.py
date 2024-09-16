@@ -1,7 +1,7 @@
 from typing import List, Optional
 
 from fastapi import Depends
-from sqlalchemy import join, select
+from sqlalchemy import Float, cast, join, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
@@ -75,26 +75,30 @@ class EvaluationDAO:
     def fetch_evaluation_scores(self, prompt_ids, per_prompt=False):
         if per_prompt:
             query = select(
-                Evaluator.name,
+                Evaluator.name.label("evaluator"),
                 Evaluation.endpoint_str,
-                func.avg(Evaluation.score),
+                cast(func.avg(Evaluation.score).label("score") * 100, Float),
                 Evaluation.prompt_id,
             )
         else:
             query = select(
-                Evaluator.name,
+                Evaluator.name.label("evaluator"),
                 Evaluation.endpoint_str,
-                func.avg(Evaluation.score),
-                func.count(Evaluation.score),
+                cast(func.avg(Evaluation.score).label("score") * 100, Float),
+                func.count(Evaluation.score).label("num_scores"),
             )
+
         query = query.filter(Evaluation.evaluator_id == Evaluator.id)
         query = query.filter(Evaluation.prompt_id.in_(prompt_ids))
-        if per_prompt:
-            query = query.group_by(Evaluation.prompt_id)
+
         query = query.group_by(Evaluator.name)
         query = query.group_by(Evaluation.endpoint_str)
+        if per_prompt:
+            query = query.group_by(Evaluation.prompt_id)
+
         rows = self.session.execute(query)
-        return list(rows.all())
+
+        return rows.fetchall()
 
     def get_evaluator_names(self, dataset_id: int, endpoint_str: str):
 
