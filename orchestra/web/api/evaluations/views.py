@@ -446,6 +446,7 @@ def get_evaluations(
         evaluation_dao=evaluation_dao,
     )
 
+    accumulator = {}  # stores scores to aggregate
     num_prompts = len(dataset_prompts_ids)
 
     for er in eval_results:
@@ -455,9 +456,11 @@ def get_evaluations(
             continue
         if er[0] not in ret:  # check evaluator_name
             ret[er[0]] = {}
+            accumulator[er[0]] = {}
 
         if er[1] not in ret[er[0]]:  # check endpoint_str
             ret[er[0]][er[1]] = {}
+            accumulator[er[0]][er[1]] = []
 
         if not per_prompt:
             ret[er[0]][er[1]]["score"] = float(er[2]) * 100  # add score
@@ -467,6 +470,13 @@ def get_evaluations(
                 ret[er[0]][er[1]]["per_prompt"] = []
             per_prompt_score = {"id": er[3], "score": 100 * float(er[2])}
             ret[er[0]][er[1]]["per_prompt"].append(per_prompt_score)
+            accumulator[er[0]][er[1]].append(float(er[2]))
+            ret[er[0]][er[1]]["score"] = (
+                100 * sum(accumulator[er[0]][er[1]]) / len(accumulator[er[0]][er[1]])
+            )
+            ret[er[0]][er[1]]["progress"] = (
+                100 * len(accumulator[er[0]][er[1]]) / num_prompts
+            )
     return ret
 
 
