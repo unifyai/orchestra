@@ -53,6 +53,7 @@ def get_cloud_sql_data():
 
 
 def write_data_to_db(data, engine):
+    # add current and default users
     user_id = os.environ.get("USER_ID")
     data["users"] = [
         {
