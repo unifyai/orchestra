@@ -132,7 +132,7 @@ class DatasetDAO:
         except:
             return {"error": f"Dataset {dataset_name} not found"}
         prompt = prompt_data["prompt"]
-        ref_answer = prompt_data["ref_answer"]
+        ref_answer = prompt_data.get("ref_answer")
         system_msg = prompt.get("system_msg")
         messages = prompt["messages"]
         prompt_kwargs = {
