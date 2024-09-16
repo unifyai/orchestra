@@ -435,11 +435,7 @@ def get_evaluations(
 
     ret = {}
 
-    dataset_prompts = dataset_dao.fetch_dataset(
-        user_id=user_id,
-        name=dataset,
-        per_prompt=per_prompt,
-    )
+    dataset_prompts = dataset_dao.fetch_dataset(user_id=user_id, name=dataset)
 
     # TODO: This doesn't account for prompt
     # variations / default prompts when per_prompt=True

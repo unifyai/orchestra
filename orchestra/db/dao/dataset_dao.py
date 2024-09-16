@@ -68,7 +68,7 @@ class DatasetDAO:
 
         self.update(id=dataset_id, name=new_name)
 
-    def fetch_dataset(self, user_id: str, name: str, per_prompt: bool) -> list[dict]:
+    def fetch_dataset(self, user_id: str, name: str) -> list[dict]:
         try:
             datasets = self.filter(name=name)
             datasets = [d for d in datasets if d.user_id in [user_id, None]]
