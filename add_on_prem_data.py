@@ -47,8 +47,6 @@ def get_cloud_sql_data():
         print(f"downloading {table_name}")
         url = f"https://storage.googleapis.com/on-prem-data/{table_name}.json"
         data[table_name] = json.loads(requests.get(url).text)
-        if "table_name" == "dataset":
-            print(data[table_name])
     return data
 
 
