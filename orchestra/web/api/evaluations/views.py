@@ -361,11 +361,6 @@ def get_grouped_evaluations(
     )
     return scores
 
-    if per_prompt:
-        per_prompt_scores = [{"id": _s.id, "score": float(_s.score)} for _s in scores]
-        result["per_prompt"] = per_prompt_scores
-    return result
-
 
 @router.get("/evaluation")
 def get_evaluations(
