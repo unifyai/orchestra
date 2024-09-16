@@ -68,14 +68,19 @@ class DatasetDAO:
 
         self.update(id=dataset_id, name=new_name)
 
-    def fetch_dataset(self, user_id: str, name: str) -> list[dict]:
+    def get_dataset_id(self, user_id: str, name: str) -> List[int]:
+        # Accounts for public datasets
         try:
             datasets = self.filter(name=name)
             datasets = [d for d in datasets if d.user_id in [user_id, None]]
-            dataset_id = datasets[0].id
+            return [
+                datasets[0].id,
+            ]
         except:
-            return
+            return []
 
+    def fetch_prompts_ids_in_dataset(self, user_id: str, name: str) -> list[dict]:
+        dataset_id = self.get_dataset_id(user_id, name)[0]
         query = (
             select(StoredPrompt.id)
             .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
@@ -86,6 +91,36 @@ class DatasetDAO:
         dataset_prompts = []
         for stored_prompt in result:
             prompt_data = {"id": stored_prompt.id}
+            dataset_prompts.append(prompt_data)
+        return sorted(dataset_prompts, key=lambda p: p["id"])
+
+    def fetch_dataset(self, user_id: str, name: str) -> list[dict]:
+        dataset_id = self.get_dataset_id(user_id, name)[0]
+        query = (
+            select(StoredPrompt, DatasetPrompt)
+            .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
+            .where(DatasetPrompt.dataset_id == dataset_id)
+        )
+        result = self.session.execute(query).fetchall()
+
+        dataset_prompts = []
+        for stored_prompt, _ in result:
+            prompt_data = {
+                "id": stored_prompt.id,
+                "system_msg": json.loads(stored_prompt.system_msg),
+                "messages": json.loads(stored_prompt.messages),
+                "prompt_kwargs": json.loads(stored_prompt.prompt_kwargs),
+                "ref_answer": stored_prompt.ref_answer,
+                "num_tokens": stored_prompt.num_tokens,
+                "timestamp": stored_prompt.timestamp,
+            }
+            # Query to get extra fields for this prompt
+            extra_fields_query = select(StoredPromptExtraField).where(
+                StoredPromptExtraField.prompt_id == stored_prompt.id,
+            )
+            extra_fields = self.session.execute(extra_fields_query).fetchall()
+            for extra_field in extra_fields:
+                prompt_data[extra_field.field] = extra_field.value
 
             dataset_prompts.append(prompt_data)
 

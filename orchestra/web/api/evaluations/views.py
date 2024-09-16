@@ -32,18 +32,16 @@ admin_router = APIRouter()
 
 # TODO: Move to utils (duplicated in routing)
 def dataset_exists(dataset_dao, user_id, name):
-    raw_datasets = dataset_dao.filter(name=name)
-    raw_datasets = [d for d in raw_datasets if d.user_id in [None, user_id]]
-    if raw_datasets:
-        return raw_datasets[0].id
+    _ids = dataset_dao.get_dataset_id(user_id, name)
+    if _ids:
+        return True
     return False
 
 
 def get_dataset_id(dataset_dao, user_id, name):
-    raw_datasets = dataset_dao.filter(name=name)
-    raw_datasets = [d for d in raw_datasets if d.user_id in [None, user_id]]
-    if raw_datasets:
-        return raw_datasets[0].id
+    _ids = dataset_dao.get_dataset_id(user_id, name)
+    if _ids:
+        return _ids[0]
     return None
 
 
@@ -435,17 +433,20 @@ def get_evaluations(
 
     ret = {}
 
-    dataset_prompts = dataset_dao.fetch_dataset(user_id=user_id, name=dataset)
+    dataset_prompts_ids = dataset_dao.fetch_prompts_ids_in_dataset(
+        user_id=user_id,
+        name=dataset,
+    )
 
     # TODO: This doesn't account for prompt
     # variations / default prompts when per_prompt=True
     eval_results = get_grouped_evaluations(
-        dataset_prompts=dataset_prompts,
+        dataset_prompts=dataset_prompts_ids,
         per_prompt=per_prompt,
         evaluation_dao=evaluation_dao,
     )
 
-    num_prompts = len(dataset_prompts)
+    num_prompts = len(dataset_prompts_ids)
 
     for er in eval_results:
         if evaluator is not None and er[0] != evaluator:
