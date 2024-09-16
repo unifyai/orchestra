@@ -1,6 +1,6 @@
 import copy
 import json
-from typing import Annotated, Dict, List
+from typing import Annotated, Dict, List, Union
 
 import tiktoken
 from fastapi import (
@@ -382,7 +382,7 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
 
 @router.delete(
-    "/dataset/delete_prompt",
+    "/dataset/data",
     responses={
         200: {
             "description": "Successful Response",
@@ -394,27 +394,37 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         },
     },
 )
-def delete_prompt(
+def delete_data(
     request_fastapi: Request,
     name: str = Query(
         description="Name of the dataset for prompt to be deleted from.",
         example="dataset1",
     ),
-    prompt_id: str = Query(
-        description="ID of the prompt to be removed.",
-        example="123",
+    data_ids: Union[str, List[str]] = Query(
+        description="Unique ids for the data to be removed.",
+        example=["001", "002", "003"],
     ),
     dataset_dao: DatasetDAO = Depends(),
 ):
-    return dataset_dao.remove_prompt_from_dataset(
-        user_id=request_fastapi.state.user_id,
-        dataset_name=name,
-        prompt_id=prompt_id,
-    )
+    if (isinstance(data_ids, list) and not data_ids) or data_ids == "":
+        return {"info": "data_ids argument was empty. Nothing to delete."}
+    rets = list()
+    for datum_id in data_ids:
+        rets.append(
+            dataset_dao.remove_prompt_from_dataset(
+                user_id=request_fastapi.state.user_id,
+                dataset_name=name,
+                prompt_id=datum_id,
+            )
+        )
+    error_rets = [ret["error"] for ret in rets if "error" in ret]
+    if error_rets:
+        return {"error": "\n".join(error_rets)}
+    return rets[0]
 
 
 @router.post(
-    "/dataset/add_prompt",
+    "/dataset/data",
     responses={
         200: {
             "description": "Successful Response",
@@ -426,32 +436,59 @@ def delete_prompt(
         },
     },
 )
-def add_prompt(
+def add_data(
     request_fastapi: Request,
     name: str = Body(
         description="Name of the dataset to add to",
         json_schema_extra={"example": "dataset_1"},
     ),
-    prompt_data: dict = Body(
-        description="JSON object containing the prompt data to upload.",
+    data: Union[Dict, List[Dict]] = Body(
+        description="JSON object containing the Datum dict to upload, "
+                    "or a list of Datum dicts to upload",
         json_schema_extra={
-            "example": {
-                "prompt": {
-                    "messages": [
-                        {"role": "user", "content": "What is the capital of Spain?"},
-                    ],
+            "example": [
+                {
+                    "prompt": {
+                        "messages": [
+                            {"role": "user",
+                             "content": "What is the capital of Spain?"},
+                        ],
+                    },
+                    "ref_answer": "Madrid",
                 },
-                "ref_answer": "Madrid",
-            },
+                {
+                    "prompt": {
+                        "messages": [
+                            {"role": "user",
+                             "content": "What is the capital of England?"},
+                        ],
+                    },
+                    "ref_answer": "London",
+                }
+            ],
         },
     ),
     dataset_dao: DatasetDAO = Depends(),
 ):
-    ret = dataset_dao.add_prompt_to_dataset(
-        user_id=request_fastapi.state.user_id,
-        dataset_name=name,
-        prompt_data=prompt_data,
-    )
-    if isinstance(ret, dict):
-        return ret
-    return {"info": "Prompt added successfully"}
+    rets = list()
+    if isinstance(data, dict):
+        rets.append(
+            dataset_dao.add_prompt_to_dataset(
+                user_id=request_fastapi.state.user_id,
+                dataset_name=name,
+                prompt_data=data,
+            )
+        )
+    elif isinstance(data, list):
+        for datum in data:
+            rets.append(
+                dataset_dao.add_prompt_to_dataset(
+                    user_id=request_fastapi.state.user_id,
+                    dataset_name=name,
+                    prompt_data=datum,
+                )
+            )
+    error_rets = [ret["error"] for ret in rets if (ret is not None and "error" in ret)]
+    if error_rets:
+        return {"error": "\n".join(error_rets)}
+    return {"info": "Data added successfully"}
