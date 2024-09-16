@@ -342,13 +342,14 @@ async def test_client_side_scores(
 # helper utils
 
 
-def populate_from_file(path, session):
+async def populate_from_file(path, session):
     with open(path) as f:
         for line in f:
             command = json.loads(line)
             statement = command["statement"]
             statement = statement.replace("%(", ":").replace(")s", "")
             session.execute(text(statement), command["parameters"])
+            session.commit()
 
 
 async def get_evaluation_scores(client, params):
@@ -373,7 +374,7 @@ async def get_evaluation_scores(client, params):
 
 async def _seed_evaluations_db(dbsession):
     path = "./orchestra/tests/sql_dumps/evaluations/dump_trigger.jsonl"
-    populate_from_file(path=path, session=dbsession)
+    await populate_from_file(path=path, session=dbsession)
 
 
 async def _helper_test_list_evaluations(client, params, expected_scores):
