@@ -138,20 +138,21 @@ class EvaluationDAO:
         return endpoints
 
     def delete_evaluations(self, dataset_name: str, endpoint: str, evaluator: str):
-        query = delete(Evaluation).where(Evaluation.prompt_id.in_(
-            select(StoredPrompt.id)
-            .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
-            .join(Dataset, DatasetPrompt.dataset_id == Dataset.id)
-            .where(Dataset.name == dataset_name)
-        ))
+        query = delete(Evaluation).where(
+            Evaluation.prompt_id.in_(
+                select(StoredPrompt.id)
+                .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
+                .join(Dataset, DatasetPrompt.dataset_id == Dataset.id)
+                .where(Dataset.name == dataset_name)
+            )
+        )
 
         if endpoint:
             query = query.where(Evaluation.endpoint_str == endpoint)
         if evaluator:
             query = query.where(
                 Evaluation.evaluator_id.in_(
-                    select(Evaluator.id)
-                    .where(Evaluator.name == evaluator)
+                    select(Evaluator.id).where(Evaluator.name == evaluator)
                 )
             )
         result = self.session.execute(query)

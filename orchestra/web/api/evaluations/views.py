@@ -543,7 +543,9 @@ def delete_evaluations(
             "info": f"Evaluation deleted successfully. You deleted {result} evaluations."
         }
     except:
-        raise HTTPException(status_code=400, detail="An unknown error occured when deleting evaluations")
+        raise HTTPException(
+            status_code=400, detail="An unknown error occured when deleting evaluations"
+        )
 
 
 ### admin functions
