@@ -148,8 +148,7 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     check_file_content(file_content)
 
     user_id = request_fastapi.state.user_id
-    user_datasets = dataset_dao.filter(name=name)
-    user_datasets = [d for d in user_datasets if d.user_id in [None, user_id]]
+    user_datasets = dataset_dao.get_dataset_id(user_id, name)
     if user_datasets:
         raise HTTPException(400, detail=f"Dataset {name} already exists.")
 
@@ -415,7 +414,7 @@ def delete_data(
                 user_id=request_fastapi.state.user_id,
                 dataset_name=name,
                 prompt_id=datum_id,
-            )
+            ),
         )
     error_rets = [ret["error"] for ret in rets if "error" in ret]
     if error_rets:
@@ -481,7 +480,7 @@ def add_data(
                 user_id=request_fastapi.state.user_id,
                 dataset_name=name,
                 prompt_data=data,
-            )
+            ),
         )
     elif isinstance(data, list):
         for datum in data:
@@ -490,7 +489,7 @@ def add_data(
                     user_id=request_fastapi.state.user_id,
                     dataset_name=name,
                     prompt_data=datum,
-                )
+                ),
             )
     error_rets = [ret["error"] for ret in rets if (ret is not None and "error" in ret)]
     if error_rets:
