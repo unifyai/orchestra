@@ -132,6 +132,7 @@ class DatasetDAO:
         except:
             return {"error": f"Dataset {dataset_name} not found"}
         prompt = prompt_data["prompt"]
+        ref_answer = prompt_data["ref_answer"]
         system_msg = prompt.get("system_msg")
         messages = prompt["messages"]
         prompt_kwargs = {
@@ -140,11 +141,11 @@ class DatasetDAO:
 
         new_prompt = StoredPrompt(
             user_id=user_id,
-            system_msg=json.dumps(system_msg),
+            system_msg=json.dumps(system_msg),  # TODO: This is broken I think
             messages=json.dumps(messages),
             prompt_kwargs=json.dumps(prompt_kwargs),
-            ref_answer=prompt.get("ref_answer"),
-            num_tokens=prompt.get("num_tokens", 0),
+            ref_answer=ref_answer,
+            num_tokens=prompt.get("num_tokens", 0),  # TODO: Compute num of tokens
             timestamp=prompt.get("timestamp", datetime.utcnow()),
         )
         self.session.add(new_prompt)
