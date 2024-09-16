@@ -68,21 +68,41 @@ class DatasetDAO:
 
         self.update(id=dataset_id, name=new_name)
 
-    def fetch_dataset(self, user_id: str, name: str) -> list[dict]:
+    def get_dataset_id(self, user_id: str, name: str) -> List[int]:
+        # Accounts for public datasets
         try:
             datasets = self.filter(name=name)
             datasets = [d for d in datasets if d.user_id in [user_id, None]]
-            dataset_id = datasets[0].id
+            return [
+                datasets[0].id,
+            ]
         except:
-            return
+            return []
 
+    def fetch_prompts_ids_in_dataset(self, user_id: str, name: str) -> list[dict]:
+        dataset_id = self.get_dataset_id(user_id, name)[0]
         query = (
-            select(StoredPrompt, DatasetPrompt)
+            select(StoredPrompt.id)
             .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
             .where(DatasetPrompt.dataset_id == dataset_id)
         )
 
         result = self.session.execute(query).fetchall()
+        dataset_prompts = []
+        for stored_prompt in result:
+            prompt_data = {"id": stored_prompt.id}
+            dataset_prompts.append(prompt_data)
+        return sorted(dataset_prompts, key=lambda p: p["id"])
+
+    def fetch_dataset(self, user_id: str, name: str) -> list[dict]:
+        dataset_id = self.get_dataset_id(user_id, name)[0]
+        query = (
+            select(StoredPrompt, DatasetPrompt)
+            .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
+            .where(DatasetPrompt.dataset_id == dataset_id)
+        )
+        result = self.session.execute(query).fetchall()
+
         dataset_prompts = []
         for stored_prompt, _ in result:
             prompt_data = {
@@ -99,7 +119,6 @@ class DatasetDAO:
                 StoredPromptExtraField.prompt_id == stored_prompt.id,
             )
             extra_fields = self.session.execute(extra_fields_query).fetchall()
-
             for extra_field in extra_fields:
                 prompt_data[extra_field.field] = extra_field.value
 
@@ -113,6 +132,7 @@ class DatasetDAO:
         except:
             return {"error": f"Dataset {dataset_name} not found"}
         prompt = prompt_data["prompt"]
+        ref_answer = prompt_data.get("ref_answer")
         system_msg = prompt.get("system_msg")
         messages = prompt["messages"]
         prompt_kwargs = {
@@ -121,11 +141,11 @@ class DatasetDAO:
 
         new_prompt = StoredPrompt(
             user_id=user_id,
-            system_msg=json.dumps(system_msg),
+            system_msg=json.dumps(system_msg),  # TODO: This is broken I think
             messages=json.dumps(messages),
             prompt_kwargs=json.dumps(prompt_kwargs),
-            ref_answer=prompt.get("ref_answer"),
-            num_tokens=prompt.get("num_tokens", 0),
+            ref_answer=ref_answer,
+            num_tokens=prompt.get("num_tokens", 0),  # TODO: Compute num of tokens
             timestamp=prompt.get("timestamp", datetime.utcnow()),
         )
         self.session.add(new_prompt)
