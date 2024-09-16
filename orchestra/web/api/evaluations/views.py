@@ -382,20 +382,13 @@ def get_single_evaluation(
 
 
 def get_grouped_evaluations(
-    user_id: str,
-    dataset: str,
     dataset_prompts,
     per_prompt: bool,
-    dataset_dao: DatasetDAO,
-    evaluator_dao: EvaluatorDAO,
     evaluation_dao: EvaluationDAO,
 ):
     """Get the score for one dataset grouped by endpoint + evaluator (optionally per_prompt)"""
-
     prompt_ids = [prompt["id"] for prompt in dataset_prompts]
-
     scores = evaluation_dao.fetch_evaluation_scores(prompt_ids=prompt_ids)
-
     return scores
 
     if per_prompt:
