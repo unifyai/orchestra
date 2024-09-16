@@ -77,6 +77,7 @@ class EvaluationDAO:
             Evaluator.name,
             Evaluation.endpoint_str,
             func.avg(Evaluation.score),
+            func.count(Evaluation.score),
         )
         query = query.filter(Evaluation.evaluator_id == Evaluator.id)
         query = query.filter(Evaluation.prompt_id.in_(prompt_ids))
