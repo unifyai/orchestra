@@ -117,6 +117,9 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         if hasattr(request, "store_prompt"):
             if isinstance(request.store_prompt, bool):
                 store_prompt = request.store_prompt
+        if store_prompt:
+            store_query_body = True if request.log_query_body else False
+            store_response_body = True if request.log_response_body else False
         if not on_prem:
             available_credits = float(user.credits if user else 0)
 
@@ -252,7 +255,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         "secondary_user_id": request.user,
         "model": model,
         "provider": provider,
-        "query_body": json.dumps(request.model_dump()) if store_prompt else "",
+        "query_body": json.dumps(request.model_dump()) if store_query_body else "",
         "signature": request.signature,
         "used_router": using_router,
         "router": router_str,
@@ -282,7 +285,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 usage=chat_response.usage,
                 response_body=(
                     json.dumps(
-                        chat_response.model_dump(),
+                        chat_response.model_dump() if store_response_body else "",
                     )
                     if store_prompt
                     else ""
@@ -298,7 +301,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             cost=cost if not use_custom_keys else 0,
             processing_time=processing_time,
             usage=response["usage"],
-            response_body=json.dumps(response) if store_prompt else "",
+            response_body=json.dumps(response) if store_response_body else "",
             **db_operations_kwargs,
         )
 

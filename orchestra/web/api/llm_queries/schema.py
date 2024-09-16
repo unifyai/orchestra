@@ -221,6 +221,16 @@ class ChatCompletionRequest(BaseModel):
             "specified region."
         ),
     )
+    log_query_body: Optional[bool] = Field(
+        True,
+        description="Whether to log the contents of the query json body. "
+        "Only valid if `store_prompt` is True, otherwise this argument is ignored."
+    )
+    log_response_body: Optional[bool] = Field(
+        True,
+        description="Whether to log the contents of the response json body. "
+        "Only valid if `store_prompt` is True, otherwise this argument is ignored."
+    )
 
 
 class ChatCompletionResponse(BaseModel):
