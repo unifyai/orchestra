@@ -34,7 +34,7 @@ jobs:
 
     - name: Upload on-prem data
       id: update_litellm
-      run: poetry run python upload_data_for_on_prem.py
+      run: python3 upload_data_for_on_prem.py
       env:
         INSTANCE_CONNECTION_NAME: ${{ secrets.INSTANCE_CONNECTION_NAME }}
         DB_USER: ${{ secrets.DB_USER }}
