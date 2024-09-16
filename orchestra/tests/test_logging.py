@@ -1,12 +1,10 @@
 import copy
-from httpx import AsyncClient
-import pytest
 import datetime
 
-from orchestra.tests.utils import (
-    HEADERS,
-    get_chat_completions_payload,
-)
+import pytest
+from httpx import AsyncClient
+
+from orchestra.tests.utils import HEADERS, get_chat_completions_payload
 
 headers = copy.copy(HEADERS)
 headers.pop("Content-Type", None)
@@ -29,7 +27,7 @@ async def test_logging_queries_NO_LOG(client: AsyncClient):
     data = get_chat_completions_payload("llama-3-8b-chat", "aws-bedrock", stream=False)
     data["log_query_body"] = False
     data["log_response_body"] = False
-    
+
     response = await client.post(endpoint, headers=HEADERS, json=data)
     assert response.status_code == 200
 
@@ -40,7 +38,6 @@ async def test_logging_queries_NO_LOG(client: AsyncClient):
     assert len(resp_json) == 1
     assert resp_json[0]["query_body"] == ""
     assert resp_json[0]["response_body"] == ""
-
 
 
 async def test_queries_filter_endpoint(client: AsyncClient):
@@ -160,7 +157,7 @@ external_data = {
                     "content": "Sir Isaac Newton was an English mathematician, physicist, and astronomer who lived from 1643 to 1727.\\n\\nHe is widely recognized as one of the most influential scientists in history, and his work laid the foundation for the Scientific Revolution of the 17th century.\\n\\nNewton's most famous achievement is his theory of universal gravitation, which he presented in his groundbreaking book \"Philosophi\\u00e6 Naturalis Principia Mathematica\" in 1687.\\n\\nAccording to Newton's theory, every",
                     "role": "assistant",
                 },
-            }
+            },
         ],
     },
 }
