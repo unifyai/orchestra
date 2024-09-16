@@ -403,12 +403,6 @@ def get_evaluations(
     if not dataset_exists(dataset_dao, user_id, dataset):
         raise dataset_does_not_exist(dataset)
 
-    if not endpoint and not evaluator:
-        raise HTTPException(
-            status_code=400,
-            detail="You need to specify at least one of (endpoint, evaluator)",
-        )
-
     if per_prompt:
         if not endpoint or not evaluator:
             raise HTTPException(
@@ -533,7 +527,7 @@ def delete_evaluations(
         invalid_endpoints = find_invalid_endpoints([endpoint])
         if invalid_endpoints:
             raise HTTPException(
-                status_code=400,
+                status_code=404,
                 detail=f"Could not find endpoint: {'.'.join(invalid_endpoints)}",
             )
     if evaluator:
@@ -545,11 +539,11 @@ def delete_evaluations(
         result = evaluation_dao.delete_evaluations(
             dataset_name=dataset, endpoint=endpoint, evaluator=evaluator
         )
-        return {"info": f"Evaluation deleted successfully. You deleted {result} evaluations."}
+        return {
+            "info": f"Evaluation deleted successfully. You deleted {result} evaluations."
+        }
     except:
-        raise HTTPException(status_code=400, detail="An unknown error occured when de")
-
-
+        raise HTTPException(status_code=400, detail="An unknown error occured when deleting evaluations")
 
 
 ### admin functions

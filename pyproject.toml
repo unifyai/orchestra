@@ -102,6 +102,9 @@ env = [
     "ORCHESTRA_SENTRY_DSN=",
 ]
 addopts = "--cov --cov-report=lcov:lcov.info --cov-report=term"
+markers = [
+    "manual: marks tests as manual",
+]
 
 [fastapi-template.options]
 project_name = "orchestra"

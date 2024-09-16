@@ -27,6 +27,9 @@ HEADERS = {
     "Authorization": f"Bearer {api_key}",
 }
 
+# makes the tests run async
+pytestmark = pytest.mark.anyio
+
 
 def create_default_prompt(client, default_prompt_name):
     data = {"name": default_prompt_name, "prompt": {"temperature": 0.8}}
@@ -336,6 +339,9 @@ async def test_client_side_scores(
     assert endpoint in scores[eval_name]
 
 
+# helper utils
+
+
 def populate_from_file(path, session):
     with open(path) as f:
         for line in f:
@@ -353,22 +359,109 @@ async def get_evaluation_scores(client, params):
     return scores
 
 
-async def test_delete_single_evaluation(client: AsyncClient, dbsession):
+# Listing Tests
 
-    # setup db for test
-    path = "./orchestra/tests/sql_dumps/dump_trigger_simple_eval.jsonl"
+# The database contains
+# {
+#     "test_eval": {
+#         "gpt-3.5-turbo@openai": {"score": 100.0, "progress": 100.0},
+#         "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
+#     },
+#     "test_eval_2": {"llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0}},
+# }
+
+
+async def _seed_evaluations_db(dbsession):
+    path = "./orchestra/tests/sql_dumps/evaluations/dump_trigger.jsonl"
     populate_from_file(path=path, session=dbsession)
+
+
+async def _helper_test_list_evaluations(client, params, expected_scores):
+    scores = await get_evaluation_scores(client, params)
+    assert scores == expected_scores
+
+
+async def test_list_evaluation_evaluator_and_endpoint(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(dbsession)
+    params = {
+        "dataset": "test_dataset_eval",
+        "evaluator": "test_eval",
+        "endpoint": "llama-3-8b-chat@aws-bedrock",
+    }
+    expected_scores = {
+        "test_eval": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
+        },
+    }
+    await _helper_test_list_evaluations(client, params, expected_scores)
+
+
+async def test_list_evaluation_endpoint(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(dbsession)
+
+    params = {
+        "dataset": "test_dataset_eval",
+        "endpoint": "llama-3-8b-chat@aws-bedrock",
+    }
+    expected_scores = {
+        "test_eval": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
+        },
+        "test_eval_2": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0}
+        },
+    }
+    await _helper_test_list_evaluations(client, params, expected_scores)
+
+
+async def test_list_evaluation_evaluator(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(dbsession)
+
+    params = {
+        "dataset": "test_dataset_eval",
+        "evaluator": "test_eval",
+    }
+
+    expected_scores = {
+        "test_eval": {
+            "gpt-3.5-turbo@openai": {"score": 100.0, "progress": 100.0},
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
+        }
+    }
+    await _helper_test_list_evaluations(client, params, expected_scores)
+
+
+async def test_list_evaluation_all(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(dbsession)
+
+    params = {
+        "dataset": "test_dataset_eval",
+    }
+
+    expected_scores = {
+        "test_eval": {
+            "gpt-3.5-turbo@openai": {"score": 100.0, "progress": 100.0},
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
+        },
+        "test_eval_2": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0}
+        },
+    }
+    await _helper_test_list_evaluations(client, params, expected_scores)
+
+
+# Deletion Tests
+
+
+async def test_delete_evaluation_endpoint_and_evaluator(client: AsyncClient, dbsession):
+
+    await _seed_evaluations_db(dbsession)
 
     params = {
         "dataset": "test_dataset_eval",
         "evaluator": "test_eval",
         "endpoint": "llama-3-8b-chat@aws-bedrock",
     }
-
-    # check db setup correctly
-    scores = await get_evaluation_scores(client, params)
-    assert len(scores) > 0
-
     # delete evaluation
     response = await client.delete(
         "/v0/evaluation",
@@ -376,28 +469,61 @@ async def test_delete_single_evaluation(client: AsyncClient, dbsession):
         headers=HEADERS,
     )
     assert response.status_code == 200
-    assert response.json() == {"info": "Evaluation deleted successfully. You deleted 2 evaluations."}
+    assert response.json() == {
+        "info": "Evaluation deleted successfully. You deleted 2 evaluations."
+    }
 
     # check deleted
-    scores = await get_evaluation_scores(client, params)
-    assert len(scores) == 0
+    expected_scores = {
+        "test_eval": {
+            "gpt-3.5-turbo@openai": {"score": 100.0, "progress": 100.0},
+        },
+        "test_eval_2": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0}
+        },
+    }
+    all_params = {"dataset": "test_dataset_eval"}
+    await _helper_test_list_evaluations(client, all_params, expected_scores)
 
 
 async def test_delete_no_endpoint(client: AsyncClient, dbsession):
 
-    # setup db for test
-    path = "./orchestra/tests/sql_dumps/dump_trigger_complex_eval.jsonl"
-    populate_from_file(path=path, session=dbsession)
+    await _seed_evaluations_db(dbsession)
 
     params = {
         "dataset": "test_dataset_eval",
         "evaluator": "test_eval",
     }
 
-    # check db setup correctly
-    scores = await get_evaluation_scores(client, params)
-    print(scores)
-    assert len(scores) > 0
+    # delete evaluation
+    response = await client.delete(
+        "/v0/evaluation",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "info": "Evaluation deleted successfully. You deleted 4 evaluations."
+    }
+
+    # check deleted
+    expected_scores = {
+        "test_eval_2": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0}
+        },
+    }
+    all_params = {"dataset": "test_dataset_eval"}
+    await _helper_test_list_evaluations(client, all_params, expected_scores)
+
+
+async def test_delete_no_evaluator(client: AsyncClient, dbsession):
+
+    await _seed_evaluations_db(dbsession)
+
+    params = {
+        "dataset": "test_dataset_eval",
+        "endpoint": "llama-3-8b-chat@aws-bedrock",
+    }
 
     # delete evaluation
     response = await client.delete(
@@ -406,123 +532,74 @@ async def test_delete_no_endpoint(client: AsyncClient, dbsession):
         headers=HEADERS,
     )
     assert response.status_code == 200
-    assert response.json() == {"info": "Evaluation deleted successfully. You deleted 2 evaluations."}
+    assert response.json() == {
+        "info": "Evaluation deleted successfully. You deleted 4 evaluations."
+    }
 
     # check deleted
-    scores = await get_evaluation_scores(client, params)
-    assert len(scores) == 0
+    expected_scores = {
+        "test_eval": {
+            "gpt-3.5-turbo@openai": {"score": 100.0, "progress": 100.0},
+        },
+    }
+    all_params = {"dataset": "test_dataset_eval"}
+    await _helper_test_list_evaluations(client, all_params, expected_scores)
 
-async def test_simple_trigger_eval(
-    client: AsyncClient,
-    tmp_path,
-    monkeypatch,
-):
-    def mock_send_to_dataset_evaluation_server(action, **data):
-        data.pop("user_email", "")
-        message_data = json.dumps(
-            {
-                "action": action,
-                **data,
-                "orchestra_url": "",
-                "admin_key": os.environ.get("ORCHESTRA_ADMIN_KEY"),
-            },
-        )
-        save_dir = tmp_path / "save_files"
-        if action == "evaluate":
-            asyncio.run(
-                evaluate_dataset(
-                    message_data,
-                    save_dir,
-                    shared_volume="",
-                    client=client,
-                ),
-            )
-        elif action == "refresh_scores":
-            user_id = data["user_id"]
-            asyncio.run(refresh_scores_for_user(user_id, save_dir))
-        else:
-            raise NotImplementedError
 
-    monkeypatch.setattr(
-        orchestra.web.api.evaluations.views,
-        "send_to_dataset_evaluation_server",
-        mock_send_to_dataset_evaluation_server,
+async def test_delete_no_evaluator_no_endpoint(client: AsyncClient, dbsession):
+
+    await _seed_evaluations_db(dbsession)
+
+    params = {
+        "dataset": "test_dataset_eval",
+    }
+
+    # delete evaluation
+    response = await client.delete(
+        "/v0/evaluation",
+        params=params,
+        headers=HEADERS,
     )
-
-    # create evaluator
-    eval_name = "test_eval"
-    system_prompt = "dummy system prompt"
-    judge_model = "llama-3-8b-chat@aws-bedrock"
-
-    url = "/v0/evaluator"
-    params = {
-        "name": eval_name,
-        "system_prompt": system_prompt,
-        "judge_models": judge_model,
+    assert response.status_code == 200
+    assert response.json() == {
+        "info": "Evaluation deleted successfully. You deleted 6 evaluations."
     }
-    response = await client.post(url, json=params, headers=HEADERS)
-    assert response.status_code == 200, response.json()
 
-    url = "/v0/evaluator"
-    params = {
-        "name": "test_eval_2",
-        "system_prompt": system_prompt,
-        "judge_models": judge_model,
+    # check deleted
+    expected_scores = {}
+    all_params = {"dataset": "test_dataset_eval"}
+    await _helper_test_list_evaluations(client, all_params, expected_scores)
+
+
+async def test_delete_bad_evaluator(client: AsyncClient, dbsession):
+
+    await _seed_evaluations_db(dbsession)
+
+    params = {"dataset": "test_dataset_eval", "evaluator": "fake_evaluator"}
+
+    # delete evaluation
+    response = await client.delete(
+        "/v0/evaluation",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 404
+    assert response.json() == {
+        "detail": "The evaluator fake_evaluator does not exist in your account"
     }
-    response = await client.post(url, json=params, headers=HEADERS)
-    assert response.status_code == 200, response.json()
-
-    # create dataset
-
-    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
-    dataset = "test_dataset_eval"
-    response = await upload_dataset(client, file_path, dataset)
-    assert response.status_code == 200, response.json()
-
-    # trigger evaluation
-
-    url = "/v0/evaluation"
-    endpoint = "llama-3-8b-chat@aws-bedrock"
-    params = {
-        "url": url,
-        "dataset": dataset,
-        "endpoint": endpoint,
-        "evaluator": eval_name,
-    }
-    response = await client.post(url, params=params, headers=HEADERS)
-    assert response.status_code == 200, response.json()
 
 
-    url = "/v0/evaluation"
-    endpoint = "gpt-3.5-turbo@openai"
-    params = {
-        "url": url,
-        "dataset": dataset,
-        "endpoint": endpoint,
-        "evaluator": eval_name,
-    }
-    response = await client.post(url, params=params, headers=HEADERS)
-    assert response.status_code == 200, response.json()
+async def test_delete_bad_endpoint(client: AsyncClient, dbsession):
 
+    await _seed_evaluations_db(dbsession)
 
-    url = "/v0/evaluation"
-    endpoint = "llama-3-8b-chat@aws-bedrock"
-    params = {
-        "url": url,
-        "dataset": dataset,
-        "endpoint": endpoint,
-        "evaluator": "test_eval_2",
-    }
-    response = await client.post(url, params=params, headers=HEADERS)
-    assert response.status_code == 200, response.json()
+    params = {"dataset": "test_dataset_eval", "endpoint": "llama-5b@amazon.com"}
 
-    url = "/v0/evaluation"
-    params = {
-        "dataset": dataset,
-        "evaluator": eval_name
-    }
-    response = await client.get(url, params=params, headers=HEADERS)
-    assert response.status_code == 200, response.json()
-    scores = response.json()
-    print(scores)
-    assert eval_name in scores
+    # delete evaluation
+    response = await client.delete(
+        "/v0/evaluation",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Could not find endpoint: llama-5b@amazon.com"}
