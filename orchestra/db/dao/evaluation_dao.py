@@ -72,15 +72,25 @@ class EvaluationDAO:
             if score:
                 setattr(entry, "score", score)  # noqa: B010
 
-    def fetch_evaluation_scores(self, prompt_ids):
-        query = select(
-            Evaluator.name,
-            Evaluation.endpoint_str,
-            func.avg(Evaluation.score),
-            func.count(Evaluation.score),
-        )
+    def fetch_evaluation_scores(self, prompt_ids, per_prompt=False):
+        if per_prompt:
+            query = select(
+                Evaluator.name,
+                Evaluation.endpoint_str,
+                func.avg(Evaluation.score),
+                Evaluation.prompt_id,
+            )
+        else:
+            query = select(
+                Evaluator.name,
+                Evaluation.endpoint_str,
+                func.avg(Evaluation.score),
+                func.count(Evaluation.score),
+            )
         query = query.filter(Evaluation.evaluator_id == Evaluator.id)
         query = query.filter(Evaluation.prompt_id.in_(prompt_ids))
+        if per_prompt:
+            query = query.group_by(Evaluation.prompt_id)
         query = query.group_by(Evaluator.name)
         query = query.group_by(Evaluation.endpoint_str)
         rows = self.session.execute(query)

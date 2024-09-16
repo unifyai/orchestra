@@ -348,39 +348,6 @@ def admin_trigger_eval(
     # return {"info": "Dataset evaluation started!"}
 
 
-# TODO: Delete this
-def get_single_evaluation(
-    user_id: str,
-    dataset: str,
-    endpoint: str,
-    evaluator: str,
-    dataset_prompts,
-    dataset_dao: DatasetDAO,
-    evaluator_dao: EvaluatorDAO,
-    evaluation_dao: EvaluationDAO,
-    per_prompt: bool,
-):
-    """Get the score for one endpoint + evaluator + dataset (optionally per_prompt)"""
-
-    prompt_ids = [prompt["id"] for prompt in dataset_prompts]
-    raw_evaluators = evaluator_dao.filter(name=evaluator)
-    if not raw_evaluators or raw_evaluators[0].user_id not in [None, user_id]:
-        raise evaluator_not_found(evaluator)
-    evaluator_id = raw_evaluators[0].id
-    scores = evaluation_dao.fetch_evaluation_scores(
-        prompt_ids=prompt_ids,
-        evaluator_id=evaluator_id,
-        endpoint_str=endpoint,
-    )
-    mean_score = 100 * sum(float(s.score) for s in scores) / len(scores)
-    progress = 100 * len(scores) / len(prompt_ids)
-    result = {"score": mean_score, "progress": progress}
-    if per_prompt:
-        per_prompt_scores = [{"id": _s.id, "score": float(_s.score)} for _s in scores]
-        result["per_prompt"] = per_prompt_scores
-    return result
-
-
 def get_grouped_evaluations(
     dataset_prompts,
     per_prompt: bool,
@@ -388,7 +355,10 @@ def get_grouped_evaluations(
 ):
     """Get the score for one dataset grouped by endpoint + evaluator (optionally per_prompt)"""
     prompt_ids = [prompt["id"] for prompt in dataset_prompts]
-    scores = evaluation_dao.fetch_evaluation_scores(prompt_ids=prompt_ids)
+    scores = evaluation_dao.fetch_evaluation_scores(
+        prompt_ids=prompt_ids,
+        per_prompt=per_prompt,
+    )
     return scores
 
     if per_prompt:
@@ -397,9 +367,7 @@ def get_grouped_evaluations(
     return result
 
 
-@router.get(
-    "/evaluation",
-)
+@router.get("/evaluation")
 def get_evaluations(
     request_fastapi: Request,
     dataset: str = Query(
@@ -478,13 +446,11 @@ def get_evaluations(
         per_prompt=per_prompt,
     )
 
+    # TODO: This doesn't account for prompt
+    # variations / default prompts when per_prompt=True
     eval_results = get_grouped_evaluations(
-        user_id=user_id,
-        dataset=dataset,
         dataset_prompts=dataset_prompts,
-        per_prompt=per_prompt,  # TODO
-        dataset_dao=dataset_dao,
-        evaluator_dao=evaluator_dao,
+        per_prompt=per_prompt,
         evaluation_dao=evaluation_dao,
     )
 
@@ -497,11 +463,17 @@ def get_evaluations(
             continue
         if er[0] not in ret:  # check evaluator_name
             ret[er[0]] = {}
-        if er[1] not in ret[er[0]]:  # check endpoint_str
-            ret[er[0]][er[1]] = {}
-        ret[er[0]][er[1]]["score"] = float(er[2]) * 100  # add score
-        ret[er[0]][er[1]]["progress"] = float(er[3]) / num_prompts * 100
 
+        if not per_prompt:
+            if er[1] not in ret[er[0]]:  # check endpoint_str
+                ret[er[0]][er[1]] = {}
+            ret[er[0]][er[1]]["score"] = float(er[2]) * 100  # add score
+            ret[er[0]][er[1]]["progress"] = float(er[3]) / num_prompts * 100
+        if per_prompt:
+            if er[1] not in ret[er[0]]:  # check endpoint_str
+                ret[er[0]][er[1]] = []
+            per_prompt_score = {"id": er[3], "score": 100 * float(er[2])}
+            ret[er[0]][er[1]].append(per_prompt_score)
     return ret
 
 
