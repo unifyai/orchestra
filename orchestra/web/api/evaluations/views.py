@@ -33,18 +33,16 @@ admin_router = APIRouter()
 
 # TODO: Move to utils (duplicated in routing)
 def dataset_exists(dataset_dao, user_id, name):
-    raw_datasets = dataset_dao.filter(name=name)
-    raw_datasets = [d for d in raw_datasets if d.user_id in [None, user_id]]
-    if raw_datasets:
-        return raw_datasets[0].id
+    _ids = dataset_dao.get_dataset_id(user_id, name)
+    if _ids:
+        return True
     return False
 
 
 def get_dataset_id(dataset_dao, user_id, name):
-    raw_datasets = dataset_dao.filter(name=name)
-    raw_datasets = [d for d in raw_datasets if d.user_id in [None, user_id]]
-    if raw_datasets:
-        return raw_datasets[0].id
+    _ids = dataset_dao.get_dataset_id(user_id, name)
+    if _ids:
+        return _ids[0]
     return None
 
 
@@ -82,7 +80,7 @@ def send_to_dataset_evaluation_server(action, **data):
     url = (
         "https://api.unify.ai"
         if not os.environ.get("ON_PREM")
-        else "http://localhost:8000"
+        else os.environ.get("ORCHESTRA_URL")
     )
     if os.getenv("STAGING"):
         topic = "projects/saas-368716/topics/staging_dataset_evaluation"
@@ -349,45 +347,21 @@ def admin_trigger_eval(
     # return {"info": "Dataset evaluation started!"}
 
 
-def get_single_evaluation(
-    user_id: str,
-    dataset: str,
-    endpoint: str,
-    evaluator: str,
-    dataset_dao: DatasetDAO,
-    evaluator_dao: EvaluatorDAO,
-    evaluation_dao: EvaluationDAO,
+def get_grouped_evaluations(
+    dataset_prompts,
     per_prompt: bool,
+    evaluation_dao: EvaluationDAO,
 ):
-    """Get the score for one endpoint + evaluator + dataset (optionally per_prompt)"""
-    dataset_prompts = dataset_dao.fetch_dataset(user_id=user_id, name=dataset)
-
+    """Get the score for one dataset grouped by endpoint + evaluator (optionally per_prompt)"""
     prompt_ids = [prompt["id"] for prompt in dataset_prompts]
-    raw_evaluators = evaluator_dao.filter(name=evaluator)
-    if not raw_evaluators or raw_evaluators[0].user_id not in [None, user_id]:
-        raise evaluator_not_found(evaluator)
-    evaluator_id = raw_evaluators[0].id
     scores = evaluation_dao.fetch_evaluation_scores(
         prompt_ids=prompt_ids,
-        evaluator_id=evaluator_id,
-        endpoint_str=endpoint,
+        per_prompt=per_prompt,
     )
-    if not scores:
-        return {}
-
-    mean_score = 100 * sum(float(s.score) for s in scores) / len(scores)
-    progress = 100 * len(scores) / len(prompt_ids)
-
-    result = {"score": f"{mean_score:.2f}", "progress": f"{progress:.2f}"}
-    if per_prompt:
-        per_prompt_scores = [{"id": _s.id, "score": float(_s.score)} for _s in scores]
-        result["per_prompt"] = per_prompt_scores
-    return result
+    return scores
 
 
-@router.get(
-    "/evaluation",
-)
+@router.get("/evaluation")
 def get_evaluations(
     request_fastapi: Request,
     dataset: str = Query(
@@ -446,16 +420,6 @@ def get_evaluations(
         raw_evaluators = evaluator_dao.filter(name=evaluator)
         if not raw_evaluators or raw_evaluators[0].user_id not in [None, user_id]:
             raise evaluator_not_found(evaluator)
-        evaluator_id = raw_evaluators[0].id
-        evaluators = [evaluator]
-    else:
-        raw_datasets = dataset_dao.filter(name=dataset)
-        raw_datasets = [d for d in raw_datasets if d.user_id in [None, user_id]]
-        dataset_id = raw_datasets[0].id
-        evaluators = evaluation_dao.get_evaluator_names(
-            dataset_id=dataset_id,
-            endpoint_str=endpoint,
-        )
 
     if endpoint:
         invalid_endpoints = find_invalid_endpoints([endpoint])
@@ -464,39 +428,56 @@ def get_evaluations(
                 status_code=400,
                 detail=f"Could not find endpoint: {'.'.join(invalid_endpoints)}",
             )
-        endpoints = [endpoint]
-    else:
-        raw_datasets = dataset_dao.filter(name=dataset)
-        raw_datasets = [d for d in raw_datasets if d.user_id in [None, user_id]]
-        dataset_id = raw_datasets[0].id
-        endpoints = evaluation_dao.get_endpoints(
-            dataset_id=dataset_id,
-            evaluator_id=evaluator_id,
-        )
 
     # multiple judges
     # exception handling
 
     ret = {}
-    for endpoint in endpoints:
-        for evaluator in evaluators:
-            eval_result = get_single_evaluation(
-                user_id=user_id,
-                dataset=dataset,
-                endpoint=endpoint,
-                evaluator=evaluator,
-                dataset_dao=dataset_dao,
-                evaluator_dao=evaluator_dao,
-                evaluation_dao=evaluation_dao,
-                per_prompt=per_prompt,
-            )
-            if not eval_result:
-                continue
-            if evaluator in ret:
-                ret[evaluator][endpoint] = eval_result
-            else:
-                ret[evaluator] = {endpoint: (eval_result)}
 
+    dataset_prompts_ids = dataset_dao.fetch_prompts_ids_in_dataset(
+        user_id=user_id,
+        name=dataset,
+    )
+
+    # TODO: This doesn't account for prompt
+    # variations / default prompts when per_prompt=True
+    eval_results = get_grouped_evaluations(
+        dataset_prompts=dataset_prompts_ids,
+        per_prompt=per_prompt,
+        evaluation_dao=evaluation_dao,
+    )
+
+    accumulator = {}  # stores scores to aggregate
+    num_prompts = len(dataset_prompts_ids)
+
+    for er in eval_results:
+        if evaluator is not None and er[0] != evaluator:
+            continue
+        if endpoint is not None and er[1] != endpoint:
+            continue
+        if er[0] not in ret:  # check evaluator_name
+            ret[er[0]] = {}
+            accumulator[er[0]] = {}
+
+        if er[1] not in ret[er[0]]:  # check endpoint_str
+            ret[er[0]][er[1]] = {}
+            accumulator[er[0]][er[1]] = []
+
+        if not per_prompt:
+            ret[er[0]][er[1]]["score"] = float(er[2]) * 100  # add score
+            ret[er[0]][er[1]]["progress"] = float(er[3]) / num_prompts * 100
+        if per_prompt:
+            if "per_prompt" not in ret[er[0]][er[1]]:
+                ret[er[0]][er[1]]["per_prompt"] = []
+            per_prompt_score = {"id": er[3], "score": 100 * float(er[2])}
+            ret[er[0]][er[1]]["per_prompt"].append(per_prompt_score)
+            accumulator[er[0]][er[1]].append(float(er[2]))
+            ret[er[0]][er[1]]["score"] = (
+                100 * sum(accumulator[er[0]][er[1]]) / len(accumulator[er[0]][er[1]])
+            )
+            ret[er[0]][er[1]]["progress"] = (
+                100 * len(accumulator[er[0]][er[1]]) / num_prompts
+            )
     return ret
 
 

@@ -3,6 +3,7 @@ from typing import List, Optional
 from fastapi import Depends
 from sqlalchemy import join, select, delete
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import func
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
@@ -71,13 +72,29 @@ class EvaluationDAO:
             if score:
                 setattr(entry, "score", score)  # noqa: B010
 
-    def fetch_evaluation_scores(self, prompt_ids, evaluator_id, endpoint_str):
-        query = select(Evaluation)
-        query = query.where(Evaluation.evaluator_id == evaluator_id)
-        query = query.where(Evaluation.endpoint_str == endpoint_str)
+    def fetch_evaluation_scores(self, prompt_ids, per_prompt=False):
+        if per_prompt:
+            query = select(
+                Evaluator.name,
+                Evaluation.endpoint_str,
+                func.avg(Evaluation.score),
+                Evaluation.prompt_id,
+            )
+        else:
+            query = select(
+                Evaluator.name,
+                Evaluation.endpoint_str,
+                func.avg(Evaluation.score),
+                func.count(Evaluation.score),
+            )
+        query = query.filter(Evaluation.evaluator_id == Evaluator.id)
         query = query.filter(Evaluation.prompt_id.in_(prompt_ids))
+        if per_prompt:
+            query = query.group_by(Evaluation.prompt_id)
+        query = query.group_by(Evaluator.name)
+        query = query.group_by(Evaluation.endpoint_str)
         rows = self.session.execute(query)
-        return list(rows.scalars().fetchall())
+        return list(rows.all())
 
     def get_evaluator_names(self, dataset_id: int, endpoint_str: str):
 

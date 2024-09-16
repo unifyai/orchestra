@@ -600,11 +600,6 @@ metrics = {
         "ttft": 840,
         "itl": 21.88,
     },
-    "mixtral-8x22b-instruct-v0.1@deepinfra": {
-        "cost": 0.65,
-        "ttft": 950,
-        "itl": 19.91,
-    },
 }
 
 for endpoint in metrics:
