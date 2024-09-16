@@ -650,13 +650,6 @@ metrics = {
         "input_cost": 1.2,
         "output_cost": 1.2,
     },
-    "mixtral-8x22b-instruct-v0.1@deepinfra": {
-        "cost": 0.65,
-        "ttft": 950,
-        "itl": 19.91,
-        "input_cost": 0.65,
-        "output_cost": 0.65,
-    },
     "pplx-70b-chat@perplexity-ai": {
         "cost": 1.225,
         "ttft": 982,
