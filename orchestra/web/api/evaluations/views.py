@@ -456,16 +456,17 @@ def get_evaluations(
         if er[0] not in ret:  # check evaluator_name
             ret[er[0]] = {}
 
+        if er[1] not in ret[er[0]]:  # check endpoint_str
+            ret[er[0]][er[1]] = {}
+
         if not per_prompt:
-            if er[1] not in ret[er[0]]:  # check endpoint_str
-                ret[er[0]][er[1]] = {}
             ret[er[0]][er[1]]["score"] = float(er[2]) * 100  # add score
             ret[er[0]][er[1]]["progress"] = float(er[3]) / num_prompts * 100
         if per_prompt:
-            if er[1] not in ret[er[0]]:  # check endpoint_str
-                ret[er[0]][er[1]] = []
+            if "per_prompt" not in ret[er[0]][er[1]]:
+                ret[er[0]][er[1]]["per_prompt"] = []
             per_prompt_score = {"id": er[3], "score": 100 * float(er[2])}
-            ret[er[0]][er[1]].append(per_prompt_score)
+            ret[er[0]][er[1]]["per_prompt"].append(per_prompt_score)
     return ret
 
 
