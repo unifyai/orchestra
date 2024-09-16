@@ -1,7 +1,7 @@
 from typing import List, Optional
 
 from fastapi import Depends
-from sqlalchemy import join, select
+from sqlalchemy import join, select, delete
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
@@ -119,3 +119,24 @@ class EvaluationDAO:
         endpoints = [row[0] for row in result]
 
         return endpoints
+
+    def delete_evaluations(self, dataset_name: str, endpoint: str, evaluator: str):
+        query = delete(Evaluation).where(Evaluation.prompt_id.in_(
+            select(StoredPrompt.id)
+            .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
+            .join(Dataset, DatasetPrompt.dataset_id == Dataset.id)
+            .where(Dataset.name == dataset_name)
+        ))
+
+        if endpoint:
+            query = query.where(Evaluation.endpoint_str == endpoint)
+        if evaluator:
+            query = query.where(
+                Evaluation.evaluator_id.in_(
+                    select(Evaluator.id)
+                    .where(Evaluator.name == evaluator)
+                )
+            )
+        result = self.session.execute(query)
+
+        return result.rowcount

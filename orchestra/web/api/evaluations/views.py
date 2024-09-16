@@ -11,6 +11,7 @@ from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.dataset_dao import DatasetDAO
 from orchestra.db.dao.default_prompt_dao import DefaultPromptDAO
+from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.evaluation_dao import EvaluationDAO
 from orchestra.db.dao.evaluator_dao import EvaluatorDAO
 from orchestra.db.dao.judgement_dao import JudgementDAO
@@ -371,9 +372,13 @@ def get_single_evaluation(
         evaluator_id=evaluator_id,
         endpoint_str=endpoint,
     )
+    if not scores:
+        return {}
+
     mean_score = 100 * sum(float(s.score) for s in scores) / len(scores)
     progress = 100 * len(scores) / len(prompt_ids)
-    result = {"score": mean_score, "progress": progress}
+
+    result = {"score": f"{mean_score:.2f}", "progress": f"{progress:.2f}"}
     if per_prompt:
         per_prompt_scores = [{"id": _s.id, "score": float(_s.score)} for _s in scores]
         result["per_prompt"] = per_prompt_scores
@@ -485,6 +490,8 @@ def get_evaluations(
                 evaluation_dao=evaluation_dao,
                 per_prompt=per_prompt,
             )
+            if not eval_result:
+                continue
             if evaluator in ret:
                 ret[evaluator][endpoint] = eval_result
             else:
@@ -525,6 +532,10 @@ def delete_evaluations(
         "endpoint pair.",
         example="eval1",
     ),
+    dataset_dao: DatasetDAO = Depends(),
+    endpoint_dao: EndpointDAO = Depends(),
+    evaluator_dao: EvaluatorDAO = Depends(),
+    evaluation_dao: EvaluationDAO = Depends(),
 ):
     """
     Deletes evaluations on a given dataset, for a specific endpoint (optional) based on
@@ -532,7 +543,32 @@ def delete_evaluations(
     all valid evaluators are deleted. Similarly, if no `endpoint` is provided, then
     evaluations for all valid endpoints are deleted.
     """
-    raise NotImplemented
+    user_id = request_fastapi.state.user_id
+    if not dataset_exists(dataset_dao, user_id, dataset):
+        raise dataset_does_not_exist(dataset)
+
+    # check endpoint and evaluator are valid
+    if endpoint:
+        invalid_endpoints = find_invalid_endpoints([endpoint])
+        if invalid_endpoints:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not find endpoint: {'.'.join(invalid_endpoints)}",
+            )
+    if evaluator:
+        raw_evaluators = evaluator_dao.filter(name=evaluator)
+        if not raw_evaluators or raw_evaluators[0].user_id not in [None, user_id]:
+            raise evaluator_not_found(evaluator)
+
+    try:
+        result = evaluation_dao.delete_evaluations(
+            dataset_name=dataset, endpoint=endpoint, evaluator=evaluator
+        )
+        return {"info": f"Evaluation deleted successfully. You deleted {result} evaluations."}
+    except:
+        raise HTTPException(status_code=400, detail="An unknown error occured when de")
+
+
 
 
 ### admin functions

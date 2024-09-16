@@ -3,8 +3,10 @@ import json
 import os
 import sys
 
+import pytest
 from dotenv import find_dotenv, load_dotenv
 from httpx import AsyncClient
+from sqlalchemy import text
 
 import orchestra
 
@@ -332,3 +334,195 @@ async def test_client_side_scores(
     scores = response.json()
     assert eval_name in scores
     assert endpoint in scores[eval_name]
+
+
+def populate_from_file(path, session):
+    with open(path) as f:
+        for line in f:
+            command = json.loads(line)
+            statement = command["statement"]
+            statement = statement.replace("%(", ":").replace(")s", "")
+            session.execute(text(statement), command["parameters"])
+
+
+async def get_evaluation_scores(client, params):
+    url = "/v0/evaluation"
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    scores = response.json()
+    return scores
+
+
+async def test_delete_single_evaluation(client: AsyncClient, dbsession):
+
+    # setup db for test
+    path = "./orchestra/tests/sql_dumps/dump_trigger_simple_eval.jsonl"
+    populate_from_file(path=path, session=dbsession)
+
+    params = {
+        "dataset": "test_dataset_eval",
+        "evaluator": "test_eval",
+        "endpoint": "llama-3-8b-chat@aws-bedrock",
+    }
+
+    # check db setup correctly
+    scores = await get_evaluation_scores(client, params)
+    assert len(scores) > 0
+
+    # delete evaluation
+    response = await client.delete(
+        "/v0/evaluation",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json() == {"info": "Evaluation deleted successfully. You deleted 2 evaluations."}
+
+    # check deleted
+    scores = await get_evaluation_scores(client, params)
+    assert len(scores) == 0
+
+
+async def test_delete_no_endpoint(client: AsyncClient, dbsession):
+
+    # setup db for test
+    path = "./orchestra/tests/sql_dumps/dump_trigger_complex_eval.jsonl"
+    populate_from_file(path=path, session=dbsession)
+
+    params = {
+        "dataset": "test_dataset_eval",
+        "evaluator": "test_eval",
+    }
+
+    # check db setup correctly
+    scores = await get_evaluation_scores(client, params)
+    print(scores)
+    assert len(scores) > 0
+
+    # delete evaluation
+    response = await client.delete(
+        "/v0/evaluation",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json() == {"info": "Evaluation deleted successfully. You deleted 2 evaluations."}
+
+    # check deleted
+    scores = await get_evaluation_scores(client, params)
+    assert len(scores) == 0
+
+async def test_simple_trigger_eval(
+    client: AsyncClient,
+    tmp_path,
+    monkeypatch,
+):
+    def mock_send_to_dataset_evaluation_server(action, **data):
+        data.pop("user_email", "")
+        message_data = json.dumps(
+            {
+                "action": action,
+                **data,
+                "orchestra_url": "",
+                "admin_key": os.environ.get("ORCHESTRA_ADMIN_KEY"),
+            },
+        )
+        save_dir = tmp_path / "save_files"
+        if action == "evaluate":
+            asyncio.run(
+                evaluate_dataset(
+                    message_data,
+                    save_dir,
+                    shared_volume="",
+                    client=client,
+                ),
+            )
+        elif action == "refresh_scores":
+            user_id = data["user_id"]
+            asyncio.run(refresh_scores_for_user(user_id, save_dir))
+        else:
+            raise NotImplementedError
+
+    monkeypatch.setattr(
+        orchestra.web.api.evaluations.views,
+        "send_to_dataset_evaluation_server",
+        mock_send_to_dataset_evaluation_server,
+    )
+
+    # create evaluator
+    eval_name = "test_eval"
+    system_prompt = "dummy system prompt"
+    judge_model = "llama-3-8b-chat@aws-bedrock"
+
+    url = "/v0/evaluator"
+    params = {
+        "name": eval_name,
+        "system_prompt": system_prompt,
+        "judge_models": judge_model,
+    }
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    url = "/v0/evaluator"
+    params = {
+        "name": "test_eval_2",
+        "system_prompt": system_prompt,
+        "judge_models": judge_model,
+    }
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # create dataset
+
+    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    dataset = "test_dataset_eval"
+    response = await upload_dataset(client, file_path, dataset)
+    assert response.status_code == 200, response.json()
+
+    # trigger evaluation
+
+    url = "/v0/evaluation"
+    endpoint = "llama-3-8b-chat@aws-bedrock"
+    params = {
+        "url": url,
+        "dataset": dataset,
+        "endpoint": endpoint,
+        "evaluator": eval_name,
+    }
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+
+    url = "/v0/evaluation"
+    endpoint = "gpt-3.5-turbo@openai"
+    params = {
+        "url": url,
+        "dataset": dataset,
+        "endpoint": endpoint,
+        "evaluator": eval_name,
+    }
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+
+    url = "/v0/evaluation"
+    endpoint = "llama-3-8b-chat@aws-bedrock"
+    params = {
+        "url": url,
+        "dataset": dataset,
+        "endpoint": endpoint,
+        "evaluator": "test_eval_2",
+    }
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    url = "/v0/evaluation"
+    params = {
+        "dataset": dataset,
+        "evaluator": eval_name
+    }
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    scores = response.json()
+    print(scores)
+    assert eval_name in scores
