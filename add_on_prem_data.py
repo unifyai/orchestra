@@ -31,16 +31,16 @@ hermes_tables = [
     ("dataset", Dataset),
     ("stored_prompt", StoredPrompt),
     ("dataset_prompt", DatasetPrompt),
-    ("stored_prompt_response", StoredPromptResponse),
+    # ("stored_prompt_response", StoredPromptResponse),
     ("evaluator", Evaluator),
-    ("judgement", Judgement),
-    ("evaluation", Evaluation),
+    # ("judgement", Judgement),
+    # ("evaluation", Evaluation),
 ]
 
 
 def get_cloud_sql_data():
     data = {}
-    for table in tables:  # + hermes_tables:
+    for table in tables + hermes_tables:
         table_name = table[0]
         if table_name == "users":
             continue
@@ -75,14 +75,14 @@ def write_data_to_db(data, engine):
     ]
     data = {
         table[0]: {"model": table[1], "rows": data[table[0]]}
-        for table in tables  # + hermes_tables
+        for table in tables + hermes_tables
     }
 
     with engine.connect() as conn:
         # check if hermes already exists in the database
-        # hermes = conn.execute(
-        #     select(Dataset).where(Dataset.name == "hermes")
-        # ).fetchall()
+        hermes = conn.execute(
+            select(Dataset).where(Dataset.name == "hermes")
+        ).fetchall()
 
         # delete the rows from the other tables
         for table in tables[::-1]:
@@ -92,7 +92,7 @@ def write_data_to_db(data, engine):
             conn.commit()
 
         # add the data to the other tables
-        for table in tables:  # + (hermes_tables if len(hermes) == 0 else []):
+        for table in tables + (hermes_tables if len(hermes) == 0 else []):
             table_name = table[0]
             print(f"table_name {table_name}")
             model = data[table_name]["model"]
