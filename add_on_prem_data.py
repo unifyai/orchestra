@@ -25,9 +25,9 @@ tables = [
     ("model", Model),
     ("provider", Provider),
     ("endpoint", Endpoint),
-    ("users", Users),
 ]
 hermes_tables = [
+    ("users", Users),
     ("dataset", Dataset),
     ("stored_prompt", StoredPrompt),
     ("dataset_prompt", DatasetPrompt),
