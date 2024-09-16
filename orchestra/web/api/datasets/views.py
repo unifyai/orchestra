@@ -444,14 +444,16 @@ def add_data(
     ),
     data: Union[Dict, List[Dict]] = Body(
         description="JSON object containing the Datum dict to upload, "
-                    "or a list of Datum dicts to upload",
+        "or a list of Datum dicts to upload",
         json_schema_extra={
             "example": [
                 {
                     "prompt": {
                         "messages": [
-                            {"role": "user",
-                             "content": "What is the capital of Spain?"},
+                            {
+                                "role": "user",
+                                "content": "What is the capital of Spain?",
+                            },
                         ],
                     },
                     "ref_answer": "Madrid",
@@ -459,12 +461,14 @@ def add_data(
                 {
                     "prompt": {
                         "messages": [
-                            {"role": "user",
-                             "content": "What is the capital of England?"},
+                            {
+                                "role": "user",
+                                "content": "What is the capital of England?",
+                            },
                         ],
                     },
                     "ref_answer": "London",
-                }
+                },
             ],
         },
     ),
