@@ -165,7 +165,6 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         if not on_prem:
             available_credits = float(user.credits if user else 0)
 
-        print(f"model_region_priority_list {model_region_priority_list}")
         model, provider, region = model_region_priority_list[0]
         try_provider = 0
         router_choices = None
