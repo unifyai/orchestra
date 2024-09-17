@@ -1,7 +1,7 @@
 from typing import List, Optional
 
 from fastapi import Depends
-from sqlalchemy import join, select, delete
+from sqlalchemy import Float, cast, delete, join, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
@@ -13,6 +13,15 @@ from orchestra.db.models.orchestra_models import (
     Evaluator,
     StoredPrompt,
 )
+
+
+class EvaluationScore:
+    def __init__(self, evaluator, endpoint_str, score, prompt_id=None, num_scores=None):
+        self.evaluator = evaluator
+        self.endpoint_str = endpoint_str
+        self.score = score
+        self.prompt_id = prompt_id
+        self.num_scores = num_scores
 
 
 class EvaluationDAO:
@@ -75,26 +84,42 @@ class EvaluationDAO:
     def fetch_evaluation_scores(self, prompt_ids, per_prompt=False):
         if per_prompt:
             query = select(
-                Evaluator.name,
+                Evaluator.name.label("evaluator"),
                 Evaluation.endpoint_str,
-                func.avg(Evaluation.score),
+                cast(func.avg(Evaluation.score).label("score") * 100, Float),
                 Evaluation.prompt_id,
             )
         else:
             query = select(
-                Evaluator.name,
+                Evaluator.name.label("evaluator"),
                 Evaluation.endpoint_str,
-                func.avg(Evaluation.score),
-                func.count(Evaluation.score),
+                cast(func.avg(Evaluation.score).label("score") * 100, Float),
+                func.count(Evaluation.score).label("num_scores"),
             )
+
         query = query.filter(Evaluation.evaluator_id == Evaluator.id)
         query = query.filter(Evaluation.prompt_id.in_(prompt_ids))
-        if per_prompt:
-            query = query.group_by(Evaluation.prompt_id)
+
         query = query.group_by(Evaluator.name)
         query = query.group_by(Evaluation.endpoint_str)
+        if per_prompt:
+            query = query.group_by(Evaluation.prompt_id)
+
         rows = self.session.execute(query)
-        return list(rows.all())
+
+        # Manually map each result row to an EvaluationScore object
+        results = []
+        for row in rows:
+            score = EvaluationScore(
+                evaluator=row[0],
+                endpoint_str=row[1],
+                score=row[2],
+                prompt_id=row[3] if per_prompt else None,
+                num_scores=row[3] if not per_prompt else None,
+            )
+            results.append(score)
+
+        return results
 
     def get_evaluator_names(self, dataset_id: int, endpoint_str: str):
 
@@ -143,8 +168,8 @@ class EvaluationDAO:
                 select(StoredPrompt.id)
                 .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
                 .join(Dataset, DatasetPrompt.dataset_id == Dataset.id)
-                .where(Dataset.name == dataset_name)
-            )
+                .where(Dataset.name == dataset_name),
+            ),
         )
 
         if endpoint:
@@ -152,8 +177,8 @@ class EvaluationDAO:
         if evaluator:
             query = query.where(
                 Evaluation.evaluator_id.in_(
-                    select(Evaluator.id).where(Evaluator.name == evaluator)
-                )
+                    select(Evaluator.id).where(Evaluator.name == evaluator),
+                ),
             )
         result = self.session.execute(query)
 
