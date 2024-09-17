@@ -121,11 +121,11 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     "<provider>" in reverse_model_provider
                     and current_provider is not None
                 ):
-                    model_provider[1] = current_provider
+                    reverse_model_provider[1] = current_provider
                 elif "<provider>" not in model_provider:
-                    current_provider = model_provider[1]
+                    current_provider = reverse_model_provider[1]
                 assert "<model>" not in model_provider
-                assert "<provider>" not in model_provider
+                assert "<provider>" not in reverse_model_provider
         except Exception as e:
             raise invalid_model_str
 
