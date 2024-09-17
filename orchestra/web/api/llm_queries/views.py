@@ -85,9 +85,11 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     try_request = 0
     num_tries = min(5, len(request_priority_list))
+    region = None
 
     while try_request >= 0 and try_request < num_tries:
         request = request_priority_list[try_request]
+        model_params = request.model_dump()
 
         if not request.tools:
             request.parallel_tool_calls = None
@@ -135,6 +137,13 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         except Exception:
             raise invalid_model_str
 
+        region = model_params.pop("region", None)
+        model_region_priority_list = []
+        for idx, region_tag in enumerate(region.split("->")):
+            model_region_priority_list += [
+                [*model, region_tag] for model in model_priority_list
+            ]
+
         try:
             messages = request.messages
         except Exception:
@@ -154,12 +163,13 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         if not on_prem:
             available_credits = float(user.credits if user else 0)
 
-        model, provider = model_priority_list[0]
+        print(f"model_region_priority_list {model_region_priority_list}")
+        model, provider, region = model_region_priority_list[0]
         try_provider = 0
         router_choices = None
         using_router = model.startswith("router")
         router_str = provider if using_router else None
-        num_tries_provider = min(5, len(model_priority_list))
+        num_tries_provider = min(5, len(model_region_priority_list))
 
         custom_api_key = None
         if use_custom_keys:
@@ -216,7 +226,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                                 num_tokens_est * 1.25,
                                 endpoint_id,
                             )
-                            model_priority_list = router_choices
+                            model_region_priority_list = router_choices
                     else:  # Non model routing, TODO: clean up to simplify
                         target_metric, metrics_thresholds = parse_endpoint(provider)
                         model, provider = dynamic_routing(
@@ -228,9 +238,13 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                         )
                         # TODO: this is probably still buggye with corner cases,
                         # more exhaustive testing is needed.
-                        model_priority_list[try_provider] = (model, provider)
+                        model_region_priority_list[try_provider] = (
+                            model,
+                            provider,
+                            region,
+                        )
 
-                model, provider = model_priority_list[try_provider]
+                model, provider, region = model_region_priority_list[try_provider]
 
                 extra_args = tuple()
                 if provider == "custom":
@@ -243,10 +257,12 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
                 stream = request.stream
 
-                filtered_params = filter_orchestra_only_args(request.model_dump())
+                filtered_params = filter_orchestra_only_args(model_params)
 
                 try:
-                    response, cost = lm(messages=messages, **filtered_params)
+                    response, cost = lm(
+                        messages=messages, region=region, **filtered_params
+                    )
                     try_provider = try_request = -1
                 except HTTPException as e:
                     if e.status_code in [400, 403, 404, 429] or e.status_code >= 500:
@@ -281,12 +297,14 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     if tags and isinstance(request.tags, str):
         tags = [tags]
 
+    request_body = request.model_dump()
+    request_body["region"] = region
     db_operations_kwargs = {
         "user_id": user_id,
         "secondary_user_id": request.user,
         "model": model,
         "provider": provider,
-        "query_body": json.dumps(request.model_dump()) if store_query_body else "",
+        "query_body": json.dumps(request_body) if store_query_body else "",
         "signature": request.signature,
         "used_router": using_router,
         "router": router_str,
