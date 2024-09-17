@@ -1,6 +1,6 @@
-import os
 import copy
 import json
+import os
 
 import pytest
 from httpx import AsyncClient
@@ -136,6 +136,7 @@ async def test_download_datasets(client: AsyncClient):
         jsonl[0]["prompt"]["messages"][0]["content"] == "What is the capital of Spain?"
     )
     assert len(jsonl) == 2
+    assert jsonl[0]["num_tokens"] > 0
 
 
 @pytest.mark.anyio

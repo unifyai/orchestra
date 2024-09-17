@@ -2,6 +2,7 @@ import json
 from datetime import datetime
 from typing import List, Optional
 
+import tiktoken
 from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,6 +14,14 @@ from orchestra.db.models.orchestra_models import (
     StoredPrompt,
     StoredPromptExtraField,
 )
+
+
+def count_tokens(messages):
+    enc = tiktoken.encoding_for_model("gpt-4")
+    num_tokens = 0
+    for msg in messages:
+        num_tokens += len(enc.encode(msg["content"], disallowed_special=()))
+    return num_tokens
 
 
 class DatasetDAO:
@@ -145,7 +154,7 @@ class DatasetDAO:
             messages=json.dumps(messages),
             prompt_kwargs=json.dumps(prompt_kwargs),
             ref_answer=ref_answer,
-            num_tokens=prompt.get("num_tokens", 0),  # TODO: Compute num of tokens
+            num_tokens=prompt.get("num_tokens", count_tokens(messages)),
             timestamp=prompt.get("timestamp", datetime.utcnow()),
         )
         self.session.add(new_prompt)
