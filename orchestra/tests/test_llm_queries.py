@@ -115,7 +115,7 @@ async def test_fallback_after_fail(
 async def test_arrow_fallback_parse(
     client: AsyncClient,
 ) -> None:
-    model_str = "claude-3-haiku@anthropic->mistral-7b-instruct-v0.3@octoai"
+    model_str = "claude-3-haiku->claude-3-sonnet@anthropic->mistral-7b-instruct-v0.3@openai->octoai"
     endpoint = "/v0/chat/completions"
     data = get_chat_completions_arrow_payload_fallback(model_str, stream=False)
     response = await client.post(endpoint, headers=HEADERS, json=data)
