@@ -493,10 +493,14 @@ def get_evaluations(
         for _evaluator in ret:
             for lb in latest_benchmarks:
                 if lb.endpoint_str in ret[_evaluator]:
-                    ret[_evaluator][lb.endpoint_str]["itl"] = lb.itl
-                    ret[_evaluator][lb.endpoint_str]["ttft"] = lb.ttft
-                    ret[_evaluator][lb.endpoint_str]["input_cost"] = lb.input_cost
-                    ret[_evaluator][lb.endpoint_str]["output_cost"] = lb.output_cost
+                    ret[_evaluator][lb.endpoint_str]["itl"] = float(lb.itl)
+                    ret[_evaluator][lb.endpoint_str]["ttft"] = float(lb.ttft)
+                    ret[_evaluator][lb.endpoint_str]["input_cost"] = float(
+                        lb.input_cost,
+                    )
+                    ret[_evaluator][lb.endpoint_str]["output_cost"] = float(
+                        lb.output_cost,
+                    )
 
     return ret
 
