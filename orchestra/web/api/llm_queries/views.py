@@ -114,9 +114,6 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         user = users_dao.get_user_with_id(user_id)
         store_prompt = user.store_prompts if user else True
         store_prompt = True if store_prompt is None else store_prompt
-        if hasattr(request, "store_prompt"):
-            if isinstance(request.store_prompt, bool):
-                store_prompt = request.store_prompt
         if store_prompt:
             store_query_body = True if request.log_query_body else False
             store_response_body = True if request.log_response_body else False
