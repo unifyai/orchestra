@@ -117,6 +117,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     model_provider[0] = current_model
                 elif "<model>" not in model_provider:
                     current_model = model_provider[0]
+
                 # replace <provider> by relevant provider while moving backward
                 reverse_idx = -1 - idx
                 reverse_model_provider = model_priority_list[reverse_idx]
@@ -127,6 +128,8 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     reverse_model_provider[1] = current_provider
                 elif "<provider>" not in reverse_model_provider:
                     current_provider = reverse_model_provider[1]
+
+                # check that there are no placeholders left
                 assert "<model>" not in model_provider
                 assert "<provider>" not in reverse_model_provider
         except Exception as e:
