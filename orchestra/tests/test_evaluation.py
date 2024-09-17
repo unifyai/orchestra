@@ -3,8 +3,10 @@ import json
 import os
 import sys
 
+import pytest
 from dotenv import find_dotenv, load_dotenv
 from httpx import AsyncClient
+from sqlalchemy import text
 
 import orchestra
 
@@ -24,6 +26,9 @@ HEADERS = {
     "accept": "application/json",
     "Authorization": f"Bearer {api_key}",
 }
+
+# makes the tests run async
+pytestmark = pytest.mark.anyio
 
 
 def create_default_prompt(client, default_prompt_name):
@@ -332,3 +337,270 @@ async def test_client_side_scores(
     scores = response.json()
     assert eval_name in scores
     assert endpoint in scores[eval_name]
+
+
+# helper utils
+
+
+async def populate_from_file(path, session):
+    with open(path) as f:
+        for line in f:
+            command = json.loads(line)
+            statement = command["statement"]
+            statement = statement.replace("%(", ":").replace(")s", "")
+            session.execute(text(statement), command["parameters"])
+
+
+async def get_evaluation_scores(client, params):
+    url = "/v0/evaluation"
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    scores = response.json()
+    return scores
+
+
+# Listing Tests
+
+# The database contains
+# {
+#     "test_eval": {
+#         "gpt-3.5-turbo@openai": {"score": 100.0, "progress": 100.0},
+#         "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
+#     },
+#     "test_eval_2": {"llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0}},
+# }
+
+
+async def _seed_evaluations_db(dbsession):
+    path = "./orchestra/tests/sql_dumps/evaluations/dump_trigger.jsonl"
+    await populate_from_file(path=path, session=dbsession)
+
+
+async def _helper_test_list_evaluations(client, params, expected_scores):
+    scores = await get_evaluation_scores(client, params)
+    assert scores == expected_scores
+
+
+async def test_list_evaluation_evaluator_and_endpoint(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(dbsession)
+    params = {
+        "dataset": "test_dataset_eval",
+        "evaluator": "test_eval",
+        "endpoint": "llama-3-8b-chat@aws-bedrock",
+    }
+    expected_scores = {
+        "test_eval": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
+        },
+    }
+    await _helper_test_list_evaluations(client, params, expected_scores)
+
+
+async def test_list_evaluation_endpoint(client: AsyncClient, dbsession):
+
+    await _seed_evaluations_db(dbsession)
+
+    params = {
+        "dataset": "test_dataset_eval",
+        "endpoint": "llama-3-8b-chat@aws-bedrock",
+    }
+    expected_scores = {
+        "test_eval": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
+        },
+        "test_eval_2": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0}
+        },
+    }
+    await _helper_test_list_evaluations(client, params, expected_scores)
+
+
+async def test_list_evaluation_evaluator(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(dbsession)
+
+    params = {
+        "dataset": "test_dataset_eval",
+        "evaluator": "test_eval",
+    }
+
+    expected_scores = {
+        "test_eval": {
+            "gpt-3.5-turbo@openai": {"score": 100.0, "progress": 100.0},
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
+        }
+    }
+    await _helper_test_list_evaluations(client, params, expected_scores)
+
+
+async def test_list_evaluation_all(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(dbsession)
+
+    params = {
+        "dataset": "test_dataset_eval",
+    }
+
+    expected_scores = {
+        "test_eval": {
+            "gpt-3.5-turbo@openai": {"score": 100.0, "progress": 100.0},
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
+        },
+        "test_eval_2": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0}
+        },
+    }
+    await _helper_test_list_evaluations(client, params, expected_scores)
+
+
+# Deletion Tests
+
+
+async def test_delete_evaluation_endpoint_and_evaluator(client: AsyncClient, dbsession):
+
+    await _seed_evaluations_db(dbsession)
+
+    params = {
+        "dataset": "test_dataset_eval",
+        "evaluator": "test_eval",
+        "endpoint": "llama-3-8b-chat@aws-bedrock",
+    }
+    # delete evaluation
+    response = await client.delete(
+        "/v0/evaluation",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "info": "Evaluation deleted successfully. You deleted 2 evaluations."
+    }
+
+    # check deleted
+    expected_scores = {
+        "test_eval": {
+            "gpt-3.5-turbo@openai": {"score": 100.0, "progress": 100.0},
+        },
+        "test_eval_2": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0}
+        },
+    }
+    all_params = {"dataset": "test_dataset_eval"}
+    await _helper_test_list_evaluations(client, all_params, expected_scores)
+
+
+async def test_delete_no_endpoint(client: AsyncClient, dbsession):
+
+    await _seed_evaluations_db(dbsession)
+
+    params = {
+        "dataset": "test_dataset_eval",
+        "evaluator": "test_eval",
+    }
+
+    # delete evaluation
+    response = await client.delete(
+        "/v0/evaluation",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "info": "Evaluation deleted successfully. You deleted 4 evaluations."
+    }
+
+    # check deleted
+    expected_scores = {
+        "test_eval_2": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0}
+        },
+    }
+    all_params = {"dataset": "test_dataset_eval"}
+    await _helper_test_list_evaluations(client, all_params, expected_scores)
+
+
+async def test_delete_no_evaluator(client: AsyncClient, dbsession):
+
+    await _seed_evaluations_db(dbsession)
+
+    params = {
+        "dataset": "test_dataset_eval",
+        "endpoint": "llama-3-8b-chat@aws-bedrock",
+    }
+
+    # delete evaluation
+    response = await client.delete(
+        "/v0/evaluation",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "info": "Evaluation deleted successfully. You deleted 4 evaluations."
+    }
+
+    # check deleted
+    expected_scores = {
+        "test_eval": {
+            "gpt-3.5-turbo@openai": {"score": 100.0, "progress": 100.0},
+        },
+    }
+    all_params = {"dataset": "test_dataset_eval"}
+    await _helper_test_list_evaluations(client, all_params, expected_scores)
+
+
+async def test_delete_no_evaluator_no_endpoint(client: AsyncClient, dbsession):
+
+    await _seed_evaluations_db(dbsession)
+
+    params = {
+        "dataset": "test_dataset_eval",
+    }
+
+    # delete evaluation
+    response = await client.delete(
+        "/v0/evaluation",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "info": "Evaluation deleted successfully. You deleted 6 evaluations."
+    }
+
+    # check deleted
+    expected_scores = {}
+    all_params = {"dataset": "test_dataset_eval"}
+    await _helper_test_list_evaluations(client, all_params, expected_scores)
+
+
+async def test_delete_bad_evaluator(client: AsyncClient, dbsession):
+
+    await _seed_evaluations_db(dbsession)
+
+    params = {"dataset": "test_dataset_eval", "evaluator": "fake_evaluator"}
+
+    # delete evaluation
+    response = await client.delete(
+        "/v0/evaluation",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 404
+    assert response.json() == {
+        "detail": "The evaluator fake_evaluator does not exist in your account"
+    }
+
+
+async def test_delete_bad_endpoint(client: AsyncClient, dbsession):
+
+    await _seed_evaluations_db(dbsession)
+
+    params = {"dataset": "test_dataset_eval", "endpoint": "llama-5b@amazon.com"}
+
+    # delete evaluation
+    response = await client.delete(
+        "/v0/evaluation",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Could not find endpoint: llama-5b@amazon.com"}
