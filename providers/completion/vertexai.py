@@ -29,13 +29,14 @@ class VertexAI(BaseCompletionProvider):
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:  # noqa: WPS210
-        kwargs_region = kwargs.pop("region", None)
-        region = (
-            kwargs_region
-            if kwargs_region
-            else self.supported_models[self.hub_model]["region"]
-        )
-        kwargs["vertex_location"] = region
+        if self.hub_model in self.supported_models:
+            kwargs_region = kwargs.pop("region", None)
+            region = (
+                kwargs_region
+                if kwargs_region
+                else self.supported_models[self.hub_model]["region"]
+            )
+            kwargs["vertex_location"] = region
         return super().__call__(messages, stream, **kwargs)
 
     def __call_async__(
@@ -44,13 +45,14 @@ class VertexAI(BaseCompletionProvider):
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        kwargs_region = kwargs.pop("region", None)
-        region = (
-            kwargs_region
-            if kwargs_region
-            else self.supported_models[self.hub_model]["region"]
-        )
-        kwargs["vertex_location"] = region
+        if self.hub_model in self.supported_models:
+            kwargs_region = kwargs.pop("region", None)
+            region = (
+                kwargs_region
+                if kwargs_region
+                else self.supported_models[self.hub_model]["region"]
+            )
+            kwargs["vertex_location"] = region
         return super().__call__(messages, stream, **kwargs)
 
 
