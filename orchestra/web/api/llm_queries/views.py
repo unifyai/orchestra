@@ -95,11 +95,39 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         try:
             # TODO: Check that model exists
             model_priority_list = []
-            for model_tag in request.model.split("->"):
+            sublist_type = 0
+            for idx, model_tag in enumerate(request.model.split("->")):
                 model_provider = model_tag.split("@")
-                assert len(model_provider) == 2
+                if len(model_provider) == 1:
+                    if idx == 0 or sublist_type == -1:
+                        sublist_type = -1
+                        model_provider = [model_provider[0], "<provider>"]
+                    elif idx != 0 or sublist_type == 1:
+                        sublist_type = 1
+                        model_provider = ["<model>", model_provider[0]]
+                else:
+                    sublist_type = 0
                 model_priority_list.append(model_provider)
-        except Exception:
+
+            current_provider = None
+            for idx, model_provider in reversed(list(enumerate(model_priority_list))):
+                model_provider = model_priority_list[idx]
+                if "<provider>" in model_provider and current_provider is not None:
+                    model_provider[1] = current_provider
+                elif "<provider>" not in model_provider:
+                    current_provider = model_provider[1]
+
+            current_model = None
+            for model_provider in model_priority_list:
+                if "<model>" in model_provider and current_model is not None:
+                    model_provider[0] = current_model
+                elif "<model>" not in model_provider:
+                    current_model = model_provider[0]
+
+            for model_provider in model_priority_list:
+                assert "<model>" not in model_provider
+                assert "<provider>" not in model_provider
+        except Exception as e:
             raise invalid_model_str
 
         try:
