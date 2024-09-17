@@ -59,7 +59,7 @@ class DefaultPromptDAO:
         try:
             default_prompt_id = self.filter(user_id=user_id, name=name)[0].id
         except:
-            return {"error": f"No default_prompt with the name {name}"}
+            raise ValueError
 
         self.update(id=default_prompt_id, name=new_name)
 
@@ -72,7 +72,7 @@ class DefaultPromptDAO:
             )
             self.session.delete(default_prompt)
             self.session.commit()
-            return {"info": "Default Prompt deleted successfully"}
+            return
         except:
             self.session.rollback()
-            return {"info": "Unable to delete default_prompt"}
+            raise ValueError

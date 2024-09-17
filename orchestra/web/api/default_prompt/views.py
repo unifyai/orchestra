@@ -4,7 +4,7 @@ Includes endpoints related to default prompts.
 
 import json
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from orchestra.db.dao.default_prompt_dao import DefaultPromptDAO
 from orchestra.web.api.default_prompt.schema import DefaultPromptConfig
@@ -25,6 +25,16 @@ router = APIRouter()
             "content": {
                 "application/json": {
                     "example": {"info": "Default Prompt created successfully!"},
+                },
+            },
+        },
+        400: {
+            "description": "Invalid Default Prompt",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Incorrect format. Could not create default prompt.",
+                    },
                 },
             },
         },
@@ -49,8 +59,10 @@ def create_default_prompt(
 
         return {"info": "Default Prompt created successfully!"}
     except:
-        # TODO: This needs to be an exception
-        return {"info": "Could not create default prompt, please check the format"}
+        raise HTTPException(
+            status_code=400,
+            detail="Incorrect format. Could not create default prompt.",
+        )
 
 
 @router.get(
@@ -64,6 +76,14 @@ def create_default_prompt(
                         "name": "default_prompt_1",
                         "prompt": "{...}",
                     },
+                },
+            },
+        },
+        404: {
+            "description": "Default Prompt Not Found",
+            "content": {
+                "application/json": {
+                    "detail": "Default Prompt <name> not found in your account.",
                 },
             },
         },
@@ -85,8 +105,13 @@ def get_default_prompt(
     raw_eval_data = default_prompt_dao.filter(
         user_id=request_fastapi.state.user_id,
         name=name,
-    )[0]
-    return raw_eval_data
+    )
+    if not raw_eval_data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Default Prompt {name} not found in your account.",
+        )
+    return raw_eval_data[0]
 
 
 @router.delete(
@@ -97,6 +122,14 @@ def get_default_prompt(
             "content": {
                 "application/json": {
                     "example": {"info": "Default Prompt deleted successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Default Prompt Not Found",
+            "content": {
+                "application/json": {
+                    "detail": "Default Prompt <name> not found in your account.",
                 },
             },
         },
@@ -113,10 +146,17 @@ def delete_default_prompt(
     """
     Deletes a default prompt from your account.
     """
-    return default_prompt_dao.delete_default_prompt(
-        user_id=request_fastapi.state.user_id,
-        name=name,
-    )
+    try:
+        default_prompt_dao.delete_default_prompt(
+            user_id=request_fastapi.state.user_id,
+            name=name,
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Default Prompt {name} not found in your account.",
+        )
+    return {"info": "Default Prompt deleted successfully"}
 
 
 @router.post(
@@ -127,6 +167,14 @@ def delete_default_prompt(
             "content": {
                 "application/json": {
                     "example": {"info": "Default Prompt renamed successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Default Prompt Not Found",
+            "content": {
+                "application/json": {
+                    "detail": "Default Prompt <name> not found in your account.",
                 },
             },
         },
@@ -147,11 +195,17 @@ def rename_default_prompt(
     """
     Renames a default prompt from `name` to `new_name` in your account.
     """
-    default_prompt_dao.rename(
-        user_id=request_fastapi.state.user_id,
-        name=name,
-        new_name=new_name,
-    )
+    try:
+        default_prompt_dao.rename(
+            user_id=request_fastapi.state.user_id,
+            name=name,
+            new_name=new_name,
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Default Prompt {name} not found in your account.",
+        )
     return {"info": "Default Prompt renamed successfully!"}
 
 
