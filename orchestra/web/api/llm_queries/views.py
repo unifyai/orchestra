@@ -138,8 +138,10 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             raise invalid_model_str
 
         region = model_params.pop("region", None)
+        region_str = region if region is not None else ""
         model_region_priority_list = []
-        for idx, region_tag in enumerate(region.split("->")):
+        for idx, region_tag in enumerate(region_str.split("->")):
+            region_tag = region_str if region_str else None
             model_region_priority_list += [
                 [*model, region_tag] for model in model_priority_list
             ]
