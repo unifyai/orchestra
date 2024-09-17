@@ -109,21 +109,21 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     sublist_type = 0
                 model_priority_list.append(model_provider)
 
-            current_model = None
-            for model_provider in model_priority_list:
+            current_model, current_provider = None, None
+            for idx, model_provider in enumerate(model_priority_list):
+                reverse_idx = -1 - idx
                 if "<model>" in model_provider and current_model is not None:
                     model_provider[0] = current_model
                 elif "<model>" not in model_provider:
                     current_model = model_provider[0]
-
-            current_provider = None
-            for model_provider in reversed(model_priority_list):
-                if "<provider>" in model_provider and current_provider is not None:
+                reverse_model_provider = model_priority_list[reverse_idx]
+                if (
+                    "<provider>" in reverse_model_provider
+                    and current_provider is not None
+                ):
                     model_provider[1] = current_provider
                 elif "<provider>" not in model_provider:
                     current_provider = model_provider[1]
-
-            for model_provider in model_priority_list:
                 assert "<model>" not in model_provider
                 assert "<provider>" not in model_provider
         except Exception as e:
