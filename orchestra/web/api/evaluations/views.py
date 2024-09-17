@@ -15,6 +15,7 @@ from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.evaluation_dao import EvaluationDAO
 from orchestra.db.dao.evaluator_dao import EvaluatorDAO
 from orchestra.db.dao.judgement_dao import JudgementDAO
+from orchestra.db.dao.latest_benchmark_dao import LatestBenchmarkDAO
 from orchestra.db.dao.stored_prompt_dao import StoredPromptDAO
 from orchestra.db.dao.stored_prompt_response_dao import StoredPromptResponseDAO
 from orchestra.db.dao.stored_prompt_variation_dao import StoredPromptVariationDAO
@@ -388,9 +389,16 @@ def get_evaluations(
         "and evaluator to be set.",
         example=False,
     ),
+    include_runtime: bool = Query(
+        default=False,
+        description="If `True`, returns additional metrics regarding the runtime "
+        "of the endpoint (ITL, TTFT, cost). By default set to `False`. ",
+        example=False,
+    ),
     dataset_dao: DatasetDAO = Depends(),
     evaluator_dao: EvaluatorDAO = Depends(),
     evaluation_dao: EvaluationDAO = Depends(),
+    latest_benchmark_dao: LatestBenchmarkDAO = Depends(),
 ) -> Dict:
     """
     Fetches evaluation results on a given dataset, for a specific endpoint (optional)
@@ -441,37 +449,55 @@ def get_evaluations(
         evaluation_dao=evaluation_dao,
     )
 
-    accumulator = {}  # stores scores to aggregate
+    latest_benchmarks = []
+    if include_runtime:
+        latest_benchmarks = latest_benchmark_dao.get_benchmark_with_endpoints()
+
+    acc = {}  # stores scores to aggregate
+    endpoints = set()
     num_prompts = len(dataset_prompts_ids)
 
     for er in eval_results:
-        if evaluator is not None and er[0] != evaluator:
+        if evaluator is not None and er.evaluator != evaluator:
             continue
-        if endpoint is not None and er[1] != endpoint:
+        if endpoint is not None and er.endpoint_str != endpoint:
             continue
-        if er[0] not in ret:  # check evaluator_name
-            ret[er[0]] = {}
-            accumulator[er[0]] = {}
 
-        if er[1] not in ret[er[0]]:  # check endpoint_str
-            ret[er[0]][er[1]] = {}
-            accumulator[er[0]][er[1]] = []
+        if er.evaluator not in ret:  # check evaluator_name
+            ret[er.evaluator] = {}
+            acc[er.evaluator] = {}
+
+        if er.endpoint_str not in ret[er.evaluator]:  # check endpoint_str
+            ret[er.evaluator][er.endpoint_str] = {}
+            acc[er.evaluator][er.endpoint_str] = []
+            endpoints.add(er.endpoint_str)
 
         if not per_prompt:
-            ret[er[0]][er[1]]["score"] = float(er[2]) * 100  # add score
-            ret[er[0]][er[1]]["progress"] = float(er[3]) / num_prompts * 100
+            ret[er.evaluator][er.endpoint_str]["score"] = er.score  # add score
+            ret[er.evaluator][er.endpoint_str]["progress"] = (
+                100 * er.num_scores / num_prompts
+            )
         if per_prompt:
-            if "per_prompt" not in ret[er[0]][er[1]]:
-                ret[er[0]][er[1]]["per_prompt"] = []
-            per_prompt_score = {"id": er[3], "score": 100 * float(er[2])}
-            ret[er[0]][er[1]]["per_prompt"].append(per_prompt_score)
-            accumulator[er[0]][er[1]].append(float(er[2]))
-            ret[er[0]][er[1]]["score"] = (
-                100 * sum(accumulator[er[0]][er[1]]) / len(accumulator[er[0]][er[1]])
+            if "per_prompt" not in ret[er.evaluator][er.endpoint_str]:
+                ret[er.evaluator][er.endpoint_str]["per_prompt"] = []
+            per_prompt_score = {"id": er.prompt_id, "score": er.score}
+            ret[er.evaluator][er.endpoint_str]["per_prompt"].append(per_prompt_score)
+            acc[er.evaluator][er.endpoint_str].append(er.score)
+            ret[er.evaluator][er.endpoint_str]["score"] = sum(
+                acc[er.evaluator][er.endpoint_str],
+            ) / len(acc[er.evaluator][er.endpoint_str])
+            ret[er.evaluator][er.endpoint_str]["progress"] = (
+                100 * len(acc[er.evaluator][er.endpoint_str]) / num_prompts
             )
-            ret[er[0]][er[1]]["progress"] = (
-                100 * len(accumulator[er[0]][er[1]]) / num_prompts
-            )
+
+        for _evaluator in ret:
+            for lb in latest_benchmarks:
+                if lb.endpoint_str in ret[_evaluator]:
+                    ret[_evaluator][lb.endpoint_str]["itl"] = lb.itl
+                    ret[_evaluator][lb.endpoint_str]["ttft"] = lb.ttft
+                    ret[_evaluator][lb.endpoint_str]["input_cost"] = lb.input_cost
+                    ret[_evaluator][lb.endpoint_str]["output_cost"] = lb.output_cost
+
     return ret
 
 
@@ -537,14 +563,17 @@ def delete_evaluations(
 
     try:
         result = evaluation_dao.delete_evaluations(
-            dataset_name=dataset, endpoint=endpoint, evaluator=evaluator
+            dataset_name=dataset,
+            endpoint=endpoint,
+            evaluator=evaluator,
         )
         return {
-            "info": f"Evaluation deleted successfully. You deleted {result} evaluations."
+            "info": f"Evaluation deleted successfully. You deleted {result} evaluations.",
         }
     except:
         raise HTTPException(
-            status_code=400, detail="An unknown error occured when deleting evaluations"
+            status_code=400,
+            detail="An unknown error occured when deleting evaluations",
         )
 
 
