@@ -132,7 +132,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 # check that there are no placeholders left
                 assert "<model>" not in model_provider
                 assert "<provider>" not in reverse_model_provider
-        except Exception as e:
+        except Exception:
             raise invalid_model_str
 
         try:
