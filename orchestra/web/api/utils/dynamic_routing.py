@@ -189,7 +189,7 @@ class RouterConfig:
 
         # Return a list of endpoints ordered by lowest cost
         ordered_keys = sorted(endpoint_scores, key=lambda k: endpoint_scores[k])
-        return [key.split("@") for key in ordered_keys]
+        return [[*key.split("@"), None] for key in ordered_keys]
 
 
 def neural_scoring(prompt, endpoint_id):
