@@ -1,11 +1,11 @@
 import datetime
-from decimal import Decimal
 import json
 import os
+from decimal import Decimal
+
 from google.cloud.sql.connector import Connector
 from google.cloud.storage import Client
 from sqlalchemy import create_engine, text
-
 
 instance_connection_name = os.environ.get("INSTANCE_CONNECTION_NAME")
 db_user = os.environ.get("DB_USER")
@@ -50,16 +50,18 @@ def get_cloud_sql_data():
     data = dict()
 
     with engine.connect() as conn:
-        hermes = get_rows(conn, "select * from dataset where name='hermes'")[0]
+        hermes = get_rows(conn, "select * from dataset where name='Open Hermes'")[0]
         hermes_id = hermes["id"]
         print("dataset")
         dataset_prompts = get_rows(
-            conn, f"select * from dataset_prompt where dataset_id={hermes_id}"
+            conn,
+            f"select * from dataset_prompt where dataset_id={hermes_id}",
         )
         print("dataset_prompt")
         prompt_ids = [dataset_prompt["prompt_id"] for dataset_prompt in dataset_prompts]
         stored_prompts = get_rows(
-            conn, f"select * from stored_prompt where id in {tuple(prompt_ids)}"
+            conn,
+            f"select * from stored_prompt where id in {tuple(prompt_ids)}",
         )
         print("stored_prompt")
         stored_prompt_responses = get_rows(
@@ -72,7 +74,8 @@ def get_cloud_sql_data():
             for stored_prompt_response in stored_prompt_responses
         ]
         default_evaluator = get_rows(
-            conn, "select * from evaluator where name='default_evaluator'"
+            conn,
+            "select * from evaluator where name='default_evaluator'",
         )[0]
         print("evaluator")
         evaluator_id = default_evaluator["id"]
