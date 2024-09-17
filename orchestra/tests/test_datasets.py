@@ -66,6 +66,64 @@ def _helper_check_downloads_match(expected, actual):
         assert exp == act
 
 
+### prompts for testing
+
+madrid_prompt = {
+    "ref_answer": "Madrid",
+    "topic": "Geography",
+    "difficulty": "Easy",
+    "prompt": {
+        "messages": [{"role": "user", "content": "What is the capital of Spain?"}]
+    },
+}
+madrid_prompt_with_id = {"id": 1, "num_tokens": 7, **madrid_prompt}
+
+squareroot_prompt = {
+    "ref_answer": "31.8",
+    "topic": "Maths",
+    "prompt": {
+        "messages": [
+            {
+                "role": "user",
+                "content": "What is the square root of 1009 to 1 decimal place",
+            }
+        ]
+    },
+}
+squareroot_prompt_with_id = {"id": 2, "num_tokens": 14, **squareroot_prompt}
+
+mitochondria_prompt = {
+    "prompt": {
+        "messages": [{"role": "user", "content": "What is the powerhouse of the cell?"}]
+    },
+}
+mitochondria_prompt_with_id = {"id": 8, "num_tokens": 8, **mitochondria_prompt}
+
+river_prompt = {
+    "prompt": {
+        "messages": [
+            {"role": "user", "content": "What is the longest river in Europe?"},
+        ],
+    }
+}
+river_prompt_with_id = {"id": 9, "num_tokens": 8, **river_prompt}
+
+
+shakespeare_prompt = {
+    "ref_answer": "William Shakespeare",
+    "topic": "Literature",
+    "prompt": {
+        "messages": [
+            {
+                "role": "user",
+                "content": "Who wrote the play 'Romeo and Juliet'?",
+            }
+        ]
+    },
+}
+shakespeare_prompt_with_id = {"id": 3, "num_tokens": 11, **shakespeare_prompt}
+
+
 # tests
 
 
@@ -214,93 +272,11 @@ async def test_download_dataset_prompts_with_keys(client: AsyncClient):
     response = await client.get("/v0/dataset", headers=headers, params=params)
     jsonl = response.json()
     expected = [
-        {
-            "id": 1,
-            "ref_answer": "Madrid",
-            "num_tokens": 7,
-            "topic": "Geography",
-            "difficulty": "Easy",
-            "prompt": {
-                "messages": [
-                    {"role": "user", "content": "What is the capital of Spain?"}
-                ]
-            },
-        },
-        {
-            "id": 2,
-            "ref_answer": "31.8",
-            "num_tokens": 14,
-            "topic": "Maths",
-            "prompt": {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": "What is the square root of 1009 to 1 decimal place",
-                    }
-                ]
-            },
-        },
+        madrid_prompt_with_id,
+        squareroot_prompt_with_id,
     ]
 
     _helper_check_downloads_match(expected, jsonl)
-
-
-### prompts for testing
-
-madrid_prompt = {
-    "ref_answer": "Madrid",
-    "topic": "Geography",
-    "difficulty": "Easy",
-    "prompt": {
-        "messages": [{"role": "user", "content": "What is the capital of Spain?"}]
-    },
-}
-madrid_prompt_with_id = {"id": 1, "num_tokens": 7, **madrid_prompt}
-
-squareroot_prompt = {
-    "ref_answer": "31.8",
-    "topic": "Maths",
-    "prompt": {
-        "messages": [
-            {
-                "role": "user",
-                "content": "What is the square root of 1009 to 1 decimal place",
-            }
-        ]
-    },
-}
-squareroot_prompt_with_id = {"id": 2, "num_tokens": 14, **squareroot_prompt}
-
-mitochondria_prompt = {
-    "prompt": {
-        "messages": [{"role": "user", "content": "What is the powerhouse of the cell?"}]
-    },
-}
-mitochondria_prompt_with_id = {"id": 8, "num_tokens": 8, **mitochondria_prompt}
-
-river_prompt = {
-    "prompt": {
-        "messages": [
-            {"role": "user", "content": "What is the longest river in Europe?"},
-        ],
-    }
-}
-river_prompt_with_id = {"id": 9, "num_tokens": 8, **river_prompt}
-
-
-shakespeare_prompt = {
-    "ref_answer": "William Shakespeare",
-    "topic": "Literature",
-    "prompt": {
-        "messages": [
-            {
-                "role": "user",
-                "content": "Who wrote the play 'Romeo and Juliet'?",
-            }
-        ]
-    },
-}
-shakespeare_prompt_with_id = {"id": 3, "num_tokens": 11, **shakespeare_prompt}
 
 
 @pytest.mark.anyio
