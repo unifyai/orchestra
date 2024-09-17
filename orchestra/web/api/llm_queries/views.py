@@ -95,10 +95,43 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         try:
             # TODO: Check that model exists
             model_priority_list = []
-            for model_tag in request.model.split("->"):
+            sublist_type = 0
+            for idx, model_tag in enumerate(request.model.split("->")):
                 model_provider = model_tag.split("@")
-                assert len(model_provider) == 2
+                if len(model_provider) == 1:
+                    # add placeholder <model> and <provider> where missing
+                    if idx == 0 or sublist_type == -1:
+                        sublist_type = -1
+                        model_provider = [model_provider[0], "<provider>"]
+                    elif idx != 0 or sublist_type == 1:
+                        sublist_type = 1
+                        model_provider = ["<model>", model_provider[0]]
+                else:
+                    sublist_type = 0
                 model_priority_list.append(model_provider)
+
+            current_model, current_provider = None, None
+            for idx, model_provider in enumerate(model_priority_list):
+                # replace <model> by relevant model while moving forward
+                if "<model>" in model_provider and current_model is not None:
+                    model_provider[0] = current_model
+                elif "<model>" not in model_provider:
+                    current_model = model_provider[0]
+
+                # replace <provider> by relevant provider while moving backward
+                reverse_idx = -1 - idx
+                reverse_model_provider = model_priority_list[reverse_idx]
+                if (
+                    "<provider>" in reverse_model_provider
+                    and current_provider is not None
+                ):
+                    reverse_model_provider[1] = current_provider
+                elif "<provider>" not in reverse_model_provider:
+                    current_provider = reverse_model_provider[1]
+
+                # check that there are no placeholders left
+                assert "<model>" not in model_provider
+                assert "<provider>" not in reverse_model_provider
         except Exception:
             raise invalid_model_str
 
@@ -114,6 +147,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         user = users_dao.get_user_with_id(user_id)
         store_prompt = user.store_prompts if user else True
         store_prompt = True if store_prompt is None else store_prompt
+        store_query_body, store_response_body = False, False
         if store_prompt:
             store_query_body = True if request.log_query_body else False
             store_response_body = True if request.log_response_body else False
