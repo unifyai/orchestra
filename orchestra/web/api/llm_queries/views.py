@@ -99,6 +99,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             for idx, model_tag in enumerate(request.model.split("->")):
                 model_provider = model_tag.split("@")
                 if len(model_provider) == 1:
+                    # add placeholder <model> and <provider> where missing
                     if idx == 0 or sublist_type == -1:
                         sublist_type = -1
                         model_provider = [model_provider[0], "<provider>"]
@@ -111,18 +112,20 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
             current_model, current_provider = None, None
             for idx, model_provider in enumerate(model_priority_list):
-                reverse_idx = -1 - idx
+                # replace <model> by relevant model while moving forward
                 if "<model>" in model_provider and current_model is not None:
                     model_provider[0] = current_model
                 elif "<model>" not in model_provider:
                     current_model = model_provider[0]
+                # replace <provider> by relevant provider while moving backward
+                reverse_idx = -1 - idx
                 reverse_model_provider = model_priority_list[reverse_idx]
                 if (
                     "<provider>" in reverse_model_provider
                     and current_provider is not None
                 ):
                     reverse_model_provider[1] = current_provider
-                elif "<provider>" not in model_provider:
+                elif "<provider>" not in reverse_model_provider:
                     current_provider = reverse_model_provider[1]
                 assert "<model>" not in model_provider
                 assert "<provider>" not in reverse_model_provider
