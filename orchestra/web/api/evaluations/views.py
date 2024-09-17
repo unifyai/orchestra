@@ -490,13 +490,13 @@ def get_evaluations(
                 100 * len(acc[er.evaluator][er.endpoint_str]) / num_prompts
             )
 
-        for evaluator in ret:
+        for _evaluator in ret:
             for lb in latest_benchmarks:
-                if lb.endpoint_str in ret[evaluator]:
-                    ret[evaluator][lb.endpoint_str]["itl"] = lb.itl
-                    ret[evaluator][lb.endpoint_str]["ttft"] = lb.ttft
-                    ret[evaluator][lb.endpoint_str]["input_cost"] = lb.input_cost
-                    ret[evaluator][lb.endpoint_str]["output_cost"] = lb.output_cost
+                if lb.endpoint_str in ret[_evaluator]:
+                    ret[_evaluator][lb.endpoint_str]["itl"] = lb.itl
+                    ret[_evaluator][lb.endpoint_str]["ttft"] = lb.ttft
+                    ret[_evaluator][lb.endpoint_str]["input_cost"] = lb.input_cost
+                    ret[_evaluator][lb.endpoint_str]["output_cost"] = lb.output_cost
 
     return ret
 
