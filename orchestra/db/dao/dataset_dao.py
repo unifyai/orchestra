@@ -124,7 +124,9 @@ class DatasetDAO:
                 "timestamp": stored_prompt.timestamp,
             }
             # Query to get extra fields for this prompt
-            extra_fields_query = select(StoredPromptExtraField).where(
+            extra_fields_query = select(
+                StoredPromptExtraField.field, StoredPromptExtraField.value
+            ).where(
                 StoredPromptExtraField.prompt_id == stored_prompt.id,
             )
             extra_fields = self.session.execute(extra_fields_query).fetchall()
