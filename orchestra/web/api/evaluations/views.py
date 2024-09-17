@@ -11,6 +11,7 @@ from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.dataset_dao import DatasetDAO
 from orchestra.db.dao.default_prompt_dao import DefaultPromptDAO
+from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.evaluation_dao import EvaluationDAO
 from orchestra.db.dao.evaluator_dao import EvaluatorDAO
 from orchestra.db.dao.judgement_dao import JudgementDAO
@@ -402,12 +403,6 @@ def get_evaluations(
     if not dataset_exists(dataset_dao, user_id, dataset):
         raise dataset_does_not_exist(dataset)
 
-    if not endpoint and not evaluator:
-        raise HTTPException(
-            status_code=400,
-            detail="You need to specify at least one of (endpoint, evaluator)",
-        )
-
     if per_prompt:
         if not endpoint or not evaluator:
             raise HTTPException(
@@ -512,6 +507,10 @@ def delete_evaluations(
         "endpoint pair.",
         example="eval1",
     ),
+    dataset_dao: DatasetDAO = Depends(),
+    endpoint_dao: EndpointDAO = Depends(),
+    evaluator_dao: EvaluatorDAO = Depends(),
+    evaluation_dao: EvaluationDAO = Depends(),
 ):
     """
     Deletes evaluations on a given dataset, for a specific endpoint (optional) based on
@@ -519,7 +518,34 @@ def delete_evaluations(
     all valid evaluators are deleted. Similarly, if no `endpoint` is provided, then
     evaluations for all valid endpoints are deleted.
     """
-    raise NotImplemented
+    user_id = request_fastapi.state.user_id
+    if not dataset_exists(dataset_dao, user_id, dataset):
+        raise dataset_does_not_exist(dataset)
+
+    # check endpoint and evaluator are valid
+    if endpoint:
+        invalid_endpoints = find_invalid_endpoints([endpoint])
+        if invalid_endpoints:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Could not find endpoint: {'.'.join(invalid_endpoints)}",
+            )
+    if evaluator:
+        raw_evaluators = evaluator_dao.filter(name=evaluator)
+        if not raw_evaluators or raw_evaluators[0].user_id not in [None, user_id]:
+            raise evaluator_not_found(evaluator)
+
+    try:
+        result = evaluation_dao.delete_evaluations(
+            dataset_name=dataset, endpoint=endpoint, evaluator=evaluator
+        )
+        return {
+            "info": f"Evaluation deleted successfully. You deleted {result} evaluations."
+        }
+    except:
+        raise HTTPException(
+            status_code=400, detail="An unknown error occured when deleting evaluations"
+        )
 
 
 ### admin functions

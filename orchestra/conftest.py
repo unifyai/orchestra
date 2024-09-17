@@ -23,7 +23,7 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def _engine(worker_id) -> Generator[Engine, None, None]:
     """
     Create engine and databases.
