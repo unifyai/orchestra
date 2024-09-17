@@ -86,8 +86,6 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     try_request = 0
     num_tries = min(5, len(request_priority_list))
     region = None
-    temp = ""
-    print(temp)
 
     while try_request >= 0 and try_request < num_tries:
         request = request_priority_list[try_request]
@@ -261,11 +259,10 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 stream = request.stream
 
                 filtered_params = filter_orchestra_only_args(model_params)
-
+                if region:
+                    filtered_params["region"] = region
                 try:
-                    response, cost = lm(
-                        messages=messages, region=region, **filtered_params
-                    )
+                    response, cost = lm(messages=messages, **filtered_params)
                     try_provider = try_request = -1
                 except HTTPException as e:
                     if e.status_code in [400, 403, 404, 429] or e.status_code >= 500:
@@ -301,7 +298,8 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         tags = [tags]
 
     request_body = request.model_dump()
-    request_body["region"] = region
+    if region:
+        request_body["region"] = region
     db_operations_kwargs = {
         "user_id": user_id,
         "secondary_user_id": request.user,
