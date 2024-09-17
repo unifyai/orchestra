@@ -425,6 +425,15 @@ class StoredPrompt(Base):
     ref_answer = sa.Column(sa.String(), nullable=True)
     num_tokens = sa.Column(sa.Integer(), nullable=False)
     timestamp = sa.Column(sa.TIMESTAMP(), nullable=False)
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "user_id",
+            "system_msg",
+            "messages",
+            "prompt_kwargs",
+            name="uq_userid_prompt",
+        ),
+    )
 
 
 class DefaultPrompt(Base):
@@ -561,6 +570,13 @@ class DatasetPrompt(Base):
         sa.ForeignKey("stored_prompt.id"),
         index=True,
         nullable=True,
+    )
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "dataset_id",
+            "prompt_id",
+            name="uq_dataset_prompt",
+        ),
     )
 
 
