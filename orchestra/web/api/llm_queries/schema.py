@@ -221,6 +221,14 @@ class ChatCompletionRequest(BaseModel):
             "specified region."
         ),
     )
+    log_query_body: Optional[bool] = Field(
+        True,
+        description="Whether to log the contents of the query json body.",
+    )
+    log_response_body: Optional[bool] = Field(
+        True,
+        description="Whether to log the contents of the response json body.",
+    )
 
 
 class ChatCompletionResponse(BaseModel):
