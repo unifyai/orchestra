@@ -55,6 +55,8 @@ def filter_orchestra_only_args(arguments):
             "signature",
             "use_custom_keys",
             "tags",
+            "log_query_body",
+            "log_response_body",
         ]
     }
 
