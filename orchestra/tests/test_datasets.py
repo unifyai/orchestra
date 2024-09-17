@@ -175,7 +175,7 @@ async def test_download_dataset_prompts_only(client: AsyncClient):
     expected = [
         {
             "id": 1,
-            "num_tokens": 0,
+            "num_tokens": 7,
             "prompt": {
                 "messages": [
                     {"role": "user", "content": "What is the capital of Spain?"}
@@ -184,7 +184,7 @@ async def test_download_dataset_prompts_only(client: AsyncClient):
         },
         {
             "id": 2,
-            "num_tokens": 0,
+            "num_tokens": 14,
             "prompt": {
                 "messages": [
                     {
@@ -217,7 +217,7 @@ async def test_download_dataset_prompts_with_keys(client: AsyncClient):
         {
             "id": 1,
             "ref_answer": "Madrid",
-            "num_tokens": 0,
+            "num_tokens": 7,
             "topic": "Geography",
             "difficulty": "Easy",
             "prompt": {
@@ -229,7 +229,7 @@ async def test_download_dataset_prompts_with_keys(client: AsyncClient):
         {
             "id": 2,
             "ref_answer": "31.8",
-            "num_tokens": 0,
+            "num_tokens": 14,
             "topic": "Maths",
             "prompt": {
                 "messages": [
@@ -255,7 +255,7 @@ madrid_prompt = {
         "messages": [{"role": "user", "content": "What is the capital of Spain?"}]
     },
 }
-madrid_prompt_with_id = {"id": 1, "num_tokens": 0, **madrid_prompt}
+madrid_prompt_with_id = {"id": 1, "num_tokens": 7, **madrid_prompt}
 
 squareroot_prompt = {
     "ref_answer": "31.8",
@@ -269,14 +269,14 @@ squareroot_prompt = {
         ]
     },
 }
-squareroot_prompt_with_id = {"id": 2, "num_tokens": 0, **squareroot_prompt}
+squareroot_prompt_with_id = {"id": 2, "num_tokens": 14, **squareroot_prompt}
 
 mitochondria_prompt = {
     "prompt": {
         "messages": [{"role": "user", "content": "What is the powerhouse of the cell?"}]
     },
 }
-mitochondria_prompt_with_id = {"id": 8, "num_tokens": 0, **mitochondria_prompt}
+mitochondria_prompt_with_id = {"id": 8, "num_tokens": 8, **mitochondria_prompt}
 
 river_prompt = {
     "prompt": {
@@ -285,7 +285,7 @@ river_prompt = {
         ],
     }
 }
-river_prompt_with_id = {"id": 9, "num_tokens": 0, **river_prompt}
+river_prompt_with_id = {"id": 9, "num_tokens": 8, **river_prompt}
 
 
 shakespeare_prompt = {
@@ -300,7 +300,7 @@ shakespeare_prompt = {
         ]
     },
 }
-shakespeare_prompt_with_id = {"id": 3, "num_tokens": 0, **shakespeare_prompt}
+shakespeare_prompt_with_id = {"id": 3, "num_tokens": 11, **shakespeare_prompt}
 
 
 @pytest.mark.anyio

@@ -155,6 +155,7 @@ class DatasetDAO:
         prompt_kwargs = {
             k: v for k, v in prompt.items() if k not in ["system_msg", "messages"]
         }
+        num_tokens = prompt.get("num_tokens", count_tokens(messages))
 
         system_msg = json.dumps(system_msg)
         messages = json.dumps(messages)
@@ -177,7 +178,7 @@ class DatasetDAO:
                 messages=messages,
                 prompt_kwargs=prompt_kwargs,
                 ref_answer=None,
-                num_tokens=prompt.get("num_tokens", count_tokens(messages)),
+                num_tokens=num_tokens,
                 timestamp=prompt.get("timestamp", datetime.utcnow()),
             )
             try:
