@@ -89,7 +89,6 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     while try_request >= 0 and try_request < num_tries:
         request = request_priority_list[try_request]
-        model_params = request.model_dump()
 
         if not request.tools:
             request.parallel_tool_calls = None
@@ -137,6 +136,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         except Exception:
             raise invalid_model_str
 
+        model_params = request.model_dump()
         region = model_params.pop("region", None)
         region_str = region if region is not None else ""
         model_region_priority_list = []
@@ -258,7 +258,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
                 stream = request.stream
 
-                filtered_params = filter_orchestra_only_args(model_params)
+                filtered_params = filter_orchestra_only_args(request.model_dump())
                 if region:
                     filtered_params["region"] = region
                 try:
