@@ -1,23 +1,21 @@
 import json
 import os
+
 import requests
-from sqlalchemy import create_engine, select, insert, delete
+from sqlalchemy import create_engine, delete, insert, select
+
 from orchestra.db.models.orchestra_models import (
-    Evaluation,
-    Evaluator,
-    Judgement,
-    Modality,
-    StoredPromptResponse,
-    Task,
-    Model,
-    Provider,
-    Endpoint,
-    Users,
     Dataset,
     DatasetPrompt,
+    Endpoint,
+    Evaluator,
+    Modality,
+    Model,
+    Provider,
     StoredPrompt,
+    Task,
+    Users,
 )
-
 
 tables = [
     ("modality", Modality),
@@ -81,7 +79,7 @@ def write_data_to_db(data, engine):
     with engine.connect() as conn:
         # check if hermes already exists in the database
         hermes = conn.execute(
-            select(Dataset).where(Dataset.name == "hermes")
+            select(Dataset).where(Dataset.name == "Open Hermes"),
         ).fetchall()
 
         # delete the rows from the other tables
