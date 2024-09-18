@@ -111,7 +111,7 @@ async def test_trigger_eval(
 
     # create dataset
 
-    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws.jsonl"
     dataset = "test_dataset_eval"
     response = await upload_dataset(client, file_path, dataset)
     assert response.status_code == 200, response.json()
@@ -223,7 +223,7 @@ async def test_trigger_eval_with_default_prompt(
 
     # create dataset
 
-    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws.jsonl"
     dataset = "test_dataset_eval"
     response = await upload_dataset(client, file_path, dataset)
     assert response.status_code == 200, response.json()
@@ -298,7 +298,7 @@ async def test_client_side_scores(
     eval_name = "test_eval_clientside"
 
     # create test dataset
-    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws.jsonl"
     dataset = "test_dataset"
     response = await upload_dataset(client, file_path, dataset)
     assert response.status_code == 200, response.json()
@@ -314,7 +314,7 @@ async def test_client_side_scores(
     url = "/v0/evaluation"
     dataset = "test_dataset"
     endpoint = "llama-3-8b-chat@aws-bedrock"
-    file_path = "./orchestra/tests/sample_datasets/new_prompts_with_scores.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_scores.jsonl"
     with open(file_path, "rb") as f:
         file_content = f.read()
     files = {

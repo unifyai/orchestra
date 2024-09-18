@@ -1,2 +1,0 @@
-{"prompt": {"messages": [{"role": "user", "content": "What is the capital of Spain?"}]}, "ref_answer": "Madrid"}
-{"prompt": {"messages": [{"role": "user", "content": "What is the square root of 1009 to 1 decimal place"}]}, "ref_answer": "31.8"}

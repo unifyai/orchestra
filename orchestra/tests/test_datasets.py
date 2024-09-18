@@ -4,6 +4,7 @@ import os
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import text
 
 from orchestra.tests.utils import HEADERS
 
@@ -34,10 +35,102 @@ def fetch_datasets(client):
     return client.get(url, headers=headers)
 
 
+# helpers
+
+
+async def populate_from_file(path, session):
+    with open(path) as f:
+        for line in f:
+            command = json.loads(line)
+            statement = command["statement"]
+            statement = statement.replace("%(", ":").replace(")s", "")
+            session.execute(text(statement), command["parameters"])
+
+
+async def _seed_datasets_db(dbsession):
+    path = "./orchestra/tests/sql_dumps/datasets/dataset_dump.jsonl"
+    await populate_from_file(path=path, session=dbsession)
+
+
+async def _download_dataset(client, name):
+    params = {"name": name}
+    response = await client.get("/v0/dataset", headers=headers, params=params)
+    jsonl = response.json()
+    return jsonl
+
+
+def _helper_check_downloads_match(expected, actual):
+    for exp, act in zip(expected, actual):
+        exp.pop("timestamp", None)
+        act.pop("timestamp", None)
+        assert exp == act
+
+
+### prompts for testing
+
+madrid_prompt = {
+    "ref_answer": "Madrid",
+    "topic": "Geography",
+    "difficulty": "Easy",
+    "prompt": {
+        "messages": [{"role": "user", "content": "What is the capital of Spain?"}]
+    },
+}
+madrid_prompt_with_id = {"id": 1, "num_tokens": 7, **madrid_prompt}
+
+squareroot_prompt = {
+    "ref_answer": "31.8",
+    "topic": "Maths",
+    "prompt": {
+        "messages": [
+            {
+                "role": "user",
+                "content": "What is the square root of 1009 to 1 decimal place",
+            }
+        ]
+    },
+}
+squareroot_prompt_with_id = {"id": 2, "num_tokens": 14, **squareroot_prompt}
+
+mitochondria_prompt = {
+    "prompt": {
+        "messages": [{"role": "user", "content": "What is the powerhouse of the cell?"}]
+    },
+}
+mitochondria_prompt_with_id = {"id": 8, "num_tokens": 8, **mitochondria_prompt}
+
+river_prompt = {
+    "prompt": {
+        "messages": [
+            {"role": "user", "content": "What is the longest river in Europe?"},
+        ],
+    }
+}
+river_prompt_with_id = {"id": 9, "num_tokens": 8, **river_prompt}
+
+
+shakespeare_prompt = {
+    "ref_answer": "William Shakespeare",
+    "topic": "Literature",
+    "prompt": {
+        "messages": [
+            {
+                "role": "user",
+                "content": "Who wrote the play 'Romeo and Juliet'?",
+            }
+        ]
+    },
+}
+shakespeare_prompt_with_id = {"id": 3, "num_tokens": 11, **shakespeare_prompt}
+
+
+# tests
+
+
 @pytest.mark.anyio
 async def test_upload_dataset(client: AsyncClient):
     # Upload dataset
-    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws.jsonl"
     name = "test_upload_dataset"
     response = await upload_dataset(client, file_path, name)
     assert response.status_code == 200, response.json()
@@ -48,11 +141,12 @@ async def test_upload_dataset(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_upload_duplicate_dataset(client: AsyncClient):
-    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws.jsonl"
     name = "test_upload_dataset"
     response = await upload_dataset(client, file_path, name)
     response = await upload_dataset(client, file_path, name)
     assert response.status_code == 400
+    assert response.json() == {"detail": f"Dataset {name} already exists."}
 
 
 @pytest.mark.anyio
@@ -63,11 +157,11 @@ async def test_upload_incorrect_dataset(client: AsyncClient):
     details = [
         (
             "The uploaded dataset has the wrong format. It must be a jsonl file where"
-            " each line has a `prompt` key and optionally a `ref_answer` one."
+            " each line has a `prompt` key."
         ),
         (
             "The uploaded dataset has the wrong format. It must be a jsonl file where"
-            " each line has a `prompt` key and optionally a `ref_answer` one."
+            " each line has a `prompt` key."
             " Key `prompt` not found in line 1."
         ),
     ]
@@ -79,11 +173,12 @@ async def test_upload_incorrect_dataset(client: AsyncClient):
         # Upload dataset
         response = await upload_dataset(client, file_path, name)
         assert response.status_code == 400
+        assert response.json() == {"detail": detail}
 
 
 @pytest.mark.anyio
 async def test_rename_dataset(client: AsyncClient):
-    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws.jsonl"
     name = "test_old_name"
     response = await upload_dataset(client, file_path, name)
     assert response.status_code == 200, response.json()
@@ -98,7 +193,7 @@ async def test_rename_dataset(client: AsyncClient):
 @pytest.mark.anyio
 async def test_list_datasets(client: AsyncClient):
 
-    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws.jsonl"
     names = [f"test_list_dataset_{i}" for i in range(3)]
 
     for name in names:
@@ -119,9 +214,53 @@ async def test_list_datasets(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_download_datasets(client: AsyncClient):
+async def test_download_dataset_prompts_only(client: AsyncClient):
 
-    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/prompts_only.jsonl"
+    name = "test_download_dataset"
+
+    # Upload dataset
+    response = await upload_dataset(client, file_path, name)
+    assert response.status_code == 200, response.json()
+
+    # Download dataset
+    params = {"name": name}
+    response = await client.get("/v0/dataset", headers=headers, params=params)
+    assert response.status_code == 200, response.json()
+
+    jsonl = response.json()
+
+    expected = [
+        {
+            "id": 1,
+            "num_tokens": 7,
+            "prompt": {
+                "messages": [
+                    {"role": "user", "content": "What is the capital of Spain?"}
+                ]
+            },
+        },
+        {
+            "id": 2,
+            "num_tokens": 14,
+            "prompt": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "What is the square root of 1009 to 1 decimal place",
+                    }
+                ]
+            },
+        },
+    ]
+
+    _helper_check_downloads_match(expected, jsonl)
+
+
+@pytest.mark.anyio
+async def test_download_dataset_prompts_with_keys(client: AsyncClient):
+
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws.jsonl"
     name = "test_download_dataset"
 
     # Upload dataset
@@ -132,36 +271,98 @@ async def test_download_datasets(client: AsyncClient):
     params = {"name": name}
     response = await client.get("/v0/dataset", headers=headers, params=params)
     jsonl = response.json()
-    assert (
-        jsonl[0]["prompt"]["messages"][0]["content"] == "What is the capital of Spain?"
-    )
-    assert len(jsonl) == 2
-    assert jsonl[0]["num_tokens"] > 0
+    expected = [
+        madrid_prompt_with_id,
+        squareroot_prompt_with_id,
+    ]
+
+    _helper_check_downloads_match(expected, jsonl)
 
 
 @pytest.mark.anyio
-async def test_atomic_prompt_fns(client: AsyncClient):
-    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
-    name = "test_add_one_prompt"
-    response = await upload_dataset(client, file_path, name)
+async def test_rename_dataset_from_seed(client: AsyncClient, dbsession):
+    await _seed_datasets_db(dbsession)
+    name = "test_upload_dataset"
+    new_name = "test_new_name"
+    params = {"name": name, "new_name": new_name}
+    response = await client.post("/v0/dataset/rename", headers=headers, params=params)
     assert response.status_code == 200, response.json()
+    assert response.json() == {"info": "Dataset name updated successfully!"}
+    response = await fetch_datasets(client)
+    assert response.status_code == 200, response.json()
+    assert response.json() == ["test_new_name", "test_second_upload_dataset"]
 
-    new_prompt = {
-        "messages": [
-            {"role": "user", "content": "What is the powerhouse of the cell?"},
-        ],
+
+async def test_rename_dataset_invalid_oldname(client: AsyncClient, dbsession):
+    await _seed_datasets_db(dbsession)
+    name = "test_upload_dataset_fake"
+    new_name = "test_new_name"
+    params = {"name": name, "new_name": new_name}
+    response = await client.post("/v0/dataset/rename", headers=headers, params=params)
+    assert response.status_code == 400, response.json()
+    assert response.json() == {"detail": f"You don't have a dataset named {name}"}
+
+
+async def test_rename_dataset_invalid_newname(client: AsyncClient, dbsession):
+    await _seed_datasets_db(dbsession)
+    name = "test_upload_dataset"
+    new_name = "test_second_upload_dataset"
+    params = {"name": name, "new_name": new_name}
+    response = await client.post("/v0/dataset/rename", headers=headers, params=params)
+    assert response.status_code == 400, response.json()
+    assert response.json() == {
+        "detail": f"You already have a dataset named {new_name}."
     }
-    data = {"name": name, "data": {"prompt": new_prompt}}
+
+
+@pytest.mark.anyio
+async def test_atomic_prompt_add_single(client: AsyncClient, dbsession):
+    await _seed_datasets_db(dbsession)
+    name = "test_upload_dataset"
+
+    new_prompt = mitochondria_prompt
+    data = {"name": name, "data": new_prompt}
+    response = await client.post("/v0/dataset/data", headers=headers, json=data)
+    assert response.status_code == 200, response.json()
+    assert response.json() == {"info": "Data added successfully"}
+
+    actual = await _download_dataset(client, name)
+    expected = [
+        madrid_prompt_with_id,
+        squareroot_prompt_with_id,
+        mitochondria_prompt_with_id,
+    ]
+    _helper_check_downloads_match(expected, actual)
+
+
+@pytest.mark.anyio
+async def test_atomic_prompt_add_multiple(client: AsyncClient, dbsession):
+    await _seed_datasets_db(dbsession)
+    name = "test_upload_dataset"
+
+    new_prompts = [
+        mitochondria_prompt,
+        river_prompt,
+    ]
+    data = {"name": name, "data": new_prompts}
     response = await client.post("/v0/dataset/data", headers=headers, json=data)
     assert response.status_code == 200, response.json()
 
-    # Download dataset
-    params = {"name": name}
-    response = await client.get("/v0/dataset", headers=headers, params=params)
-    jsonl = response.json()
-    assert len(jsonl) == 3
+    actual = await _download_dataset(client, name)
+    expected = [
+        madrid_prompt_with_id,
+        squareroot_prompt_with_id,
+        mitochondria_prompt_with_id,
+        river_prompt_with_id,
+    ]
+    _helper_check_downloads_match(expected, actual)
 
-    _id = jsonl[0]["id"]
+
+@pytest.mark.anyio
+async def test_atomic_prompt_delete_single(client: AsyncClient, dbsession):
+    await _seed_datasets_db(dbsession)
+    name = "test_upload_dataset"
+    _id = 1
 
     data = {"name": name, "data_ids": _id}
     response = await client.delete(
@@ -171,41 +372,104 @@ async def test_atomic_prompt_fns(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
 
-    params = {"name": name}
-    response = await client.get("/v0/dataset", headers=headers, params=params)
-    jsonl = response.json()
-    assert len(jsonl) == 2
-    assert jsonl[0]["prompt"]["messages"] == [
-        {
-            "role": "user",
-            "content": "What is the square root of 1009 to 1 decimal place",
-        },
+    actual = await _download_dataset(client, name)
+    expected = [
+        squareroot_prompt_with_id,
     ]
+    _helper_check_downloads_match(expected, actual)
 
 
 @pytest.mark.anyio
-async def test_atomic_prompt_duplicate_add_ignored(client: AsyncClient):
-    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
-    name = "test_duplicate_prompt_ignored"
-    response = await upload_dataset(client, file_path, name)
+async def test_atomic_prompt_delete_multiple(client: AsyncClient, dbsession):
+    await _seed_datasets_db(dbsession)
+    name = "test_second_upload_dataset"
+    _ids = [4, 5, 6, 7]
+
+    data = {"name": name, "data_ids": _ids}
+    response = await client.delete(
+        "/v0/dataset/data",
+        headers=headers,
+        params=data,
+    )
     assert response.status_code == 200, response.json()
 
-    with open(file_path) as file:
-        duplicate_data = file.read()
-    duplicate_data = json.loads(duplicate_data.split("\n")[0])
+    actual = await _download_dataset(client, name)
+    expected = [
+        shakespeare_prompt_with_id,
+    ]
+    _helper_check_downloads_match(expected, actual)
 
-    data = {"name": name, "data": duplicate_data}
+
+async def test_atomic_prompt_add_duplicate(client: AsyncClient, dbsession):
+    await _seed_datasets_db(dbsession)
+    name = "test_upload_dataset"
+
+    new_prompt = madrid_prompt
+    data = {"name": name, "data": new_prompt}
+    response = await client.post("/v0/dataset/data", headers=headers, json=data)
+    assert response.status_code == 400, response.json()
+    assert response.json() == {
+        "detail": "There was an error adding the prompt.\nErrors:\nError with prompt 1: This prompt is already in the dataset\n"
+    }
+
+    actual = await _download_dataset(client, name)
+    expected = [
+        madrid_prompt_with_id,
+        squareroot_prompt_with_id,
+    ]
+    _helper_check_downloads_match(expected, actual)
+
+
+async def test_atomic_prompt_add_from_other_dataset(client: AsyncClient, dbsession):
+    await _seed_datasets_db(dbsession)
+
+    name = "test_upload_dataset"
+
+    new_prompt = shakespeare_prompt
+    data = {"name": name, "data": new_prompt}
     response = await client.post("/v0/dataset/data", headers=headers, json=data)
     assert response.status_code == 200, response.json()
 
-    dataset = await client.get("/v0/dataset", headers=headers, params={"name": name})
-    dataset = json.loads(dataset.text)
-    assert len(dataset) == 2
+    actual = await _download_dataset(client, name)
+    expected = [
+        madrid_prompt_with_id,
+        squareroot_prompt_with_id,
+        shakespeare_prompt_with_id,
+    ]
+    _helper_check_downloads_match(expected, actual)
+
+
+async def test_atomic_prompt_add_multiple_with_some_duplicates(
+    client: AsyncClient, dbsession
+):
+    await _seed_datasets_db(dbsession)
+    name = "test_upload_dataset"
+
+    new_prompts = [
+        mitochondria_prompt,
+        river_prompt,
+        madrid_prompt,
+        squareroot_prompt,
+    ]
+    data = {"name": name, "data": new_prompts}
+    response = await client.post("/v0/dataset/data", headers=headers, json=data)
+    assert response.status_code == 400, response.json()
+    assert response.json() == {
+        "detail": "There was an error while adding some of the prompts.\nThere were 2 prompts added successfuly, and 2 errors.\nErrors:\nError with prompt 3: This prompt is already in the dataset\nError with prompt 4: This prompt is already in the dataset\n"
+    }
+    actual = await _download_dataset(client, name)
+    expected = [
+        madrid_prompt_with_id,
+        squareroot_prompt_with_id,
+        mitochondria_prompt_with_id,
+        river_prompt_with_id,
+    ]
+    _helper_check_downloads_match(expected, actual)
 
 
 @pytest.mark.anyio
 async def test_dataset_extra_fields_added(client: AsyncClient):
-    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws.jsonl"
     name = "test_extra_fields_stored"
     response = await upload_dataset(client, file_path, name)
     assert response.status_code == 200, response.json()

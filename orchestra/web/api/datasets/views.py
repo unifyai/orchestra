@@ -28,8 +28,7 @@ def check_file_content(file_content: str):
     valid = True
     info = (
         "The uploaded dataset has the wrong format."
-        " It must be a jsonl file where each line has a `prompt` key"
-        " and optionally a `ref_answer` one."
+        " It must be a jsonl file where each line has a `prompt` key."
     )
     try:
         dicts = file_content.decode().split("\n")
@@ -41,9 +40,11 @@ def check_file_content(file_content: str):
             for kw in dct.keys():
                 if kw == "prompt":
                     prompt_present = True
-                if kw not in ["prompt", "ref_answer"]:
-                    info += f" Unknown keyword `{kw}` in line {i+1}."
-                    continue
+                if kw == "id":
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"You can't have an extra field with the name `id`.",
+                    )
             if not prompt_present:
                 info += f" Key `prompt` not found in line {i+1}."
                 raise ValueError
@@ -123,8 +124,7 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     """
     Uploads a custom dataset to your account.
 
-    The uploaded file must be a JSONL file with **at least** a `prompt` key for
-    each prompt each:
+    The uploaded file must be a JSONL file where each line contains **at least** a `prompt` key as follows:
 
     ```
     {"prompt": "This is the first prompt"}
@@ -132,8 +132,7 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     {"prompt": "This is the third prompt"}
     ```
 
-    Additionally, you can include any extra keys as desired, depending on the use case
-    for the dataset, and how it will be used by the evaluators and/or router training.
+    Additionally, you can include arbitrary extra keys, which may be used downstream (e.g. in evaluations).
     For example, you could include a reference answer to each prompt as follows:
 
     ```
@@ -154,21 +153,21 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     dataset_dao.create(user_id=user_id, name=name)
 
+    data_to_upload = []
     try:
         for entry in file_content.decode().split("\n"):
             if not entry.strip():
                 continue
-            prompt_data = json.loads(entry.strip())
-            dataset_dao.add_prompt_to_dataset(
-                user_id=user_id,
-                dataset_name=name,
-                prompt_data=prompt_data,
-            )
-    except Exception as e:
-        print(e)
+            datum = json.loads(entry.strip())
+            data_to_upload.append(datum)
+    except:
         raise HTTPException(400, detail=f"Incorrect data format")
 
-    return {"info": "Dataset uploaded successfully!"}
+    result = _add_data(
+        dataset_dao=dataset_dao, user_id=user_id, dataset_name=name, data=data_to_upload
+    )
+    if "info" in result:
+        return {"info": "Dataset uploaded successfully!"}
 
 
 # download dataset
@@ -227,8 +226,6 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     formatted_entries = []
     for e in entries:
         formatted_entry = copy.copy(e)
-        if formatted_entry["ref_answer"] is None:
-            formatted_entry.pop("ref_answer")
 
         system_msg = formatted_entry.pop("system_msg")
         if system_msg:
@@ -348,6 +345,23 @@ def rename_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     Renames a previously uploaded dataset.
 
     """
+    user_id = request_fastapi.state.user_id
+
+    existing_dataset = dataset_dao.filter(user_id=user_id, name=name)
+    if not existing_dataset:
+        raise HTTPException(
+            status_code=400, detail=f"You don't have a dataset named {name}"
+        )
+
+    if name == new_name:
+        return {"info": "Dataset name updated succesfully!"}
+
+    clash_name = dataset_dao.filter(user_id=user_id, name=new_name)
+    if clash_name:
+        raise HTTPException(
+            status_code=400, detail=f"You already have a dataset named {new_name}."
+        )
+
     dataset_dao.rename(
         user_id=request_fastapi.state.user_id,
         name=name,
@@ -377,7 +391,8 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     """
     user_id = request_fastapi.state.user_id
     dataset_info = dataset_dao.filter()
-    return [d.name for d in dataset_info if d.user_id in [None, user_id]]
+    ret = [d.name for d in dataset_info if d.user_id in [None, user_id]]
+    return sorted(ret)
 
 
 @router.delete(
@@ -420,6 +435,56 @@ def delete_data(
     if error_rets:
         return {"error": "\n".join(error_rets)}
     return rets[0]
+
+
+def _add_data(
+    dataset_dao: DatasetDAO,
+    user_id: str,
+    dataset_name: str,
+    data: Union[dict, list[dict]],
+):
+    if isinstance(data, dict):
+        data = [data]
+
+    successes = []
+    failures = {}
+    for ix, datum in enumerate(data):
+        result = dataset_dao.add_prompt_to_dataset(
+            user_id=user_id, dataset_name=dataset_name, prompt_data=datum
+        )
+        if not result:
+            successes.append(ix)
+            continue
+        if isinstance(result, dict) and "error" in result:
+            failures[ix] = result["error"]
+        else:
+            failures[ix] = None
+
+    if not failures:
+        return {"info": "Data added successfully"}
+
+    error_msg_formatted = "Errors:\n"
+    for ix, msg in failures.items():
+        if msg is not None:
+            error_msg_formatted += f"Error with prompt {ix+1}: {msg}\n"
+
+    if successes:
+        msg = (
+            f"There was an error while adding some of the prompts.\n"
+            f"There were {len(successes)} prompts added successfuly, and {len(failures)} errors.\n"
+        )
+    else:
+        if len(failures) == 1:
+            msg = f"There was an error adding the prompt.\n"
+        else:
+            msg = (
+                f"There was an error adding all of the prompts.\n"
+                f"There were {len(failures)} errors.\n"
+            )
+
+    msg += error_msg_formatted
+
+    raise HTTPException(status_code=400, detail=msg)
 
 
 @router.post(
@@ -473,25 +538,8 @@ def add_data(
     ),
     dataset_dao: DatasetDAO = Depends(),
 ):
-    rets = list()
-    if isinstance(data, dict):
-        rets.append(
-            dataset_dao.add_prompt_to_dataset(
-                user_id=request_fastapi.state.user_id,
-                dataset_name=name,
-                prompt_data=data,
-            ),
-        )
-    elif isinstance(data, list):
-        for datum in data:
-            rets.append(
-                dataset_dao.add_prompt_to_dataset(
-                    user_id=request_fastapi.state.user_id,
-                    dataset_name=name,
-                    prompt_data=datum,
-                ),
-            )
-    error_rets = [ret["error"] for ret in rets if (ret is not None and "error" in ret)]
-    if error_rets:
-        return {"error": "\n".join(error_rets)}
-    return {"info": "Data added successfully"}
+    user_id = request_fastapi.state.user_id
+
+    return _add_data(
+        dataset_dao=dataset_dao, user_id=user_id, dataset_name=name, data=data
+    )

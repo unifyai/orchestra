@@ -1,0 +1,5 @@
+{"prompt": {"messages": [{"role": "user", "content": "Who wrote the play 'Romeo and Juliet'?"}]}, "ref_answer": "William Shakespeare", "topic": "Literature"}
+{"prompt": {"messages": [{"role": "user", "content": "What is the chemical symbol for gold?"}]}, "ref_answer": "Au", "topic": "Chemistry"}
+{"prompt": {"messages": [{"role": "user", "content": "In which year did World War II end?"}]}, "ref_answer": "1945", "topic": "History"}
+{"prompt": {"messages": [{"role": "user", "content": "What is the largest planet in our solar system?"}]}, "ref_answer": "Jupiter", "topic": "Astronomy"}
+{"prompt": {"messages": [{"role": "user", "content": "Who painted the Mona Lisa?"}]}, "ref_answer": "Leonardo da Vinci", "topic": "Art"}
