@@ -216,7 +216,7 @@ def append_to_benchmark(
 
 @router.get(
     "/benchmark",
-    response_model=List[Dict[str, Union[str, float, None]]],
+    response_model=List[Dict[str, Union[datetime.date, float, None]]],
     responses={
         200: {
             "description": "Successful Response",
@@ -338,7 +338,7 @@ def get_benchmark(
                     "itl": result.itl,
                     "input_cost": result.input_cost,
                     "output_cost": result.output_cost,
-                    "measured_at": str(result.measured_at),
+                    "measured_at": result.measured_at,
                 },
             ]
         elif not start_time_provided and end_time_provided:
