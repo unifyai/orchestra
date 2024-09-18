@@ -4,6 +4,7 @@ Includes endpoints related to benchmarks.
 
 import os
 from datetime import datetime
+from typing import Dict, List, Union
 
 import requests
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -215,7 +216,7 @@ def append_to_benchmark(
 
 @router.get(
     "/benchmark",
-    # response_model=List[Dict[str, Union[float, None]]],
+    response_model=List[Dict[str, Union[str, float, None]]],
     responses={
         200: {
             "description": "Successful Response",
@@ -294,7 +295,7 @@ def get_benchmark(
             custom_endpoint_dao=custom_endpoint_dao,
             custom_endpoint_benchmark_dao=custom_endpoint_benchmark_dao,
         )
-    elif False:  # os.environ.get("ON_PREM"):
+    elif os.environ.get("ON_PREM"):
         request_url = os.environ.get("PUBLIC_ORCHESTRA_URL", "") + "/benchmark"
         kwargs = {
             "model": model,
