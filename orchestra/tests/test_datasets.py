@@ -494,6 +494,7 @@ async def test_add_prompt_invalid_pydantic(client: AsyncClient, dbsession):
     data = {"name": name, "data": bad_prompt}
     response = await client.post("/v0/dataset/data", headers=headers, json=data)
     assert response.status_code == 400, response.json()
+    print(response.json())
     assert response.json() == {
-        "detail": "There was an error adding the prompt.\nErrors:\nError with prompt 1: 1 validation error for Prompt\nfake_kw\n  Extra inputs are not permitted [type=extra_forbidden, input_value=123, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.8/v/extra_forbidden\n"
+        "detail": "There was an error adding the prompt.\nErrors:\nError with prompt 1: 1 validation error for Prompt\nfake_kw\n  Extra inputs are not permitted [type=extra_forbidden, input_value=123, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.9/v/extra_forbidden\n"
     }
