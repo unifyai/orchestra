@@ -1,3 +1,2 @@
-{"prompt": "This is the first prompt", "score": 0.5}
-{"prompt": "This is the second prompt", "score": 1.0}
-{"prompt": "This is the third prompt", "score": 0.2}
+{"prompt_id": 1, "score": 0.9}
+{"prompt_id": 2, "score": 0.5}

@@ -1,4 +1,5 @@
 import sqlalchemy as sa
+from sqlalchemy import Index, func
 from sqlalchemy.orm import relationship
 
 from orchestra.db.base import Base
@@ -425,6 +426,15 @@ class StoredPrompt(Base):
     ref_answer = sa.Column(sa.String(), nullable=True)
     num_tokens = sa.Column(sa.Integer(), nullable=False)
     timestamp = sa.Column(sa.TIMESTAMP(), nullable=False)
+    __table_args__ = (
+        Index(
+            "uq_userid_prompt",
+            func.hash_record_extended(
+                func.row(user_id, system_msg, messages, prompt_kwargs), 0
+            ),
+            unique=True,
+        ),
+    )
 
 
 class DefaultPrompt(Base):
@@ -561,6 +571,13 @@ class DatasetPrompt(Base):
         sa.ForeignKey("stored_prompt.id"),
         index=True,
         nullable=True,
+    )
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "dataset_id",
+            "prompt_id",
+            name="uq_dataset_prompt",
+        ),
     )
 
 
