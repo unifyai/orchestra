@@ -24,10 +24,9 @@ from orchestra.web.api.llm_queries.schema import (
 )
 from orchestra.web.api.utils.bg_tasks import db_operations
 from orchestra.web.api.utils.dynamic_routing import (
-    RouterConfig,
-    dynamic_routing,
+    NeuralRouter,
+    Router,
     get_router_endpoint_id,
-    parse_endpoint,
 )
 from orchestra.web.api.utils.helpers import filter_orchestra_only_args
 from orchestra.web.api.utils.http_responses import (
@@ -208,37 +207,27 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         try:
             while try_provider >= 0 and try_provider < num_tries_provider:
                 if provider not in PROVIDER_CLASSES or using_router:
-                    # Dynamic routing
+                    # neural routing
                     if using_router:
                         if router_choices is None:
-                            rc = RouterConfig(
+                            router = NeuralRouter(
                                 request.model,
                                 endpoint_dao,
                                 benchmark_run_dao,
                             )
-                            num_tokens_est = 0
-                            for msg in messages:
-                                if msg.get("content") is not None:
-                                    num_tokens_est += len(msg["content"])
-                            # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
-                            # TODO: add error message if the router is not deployed
-                            router_choices = rc(
+                            router_choices = router(
+                                request_fastapi,
                                 messages[-1]["content"],
-                                num_tokens_est * 1.25,
                                 endpoint_id,
                             )
                             model_region_priority_list = router_choices
-                    else:  # Non model routing, TODO: clean up to simplify
-                        target_metric, metrics_thresholds = parse_endpoint(provider)
-                        model, provider = dynamic_routing(
+                    # performance routing
+                    else:
+                        model, provider, _ = Router(
+                            request.model,
                             endpoint_dao,
                             benchmark_run_dao,
-                            target_metric,
-                            models=(model,),
-                            metrics_thresholds=metrics_thresholds,
-                        )
-                        # TODO: this is probably still buggye with corner cases,
-                        # more exhaustive testing is needed.
+                        )(request_fastapi)
                         model_region_priority_list[try_provider] = (
                             model,
                             provider,
@@ -370,10 +359,11 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 )
 @handle_on_prem("/router/scores", "none")
 def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
+    request_fastapi: Request,
     request: ChatCompletionRequest,
     endpoint_dao: EndpointDAO = Depends(),
     benchmark_run_dao: BenchmarkRunDAO = Depends(),
 ) -> RouterScoresResponse:
-    rc = RouterConfig(request.model, endpoint_dao, benchmark_run_dao)
-    scores = rc(request.messages[-1]["content"], debug=True)
+    rc = NeuralRouter(request.model, endpoint_dao, benchmark_run_dao)
+    scores = rc(request_fastapi, request.messages[-1]["content"], debug=True)
     return RouterScoresResponse(scores=scores)

@@ -1,11 +1,14 @@
 # TODO: lru cache needs to be changed to a bg task
 import logging
 import math
+import os
 import re
 import time
 from collections import namedtuple
 from typing import Dict, List, Optional, Tuple, Union
 
+import requests
+from fastapi import Request
 from google.cloud import aiplatform
 from providers.completion import PROVIDER_CLASSES
 
@@ -49,147 +52,6 @@ default_providers = {
     "octoai",
     "aws-bedrock",
 }
-
-
-class RouterConfig:
-    def __init__(
-        self,
-        endpoint_str: str,
-        endpoint_dao: EndpointDAO,
-        benchmark_run_dao: BenchmarkRunDAO,
-    ):
-        assert "router" in endpoint_str
-
-        self.endpoint_str = endpoint_str
-        self.endpoint_dao = endpoint_dao
-        self.benchmark_run_dao = benchmark_run_dao
-
-        self.info_segments = self.endpoint_str_to_dict()
-
-        self.default_models = default_models
-        self.models = self.extract_list("models")
-
-        self.default_providers = default_providers
-        self.providers = self.extract_list("providers")
-
-        self.q = self.extract_factor("q")
-        self.c = self.extract_factor("c")
-        self.i = self.extract_factor("i")
-        self.t = self.extract_factor("t")
-
-        self.q0 = self.extract_factor("q0")
-        self.c0 = self.extract_factor("c0")
-        self.i0 = self.extract_factor("i0")
-        self.t0 = self.extract_factor("t0")
-
-        self.thresholds = {}
-        self.thresholds["quality"] = self.extract_thrs("quality")
-        self.thresholds["cost"] = self.extract_thrs("cost")
-        self.thresholds["itl"] = self.extract_thrs("itl")
-        self.thresholds["ttft"] = self.extract_thrs("ttft")
-
-    def endpoint_str_to_dict(self):
-        provider_substr = self.endpoint_str.split("@")[1]
-        pairs = provider_substr.split("|")
-        dict_out = {}
-        for p in pairs:
-            items = p.split(":")
-            dict_out[items[0]] = items[1]
-        return dict_out
-
-    def extract_list(self, attr):
-        out = getattr(self, f"default_{attr}")
-        if attr in self.info_segments:
-            specified = set(self.info_segments[attr].split(","))
-            out = out.intersection(specified)
-        return out
-
-    def extract_factor(self, attr, default=0):
-        out = default
-        if attr in self.info_segments:
-            out = float(self.info_segments[attr])
-        return out
-
-    def extract_thrs(self, attr):
-        full_attr = f"{attr}_thrs"
-        if full_attr in self.info_segments:
-            items = self.info_segments[full_attr].split(",")
-            return (float(items[0]), float(items[1]))
-        return (float("-inf"), float("inf"))
-
-    def cost_fn(self, quality, cost, itl, ttft, **kwargs):
-        return (
-            -self.q * (quality - self.q0)
-            + self.c * (cost - self.c0)
-            + self.i * (itl - self.i0)
-            + self.t * (ttft - self.t0)
-        )
-
-    def __call__(self, prompt, input_tokens, router_endpoint_id, debug=False):
-        # Get full list of endpoints
-        # endpoints = get_endpoints_of(
-        #     self.endpoint_dao,
-        #     tuple(self.models),
-        #     only_from=tuple(self.providers),
-        #     ttl_hash=get_ttl_hash(),
-        # )
-        endpoints = baked_router_endpoints
-        endpoints = [e for e in endpoints if e.provider in self.providers]
-        endpoints = [e for e in endpoints if e.model in self.models]
-        # Get quality from the neural router scoring function
-        model_scores = neural_scoring(prompt, router_endpoint_id)
-        if debug:
-            return model_scores
-
-        endpoint_metrics = {}
-        thresholded_endpoints = []
-        # Iterate over each endpoint
-        for endpoint in endpoints:
-            name = f"{endpoint.model}@{endpoint.provider}"
-            if endpoint.model not in model_scores:
-                continue
-            endpoint_metrics[name] = {}
-            endpoint_metrics[name]["quality"] = model_scores[endpoint.model]
-            # Fetch the metrics values
-            for metric in [
-                "input_cost_per_token",
-                "output_cost_per_token",
-                "ttft",
-                "itl",
-                "context_window",
-            ]:
-                endpoint_metrics[name][metric] = float(
-                    get_value_of(self.benchmark_run_dao, endpoint, metric),
-                )
-            endpoint_metrics[name]["cost"] = (
-                endpoint_metrics[name]["input_cost_per_token"] * 3
-                + endpoint_metrics[name]["output_cost_per_token"]
-            ) / 4
-
-            # Remove endpoints outside of the thresholds
-            valid = True
-            for metric, threshold in self.thresholds.items():
-                if threshold[0] < endpoint_metrics[name][metric] < threshold[1]:
-                    pass
-                else:
-                    valid = False
-            if endpoint_metrics[name]["context_window"] <= input_tokens:
-                valid = False
-            if valid:
-                thresholded_endpoints.append(endpoint)
-
-        if not thresholded_endpoints:
-            raise provider_not_found_under_conditions
-
-        # Compute the cost function for each endpoint
-        endpoint_scores = {}
-        for endpoint in thresholded_endpoints:
-            name = f"{endpoint.model}@{endpoint.provider}"
-            endpoint_scores[name] = self.cost_fn(**endpoint_metrics[name])
-
-        # Return a list of endpoints ordered by lowest cost
-        ordered_keys = sorted(endpoint_scores, key=lambda k: endpoint_scores[k])
-        return [[*key.split("@"), None] for key in ordered_keys]
 
 
 def neural_scoring(prompt, endpoint_id):
@@ -389,100 +251,309 @@ def standarise_thresholds(threhsolds):
     return clean_thresholds
 
 
-def parse_endpoint(endpoint: str):
-    # TODO: Raise error if not correctly formated or not valid metric
+class Router:
+    def __init__(self, model, endpoint_dao, benchmark_run_dao):
+        self.model = model
+        self.endpoint_dao = endpoint_dao
+        self.benchmark_run_dao = benchmark_run_dao
+        self.metric_aliases = [
+            ["quality", "q"],
+            ["ttft", "time-to-first-token", "t"],
+            ["itl", "inter-token-latency", "i"],
+            ["cost", "c"],
+            ["input-cost", "ic"],
+            ["output-cost", "oc"],
+        ]
+        self.metric_map = dict()
+        self.metrics_and_thresholds = dict()
+        self.models = None
+        self.skip_models = None
+        self.providers = None
+        self.skip_providers = None
+        self.load_metric_map()
+        self.load_metrics_and_thresholds()
+        self.load_models_and_providers()
+        self.model = self.model.split("@")[0]
 
-    main_metric = endpoint.split("<", 1)[0].split(">")[0]
+    def load_metric_map(self):
+        # create a dict for mapping each alias to a common term
+        for metric_alias in self.metric_aliases:
+            for metric in metric_alias:
+                self.metric_map[metric] = metric_alias[0]
 
-    # Regular expression pattern to match the thresholds
-    pattern = r"(?P<operator>[<>])(?P<value>\d+\.*\d*)(?P<unit>[\w'-]*)"
+    def load_metrics_and_thresholds(self):
+        # get the string representing the constraints
+        provider_str = self.model.split("@")[1]
+        metrics = provider_str.split("|")
 
-    # Search for matches using the pattern
-    matches = re.findall(pattern, endpoint.removeprefix(main_metric))
+        for metric in metrics:
+            # get the name of the metric
+            metric_name = metric.split("<", 1)[0].split(">")[0].split(":")[0]
+            main_metric = self.metric_map.get(
+                metric_name.replace("lowest-", "").replace("highest-", ""),
+            )
 
-    # Initialize variables to store thresholds
-    thresholds = {}
+            # get the keywords specified in the string without any numbers
+            # when numbers are specified then these get considered as "none"
+            keywords = re.findall("(lowest|highest)-", metric_name)
+            keyword = (
+                keywords[0]
+                if len(keywords)
+                else ("highest" if main_metric == "quality" else "lowest")
+            )
 
-    for match in matches:
-        value = float(match[1])
-        metric = match[2]
+            # get all number-based constraints of the metrics
+            thresholds = re.findall(r"[<>]=?\d+\.?\d*", metric)
+            checks = []
+            for threshold in thresholds:
+                # get the value
+                val = float(re.findall(r"\d+\.?\d*", threshold)[0])
 
-        # Store the threshold in the dictionary
-        thresholds[metric] = value
+                # get the comparison sign
+                op = re.findall(r"[<>]=?", threshold)[0]
+                cmp = None
+                if op == ">=":
+                    cmp = lambda value, threshold: value >= threshold
+                elif op == ">":
+                    cmp = lambda value, threshold: value > threshold
+                elif op == "<=":
+                    cmp = lambda value, threshold: value <= threshold
+                else:
+                    cmp = lambda value, threshold: value < threshold
 
-    main_metric = metric_aliases(main_metric)
-    if main_metric is None:
-        raise invalid_provider_str
-    thresholds = standarise_thresholds(thresholds)
+                # add the check to the list
+                checks.append({"threshold": val, "op": op, "cmp": cmp})
+                keyword = self.metrics_and_thresholds.get(main_metric, dict()).get(
+                    "keyword",
+                    "none",
+                )
 
-    return main_metric, thresholds
+            # get the multiplers specified with :
+            multipliers = [factor[1:] for factor in re.findall(r":\d+\.?\d*", metric)]
 
+            # store all the info, concatenate with previous checks if multiple
+            # checks are specified for each metric
+            self.metrics_and_thresholds[main_metric] = {
+                "keyword": keyword,
+                "checks": (
+                    self.metrics_and_thresholds.get(main_metric, {"checks": []})[
+                        "checks"
+                    ]
+                    + checks
+                ),
+                "multipliers": multipliers,
+            }
 
-def dynamic_routing(
-    endpoint_dao: EndpointDAO,
-    benchmark_run_dao: BenchmarkRunDAO,
-    target_metric: str,
-    user_config: Optional[str] = None,
-    models: Optional[Tuple[str, ...]] = None,
-    providers: Optional[Tuple[str, ...]] = None,
-    router_threshold: float = 0,
-    metrics_thresholds: Optional[Dict[str, float]] = None,
-) -> Tuple[str, str]:
-    # If user_config is specified, override params.
-    # The configs should be cached, if there is no cache, the config
-    # is queried from the DB. If there is cache, we get it from there
-    # and then start a background task to update the config in the cache.
-    if user_config:
-        raise NotImplementedError("Users configs are not available yet.")
-    if not models or len(models) != 1:
-        raise NotImplementedError(
-            "Performance based routing is not available yet. Only one model can be specified.",
+    def load_models_and_providers(self):
+        # get the model and provider specifications
+        search_str = self.model.split("@")[1]
+        for criteria_str in search_str.split("|"):
+            if ":" not in criteria_str:
+                continue
+            criteria, criteria_val = criteria_str.split(":")
+            if criteria in ["providers", "skip_providers", "models", "skip_models"]:
+                criteria_list = criteria_val.split(",")
+                if criteria_val == "providers":
+                    self.providers = criteria_list
+                elif criteria_val == "skip_providers":
+                    self.skip_providers = criteria_list
+                elif criteria_val == "models":
+                    self.models = criteria_list
+                else:
+                    self.skip_models = criteria_list
+
+    def get_public_endpoint_metrics(self, endpoint: Endpoint, request_fastapi: Request):
+        # query the public endpoint on-prem to get benchmarks
+        model = endpoint.model
+        provider = endpoint.provider
+        request_url = os.environ.get("PUBLIC_ORCHESTRA_URL", "") + "/benchmark"
+        kwargs = {"model": model, "provider": provider}
+        headers = {
+            key: value
+            for key, value in request_fastapi._headers.items()
+            if key in ["content-type", "authorization"]
+        }
+        return requests.get(
+            request_url,
+            params=kwargs,
+            headers=headers,
+        ).json()
+
+    def get_metric_value(
+        self,
+        endpoint_metrics: Dict[str, Dict[str, float]],
+        endpoint: Endpoint,
+        metric: str,
+    ) -> float:
+        # get value for the metric on-prem
+        if os.environ.get("ON_PREM"):
+            try:
+                return endpoint_metrics[endpoint.model + "@" + endpoint.provider][
+                    metric.replace("-", "_")
+                ]
+            except KeyError:
+                logger.warning(f"{endpoint} has no metrics. Skipping.")
+                return math.inf
+
+        # get the value on the cloud deployment
+        model_metrics = get_model_metrics(
+            self.benchmark_run_dao,
+            endpoint,
+            ttl_hash=get_ttl_hash(),
         )
-    # Get all endpoints from the specified models x providers.
-    # If providers is not None, only endpoints from these providers will be considered.
-    # TODO: Implement function to get these from cache / DB + background task?
-    endpoints = get_endpoints_of(
-        endpoint_dao,
-        models,
-        only_from=providers,
-        ttl_hash=get_ttl_hash(),
-    )
-    # Remove endpoints that don't fall within the metrics thresholds
-    if metrics_thresholds:
-        thresholded_endpoints = threshold_endpoints(
-            benchmark_run_dao,
-            endpoints,
-            metrics_thresholds,
+        try:
+            value = model_metrics[endpoint.provider][metric]
+        except KeyError:
+            logger.warning(f"{endpoint} has no metrics. Skipping.")
+            return math.inf
+        return value
+
+    def __call__(
+        self,
+        request_fastapi: Request,
+        endpoints: Optional[List[Endpoint]] = None,
+        scores: Optional[Dict[str, float]] = None,
+        return_all: bool = False,
+    ):
+        # get all endpoints from the specified models x providers.
+        # this is skipped in case of the neural scoring function
+        if not endpoints:
+            endpoints = get_endpoints_of(
+                self.endpoint_dao,
+                (self.model,),
+                only_from=self.providers,
+                ttl_hash=get_ttl_hash(),
+            )
+
+        # remove endpoints that don't fall within the metrics thresholds
+        endpoint_metrics = dict()
+        if len(self.metrics_and_thresholds.keys()):
+            thresholded_endpoints = []
+            for endpoint in endpoints:
+                is_valid = True
+
+                # get metrics for the endpoint on-prem
+                if os.environ.get("ON_PREM"):
+                    metrics = self.get_public_endpoint_metrics(
+                        endpoint,
+                        request_fastapi,
+                    )
+                    metrics["cost"] = (
+                        3 * metrics["input-cost"] + metrics["output-cost"]
+                    ) / 4
+                    metrics["quality"] = scores[f"{endpoint.model}@{endpoint.provider}"]
+                    if isinstance(metrics, list):
+                        metrics = metrics[0]
+                    else:
+                        metrics = dict()
+                    endpoint_metrics[endpoint.model + "@" + endpoint.provider] = metrics
+
+                # iterate over metrics and thresholds for filtering
+                for metric, data in self.metrics_and_thresholds.items():
+                    # get model metrics
+                    if os.environ.get("ON_PREM"):
+                        try:
+                            value = metrics[metric.replace("-", "_")]
+                        except KeyError:
+                            logger.warning(
+                                f"{endpoint} has no metric {metric}. Skipping.",
+                            )
+                            value = math.inf
+                            is_valid = False
+                            break
+                    else:
+                        model_metrics = get_model_metrics(
+                            self.benchmark_run_dao,
+                            endpoint,
+                            ttl_hash=get_ttl_hash(),
+                        )
+                        try:
+                            value = model_metrics[endpoint.provider][
+                                metric.replace("-", "_")
+                            ]
+                        except KeyError:
+                            logger.warning(
+                                f"{endpoint} has no metric {metric}. Skipping.",
+                            )
+                            value = math.inf
+                            is_valid = False
+                            break
+
+                    # check for the threshold
+                    for check in data["checks"]:
+                        if not value or (
+                            "cmp" in check
+                            and not check["cmp"](value, check["threshold"])
+                        ):
+                            is_valid = False
+                            break
+
+                # add the valid endpoints to the list
+                if is_valid:
+                    thresholded_endpoints.append(endpoint)
+
+            # if no endpoints found then return error
+            if not thresholded_endpoints:
+                raise provider_not_found_under_conditions
+
+            # sort the thresholded endpoints
+            sorted_endpoints = thresholded_endpoints
+            for metric in self.metrics_and_thresholds:
+                if "keyword" in self.metrics_and_thresholds[metric]:
+                    keyword = self.metrics_and_thresholds[metric]["keyword"]
+                    if keyword != "none":
+                        sorted_endpoints = sorted(
+                            sorted_endpoints,
+                            key=lambda endpoint: self.get_metric_value(
+                                endpoint_metrics,
+                                endpoint,
+                                metric,
+                            ),
+                            reverse=keyword == "highest",
+                        )
+            final_endpoints = sorted_endpoints
+        else:
+            final_endpoints = endpoints
+
+        # return all endpoints if we're routing
+        if return_all:
+            return [
+                (endpoint.model, endpoint.provider, None)
+                for endpoint in final_endpoints
+            ]
+        selected_endpoint = final_endpoints[0]
+
+        return selected_endpoint.model, selected_endpoint.provider, None
+
+
+class NeuralRouter(Router):
+    def __call__(
+        self,
+        request_fastapi: Request,
+        prompt: Optional[str] = "",
+        router_endpoint_id: Optional[int] = None,
+        debug: Optional[bool] = None,
+    ):
+        endpoints = baked_router_endpoints
+        endpoints = [
+            e
+            for e in endpoints
+            if (
+                e.provider in (self.providers or [])
+                and e.provider not in (self.skip_providers or [])
+                and e.model in (self.models or [])
+                and e.model not in (self.skip_models or [])
+            )
+        ]
+        model_scores = neural_scoring(prompt, router_endpoint_id)
+        if debug:
+            return model_scores
+        return super().__call__(
+            request_fastapi=request_fastapi,
+            endpoints=endpoints,
+            scores=model_scores,
+            return_all=True,
         )
-        if not thresholded_endpoints:
-            raise provider_not_found_under_conditions
-    else:
-        thresholded_endpoints = endpoints
-    # Extract models from thresholded_endpoints
-    thresholded_models = set([endpoint.model for endpoint in thresholded_endpoints])
-    # Pass this to the router to get scores for each model
-    # TODO: Implement this properly, it should return a Dict[str, float] of
-    # model_id:score
-    # router_scores = score_models(models, messages)
-    # Get the first one since there should only be one
-    router_scores = {list(thresholded_models)[0]: 1}
-    non_valid_models = set(
-        [model for model, score in router_scores.items() if score < router_threshold],
-    )
-    # Remove non_valid_models from thresholded_endpoints
-    valid_endpoints = []
-    for endpoint in thresholded_endpoints:
-        if endpoint.model not in non_valid_models:
-            valid_endpoints.append(endpoint)
-    # TODO: Raise error if no valid endpoints
-    # Now we have a list of valid endpoints
-    # Get the (model, provider) combination that optimises the target metric
-    selected_model, selected_provider = find_best(
-        benchmark_run_dao,
-        valid_endpoints,
-        target_metric,
-    )
-    return selected_model, selected_provider
 
 
 def get_router_endpoint_id(
