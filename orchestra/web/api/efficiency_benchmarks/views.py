@@ -295,7 +295,7 @@ def get_benchmark(
             custom_endpoint_dao=custom_endpoint_dao,
             custom_endpoint_benchmark_dao=custom_endpoint_benchmark_dao,
         )
-    elif os.environ.get("ON_PREM"):
+    elif False:  # os.environ.get("ON_PREM"):
         request_url = os.environ.get("PUBLIC_ORCHESTRA_URL", "") + "/benchmark"
         kwargs = {
             "model": model,
