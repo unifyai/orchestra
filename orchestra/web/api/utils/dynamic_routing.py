@@ -438,15 +438,20 @@ class Router:
                         endpoint,
                         request_fastapi,
                     )
-                    metrics["cost"] = (
-                        3 * metrics["input-cost"] + metrics["output-cost"]
-                    ) / 4
-                    metrics["quality"] = scores[f"{endpoint.model}@{endpoint.provider}"]
                     if isinstance(metrics, list):
                         metrics = metrics[0]
+                        metrics["cost"] = (
+                            3 * metrics["input_cost"] + metrics["output_cost"]
+                        ) / 4
+                        if scores:
+                            metrics["quality"] = scores[
+                                f"{endpoint.model}@{endpoint.provider}"
+                            ]
+                        endpoint_metrics[
+                            endpoint.model + "@" + endpoint.provider
+                        ] = metrics
                     else:
                         metrics = dict()
-                    endpoint_metrics[endpoint.model + "@" + endpoint.provider] = metrics
 
                 # iterate over metrics and thresholds for filtering
                 for metric, data in self.metrics_and_thresholds.items():
@@ -455,12 +460,15 @@ class Router:
                         try:
                             value = metrics[metric.replace("-", "_")]
                         except KeyError:
-                            logger.warning(
-                                f"{endpoint} has no metric {metric}. Skipping.",
-                            )
-                            value = math.inf
-                            is_valid = False
-                            break
+                            # skip quality-based filtering unless performing
+                            # neural routing
+                            if scores is not None or metric != "quality":
+                                logger.warning(
+                                    f"{endpoint} has no metric {metric}. Skipping.",
+                                )
+                                value = math.inf
+                                is_valid = False
+                                break
                     else:
                         model_metrics = get_model_metrics(
                             self.benchmark_run_dao,
@@ -472,12 +480,15 @@ class Router:
                                 metric.replace("-", "_")
                             ]
                         except KeyError:
-                            logger.warning(
-                                f"{endpoint} has no metric {metric}. Skipping.",
-                            )
-                            value = math.inf
-                            is_valid = False
-                            break
+                            # skip quality-based filtering unless performing
+                            # neural routing
+                            if scores is not None or metric != "quality":
+                                logger.warning(
+                                    f"{endpoint} has no metric {metric}. Skipping.",
+                                )
+                                value = math.inf
+                                is_valid = False
+                                break
 
                     # check for the threshold
                     for check in data["checks"]:
