@@ -477,3 +477,23 @@ async def test_dataset_extra_fields_added(client: AsyncClient):
     dataset = await client.get("/v0/dataset", headers=headers, params={"name": name})
     dataset = json.loads(dataset.text)
     assert "ref_answer" in dataset[0]
+
+
+async def test_add_prompt_invalid_pydantic(client: AsyncClient, dbsession):
+    await _seed_datasets_db(dbsession)
+    name = "test_upload_dataset"
+
+    bad_prompt = {
+        "prompt": {
+            "messages": [
+                {"role": "user", "content": "What is the powerhouse of the cell?"}
+            ],
+            "fake_kw": 123,
+        },
+    }
+    data = {"name": name, "data": bad_prompt}
+    response = await client.post("/v0/dataset/data", headers=headers, json=data)
+    assert response.status_code == 400, response.json()
+    assert response.json() == {
+        "detail": "There was an error adding the prompt.\nErrors:\nError with prompt 1: 1 validation error for Prompt\nfake_kw\n  Extra inputs are not permitted [type=extra_forbidden, input_value=123, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.8/v/extra_forbidden\n"
+    }

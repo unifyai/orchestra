@@ -1,0 +1,23 @@
+name: Sync Unify Python SDK submodule
+
+on:
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pull & update submodules recursively
+        run: |
+          git submodule update --init --recursive
+          git submodule update --recursive --remote
+
+      - name: Commit & push changes
+        run: |
+          git config --global user.name "actions@github.com"
+          git config --global user.email "GitHub Actions - sync Python SDK submodule"
+          git commit -am "Update Python SDK submodule"
+          git push origin HEAD:${{ github.ref }}
