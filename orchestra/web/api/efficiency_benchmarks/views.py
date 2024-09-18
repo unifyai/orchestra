@@ -4,7 +4,6 @@ Includes endpoints related to benchmarks.
 
 import os
 from datetime import datetime
-from typing import Dict, List, Union
 
 import requests
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -216,7 +215,7 @@ def append_to_benchmark(
 
 @router.get(
     "/benchmark",
-    response_model=List[Dict[str, Union[float, None]]],
+    # response_model=List[Dict[str, Union[float, None]]],
     responses={
         200: {
             "description": "Successful Response",
