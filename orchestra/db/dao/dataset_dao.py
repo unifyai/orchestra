@@ -6,6 +6,8 @@ import tiktoken
 from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+from psycopg2 import errors as psycopg2_errors
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
@@ -119,12 +121,13 @@ class DatasetDAO:
                 "system_msg": json.loads(stored_prompt.system_msg),
                 "messages": json.loads(stored_prompt.messages),
                 "prompt_kwargs": json.loads(stored_prompt.prompt_kwargs),
-                "ref_answer": stored_prompt.ref_answer,
                 "num_tokens": stored_prompt.num_tokens,
                 "timestamp": stored_prompt.timestamp,
             }
             # Query to get extra fields for this prompt
-            extra_fields_query = select(StoredPromptExtraField).where(
+            extra_fields_query = select(
+                StoredPromptExtraField.field, StoredPromptExtraField.value
+            ).where(
                 StoredPromptExtraField.prompt_id == stored_prompt.id,
             )
             extra_fields = self.session.execute(extra_fields_query).fetchall()
@@ -140,41 +143,80 @@ class DatasetDAO:
             dataset_id = self.filter(user_id=user_id, name=dataset_name)[0].id
         except:
             return {"error": f"Dataset {dataset_name} not found"}
+
+        if "prompt" not in prompt_data:
+            return {"error": "Prompt must contain 'prompt'."}
+
         prompt = prompt_data["prompt"]
-        ref_answer = prompt_data.get("ref_answer")
         system_msg = prompt.get("system_msg")
+        if "messages" not in prompt:
+            return {"error": "Prompt must contain 'messages'."}
         messages = prompt["messages"]
         prompt_kwargs = {
             k: v for k, v in prompt.items() if k not in ["system_msg", "messages"]
         }
+        num_tokens = prompt.get("num_tokens", count_tokens(messages))
 
-        new_prompt = StoredPrompt(
-            user_id=user_id,
-            system_msg=json.dumps(system_msg),  # TODO: This is broken I think
-            messages=json.dumps(messages),
-            prompt_kwargs=json.dumps(prompt_kwargs),
-            ref_answer=ref_answer,
-            num_tokens=prompt.get("num_tokens", count_tokens(messages)),
-            timestamp=prompt.get("timestamp", datetime.utcnow()),
-        )
-        self.session.add(new_prompt)
-        self.session.flush()
+        system_msg = json.dumps(system_msg)
+        messages = json.dumps(messages)
+        prompt_kwargs = json.dumps(prompt_kwargs)
 
-        # add extra fields
-        for field, value in prompt_data.items():
-            if field in ["prompt", "ref_answer", "num_tokens", "timestamp"]:
-                continue
-            extra_field = StoredPromptExtraField(
-                prompt_id=new_prompt.id,
-                field=field,
-                value=value,
+        existing_prompt = (
+            self.session.query(StoredPrompt)
+            .where(StoredPrompt.user_id == user_id)
+            .where(StoredPrompt.system_msg == system_msg)
+            .where(StoredPrompt.messages == messages)
+            .where(StoredPrompt.prompt_kwargs == prompt_kwargs)
+        ).first()
+
+        if existing_prompt:
+            prompt_id = existing_prompt.id
+        else:
+            new_prompt = StoredPrompt(
+                user_id=user_id,
+                system_msg=system_msg,  # TODO: This is broken I think
+                messages=messages,
+                prompt_kwargs=prompt_kwargs,
+                ref_answer=None,
+                num_tokens=num_tokens,
+                timestamp=prompt.get("timestamp", datetime.utcnow()),
             )
-            self.session.add(extra_field)
-            self.session.flush()
+            try:
+                self.session.add(new_prompt)
+                self.session.flush()
+                prompt_id = new_prompt.id
+            except:
+                return {
+                    "error": "An error occurred while adding the prompt. Please check the format is correct, and try again."
+                }
+            # add extra fields
+            for field, value in prompt_data.items():
+                if field in ["prompt", "num_tokens", "timestamp"]:
+                    continue
+                extra_field = StoredPromptExtraField(
+                    prompt_id=prompt_id,
+                    field=field,
+                    value=value,
+                )
+                self.session.add(extra_field)
+                self.session.flush()
 
-        dataset_prompt = DatasetPrompt(dataset_id=dataset_id, prompt_id=new_prompt.id)
-        self.session.add(dataset_prompt)
-        self.session.commit()
+        existing_dataset_prompt = (
+            self.session.query(DatasetPrompt)
+            .where(DatasetPrompt.dataset_id == dataset_id)
+            .where(DatasetPrompt.prompt_id == prompt_id)
+        ).first()
+        if existing_dataset_prompt:
+            return {"error": "This prompt is already in the dataset"}
+
+        dataset_prompt = DatasetPrompt(dataset_id=dataset_id, prompt_id=prompt_id)
+        try:
+            self.session.add(dataset_prompt)
+            self.session.flush()
+        except:
+            return {
+                "error": "An error occurred while adding the prompt. Please check the format is correct, and try again."
+            }
 
     def remove_prompt_from_dataset(self, user_id, dataset_name, prompt_id):
         try:
