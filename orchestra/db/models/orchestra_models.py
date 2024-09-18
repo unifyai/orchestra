@@ -1,4 +1,5 @@
 import sqlalchemy as sa
+from sqlalchemy import Index, func
 from sqlalchemy.orm import relationship
 
 from orchestra.db.base import Base
@@ -426,12 +427,12 @@ class StoredPrompt(Base):
     num_tokens = sa.Column(sa.Integer(), nullable=False)
     timestamp = sa.Column(sa.TIMESTAMP(), nullable=False)
     __table_args__ = (
-        sa.UniqueConstraint(
-            "user_id",
-            "system_msg",
-            "messages",
-            "prompt_kwargs",
-            name="uq_userid_prompt",
+        Index(
+            "uq_userid_prompt",
+            func.hash_record_extended(
+                func.row(user_id, system_msg, messages, prompt_kwargs), 0
+            ),
+            unique=True,
         ),
     )
 
