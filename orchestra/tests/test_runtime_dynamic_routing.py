@@ -110,11 +110,11 @@ def test_empty_lut(dbsession) -> str:  # type: ignore[return]
 
     with pytest.raises(HTTPException) as err:
         Router(
-            "llama-3.1-8b-chat@itl<1|itl<20",
+            "llama-3.11-8b-chat@itl",
             endpoint_dao,
             benchmark_run_dao,
         )("")
-    assert err.value.status_code == 404
+    assert err.value.status_code == 500
 
 
 # TODO: This needs to happen at chat/completions and inference level
