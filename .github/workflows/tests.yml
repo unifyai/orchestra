@@ -71,9 +71,7 @@ jobs:
         python-version: "3.9"
 
     - name: Check directory structure
-      run: |
-       pwd
-       ls -R
+      run: pwd ls -R
 
     - name: Install and configure Poetry
       uses: snok/install-poetry@v1
