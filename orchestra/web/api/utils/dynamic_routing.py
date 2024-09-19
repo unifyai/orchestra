@@ -292,6 +292,8 @@ class Router:
             main_metric = self.metric_map.get(
                 metric_name.replace("lowest-", "").replace("highest-", ""),
             )
+            if main_metric is None:
+                continue
 
             # get the keywords specified in the string without any numbers
             # when numbers are specified then these get considered as "none"
@@ -353,11 +355,11 @@ class Router:
             criteria, criteria_val = criteria_str.split(":")
             if criteria in ["providers", "skip_providers", "models", "skip_models"]:
                 criteria_list = criteria_val.split(",")
-                if criteria_val == "providers":
+                if criteria == "providers":
                     self.providers = criteria_list
-                elif criteria_val == "skip_providers":
+                elif criteria == "skip_providers":
                     self.skip_providers = criteria_list
-                elif criteria_val == "models":
+                elif criteria == "models":
                     self.models = criteria_list
                 else:
                     self.skip_models = criteria_list
@@ -421,9 +423,15 @@ class Router:
             endpoints = get_endpoints_of(
                 self.endpoint_dao,
                 (self.model,),
-                only_from=self.providers,
+                only_from=tuple(self.providers) if self.providers else None,
                 ttl_hash=get_ttl_hash(),
             )
+            if self.skip_providers:
+                endpoints = [
+                    endpoint
+                    for endpoint in endpoints
+                    if endpoint.provider not in self.skip_providers
+                ]
 
         # remove endpoints that don't fall within the metrics thresholds
         endpoint_metrics = dict()
