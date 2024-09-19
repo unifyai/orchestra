@@ -9,6 +9,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: 'true'
 
       - name: Pull & update submodules recursively
         run: |
@@ -17,7 +19,7 @@ jobs:
 
       - name: Commit & push changes
         run: |
-          git config --global user.name "actions@github.com"
-          git config --global user.email "GitHub Actions - sync Python SDK submodule"
+          git config --global user.name github-actions
+          git config --global user.email github-actions@github.com
           git commit -am "Update Python SDK submodule"
           git push origin HEAD:${{ github.ref }}
