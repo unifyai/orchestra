@@ -106,23 +106,23 @@ INSERT INTO metric VALUES ('cold_start', 'ms', 'Cold Start', 'Cold Start', 20, '
 
 -- Datapoint
 ---- lowest-input-cost-per-token-provider
-INSERT INTO datapoint VALUES (13, 3, 'input_cost_per_token', 0.01, NULL, NOW());
-INSERT INTO datapoint VALUES (14, 3, 'output_cost_per_token', 35, NULL, NOW());
+INSERT INTO datapoint VALUES (13, 3, 'input_cost', 0.01, NULL, NOW());
+INSERT INTO datapoint VALUES (14, 3, 'output_cost', 35, NULL, NOW());
 INSERT INTO datapoint VALUES (16, 3, 'ttft', 4500, NULL, NOW());
 INSERT INTO datapoint VALUES (17, 3, 'itl', 1000, NULL, NOW());
 ---- lowest-output-cost-per-token-provider
-INSERT INTO datapoint VALUES (19, 4, 'input_cost_per_token', 20, NULL, NOW());
-INSERT INTO datapoint VALUES (20, 4, 'output_cost_per_token', 0.01, NULL, NOW());
+INSERT INTO datapoint VALUES (19, 4, 'input_cost', 20, NULL, NOW());
+INSERT INTO datapoint VALUES (20, 4, 'output_cost', 0.01, NULL, NOW());
 INSERT INTO datapoint VALUES (22, 4, 'ttft', 450, NULL, NOW());
 INSERT INTO datapoint VALUES (23, 4, 'itl', 10, NULL, NOW());
 ---- lowest-itl-provider
-INSERT INTO datapoint VALUES (25, 5, 'input_cost_per_token', 20, NULL, NOW());
-INSERT INTO datapoint VALUES (26, 5, 'output_cost_per_token', 35, NULL, NOW());
+INSERT INTO datapoint VALUES (25, 5, 'input_cost', 0.6, NULL, NOW());
+INSERT INTO datapoint VALUES (26, 5, 'output_cost', 0.7, NULL, NOW());
 INSERT INTO datapoint VALUES (28, 5, 'ttft', 450, NULL, NOW());
 INSERT INTO datapoint VALUES (29, 5, 'itl', 4, NULL, NOW());
 ---- lowest-ttft-provider
-INSERT INTO datapoint VALUES (43, 8, 'input_cost_per_token', 20, NULL, NOW());
-INSERT INTO datapoint VALUES (44, 8, 'output_cost_per_token', 35, NULL, NOW());
+INSERT INTO datapoint VALUES (43, 8, 'input_cost', 20, NULL, NOW());
+INSERT INTO datapoint VALUES (44, 8, 'output_cost', 35, NULL, NOW());
 INSERT INTO datapoint VALUES (46, 8, 'ttft', 50, NULL, NOW());
 INSERT INTO datapoint VALUES (47, 8, 'itl', 10, NULL, NOW());
 
