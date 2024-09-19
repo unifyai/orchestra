@@ -402,9 +402,11 @@ class Router:
         scores: Optional[Dict[str, float]] = None,
     ) -> float:
         try:
-            return endpoint_metrics[endpoint.model + "@" + endpoint.provider][
-                metric.replace("-", "_")
-            ]
+            return float(
+                endpoint_metrics[endpoint.model + "@" + endpoint.provider][
+                    metric.replace("-", "_")
+                ],
+            )
         except KeyError:
             # skip quality-based filtering unless performing
             # neural routing
