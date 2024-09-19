@@ -83,30 +83,11 @@ INSERT INTO endpoint VALUES (37, 13, 37, NOW(), true);
 INSERT INTO model VALUES (4, 'pbr-model', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (5, 'pbr-model-empty-lut', NOW(), 'dummy_task', true);
 
-INSERT INTO endpoint VALUES (12, 4, 13, NOW(), true);
-INSERT INTO endpoint VALUES (13, 4, 14, NOW(), true);
-INSERT INTO endpoint VALUES (14, 4, 15, NOW(), true);
-INSERT INTO endpoint VALUES (17, 4, 18, NOW(), true);
-
-INSERT INTO endpoint VALUES (18, 4, 19, NOW(), true);
-INSERT INTO endpoint VALUES (19, 4, 20, NOW(), true);
-INSERT INTO endpoint VALUES (20, 4, 21, NOW(), true);
-INSERT INTO endpoint VALUES (21, 4, 22, NOW(), true);
-
-INSERT INTO endpoint VALUES (22, 4, 23, NOW(), true);
-INSERT INTO endpoint VALUES (23, 4, 24, NOW(), true);
-INSERT INTO endpoint VALUES (24, 4, 25, NOW(), true);
-INSERT INTO endpoint VALUES (25, 4, 26, NOW(), true);
-
-INSERT INTO endpoint VALUES (26, 4, 27, NOW(), true);
-INSERT INTO endpoint VALUES (27, 4, 28, NOW(), true);
-INSERT INTO endpoint VALUES (28, 4, 29, NOW(), true);
-INSERT INTO endpoint VALUES (29, 4, 30, NOW(), true);
-
-INSERT INTO endpoint VALUES (30, 4, 31, NOW(), true);
-INSERT INTO endpoint VALUES (31, 4, 32, NOW(), true);
-INSERT INTO endpoint VALUES (32, 4, 33, NOW(), true);
-INSERT INTO endpoint VALUES (33, 4, 34, NOW(), true);
+INSERT INTO endpoint VALUES (12, 4, 3, NOW(), true);
+INSERT INTO endpoint VALUES (13, 4, 4, NOW(), true);
+INSERT INTO endpoint VALUES (14, 4, 5, NOW(), true);
+INSERT INTO endpoint VALUES (17, 4, 6, NOW(), true);
+INSERT INTO endpoint VALUES (18, 4, 7, NOW(), true);
 
 
 -- Benchmark run
