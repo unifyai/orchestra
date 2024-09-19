@@ -155,7 +155,7 @@ def test_invalid_provider(dbsession) -> str:  # type: ignore[return]
 
     with pytest.raises(HTTPException) as err:
         Router(
-            "pbr-model@itr<1|itr<20",
+            "pbr-model@itr>1|itr<20",
             endpoint_dao,
             benchmark_run_dao,
         )("")
