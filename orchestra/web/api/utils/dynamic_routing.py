@@ -478,9 +478,7 @@ class Router:
 
                 supported_model = PROVIDER_CLASSES[endpoint.provider](
                     "",
-                ).supported_models[endpoint.model][
-                    f"{endpoint.model}@{endpoint.provider}"
-                ]
+                ).supported_models[endpoint.model]
                 metrics["input_cost"] = supported_model["input_cost"]
                 metrics["output_cost"] = supported_model["output_cost"]
                 context_window = supported_model["context_window"]
