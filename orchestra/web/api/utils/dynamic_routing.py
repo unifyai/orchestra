@@ -401,6 +401,11 @@ class Router:
         metric: str,
         scores: Optional[Dict[str, float]] = None,
     ) -> float:
+        print(
+            f"endpoint_metrics {endpoint_metrics[endpoint.model + '@' + endpoint.provider]}",
+        )
+        print(f"endpoint {endpoint}")
+        print(f"metric {metric}")
         try:
             return endpoint_metrics[endpoint.model + "@" + endpoint.provider][
                 metric.replace("-", "_")
@@ -496,7 +501,7 @@ class Router:
                         self.benchmark_run_dao,
                         endpoint,
                         ttl_hash=get_ttl_hash(),
-                    )[endpoint.provider]
+                    ).get(endpoint.provider, dict())
                     metrics["input_cost"] = float(
                         metrics.pop("input_cost_per_token", 0),
                     )
@@ -524,7 +529,7 @@ class Router:
                         metric,
                         scores,
                     )
-                    if value == math.inf:
+                    if value == math.inf and len(data["checks"]):
                         is_valid = False
                         break
 
@@ -534,6 +539,7 @@ class Router:
                     ).supported_models[endpoint.model]["context_window"]
                     if input_tokens and context_window <= input_tokens:
                         is_valid = False
+                        break
 
                     # check for the threshold
                     for check in data["checks"]:
