@@ -476,11 +476,12 @@ class Router:
                         ttl_hash=get_ttl_hash(),
                     ).get(endpoint.provider, dict())
 
+                # store the cost and context_window size
                 supported_model = PROVIDER_CLASSES[endpoint.provider](
                     "",
                 ).supported_models[endpoint.model]
-                metrics["input_cost"] = supported_model["input_cost"]
-                metrics["output_cost"] = supported_model["output_cost"]
+                metrics["input_cost"] = supported_model["cost"]["prompt"]
+                metrics["output_cost"] = supported_model["cost"]["completion"]
                 context_window = supported_model["context_window"]
 
                 logging.info(f"endpoint {endpoint}")
