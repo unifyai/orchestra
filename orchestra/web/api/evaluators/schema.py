@@ -39,7 +39,7 @@ class EvaluatorConfig(BaseModel):
         "the evaluation.",
         json_schema_extra={"example": "eval1"},
     )
-    judge_prompt: Union[str, Prompt] = Field(
+    judge_prompt: Optional[Union[str, Prompt]] = Field(
         default=None,
         description="An optional custom system prompt to provide specific instructions "
         "to the judge on how to score the answers.",
