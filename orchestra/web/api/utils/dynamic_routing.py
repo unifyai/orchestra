@@ -25,34 +25,6 @@ from orchestra.web.api.utils.http_responses import (  # invalid_optimisation_goa
 
 logger = logging.getLogger(__name__)
 
-### Arbitrary function
-
-default_models = {
-    "claude-3-haiku",
-    "claude-3-opus",
-    "claude-3-sonnet",
-    "gpt-3.5-turbo",
-    "gpt-4-turbo",
-    "gpt-4o",
-    "llama-3-70b-chat",
-    "llama-3-8b-chat",
-    "mistral-large",
-    "mistral-small",
-    "mixtral-8x22b-instruct-v0.1",
-    "mixtral-8x7b-instruct-v0.1",
-}
-
-default_providers = {
-    "anthropic",
-    "together-ai",
-    "mistral-ai",
-    "openai",
-    "fireworks-ai",
-    "deepinfra",
-    "octoai",
-    "aws-bedrock",
-}
-
 
 def neural_scoring(prompt, endpoint_id):
     endpoint = aiplatform.Endpoint(endpoint_id)
@@ -61,30 +33,6 @@ def neural_scoring(prompt, endpoint_id):
     if "gpt-4-0125-preview" in out:
         out["gpt-4-turbo"] = out.pop("gpt-4-0125-preview")
     return out
-
-
-def metric_aliases(metric):
-    return {
-        "ic": "input_cost_per_token",
-        "input-cost": "input_cost_per_token",
-        "input-cost-per-token": "input_cost_per_token",
-        "lowest-input-cost": "input_cost_per_token",
-        "lowest-input-cost-per-token": "input_cost_per_token",
-        "oc": "output_cost_per_token",
-        "output-cost": "output_cost_per_token",
-        "output-cost-per-token": "output_cost_per_token",
-        "lowest-output-cost": "output_cost_per_token",
-        "lowest-output-cost-per-token": "output_cost_per_token",
-        "ots": "itl",
-        "tks-per-sec": "itl",
-        "highest-tks-per-sec": "itl",
-        "output-tks-per-sec": "itl",
-        "highest-output-tks-per-sec": "itl",
-        "lowest-itl": "itl",
-        "itl": "itl",
-        "lowest-ttft": "ttft",
-        "ttft": "ttft",
-    }.get(metric, None)
 
 
 Endpoint = namedtuple(
@@ -168,87 +116,6 @@ def get_model_metrics(
     _cached_metrics[endpoint]["metrics"] = metrics
     _cached_metrics[endpoint]["ttl_hash"] = ttl_hash
     return metrics
-
-
-def get_value_of(
-    benchmark_run_dao: BenchmarkRunDAO,
-    endpoint: Endpoint,
-    metric: str,
-) -> Optional[float]:
-    if f"{endpoint.model}@{endpoint.provider}" in metrics:
-        if metric in ["input_cost_per_token", "output_cost_per_token"]:
-            metric = "cost"
-        return metrics[f"{endpoint.model}@{endpoint.provider}"][metric]
-    model_metrics = get_model_metrics(
-        benchmark_run_dao,
-        endpoint,
-        ttl_hash=get_ttl_hash(),
-    )
-    try:
-        value = model_metrics[endpoint.provider][metric]
-    except KeyError:
-        logger.warning(f"{endpoint} has no metrics. Skipping.")
-        return None
-    return value
-
-
-def find_best(
-    benchmark_run_dao: BenchmarkRunDAO,
-    endpoints: List[Endpoint],
-    metric: str,
-) -> Tuple[str, str]:
-    def _get_metric_value(endpoint: Endpoint) -> float:
-        model_metrics = get_model_metrics(
-            benchmark_run_dao,
-            endpoint,
-            ttl_hash=get_ttl_hash(),
-        )
-        try:
-            value = model_metrics[endpoint.provider][metric]
-        except KeyError:
-            logger.warning(f"{endpoint} has no metrics. Skipping.")
-            return math.inf
-        return value
-
-    selected_endpoint = min(endpoints, key=_get_metric_value)
-    return selected_endpoint.model, selected_endpoint.provider
-
-
-def threshold_endpoints(
-    benchmark_run_dao: BenchmarkRunDAO,
-    endpoints: List[Endpoint],
-    metrics_thresholds: Dict[str, float],
-) -> List[Endpoint]:
-    valid_endpoints = []
-    for endpoint in endpoints:
-        is_valid = True
-        for metric, threshold in metrics_thresholds.items():
-            value = get_value_of(benchmark_run_dao, endpoint, metric)
-            if not value or value >= threshold:
-                is_valid = False
-        if is_valid:
-            valid_endpoints.append(endpoint)
-    return valid_endpoints
-
-
-def convert_threshold(metric, value):
-    fn = {
-        "ots": lambda x: 1 / x,
-        "tks-per-sec": lambda x: 1 / x,
-        "highest-tks-per-sec": lambda x: 1 / x,
-        "output-tks-per-sec": lambda x: 1 / x,
-        "highest-output-tks-per-sec": lambda x: 1 / x,
-    }.get(metric, lambda x: x)
-    return fn(value)
-
-
-def standarise_thresholds(threhsolds):
-    clean_thresholds = {}
-    for old_metric, old_value in threhsolds.items():
-        new_metric = metric_aliases(old_metric)
-        new_value = convert_threshold(old_metric, old_value)
-        clean_thresholds[new_metric] = new_value
-    return clean_thresholds
 
 
 class Router:
