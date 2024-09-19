@@ -83,23 +83,16 @@ INSERT INTO endpoint VALUES (37, 13, 37, NOW(), true);
 INSERT INTO model VALUES (4, 'pbr-model', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (5, 'pbr-model-empty-lut', NOW(), 'dummy_task', true);
 
-INSERT INTO endpoint VALUES (12, 13, 3, NOW(), true);
-INSERT INTO endpoint VALUES (13, 13, 4, NOW(), true);
-INSERT INTO endpoint VALUES (14, 13, 5, NOW(), true);
-INSERT INTO endpoint VALUES (17, 13, 6, NOW(), true);
-INSERT INTO endpoint VALUES (18, 13, 7, NOW(), true);
-
-
 -- Benchmark run
 INSERT INTO benchmark_regime VALUES('concurrent-1');
 INSERT INTO benchmark_region VALUES('Belgium');
 INSERT INTO benchmark_seq_len VALUES('short');
 
-INSERT INTO benchmark_run VALUES(3, 12, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(4, 13, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(5, 14, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(8, 17, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(9, 18, 'concurrent-1', 'Belgium', 'short', now());
+INSERT INTO benchmark_run VALUES(3, 8, 'concurrent-1', 'Belgium', 'short', now());
+INSERT INTO benchmark_run VALUES(4, 9, 'concurrent-1', 'Belgium', 'short', now());
+INSERT INTO benchmark_run VALUES(5, 10, 'concurrent-1', 'Belgium', 'short', now());
+INSERT INTO benchmark_run VALUES(8, 11, 'concurrent-1', 'Belgium', 'short', now());
+INSERT INTO benchmark_run VALUES(9, 12, 'concurrent-1', 'Belgium', 'short', now());
 
 
 -- Metrics

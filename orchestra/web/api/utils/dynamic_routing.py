@@ -272,8 +272,8 @@ class Router:
         self.providers = None
         self.skip_providers = None
         self.load_metric_map()
-        self.load_metrics_and_thresholds()
         self.load_models_and_providers()
+        self.load_metrics_and_thresholds()
         self.model = self.model.split("@")[0]
 
     def load_metric_map(self):
@@ -294,7 +294,14 @@ class Router:
                 metric_name.replace("lowest-", "").replace("highest-", ""),
             )
             if main_metric is None:
-                raise invalid_provider_str
+                if (
+                    self.providers is None
+                    and self.skip_providers is None
+                    and self.models is None
+                    and self.skip_models is None
+                ):
+                    raise invalid_provider_str
+                continue
 
             # get the keywords specified in the string without any numbers
             # when numbers are specified then these get considered as "none"
