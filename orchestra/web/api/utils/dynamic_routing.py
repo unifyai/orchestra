@@ -401,11 +401,6 @@ class Router:
         metric: str,
         scores: Optional[Dict[str, float]] = None,
     ) -> float:
-        print(
-            f"endpoint_metrics {endpoint_metrics[endpoint.model + '@' + endpoint.provider]}",
-        )
-        print(f"endpoint {endpoint}")
-        print(f"metric {metric}")
         try:
             return endpoint_metrics[endpoint.model + "@" + endpoint.provider][
                 metric.replace("-", "_")
@@ -418,6 +413,7 @@ class Router:
                     f"{endpoint} has no metric {metric}. Skipping.",
                 )
                 return math.inf
+        return 1e6
 
     def obj_fn(self, metrics):
         objective = 0
@@ -855,13 +851,6 @@ baked_router_endpoints = [
         model_id=141,
         provider="fireworks-ai",
         provider_id=10,
-    ),
-    Endpoint(
-        id=1426,
-        model="mixtral-8x22b-instruct-v0.1",
-        model_id=141,
-        provider="deepinfra",
-        provider_id=12,
     ),
     Endpoint(
         id=1427,
