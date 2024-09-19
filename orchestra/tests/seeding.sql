@@ -83,11 +83,11 @@ INSERT INTO endpoint VALUES (37, 13, 37, NOW(), true);
 INSERT INTO model VALUES (4, 'pbr-model', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (5, 'pbr-model-empty-lut', NOW(), 'dummy_task', true);
 
-INSERT INTO endpoint VALUES (12, 4, 3, NOW(), true);
-INSERT INTO endpoint VALUES (13, 4, 4, NOW(), true);
-INSERT INTO endpoint VALUES (14, 4, 5, NOW(), true);
-INSERT INTO endpoint VALUES (17, 4, 6, NOW(), true);
-INSERT INTO endpoint VALUES (18, 4, 7, NOW(), true);
+INSERT INTO endpoint VALUES (12, 13, 3, NOW(), true);
+INSERT INTO endpoint VALUES (13, 13, 4, NOW(), true);
+INSERT INTO endpoint VALUES (14, 13, 5, NOW(), true);
+INSERT INTO endpoint VALUES (17, 13, 6, NOW(), true);
+INSERT INTO endpoint VALUES (18, 13, 7, NOW(), true);
 
 
 -- Benchmark run
@@ -99,26 +99,7 @@ INSERT INTO benchmark_run VALUES(3, 12, 'concurrent-1', 'Belgium', 'short', now(
 INSERT INTO benchmark_run VALUES(4, 13, 'concurrent-1', 'Belgium', 'short', now());
 INSERT INTO benchmark_run VALUES(5, 14, 'concurrent-1', 'Belgium', 'short', now());
 INSERT INTO benchmark_run VALUES(8, 17, 'concurrent-1', 'Belgium', 'short', now());
-
 INSERT INTO benchmark_run VALUES(9, 18, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(10, 19, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(11, 20, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(12, 21, 'concurrent-1', 'Belgium', 'short', now());
-
-INSERT INTO benchmark_run VALUES(13, 22, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(14, 23, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(15, 24, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(16, 25, 'concurrent-1', 'Belgium', 'short', now());
-
-INSERT INTO benchmark_run VALUES(17, 26, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(18, 27, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(19, 28, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(20, 29, 'concurrent-1', 'Belgium', 'short', now());
-
-INSERT INTO benchmark_run VALUES(21, 30, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(22, 31, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(23, 32, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(24, 33, 'concurrent-1', 'Belgium', 'short', now());
 
 
 -- Metrics
@@ -158,84 +139,3 @@ INSERT INTO datapoint VALUES (48, 9, 'input_cost_per_token', 0.09, NULL, NOW());
 INSERT INTO datapoint VALUES (49, 9, 'output_cost_per_token', 35, NULL, NOW());
 INSERT INTO datapoint VALUES (50, 9, 'ttft', 450, NULL, NOW());
 INSERT INTO datapoint VALUES (51, 9, 'itl', 10, NULL, NOW());
----- lowest-output-cost-per-token-provider<0.1ic
-INSERT INTO datapoint VALUES (52, 10, 'input_cost_per_token', 0.09, NULL, NOW());
-INSERT INTO datapoint VALUES (53, 10, 'output_cost_per_token', 0.02, NULL, NOW());
-INSERT INTO datapoint VALUES (54, 10, 'ttft', 450, NULL, NOW());
-INSERT INTO datapoint VALUES (55, 10, 'itl', 10, NULL, NOW());
----- lowest-itl-provider<0.1ic
-INSERT INTO datapoint VALUES (56, 11, 'input_cost_per_token', 0.09, NULL, NOW());
-INSERT INTO datapoint VALUES (57, 11, 'output_cost_per_token', 35, NULL, NOW());
-INSERT INTO datapoint VALUES (58, 11, 'ttft', 450, NULL, NOW());
-INSERT INTO datapoint VALUES (59, 11, 'itl', 9, NULL, NOW());
----- lowest-ttft-provider<0.1ic
-INSERT INTO datapoint VALUES (60, 12, 'input_cost_per_token', 0.09, NULL, NOW());
-INSERT INTO datapoint VALUES (61, 12, 'output_cost_per_token', 35, NULL, NOW());
-INSERT INTO datapoint VALUES (62, 12, 'ttft', 200, NULL, NOW());
-INSERT INTO datapoint VALUES (63, 12, 'itl', 10, NULL, NOW());
-
-
----- lowest-input-cost-per-token-provider<10ic
-INSERT INTO datapoint VALUES (64, 13, 'input_cost_per_token', 2, NULL, NOW());
-INSERT INTO datapoint VALUES (65, 13, 'output_cost_per_token', 35, NULL, NOW());
-INSERT INTO datapoint VALUES (66, 13, 'ttft', 450, NULL, NOW());
-INSERT INTO datapoint VALUES (67, 13, 'itl', 10, NULL, NOW());
----- lowest-output-cost-per-token-provider<10ic
-INSERT INTO datapoint VALUES (68, 14, 'input_cost_per_token', 2, NULL, NOW());
-INSERT INTO datapoint VALUES (69, 14, 'output_cost_per_token', 0.01, NULL, NOW());
-INSERT INTO datapoint VALUES (70, 14, 'ttft', 450, NULL, NOW());
-INSERT INTO datapoint VALUES (71, 14, 'itl', 10, NULL, NOW());
----- lowest-itl-provider<10ic
-INSERT INTO datapoint VALUES (72, 15, 'input_cost_per_token', 2, NULL, NOW());
-INSERT INTO datapoint VALUES (73, 15, 'output_cost_per_token', 35, NULL, NOW());
-INSERT INTO datapoint VALUES (74, 15, 'ttft', 450, NULL, NOW());
-INSERT INTO datapoint VALUES (75, 15, 'itl', 5, NULL, NOW());
----- lowest-ttft-provider<10ic
-INSERT INTO datapoint VALUES (76, 16, 'input_cost_per_token', 2, NULL, NOW());
-INSERT INTO datapoint VALUES (77, 16, 'output_cost_per_token', 35, NULL, NOW());
-INSERT INTO datapoint VALUES (78, 16, 'ttft', 100, NULL, NOW());
-INSERT INTO datapoint VALUES (79, 16, 'itl', 10, NULL, NOW());
-
-
----- lowest-input-cost-per-token-provider<0.1oc
-INSERT INTO datapoint VALUES (80, 17, 'input_cost_per_token', 0.02, NULL, NOW());
-INSERT INTO datapoint VALUES (81, 17, 'output_cost_per_token', 0.09, NULL, NOW());
-INSERT INTO datapoint VALUES (82, 17, 'ttft', 450, NULL, NOW());
-INSERT INTO datapoint VALUES (83, 17, 'itl', 10, NULL, NOW());
----- lowest-output-cost-per-token-provider<0.1oc
-INSERT INTO datapoint VALUES (84, 18, 'input_cost_per_token', 20, NULL, NOW());
-INSERT INTO datapoint VALUES (85, 18, 'output_cost_per_token', 0.09, NULL, NOW());
-INSERT INTO datapoint VALUES (86, 18, 'ttft', 450, NULL, NOW());
-INSERT INTO datapoint VALUES (87, 18, 'itl', 10, NULL, NOW());
----- lowest-itl-provider<0.1oc
-INSERT INTO datapoint VALUES (88, 19, 'input_cost_per_token', 20, NULL, NOW());
-INSERT INTO datapoint VALUES (89, 19, 'output_cost_per_token', 0.09, NULL, NOW());
-INSERT INTO datapoint VALUES (90, 19, 'ttft', 450, NULL, NOW());
-INSERT INTO datapoint VALUES (91, 19, 'itl', 9, NULL, NOW());
----- lowest-ttft-provider<0.1oc
-INSERT INTO datapoint VALUES (92, 20, 'input_cost_per_token', 20, NULL, NOW());
-INSERT INTO datapoint VALUES (93, 20, 'output_cost_per_token', 0.09, NULL, NOW());
-INSERT INTO datapoint VALUES (94, 20, 'ttft', 200, NULL, NOW());
-INSERT INTO datapoint VALUES (95, 20, 'itl', 20, NULL, NOW());
-
-
----- lowest-input-cost-per-token-provider<10oc
-INSERT INTO datapoint VALUES (96, 21, 'input_cost_per_token', 0.01, NULL, NOW());
-INSERT INTO datapoint VALUES (97, 21, 'output_cost_per_token', 5, NULL, NOW());
-INSERT INTO datapoint VALUES (98, 21, 'ttft', 450, NULL, NOW());
-INSERT INTO datapoint VALUES (99, 21, 'itl', 10, NULL, NOW());
----- lowest-output-cost-per-token-provider<10oc
-INSERT INTO datapoint VALUES (100, 22, 'input_cost_per_token', 2, NULL, NOW());
-INSERT INTO datapoint VALUES (101, 22, 'output_cost_per_token', 5, NULL, NOW());
-INSERT INTO datapoint VALUES (102, 22, 'ttft', 450, NULL, NOW());
-INSERT INTO datapoint VALUES (103, 22, 'itl', 10, NULL, NOW());
----- lowest-itl-provider<10oc
-INSERT INTO datapoint VALUES (104, 23, 'input_cost_per_token', 2, NULL, NOW());
-INSERT INTO datapoint VALUES (105, 23, 'output_cost_per_token', 5, NULL, NOW());
-INSERT INTO datapoint VALUES (106, 23, 'ttft', 450, NULL, NOW());
-INSERT INTO datapoint VALUES (107, 23, 'itl', 5, NULL, NOW());
----- lowest-ttft-provider<10oc
-INSERT INTO datapoint VALUES (108, 24, 'input_cost_per_token', 2, NULL, NOW());
-INSERT INTO datapoint VALUES (109, 24, 'output_cost_per_token', 5, NULL, NOW());
-INSERT INTO datapoint VALUES (110, 24, 'ttft', 100, NULL, NOW());
-INSERT INTO datapoint VALUES (111, 24, 'itl', 10, NULL, NOW());
