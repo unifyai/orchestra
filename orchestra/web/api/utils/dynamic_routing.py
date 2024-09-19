@@ -294,7 +294,7 @@ class Router:
                 metric_name.replace("lowest-", "").replace("highest-", ""),
             )
             if main_metric is None:
-                continue
+                raise invalid_provider_str
 
             # get the keywords specified in the string without any numbers
             # when numbers are specified then these get considered as "none"
