@@ -476,12 +476,13 @@ class Router:
                         ttl_hash=get_ttl_hash(),
                     ).get(endpoint.provider, dict())
                     metrics["input_cost"] = float(
-                        metrics.pop("input_cost_per_token", 0),
+                        metrics.get("input_cost_per_token", 0),
                     )
                     metrics["output_cost"] = float(
-                        metrics.pop("output_cost_per_token", 0),
+                        metrics.get("output_cost_per_token", 0),
                     )
 
+                logging.info(f"endpoint {endpoint}")
                 logging.info(f"metrics {metrics}")
 
                 # store the cost with the 3:1 ratio
