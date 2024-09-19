@@ -399,7 +399,21 @@ class Router:
         endpoint_metrics: Dict[str, Dict[str, float]],
         endpoint: Endpoint,
         metric: str,
+        scores: Optional[Dict[str, float]] = None,
     ) -> float:
+        try:
+            return endpoint_metrics[endpoint.model + "@" + endpoint.provider][
+                metric.replace("-", "_")
+            ]
+        except KeyError:
+            # skip quality-based filtering unless performing
+            # neural routing
+            if scores is not None or metric != "quality":
+                logger.warning(
+                    f"{endpoint} has no metric {metric}. Skipping.",
+                )
+                return math.inf
+
         # get value for the metric on-prem
         if os.environ.get("ON_PREM"):
             try:
@@ -475,56 +489,35 @@ class Router:
                     )
                     if isinstance(metrics, list):
                         metrics = metrics[0]
-                        metrics["cost"] = (
-                            3 * metrics["input_cost"] + metrics["output_cost"]
-                        ) / 4
-                        if scores:
-                            metrics["quality"] = scores[endpoint.model]
-                        endpoint_metrics[
-                            endpoint.model + "@" + endpoint.provider
-                        ] = metrics
                     else:
                         metrics = dict()
+                else:
+                    metrics = get_model_metrics(
+                        self.benchmark_run_dao,
+                        endpoint,
+                        ttl_hash=get_ttl_hash(),
+                    )[endpoint.provider]
+
+                # store the cost with the 3:1 ratio
+                metrics["cost"] = (
+                    3 * metrics["input_cost"] + metrics["output_cost"]
+                ) / 4
+                if scores:
+                    metrics["quality"] = scores[endpoint.model]
+                endpoint_metrics[endpoint.model + "@" + endpoint.provider] = metrics
 
                 # iterate over metrics and thresholds for filtering
                 for metric, data in self.metrics_and_thresholds.items():
                     # get model metrics
-                    if os.environ.get("ON_PREM"):
-                        try:
-                            value = metrics[metric.replace("-", "_")]
-                        except KeyError:
-                            # skip quality-based filtering unless performing
-                            # neural routing
-                            if scores is not None or metric != "quality":
-                                logger.warning(
-                                    f"{endpoint} has no metric {metric}. Skipping.",
-                                )
-                                value = math.inf
-                                is_valid = False
-                                break
-                    else:
-                        metrics = get_model_metrics(
-                            self.benchmark_run_dao,
-                            endpoint,
-                            ttl_hash=get_ttl_hash(),
-                        )
-                        metrics["cost"] = (
-                            3 * metrics["input_cost"] + metrics["output_cost"]
-                        ) / 4
-                        if scores:
-                            metrics["quality"] = scores[endpoint.model]
-                        try:
-                            value = metrics[endpoint.provider][metric.replace("-", "_")]
-                        except KeyError:
-                            # skip quality-based filtering unless performing
-                            # neural routing
-                            if scores is not None or metric != "quality":
-                                logger.warning(
-                                    f"{endpoint} has no metric {metric}. Skipping.",
-                                )
-                                value = math.inf
-                                is_valid = False
-                                break
+                    value = self.get_metric_value(
+                        endpoint_metrics,
+                        endpoint,
+                        metric,
+                        scores,
+                    )
+                    if value == math.inf:
+                        is_valid = False
+                        break
 
                     # store the context window size for the endpoint
                     context_window = PROVIDER_CLASSES[endpoint.provider](
