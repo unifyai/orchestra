@@ -1,71 +1,66 @@
-from typing import Optional
+import datetime
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
+
+from orchestra.db.dao.account_dao import AccountDAO
+from orchestra.db.dao.auth_user_dao import AuthUserDAO
+from orchestra.web.api.users.schema import AccountRequest, SessionRequest, UserRequest
 
 admin_router = APIRouter()
 
-# Dummy in-memory storage for users and sessions
-users_db = {}
-sessions_db = {}
-
-
-class User(BaseModel):
-    id: str
-    email: str
-    name: Optional[str] = None
-
-
-class Account(BaseModel):
-    provider: str
-    type: str
-    providerAccountId: str
-    access_token: str
-    expires_at: int
-    scope: str
-    token_type: str
-    id_token: str
-    userId: str
-
-
-class Session(BaseModel):
-    sessionToken: str
-    userId: str
-
-
-class CreateUserRequest(BaseModel):
-    email: str
-    name: Optional[str] = None
-
 
 @admin_router.post("/auth-user")
-async def create_user(user: CreateUserRequest):
-    user_id = f"user_{len(users_db) + 1}"
-    new_user = User(id=user_id, email=user.email, name=user.name)
-    users_db[user_id] = new_user
-    return new_user
+async def create_user(user: UserRequest, auth_user_dao: AuthUserDAO = Depends()):
+    print(user.model_dump())
+    auth_user_dao.create(email=user.email)
+    return ""
 
 
 @admin_router.get("/auth-user/by-user-id")
-async def get_user(user_id: str):
-    user = users_db.get(user_id)
+async def get_user(user_id: str, auth_user_dao: AuthUserDAO = Depends()):
+    user = auth_user_dao.filter(id=user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
+        return None
+    return user.id
 
 
 @admin_router.get("/auth-user/by-email")
-async def get_user_by_email(email: str):
-    return None  # if there is no user with that email
+async def get_user_by_email(email: str, auth_user_dao: AuthUserDAO = Depends()):
+    user = auth_user_dao.filter(email=email)
+    if not user:
+        return None
+    return {
+        "id": user[0][0].id,
+        "email": user[0][0].email,
+        # "emailVerified": None,
+        # "name": "",
+        # "image": "",
+    }
 
 
 @admin_router.get("/auth-user/by-account")
-async def get_user_by_account(provider_account_id: str, provider: str):
-    return None  # if there is no user with that account
+async def get_user_by_account(
+    provider_account_id: str,
+    provider: str,
+    account_dao: AccountDAO = Depends(),
+):
+    account = account_dao.filter(
+        provider_account_id=provider_account_id,
+        provider=provider,
+    )
+    if not account:
+        return None
+    return {
+        "id": account[0][0].id,
+        "email": "guillermo@unify.ai",  # TODO: fetch this properly
+        # "emailVerified": None,
+        # "name": "",
+        # "image": "",
+    }
 
 
 @admin_router.put("/auth-user")
-async def update_user(user_id: str, updated_user: User):
+async def update_user(user_id: str, updated_user: UserRequest):  # TODO
     if user_id not in users_db:
         raise HTTPException(status_code=404, detail="User not found")
     users_db[user_id] = updated_user
@@ -73,7 +68,7 @@ async def update_user(user_id: str, updated_user: User):
 
 
 @admin_router.delete("/auth-user")
-async def delete_user(user_id: str):
+async def delete_user(user_id: str):  # TODO
     if user_id not in users_db:
         raise HTTPException(status_code=404, detail="User not found")
     del users_db[user_id]
@@ -81,27 +76,32 @@ async def delete_user(user_id: str):
 
 
 @admin_router.post("/account")
-async def link_account(account: Account):
-    print(account)
-    # Link an account to the user (e.g., social login provider)
-    # TODO: this should return the newly created account
-    return {"message": f"Account {account.provider} linked for user {account.userId}"}
+async def link_account(account: AccountRequest, account_dao: AccountDAO = Depends()):
+    account_dao.create(
+        user_id=account.userId,
+        provider=account.provider,
+        provider_type="oauth",  # TODO: This can most likely be removed look into it
+        provider_account_id=account.providerAccountId,
+        access_token=account.access_token,
+        expires_at=datetime.datetime.fromtimestamp(account.expires_at),
+    )
+    return ""
 
 
 @admin_router.delete("/account")
-async def unlink_account(account: Account):
+async def unlink_account(account: AccountRequest):  # TODO
     # Unlink an account from the user
     return {"message": f"Account {account.provider} unlinked for user {account.userId}"}
 
 
 @admin_router.post("/session")
-async def create_session(session: Session):
+async def create_session(session: SessionRequest):  # TODO
     sessions_db[session.sessionToken] = session
     return session
 
 
 @admin_router.get("/session")
-async def get_session_and_user(session_token: str):
+async def get_session_and_user(session_token: str):  # TODO
     session = sessions_db.get(session_token)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -112,7 +112,7 @@ async def get_session_and_user(session_token: str):
 
 
 @admin_router.put("/session")
-async def update_session(session_token: str, updated_session: Session):
+async def update_session(session_token: str, updated_session: SessionRequest):  # TODO
     if session_token not in sessions_db:
         raise HTTPException(status_code=404, detail="Session not found")
     sessions_db[session_token] = updated_session
@@ -120,7 +120,7 @@ async def update_session(session_token: str, updated_session: Session):
 
 
 @admin_router.delete("/session")
-async def delete_session(session_token: str):
+async def delete_session(session_token: str):  # TODO
     if session_token not in sessions_db:
         raise HTTPException(status_code=404, detail="Session not found")
     del sessions_db[session_token]
