@@ -497,14 +497,20 @@ class Router:
                         endpoint,
                         ttl_hash=get_ttl_hash(),
                     )[endpoint.provider]
-                    metrics["input_cost"] = metrics.pop("input_cost_per_token")
-                    metrics["output_cost"] = metrics.pop("output_cost_per_token")
+                    metrics["input_cost"] = float(
+                        metrics.pop("input_cost_per_token", 0),
+                    )
+                    metrics["output_cost"] = float(
+                        metrics.pop("output_cost_per_token", 0),
+                    )
 
-                logger.info(f"metrics {metrics}")
+                logging.info(f"metrics {metrics}")
+
                 # store the cost with the 3:1 ratio
-                metrics["cost"] = (
-                    3 * metrics["input_cost"] + metrics["output_cost"]
-                ) / 4
+                if "input_cost" in metrics and "output_cost" in metrics:
+                    metrics["cost"] = (
+                        3 * metrics["input_cost"] + metrics["output_cost"]
+                    ) / 4
                 if scores:
                     metrics["quality"] = scores[endpoint.model]
                 endpoint_metrics[endpoint.model + "@" + endpoint.provider] = metrics
