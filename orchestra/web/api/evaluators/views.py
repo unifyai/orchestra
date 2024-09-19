@@ -17,7 +17,7 @@ router = APIRouter()
 # utils
 
 
-template_no_ref = """[
+template_no_ref = """
 {class_config}
 
 [start of user question]
