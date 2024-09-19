@@ -498,6 +498,7 @@ class Router:
                         ttl_hash=get_ttl_hash(),
                     )[endpoint.provider]
 
+                logger.info(f"metrics {metrics}")
                 # store the cost with the 3:1 ratio
                 metrics["cost"] = (
                     3 * metrics["input_cost"] + metrics["output_cost"]
@@ -575,6 +576,11 @@ class Router:
                                 ),
                                 reverse=keyword == "highest",
                             )
+
+            for endpoint in sorted_endpoints:
+                print(endpoint)
+                print(endpoint_metrics[endpoint.model + "@" + endpoint.provider])
+                print()
             final_endpoints = sorted_endpoints
         else:
             final_endpoints = endpoints
