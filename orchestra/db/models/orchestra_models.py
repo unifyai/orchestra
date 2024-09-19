@@ -638,3 +638,36 @@ class Evaluation(Base):
             name="uq_evaluation",
         ),
     )
+class AuthUser(Base):
+    __tablename__ = "auth_user"
+
+    id = Column(String, primary_key=True, default=uuid.uuid4)
+    email = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+
+
+# Account table (for external providers like Google, GitHub)
+# Each user can have multiple accounts
+class Account(Base):
+    __tablename__ = "account"
+
+    id = Column(String, primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"))
+    provider = Column(String, nullable=False)  # OAuth provider name
+    provider_account_id = Column(String, nullable=False)
+    access_token = Column(String, nullable=True)  # OAuth access token (optional)
+    refresh_token = Column(String, nullable=True)  # OAuth refresh token (optional)
+    # Expiration time for OAuth token (optional)
+    expires_at = Column(TIMESTAMP, nullable=True)
+
+
+# Session table
+class Session(Base):
+    __tablename__ = "session"
+
+    session_token = Column(String, primary_key=True, index=True)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"))
+    expires_at = Column(TIMESTAMP, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
