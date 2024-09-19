@@ -1,3 +1,5 @@
+from typing import Any, Dict, List
+
 import pytest
 from fastapi import HTTPException, Request
 
@@ -11,59 +13,64 @@ from orchestra.web.api.utils.http_responses import (
 
 # TODO: Add test for same value in metric
 
-TEST_VALID_CONFIGS = [
-    "input-cost",
-    "oc>10" "highest-i",
-    "ttft>10|ttft<30",
+TEST_CASES = [
+    [
+        "input-cost",
+        {
+            "metric": "input-cost",
+            "key": "keyword",
+            "value": "lowest",
+        },
+    ],
+    [
+        "oc>10",
+        {
+            "metric": "output-cost",
+            "key": "checks",
+            "value": [
+                {
+                    "threshold": 10,
+                    "op": ">",
+                },
+            ],
+        },
+    ],
+    [
+        "highest-i",
+        {
+            "metric": "itl",
+            "key": "keyword",
+            "value": "highest",
+        },
+    ],
+    [
+        "ttft>10|ttft<30",
+        {
+            "metric": "ttft",
+            "key": "checks",
+            "value": [
+                {
+                    "threshold": 10,
+                    "op": ">",
+                },
+                {
+                    "threshold": 30,
+                    "op": "<",
+                },
+            ],
+        },
+    ],
 ]
 
-TEST_VALID_PRICE_THRESHOLDS = [
-    {
-        "metric": "input-cost",
-        "key": "keyword",
-        "value": "lowest",
-    },
-    {
-        "metric": "output-cost",
-        "key": "checks",
-        "value": [
-            {
-                "threshold": 10,
-                "op": ">",
-            },
-        ],
-    },
-    {
-        "metric": "itl",
-        "key": "keyword",
-        "value": "highest",
-    },
-    {
-        "metric": "ttft",
-        "key": "checks",
-        "value": [
-            {
-                "threshold": 10,
-                "op": ">",
-            },
-            {
-                "threshold": 30,
-                "op": "<",
-            },
-        ],
-    },
-]
 
-
-@pytest.mark.parametrize("price_threshold", TEST_VALID_PRICE_THRESHOLDS)
-@pytest.mark.parametrize("provider", TEST_VALID_CONFIGS)
+@pytest.mark.parametrize("test_case", TEST_CASES)
 def test_valid_performance_based_routing(  # type: ignore[return]
     dbsession,
-    provider: str,
-    threshold: str,
+    test_case: List[str, Dict[str, Any]],
 ) -> str:
     endpoint_dao = EndpointDAO(dbsession)
     benchmark_run_dao = BenchmarkRunDAO(dbsession)
+    provider, threshold = test_case
 
     metrics_and_thresholds = Router(
         f"claude-3.5-sonnet@{provider}",
