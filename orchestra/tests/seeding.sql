@@ -119,7 +119,7 @@ INSERT INTO datapoint VALUES (23, 4, 'itl', 10, NULL, NOW());
 INSERT INTO datapoint VALUES (25, 5, 'input_cost_per_token', 20, NULL, NOW());
 INSERT INTO datapoint VALUES (26, 5, 'output_cost_per_token', 35, NULL, NOW());
 INSERT INTO datapoint VALUES (28, 5, 'ttft', 450, NULL, NOW());
-INSERT INTO datapoint VALUES (29, 5, 'itl', 1, NULL, NOW());
+INSERT INTO datapoint VALUES (29, 5, 'itl', 4, NULL, NOW());
 ---- lowest-ttft-provider
 INSERT INTO datapoint VALUES (43, 8, 'input_cost_per_token', 20, NULL, NOW());
 INSERT INTO datapoint VALUES (44, 8, 'output_cost_per_token', 35, NULL, NOW());
