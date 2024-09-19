@@ -1,7 +1,7 @@
 from typing import Any, Dict, Tuple
 
 import pytest
-from fastapi import HTTPException, Request
+from fastapi import HTTPException
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
@@ -99,7 +99,7 @@ def test_new_dynamic_routing(  # type: ignore[return]
         "llama-3.1-70b-chat@quality|input-cost<=0.8|output-cost<=0.8|itl>1|itl<20",
         endpoint_dao,
         benchmark_run_dao,
-    )(Request(), input_tokens=None)
+    )("", input_tokens=None)
 
     print(model, provider)
 
@@ -113,7 +113,7 @@ def test_empty_lut(dbsession) -> str:  # type: ignore[return]
             "llama-3.11-70b-chat@itl>1|itl<20",
             endpoint_dao,
             benchmark_run_dao,
-        )(Request())
+        )("")
     assert err.value.status_code == 404
 
 
@@ -144,7 +144,7 @@ def test_no_models_within_threshold(dbsession) -> str:  # type: ignore[return]
             "llama-3.1-70b-chat@itl<1|itl<20",
             endpoint_dao,
             benchmark_run_dao,
-        )(Request())
+        )("")
     assert err.value.status_code == provider_not_found_under_conditions.status_code
     assert err.value.detail == provider_not_found_under_conditions.detail
 
@@ -158,6 +158,6 @@ def test_invalid_provider(dbsession) -> str:  # type: ignore[return]
             "llama-3.11-70b-chat@itl<1|itl<20",
             endpoint_dao,
             benchmark_run_dao,
-        )(Request())
+        )("")
     assert err.value.status_code == invalid_provider_str.status_code
     assert err.value.detail == invalid_provider_str.detail
