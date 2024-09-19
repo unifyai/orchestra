@@ -303,6 +303,11 @@ class Router:
                     raise invalid_provider_str
                 continue
 
+            if main_metric == "quality" and not self.model.startswith("router"):
+                logging.warning(
+                    "Quality-based routing across providers of the same model isn't yet supported, so it would be ignored",
+                )
+
             # get the keywords specified in the string without any numbers
             # when numbers are specified then these get considered as "none"
             keywords = re.findall("(lowest|highest)-", metric_name)
