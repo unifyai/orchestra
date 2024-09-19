@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, Tuple
 
 import pytest
 from fastapi import HTTPException, Request
@@ -14,15 +14,15 @@ from orchestra.web.api.utils.http_responses import (
 # TODO: Add test for same value in metric
 
 TEST_CASES = [
-    [
+    (
         "input-cost",
         {
             "metric": "input-cost",
             "key": "keyword",
             "value": "lowest",
         },
-    ],
-    [
+    ),
+    (
         "oc>10",
         {
             "metric": "output-cost",
@@ -34,16 +34,16 @@ TEST_CASES = [
                 },
             ],
         },
-    ],
-    [
+    ),
+    (
         "highest-i",
         {
             "metric": "itl",
             "key": "keyword",
             "value": "highest",
         },
-    ],
-    [
+    ),
+    (
         "ttft>10|ttft<30",
         {
             "metric": "ttft",
@@ -59,14 +59,14 @@ TEST_CASES = [
                 },
             ],
         },
-    ],
+    ),
 ]
 
 
 @pytest.mark.parametrize("test_case", TEST_CASES)
 def test_valid_performance_based_routing(  # type: ignore[return]
     dbsession,
-    test_case: List[str, Dict[str, Any]],
+    test_case: Tuple[str, Dict[str, Any]],
 ) -> str:
     endpoint_dao = EndpointDAO(dbsession)
     benchmark_run_dao = BenchmarkRunDAO(dbsession)
