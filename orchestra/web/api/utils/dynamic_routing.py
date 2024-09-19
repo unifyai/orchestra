@@ -444,9 +444,7 @@ class Router:
                             3 * metrics["input_cost"] + metrics["output_cost"]
                         ) / 4
                         if scores:
-                            metrics["quality"] = scores[
-                                f"{endpoint.model}@{endpoint.provider}"
-                            ]
+                            metrics["quality"] = scores[endpoint.model]
                         endpoint_metrics[
                             endpoint.model + "@" + endpoint.provider
                         ] = metrics
@@ -550,10 +548,10 @@ class NeuralRouter(Router):
             e
             for e in endpoints
             if (
-                e.provider in (self.providers or [])
-                and e.provider not in (self.skip_providers or [])
-                and e.model in (self.models or [])
-                and e.model not in (self.skip_models or [])
+                (not self.providers or e.provider in self.providers)
+                and (not self.skip_providers or e.provider not in self.skip_providers)
+                and (not self.models or e.model in self.models)
+                and (not self.skip_models or e.model not in self.skip_models)
             )
         ]
         model_scores = neural_scoring(prompt, router_endpoint_id)
