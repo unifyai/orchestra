@@ -364,9 +364,6 @@ class Router:
                 metrics["output_cost"] = supported_model["cost"]["completion"]
                 context_window = supported_model["context_window"]
 
-                logging.info(f"endpoint {endpoint}")
-                logging.info(f"metrics {metrics}")
-
                 # store the cost with the 3:1 ratio
                 if "input_cost" in metrics and "output_cost" in metrics:
                     metrics["cost"] = (
@@ -443,11 +440,6 @@ class Router:
                                 ),
                                 reverse=keyword == "highest",
                             )
-
-            for endpoint in sorted_endpoints:
-                print(endpoint)
-                print(endpoint_metrics[endpoint.model + "@" + endpoint.provider])
-                print()
             final_endpoints = sorted_endpoints
         else:
             final_endpoints = endpoints
