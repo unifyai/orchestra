@@ -58,20 +58,19 @@ jobs:
         - 5432:5432
     steps:
 
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: Auth into Google Cloud
       uses: 'google-github-actions/auth@v2'
       # This service account also needs pub/sub
       with:
         credentials_json: '${{ secrets.ORCHESTRA_VERTEXAI_CREDENTIALS }}'
+        submodules: 'true'
 
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
         python-version: "3.9"
 
-    - name: Check directory structure
-      run: pwd ls -R
 
     - name: Install and configure Poetry
       uses: snok/install-poetry@v1
