@@ -402,11 +402,9 @@ class Router:
         scores: Optional[Dict[str, float]] = None,
     ) -> float:
         try:
-            return float(
-                endpoint_metrics[endpoint.model + "@" + endpoint.provider][
-                    metric.replace("-", "_")
-                ],
-            )
+            return endpoint_metrics[endpoint.model + "@" + endpoint.provider][
+                metric.replace("-", "_")
+            ]
         except KeyError:
             # skip quality-based filtering unless performing
             # neural routing
@@ -477,6 +475,7 @@ class Router:
                         endpoint,
                         ttl_hash=get_ttl_hash(),
                     ).get(endpoint.provider, dict())
+                    metrics = {k: float(v) for k, v in metrics.items()}
 
                 # store the cost and context_window size
                 supported_model = PROVIDER_CLASSES[endpoint.provider](
