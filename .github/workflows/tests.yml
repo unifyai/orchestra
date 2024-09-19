@@ -59,12 +59,14 @@ jobs:
     steps:
 
     - uses: actions/checkout@v4
+      with:
+        submodules: 'true'
+
     - name: Auth into Google Cloud
       uses: 'google-github-actions/auth@v2'
       # This service account also needs pub/sub
       with:
         credentials_json: '${{ secrets.ORCHESTRA_VERTEXAI_CREDENTIALS }}'
-        submodules: 'true'
 
     - name: Set up Python
       uses: actions/setup-python@v2
