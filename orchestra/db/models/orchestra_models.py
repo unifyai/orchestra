@@ -543,8 +543,10 @@ class Account(Base):
     id = Column(String, primary_key=True, default=uuid.uuid4)
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"))
     provider = Column(String, nullable=False)  # OAuth provider name
+    provider_type = Column(String, nullable=False)
     provider_account_id = Column(String, nullable=False)
     access_token = Column(String)  # OAuth access token (optional)
+    # TODO: This can be removed? refreshtokens
     refresh_token = Column(String)  # OAuth refresh token (optional)
     # Expiration time for OAuth token (optional)
     expires_at = Column(TIMESTAMP)
