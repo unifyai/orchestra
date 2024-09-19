@@ -475,12 +475,15 @@ class Router:
                         endpoint,
                         ttl_hash=get_ttl_hash(),
                     ).get(endpoint.provider, dict())
-                    metrics["input_cost"] = float(
-                        metrics.get("input_cost_per_token", 0),
-                    )
-                    metrics["output_cost"] = float(
-                        metrics.get("output_cost_per_token", 0),
-                    )
+
+                supported_model = PROVIDER_CLASSES[endpoint.provider](
+                    "",
+                ).supported_models[endpoint.model][
+                    f"{endpoint.model}@{endpoint.provider}"
+                ]
+                metrics["input_cost"] = supported_model["input_cost"]
+                metrics["output_cost"] = supported_model["output_cost"]
+                context_window = supported_model["context_window"]
 
                 logging.info(f"endpoint {endpoint}")
                 logging.info(f"metrics {metrics}")
@@ -508,9 +511,6 @@ class Router:
                         break
 
                     # store the context window size for the endpoint
-                    context_window = PROVIDER_CLASSES[endpoint.provider](
-                        "",
-                    ).supported_models[endpoint.model]["context_window"]
                     if input_tokens and context_window <= input_tokens:
                         is_valid = False
                         break
