@@ -359,7 +359,9 @@ class Router:
                 # store the cost and context_window size
                 supported_model = PROVIDER_CLASSES[endpoint.provider](
                     "",
-                ).supported_models[endpoint.model]
+                ).supported_models.get(endpoint.model)
+                if not supported_model:
+                    continue
                 metrics["input_cost"] = supported_model["cost"]["prompt"]
                 metrics["output_cost"] = supported_model["cost"]["completion"]
                 context_window = supported_model["context_window"]
@@ -486,7 +488,7 @@ class NeuralRouter(Router):
             if self.models:
                 models = tuple(self.models)
             else:
-                models = (self.model,)
+                models = None
             endpoints = get_endpoints_of(
                 self.endpoint_dao,
                 models,
