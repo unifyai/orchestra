@@ -266,6 +266,7 @@ class Router:
         ]
         self.metric_map = dict()
         self.metrics_and_thresholds = dict()
+        self.using_obj_fn = False
         self.models = None
         self.skip_models = None
         self.providers = None
@@ -331,7 +332,11 @@ class Router:
                 )
 
             # get the multiplers specified with :
-            multipliers = [factor[1:] for factor in re.findall(r":\d+\.?\d*", metric)]
+            multipliers = [
+                float(factor[1:]) for factor in re.findall(r":\d+\.?\d*", metric)
+            ]
+            if len(multipliers):
+                self.using_obj_fn = True
 
             # store all the info, concatenate with previous checks if multiple
             # checks are specified for each metric
@@ -345,6 +350,14 @@ class Router:
                 ),
                 "multipliers": multipliers,
             }
+
+        # if we're using multipliers then we need to track another metric
+        # for all non-specified constraints, the multiplier is set to 0
+        if self.using_obj_fn:
+            for metric in self.metrics_and_thresholds:
+                multipliers = self.metrics_and_thresholds[metric]["multipliers"]
+                if len(multipliers) == 0:
+                    multipliers.append(0)
 
     def load_models_and_providers(self):
         # get the model and provider specifications
@@ -410,6 +423,19 @@ class Router:
             return math.inf
         return value
 
+    def obj_fn(self, metrics):
+        objective = 0
+        for metric in self.metrics_and_thresholds:
+            if metric in metrics:
+                value = (
+                    metrics[metric]
+                    * self.metrics_and_thresholds[metric]["multipliers"][0]
+                )
+                if metric == "quality":
+                    value = -value
+                objective += value
+        return objective
+
     def __call__(
         self,
         request_fastapi: Request,
@@ -420,7 +446,7 @@ class Router:
     ):
         # get all endpoints from the specified models x providers.
         # this is skipped in case of the neural scoring function
-        if not endpoints:
+        if endpoints is None:
             endpoints = get_endpoints_of(
                 self.endpoint_dao,
                 (self.model,),
@@ -482,6 +508,11 @@ class Router:
                             endpoint,
                             ttl_hash=get_ttl_hash(),
                         )
+                        metrics["cost"] = (
+                            3 * metrics["input_cost"] + metrics["output_cost"]
+                        ) / 4
+                        if scores:
+                            metrics["quality"] = scores[endpoint.model]
                         try:
                             value = metrics[endpoint.provider][metric.replace("-", "_")]
                         except KeyError:
@@ -519,21 +550,38 @@ class Router:
             if not thresholded_endpoints:
                 raise provider_not_found_under_conditions
 
-            # sort the thresholded endpoints
-            sorted_endpoints = thresholded_endpoints
-            for metric in self.metrics_and_thresholds:
-                if "keyword" in self.metrics_and_thresholds[metric]:
-                    keyword = self.metrics_and_thresholds[metric]["keyword"]
-                    if keyword != "none":
-                        sorted_endpoints = sorted(
-                            sorted_endpoints,
-                            key=lambda endpoint: self.get_metric_value(
-                                endpoint_metrics,
-                                endpoint,
-                                metric,
-                            ),
-                            reverse=keyword == "highest",
-                        )
+            if self.using_obj_fn:
+                # compute the objective function value for all the endpoints
+                for endpoint in thresholded_endpoints:
+                    endpoint_metrics[endpoint.model + "@" + endpoint.provider][
+                        "objective"
+                    ] = self.obj_fn(
+                        endpoint_metrics[endpoint.model + "@" + endpoint.provider],
+                    )
+
+                # sort based on the objective function
+                sorted_endpoints = sorted(
+                    thresholded_endpoints,
+                    key=lambda endpoint: endpoint_metrics[
+                        endpoint.model + "@" + endpoint.provider
+                    ]["objective"],
+                )
+            else:
+                # sort the thresholded endpoints
+                sorted_endpoints = thresholded_endpoints
+                for metric in self.metrics_and_thresholds:
+                    if "keyword" in self.metrics_and_thresholds[metric]:
+                        keyword = self.metrics_and_thresholds[metric]["keyword"]
+                        if keyword != "none":
+                            sorted_endpoints = sorted(
+                                sorted_endpoints,
+                                key=lambda endpoint: self.get_metric_value(
+                                    endpoint_metrics,
+                                    endpoint,
+                                    metric,
+                                ),
+                                reverse=keyword == "highest",
+                            )
             final_endpoints = sorted_endpoints
         else:
             final_endpoints = endpoints
@@ -555,6 +603,7 @@ class NeuralRouter(Router):
         request_fastapi: Request,
         prompt: Optional[str] = "",
         router_endpoint_id: Optional[int] = None,
+        input_tokens: Optional[int] = None,
         debug: Optional[bool] = None,
     ):
         endpoints = baked_router_endpoints
@@ -575,6 +624,7 @@ class NeuralRouter(Router):
             request_fastapi=request_fastapi,
             endpoints=endpoints,
             scores=model_scores,
+            input_tokens=input_tokens,
             return_all=True,
         )
 
