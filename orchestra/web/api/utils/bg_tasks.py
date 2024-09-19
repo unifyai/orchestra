@@ -10,6 +10,7 @@ from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.query.schema import QueryModelRequest
+from orchestra.web.api.query.views import create_query_model
 from orchestra.web.api.utils.gcp import send_pubsub_msg
 from orchestra.web.api.utils.helpers import recharge_and_generate_invoice
 from orchestra.web.api.utils.http_responses import internal_endpoint_not_found
@@ -129,7 +130,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         tags=tags,
     )
 
-    # create_query_model(query_model_request, query_dao=query_dao)
+    create_query_model(query_model_request, query_dao=query_dao)
     user = users_dao.get_user_with_id(user_id)
 
     if not os.environ.get("ON_PREM"):
