@@ -419,29 +419,6 @@ class Router:
                 )
                 return math.inf
 
-        # get value for the metric on-prem
-        if os.environ.get("ON_PREM"):
-            try:
-                return endpoint_metrics[endpoint.model + "@" + endpoint.provider][
-                    metric.replace("-", "_")
-                ]
-            except KeyError:
-                logger.warning(f"{endpoint} has no metrics. Skipping.")
-                return math.inf
-
-        # get the value on the cloud deployment
-        model_metrics = get_model_metrics(
-            self.benchmark_run_dao,
-            endpoint,
-            ttl_hash=get_ttl_hash(),
-        )
-        try:
-            value = model_metrics[endpoint.provider][metric]
-        except KeyError:
-            logger.warning(f"{endpoint} has no metrics. Skipping.")
-            return math.inf
-        return value
-
     def obj_fn(self, metrics):
         objective = 0
         for metric in self.metrics_and_thresholds:
