@@ -3,12 +3,13 @@ Includes endpoints related to evaluators.
 """
 
 import json
+import string
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.evaluator_dao import EvaluatorDAO
-from orchestra.web.api.evaluators.schema import EvaluatorConfig
+from orchestra.web.api.evaluators.schema import EvaluatorConfig, Prompt
 from orchestra.web.api.utils.http_responses import evaluator_not_found
 
 router = APIRouter()
@@ -88,14 +89,31 @@ def create_evaluator(
 
     judge_models = json.dumps(judge_models)
     # TODO: put these defaults somewhere sensible
-    system_prompt = request.system_prompt
-    if system_prompt is None:
-        system_prompt = """[System]
+    # system_prompt = request.system_prompt
+    judge_prompt = request.judge_prompt
+    if isinstance(judge_prompt, str):
+        judge_prompt = Prompt(messages=[{"role": "user", "content": judge_prompt}])
+    # if system_prompt is None:
+
+    # TODO: properly deal with default judge prompt
+    if judge_prompt is None:
+        # system_prompt = """[System]
+        judge_prompt = """[System]
 Please act as an impartial judge and evaluate the quality of the response provided by an assistant to the user question displayed below.
 Your job is to evaluate how good the assistant's answer is.
 Your evaluation should consider correctness and helpfulness. Identify any mistakes.
 
 Be as objective as possible."""
+
+    else:
+        judge_msg = judge_prompt.messages[-1]["content"]
+        formatter = string.Formatter()
+        placeholders = [i[1] for i in formatter.parse(judge_msg) if i[1] is not None]
+        if not set({"user_prompt", "response", "class_config"}).issubset(placeholders):
+            raise HTTPException(
+                status_code=400,
+                detail="placeholders `user_prompt`, `response` and `class_config` must be in your judge prompt.",
+            )
 
     class_config = request.class_config
     if class_config is None:
@@ -109,7 +127,7 @@ Be as objective as possible."""
     result = evaluator_dao.create(
         user_id=user_id,
         name=request.name,
-        system_prompt=system_prompt,
+        judge_prompt=judge_prompt.model_dump_json(),
         class_config=json.dumps(class_config),
         judge_models=judge_models,
         client_side=request.client_side,
