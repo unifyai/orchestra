@@ -84,7 +84,7 @@ def test_valid_performance_based_routing(  # type: ignore[return]
             assert check["threshold"] == threshold["value"][i]["threshold"]
             assert check["op"] == threshold["value"][i]["op"]
     else:
-        assert metrics_and_thresholds[metric] == threshold[metric]
+        assert metrics_and_thresholds[metric] == threshold["value"]
 
 
 def test_new_dynamic_routing(  # type: ignore[return]
