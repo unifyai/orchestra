@@ -102,7 +102,7 @@ env = [
     "ORCHESTRA_DB_BASE=orchestra_test",
     "ORCHESTRA_SENTRY_DSN=",
 ]
-addopts = "--cov --cov-report=lcov:lcov.info --cov-report=term --ignore=unify/""
+addopts = "--cov --cov-report=lcov:lcov.info --cov-report=term --ignore=unify"
 markers = [
     "manual: marks tests as manual",
 ]
