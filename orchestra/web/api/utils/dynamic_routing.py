@@ -8,9 +8,10 @@ from collections import namedtuple
 from typing import Dict, List, Optional, Tuple, Union
 
 import requests
-from fastapi import Request
+from fastapi import HTTPException, Request
 from google.cloud import aiplatform
 from providers.completion import PROVIDER_CLASSES
+from starlette import status
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.custom_router_dao import CustomRouterDAO
@@ -349,11 +350,18 @@ class Router:
                     else:
                         metrics = dict()
                 else:
-                    metrics = get_model_metrics(
-                        self.benchmark_run_dao,
-                        endpoint,
-                        ttl_hash=get_ttl_hash(),
-                    ).get(endpoint.provider, dict())
+                    try:
+                        metrics = get_model_metrics(
+                            self.benchmark_run_dao,
+                            endpoint,
+                            ttl_hash=get_ttl_hash(),
+                        ).get(endpoint.provider, dict())
+                    except HTTPException as e:
+                        if e.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR:
+                            logging.warning(f"Couldn't find metrics for {endpoint}")
+                            continue
+                        else:
+                            raise e
                     metrics = {k: float(v) for k, v in metrics.items()}
 
                 # store the cost and context_window size
