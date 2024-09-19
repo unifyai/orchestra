@@ -207,6 +207,13 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         try:
             while try_provider >= 0 and try_provider < num_tries_provider:
                 if provider not in PROVIDER_CLASSES or using_router:
+                    # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
+                    num_tokens_est = 0
+                    for msg in messages:
+                        if msg.get("content") is not None:
+                            num_tokens_est += len(msg["content"])
+                    input_tokens = num_tokens_est * 1.25
+
                     # neural routing
                     if using_router:
                         if router_choices is None:
@@ -215,10 +222,12 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                                 endpoint_dao,
                                 benchmark_run_dao,
                             )
+                            # TODO: add error message if the router is not deployed
                             router_choices = router(
                                 request_fastapi,
                                 messages[-1]["content"],
                                 endpoint_id,
+                                input_tokens=input_tokens,
                             )
                             model_region_priority_list = router_choices
                     # performance routing
@@ -227,7 +236,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                             request.model,
                             endpoint_dao,
                             benchmark_run_dao,
-                        )(request_fastapi)
+                        )(request_fastapi, input_tokens=input_tokens)
                         model_region_priority_list[try_provider] = (
                             model,
                             provider,

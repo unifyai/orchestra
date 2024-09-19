@@ -415,6 +415,7 @@ class Router:
         request_fastapi: Request,
         endpoints: Optional[List[Endpoint]] = None,
         scores: Optional[Dict[str, float]] = None,
+        input_tokens: Optional[int] = None,
         return_all: bool = False,
     ):
         # get all endpoints from the specified models x providers.
@@ -476,15 +477,13 @@ class Router:
                                 is_valid = False
                                 break
                     else:
-                        model_metrics = get_model_metrics(
+                        metrics = get_model_metrics(
                             self.benchmark_run_dao,
                             endpoint,
                             ttl_hash=get_ttl_hash(),
                         )
                         try:
-                            value = model_metrics[endpoint.provider][
-                                metric.replace("-", "_")
-                            ]
+                            value = metrics[endpoint.provider][metric.replace("-", "_")]
                         except KeyError:
                             # skip quality-based filtering unless performing
                             # neural routing
@@ -495,6 +494,13 @@ class Router:
                                 value = math.inf
                                 is_valid = False
                                 break
+
+                    # store the context window size for the endpoint
+                    context_window = PROVIDER_CLASSES[endpoint.provider](
+                        "",
+                    ).supported_models[endpoint.model]["context_window"]
+                    if input_tokens and context_window <= input_tokens:
+                        is_valid = False
 
                     # check for the threshold
                     for check in data["checks"]:
