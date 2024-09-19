@@ -34,14 +34,6 @@ After that, you must output your final verdict in JSON by **strictly** following
 }}
 Do not output anything else after your final verdict, but make sure you do give a verdict, that's the most important part!
 
-[User Question]
-[[[PROMPT]]]
-[End of User Question]
-
-[The Start of Assistant's Answer]
-[[[MODEL_RESPONSE]]]
-[The End of Assistant's  Answer]
-
 {class_config}
 
 [start of user question]
