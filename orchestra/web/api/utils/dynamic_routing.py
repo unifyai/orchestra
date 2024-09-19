@@ -464,20 +464,49 @@ class NeuralRouter(Router):
         input_tokens: Optional[int] = None,
         debug: Optional[bool] = None,
     ):
-        endpoints = baked_router_endpoints
-        endpoints = [
-            e
-            for e in endpoints
-            if (
-                (not self.providers or e.provider in self.providers)
-                and (not self.skip_providers or e.provider not in self.skip_providers)
-                and (not self.models or e.model in self.models)
-                and (not self.skip_models or e.model not in self.skip_models)
+        if "quality" in self.metrics_and_thresholds:
+            endpoints = baked_router_endpoints
+            endpoints = [
+                e
+                for e in endpoints
+                if (
+                    (not self.providers or e.provider in self.providers)
+                    and (
+                        not self.skip_providers or e.provider not in self.skip_providers
+                    )
+                    and (not self.models or e.model in self.models)
+                    and (not self.skip_models or e.model not in self.skip_models)
+                )
+            ]
+            model_scores = neural_scoring(prompt, router_endpoint_id)
+            if debug:
+                return model_scores
+        else:
+            endpoints = None
+            if self.models:
+                models = tuple(self.models)
+            else:
+                models = (self.model,)
+            endpoints = get_endpoints_of(
+                self.endpoint_dao,
+                models,
+                only_from=tuple(self.providers) if self.providers else None,
+                ttl_hash=get_ttl_hash(),
             )
-        ]
-        model_scores = neural_scoring(prompt, router_endpoint_id)
-        if debug:
-            return model_scores
+            skip_models, skip_providers = [], []
+            if not self.skip_models:
+                skip_models = []
+            if not self.skip_providers:
+                skip_providers = []
+            endpoints = [
+                endpoint
+                for endpoint in endpoints
+                if (
+                    endpoint.provider not in skip_providers
+                    and endpoint.model not in skip_models
+                )
+            ]
+            model_scores = None
         return super().__call__(
             request_fastapi=request_fastapi,
             endpoints=endpoints,
