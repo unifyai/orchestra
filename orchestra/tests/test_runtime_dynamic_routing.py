@@ -110,7 +110,7 @@ def test_empty_lut(dbsession) -> str:  # type: ignore[return]
 
     with pytest.raises(HTTPException) as err:
         Router(
-            "pbr-model-empty-lut@itl",
+            "pbr-model-empty-lut@ttft",
             endpoint_dao,
             benchmark_run_dao,
         )("")
