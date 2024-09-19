@@ -143,10 +143,10 @@ class QueryOld(Base):
     at = Column(TIMESTAMP, nullable=False)
     endpoint_id = Column(Integer(), ForeignKey("endpoint.id"), nullable=False)
     credits = Column(Numeric(), nullable=False)
-    prompt = Column(String(), nullable=True)
-    signature = Column(String(), nullable=True)
-    used_router = Column(Boolean(), nullable=True)
-    router = Column(String, nullable=True)
+    prompt = Column(String())
+    signature = Column(String())
+    used_router = Column(Boolean())
+    router = Column(String)
 
 
 class Users(Base):
@@ -157,11 +157,11 @@ class Users(Base):
     # IMPORTANT: If any change happens here the DB trigger must be updated as well!
     id = Column(String(), primary_key=True)
     credits = Column(Numeric(), nullable=False)
-    stripe_customer_id = Column(String(), nullable=True)
+    stripe_customer_id = Column(String())
     autorecharge = Column(Boolean, nullable=False)
     autorecharge_threshold = Column(Numeric, nullable=False)
     autorecharge_qty = Column(Numeric, nullable=False)
-    store_prompts = Column(Boolean, nullable=True)
+    store_prompts = Column(Boolean)
 
 
 class Recharge(Base):
@@ -174,7 +174,7 @@ class Recharge(Base):
     user_id = Column(String(), ForeignKey("users.id"), nullable=False)
     quantity = Column(Numeric(), nullable=False)
     type = Column(String(), ForeignKey("recharge_type.type"), nullable=False)
-    transaction_id = Column(String(), nullable=True)
+    transaction_id = Column(String())
 
 
 class RechargeType(Base):
@@ -214,7 +214,7 @@ class CustomEndpoint(Base):
     id = Column(Integer(), primary_key=True)
     user_id = Column(String(), ForeignKey("users.id"), nullable=False)
     name = Column(String(), nullable=False)
-    mdl_name = Column(String(), nullable=True)
+    mdl_name = Column(String())
     url = Column(String(), nullable=False)
     key_id = Column(Integer(), ForeignKey("custom_api_key.id"), nullable=False)
 
@@ -225,7 +225,7 @@ class CustomRouter(Base):
     __tablename__ = "custom_router"
 
     id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), nullable=True)
+    user_id = Column(String(), ForeignKey("users.id"))
     router_name = Column(String(), nullable=False)
     router_id = Column(String(), nullable=False)
 
@@ -332,9 +332,9 @@ class Query(Base):
     credits = Column(Numeric(), nullable=False)
     query_body = Column(String(), nullable=False)
     response_body = Column(String(), nullable=False)
-    signature = Column(String(), nullable=True)
-    used_router = Column(Boolean(), nullable=True)
-    router = Column(String, nullable=True)
+    signature = Column(String())
+    used_router = Column(Boolean())
+    router = Column(String)
     tags = relationship("QueryTagAssociation", back_populates="query")
     __table_args__ = (Index("ix_user_endpoint", "user_id", "endpoint_id"),)
 
@@ -348,7 +348,7 @@ class Dataset(Base):
     __tablename__ = "dataset"
 
     id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), index=True, nullable=True)
+    user_id = Column(String(), ForeignKey("users.id"), index=True)
     name = Column(String(), nullable=False)
     __table_args__ = (UniqueConstraint("user_id", "name", name="uq_userid_name"),)
 
@@ -359,11 +359,11 @@ class StoredPrompt(Base):
     __tablename__ = "stored_prompt"
 
     id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), index=True, nullable=True)
-    system_msg = Column(String(), index=True, nullable=True)
+    user_id = Column(String(), ForeignKey("users.id"), index=True)
+    system_msg = Column(String(), index=True)
     messages = Column(String(), nullable=False)
     prompt_kwargs = Column(String(), nullable=False)
-    ref_answer = Column(String(), nullable=True)
+    ref_answer = Column(String())
     num_tokens = Column(Integer(), nullable=False)
     timestamp = Column(TIMESTAMP, nullable=False)
     __table_args__ = (
@@ -384,9 +384,9 @@ class DefaultPrompt(Base):
     __tablename__ = "default_prompt"
 
     id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), index=True, nullable=True)
+    user_id = Column(String(), ForeignKey("users.id"), index=True)
     name = Column(String(), nullable=False)
-    prompt = Column(String(), nullable=True)
+    prompt = Column(String())
 
 
 class StoredPromptVariation(Base):
@@ -417,12 +417,7 @@ class StoredPromptExtraField(Base):
     __tablename__ = "stored_prompt_extra_field"
 
     id = Column(Integer(), primary_key=True)
-    prompt_id = Column(
-        Integer(),
-        ForeignKey("stored_prompt.id"),
-        index=True,
-        nullable=True,
-    )
+    prompt_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
     field = Column(String(), nullable=False)
     value = Column(String(), nullable=False)
 
@@ -433,17 +428,11 @@ class StoredPromptResponse(Base):
     __tablename__ = "stored_prompt_response"
 
     id = Column(Integer(), primary_key=True)
-    prompt_id = Column(
-        Integer(),
-        ForeignKey("stored_prompt.id"),
-        index=True,
-        nullable=True,
-    )
+    prompt_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
     prompt_variation_id = Column(
         Integer(),
         ForeignKey("stored_prompt_variation.id"),
         index=True,
-        nullable=True,
     )
     endpoint_str = Column(String(), nullable=False)
     response = Column(String(), nullable=False)
@@ -464,12 +453,7 @@ class Judgement(Base):
     __tablename__ = "judgement"
 
     id = Column(Integer(), primary_key=True)
-    response_id = Column(
-        Integer(),
-        ForeignKey("stored_prompt_response.id"),
-        index=True,
-        nullable=True,
-    )
+    response_id = Column(Integer(), ForeignKey("stored_prompt_response.id"), index=True)
     judge_endpoint_str = Column(String(), nullable=False)
     evaluator_id = Column(Integer(), ForeignKey("evaluator.id"), nullable=False)
     judgement = Column(String(), nullable=False)
@@ -489,13 +473,8 @@ class DatasetPrompt(Base):
     __tablename__ = "dataset_prompt"
 
     id = Column(Integer(), primary_key=True)
-    dataset_id = Column(Integer(), ForeignKey("dataset.id"), index=True, nullable=True)
-    prompt_id = Column(
-        Integer(),
-        ForeignKey("stored_prompt.id"),
-        index=True,
-        nullable=True,
-    )
+    dataset_id = Column(Integer(), ForeignKey("dataset.id"), index=True)
+    prompt_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
     __table_args__ = (
         UniqueConstraint(
             "dataset_id",
@@ -511,7 +490,7 @@ class Evaluator(Base):
     __tablename__ = "evaluator"
 
     id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), index=True, nullable=True)
+    user_id = Column(String(), ForeignKey("users.id"), index=True)
     name = Column(String(), nullable=False)
     system_prompt = Column(String(), nullable=False)
     class_config = Column(String(), nullable=False)
@@ -526,24 +505,13 @@ class Evaluation(Base):
     __tablename__ = "evaluation"
 
     id = Column(Integer(), primary_key=True)
-    prompt_id = Column(
-        Integer(),
-        ForeignKey("stored_prompt.id"),
-        index=True,
-        nullable=True,
-    )
+    prompt_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
     prompt_variation_id = Column(
         Integer(),
         ForeignKey("stored_prompt_variation.id"),
         index=True,
-        nullable=True,
     )
-    evaluator_id = Column(
-        Integer(),
-        ForeignKey("evaluator.id"),
-        index=True,
-        nullable=True,
-    )
+    evaluator_id = Column(Integer(), ForeignKey("evaluator.id"), index=True)
     endpoint_str = Column(String(), nullable=False)
     score = Column(Numeric(), nullable=False)
     __table_args__ = (
@@ -562,7 +530,7 @@ class AuthUser(Base):
 
     id = Column(String, primary_key=True, default=uuid.uuid4)
     email = Column(String, unique=True, index=True, nullable=False)
-    name = Column(String, nullable=True)
+    name = Column(String)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
 
@@ -576,10 +544,10 @@ class Account(Base):
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"))
     provider = Column(String, nullable=False)  # OAuth provider name
     provider_account_id = Column(String, nullable=False)
-    access_token = Column(String, nullable=True)  # OAuth access token (optional)
-    refresh_token = Column(String, nullable=True)  # OAuth refresh token (optional)
+    access_token = Column(String)  # OAuth access token (optional)
+    refresh_token = Column(String)  # OAuth refresh token (optional)
     # Expiration time for OAuth token (optional)
-    expires_at = Column(TIMESTAMP, nullable=True)
+    expires_at = Column(TIMESTAMP)
 
 
 # Session table
