@@ -18,7 +18,13 @@ class User(BaseModel):
 
 class Account(BaseModel):
     provider: str
+    type: str
     providerAccountId: str
+    access_token: str
+    expires_at: int
+    scope: str
+    token_type: str
+    id_token: str
     userId: str
 
 
@@ -32,7 +38,7 @@ class CreateUserRequest(BaseModel):
     name: Optional[str] = None
 
 
-@admin_router.post("/create-user")
+@admin_router.post("/auth-user")
 async def create_user(user: CreateUserRequest):
     user_id = f"user_{len(users_db) + 1}"
     new_user = User(id=user_id, email=user.email, name=user.name)
@@ -40,7 +46,7 @@ async def create_user(user: CreateUserRequest):
     return new_user
 
 
-@admin_router.get("/user/{user_id}")
+@admin_router.get("/auth-user/by-user-id")
 async def get_user(user_id: str):
     user = users_db.get(user_id)
     if not user:
@@ -48,23 +54,17 @@ async def get_user(user_id: str):
     return user
 
 
-@admin_router.get("/user-by-email/{email}")
+@admin_router.get("/auth-user/by-email")
 async def get_user_by_email(email: str):
-    user = next((user for user in users_db.values() if user.email == email), None)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
+    return None  # if there is no user with that email
 
 
-@admin_router.post("/user-by-account")
-async def get_user_by_account(account: Account):
-    user = next((user for user in users_db.values() if user.id == account.userId), None)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
+@admin_router.get("/auth-user/by-account")
+async def get_user_by_account(provider_account_id: str, provider: str):
+    return None  # if there is no user with that account
 
 
-@admin_router.put("/update-user/{user_id}")
+@admin_router.put("/auth-user")
 async def update_user(user_id: str, updated_user: User):
     if user_id not in users_db:
         raise HTTPException(status_code=404, detail="User not found")
@@ -72,7 +72,7 @@ async def update_user(user_id: str, updated_user: User):
     return updated_user
 
 
-@admin_router.delete("/delete-user/{user_id}")
+@admin_router.delete("/auth-user")
 async def delete_user(user_id: str):
     if user_id not in users_db:
         raise HTTPException(status_code=404, detail="User not found")
@@ -80,25 +80,27 @@ async def delete_user(user_id: str):
     return {"message": "User deleted"}
 
 
-@admin_router.post("/link-account")
+@admin_router.post("/account")
 async def link_account(account: Account):
+    print(account)
     # Link an account to the user (e.g., social login provider)
+    # TODO: this should return the newly created account
     return {"message": f"Account {account.provider} linked for user {account.userId}"}
 
 
-@admin_router.post("/unlink-account")
+@admin_router.delete("/account")
 async def unlink_account(account: Account):
     # Unlink an account from the user
     return {"message": f"Account {account.provider} unlinked for user {account.userId}"}
 
 
-@admin_router.post("/create-session")
+@admin_router.post("/session")
 async def create_session(session: Session):
     sessions_db[session.sessionToken] = session
     return session
 
 
-@admin_router.get("/session/{session_token}")
+@admin_router.get("/session")
 async def get_session_and_user(session_token: str):
     session = sessions_db.get(session_token)
     if not session:
@@ -109,7 +111,7 @@ async def get_session_and_user(session_token: str):
     return {"session": session, "user": user}
 
 
-@admin_router.put("/update-session/{session_token}")
+@admin_router.put("/session")
 async def update_session(session_token: str, updated_session: Session):
     if session_token not in sessions_db:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -117,7 +119,7 @@ async def update_session(session_token: str, updated_session: Session):
     return updated_session
 
 
-@admin_router.delete("/delete-session/{session_token}")
+@admin_router.delete("/session")
 async def delete_session(session_token: str):
     if session_token not in sessions_db:
         raise HTTPException(status_code=404, detail="Session not found")
