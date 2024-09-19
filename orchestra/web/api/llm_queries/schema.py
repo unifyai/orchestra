@@ -173,7 +173,7 @@ class ChatCompletionRequest(BaseModel):
             "example": '{"type": "function", "function": {"name": "my_function"}}',
         },
     )
-    parallel_tool_calls: bool = Field(
+    parallel_tool_calls: Optional[bool] = Field(
         True,
         description="Whether to enable parallel function calling during tool " "use.",
         json_schema_extra={"example": True},
