@@ -95,7 +95,7 @@ def test_new_dynamic_routing(  # type: ignore[return]
     # datapoint_dao = DatapointDAO(dbsession)
     endpoint_dao = EndpointDAO(dbsession)
 
-    model, provider = Router(
+    model, provider, _ = Router(
         "llama-3.1-8b-chat@quality|input-cost<=0.8|output-cost<=0.8|itl>1|itl<20",
         endpoint_dao,
         benchmark_run_dao,
