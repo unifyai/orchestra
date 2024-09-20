@@ -2,6 +2,7 @@
 Includes endpoints related to benchmarks.
 """
 
+import logging
 import os
 from datetime import datetime
 from itertools import chain
@@ -41,6 +42,7 @@ def _get_endpoint_from_model_provider(
         models=(model,) if isinstance(model, str) else model,
         only_from=(provider,) if isinstance(provider, str) else provider,
     )
+    logging.info(f"endpoints {endpoints}")
     endpoint_ids = [
         {
             "id": endpoint[0].id,
