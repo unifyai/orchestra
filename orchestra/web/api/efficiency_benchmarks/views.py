@@ -4,6 +4,7 @@ Includes endpoints related to benchmarks.
 
 import os
 from datetime import datetime
+from itertools import chain
 from typing import Dict, List, Union
 
 import requests
@@ -37,12 +38,19 @@ def _get_endpoint_from_model_provider(
     endpoint_dao: EndpointDAO,
 ):
     try:
-        endpoint_id = endpoint_dao.get_endpoints_of(
-            models=(model,),
-            only_from=(provider,),
+        endpoints = endpoint_dao.get_endpoints_of(
+            models=(model,) if isinstance(model, str) else model,
+            only_from=(provider,) if isinstance(provider, str) else provider,
         )
-        endpoint_id = endpoint_id[0][0].id
-        return endpoint_id
+        endpoints = [
+            {
+                "id": endpoint[0].id,
+                "model": endpoint[1].mdl_code,
+                "provider": endpoint[2].name,
+            }
+            for endpoint in endpoints
+        ]
+        return endpoints
     except:
         raise model_not_found
 
@@ -112,6 +120,7 @@ def _get_custom_endpoint_benchmark(
                     single_return[key] = None
                 else:
                     single_return[key] = rets[key][-1]
+            single_return["endpoint"] = model
             return [
                 single_return,
             ]
@@ -123,6 +132,7 @@ def _get_custom_endpoint_benchmark(
                     val[key] = None
                 else:
                     val[key] = rets[key][i]
+            val["endpoint"] = model
             returns.append(val)
         return returns
     except Exception as e:
@@ -216,7 +226,7 @@ def append_to_benchmark(
 
 @router.get(
     "/benchmark",
-    response_model=List[Dict[str, Union[datetime, float, None]]],
+    response_model=List[Dict[str, Union[str, datetime, float, None]]],
     responses={
         200: {
             "description": "Successful Response",
@@ -236,8 +246,16 @@ def append_to_benchmark(
 )
 def get_benchmark(
     request_fastapi: Request,
-    model: str = Query(description="Name of the model.", example="gpt-4o-mini"),
-    provider: str = Query(description="Name of the provider.", example="openai"),
+    model: str = Query(
+        default=None,
+        description="Name of the model.",
+        example="gpt-4o-mini",
+    ),
+    provider: str = Query(
+        default=None,
+        description="Name of the provider.",
+        example="openai",
+    ),
     region: str = Query(
         default="Belgium",
         description="""Region where the benchmark is run.
@@ -323,23 +341,31 @@ def get_benchmark(
             raise HTTPException(response.status_code, json_response["detail"])
         return json_response
     try:
-        endpoint_id = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
+        endpoints = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
         if latest_only:
-            result = latest_benchmark_dao.get_latest_benchmarks(
-                endpoint_id=endpoint_id,
-                regime="concurrent-1",
-                region=region,
-                seq_len=seq_len,
-            )
-            result = result[0]
+            results = [
+                {
+                    "benchmark": latest_benchmark_dao.get_latest_benchmarks(
+                        endpoint_id=endpoint["id"],
+                        regime="concurrent-1",
+                        region=region,
+                        seq_len=seq_len,
+                    ),
+                    "endpoint": f'{endpoint["model"]}@{endpoint["provider"]}',
+                }
+                for endpoint in endpoints
+            ]
             return [
                 {
-                    "ttft": result.ttft,
-                    "itl": result.itl,
-                    "input_cost": result.input_cost,
-                    "output_cost": result.output_cost,
-                    "measured_at": result.measured_at,
-                },
+                    "ttft": result["benchmark"][0].ttft,
+                    "itl": result["benchmark"][0].itl,
+                    "input_cost": result["benchmark"][0].input_cost,
+                    "output_cost": result["benchmark"][0].output_cost,
+                    "measured_at": result["benchmark"][0].measured_at,
+                    "endpoint": result["endpoint"],
+                }
+                for result in results
+                if len(result["benchmark"]) > 0
             ]
         elif not start_time_provided and end_time_provided:
             raise Exception(
@@ -347,13 +373,26 @@ def get_benchmark(
             )
         elif start_time_provided and not end_time_provided:
             end_time = str(datetime.now())
-        return benchmark_run_dao.benchmarks_between(
-            endpoint_id=endpoint_id,
-            start_time=start_time,
-            end_time=end_time,
-            regime="concurrent-1",
-            region=region,
-            seq_len=seq_len,
+        return list(
+            chain.from_iterable(
+                [
+                    [
+                        {
+                            **benchmark,
+                            "endpoint": f'{endpoint["model"]}@{endpoint["provider"]}',
+                        }
+                        for benchmark in benchmark_run_dao.benchmarks_between(
+                            endpoint_id=endpoint["id"],
+                            start_time=start_time,
+                            end_time=end_time,
+                            regime="concurrent-1",
+                            region=region,
+                            seq_len=seq_len,
+                        )
+                    ]
+                    for endpoint in endpoints
+                ],
+            ),
         )
     except:
         raise benchmark_not_found(f"{model}@{provider}")
