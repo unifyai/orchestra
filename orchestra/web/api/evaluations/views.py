@@ -6,6 +6,7 @@ import json
 import os
 from typing import Dict, Optional
 
+import requests
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from providers.completion import PROVIDER_CLASSES
 
@@ -451,7 +452,19 @@ def get_evaluations(
 
     latest_benchmarks = []
     if include_runtime:
-        latest_benchmarks = latest_benchmark_dao.get_benchmark_with_endpoints()
+        if os.environ.get("ON_PREM"):
+            request_url = os.environ.get("PUBLIC_ORCHESTRA_URL", "") + "/benchmark"
+            headers = {
+                key: value
+                for key, value in request_fastapi._headers.items()
+                if key in ["content-type", "authorization"]
+            }
+            response = requests.get(request_url, headers=headers)
+            latest_benchmarks = response.json()
+            if response.status_code != 200:
+                raise HTTPException(response.status_code, latest_benchmarks["detail"])
+        else:
+            latest_benchmarks = latest_benchmark_dao.get_benchmark_with_endpoints()
 
     acc = {}  # stores scores to aggregate
     endpoints = set()
