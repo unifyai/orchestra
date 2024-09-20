@@ -6,6 +6,7 @@ import json
 import os
 from typing import Dict, Optional
 
+import requests
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from providers.completion import PROVIDER_CLASSES
 
@@ -451,7 +452,19 @@ def get_evaluations(
 
     latest_benchmarks = []
     if include_runtime:
-        latest_benchmarks = latest_benchmark_dao.get_benchmark_with_endpoints()
+        if os.environ.get("ON_PREM"):
+            request_url = os.environ.get("PUBLIC_ORCHESTRA_URL", "") + "/benchmark"
+            headers = {
+                key: value
+                for key, value in request_fastapi._headers.items()
+                if key in ["content-type", "authorization"]
+            }
+            response = requests.get(request_url, headers=headers)
+            latest_benchmarks = response.json()
+            if response.status_code != 200:
+                raise HTTPException(response.status_code, latest_benchmarks["detail"])
+        else:
+            latest_benchmarks = latest_benchmark_dao.get_benchmark_with_endpoints()
 
     acc = {}  # stores scores to aggregate
     endpoints = set()
@@ -492,15 +505,17 @@ def get_evaluations(
 
         for _evaluator in ret:
             for lb in latest_benchmarks:
-                if lb.endpoint_str in ret[_evaluator]:
-                    ret[_evaluator][lb.endpoint_str]["itl"] = float(lb.itl)
-                    ret[_evaluator][lb.endpoint_str]["ttft"] = float(lb.ttft)
-                    ret[_evaluator][lb.endpoint_str]["input_cost"] = float(
-                        lb.input_cost,
-                    )
-                    ret[_evaluator][lb.endpoint_str]["output_cost"] = float(
-                        lb.output_cost,
-                    )
+                on_prem = os.environ.get("ON_PREM")
+                endpoint_str = lb["endpoint"] if on_prem else lb.endpoint_str
+                input_cost = lb["input_cost"] if on_prem else lb.input_cost
+                output_cost = lb["output_cost"] if on_prem else lb.output_cost
+                ttft = lb["ttft"] if on_prem else lb.ttft
+                itl = lb["itl"] if on_prem else lb.itl
+                if endpoint_str in ret[_evaluator]:
+                    ret[_evaluator][endpoint_str]["itl"] = float(itl)
+                    ret[_evaluator][endpoint_str]["ttft"] = float(ttft)
+                    ret[_evaluator][endpoint_str]["input_cost"] = float(input_cost)
+                    ret[_evaluator][endpoint_str]["output_cost"] = float(output_cost)
 
     return ret
 
