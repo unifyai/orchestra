@@ -2,7 +2,6 @@
 Includes endpoints related to benchmarks.
 """
 
-import logging
 import os
 from datetime import datetime
 from itertools import chain
@@ -17,6 +16,7 @@ from orchestra.db.dao.custom_endpoint_benchmark_dao import CustomEndpointBenchma
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.latest_benchmark_dao import LatestBenchmarkDAO
+from orchestra.web.api.utils.http_responses import benchmark_not_found, model_not_found
 
 router = APIRouter()
 
@@ -37,25 +37,22 @@ def _get_endpoint_from_model_provider(
     provider: str,
     endpoint_dao: EndpointDAO,
 ):
-    # try:
-    endpoints = endpoint_dao.get_endpoints_of(
-        models=(model,) if isinstance(model, str) else model,
-        only_from=(provider,) if isinstance(provider, str) else provider,
-    )
-    logging.info(f"endpoints {endpoints}")
-    endpoints = [
-        {
-            "id": endpoint[0].id,
-            "model": endpoint[1].mdl_code,
-            "provider": endpoint[2].name,
-        }
-        for endpoint in endpoints
-    ]
-    return endpoints
-
-
-# except:
-#     raise model_not_found
+    try:
+        endpoints = endpoint_dao.get_endpoints_of(
+            models=(model,) if isinstance(model, str) else model,
+            only_from=(provider,) if isinstance(provider, str) else provider,
+        )
+        endpoints = [
+            {
+                "id": endpoint[0].id,
+                "model": endpoint[1].mdl_code,
+                "provider": endpoint[2].name,
+            }
+            for endpoint in endpoints
+        ]
+        return endpoints
+    except:
+        raise model_not_found
 
 
 def _get_custom_endpoint_benchmark(
@@ -343,65 +340,62 @@ def get_benchmark(
         if response.status_code != 200:
             raise HTTPException(response.status_code, json_response["detail"])
         return json_response
-    # try:
-    endpoints = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
-    if latest_only:
-        results = [
-            {
-                "benchmark": latest_benchmark_dao.get_latest_benchmarks(
-                    endpoint_id=endpoint["id"],
-                    regime="concurrent-1",
-                    region=region,
-                    seq_len=seq_len,
-                ),
-                "endpoint": f'{endpoint["model"]}@{endpoint["provider"]}',
-            }
-            for endpoint in endpoints
-        ]
-        return [
-            {
-                "ttft": result["benchmark"][0].ttft,
-                "itl": result["benchmark"][0].itl,
-                "input_cost": result["benchmark"][0].input_cost,
-                "output_cost": result["benchmark"][0].output_cost,
-                "measured_at": result["benchmark"][0].measured_at,
-                "endpoint": result["endpoint"],
-            }
-            for result in results
-            if len(result["benchmark"]) > 0
-        ]
-    elif not start_time_provided and end_time_provided:
-        raise Exception(
-            "`start_time` must be provided when" "`end_time` is provided.",
-        )
-    elif start_time_provided and not end_time_provided:
-        end_time = str(datetime.now())
-    return list(
-        chain.from_iterable(
-            [
-                [
-                    {
-                        **benchmark,
-                        "endpoint": f'{endpoint["model"]}@{endpoint["provider"]}',
-                    }
-                    for benchmark in benchmark_run_dao.benchmarks_between(
+    try:
+        endpoints = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
+        if latest_only:
+            results = [
+                {
+                    "benchmark": latest_benchmark_dao.get_latest_benchmarks(
                         endpoint_id=endpoint["id"],
-                        start_time=start_time,
-                        end_time=end_time,
                         regime="concurrent-1",
                         region=region,
                         seq_len=seq_len,
-                    )
-                ]
+                    ),
+                    "endpoint": f'{endpoint["model"]}@{endpoint["provider"]}',
+                }
                 for endpoint in endpoints
-            ],
-        ),
-    )
-
-
-# except Exception as e:
-#     raise e
-#     raise benchmark_not_found(f"{model}@{provider}")
+            ]
+            return [
+                {
+                    "ttft": result["benchmark"][0].ttft,
+                    "itl": result["benchmark"][0].itl,
+                    "input_cost": result["benchmark"][0].input_cost,
+                    "output_cost": result["benchmark"][0].output_cost,
+                    "measured_at": result["benchmark"][0].measured_at,
+                    "endpoint": result["endpoint"],
+                }
+                for result in results
+                if len(result["benchmark"]) > 0
+            ]
+        elif not start_time_provided and end_time_provided:
+            raise Exception(
+                "`start_time` must be provided when" "`end_time` is provided.",
+            )
+        elif start_time_provided and not end_time_provided:
+            end_time = str(datetime.now())
+        return list(
+            chain.from_iterable(
+                [
+                    [
+                        {
+                            **benchmark,
+                            "endpoint": f'{endpoint["model"]}@{endpoint["provider"]}',
+                        }
+                        for benchmark in benchmark_run_dao.benchmarks_between(
+                            endpoint_id=endpoint["id"],
+                            start_time=start_time,
+                            end_time=end_time,
+                            regime="concurrent-1",
+                            region=region,
+                            seq_len=seq_len,
+                        )
+                    ]
+                    for endpoint in endpoints
+                ],
+            ),
+        )
+    except:
+        raise benchmark_not_found(f"{model}@{provider}")
 
 
 @router.delete(
