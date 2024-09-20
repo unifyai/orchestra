@@ -355,7 +355,7 @@ def get_benchmark(
                 }
                 for endpoint in endpoints
             ]
-            return [
+            results = [
                 {
                     "ttft": result["benchmark"][0].ttft,
                     "itl": result["benchmark"][0].itl,
@@ -367,13 +367,15 @@ def get_benchmark(
                 for result in results
                 if len(result["benchmark"]) > 0
             ]
+            assert len(results) > 0
+            return results
         elif not start_time_provided and end_time_provided:
             raise Exception(
                 "`start_time` must be provided when" "`end_time` is provided.",
             )
         elif start_time_provided and not end_time_provided:
             end_time = str(datetime.now())
-        return list(
+        results = list(
             chain.from_iterable(
                 [
                     [
@@ -394,6 +396,8 @@ def get_benchmark(
                 ],
             ),
         )
+        assert len(results) > 0
+        return results
     except:
         raise benchmark_not_found(f"{model}@{provider}")
 
