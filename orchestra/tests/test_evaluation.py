@@ -381,6 +381,7 @@ async def get_evaluation_scores(client, params):
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     scores = response.json()
+    print(response.json())
     return scores
 
 
@@ -472,6 +473,159 @@ async def test_list_evaluation_all(client: AsyncClient, dbsession):
         "test_eval_2": {
             "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
         },
+    }
+    await _helper_test_list_evaluations(client, params, expected_scores)
+
+
+async def test_list_evaluation_per_prompt(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(dbsession)
+    params = {
+        "dataset": "test_dataset_eval",
+        "evaluator": "test_eval",
+        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "per_prompt": True,
+    }
+    expected_scores = {
+        "test_eval": {
+            "llama-3-8b-chat@aws-bedrock": {
+                "per_prompt": [{"id": 1, "score": 100.0}, {"id": 2, "score": 80.0}],
+                "progress": 100.0,
+                "score": 90.0,
+            }
+        }
+    }
+    await _helper_test_list_evaluations(client, params, expected_scores)
+
+
+async def test_list_evaluation_rationale_no_perprompt(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(dbsession)
+
+    params = {
+        "dataset": "test_dataset_eval",
+        "evaluator": "test_eval",
+        "return_rationale": True,
+    }
+    url = "/v0/evaluation"
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 404, response.json()
+    assert response.json() == {
+        "detail": "If return_rationale=True, need to also have per_prompt=True."
+    }
+
+
+async def test_list_evaluation_rationale_response(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(dbsession)
+    params = {
+        "dataset": "test_dataset_eval",
+        "evaluator": "test_eval",
+        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "return_rationale": True,
+        "return_response": True,
+        "per_prompt": True,
+    }
+    expected_scores = {
+        "test_eval": {
+            "llama-3-8b-chat@aws-bedrock": [
+                {
+                    "prompt_id": 1,
+                    "response": "The capital of Spain is Madrid.",
+                    "evaluation": [
+                        {
+                            "endpoint": "llama-3-8b-chat@aws-bedrock",
+                            "rationale": 'Explanation:\nThe assistant correctly answers the user\'s question about the capital of Spain, providing the accurate information that the capital of Spain is Madrid.\n\nFinal Rating: excellent\n\n{"assistant_rating": "excellent"}',
+                            "score": 1.0,
+                        }
+                    ],
+                },
+                {
+                    "prompt_id": 2,
+                    "response": "The square root of 1009 to 1 decimal place is 32.1.",
+                    "evaluation": [
+                        {
+                            "endpoint": "llama-3-8b-chat@aws-bedrock",
+                            "rationale": 'Explanation:\nThe user asked for the square root of 1009 to 1 decimal place. The assistant provided an answer that is correct to 1 decimal place, which is 32.1. However, the assistant did not provide any explanation or justification for the answer.\n\nFinal Rating: very_good\n\n{"assistant_rating": "very_good"}',
+                            "score": 0.8,
+                        }
+                    ],
+                },
+            ]
+        }
+    }
+    await _helper_test_list_evaluations(client, params, expected_scores)
+
+
+async def test_list_evaluation_rationale(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(dbsession)
+    params = {
+        "dataset": "test_dataset_eval",
+        "evaluator": "test_eval",
+        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "return_rationale": True,
+        "per_prompt": True,
+    }
+    expected_scores = {
+        "test_eval": {
+            "llama-3-8b-chat@aws-bedrock": [
+                {
+                    "prompt_id": 1,
+                    "evaluation": [
+                        {
+                            "endpoint": "llama-3-8b-chat@aws-bedrock",
+                            "rationale": 'Explanation:\nThe assistant correctly answers the user\'s question about the capital of Spain, providing the accurate information that the capital of Spain is Madrid.\n\nFinal Rating: excellent\n\n{"assistant_rating": "excellent"}',
+                            "score": 1.0,
+                        }
+                    ],
+                },
+                {
+                    "prompt_id": 2,
+                    "evaluation": [
+                        {
+                            "endpoint": "llama-3-8b-chat@aws-bedrock",
+                            "rationale": 'Explanation:\nThe user asked for the square root of 1009 to 1 decimal place. The assistant provided an answer that is correct to 1 decimal place, which is 32.1. However, the assistant did not provide any explanation or justification for the answer.\n\nFinal Rating: very_good\n\n{"assistant_rating": "very_good"}',
+                            "score": 0.8,
+                        }
+                    ],
+                },
+            ]
+        }
+    }
+    await _helper_test_list_evaluations(client, params, expected_scores)
+
+
+async def test_list_evaluation_responses(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(dbsession)
+    params = {
+        "dataset": "test_dataset_eval",
+        "evaluator": "test_eval",
+        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "return_response": True,
+        "per_prompt": True,
+    }
+    expected_scores = {
+        "test_eval": {
+            "llama-3-8b-chat@aws-bedrock": [
+                {
+                    "prompt_id": 1,
+                    "evaluation": [
+                        {
+                            "endpoint": "llama-3-8b-chat@aws-bedrock",
+                            "rationale": 'Explanation:\nThe assistant correctly answers the user\'s question about the capital of Spain, providing the accurate information that the capital of Spain is Madrid.\n\nFinal Rating: excellent\n\n{"assistant_rating": "excellent"}',
+                            "score": 1.0,
+                        }
+                    ],
+                },
+                {
+                    "prompt_id": 2,
+                    "evaluation": [
+                        {
+                            "endpoint": "llama-3-8b-chat@aws-bedrock",
+                            "rationale": 'Explanation:\nThe user asked for the square root of 1009 to 1 decimal place. The assistant provided an answer that is correct to 1 decimal place, which is 32.1. However, the assistant did not provide any explanation or justification for the answer.\n\nFinal Rating: very_good\n\n{"assistant_rating": "very_good"}',
+                            "score": 0.8,
+                        }
+                    ],
+                },
+            ]
+        }
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
 

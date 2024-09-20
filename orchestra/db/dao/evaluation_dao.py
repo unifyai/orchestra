@@ -1,9 +1,10 @@
+import json
 from typing import List, Optional
 
 from fastapi import Depends
-from sqlalchemy import Float, cast, delete, join, select
+from sqlalchemy import Float, cast, delete, join, select, and_
 from sqlalchemy.orm import Session
-from sqlalchemy.sql import func
+from sqlalchemy.sql import func, literal
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
@@ -12,6 +13,8 @@ from orchestra.db.models.orchestra_models import (
     Evaluation,
     Evaluator,
     StoredPrompt,
+    StoredPromptResponse,
+    Judgement,
 )
 
 
@@ -120,6 +123,62 @@ class EvaluationDAO:
             results.append(score)
 
         return results
+
+    def fetch_rationales(
+        self, prompt_ids, endpoint, evaluator, responses: bool, rationales: bool
+    ):
+        """given endpoint, evaluator, promptids, finds all responses, judgements from that"""
+        query = (
+            select(
+                StoredPromptResponse.prompt_id,
+                Evaluation.score,
+                StoredPromptResponse.response if responses else literal(None),
+                Judgement.judgement if rationales else literal(None),
+                Judgement.judge_endpoint_str if rationales else literal(None),
+            )
+            .select_from(StoredPromptResponse)
+            .join(Judgement, StoredPromptResponse.id == Judgement.response_id)
+            .join(Evaluator, Evaluator.id == Judgement.evaluator_id)
+            .join(
+                Evaluation,
+                and_(
+                    StoredPromptResponse.prompt_id == Evaluation.prompt_id,
+                    Evaluator.id == Evaluation.evaluator_id,
+                ),
+            )
+            .where(StoredPromptResponse.prompt_id.in_(prompt_ids))
+            .where(StoredPromptResponse.endpoint_str == endpoint)
+            .where(Evaluator.name == evaluator)
+            .where(Evaluation.endpoint_str == endpoint)
+        )
+
+        rows = self.session.execute(query)
+        # [prompt_id, response, judgement, judge_endpoint_str, judgement, score]
+        # {prompt_id: XXX , response: XXX , evaluation: [ {"endpoint": "judge_endpoint_str", rationale: XXX, score: XXX}, ] }
+
+        result_dict = {}
+
+        for row in rows:
+            prompt_id = row.prompt_id
+
+            if prompt_id not in result_dict:
+                result_dict[prompt_id] = {"id": prompt_id}
+                if responses:
+                    result_dict[prompt_id]["response"] = json.loads(row.response)[
+                        "choices"
+                    ][0]["message"]["content"]
+
+                result_dict[prompt_id]["evaluation"] = []
+
+            evaluation_entry = {"endpoint": row.judge_endpoint_str}
+            if rationales:
+                evaluation_entry["rationale"] = row.judgement
+
+            evaluation_entry["score"] = float(row.score)
+
+            result_dict[prompt_id]["evaluation"].append(evaluation_entry)
+        ret = list(result_dict.values())
+        return ret
 
     def get_evaluator_names(self, dataset_id: int, endpoint_str: str):
 

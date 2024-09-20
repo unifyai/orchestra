@@ -362,6 +362,25 @@ def get_grouped_evaluations(
     return scores
 
 
+def get_rationales(
+    dataset_prompts,
+    endpoint: str,
+    evaluator: str,
+    evaluation_dao: EvaluationDAO,
+    responses: bool,
+    rationales: bool,
+):
+    prompt_ids = [prompt["id"] for prompt in dataset_prompts]
+    rationales = evaluation_dao.fetch_rationales(
+        prompt_ids=prompt_ids,
+        endpoint=endpoint,
+        evaluator=evaluator,
+        responses=responses,
+        rationales=rationales,
+    )
+    return rationales
+
+
 @router.get("/evaluation")
 def get_evaluations(
     request_fastapi: Request,
@@ -395,6 +414,18 @@ def get_evaluations(
         "of the endpoint (ITL, TTFT, cost). By default set to `False`. ",
         example=False,
     ),
+    return_response: bool = Query(
+        default=False,
+        description="If `True`, returns the LLM response to the prompt. This argument requires `per_prompt=True`."
+        "By default set to `False`.",
+        example=False,
+    ),
+    return_rationale: bool = Query(
+        default=False,
+        description="If `True`, returns the reasoning behind the score. This argument requires `per_prompt=True`."
+        "By default set to `False`.",
+        example=False,
+    ),
     dataset_dao: DatasetDAO = Depends(),
     evaluator_dao: EvaluatorDAO = Depends(),
     evaluation_dao: EvaluationDAO = Depends(),
@@ -410,7 +441,16 @@ def get_evaluations(
     user_id = request_fastapi.state.user_id
     if not dataset_exists(dataset_dao, user_id, dataset):
         raise dataset_does_not_exist(dataset)
-
+    if return_rationale and not per_prompt:
+        raise HTTPException(
+            status_code=404,
+            detail="If return_rationale=True, need to also have per_prompt=True.",
+        )
+    if return_response and not per_prompt:
+        raise HTTPException(
+            status_code=404,
+            detail="If return_response=True, need to also have per_prompt=True.",
+        )
     if per_prompt:
         if not endpoint or not evaluator:
             raise HTTPException(
@@ -441,13 +481,27 @@ def get_evaluations(
         name=dataset,
     )
 
-    # TODO: This doesn't account for prompt
-    # variations / default prompts when per_prompt=True
-    eval_results = get_grouped_evaluations(
-        dataset_prompts=dataset_prompts_ids,
-        per_prompt=per_prompt,
-        evaluation_dao=evaluation_dao,
-    )
+    if return_rationale or return_response:
+        # grab rationales
+        rationales = get_rationales(
+            dataset_prompts=dataset_prompts_ids,
+            endpoint=endpoint,
+            evaluator=evaluator,
+            evaluation_dao=evaluation_dao,
+            responses=return_response,
+            rationales=return_rationale,
+        )
+        ret = {evaluator: {endpoint: rationales}}
+        print(ret)
+        return ret
+    else:
+        # TODO: This doesn't account for prompt
+        # variations / default prompts when per_prompt=True
+        eval_results = get_grouped_evaluations(
+            dataset_prompts=dataset_prompts_ids,
+            per_prompt=per_prompt,
+            evaluation_dao=evaluation_dao,
+        )
 
     latest_benchmarks = []
     if include_runtime:
