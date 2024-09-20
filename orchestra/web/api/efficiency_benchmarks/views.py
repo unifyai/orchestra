@@ -353,21 +353,22 @@ def get_benchmark(
                     regime="concurrent-1",
                     region=region,
                     seq_len=seq_len,
-                )[0],
+                ),
                 "endpoint": f'{endpoint["model"]}@{endpoint["provider"]}',
             }
             for endpoint in endpoints
         ]
         return [
             {
-                "ttft": result["benchmark"].ttft,
-                "itl": result["benchmark"].itl,
-                "input_cost": result["benchmark"].input_cost,
-                "output_cost": result["benchmark"].output_cost,
-                "measured_at": result["benchmark"].measured_at,
+                "ttft": result["benchmark"][0].ttft,
+                "itl": result["benchmark"][0].itl,
+                "input_cost": result["benchmark"][0].input_cost,
+                "output_cost": result["benchmark"][0].output_cost,
+                "measured_at": result["benchmark"][0].measured_at,
                 "endpoint": result["endpoint"],
             }
             for result in results
+            if len(result["benchmark"]) > 0
         ]
     elif not start_time_provided and end_time_provided:
         raise Exception(
