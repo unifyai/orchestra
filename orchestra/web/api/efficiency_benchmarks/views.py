@@ -37,11 +37,11 @@ def _get_endpoint_from_model_provider(
     endpoint_dao: EndpointDAO,
 ):
     # try:
-    endpoint_ids = endpoint_dao.get_endpoints_of(
+    endpoints = endpoint_dao.get_endpoints_of(
         models=(model,) if isinstance(model, str) else model,
         only_from=(provider,) if isinstance(provider, str) else provider,
     )
-    endpoint_ids = [endpoint_id[0][0].id for endpoint_id in endpoint_ids]
+    endpoint_ids = [endpoint[0].id for endpoint in endpoints]
     return endpoint_ids
 
 
