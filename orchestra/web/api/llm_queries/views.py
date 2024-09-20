@@ -182,25 +182,28 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 raise custom_api_key_not_found
 
         if using_router:
-            # parse router string
-            tmp = model.split("_", 1)
-            if len(tmp) == 1:
-                endpoint_id = get_router_endpoint_id(
-                    custom_router_dao,
-                    user_id=None,
-                    router_name="foundation_router",
-                )
+            if os.environ.get("ON_PREM"):
+                endpoint_id = 1
             else:
-                router_name = tmp[1]
-                try:
+                # parse router string
+                tmp = model.split("_", 1)
+                if len(tmp) == 1:
                     endpoint_id = get_router_endpoint_id(
                         custom_router_dao,
-                        user_id,
-                        router_name,
+                        user_id=None,
+                        router_name="foundation_router",
                     )
-                except:
-                    # TODO: add proper error message for this
-                    raise invalid_model_str
+                else:
+                    router_name = tmp[1]
+                    try:
+                        endpoint_id = get_router_endpoint_id(
+                            custom_router_dao,
+                            user_id,
+                            router_name,
+                        )
+                    except:
+                        # TODO: add proper error message for this
+                        raise invalid_model_str
 
         t0 = time.time()
 
