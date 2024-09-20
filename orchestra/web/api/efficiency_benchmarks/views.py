@@ -123,6 +123,7 @@ def _get_custom_endpoint_benchmark(
                     single_return[key] = None
                 else:
                     single_return[key] = rets[key][-1]
+            single_return["endpoint"] = model
             return [
                 single_return,
             ]
@@ -134,6 +135,7 @@ def _get_custom_endpoint_benchmark(
                     val[key] = None
                 else:
                     val[key] = rets[key][i]
+            val["endpoint"] = model
             returns.append(val)
         return returns
     except Exception as e:
