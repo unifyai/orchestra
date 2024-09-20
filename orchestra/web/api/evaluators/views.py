@@ -3,18 +3,30 @@ Includes endpoints related to evaluators.
 """
 
 import json
+import string
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.evaluator_dao import EvaluatorDAO
-from orchestra.web.api.evaluators.schema import EvaluatorConfig
+from orchestra.web.api.evaluators.schema import EvaluatorConfig, Prompt
 from orchestra.web.api.utils.http_responses import evaluator_not_found
 
 router = APIRouter()
 
 # utils
 
+
+template_no_ref = """
+{class_config}
+
+[start of user question]
+{user_prompt}
+[end of user quesstion]
+
+[start of assistant answer]
+{response}
+[end of assistant answer]"""
 
 # TODO: Move to utils (duplicated in routing)
 def is_standard_endpoint(model: str, provider: str):
@@ -88,14 +100,41 @@ def create_evaluator(
 
     judge_models = json.dumps(judge_models)
     # TODO: put these defaults somewhere sensible
-    system_prompt = request.system_prompt
-    if system_prompt is None:
-        system_prompt = """[System]
+    # system_prompt = request.system_prompt
+    judge_prompt = request.judge_prompt
+    if isinstance(judge_prompt, str):
+        judge_prompt = Prompt(messages=[{"role": "user", "content": judge_prompt}])
+    # if system_prompt is None:
+
+    if judge_prompt is None:
+        sys = """[System]
 Please act as an impartial judge and evaluate the quality of the response provided by an assistant to the user question displayed below.
 Your job is to evaluate how good the assistant's answer is.
 Your evaluation should consider correctness and helpfulness. Identify any mistakes.
 
 Be as objective as possible."""
+        judge_prompt = Prompt(
+            messages=[
+                {
+                    "role": "system",
+                    "content": sys,
+                },
+                {
+                    "role": "user",
+                    "content": template_no_ref,
+                },
+            ],
+        )
+
+    else:
+        judge_msg = judge_prompt.messages[-1]["content"]
+        formatter = string.Formatter()
+        placeholders = [i[1] for i in formatter.parse(judge_msg) if i[1] is not None]
+        if not set({"user_prompt", "response", "class_config"}).issubset(placeholders):
+            raise HTTPException(
+                status_code=400,
+                detail="placeholders `user_prompt`, `response` and `class_config` must be in your judge prompt.",
+            )
 
     class_config = request.class_config
     if class_config is None:
@@ -109,7 +148,7 @@ Be as objective as possible."""
     result = evaluator_dao.create(
         user_id=user_id,
         name=request.name,
-        system_prompt=system_prompt,
+        judge_prompt=judge_prompt.model_dump_json(),
         class_config=json.dumps(class_config),
         judge_models=judge_models,
         client_side=request.client_side,

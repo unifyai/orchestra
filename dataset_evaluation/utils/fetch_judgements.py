@@ -1,3 +1,4 @@
+import copy
 import json
 
 from utils.helpers import (
@@ -7,7 +8,6 @@ from utils.helpers import (
     load_prompt_variation,
     load_response,
 )
-from utils.judge_templates import template_with_ref
 from utils.parsing_judge import ratings_from_sample
 
 default_cfg = [
@@ -51,21 +51,20 @@ def format_q(prompt_data):
 
 
 def create_judge_prompt(prompt_data, eval_config):
-    system_prompt = eval_config.get("system_prompt", None)
+    judge_prompt = eval_config["judge_prompt"]
     class_cfg = eval_config.get("class_cfg", None)
-    if system_prompt:
-        instructions = system_prompt
-    else:
-        instructions = template_with_ref
-    if class_cfg:
-        judge_rubric = create_judge_rubric(class_cfg)
-    else:
-        judge_rubric = create_judge_rubric(default_cfg)
-    formatted_q = format_q(prompt_data)
 
-    final_prompt = instructions + judge_rubric + formatted_q
-
-    return final_prompt
+    judge_prompt = copy.deepcopy(judge_prompt)
+    judge_prompt["messages"][-1]["content"] = judge_prompt["messages"][-1][
+        "content"
+    ].format(
+        user_prompt=prompt_data["prompt"],
+        response=prompt_data["model_response"],
+        class_config=create_judge_rubric(class_cfg)
+        if class_cfg
+        else create_judge_rubric(default_cfg),
+    )
+    return judge_prompt
 
 
 async def calc_score(eval_config, judgement_str):
@@ -185,20 +184,22 @@ async def generate_judgement(
                 prompt = sys_prompt + prompt
             data = {}
             data["prompt"] = prompt
-            data["ref_answer"] = prompt_data["ref_answer"]
+            # data["ref_answer"] = prompt_data["ref_answer"]
             data["model_response"] = json.loads(response_data["response"])["choices"][
                 0
             ]["message"]["content"]
             judge_prompt = create_judge_prompt(data, eval_config)
-            messages = [
-                {"role": "user", "content": judge_prompt},
-            ]
-
             # get the response to the judge prompt
 
             # TODO: what if more than one judge
             judge_model = eval_config["judge_models"][0]
-            payload = {"model": judge_model, "messages": messages, "temperature": 0.3}
+            if isinstance(judge_prompt, str):
+                judge_prompt = {
+                    "messages": [
+                        {"role": "user", "content": judge_prompt},
+                    ],
+                }
+            payload = {"model": judge_model, **judge_prompt}
 
             url = f"/v0/chat/completions"
             headers = {"Authorization": f"Bearer {cfg.api_key}"}
@@ -224,5 +225,5 @@ async def generate_judgement(
             if db_upload_msg.status_code != 200:
                 raise Exception
             return (True, prompt_id, prompt_variation_id)
-    except:
+    except Exception as e:
         return (False, prompt_id, prompt_variation_id)
