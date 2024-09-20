@@ -511,7 +511,7 @@ def get_evaluations(
                 output_cost = lb["output_cost"] if on_prem else lb.output_cost
                 ttft = lb["ttft"] if on_prem else lb.ttft
                 itl = lb["itl"] if on_prem else lb.itl
-                if lb.endpoint_str in ret[_evaluator]:
+                if endpoint_str in ret[_evaluator]:
                     ret[_evaluator][endpoint_str]["itl"] = float(itl)
                     ret[_evaluator][endpoint_str]["ttft"] = float(ttft)
                     ret[_evaluator][endpoint_str]["input_cost"] = float(input_cost)
