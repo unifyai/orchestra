@@ -30,4 +30,14 @@ Do not output anything else after your final verdict, but make sure you do give 
 
 [The Start of Assistant's Answer]
 [[[MODEL_RESPONSE]]]
-[The End of Assistant's  Answer]"""
+[The End of Assistant's  Answer]
+
+{class_config}
+
+[start of user question]
+{user_prompt}
+[end of user quesstion]
+
+[start of assistant answer]
+{response}
+[end of assistant answer]"""
