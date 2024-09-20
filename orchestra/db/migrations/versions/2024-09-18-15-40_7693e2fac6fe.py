@@ -11,7 +11,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "7693e2fac6fe"
-down_revision = "6deeccc0faa5"
+down_revision = "f1131ce1eefb"
 branch_labels = None
 depends_on = None
 
@@ -34,10 +34,12 @@ def upgrade() -> None:
         ) t
         WHERE t.row_num > 1
     )
-    """
+    """,
     )
     op.create_unique_constraint(
-        "uq_dataset_prompt", "dataset_prompt", ["dataset_id", "prompt_id"]
+        "uq_dataset_prompt",
+        "dataset_prompt",
+        ["dataset_id", "prompt_id"],
     )
     op.execute(
         """
@@ -54,7 +56,7 @@ def upgrade() -> None:
         ) t
         WHERE t.row_num > 1
     )
-    """
+    """,
     )
 
     op.create_index(
@@ -62,8 +64,8 @@ def upgrade() -> None:
         "stored_prompt",
         [
             sa.text(
-                "hash_record_extended(row(user_id, system_msg, messages, prompt_kwargs), 0)"
-            )
+                "hash_record_extended(row(user_id, system_msg, messages, prompt_kwargs), 0)",
+            ),
         ],
         unique=True,
     )
