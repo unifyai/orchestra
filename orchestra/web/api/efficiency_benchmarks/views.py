@@ -374,7 +374,8 @@ def get_benchmark(
                 ],
             ),
         )
-    except:
+    except Exception as e:
+        raise e
         raise benchmark_not_found(f"{model}@{provider}")
 
 
