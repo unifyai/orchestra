@@ -1,14 +1,8 @@
-import asyncio
 import json
 import os
-import sys
 
 import pytest
-from google.cloud import storage
 from httpx import AsyncClient
-
-import orchestra
-
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 
@@ -25,10 +19,10 @@ async def test_create_eval(
     client: AsyncClient,
 ):
     eval_name = "test_eval_config"
-    system_prompt = "dummy system prompt"
+    system_prompt = "dummy system prompt {user_prompt} {response} {class_config}"
 
     url = "/v0/evaluator"
-    params = {"name": eval_name, "system_prompt": system_prompt}
+    params = {"name": eval_name, "judge_prompt": system_prompt}
     response = await client.post(url, json=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
@@ -39,7 +33,10 @@ async def test_create_eval(
     url = "/v0/evaluator"
     params = {"name": eval_name}
     response = await client.get(url, params=params, headers=HEADERS)
-    assert response.json()["system_prompt"] == system_prompt
+    assert (
+        json.loads(response.json()["judge_prompt"])["messages"][-1]["content"]
+        == system_prompt
+    )
 
 
 @pytest.mark.anyio
@@ -47,10 +44,10 @@ async def test_create_eval_duplicate(
     client: AsyncClient,
 ):
     eval_name = "test_eval_config"
-    system_prompt = "dummy system prompt"
+    system_prompt = "dummy system prompt {user_prompt} {response} {class_config}"
 
     url = "/v0/evaluator"
-    params = {"name": eval_name, "system_prompt": system_prompt}
+    params = {"name": eval_name, "judge_prompt": system_prompt}
 
     response = await client.post(url, json=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
