@@ -41,7 +41,14 @@ def _get_endpoint_from_model_provider(
         models=(model,) if isinstance(model, str) else model,
         only_from=(provider,) if isinstance(provider, str) else provider,
     )
-    endpoint_ids = [endpoint[0].id for endpoint in endpoints]
+    endpoint_ids = [
+        {
+            "id": endpoint[0].id,
+            "model": endpoint[0].model,
+            "provider": endpoint[0].provider,
+        }
+        for endpoint in endpoints
+    ]
     return endpoint_ids
 
 
@@ -333,28 +340,28 @@ def get_benchmark(
             raise HTTPException(response.status_code, json_response["detail"])
         return json_response
     # try:
-    endpoint_ids = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
+    endpoints = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
     if latest_only:
-        results = list(
-            chain.from_iterable(
-                [
-                    latest_benchmark_dao.get_latest_benchmarks(
-                        endpoint_id=endpoint_id,
-                        regime="concurrent-1",
-                        region=region,
-                        seq_len=seq_len,
-                    )
-                    for endpoint_id in endpoint_ids
-                ],
-            ),
-        )
+        results = [
+            {
+                "benchmark": latest_benchmark_dao.get_latest_benchmarks(
+                    endpoint_id=endpoint["id"],
+                    regime="concurrent-1",
+                    region=region,
+                    seq_len=seq_len,
+                )[0],
+                "endpoint": f'{endpoint["model"]}@{endpoint["provider"]}',
+            }
+            for endpoint in endpoints
+        ]
         return [
             {
-                "ttft": result.ttft,
-                "itl": result.itl,
-                "input_cost": result.input_cost,
-                "output_cost": result.output_cost,
-                "measured_at": result.measured_at,
+                "ttft": result["benchmark"].ttft,
+                "itl": result["benchmark"].itl,
+                "input_cost": result["benchmark"].input_cost,
+                "output_cost": result["benchmark"].output_cost,
+                "measured_at": result["benchmark"].measured_at,
+                "endpoint": result["endpoint"],
             }
             for result in results
         ]
@@ -367,15 +374,21 @@ def get_benchmark(
     return list(
         chain.from_iterable(
             [
-                benchmark_run_dao.benchmarks_between(
-                    endpoint_id=endpoint_id,
-                    start_time=start_time,
-                    end_time=end_time,
-                    regime="concurrent-1",
-                    region=region,
-                    seq_len=seq_len,
-                )
-                for endpoint_id in endpoint_ids
+                [
+                    {
+                        **benchmark,
+                        "endpoint": f'{endpoint["model"]}@{endpoint["provider"]}',
+                    }
+                    for benchmark in benchmark_run_dao.benchmarks_between(
+                        endpoint_id=endpoint["id"],
+                        start_time=start_time,
+                        end_time=end_time,
+                        regime="concurrent-1",
+                        region=region,
+                        seq_len=seq_len,
+                    )
+                ]
+                for endpoint in endpoints
             ],
         ),
     )
