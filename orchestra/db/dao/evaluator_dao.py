@@ -16,7 +16,7 @@ class EvaluatorDAO:
         self,
         user_id: str,
         name: str,
-        system_prompt: str,
+        judge_prompt: str,
         class_config: str,
         judge_models: str,
         client_side: bool,
@@ -26,7 +26,7 @@ class EvaluatorDAO:
                 Evaluator(
                     user_id=user_id,
                     name=name,
-                    system_prompt=system_prompt,
+                    judge_prompt=judge_prompt,
                     class_config=class_config,
                     judge_models=judge_models,
                     client_side=client_side,

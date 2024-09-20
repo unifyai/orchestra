@@ -151,6 +151,7 @@ async def fetch_evaluator_config(client, cfg):
     response = await client.get(url, headers=HEADERS, params=params)
     eval_cfg = response.json()
     eval_cfg["judge_models"] = json.loads(eval_cfg["judge_models"])
+    eval_cfg["judge_prompt"] = json.loads(eval_cfg["judge_prompt"])
     return eval_cfg
 
 

@@ -594,7 +594,7 @@ class Evaluator(Base):
         nullable=True,
     )
     name = sa.Column(sa.String(), nullable=False)
-    system_prompt = sa.Column(sa.String(), nullable=False)
+    judge_prompt = sa.Column(sa.String(), nullable=False)
     class_config = sa.Column(sa.String(), nullable=False)
     judge_models = sa.Column(sa.String(), nullable=False)
     client_side = sa.Column(sa.Boolean(), nullable=False)
