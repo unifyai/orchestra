@@ -335,15 +335,19 @@ def get_benchmark(
     # try:
     endpoint_ids = _get_endpoint_from_model_provider(model, provider, endpoint_dao)
     if latest_only:
-        results = [
-            latest_benchmark_dao.get_latest_benchmarks(
-                endpoint_id=endpoint_id,
-                regime="concurrent-1",
-                region=region,
-                seq_len=seq_len,
-            )[0]
-            for endpoint_id in endpoint_ids
-        ]
+        results = list(
+            chain.from_iterable(
+                [
+                    latest_benchmark_dao.get_latest_benchmarks(
+                        endpoint_id=endpoint_id,
+                        regime="concurrent-1",
+                        region=region,
+                        seq_len=seq_len,
+                    )
+                    for endpoint_id in endpoint_ids
+                ],
+            ),
+        )
         return [
             {
                 "ttft": result.ttft,
