@@ -97,13 +97,38 @@ async def test_trigger_eval(
 
     # create evaluator
     eval_name = "test_eval"
-    system_prompt = "dummy system prompt"
+    judge_prompt = {
+        "messages": [
+            {
+                "role": "system",
+                "content": """As a judge, rate the assistant's answer to the user prompt.""",
+            },
+            {
+                "role": "user",
+                "content": """
+    <user_prompt>
+    {user_prompt}
+    </user_prompt>
+
+    <assistant_response>
+    {response}
+    </assistant_respose>
+
+    follow these rating rules:
+    <rating rules>
+    {class_config}
+    </rating rules>""",
+            },
+        ],
+        "temperature": 0.7,
+    }
+
     judge_model = "llama-3-8b-chat@aws-bedrock"
 
     url = "/v0/evaluator"
     params = {
         "name": eval_name,
-        "system_prompt": system_prompt,
+        "judge_prompt": judge_prompt,
         "judge_models": judge_model,
     }
     response = await client.post(url, json=params, headers=HEADERS)
@@ -409,7 +434,7 @@ async def test_list_evaluation_endpoint(client: AsyncClient, dbsession):
             "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
         },
         "test_eval_2": {
-            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0}
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
         },
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
@@ -427,7 +452,7 @@ async def test_list_evaluation_evaluator(client: AsyncClient, dbsession):
         "test_eval": {
             "gpt-3.5-turbo@openai": {"score": 100.0, "progress": 100.0},
             "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
-        }
+        },
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
 
@@ -445,7 +470,7 @@ async def test_list_evaluation_all(client: AsyncClient, dbsession):
             "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
         },
         "test_eval_2": {
-            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0}
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
         },
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
@@ -471,7 +496,7 @@ async def test_delete_evaluation_endpoint_and_evaluator(client: AsyncClient, dbs
     )
     assert response.status_code == 200
     assert response.json() == {
-        "info": "Evaluation deleted successfully. You deleted 2 evaluations."
+        "info": "Evaluation deleted successfully. You deleted 2 evaluations.",
     }
 
     # check deleted
@@ -480,7 +505,7 @@ async def test_delete_evaluation_endpoint_and_evaluator(client: AsyncClient, dbs
             "gpt-3.5-turbo@openai": {"score": 100.0, "progress": 100.0},
         },
         "test_eval_2": {
-            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0}
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
         },
     }
     all_params = {"dataset": "test_dataset_eval"}
@@ -504,13 +529,13 @@ async def test_delete_no_endpoint(client: AsyncClient, dbsession):
     )
     assert response.status_code == 200
     assert response.json() == {
-        "info": "Evaluation deleted successfully. You deleted 4 evaluations."
+        "info": "Evaluation deleted successfully. You deleted 4 evaluations.",
     }
 
     # check deleted
     expected_scores = {
         "test_eval_2": {
-            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0}
+            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
         },
     }
     all_params = {"dataset": "test_dataset_eval"}
@@ -534,7 +559,7 @@ async def test_delete_no_evaluator(client: AsyncClient, dbsession):
     )
     assert response.status_code == 200
     assert response.json() == {
-        "info": "Evaluation deleted successfully. You deleted 4 evaluations."
+        "info": "Evaluation deleted successfully. You deleted 4 evaluations.",
     }
 
     # check deleted
@@ -563,7 +588,7 @@ async def test_delete_no_evaluator_no_endpoint(client: AsyncClient, dbsession):
     )
     assert response.status_code == 200
     assert response.json() == {
-        "info": "Evaluation deleted successfully. You deleted 6 evaluations."
+        "info": "Evaluation deleted successfully. You deleted 6 evaluations.",
     }
 
     # check deleted
@@ -586,7 +611,7 @@ async def test_delete_bad_evaluator(client: AsyncClient, dbsession):
     )
     assert response.status_code == 404
     assert response.json() == {
-        "detail": "The evaluator fake_evaluator does not exist in your account"
+        "detail": "The evaluator fake_evaluator does not exist in your account",
     }
 
 
