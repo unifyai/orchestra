@@ -43,15 +43,15 @@ def _get_endpoint_from_model_provider(
         only_from=(provider,) if isinstance(provider, str) else provider,
     )
     logging.info(f"endpoints {endpoints}")
-    endpoint_ids = [
+    endpoints = [
         {
             "id": endpoint[0].id,
-            "model": endpoint[0].model,
-            "provider": endpoint[0].provider,
+            "model": endpoint[1].mdl_code,
+            "provider": endpoint[2].name,
         }
         for endpoint in endpoints
     ]
-    return endpoint_ids
+    return endpoints
 
 
 # except:
