@@ -227,7 +227,7 @@ def append_to_benchmark(
 
 @router.get(
     "/benchmark",
-    response_model=List[Dict[str, Union[datetime, float, None]]],
+    response_model=List[Dict[str, Union[str, datetime, float, None]]],
     responses={
         200: {
             "description": "Successful Response",
