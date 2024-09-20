@@ -345,7 +345,7 @@ class Router:
                         endpoint,
                         request_fastapi,
                     )
-                    if isinstance(metrics, list):
+                    if isinstance(metrics, list) and len(metrics) > 0:
                         metrics = metrics[0]
                     else:
                         metrics = dict()
