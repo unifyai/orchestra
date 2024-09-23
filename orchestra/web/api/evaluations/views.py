@@ -78,12 +78,12 @@ def find_invalid_endpoints(endpoints):
 
 
 def send_to_dataset_evaluation_server(action, **data):
-    topic = "projects/gcp-project-saas/topics/dataset_evaluation"
-    url = (
-        "https://api.unify.ai"
-        if not os.environ.get("ON_PREM")
-        else os.environ.get("ORCHESTRA_URL")
+    topic = "projects/gcp-project-saas/topics/" + os.environ.get(
+        "PUBSUB_MESSAGING_TOPIC",
+        "dataset_evaluation",
     )
+    on_prem = os.environ.get("ON_PREM")
+    url = "https://api.unify.ai" if not on_prem else os.environ.get("ORCHESTRA_URL")
     if os.getenv("STAGING"):
         topic = "projects/gcp-project-saas/topics/staging_dataset_evaluation"
         url = "https://service.a.run.app"
@@ -94,7 +94,7 @@ def send_to_dataset_evaluation_server(action, **data):
         "orchestra_url": url,
         "admin_key": os.environ.get("ORCHESTRA_ADMIN_KEY"),
     }
-    if os.environ.get("ON_PREM"):
+    if on_prem and not os.environ.get("PUBSUB_MESSAGING_TOPIC"):
         on_prem.send_pubsub_msg(topic, msg)
     else:
         gcp.send_pubsub_msg(topic, msg)
