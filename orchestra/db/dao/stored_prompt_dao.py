@@ -53,3 +53,9 @@ class StoredPromptDAO:
             query = query.where(StoredPrompt.messages == messages)
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())
+
+    def check_ids_valid(self, user_id, prompt_ids):
+        subquery = select(StoredPrompt).where(StoredPrompt.user_id == user_id)
+        invalid_ids_query = select(prompt_ids).where(not_(prompt_ids.in_(subquery)))
+        invalid_ids = session.execute(invalid_ids_query).scalars().all()
+        return invalid_ids

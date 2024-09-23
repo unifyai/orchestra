@@ -146,7 +146,7 @@ async def test_trigger_eval(
     endpoint = "gpt-3.5-turbo@openai"
     params = {
         "url": url,
-        "dataset": dataset,
+        "prompts": dataset,
         "endpoint": endpoint,
         "evaluator": eval_name,
     }
@@ -157,7 +157,7 @@ async def test_trigger_eval(
     endpoint = "llama-3-8b-chat@aws-bedrock"
     params = {
         "url": url,
-        "dataset": dataset,
+        "prompts": dataset,
         "endpoint": endpoint,
         "evaluator": eval_name,
     }
@@ -166,7 +166,7 @@ async def test_trigger_eval(
     ############################
 
     url = "/v0/evaluation"
-    params = {"dataset": dataset, "evaluator": eval_name}
+    params = {"prompts": dataset, "evaluator": eval_name}
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     scores = response.json()
@@ -178,7 +178,7 @@ async def test_trigger_eval(
     # per prompt
     url = "/v0/evaluation"
     params = {
-        "dataset": dataset,
+        "prompts": dataset,
         "evaluator": eval_name,
         "endpoint": endpoint,
         "per_prompt": True,
@@ -262,7 +262,7 @@ async def test_trigger_eval_with_default_prompt(
     endpoint = "gpt-3.5-turbo@openai"
     params = {
         "url": url,
-        "dataset": dataset,
+        "prompts": dataset,
         "endpoint": endpoint,
         "evaluator": eval_name,
         "default_prompt": default_prompt_name,
@@ -274,7 +274,7 @@ async def test_trigger_eval_with_default_prompt(
     endpoint = "llama-3-8b-chat@aws-bedrock"
     params = {
         "url": url,
-        "dataset": dataset,
+        "prompts": dataset,
         "endpoint": endpoint,
         "evaluator": eval_name,
         "default_prompt": default_prompt_name,
@@ -285,7 +285,7 @@ async def test_trigger_eval_with_default_prompt(
 
     url = "/v0/evaluation"
     params = {
-        "dataset": dataset,
+        "prompts": dataset,
         "evaluator": eval_name,
         "default_prompt": default_prompt_name,
     }
@@ -300,7 +300,7 @@ async def test_trigger_eval_with_default_prompt(
     # per prompt
     url = "/v0/evaluation"
     params = {
-        "dataset": dataset,
+        "prompts": dataset,
         "evaluator": eval_name,
         "endpoint": endpoint,
         "per_prompt": True,
@@ -348,7 +348,7 @@ async def test_client_side_scores(
 
     params = {
         "url": url,
-        "dataset": dataset,
+        "prompts": dataset,
         "endpoint": endpoint,
         "evaluator": eval_name,
     }
