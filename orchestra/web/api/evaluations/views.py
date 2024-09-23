@@ -237,8 +237,26 @@ def trigger_evaluation(
             lines = file.decode().split("\n")
             lines = [json.loads(l) for l in lines if l != ""]
             for ix, line in enumerate(lines):
-                if set(line.keys()) != set(["prompt_id", "score"]):
-                    raise HTTPException(status_code=400, detail=f"Error in line {ix}")
+                _expected_keys = set(["prompt_id", "score"])
+                _found_keys = set(line.keys())
+                _optional_keys = set(["rationale"])
+                if _found_keys.intersection(optional_keys):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Error in line {ix}: rationale not currently supported in client side evaluations.",
+                    )
+                if _missing := _expected_keys.difference(found_keys):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Error in line {ix}: missing: {', '.join(_missing)}",
+                    )
+                if _extra := _found_keys.difference(
+                    _expected_keys.union(_optional_keys)
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Error in line {ix}: extra key: {', '.join(_extra)}. Only allowed keys: {', '.join(_expected_keys.union(_optional_keys))}",
+                    )
         except:
             raise HTTPException(
                 status_code=400,
@@ -265,12 +283,14 @@ def trigger_evaluation(
                     status_code=400,
                     detail=f"Error with score from prompt_id: {prompt_id}, score: {score}",
                 )
+            rationale = l.get("rationale", None)
             evaluation_dao.create(
                 prompt_id=prompt_id,
                 prompt_variation_id=None,
                 evaluator_id=evaluator_id,
                 endpoint_str=endpoint,
                 score=score,
+                rationale=rationale,
             )
         return {"info": "Evaluation uploaded!"}
 
