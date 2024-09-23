@@ -49,7 +49,7 @@ supported_models = {
         "cost": {"prompt": 2, "completion": 6},
     },
     "mistral-nemo": {
-        "endpoint": "mistral/open-mistral-nemo-latest",
+        "endpoint": "mistral/open-mistral-nemo-2407",
         "context_window": 128000,
         "cost": {"prompt": 0.15, "completion": 0.15},
     },
