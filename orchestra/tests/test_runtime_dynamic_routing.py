@@ -145,8 +145,8 @@ def test_no_models_within_threshold(dbsession) -> str:  # type: ignore[return]
     with pytest.raises(HTTPException) as err:
         Router(
             "llama-3.1-8b-chat@itl<1|itl<20",
-            endpoint_dao,
             "",
+            endpoint_dao,
             benchmark_run_dao,
         )()
     assert err.value.status_code == provider_not_found_under_conditions.status_code
