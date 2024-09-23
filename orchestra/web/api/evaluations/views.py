@@ -79,7 +79,7 @@ def find_invalid_endpoints(endpoints):
 
 def send_to_dataset_evaluation_server(action, **data):
     topic = "projects/saas-368716/topics/" + os.environ.get(
-        "MESSAGING_TOPIC",
+        "PUBSUB_MESSAGING_TOPIC",
         "dataset_evaluation",
     )
     on_prem = os.environ.get("ON_PREM")
@@ -94,7 +94,7 @@ def send_to_dataset_evaluation_server(action, **data):
         "orchestra_url": url,
         "admin_key": os.environ.get("ORCHESTRA_ADMIN_KEY"),
     }
-    if on_prem and not os.environ.get("MESSAGING_TOPIC"):
+    if on_prem and not os.environ.get("PUBSUB_MESSAGING_TOPIC"):
         on_prem.send_pubsub_msg(topic, msg)
     else:
         gcp.send_pubsub_msg(topic, msg)
