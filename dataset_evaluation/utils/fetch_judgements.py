@@ -60,14 +60,16 @@ def create_judge_prompt(prompt_data, eval_config):
     ].format(
         user_prompt=prompt_data["prompt"],
         response=prompt_data["model_response"],
-        class_config=create_judge_rubric(class_cfg)
-        if class_cfg
-        else create_judge_rubric(default_cfg),
+        class_config=(
+            create_judge_rubric(class_cfg)
+            if class_cfg
+            else create_judge_rubric(default_cfg)
+        ),
     )
     return judge_prompt
 
 
-async def calc_score(eval_config, judgement_str):
+def calc_score(eval_config, judgement_str):
     score = ratings_from_sample(
         sample=judgement_str,
         cfg=json.loads(eval_config.get("class_config", None)),
@@ -75,14 +77,14 @@ async def calc_score(eval_config, judgement_str):
     return score
 
 
-async def send_judgement_to_db(
+async def send_judgements_to_db(
     prompt_id,
     prompt_variation_id,
     endpoint_str,
-    judge_str,
+    judge_model_list,
+    judgement_list,
     admin_key,
     client,
-    judgement,
     cfg,
     eval_config,
 ):
@@ -92,21 +94,24 @@ async def send_judgement_to_db(
         "Authorization": f"Bearer {admin_key}",
         "Content-Type": "application/json",
     }
-    judgement_str = judgement["choices"][0]["message"]["content"]
-    score = await calc_score(eval_config, judgement_str)
+    judgement_list = [j["choices"][0]["message"]["content"] for j in judgement_list]
+    judgement_scores = [calc_score(eval_config, j_str) for j_str in judgement_list]
     params = {
         "prompt_id": prompt_id,
         "endpoint_str": endpoint_str,
         "evaluator_id": cfg.evaluator_id,
-        "judge_endpoint_str": judge_str,
-        "judgement": judgement_str,
-        "score": score,
+    }
+
+    body = {
+        "judge_model_list": judge_model_list,
+        "judgement_list": judgement_list,
+        "judgement_scores": judgement_scores,
     }
 
     if prompt_variation_id:
-        params["prompt_variation_id"] = prompt_variation_id
+        params["prompt_variation_id"] = prompt_variation_id 
 
-    response = await client.post(url, headers=HEADERS, params=params)
+    response = await client.post(url, headers=HEADERS, params=params, json=body)
     return response
 
 
@@ -131,16 +136,17 @@ async def generate_judgement(
                 prompt_variation_id = response[0]["id"]
 
             # check we haven't already generated this one
-            judgement = await load_judgement(
-                prompt_id=prompt_id,
-                prompt_variation_id=prompt_variation_id,
-                endpoint_str=endpoint_str,
-                evaluator_id=cfg.evaluator_id,
-                admin_key=cfg.admin_key,
-                client=client,
-            )
-            if judgement:
-                return (True, prompt_id, prompt_variation_id)
+            # TODO: cache the jury stuff properly
+            # judgement = await load_judgement(
+            #     prompt_id=prompt_id,
+            #     prompt_variation_id=prompt_variation_id,
+            #     endpoint_str=endpoint_str,
+            #     evaluator_id=cfg.evaluator_id,
+            #     admin_key=cfg.admin_key,
+            #     client=client,
+            # )
+            # if judgement:
+            #     return (True, prompt_id, prompt_variation_id)
 
             # get the prompt from the db
             prompt_data = await load_prompt(
@@ -184,46 +190,52 @@ async def generate_judgement(
                 prompt = sys_prompt + prompt
             data = {}
             data["prompt"] = prompt
-            # data["ref_answer"] = prompt_data["ref_answer"]
             data["model_response"] = json.loads(response_data["response"])["choices"][
                 0
             ]["message"]["content"]
             judge_prompt = create_judge_prompt(data, eval_config)
             # get the response to the judge prompt
 
-            # TODO: what if more than one judge
-            judge_model = eval_config["judge_models"][0]
-            if isinstance(judge_prompt, str):
-                judge_prompt = {
-                    "messages": [
-                        {"role": "user", "content": judge_prompt},
-                    ],
-                }
-            payload = {"model": judge_model, **judge_prompt}
+            judge_to_responses = {}
+            for judge_model in eval_config["judge_models"]:
+                if isinstance(judge_prompt, str):
+                    judge_prompt = {
+                        "messages": [
+                            {"role": "user", "content": judge_prompt},
+                        ],
+                    }
+                payload = {"model": judge_model, **judge_prompt}
 
-            url = f"/v0/chat/completions"
-            headers = {"Authorization": f"Bearer {cfg.api_key}"}
-            response = await get_llm_response(
-                payload=payload,
-                url=url,
-                headers=headers,
-                client=client,
-            )
+                url = f"/v0/chat/completions"
+                headers = {"Authorization": f"Bearer {cfg.api_key}"}
+                response = await get_llm_response(
+                    payload=payload,
+                    url=url,
+                    headers=headers,
+                    client=client,
+                )
+                judge_to_responses[judge_model] = response
 
             # log it in the db
-            db_upload_msg = await send_judgement_to_db(
+            judge_model_list = list(judge_to_responses.keys())
+            responses_list = list(judge_to_responses.values())
+
+            db_upload_msg = await send_judgements_to_db(
                 prompt_id=prompt_id,
                 prompt_variation_id=prompt_variation_id,
                 endpoint_str=endpoint_str,
-                judge_str=judge_model,
+                judge_model_list=judge_model_list,
+                judgement_list=responses_list,
                 admin_key=cfg.admin_key,
                 client=client,
-                judgement=response,
                 cfg=cfg,
                 eval_config=eval_config,
             )
             if db_upload_msg.status_code != 200:
+                print(db_upload_msg.text)
                 raise Exception
+
             return (True, prompt_id, prompt_variation_id)
     except Exception as e:
+        print(e)
         return (False, prompt_id, prompt_variation_id)

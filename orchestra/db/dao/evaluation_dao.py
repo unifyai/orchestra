@@ -125,7 +125,13 @@ class EvaluationDAO:
         return results
 
     def fetch_rationales(
-        self, prompt_ids, endpoint, evaluator, responses: bool, rationales: bool
+        self,
+        prompt_ids,
+        endpoint,
+        evaluator,
+        responses: bool,
+        rationales: bool,
+        num_judges: int,
     ):
         """given endpoint, evaluator, promptids, finds all responses, judgements from that"""
         query = (
@@ -135,6 +141,7 @@ class EvaluationDAO:
                 StoredPromptResponse.response if responses else literal(None),
                 Judgement.judgement if rationales else literal(None),
                 Judgement.judge_endpoint_str if rationales else literal(None),
+                Judgement.judgement_score if rationales else literal(None),
             )
             .select_from(StoredPromptResponse)
             .join(Judgement, StoredPromptResponse.id == Judgement.response_id)
@@ -153,8 +160,6 @@ class EvaluationDAO:
         )
 
         rows = self.session.execute(query)
-        # [prompt_id, response, judgement, judge_endpoint_str, judgement, score]
-        # {prompt_id: XXX , response: XXX , evaluation: [ {"endpoint": "judge_endpoint_str", rationale: XXX, score: XXX}, ] }
 
         result_dict = {}
 
@@ -167,17 +172,29 @@ class EvaluationDAO:
                     result_dict[prompt_id]["response"] = json.loads(row.response)[
                         "choices"
                     ][0]["message"]["content"]
+                result_dict[prompt_id]["score"] = float(row.score)
+                if rationales:
+                    result_dict[prompt_id]["evaluation"] = []
 
-                result_dict[prompt_id]["evaluation"] = []
-
-            evaluation_entry = {"endpoint": row.judge_endpoint_str}
             if rationales:
+                evaluation_entry = {"endpoint": row.judge_endpoint_str}
                 evaluation_entry["rationale"] = row.judgement
+                evaluation_entry["rationale_score"] = float(row.judgement_score)
 
-            evaluation_entry["score"] = float(row.score)
-
-            result_dict[prompt_id]["evaluation"].append(evaluation_entry)
-        ret = list(result_dict.values())
+                result_dict[prompt_id]["evaluation"].append(evaluation_entry)
+        per_prompt_data = list(result_dict.values())
+        mean_score = sum(er["score"] for er in per_prompt_data) / len(per_prompt_data)
+        if rationales:
+            progress = sum(len(er["evaluation"]) for er in per_prompt_data) / (
+                num_judges * len(prompt_ids)
+            )
+        else:
+            progress = len(per_prompt_data) / len(prompt_ids)
+        ret = {
+            "score": 100 * mean_score,
+            "progress": 100 * progress,
+            "per_prompt": per_prompt_data,
+        }
         return ret
 
     def get_evaluator_names(self, dataset_id: int, endpoint_str: str):

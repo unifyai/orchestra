@@ -6,7 +6,16 @@ import json
 import os
 from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    Body,
+)
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.dataset_dao import DatasetDAO
@@ -369,6 +378,7 @@ def get_rationales(
     evaluation_dao: EvaluationDAO,
     responses: bool,
     rationales: bool,
+    num_judges: int,
 ):
     prompt_ids = [prompt["id"] for prompt in dataset_prompts]
     rationales = evaluation_dao.fetch_rationales(
@@ -377,6 +387,7 @@ def get_rationales(
         evaluator=evaluator,
         responses=responses,
         rationales=rationales,
+        num_judges=num_judges,
     )
     return rationales
 
@@ -471,9 +482,6 @@ def get_evaluations(
                 detail=f"Could not find endpoint: {'.'.join(invalid_endpoints)}",
             )
 
-    # multiple judges
-    # exception handling
-
     ret = {}
 
     dataset_prompts_ids = dataset_dao.fetch_prompts_ids_in_dataset(
@@ -482,7 +490,7 @@ def get_evaluations(
     )
 
     if return_rationale or return_response:
-        # grab rationales
+        num_judges = len(json.loads(raw_evaluators[0].judge_models))
         rationales = get_rationales(
             dataset_prompts=dataset_prompts_ids,
             endpoint=endpoint,
@@ -490,9 +498,9 @@ def get_evaluations(
             evaluation_dao=evaluation_dao,
             responses=return_response,
             rationales=return_rationale,
+            num_judges=num_judges,
         )
         ret = {evaluator: {endpoint: rationales}}
-        print(ret)
         return ret
     else:
         # TODO: This doesn't account for prompt
@@ -663,14 +671,16 @@ def upload_judgements(
     prompt_id: int,
     endpoint_str: str,
     evaluator_id: str,
-    judge_endpoint_str: str,
-    judgement: str,
-    score: str,
+    judge_model_list: list = Body(),
+    judgement_list: list = Body(),
+    judgement_scores: list = Body(),
     prompt_variation_id: Optional[int] = None,
     stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
     judgement_dao: JudgementDAO = Depends(),
+    evaluator_dao: EvaluatorDAO = Depends(),
     evaluation_dao: EvaluationDAO = Depends(),
 ):
+
     try:
         raw_ids = stored_prompt_response_dao.filter(
             prompt_id=prompt_id,
@@ -681,18 +691,25 @@ def upload_judgements(
     except Exception as e:
         raise e
 
-    judgement_dao.create(
-        response_id=response_id,
-        judge_endpoint_str=judge_endpoint_str,
-        evaluator_id=evaluator_id,
-        judgement=judgement,
-    )
+    for judge_model, judgement, score in zip(
+        judge_model_list, judgement_list, judgement_scores
+    ):
+        judgement_dao.create(
+            response_id=response_id,
+            judge_endpoint_str=judge_model,
+            evaluator_id=evaluator_id,
+            judgement=judgement,
+            judgement_score=score,
+        )
+
+    mean_score = sum(judgement_scores) / len(judgement_scores)
+
     evaluation_dao.create(
         prompt_id=prompt_id,
         prompt_variation_id=prompt_variation_id,
         evaluator_id=evaluator_id,
         endpoint_str=endpoint_str,
-        score=score,
+        score=mean_score,
     )
 
 

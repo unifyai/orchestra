@@ -123,28 +123,48 @@ async def test_create_data_trigger_eval(
 
     # create evaluator
     eval_name = "test_eval"
-    system_prompt = "dummy system prompt"
+    judge_prompt = {
+        "messages": [
+            {
+                "role": "system",
+                "content": """As a judge, rate the assistant's answer to the user prompt.""",
+            },
+            {
+                "role": "user",
+                "content": """
+    <user_prompt>
+    {user_prompt}
+    </user_prompt>
+
+    <assistant_response>
+    {response}
+    </assistant_respose>
+
+    follow these rating rules:
+    <rating rules>
+    {class_config}
+    </rating rules>""",
+            },
+        ],
+        "temperature": 0.7,
+    }
     judge_model = "llama-3-8b-chat@aws-bedrock"
 
     url = "/v0/evaluator"
     params = {
         "name": eval_name,
-        "system_prompt": system_prompt,
+        "judge_prompt": judge_prompt,
         "judge_models": judge_model,
     }
     response = await client.post(url, json=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
-    # create evaluator
-    eval_name = "test_eval_2"
-    system_prompt = "dummy system prompt"
-    judge_model = "llama-3-8b-chat@aws-bedrock"
 
     url = "/v0/evaluator"
     params = {
-        "name": eval_name,
-        "system_prompt": system_prompt,
-        "judge_models": judge_model,
+        "name": "test_eval_multi_judge",
+        "judge_prompt": judge_prompt,
+        "judge_models": ["llama-3-8b-chat@aws-bedrock", "gpt-3.5-turbo@openai"],
     }
     response = await client.post(url, json=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
@@ -152,7 +172,7 @@ async def test_create_data_trigger_eval(
     # create second
     # create dataset
 
-    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws.jsonl"
     dataset = "test_dataset_eval"
     response = await upload_dataset(client, file_path, dataset)
     assert response.status_code == 200, response.json()
@@ -186,12 +206,33 @@ async def test_create_data_trigger_eval(
         "url": url,
         "dataset": dataset,
         "endpoint": endpoint,
-        "evaluator": "test_eval_2",
+        "evaluator": "test_eval_multi_judge",
     }
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
     ############################
+
+    url = "/v0/evaluation"
+    params = {"dataset": dataset, "evaluator": eval_name}
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    scores = response.json()
+    assert eval_name in scores
+    assert endpoint in scores[eval_name]
+    assert "score" in scores[eval_name][endpoint]
+    assert "progress" in scores[eval_name][endpoint]
+
+    url = "/v0/evaluation"
+    params = {"dataset": dataset, "evaluator": eval_name}
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    scores = response.json()
+    assert eval_name in scores
+    assert endpoint in scores[eval_name]
+    assert "score" in scores[eval_name][endpoint]
+    assert "progress" in scores[eval_name][endpoint]
+
 
     url = "/v0/evaluation"
     params = {"dataset": dataset, "evaluator": eval_name}

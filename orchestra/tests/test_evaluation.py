@@ -517,38 +517,54 @@ async def test_list_evaluation_rationale_response(client: AsyncClient, dbsession
     await _seed_evaluations_db(dbsession)
     params = {
         "dataset": "test_dataset_eval",
-        "evaluator": "test_eval",
+        "evaluator": "test_eval_multi_judge",
         "endpoint": "llama-3-8b-chat@aws-bedrock",
         "return_rationale": True,
         "return_response": True,
         "per_prompt": True,
     }
     expected_scores = {
-        "test_eval": {
-            "llama-3-8b-chat@aws-bedrock": [
-                {
-                    "prompt_id": 1,
-                    "response": "The capital of Spain is Madrid.",
-                    "evaluation": [
-                        {
-                            "endpoint": "llama-3-8b-chat@aws-bedrock",
-                            "rationale": 'Explanation:\nThe assistant correctly answers the user\'s question about the capital of Spain, providing the accurate information that the capital of Spain is Madrid.\n\nFinal Rating: excellent\n\n{"assistant_rating": "excellent"}',
-                            "score": 1.0,
-                        }
-                    ],
-                },
-                {
-                    "prompt_id": 2,
-                    "response": "The square root of 1009 to 1 decimal place is 32.1.",
-                    "evaluation": [
-                        {
-                            "endpoint": "llama-3-8b-chat@aws-bedrock",
-                            "rationale": 'Explanation:\nThe user asked for the square root of 1009 to 1 decimal place. The assistant provided an answer that is correct to 1 decimal place, which is 32.1. However, the assistant did not provide any explanation or justification for the answer.\n\nFinal Rating: very_good\n\n{"assistant_rating": "very_good"}',
-                            "score": 0.8,
-                        }
-                    ],
-                },
-            ]
+        "test_eval_multi_judge": {
+            "llama-3-8b-chat@aws-bedrock": {
+                "score": 50.0,
+                "progress": 100.0,
+                "per_prompt": [
+                    {
+                        "id": 1,
+                        "response": "The capital of Spain is Madrid.",
+                        "score": 0.75,
+                        "evaluation": [
+                            {
+                                "endpoint": "llama-3-8b-chat@aws-bedrock",
+                                "rationale": '<explanation>\nThe assistant\'s response is a straightforward and accurate answer to the user\'s question. The capital of Spain is indeed Madrid. The answer is clear, concise, and easy to understand. However, the response lacks any additional information or context that might be helpful to the user. Nevertheless, the answer is correct and relevant to the question.\n\nFinal rating: good\n\n{"assistant_rating": "good"}',
+                                "rationale_score": 0.5,
+                            },
+                            {
+                                "endpoint": "gpt-3.5-turbo@openai",
+                                "rationale": 'The assistant\'s answer is correct and directly addresses the user prompt by providing the capital of Spain, which is Madrid. The response is clear and on point.\n\n{"assistant_rating": "excellent"}',
+                                "rationale_score": 1.0,
+                            },
+                        ],
+                    },
+                    {
+                        "id": 2,
+                        "response": "The square root of 1009 to 1 decimal place is 32.1.",
+                        "score": 0.25,
+                        "evaluation": [
+                            {
+                                "endpoint": "llama-3-8b-chat@aws-bedrock",
+                                "rationale": 'The square root of 1009 to 1 decimal place is indeed approximately 32.1. However, the assistant\'s response lacks a clear explanation or justification for the calculation. A simple "because I said so" or "because it\'s correct" is not sufficient.\n\nThe assistant\'s response is straightforward and provides the correct answer, but it does not demonstrate an understanding of the underlying mathematical concept or provide any additional context. A good answer should not only provide the correct answer but also explain the reasoning or process used to arrive at that answer.\n\nBased on the rating rules, I would rate the assistant\'s answer as "good".\n\n{"assistant_rating": "good"}',
+                                "rationale_score": 0.5,
+                            },
+                            {
+                                "endpoint": "gpt-3.5-turbo@openai",
+                                "rationale": 'The square root of 1009 to 1 decimal place is actually approximately 31.8, not 32.1. The assistant\'s answer is incorrect. Therefore, I would rate this response as "bad".\n\n{"assistant_rating": "bad"}',
+                                "rationale_score": 0.0,
+                            },
+                        ],
+                    },
+                ],
+            }
         }
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
@@ -558,35 +574,51 @@ async def test_list_evaluation_rationale(client: AsyncClient, dbsession):
     await _seed_evaluations_db(dbsession)
     params = {
         "dataset": "test_dataset_eval",
-        "evaluator": "test_eval",
+        "evaluator": "test_eval_multi_judge",
         "endpoint": "llama-3-8b-chat@aws-bedrock",
         "return_rationale": True,
         "per_prompt": True,
     }
     expected_scores = {
-        "test_eval": {
-            "llama-3-8b-chat@aws-bedrock": [
-                {
-                    "prompt_id": 1,
-                    "evaluation": [
-                        {
-                            "endpoint": "llama-3-8b-chat@aws-bedrock",
-                            "rationale": 'Explanation:\nThe assistant correctly answers the user\'s question about the capital of Spain, providing the accurate information that the capital of Spain is Madrid.\n\nFinal Rating: excellent\n\n{"assistant_rating": "excellent"}',
-                            "score": 1.0,
-                        }
-                    ],
-                },
-                {
-                    "prompt_id": 2,
-                    "evaluation": [
-                        {
-                            "endpoint": "llama-3-8b-chat@aws-bedrock",
-                            "rationale": 'Explanation:\nThe user asked for the square root of 1009 to 1 decimal place. The assistant provided an answer that is correct to 1 decimal place, which is 32.1. However, the assistant did not provide any explanation or justification for the answer.\n\nFinal Rating: very_good\n\n{"assistant_rating": "very_good"}',
-                            "score": 0.8,
-                        }
-                    ],
-                },
-            ]
+        "test_eval_multi_judge": {
+            "llama-3-8b-chat@aws-bedrock": {
+                "score": 50.0,
+                "progress": 100.0,
+                "per_prompt": [
+                    {
+                        "id": 1,
+                        "score": 0.75,
+                        "evaluation": [
+                            {
+                                "endpoint": "llama-3-8b-chat@aws-bedrock",
+                                "rationale": '<explanation>\nThe assistant\'s response is a straightforward and accurate answer to the user\'s question. The capital of Spain is indeed Madrid. The answer is clear, concise, and easy to understand. However, the response lacks any additional information or context that might be helpful to the user. Nevertheless, the answer is correct and relevant to the question.\n\nFinal rating: good\n\n{"assistant_rating": "good"}',
+                                "rationale_score": 0.5,
+                            },
+                            {
+                                "endpoint": "gpt-3.5-turbo@openai",
+                                "rationale": 'The assistant\'s answer is correct and directly addresses the user prompt by providing the capital of Spain, which is Madrid. The response is clear and on point.\n\n{"assistant_rating": "excellent"}',
+                                "rationale_score": 1.0,
+                            },
+                        ],
+                    },
+                    {
+                        "id": 2,
+                        "score": 0.25,
+                        "evaluation": [
+                            {
+                                "endpoint": "llama-3-8b-chat@aws-bedrock",
+                                "rationale": 'The square root of 1009 to 1 decimal place is indeed approximately 32.1. However, the assistant\'s response lacks a clear explanation or justification for the calculation. A simple "because I said so" or "because it\'s correct" is not sufficient.\n\nThe assistant\'s response is straightforward and provides the correct answer, but it does not demonstrate an understanding of the underlying mathematical concept or provide any additional context. A good answer should not only provide the correct answer but also explain the reasoning or process used to arrive at that answer.\n\nBased on the rating rules, I would rate the assistant\'s answer as "good".\n\n{"assistant_rating": "good"}',
+                                "rationale_score": 0.5,
+                            },
+                            {
+                                "endpoint": "gpt-3.5-turbo@openai",
+                                "rationale": 'The square root of 1009 to 1 decimal place is actually approximately 31.8, not 32.1. The assistant\'s answer is incorrect. Therefore, I would rate this response as "bad".\n\n{"assistant_rating": "bad"}',
+                                "rationale_score": 0.0,
+                            },
+                        ],
+                    },
+                ],
+            }
         }
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
@@ -596,35 +628,29 @@ async def test_list_evaluation_responses(client: AsyncClient, dbsession):
     await _seed_evaluations_db(dbsession)
     params = {
         "dataset": "test_dataset_eval",
-        "evaluator": "test_eval",
+        "evaluator": "test_eval_multi_judge",
         "endpoint": "llama-3-8b-chat@aws-bedrock",
         "return_response": True,
         "per_prompt": True,
     }
     expected_scores = {
-        "test_eval": {
-            "llama-3-8b-chat@aws-bedrock": [
-                {
-                    "prompt_id": 1,
-                    "evaluation": [
-                        {
-                            "endpoint": "llama-3-8b-chat@aws-bedrock",
-                            "rationale": 'Explanation:\nThe assistant correctly answers the user\'s question about the capital of Spain, providing the accurate information that the capital of Spain is Madrid.\n\nFinal Rating: excellent\n\n{"assistant_rating": "excellent"}',
-                            "score": 1.0,
-                        }
-                    ],
-                },
-                {
-                    "prompt_id": 2,
-                    "evaluation": [
-                        {
-                            "endpoint": "llama-3-8b-chat@aws-bedrock",
-                            "rationale": 'Explanation:\nThe user asked for the square root of 1009 to 1 decimal place. The assistant provided an answer that is correct to 1 decimal place, which is 32.1. However, the assistant did not provide any explanation or justification for the answer.\n\nFinal Rating: very_good\n\n{"assistant_rating": "very_good"}',
-                            "score": 0.8,
-                        }
-                    ],
-                },
-            ]
+        "test_eval_multi_judge": {
+            "llama-3-8b-chat@aws-bedrock": {
+                "score": 50.0,
+                "progress": 100.0,
+                "per_prompt": [
+                    {
+                        "id": 1,
+                        "response": "The capital of Spain is Madrid.",
+                        "score": 0.75,
+                    },
+                    {
+                        "id": 2,
+                        "response": "The square root of 1009 to 1 decimal place is 32.1.",
+                        "score": 0.25,
+                    },
+                ],
+            }
         }
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
@@ -655,11 +681,9 @@ async def test_delete_evaluation_endpoint_and_evaluator(client: AsyncClient, dbs
 
     # check deleted
     expected_scores = {
-        "test_eval": {
-            "gpt-3.5-turbo@openai": {"score": 100.0, "progress": 100.0},
-        },
-        "test_eval_2": {
-            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
+        "test_eval": {"gpt-3.5-turbo@openai": {"score": 65.0, "progress": 100.0}},
+        "test_eval_multi_judge": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 50.0, "progress": 100.0}
         },
     }
     all_params = {"dataset": "test_dataset_eval"}
