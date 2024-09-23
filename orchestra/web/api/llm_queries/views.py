@@ -222,12 +222,12 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                         if router_choices is None:
                             router = NeuralRouter(
                                 request.model,
+                                request_fastapi,
                                 endpoint_dao,
                                 benchmark_run_dao,
                             )
                             # TODO: add error message if the router is not deployed
                             router_choices = router(
-                                request_fastapi,
                                 messages[-1]["content"],
                                 endpoint_id,
                                 input_tokens=input_tokens,
@@ -237,9 +237,10 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     else:
                         model, provider, _ = Router(
                             request.model,
+                            request_fastapi,
                             endpoint_dao,
                             benchmark_run_dao,
-                        )(request_fastapi, input_tokens=input_tokens)
+                        )(input_tokens=input_tokens)
                         model_region_priority_list[try_provider] = (
                             model,
                             provider,
