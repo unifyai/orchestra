@@ -13,6 +13,8 @@ from fastapi import (
     Request,
     UploadFile,
 )
+from pydantic import ValidationError
+from unify import Prompt
 
 from orchestra.db.dao.dataset_dao import DatasetDAO
 from orchestra.db.dao.dataset_prompt_dao import DatasetPromptDAO
@@ -449,6 +451,14 @@ def _add_data(
     successes = []
     failures = {}
     for ix, datum in enumerate(data):
+        # validate the pydantic
+        try:
+            ret = Prompt.parse_obj(datum["prompt"])
+        except ValidationError as e:
+            failures[ix] = e
+            continue
+        except:
+            failures[ix] = "An unknown error occured"
         result = dataset_dao.add_prompt_to_dataset(
             user_id=user_id, dataset_name=dataset_name, prompt_data=datum
         )
