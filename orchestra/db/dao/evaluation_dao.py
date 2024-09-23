@@ -89,14 +89,14 @@ class EvaluationDAO:
             query = select(
                 Evaluator.name.label("evaluator"),
                 Evaluation.endpoint_str,
-                cast(func.avg(Evaluation.score).label("score") * 100, Float),
+                cast(func.avg(Evaluation.score).label("score"), Float),
                 Evaluation.prompt_id,
             )
         else:
             query = select(
                 Evaluator.name.label("evaluator"),
                 Evaluation.endpoint_str,
-                cast(func.avg(Evaluation.score).label("score") * 100, Float),
+                cast(func.avg(Evaluation.score).label("score"), Float),
                 func.count(Evaluation.score).label("num_scores"),
             )
 
@@ -191,7 +191,7 @@ class EvaluationDAO:
         else:
             progress = len(per_prompt_data) / len(prompt_ids)
         ret = {
-            "score": 100 * mean_score,
+            "score": mean_score,
             "progress": 100 * progress,
             "per_prompt": per_prompt_data,
         }

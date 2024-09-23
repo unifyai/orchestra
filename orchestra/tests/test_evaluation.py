@@ -390,10 +390,12 @@ async def get_evaluation_scores(client, params):
 # The database contains
 # {
 #     "test_eval": {
-#         "gpt-3.5-turbo@openai": {"score": 100.0, "progress": 100.0},
-#         "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
+#         "gpt-3.5-turbo@openai": {"score": 0.65, "progress": 100.0},
+#         "llama-3-8b-chat@aws-bedrock": {"score": 0.4, "progress": 100.0},
 #     },
-#     "test_eval_2": {"llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0}},
+#     "test_eval_multi_judge": {
+#         "llama-3-8b-chat@aws-bedrock": {"score": 0.5, "progress": 100.0}
+#     },
 # }
 
 
@@ -415,9 +417,7 @@ async def test_list_evaluation_evaluator_and_endpoint(client: AsyncClient, dbses
         "endpoint": "llama-3-8b-chat@aws-bedrock",
     }
     expected_scores = {
-        "test_eval": {
-            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
-        },
+        "test_eval": {"llama-3-8b-chat@aws-bedrock": {"score": 0.4, "progress": 100.0}}
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
 
@@ -431,11 +431,9 @@ async def test_list_evaluation_endpoint(client: AsyncClient, dbsession):
         "endpoint": "llama-3-8b-chat@aws-bedrock",
     }
     expected_scores = {
-        "test_eval": {
-            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
-        },
-        "test_eval_2": {
-            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
+        "test_eval": {"llama-3-8b-chat@aws-bedrock": {"score": 0.4, "progress": 100.0}},
+        "test_eval_multi_judge": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 0.5, "progress": 100.0}
         },
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
@@ -451,9 +449,9 @@ async def test_list_evaluation_evaluator(client: AsyncClient, dbsession):
 
     expected_scores = {
         "test_eval": {
-            "gpt-3.5-turbo@openai": {"score": 100.0, "progress": 100.0},
-            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
-        },
+            "gpt-3.5-turbo@openai": {"score": 0.65, "progress": 100.0},
+            "llama-3-8b-chat@aws-bedrock": {"score": 0.4, "progress": 100.0},
+        }
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
 
@@ -467,11 +465,11 @@ async def test_list_evaluation_all(client: AsyncClient, dbsession):
 
     expected_scores = {
         "test_eval": {
-            "gpt-3.5-turbo@openai": {"score": 100.0, "progress": 100.0},
-            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
+            "gpt-3.5-turbo@openai": {"score": 0.65, "progress": 100.0},
+            "llama-3-8b-chat@aws-bedrock": {"score": 0.4, "progress": 100.0},
         },
-        "test_eval_2": {
-            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
+        "test_eval_multi_judge": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 0.5, "progress": 100.0}
         },
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
@@ -488,9 +486,9 @@ async def test_list_evaluation_per_prompt(client: AsyncClient, dbsession):
     expected_scores = {
         "test_eval": {
             "llama-3-8b-chat@aws-bedrock": {
-                "per_prompt": [{"id": 1, "score": 100.0}, {"id": 2, "score": 80.0}],
+                "per_prompt": [{"id": 1, "score": 0.8}, {"id": 2, "score": 0.0}],
+                "score": 0.4,
                 "progress": 100.0,
-                "score": 90.0,
             }
         }
     }
@@ -526,7 +524,7 @@ async def test_list_evaluation_rationale_response(client: AsyncClient, dbsession
     expected_scores = {
         "test_eval_multi_judge": {
             "llama-3-8b-chat@aws-bedrock": {
-                "score": 50.0,
+                "score": 0.5,
                 "progress": 100.0,
                 "per_prompt": [
                     {
@@ -582,7 +580,7 @@ async def test_list_evaluation_rationale(client: AsyncClient, dbsession):
     expected_scores = {
         "test_eval_multi_judge": {
             "llama-3-8b-chat@aws-bedrock": {
-                "score": 50.0,
+                "score": 0.5,
                 "progress": 100.0,
                 "per_prompt": [
                     {
@@ -636,7 +634,7 @@ async def test_list_evaluation_responses(client: AsyncClient, dbsession):
     expected_scores = {
         "test_eval_multi_judge": {
             "llama-3-8b-chat@aws-bedrock": {
-                "score": 50.0,
+                "score": 0.5,
                 "progress": 100.0,
                 "per_prompt": [
                     {
@@ -681,9 +679,9 @@ async def test_delete_evaluation_endpoint_and_evaluator(client: AsyncClient, dbs
 
     # check deleted
     expected_scores = {
-        "test_eval": {"gpt-3.5-turbo@openai": {"score": 65.0, "progress": 100.0}},
+        "test_eval": {"gpt-3.5-turbo@openai": {"score": 0.65, "progress": 100.0}},
         "test_eval_multi_judge": {
-            "llama-3-8b-chat@aws-bedrock": {"score": 50.0, "progress": 100.0}
+            "llama-3-8b-chat@aws-bedrock": {"score": 0.5, "progress": 100.0}
         },
     }
     all_params = {"dataset": "test_dataset_eval"}
@@ -712,8 +710,8 @@ async def test_delete_no_endpoint(client: AsyncClient, dbsession):
 
     # check deleted
     expected_scores = {
-        "test_eval_2": {
-            "llama-3-8b-chat@aws-bedrock": {"score": 90.0, "progress": 100.0},
+        "test_eval_multi_judge": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 0.5, "progress": 100.0},
         },
     }
     all_params = {"dataset": "test_dataset_eval"}
@@ -743,7 +741,7 @@ async def test_delete_no_evaluator(client: AsyncClient, dbsession):
     # check deleted
     expected_scores = {
         "test_eval": {
-            "gpt-3.5-turbo@openai": {"score": 100.0, "progress": 100.0},
+            "gpt-3.5-turbo@openai": {"score": 0.65, "progress": 100.0},
         },
     }
     all_params = {"dataset": "test_dataset_eval"}
