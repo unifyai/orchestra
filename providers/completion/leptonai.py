@@ -79,6 +79,11 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.07, "completion": 0.07},
     },
+    "mistral-nemo": {
+        "endpoint": "mistral-nemo",
+        "context_window": 128000,
+        "cost": {"prompt": 0.18, "completion": 0.18},
+    },
     "qwen-2-72b-instruct": {
         "endpoint": "qwen2-72b",
         "context_window": 128000,
