@@ -146,22 +146,27 @@ async def test_trigger_eval(
     endpoint = "gpt-3.5-turbo@openai"
     params = {
         "url": url,
-        "prompts": dataset,
         "endpoint": endpoint,
         "evaluator": eval_name,
     }
-    response = await client.post(url, params=params, headers=HEADERS)
+    body = {
+        "prompts": [1,2],
+    }
+    response = await client.post(url, params=params, data=body, headers=HEADERS)
+    print(response.json())
     assert response.status_code == 200, response.json()
 
     url = "/v0/evaluation"
     endpoint = "llama-3-8b-chat@aws-bedrock"
     params = {
         "url": url,
-        "prompts": dataset,
         "endpoint": endpoint,
         "evaluator": eval_name,
     }
-    response = await client.post(url, params=params, headers=HEADERS)
+    body = {
+        "prompts": dataset,
+    }
+    response = await client.post(url, params=params, body=body, headers=HEADERS)
     assert response.status_code == 200, response.json()
     ############################
 

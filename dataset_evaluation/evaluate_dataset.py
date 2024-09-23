@@ -185,8 +185,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     # load eval_config
     eval_config = await fetch_evaluator_config(client, cfg)
 
-    # TODO: change this, we only need the ids
-    prompts = cfg["prompts"]
+    prompts = cfg.prompts
 
     BATCH_SIZE = 5  # TODO: change
     semaphore = asyncio.Semaphore(BATCH_SIZE)

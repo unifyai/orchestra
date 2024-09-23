@@ -163,7 +163,7 @@ def trigger_evaluation(
         description="Name of the default prompt to use.",
         example="default_prompt1",
     ),
-    prompts: str = Query(
+    prompts: Union[str, list[int]] = Body(
         description="Specify the prompts to evaluate. You can pass a string to specify the name of a dataset, "
         "or pass individual prompt ids, either as an integer or list of integers.",
         example="dataset1",
@@ -195,7 +195,10 @@ def trigger_evaluation(
     `/v0/evaluation` endpoint. If a custom prompt is specified, its fields will overwrite
     the corresponding fields in each one of the evaluated prompts.
     """
-
+    print(prompts)
+    print(type(prompts))
+    print(repr(prompts))
+    breakpoint()
     user_id = request_fastapi.state.user_id
     user_email = request_fastapi.state.user_email
     api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
