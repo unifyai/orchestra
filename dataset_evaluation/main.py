@@ -30,9 +30,13 @@ n = sdnotify.SystemdNotifier()
 
 # Pub/Sub subscription
 using_pubsub = not os.environ.get("ON_PREM") or os.environ.get("MESSAGING_TOPIC")
-subscription_name = os.environ.get(
-    "MESSAGING_TOPIC",
-    "projects/saas-368716/subscriptions/dataset_evaluation-sub",
+subscription_name = (
+    "projects/saas-368716/subscriptions/"
+    + os.environ.get(
+        "MESSAGING_TOPIC",
+        "dataset_evaluation",
+    )
+    + "-sub"
 )
 if os.getenv("STAGING"):
     subscription_name = (

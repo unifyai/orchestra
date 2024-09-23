@@ -78,9 +78,9 @@ def find_invalid_endpoints(endpoints):
 
 
 def send_to_dataset_evaluation_server(action, **data):
-    topic = os.environ.get(
+    topic = "projects/saas-368716/topics/" + os.environ.get(
         "MESSAGING_TOPIC",
-        "projects/saas-368716/topics/dataset_evaluation",
+        "dataset_evaluation",
     )
     on_prem = os.environ.get("ON_PREM")
     url = "https://api.unify.ai" if not on_prem else os.environ.get("ORCHESTRA_URL")
