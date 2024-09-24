@@ -6,6 +6,7 @@ import json
 import os
 from typing import Dict, Optional
 
+import requests
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from providers.completion import PROVIDER_CLASSES
 
@@ -77,14 +78,15 @@ def find_invalid_endpoints(endpoints):
 
 
 def send_to_dataset_evaluation_server(action, **data):
-    topic = "projects/saas-368716/topics/dataset_evaluation"
-    url = (
-        "https://api.unify.ai"
-        if not os.environ.get("ON_PREM")
-        else os.environ.get("ORCHESTRA_URL")
+    project_name = os.environ.get("PUBSUB_PROJECT_NAME", "saas-368716")
+    topic = f"projects/{project_name}/topics/" + os.environ.get(
+        "PUBSUB_MESSAGING_TOPIC",
+        "dataset_evaluation",
     )
+    on_prem = os.environ.get("ON_PREM")
+    url = "https://api.unify.ai" if not on_prem else os.environ.get("ORCHESTRA_URL")
     if os.getenv("STAGING"):
-        topic = "projects/saas-368716/topics/staging_dataset_evaluation"
+        topic = f"projects/{project_name}/topics/staging_dataset_evaluation"
         url = "https://orchestra-staging-lz5fmz6i7q-ew.a.run.app"
 
     msg = {
@@ -93,7 +95,7 @@ def send_to_dataset_evaluation_server(action, **data):
         "orchestra_url": url,
         "admin_key": os.environ.get("ORCHESTRA_ADMIN_KEY"),
     }
-    if os.environ.get("ON_PREM"):
+    if on_prem and not os.environ.get("PUBSUB_MESSAGING_TOPIC"):
         on_prem.send_pubsub_msg(topic, msg)
     else:
         gcp.send_pubsub_msg(topic, msg)
@@ -451,7 +453,19 @@ def get_evaluations(
 
     latest_benchmarks = []
     if include_runtime:
-        latest_benchmarks = latest_benchmark_dao.get_benchmark_with_endpoints()
+        if os.environ.get("ON_PREM"):
+            request_url = os.environ.get("PUBLIC_ORCHESTRA_URL", "") + "/benchmark"
+            headers = {
+                key: value
+                for key, value in request_fastapi._headers.items()
+                if key in ["content-type", "authorization"]
+            }
+            response = requests.get(request_url, headers=headers)
+            latest_benchmarks = response.json()
+            if response.status_code != 200:
+                raise HTTPException(response.status_code, latest_benchmarks["detail"])
+        else:
+            latest_benchmarks = latest_benchmark_dao.get_benchmark_with_endpoints()
 
     acc = {}  # stores scores to aggregate
     endpoints = set()
@@ -492,15 +506,17 @@ def get_evaluations(
 
         for _evaluator in ret:
             for lb in latest_benchmarks:
-                if lb.endpoint_str in ret[_evaluator]:
-                    ret[_evaluator][lb.endpoint_str]["itl"] = float(lb.itl)
-                    ret[_evaluator][lb.endpoint_str]["ttft"] = float(lb.ttft)
-                    ret[_evaluator][lb.endpoint_str]["input_cost"] = float(
-                        lb.input_cost,
-                    )
-                    ret[_evaluator][lb.endpoint_str]["output_cost"] = float(
-                        lb.output_cost,
-                    )
+                on_prem = os.environ.get("ON_PREM")
+                endpoint_str = lb["endpoint"] if on_prem else lb.endpoint_str
+                input_cost = lb["input_cost"] if on_prem else lb.input_cost
+                output_cost = lb["output_cost"] if on_prem else lb.output_cost
+                ttft = lb["ttft"] if on_prem else lb.ttft
+                itl = lb["itl"] if on_prem else lb.itl
+                if endpoint_str in ret[_evaluator]:
+                    ret[_evaluator][endpoint_str]["itl"] = float(itl)
+                    ret[_evaluator][endpoint_str]["ttft"] = float(ttft)
+                    ret[_evaluator][endpoint_str]["input_cost"] = float(input_cost)
+                    ret[_evaluator][endpoint_str]["output_cost"] = float(output_cost)
 
     return ret
 
