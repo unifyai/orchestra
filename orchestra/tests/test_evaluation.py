@@ -475,7 +475,6 @@ async def test_client_side_scores(
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     scores = response.json()
-    print(scores)
     assert eval_name in scores
     assert endpoint in scores[eval_name]
 
@@ -497,7 +496,6 @@ async def get_evaluation_scores(client, params):
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     scores = response.json()
-    print(response.json())
     return scores
 
 
