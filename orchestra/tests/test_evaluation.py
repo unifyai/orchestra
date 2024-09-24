@@ -424,28 +424,67 @@ async def test_trigger_pass_invalid_prompts(
 
 async def test_client_side_scores(
     client: AsyncClient,
-    tmp_path,
+    dbsession,
 ):
+    await _seed_evaluations_db(
+        dbsession, path="./orchestra/tests/sql_dumps/evaluations/dump_clientside.jsonl"
+    )
+
     eval_name = "test_eval_clientside"
-
-    # create test dataset
-    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws.jsonl"
-    dataset = "test_dataset"
-    response = await upload_dataset(client, file_path, dataset)
-    assert response.status_code == 200, response.json()
-
-    url = "/v0/evaluator"
-    params = {
-        "name": eval_name,
-        "client_side": True,
-    }
-    response = await client.post(url, json=params, headers=HEADERS)
-    assert response.status_code == 200, response.json()
 
     url = "/v0/evaluation"
     dataset = "test_dataset"
     endpoint = "llama-3-8b-chat@aws-bedrock"
-    file_path = "./orchestra/tests/sample_datasets/prompts_with_scores.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws_scored.jsonl"
+    with open(file_path, "rb") as f:
+        file_content = f.read()
+    files = {
+        "client_side_scores": ("test.jsonl", file_content, "application/x-jsonlines"),
+    }
+
+    params = {
+        "url": url,
+        "dataset": dataset,
+        "endpoint": endpoint,
+        "evaluator": eval_name,
+    }
+    response = await client.post(url, params=params, files=files, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # get results
+
+    url = "/v0/evaluation"
+    params = {
+        "endpoint": endpoint,
+        "dataset": dataset,
+        "evaluator": eval_name,
+    }
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    scores = response.json()
+    assert scores == {
+        "test_eval_clientside": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 0.5, "progress": 100.0}
+        }
+    }
+
+
+async def test_client_side_rationales(
+    client: AsyncClient,
+    dbsession,
+):
+    await _seed_evaluations_db(
+        dbsession, path="./orchestra/tests/sql_dumps/evaluations/dump_clientside.jsonl"
+    )
+
+    eval_name = "test_eval_clientside"
+
+    url = "/v0/evaluation"
+    dataset = "test_dataset"
+    endpoint = "llama-3-8b-chat@aws-bedrock"
+    file_path = (
+        "./orchestra/tests/sample_datasets/prompts_with_kws_scored_rationale.jsonl"
+    )
     with open(file_path, "rb") as f:
         file_content = f.read()
     files = {
@@ -475,8 +514,119 @@ async def test_client_side_scores(
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     scores = response.json()
-    assert eval_name in scores
-    assert endpoint in scores[eval_name]
+    assert scores == {
+        "test_eval_clientside": {
+            "llama-3-8b-chat@aws-bedrock": {
+                "score": 0.5,
+                "progress": 100.0,
+                "per_prompt": [
+                    {
+                        "id": 1,
+                        "response": "Madrid",
+                        "score": 1.0,
+                        "evaluation": [
+                            {
+                                "endpoint": "client_side",
+                                "rationale": "Correct answer",
+                                "rationale_score": 1.0,
+                            }
+                        ],
+                    },
+                    {
+                        "id": 2,
+                        "response": "30",
+                        "score": 0.0,
+                        "evaluation": [
+                            {
+                                "endpoint": "client_side",
+                                "rationale": "Incorrect answer",
+                                "rationale_score": 0.0,
+                            }
+                        ],
+                    },
+                ],
+            }
+        }
+    }
+
+
+async def test_client_side_no_rationales(
+    client: AsyncClient,
+    dbsession,
+):
+    await _seed_evaluations_db(
+        dbsession, path="./orchestra/tests/sql_dumps/evaluations/dump_clientside.jsonl"
+    )
+
+    eval_name = "test_eval_clientside"
+
+    url = "/v0/evaluation"
+    dataset = "test_dataset"
+    endpoint = "llama-3-8b-chat@aws-bedrock"
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws_scored.jsonl"
+    with open(file_path, "rb") as f:
+        file_content = f.read()
+    files = {
+        "client_side_scores": ("test.jsonl", file_content, "application/x-jsonlines"),
+    }
+
+    params = {
+        "url": url,
+        "dataset": dataset,
+        "endpoint": endpoint,
+        "evaluator": eval_name,
+    }
+    response = await client.post(url, params=params, files=files, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # get results
+
+    url = "/v0/evaluation"
+    params = {
+        "endpoint": endpoint,
+        "dataset": dataset,
+        "evaluator": eval_name,
+        "return_rationale": True,
+        "return_response": True,
+        "per_prompt": True,
+    }
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    scores = response.json()
+    assert scores == {
+        "test_eval_clientside": {
+            "llama-3-8b-chat@aws-bedrock": {
+                "score": 0.5,
+                "progress": 100.0,
+                "per_prompt": [
+                    {
+                        "id": 1,
+                        "response": "",
+                        "score": 1.0,
+                        "evaluation": [
+                            {
+                                "endpoint": "client_side",
+                                "rationale": "",
+                                "rationale_score": 1.0,
+                            }
+                        ],
+                    },
+                    {
+                        "id": 2,
+                        "response": "",
+                        "score": 0.0,
+                        "evaluation": [
+                            {
+                                "endpoint": "client_side",
+                                "rationale": "",
+                                "rationale_score": 0.0,
+                            }
+                        ],
+                    },
+                ],
+            }
+        }
+    }
 
 
 # helper utils
@@ -513,8 +663,9 @@ async def get_evaluation_scores(client, params):
 # }
 
 
-async def _seed_evaluations_db(dbsession):
-    path = "./orchestra/tests/sql_dumps/evaluations/dump_trigger.jsonl"
+async def _seed_evaluations_db(
+    dbsession, path="./orchestra/tests/sql_dumps/evaluations/dump_trigger.jsonl"
+):
     await populate_from_file(path=path, session=dbsession)
 
 

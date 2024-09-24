@@ -243,3 +243,47 @@ async def test_create_data_trigger_eval(
     assert endpoint in scores[eval_name]
     assert "score" in scores[eval_name][endpoint]
     assert "progress" in scores[eval_name][endpoint]
+
+
+@pytest.mark.manual
+async def test_create_data_clientside(
+    client: AsyncClient,
+):
+
+    @event.listens_for(Engine, "before_cursor_execute")
+    def receive_before_cursor_execute(
+        conn, cursor, statement, parameters, context, executemany
+    ):
+        "listen for the 'before_cursor_execute' event"
+        obj = {"statement": statement, "parameters": parameters}
+        if (
+            statement.startswith("SELECT")
+            or statement.startswith("DROP")
+            or statement.startswith("UPDATE users")
+        ):
+            return
+        with open(PATH_FOR_DUMP, "a") as f:
+            f.write(json.dumps(obj, default=str))
+            f.write("\n")
+            f.flush()
+
+    # create test dataset
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws.jsonl"
+    dataset = "test_dataset"
+    response = await upload_dataset(client, file_path, dataset)
+    assert response.status_code == 200, response.json()
+
+    url = "/v0/evaluator"
+    eval_name = "test_eval_clientside"
+    params = {
+        "name": eval_name,
+        "client_side": True,
+    }
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    url = "/v0/evaluation"
+    params = {"dataset": dataset, "evaluator": eval_name}
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    scores = response.json()

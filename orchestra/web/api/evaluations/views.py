@@ -301,9 +301,9 @@ def trigger_evaluation(
             lines = file.decode().split("\n")
             lines = [json.loads(l) for l in lines if l != ""]
             for ix, line in enumerate(lines):
-                _expected_keys = set(["prompt_id", "response", "score"])
+                _expected_keys = set(["prompt_id", "score"])
                 _found_keys = set(line.keys())
-                _optional_keys = set(["rationale"])
+                _optional_keys = set(["response", "rationale"])
                 if _missing := _expected_keys.difference(_found_keys):
                     raise HTTPException(
                         status_code=400,
@@ -352,7 +352,7 @@ def trigger_evaluation(
                     status_code=400,
                     detail=f"Error with score from prompt_id: {prompt_id}, score: {score}",
                 )
-            rationale = l.get("rationale", None)
+            rationale = l.get("rationale", "")
 
             num_tokens = 0
 
@@ -360,7 +360,7 @@ def trigger_evaluation(
                 prompt_id=prompt_id,
                 prompt_variation_id=None,
                 endpoint_str=endpoint,
-                response=l["response"],
+                response=l.get("response", ""),
                 num_tokens=num_tokens,
             )
 
@@ -372,14 +372,13 @@ def trigger_evaluation(
             response_id = raw_ids[0].id
             judge_model = "client_side"
 
-            if rationale:
-                judgement_dao.create(
-                    response_id=response_id,
-                    judge_endpoint_str=judge_model,
-                    evaluator_id=evaluator_id,
-                    judgement=rationale,
-                    judgement_score=score,
-                )
+            judgement_dao.create(
+                response_id=response_id,
+                judge_endpoint_str=judge_model,
+                evaluator_id=evaluator_id,
+                judgement=rationale,
+                judgement_score=score,
+            )
             ## add evaluation with the score
             evaluation_dao.create(
                 prompt_id=prompt_id,
