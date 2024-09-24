@@ -430,11 +430,13 @@ class StoredPrompt(Base):
         Index(
             "uq_userid_prompt",
             func.hash_record_extended(
-                func.row(user_id, system_msg, messages, prompt_kwargs), 0
+                func.row(user_id, system_msg, messages, prompt_kwargs),
+                0,
             ),
             unique=True,
         ),
     )
+    extra_fields = relationship("StoredPromptExtraField")
 
 
 class DefaultPrompt(Base):
@@ -596,6 +598,16 @@ class Evaluator(Base):
     )
     name = sa.Column(sa.String(), nullable=False)
     judge_prompt = sa.Column(sa.String(), nullable=False)
+    prompt_parser = sa.Column(
+        sa.String(),
+        nullable=False,
+        default="{\"user_message\": \"['messages'][-1]['content']\"}",
+    )
+    response_parser = sa.Column(
+        sa.String(),
+        nullable=False,
+        default="{\"assistant_message\": \"['message']['content']\"}",
+    )
     class_config = sa.Column(sa.String(), nullable=False)
     judge_models = sa.Column(sa.String(), nullable=False)
     client_side = sa.Column(sa.Boolean(), nullable=False)

@@ -100,6 +100,12 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 2.5, "completion": 10},
     },
+    "gpt-4o-2024-05-13": {
+        "endpoint": "azure/gpt-4o-2024-05-13",
+        "version": "2023-03-15-preview",
+        "context_window": 128000,
+        "cost": {"prompt": 5, "completion": 15},
+    },
     "llama-3.1-405b-chat": {
         "endpoint": "azure_ai/Meta-Llama-3-1-405B-Instruct-aog",
         "context_window": 128000,

@@ -3,7 +3,7 @@ from typing import List, Optional
 
 from fastapi import Depends
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import StoredPrompt
@@ -51,8 +51,9 @@ class StoredPromptDAO:
             query = query.where(StoredPrompt.system_msg == system_msg)
         if messages:
             query = query.where(StoredPrompt.messages == messages)
+        query = query.options(joinedload(StoredPrompt.extra_fields))
         rows = self.session.execute(query)
-        return list(rows.scalars().fetchall())
+        return list(rows.scalars().unique().fetchall())
 
     def check_ids_valid(self, user_id, prompt_ids):
         query = (
@@ -63,3 +64,4 @@ class StoredPromptDAO:
         matching_ids = self.session.execute(query).scalars().all()
         invalid_ids = set(prompt_ids).difference(set(matching_ids))
         return invalid_ids
+

@@ -120,10 +120,18 @@ def get_model_metrics(
 
 
 class Router:
-    def __init__(self, model, endpoint_dao, benchmark_run_dao):
+    def __init__(
+        self,
+        model: str,
+        request_fastapi: Request,
+        endpoint_dao: EndpointDAO,
+        benchmark_run_dao: BenchmarkRunDAO,
+    ):
         self.model = model
+        self.request_fastapi = request_fastapi
         self.endpoint_dao = endpoint_dao
         self.benchmark_run_dao = benchmark_run_dao
+        self.on_prem = os.environ.get("ON_PREM")
         self.metric_aliases = [
             ["quality", "q"],
             ["ttft", "time-to-first-token", "t"],
@@ -139,9 +147,12 @@ class Router:
         self.skip_models = None
         self.providers = None
         self.skip_providers = None
+        self.benchmarks = dict()
         self.load_metric_map()
         self.load_models_and_providers()
         self.load_metrics_and_thresholds()
+        if self.on_prem:
+            self.load_benchmark_data()
         self.model = self.model.split("@")[0]
 
     def load_metric_map(self):
@@ -149,6 +160,24 @@ class Router:
         for metric_alias in self.metric_aliases:
             for metric in metric_alias:
                 self.metric_map[metric] = metric_alias[0]
+
+    def load_models_and_providers(self):
+        # get the model and provider specifications
+        search_str = self.model.split("@")[1]
+        for criteria_str in search_str.split("|"):
+            if ":" not in criteria_str:
+                continue
+            criteria, criteria_val = criteria_str.split(":")
+            if criteria in ["providers", "skip_providers", "models", "skip_models"]:
+                criteria_list = criteria_val.split(",")
+                if criteria == "providers":
+                    self.providers = criteria_list
+                elif criteria == "skip_providers":
+                    self.skip_providers = criteria_list
+                elif criteria == "models":
+                    self.models = criteria_list
+                else:
+                    self.skip_models = criteria_list
 
     def load_metrics_and_thresholds(self):
         # get the string representing the constraints
@@ -239,40 +268,17 @@ class Router:
                 if len(multipliers) == 0:
                     multipliers.append(0)
 
-    def load_models_and_providers(self):
-        # get the model and provider specifications
-        search_str = self.model.split("@")[1]
-        for criteria_str in search_str.split("|"):
-            if ":" not in criteria_str:
-                continue
-            criteria, criteria_val = criteria_str.split(":")
-            if criteria in ["providers", "skip_providers", "models", "skip_models"]:
-                criteria_list = criteria_val.split(",")
-                if criteria == "providers":
-                    self.providers = criteria_list
-                elif criteria == "skip_providers":
-                    self.skip_providers = criteria_list
-                elif criteria == "models":
-                    self.models = criteria_list
-                else:
-                    self.skip_models = criteria_list
-
-    def get_public_endpoint_metrics(self, endpoint: Endpoint, request_fastapi: Request):
+    def load_benchmark_data(self):
         # query the public endpoint on-prem to get benchmarks
-        model = endpoint.model
-        provider = endpoint.provider
         request_url = os.environ.get("PUBLIC_ORCHESTRA_URL", "") + "/benchmark"
-        kwargs = {"model": model, "provider": provider}
         headers = {
             key: value
-            for key, value in request_fastapi._headers.items()
+            for key, value in self.request_fastapi._headers.items()
             if key in ["content-type", "authorization"]
         }
-        return requests.get(
-            request_url,
-            params=kwargs,
-            headers=headers,
-        ).json()
+        benchmark_data = requests.get(request_url, headers=headers).json()
+        for benchmark in benchmark_data:
+            self.benchmarks[benchmark.pop("endpoint")] = benchmark
 
     def get_metric_value(
         self,
@@ -310,7 +316,6 @@ class Router:
 
     def __call__(
         self,
-        request_fastapi: Request,
         endpoints: Optional[List[Endpoint]] = None,
         scores: Optional[Dict[str, float]] = None,
         input_tokens: Optional[int] = None,
@@ -340,13 +345,12 @@ class Router:
                 is_valid = True
 
                 # get metrics for the endpoint on-prem
-                if os.environ.get("ON_PREM"):
-                    metrics = self.get_public_endpoint_metrics(
-                        endpoint,
-                        request_fastapi,
-                    )
-                    if isinstance(metrics, list):
-                        metrics = metrics[0]
+                if self.on_prem:
+                    endpoint_str = f"{endpoint.model}@{endpoint.provider}"
+                    if endpoint_str in self.benchmarks:
+                        metrics = self.benchmarks[
+                            f"{endpoint.model}@{endpoint.provider}"
+                        ]
                     else:
                         metrics = dict()
                 else:
@@ -468,7 +472,6 @@ class Router:
 class NeuralRouter(Router):
     def __call__(
         self,
-        request_fastapi: Request,
         prompt: Optional[str] = "",
         router_endpoint_id: Optional[int] = None,
         input_tokens: Optional[int] = None,
@@ -518,7 +521,6 @@ class NeuralRouter(Router):
             ]
             model_scores = None
         return super().__call__(
-            request_fastapi=request_fastapi,
             endpoints=endpoints,
             scores=model_scores,
             input_tokens=input_tokens,
