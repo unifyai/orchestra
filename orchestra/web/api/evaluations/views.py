@@ -8,7 +8,16 @@ import re
 from typing import Dict, Optional, Union, List
 
 import requests
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    Body,
+)
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.dataset_dao import DatasetDAO

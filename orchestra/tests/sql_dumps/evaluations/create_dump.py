@@ -64,6 +64,8 @@ HEADERS = {
 
 
 PATH_FOR_DUMP = os.path.join(os.path.dirname(__file__), "./tmp_dump_trigger.jsonl")
+# wipe the file
+open(PATH_FOR_DUMP, 'w').close()
 
 
 @pytest.mark.manual
