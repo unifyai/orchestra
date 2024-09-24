@@ -605,7 +605,7 @@ class Evaluator(Base):
     response_parser = sa.Column(
         sa.String(),
         nullable=False,
-        default="{\"assistant_response\": \"['message']['content']\"}",
+        default="{\"assistant_message\": \"['message']['content']\"}",
     )
     class_config = sa.Column(sa.String(), nullable=False)
     judge_models = sa.Column(sa.String(), nullable=False)

@@ -16,7 +16,7 @@ default_cfg = [
     {"label": "very_good", "score": 0.8},
     {"label": "good", "score": 0.5},
     {"label": "bad", "score": 0.0},
-    {"label": "irrelevant", "score": 0.0},
+    # {"label": "irrelevant", "score": 0.0},
 ]
 
 
@@ -37,27 +37,33 @@ Do not output anything else after your final verdict, but make sure you do give 
 
 
 def get_format_kwargs(parser, data, eval_config):
+    # breakpoint()
     format_kwargs = {}
-    for key, val in eval_config[parser].items():
+    for key, val in json.loads(eval_config[parser]).items():
         format_value = ""
         item = data["prompt" if parser == "prompt_parser" else "model_response"]
         idx_chain = val[1:-1].split("][")
         for idx in idx_chain:
             if idx.lstrip("-").isdigit():
                 idx = int(idx)
+                if isinstance(item, list):
+                    if len(item) < idx:
+                        break
             else:
                 # str idx
                 idx = idx[1:-1]
-            if isinstance(item, list):
-                if len(item) < idx:
-                    break
-            elif isinstance(item, dict):
-                if idx not in item:
-                    break
-            format_value = item[idx]
+                if isinstance(item, dict):
+                    if idx not in item:
+                        break
+            # format_value = item[idx]
             item = item[idx]
+
+        # for-else (if no breaks happen)
+        else:
+            format_value = item
+
         format_kwargs[key] = format_value
-        return format_kwargs
+    return format_kwargs
 
 
 def create_judge_prompt(data, eval_config):
@@ -68,11 +74,14 @@ def create_judge_prompt(data, eval_config):
     # TODO: do this properly
     data["prompt"].pop("user_id")
     data["prompt"].pop("id")
+    data["prompt"]["extra_fields"] = {
+        i["field"]: i["value"] for i in data["prompt"]["extra_fields"]
+    }
 
     prompt_parser_formatter = get_format_kwargs("prompt_parser", data, eval_config)
     response_parser_formatter = get_format_kwargs("response_parser", data, eval_config)
 
-    breakpoint()
+    # breakpoint()
     judge_prompt = copy.deepcopy(judge_prompt)
     # what goes into the system prompt
     system_prompt_placeholders = {}

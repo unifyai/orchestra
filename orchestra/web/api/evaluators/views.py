@@ -132,12 +132,14 @@ Be as objective as possible."""
             {"label": "very_good", "score": 0.8},
             {"label": "good", "score": 0.5},
             {"label": "bad", "score": 0.0},
-            {"label": "irrelevant", "score": 0.0},
+            # {"label": "irrelevant", "score": 0.0},
         ]
     result = evaluator_dao.create(
         user_id=user_id,
         name=request.name,
         judge_prompt=judge_prompt.model_dump_json(),
+        prompt_parser=json.dumps(request.prompt_parser),
+        response_parser=json.dumps(request.response_parser),
         class_config=json.dumps(class_config),
         judge_models=judge_models,
         client_side=request.client_side,
