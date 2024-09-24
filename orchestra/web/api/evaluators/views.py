@@ -3,7 +3,6 @@ Includes endpoints related to evaluators.
 """
 
 import json
-import string
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from providers.completion import PROVIDER_CLASSES
@@ -125,16 +124,6 @@ Be as objective as possible."""
                 },
             ],
         )
-
-    else:
-        judge_msg = judge_prompt.messages[-1]["content"]
-        formatter = string.Formatter()
-        placeholders = [i[1] for i in formatter.parse(judge_msg) if i[1] is not None]
-        if not set({"user_prompt", "response", "class_config"}).issubset(placeholders):
-            raise HTTPException(
-                status_code=400,
-                detail="placeholders `user_prompt`, `response` and `class_config` must be in your judge prompt.",
-            )
 
     class_config = request.class_config
     if class_config is None:

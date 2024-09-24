@@ -1,5 +1,6 @@
 import copy
 import json
+import string
 
 from utils.helpers import (
     get_llm_response,
@@ -35,35 +36,91 @@ Do not output anything else after your final verdict, but make sure you do give 
     return prompt
 
 
-def format_q(prompt_data):
-    s_to_attr = {
-        "User Question": "prompt",
-        "Reference Answer": "ref_answer",
-        "Assistant's Answer": "model_response",
-    }
+def get_format_kwargs(parser, data, eval_config):
+    format_kwargs = {}
+    for key, val in eval_config[parser].items():
+        format_value = ""
+        item = data["prompt" if parser == "prompt_parser" else "model_response"]
+        idx_chain = val[1:-1].split("][")
+        for idx in idx_chain:
+            if idx.lstrip("-").isdigit():
+                idx = int(idx)
+            else:
+                # str idx
+                idx = idx[1:-1]
+            if isinstance(item, list):
+                if len(item) < idx:
+                    break
+            elif isinstance(item, dict):
+                if idx not in item:
+                    break
+            format_value = item[idx]
+            item = item[idx]
+        format_kwargs[key] = format_value
+        return format_kwargs
 
-    ret = ""
-    for s, attr in s_to_attr.items():
-        if attr in prompt_data:
-            ret += f"""\n[The start of {s}]\n{prompt_data[attr]}\n[The end of {s}]"""
 
-    return ret
-
-
-def create_judge_prompt(prompt_data, eval_config):
+def create_judge_prompt(data, eval_config):
     judge_prompt = eval_config["judge_prompt"]
-    class_cfg = eval_config.get("class_cfg", None)
+    class_cfg = eval_config.get("class_cfg", None) or default_cfg
 
+    # ig those should be be accesible through indexing
+    # TODO: do this properly
+    data["prompt"].pop("user_id")
+    data["prompt"].pop("id")
+
+    prompt_parser_formatter = get_format_kwargs("prompt_parser", data, eval_config)
+    response_parser_formatter = get_format_kwargs("response_parser", data, eval_config)
+
+    breakpoint()
     judge_prompt = copy.deepcopy(judge_prompt)
+    # what goes into the system prompt
+    system_prompt_placeholders = {}
+
+    # what goes into the user prompt
+    user_prompt_placeholders = {}
+    formatter = string.Formatter()
+
+    if judge_prompt["messages"][0]["role"] == "system":
+        placeholders = [
+            i[1]
+            for i in formatter.parse(judge_prompt["messages"][0]["content"])
+            if i[1] is not None
+        ]
+        for placeholder in placeholders:
+            system_prompt_placeholders[placeholder] = prompt_parser_formatter.get(
+                placeholder,
+                "",
+            ) or response_parser_formatter.get(placeholder, "")
+
+        judge_prompt["messages"][0]["content"] = judge_prompt["messages"][0][
+            "content"
+        ].format(**system_prompt_placeholders)
+
+        judge_prompt["messages"][0]["content"] += "\n\n" + create_judge_rubric(
+            class_cfg,
+        )
+
+    placeholders = [
+        i[1]
+        for i in formatter.parse(judge_prompt["messages"][-1]["content"])
+        if i[1] is not None
+    ]
+    for placeholder in placeholders:
+        user_prompt_placeholders[placeholder] = prompt_parser_formatter.get(
+            placeholder,
+            "",
+        ) or response_parser_formatter.get(placeholder, "")
+
     judge_prompt["messages"][-1]["content"] = judge_prompt["messages"][-1][
         "content"
-    ].format(
-        user_prompt=prompt_data["prompt"],
-        response=prompt_data["model_response"],
-        class_config=create_judge_rubric(class_cfg)
-        if class_cfg
-        else create_judge_rubric(default_cfg),
-    )
+    ].format(**user_prompt_placeholders)
+
+    if not judge_prompt["messages"][0]["role"] != "system":
+        judge_prompt["messages"][-1]["content"] += "\n\n" + create_judge_rubric(
+            class_cfg,
+        )
+
     return judge_prompt
 
 
@@ -148,6 +205,7 @@ async def generate_judgement(
                 admin_key=cfg.admin_key,
                 client=client,
             )
+            # breakpoint()
             # get the response from the db
             # TODO: exception handling if the response isn't there for some reason
             response_data = (
@@ -159,9 +217,10 @@ async def generate_judgement(
                     client=client,
                 )
             )[0]
+
+            # response_data[0]
             # create the judge prompt
-            prompt = json.loads(prompt_data["messages"])[0]["content"]
-            sys_prompt = json.loads(prompt_data["system_msg"])
+            prompt_data["messages"] = json.loads(prompt_data["messages"])
 
             # Override the system msg if available
             # TODO: This is duplicated in fetch_queries
@@ -174,20 +233,20 @@ async def generate_judgement(
                     # instead of looking at the first one
                     if default_prompt_dict["messages"][0]["role"] == "system":
                         sys_prompt = default_prompt_dict["messages"][0]["content"]
+                        if prompt_data["messages"][0]["role"] != "system":
+                            prompt_data["message"].insert(0, sys_prompt)
                         default_prompt_dict.pop("messages")  # remove the msgs
                     else:
                         raise ValueError
                 except:
                     pass
 
-            if sys_prompt:
-                prompt = sys_prompt + prompt
+            # if sys_prompt:
+            #     prompt = sys_prompt + prompt
             data = {}
-            data["prompt"] = prompt
+            data["prompt"] = prompt_data
             # data["ref_answer"] = prompt_data["ref_answer"]
-            data["model_response"] = json.loads(response_data["response"])["choices"][
-                0
-            ]["message"]["content"]
+            data["model_response"] = json.loads(response_data["response"])["choices"][0]
             judge_prompt = create_judge_prompt(data, eval_config)
             # get the response to the judge prompt
 

@@ -107,17 +107,13 @@ async def test_trigger_eval(
                 "role": "user",
                 "content": """
     <user_prompt>
-    {user_prompt}
+    {user_message}
     </user_prompt>
 
     <assistant_response>
-    {response}
+    {assistant_response}
     </assistant_respose>
-
-    follow these rating rules:
-    <rating rules>
-    {class_config}
-    </rating rules>""",
+    """,
             },
         ],
         "temperature": 0.7,
