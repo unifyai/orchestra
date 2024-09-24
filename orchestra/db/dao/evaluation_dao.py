@@ -129,6 +129,7 @@ class EvaluationDAO:
         prompt_ids,
         endpoint,
         evaluator,
+        per_prompt: bool,
         responses: bool,
         rationales: bool,
         num_judges: int,
@@ -170,6 +171,7 @@ class EvaluationDAO:
                 result_dict[prompt_id] = {"id": prompt_id}
                 if responses:
                     try:
+                        # TODO: What do we want the response to actually be?
                         s = json.loads(row.response)["choices"][0]["message"]["content"]
                     except:
                         s = row.response
@@ -186,7 +188,7 @@ class EvaluationDAO:
                 result_dict[prompt_id]["evaluation"].append(evaluation_entry)
         per_prompt_data = list(result_dict.values())
         if not per_prompt_data:
-            ret = "There was an error finding the responses/rationales."
+            ret = "There was an error finding the evaluations selected."
         mean_score = sum(er["score"] for er in per_prompt_data) / len(per_prompt_data)
         if rationales:
             progress = sum(len(er["evaluation"]) for er in per_prompt_data) / (
@@ -194,11 +196,9 @@ class EvaluationDAO:
             )
         else:
             progress = len(per_prompt_data) / len(prompt_ids)
-        ret = {
-            "score": mean_score,
-            "progress": 100 * progress,
-            "per_prompt": per_prompt_data,
-        }
+        ret = {"score": mean_score, "progress": 100 * progress}
+        if per_prompt:
+            ret["per_prompt"] = per_prompt_data
         return ret
 
     def get_evaluator_names(self, dataset_id: int, endpoint_str: str):

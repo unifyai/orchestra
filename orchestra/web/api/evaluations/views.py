@@ -490,6 +490,7 @@ def get_rationales(
     endpoint: str,
     evaluator: str,
     evaluation_dao: EvaluationDAO,
+    per_prompt: bool,
     responses: bool,
     rationales: bool,
     num_judges: int,
@@ -498,6 +499,7 @@ def get_rationales(
         prompt_ids=prompt_ids,
         endpoint=endpoint,
         evaluator=evaluator,
+        per_prompt=per_prompt,
         responses=responses,
         rationales=rationales,
         num_judges=num_judges,
@@ -556,6 +558,7 @@ def get_evaluations(
         "By default set to `False`.",
         example=False,
     ),
+    sub_scorers: bool = Query(default=False, description="If `True`, returns more in-depth summary statistics of the evaluation."),
     dataset_dao: DatasetDAO = Depends(),
     evaluator_dao: EvaluatorDAO = Depends(),
     evaluation_dao: EvaluationDAO = Depends(),
@@ -611,13 +614,14 @@ def get_evaluations(
 
     ret = {}
 
-    if return_rationale or return_response:
+    if per_prompt:
         num_judges = len(json.loads(raw_evaluators[0].judge_models))
         rationales = get_rationales(
             prompt_ids=prompt_ids,
             endpoint=endpoint,
             evaluator=evaluator,
             evaluation_dao=evaluation_dao,
+            per_prompt=per_prompt,
             responses=return_response,
             rationales=return_rationale,
             num_judges=num_judges,
