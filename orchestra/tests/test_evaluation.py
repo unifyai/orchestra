@@ -457,11 +457,21 @@ async def test_client_side_scores(
     response = await client.post(url, params=params, files=files, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
+    # get results
+
     url = "/v0/evaluation"
-    params = {"dataset": dataset, "evaluator": eval_name}
+    params = {
+        "endpoint": endpoint,
+        "dataset": dataset,
+        "evaluator": eval_name,
+        "return_rationale": True,
+        "return_response": True,
+        "per_prompt": True,
+    }
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     scores = response.json()
+    print(scores)
     assert eval_name in scores
     assert endpoint in scores[eval_name]
 
@@ -809,6 +819,39 @@ async def test_delete_evaluation_endpoint_and_evaluator(client: AsyncClient, dbs
 
     params = {
         "dataset": "test_dataset_eval",
+        "evaluator": "test_eval",
+        "endpoint": "llama-3-8b-chat@aws-bedrock",
+    }
+    # delete evaluation
+    response = await client.delete(
+        "/v0/evaluation",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "info": "Evaluation deleted successfully. You deleted 2 evaluations.",
+    }
+
+    # check deleted
+    expected_scores = {
+        "test_eval": {"gpt-3.5-turbo@openai": {"score": 0.65, "progress": 100.0}},
+        "test_eval_multi_judge": {
+            "llama-3-8b-chat@aws-bedrock": {"score": 0.5, "progress": 100.0}
+        },
+    }
+    all_params = {"dataset": "test_dataset_eval"}
+    await _helper_test_list_evaluations(client, all_params, expected_scores)
+
+
+async def test_delete_evaluation_endpoint_and_evaluator_from_prompt_ids(
+    client: AsyncClient, dbsession
+):
+
+    await _seed_evaluations_db(dbsession)
+
+    params = {
+        "prompts": "1,2",
         "evaluator": "test_eval",
         "endpoint": "llama-3-8b-chat@aws-bedrock",
     }

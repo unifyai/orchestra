@@ -232,13 +232,15 @@ def trigger_evaluation(
     ),
     dataset_dao: DatasetDAO = Depends(),
     stored_prompt_dao: StoredPromptDAO = Depends(),
+    stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
     evaluator_dao: EvaluatorDAO = Depends(),
+    judgement_dao: JudgementDAO = Depends(),
     default_prompt_dao: DefaultPromptDAO = Depends(),
     evaluation_dao: EvaluationDAO = Depends(),
 ) -> Dict[str, str]:
     """
     Uses the named `evaluator` to trigger an evaluation of quality scores for the
-    selected LLM `endpoint` on the selected `dataset`. You can upload custom scores (and
+    selected LLM `endpoint` on the selected `dataset`, or selected `prompts` (by prompt_id). You can upload custom scores (and
     bypass the LLM judge entirely) by uploading a file via the `client_side_scores`
     argument. Once the evaluation has finished, you can access the scores using the
     `/v0/evaluation` endpoint. If a custom prompt is specified, its fields will overwrite
@@ -257,11 +259,15 @@ def trigger_evaluation(
     if prompts and client_side_scores:
         raise HTTPException(
             status_code=400,
-            detail=f"Client-side scores for individual prompts not yet implemented.",
+            detail=f"Client-side scores for individual prompts not yet supported.",
         )
 
     prompt_ids = get_prompt_ids(
-        dataset=dataset, prompts=prompts, user_id=user_id, dataset_dao=dataset_dao, stored_prompt_dao=stored_prompt_dao
+        dataset=dataset,
+        prompts=prompts,
+        user_id=user_id,
+        dataset_dao=dataset_dao,
+        stored_prompt_dao=stored_prompt_dao,
     )
 
     # evaluator_id
@@ -293,15 +299,10 @@ def trigger_evaluation(
             lines = file.decode().split("\n")
             lines = [json.loads(l) for l in lines if l != ""]
             for ix, line in enumerate(lines):
-                _expected_keys = set(["prompt_id", "score"])
+                _expected_keys = set(["prompt_id", "response", "score"])
                 _found_keys = set(line.keys())
                 _optional_keys = set(["rationale"])
-                if _found_keys.intersection(optional_keys):
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Error in line {ix}: rationale not currently supported in client side evaluations.",
-                    )
-                if _missing := _expected_keys.difference(found_keys):
+                if _missing := _expected_keys.difference(_found_keys):
                     raise HTTPException(
                         status_code=400,
                         detail=f"Error in line {ix}: missing: {', '.join(_missing)}",
@@ -313,11 +314,22 @@ def trigger_evaluation(
                         status_code=400,
                         detail=f"Error in line {ix}: extra key: {', '.join(_extra)}. Only allowed keys: {', '.join(_expected_keys.union(_optional_keys))}",
                     )
-        except:
+        except HTTPException as e:
+            raise e
+        except Exception as e:
             raise HTTPException(
                 status_code=400,
                 detail="Error processing uploaded scores",
             )
+
+        # _model, _provider = endpoint.split("@")
+        # if _provider != "external":
+        #     raise HTTPException(
+        #         status_code=400,
+        #         detail=f"Error with {endpoint}: "
+        #         "When submitting client-side scores, endpoint must be an `external` model, "
+        #         "specified as e.g. `model@external`.",
+        #     )
 
         # check whether the evaluator is a client side one:
         if (
@@ -339,13 +351,40 @@ def trigger_evaluation(
                     detail=f"Error with score from prompt_id: {prompt_id}, score: {score}",
                 )
             rationale = l.get("rationale", None)
+
+            num_tokens = 0
+
+            stored_prompt_response_dao.create(
+                prompt_id=prompt_id,
+                prompt_variation_id=None,
+                endpoint_str=endpoint,
+                response=l["response"],
+                num_tokens=num_tokens,
+            )
+
+            raw_ids = stored_prompt_response_dao.filter(
+                prompt_id=prompt_id,
+                prompt_variation_id=None,
+                endpoint_str=endpoint,
+            )
+            response_id = raw_ids[0].id
+            judge_model = "client_side"
+
+            if rationale:
+                judgement_dao.create(
+                    response_id=response_id,
+                    judge_endpoint_str=judge_model,
+                    evaluator_id=evaluator_id,
+                    judgement=rationale,
+                    judgement_score=score,
+                )
+            ## add evaluation with the score
             evaluation_dao.create(
                 prompt_id=prompt_id,
                 prompt_variation_id=None,
                 evaluator_id=evaluator_id,
                 endpoint_str=endpoint,
                 score=score,
-                rationale=rationale,
             )
         return {"info": "Evaluation uploaded!"}
 
@@ -523,7 +562,7 @@ def get_evaluations(
     latest_benchmark_dao: LatestBenchmarkDAO = Depends(),
 ) -> Dict:
     """
-    Fetches evaluation results on a given dataset, for a specific endpoint (optional)
+    Fetches evaluation results on a given dataset or for specific prompts, for a specific endpoint (optional)
     based on a specific evaluator (optional). If no `evaluator` is provided, then scores
     are returned for all valid evaluators. Similarly, if no `endpoint` is provided, then
     scores are returned for all valid endpoints.
@@ -531,9 +570,12 @@ def get_evaluations(
     # ToDo: implement the logic where the endpoint (required) is considered in the input
     user_id = request_fastapi.state.user_id
 
-
     prompt_ids = get_prompt_ids(
-        dataset=dataset, prompts=prompts, user_id=user_id, dataset_dao=dataset_dao, stored_prompt_dao=stored_prompt_dao
+        dataset=dataset,
+        prompts=prompts,
+        user_id=user_id,
+        dataset_dao=dataset_dao,
+        stored_prompt_dao=stored_prompt_dao,
     )
 
     if return_rationale and not per_prompt:
@@ -699,7 +741,11 @@ def delete_evaluations(
     user_id = request_fastapi.state.user_id
 
     prompt_ids = get_prompt_ids(
-        dataset=dataset, prompts=prompts, user_id=user_id, dataset_dao=dataset_dao, stored_prompt_dao=stored_prompt_dao
+        dataset=dataset,
+        prompts=prompts,
+        user_id=user_id,
+        dataset_dao=dataset_dao,
+        stored_prompt_dao=stored_prompt_dao,
     )
 
     # check endpoint and evaluator are valid

@@ -169,9 +169,13 @@ class EvaluationDAO:
             if prompt_id not in result_dict:
                 result_dict[prompt_id] = {"id": prompt_id}
                 if responses:
-                    result_dict[prompt_id]["response"] = json.loads(row.response)[
+                    try:
+                        s = json.loads(row.response)[
                         "choices"
                     ][0]["message"]["content"]
+                    except:
+                        s = row.response
+                    result_dict[prompt_id]["response"] = s
                 result_dict[prompt_id]["score"] = float(row.score)
                 if rationales:
                     result_dict[prompt_id]["evaluation"] = []
@@ -183,6 +187,8 @@ class EvaluationDAO:
 
                 result_dict[prompt_id]["evaluation"].append(evaluation_entry)
         per_prompt_data = list(result_dict.values())
+        if not per_prompt_data:
+            ret = "There was an error finding the responses/rationales."
         mean_score = sum(er["score"] for er in per_prompt_data) / len(per_prompt_data)
         if rationales:
             progress = sum(len(er["evaluation"]) for er in per_prompt_data) / (
