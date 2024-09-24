@@ -4,6 +4,7 @@ Includes endpoints related to dataset evaluations.
 
 import json
 import os
+import re
 from typing import Dict, Optional, Union, List
 
 from fastapi import (
@@ -39,6 +40,11 @@ router = APIRouter()
 admin_router = APIRouter()
 
 # utils
+
+
+def is_csv_of_integers(s):
+    pattern = r"^(\d+,)*\d+$"
+    return bool(re.match(pattern, s))
 
 
 # TODO: Move to utils (duplicated in routing)
@@ -109,6 +115,44 @@ def send_to_dataset_evaluation_server(action, **data):
     print(f"Published: {str({'action': action, **data, 'orchestra_url': url})}")
 
 
+def check_dataset_prompt_arg(dataset, prompts):
+    if (dataset is None) == (prompts is None):
+        raise HTTPException(
+            status_code=400,
+            detail="You must specify exactly one of `dataset`, `prompts`.",
+        )
+
+
+def get_prompt_ids(dataset, prompts, user_id, dataset_dao, stored_prompt_dao):
+    check_dataset_prompt_arg(dataset, prompts)
+    if dataset:
+        dataset_id = get_dataset_id(dataset_dao, user_id, dataset)
+        if dataset_id is None:
+            raise dataset_does_not_exist(dataset)
+        prompt_ids = dataset_dao.fetch_prompts_ids_in_dataset(user_id, dataset)
+        prompt_ids = [p["id"] for p in prompt_ids]
+        return prompt_ids
+
+    # otherwise it's prompts
+
+    if not is_csv_of_integers(prompts):
+        raise HTTPException(
+            status_code=400,
+            detail="Error parsing `prompts`: "
+            "Please ensure `prompts` is a comma-separated string of integers, "
+            "with no whitespace.",
+        )
+
+    prompt_ids = [int(c) for c in prompts.split(",")]
+    missing_ids = stored_prompt_dao.check_ids_valid(user_id, prompt_ids)
+    if missing_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=f"The following prompt_ids are invalid: {', '.join(str(_id) for _id in missing_ids)}",
+        )
+    return prompt_ids
+
+
 ###########################
 # endpoints
 ###########################
@@ -163,10 +207,15 @@ def trigger_evaluation(
         description="Name of the default prompt to use.",
         example="default_prompt1",
     ),
-    prompts: Union[str, list[int]] = Body(
-        description="Specify the prompts to evaluate. You can pass a string to specify the name of a dataset, "
-        "or pass individual prompt ids, either as an integer or list of integers.",
+    dataset: Optional[str] = Query(
+        default=None,
+        description="Name of the uploaded dataset to evaluate. Must pass exactly one of `dataset`, `prompts`.",
         example="dataset1",
+    ),
+    prompts: Optional[str] = Query(
+        default=None,
+        description="Specify the prompts to evaluate. Pass a string of comma separated integers. Must pass exactly one of `dataset`, `prompts`.",
+        example="34,89,127",
     ),
     endpoint: str = Query(
         description=(
@@ -195,10 +244,7 @@ def trigger_evaluation(
     `/v0/evaluation` endpoint. If a custom prompt is specified, its fields will overwrite
     the corresponding fields in each one of the evaluated prompts.
     """
-    print(prompts)
-    print(type(prompts))
-    print(repr(prompts))
-    breakpoint()
+
     user_id = request_fastapi.state.user_id
     user_email = request_fastapi.state.user_email
     api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
@@ -208,29 +254,15 @@ def trigger_evaluation(
     if invalid_endpoints:
         raise invalid_training_endpoints(invalid_endpoints)
 
-    if isinstance(prompts, str):
-        dataset = prompts
-        dataset_id = get_dataset_id(dataset_dao, user_id, dataset)
-        if dataset_id is None:
-            raise dataset_does_not_exist(dataset)
-        prompt_ids = dataset_dao.fetch_prompts_ids_in_dataset(user_id, dataset)
-        prompt_ids = [p["id"] for p in prompt_ids]
-    elif isinstance(prompts, int):
-        prompts = [prompts]
+    if prompts and client_side_scores:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Client-side scores for individual prompts not yet implemented.",
+        )
 
-    if isinstance(prompts, list):
-        if client_side_scores:
-            return HTTPException(
-                status_code=400,
-                detail=f"Client-side scores for individual prompts not yet implemented.",
-            )
-        missing_ids = stored_prompt_dao.check_ids_valid(user_id, prompts)
-        if missing_ids:
-            return HTTPException(
-                status_code=400,
-                detail=f"The following prompt_ids are invalid: {','.join(missing_ids)}",
-            )
-        prompt_ids = prompts
+    prompt_ids = get_prompt_ids(
+        dataset=dataset, prompts=prompts, user_id=user_id, dataset_dao=dataset_dao, stored_prompt_dao=stored_prompt_dao
+    )
 
     # evaluator_id
     raw_evaluators = evaluator_dao.filter(name=evaluator)
@@ -323,7 +355,7 @@ def trigger_evaluation(
         user_id=user_id,
         user_email=user_email,
         api_key=api_key,
-        prompts=prompts,
+        prompts=prompt_ids,
         endpoint=endpoint,
         evaluator=evaluator,
         evaluator_id=evaluator_id,
@@ -401,12 +433,11 @@ def admin_trigger_eval(
 
 
 def get_grouped_evaluations(
-    dataset_prompts,
+    prompt_ids: list[int],
     per_prompt: bool,
     evaluation_dao: EvaluationDAO,
 ):
     """Get the score for one dataset grouped by endpoint + evaluator (optionally per_prompt)"""
-    prompt_ids = [prompt["id"] for prompt in dataset_prompts]
     scores = evaluation_dao.fetch_evaluation_scores(
         prompt_ids=prompt_ids,
         per_prompt=per_prompt,
@@ -415,7 +446,7 @@ def get_grouped_evaluations(
 
 
 def get_rationales(
-    dataset_prompts,
+    prompt_ids: list[int],
     endpoint: str,
     evaluator: str,
     evaluation_dao: EvaluationDAO,
@@ -423,7 +454,6 @@ def get_rationales(
     rationales: bool,
     num_judges: int,
 ):
-    prompt_ids = [prompt["id"] for prompt in dataset_prompts]
     rationales = evaluation_dao.fetch_rationales(
         prompt_ids=prompt_ids,
         endpoint=endpoint,
@@ -438,10 +468,15 @@ def get_rationales(
 @router.get("/evaluation")
 def get_evaluations(
     request_fastapi: Request,
-    prompts: Union[str, int, list[int]] = Query(
-        description="Specify the prompts to get evaluations for. You can pass a string to specify the name of a dataset, "
-        "or pass individual prompt ids, either as an integer or list of integers.",
+    dataset: Optional[str] = Query(
+        default=None,
+        description="Name of the uploaded dataset to get evaluations for. Must pass exactly one of `dataset`, `prompts`.",
         example="dataset1",
+    ),
+    prompts: Optional[str] = Query(
+        default=None,
+        description="Specify the prompts to get evaluations for. Pass a string of comma separated integers. Must pass exactly one of `dataset`, `prompts`.",
+        example="34,89,127",
     ),
     endpoint: str = Query(
         default=None,
@@ -484,6 +519,7 @@ def get_evaluations(
     dataset_dao: DatasetDAO = Depends(),
     evaluator_dao: EvaluatorDAO = Depends(),
     evaluation_dao: EvaluationDAO = Depends(),
+    stored_prompt_dao: StoredPromptDAO = Depends(),
     latest_benchmark_dao: LatestBenchmarkDAO = Depends(),
 ) -> Dict:
     """
@@ -495,24 +531,10 @@ def get_evaluations(
     # ToDo: implement the logic where the endpoint (required) is considered in the input
     user_id = request_fastapi.state.user_id
 
-    if isinstance(prompts, str):
-        dataset = prompts
-        dataset_id = get_dataset_id(dataset_dao, user_id, dataset)
-        if dataset_id is None:
-            raise dataset_does_not_exist(dataset)
-        prompt_ids = dataset_dao.fetch_prompts_ids_in_dataset(user_id, dataset)
-        prompt_ids = [p["id"] for p in prompt_ids]
-    elif isinstance(prompts, int):
-        prompts = [prompts]
 
-    if isinstance(prompts, list):
-        missing_ids = stored_prompt_dao.check_ids_valid(user_id, prompts)
-        if missing_ids:
-            return HTTPException(
-                status_code=400,
-                detail=f"The following prompt_ids are invalid: {','.join(missing_ids)}",
-            )
-        prompt_ids = prompts
+    prompt_ids = get_prompt_ids(
+        dataset=dataset, prompts=prompts, user_id=user_id, dataset_dao=dataset_dao, stored_prompt_dao=stored_prompt_dao
+    )
 
     if return_rationale and not per_prompt:
         raise HTTPException(
@@ -549,7 +571,7 @@ def get_evaluations(
     if return_rationale or return_response:
         num_judges = len(json.loads(raw_evaluators[0].judge_models))
         rationales = get_rationales(
-            dataset_prompts=prompt_ids,
+            prompt_ids=prompt_ids,
             endpoint=endpoint,
             evaluator=evaluator,
             evaluation_dao=evaluation_dao,
@@ -563,7 +585,7 @@ def get_evaluations(
         # TODO: This doesn't account for prompt
         # variations / default prompts when per_prompt=True
         eval_results = get_grouped_evaluations(
-            dataset_prompts=prompt_ids,
+            prompt_ids=prompt_ids,
             per_prompt=per_prompt,
             evaluation_dao=evaluation_dao,
         )
@@ -574,7 +596,7 @@ def get_evaluations(
 
     acc = {}  # stores scores to aggregate
     endpoints = set()
-    num_prompts = len(dataset_prompts_ids)
+    num_prompts = len(prompt_ids)
 
     for er in eval_results:
         if evaluator is not None and er.evaluator != evaluator:
@@ -639,10 +661,15 @@ def get_evaluations(
 )
 def delete_evaluations(
     request_fastapi: Request,
-    prompts: Union[str, int, list[int]] = Query(
-        description="Specify the prompts to delete evaluations for. You can pass a string to specify the name of a dataset, "
-        "or pass individual prompt ids, either as an integer or list of integers.",
+    dataset: Optional[str] = Query(
+        default=None,
+        description="Name of the uploaded dataset to get delete evaluations for. Must pass exactly one of `dataset`, `prompts`.",
         example="dataset1",
+    ),
+    prompts: Optional[str] = Query(
+        default=None,
+        description="Specify the prompts to delete evaluations for. Pass a string of comma separated integers. Must pass exactly one of `dataset`, `prompts`.",
+        example="34,89,127",
     ),
     endpoint: str = Query(
         default=None,
@@ -661,6 +688,7 @@ def delete_evaluations(
     endpoint_dao: EndpointDAO = Depends(),
     evaluator_dao: EvaluatorDAO = Depends(),
     evaluation_dao: EvaluationDAO = Depends(),
+    stored_prompt_dao: StoredPromptDAO = Depends(),
 ):
     """
     Deletes evaluations on a given dataset, for a specific endpoint (optional) based on
@@ -670,24 +698,9 @@ def delete_evaluations(
     """
     user_id = request_fastapi.state.user_id
 
-    if isinstance(prompts, str):
-        dataset = prompts
-        dataset_id = get_dataset_id(dataset_dao, user_id, dataset)
-        if dataset_id is None:
-            raise dataset_does_not_exist(dataset)
-        prompt_ids = dataset_dao.fetch_prompts_ids_in_dataset(user_id, dataset)
-        prompt_ids = [p["id"] for p in prompt_ids]
-    elif isinstance(prompts, int):
-        prompts = [prompts]
-
-    if isinstance(prompts, list):
-        missing_ids = stored_prompt_dao.check_ids_valid(user_id, prompts)
-        if missing_ids:
-            return HTTPException(
-                status_code=400,
-                detail=f"The following prompt_ids are invalid: {','.join(missing_ids)}",
-            )
-        prompt_ids = prompts
+    prompt_ids = get_prompt_ids(
+        dataset=dataset, prompts=prompts, user_id=user_id, dataset_dao=dataset_dao, stored_prompt_dao=stored_prompt_dao
+    )
 
     # check endpoint and evaluator are valid
     if endpoint:

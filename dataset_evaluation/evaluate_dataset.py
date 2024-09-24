@@ -194,7 +194,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     # the generate_* functions return success/fail, and we could retry them here,
     tasks = [
         generate_response(p_id, cfg.endpoint, cfg, client, semaphore)
-        for p in prompts
+        for p_id in prompts
     ]
     successful_responses = await asyncio.gather(*tasks)
 
@@ -208,7 +208,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
             client=client,
             semaphore=semaphore,
         )
-        for p in prompts
+        for p_id in prompts
     ]
     sucessful_judgements = await asyncio.gather(*tasks)
 

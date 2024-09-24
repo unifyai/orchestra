@@ -147,13 +147,11 @@ async def test_trigger_eval(
     params = {
         "url": url,
         "endpoint": endpoint,
+        "dataset": dataset,
         "evaluator": eval_name,
     }
-    body = {
-        "prompts": [1,2],
-    }
-    response = await client.post(url, params=params, data=body, headers=HEADERS)
-    print(response.json())
+
+    response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
     url = "/v0/evaluation"
@@ -161,17 +159,16 @@ async def test_trigger_eval(
     params = {
         "url": url,
         "endpoint": endpoint,
+        "dataset": dataset,
         "evaluator": eval_name,
     }
-    body = {
-        "prompts": dataset,
-    }
-    response = await client.post(url, params=params, body=body, headers=HEADERS)
+
+    response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     ############################
 
     url = "/v0/evaluation"
-    params = {"prompts": dataset, "evaluator": eval_name}
+    params = {"dataset": dataset, "evaluator": eval_name}
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     scores = response.json()
@@ -183,7 +180,7 @@ async def test_trigger_eval(
     # per prompt
     url = "/v0/evaluation"
     params = {
-        "prompts": dataset,
+        "dataset": dataset,
         "evaluator": eval_name,
         "endpoint": endpoint,
         "per_prompt": True,
@@ -267,7 +264,7 @@ async def test_trigger_eval_with_default_prompt(
     endpoint = "gpt-3.5-turbo@openai"
     params = {
         "url": url,
-        "prompts": dataset,
+        "dataset": dataset,
         "endpoint": endpoint,
         "evaluator": eval_name,
         "default_prompt": default_prompt_name,
@@ -279,7 +276,7 @@ async def test_trigger_eval_with_default_prompt(
     endpoint = "llama-3-8b-chat@aws-bedrock"
     params = {
         "url": url,
-        "prompts": dataset,
+        "dataset": dataset,
         "endpoint": endpoint,
         "evaluator": eval_name,
         "default_prompt": default_prompt_name,
@@ -290,7 +287,7 @@ async def test_trigger_eval_with_default_prompt(
 
     url = "/v0/evaluation"
     params = {
-        "prompts": dataset,
+        "dataset": dataset,
         "evaluator": eval_name,
         "default_prompt": default_prompt_name,
     }
@@ -305,7 +302,7 @@ async def test_trigger_eval_with_default_prompt(
     # per prompt
     url = "/v0/evaluation"
     params = {
-        "prompts": dataset,
+        "dataset": dataset,
         "evaluator": eval_name,
         "endpoint": endpoint,
         "per_prompt": True,
@@ -319,6 +316,106 @@ async def test_trigger_eval_with_default_prompt(
     assert "score" in scores[eval_name][endpoint]
     assert "progress" in scores[eval_name][endpoint]
     assert "per_prompt" in scores[eval_name][endpoint]
+
+
+####################################################
+
+
+async def test_trigger_pass_dataset(
+    client: AsyncClient,
+    tmp_path,
+    monkeypatch,
+    dbsession,
+):
+    await _seed_evaluations_db(dbsession)
+
+    def mock_send_to_dataset_evaluation_server(action, **data):
+        assert data["prompts"] == [1, 2]
+
+    monkeypatch.setattr(
+        orchestra.web.api.evaluations.views,
+        "send_to_dataset_evaluation_server",
+        mock_send_to_dataset_evaluation_server,
+    )
+
+    # create trigger evaluation
+
+    url = "/v0/evaluation"
+    endpoint = "llama-3-8b-chat@aws-bedrock"
+    params = {
+        "url": url,
+        "endpoint": endpoint,
+        "dataset": "test_dataset_eval",
+        "evaluator": "test_eval",
+    }
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+
+async def test_trigger_pass_prompts(
+    client: AsyncClient,
+    tmp_path,
+    monkeypatch,
+    dbsession,
+):
+    await _seed_evaluations_db(dbsession)
+
+    def mock_send_to_dataset_evaluation_server(action, **data):
+        assert data["prompts"] == [1, 2]
+
+    monkeypatch.setattr(
+        orchestra.web.api.evaluations.views,
+        "send_to_dataset_evaluation_server",
+        mock_send_to_dataset_evaluation_server,
+    )
+
+    # create trigger evaluation
+
+    url = "/v0/evaluation"
+    endpoint = "llama-3-8b-chat@aws-bedrock"
+    params = {
+        "url": url,
+        "endpoint": endpoint,
+        "prompts": "1,2",
+        "evaluator": "test_eval",
+    }
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+
+async def test_trigger_pass_invalid_prompts(
+    client: AsyncClient,
+    tmp_path,
+    monkeypatch,
+    dbsession,
+):
+    await _seed_evaluations_db(dbsession)
+
+    def mock_send_to_dataset_evaluation_server(action, **data):
+        assert data["prompts"] == [1, 3, 99]
+
+    monkeypatch.setattr(
+        orchestra.web.api.evaluations.views,
+        "send_to_dataset_evaluation_server",
+        mock_send_to_dataset_evaluation_server,
+    )
+
+    # create trigger evaluation
+
+    url = "/v0/evaluation"
+    endpoint = "llama-3-8b-chat@aws-bedrock"
+    params = {
+        "url": url,
+        "endpoint": endpoint,
+        "prompts": "1,3,99",
+        "evaluator": "test_eval",
+    }
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 400, response.json()
+    assert response.json() == {"detail": "The following prompt_ids are invalid: 3, 99"}
+
+
+########################
 
 
 async def test_client_side_scores(
@@ -353,7 +450,7 @@ async def test_client_side_scores(
 
     params = {
         "url": url,
-        "prompts": dataset,
+        "dataset": dataset,
         "endpoint": endpoint,
         "evaluator": eval_name,
     }
@@ -418,6 +515,21 @@ async def test_list_evaluation_evaluator_and_endpoint(client: AsyncClient, dbses
     await _seed_evaluations_db(dbsession)
     params = {
         "dataset": "test_dataset_eval",
+        "evaluator": "test_eval",
+        "endpoint": "llama-3-8b-chat@aws-bedrock",
+    }
+    expected_scores = {
+        "test_eval": {"llama-3-8b-chat@aws-bedrock": {"score": 0.4, "progress": 100.0}}
+    }
+    await _helper_test_list_evaluations(client, params, expected_scores)
+
+
+async def test_list_evaluation_evaluator_and_endpoint_via_prompts(
+    client: AsyncClient, dbsession
+):
+    await _seed_evaluations_db(dbsession)
+    params = {
+        "prompts": "1,2",
         "evaluator": "test_eval",
         "endpoint": "llama-3-8b-chat@aws-bedrock",
     }
@@ -647,6 +759,35 @@ async def test_list_evaluation_responses(client: AsyncClient, dbsession):
                         "response": "The capital of Spain is Madrid.",
                         "score": 0.75,
                     },
+                    {
+                        "id": 2,
+                        "response": "The square root of 1009 to 1 decimal place is 32.1.",
+                        "score": 0.25,
+                    },
+                ],
+            }
+        }
+    }
+    await _helper_test_list_evaluations(client, params, expected_scores)
+
+
+async def test_list_evaluation_responses_from_prompt_ids(
+    client: AsyncClient, dbsession
+):
+    await _seed_evaluations_db(dbsession)
+    params = {
+        "prompts": "2",
+        "evaluator": "test_eval_multi_judge",
+        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "return_response": True,
+        "per_prompt": True,
+    }
+    expected_scores = {
+        "test_eval_multi_judge": {
+            "llama-3-8b-chat@aws-bedrock": {
+                "score": 0.25,
+                "progress": 100.0,
+                "per_prompt": [
                     {
                         "id": 2,
                         "response": "The square root of 1009 to 1 decimal place is 32.1.",
