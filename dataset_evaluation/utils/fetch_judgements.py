@@ -218,7 +218,6 @@ async def generate_judgement(
                 admin_key=cfg.admin_key,
                 client=client,
             )
-            # breakpoint()
             # get the response from the db
             # TODO: exception handling if the response isn't there for some reason
             response_data = (
@@ -231,7 +230,6 @@ async def generate_judgement(
                 )
             )[0]
 
-            # response_data[0]
             # create the judge prompt
             prompt_data["messages"] = json.loads(prompt_data["messages"])
 
@@ -254,14 +252,11 @@ async def generate_judgement(
                 except:
                     pass
 
-            # if sys_prompt:
-            #     prompt = sys_prompt + prompt
+
             data = {}
             data["prompt"] = prompt_data
-            # data["ref_answer"] = prompt_data["ref_answer"]
             data["model_response"] = json.loads(response_data["response"])["choices"][0]
             judge_prompt = create_judge_prompt(data, eval_config)
-            # get the response to the judge prompt
 
             judge_to_responses = {}
             for judge_model in eval_config["judge_models"]:
