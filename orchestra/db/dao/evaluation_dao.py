@@ -170,9 +170,7 @@ class EvaluationDAO:
                 result_dict[prompt_id] = {"id": prompt_id}
                 if responses:
                     try:
-                        s = json.loads(row.response)[
-                        "choices"
-                    ][0]["message"]["content"]
+                        s = json.loads(row.response)["choices"][0]["message"]["content"]
                     except:
                         s = row.response
                     result_dict[prompt_id]["response"] = s

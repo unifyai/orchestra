@@ -173,7 +173,7 @@ async def send_judgements_to_db(
     }
 
     if prompt_variation_id:
-        params["prompt_variation_id"] = prompt_variation_id 
+        params["prompt_variation_id"] = prompt_variation_id
 
     response = await client.post(url, headers=HEADERS, params=params, json=body)
     return response
@@ -251,7 +251,6 @@ async def generate_judgement(
                         raise ValueError
                 except:
                     pass
-
 
             data = {}
             data["prompt"] = prompt_data

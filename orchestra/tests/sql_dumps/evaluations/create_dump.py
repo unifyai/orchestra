@@ -65,7 +65,7 @@ HEADERS = {
 
 PATH_FOR_DUMP = os.path.join(os.path.dirname(__file__), "./tmp_dump_trigger.jsonl")
 # wipe the file
-open(PATH_FOR_DUMP, 'w').close()
+open(PATH_FOR_DUMP, "w").close()
 
 
 @pytest.mark.manual
@@ -161,7 +161,6 @@ async def test_create_data_trigger_eval(
     response = await client.post(url, json=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
-
     url = "/v0/evaluator"
     params = {
         "name": "test_eval_multi_judge",
@@ -234,7 +233,6 @@ async def test_create_data_trigger_eval(
     assert endpoint in scores[eval_name]
     assert "score" in scores[eval_name][endpoint]
     assert "progress" in scores[eval_name][endpoint]
-
 
     url = "/v0/evaluation"
     params = {"dataset": dataset, "evaluator": eval_name}

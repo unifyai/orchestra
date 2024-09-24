@@ -64,4 +64,3 @@ class StoredPromptDAO:
         matching_ids = self.session.execute(query).scalars().all()
         invalid_ids = set(prompt_ids).difference(set(matching_ids))
         return invalid_ids
-
