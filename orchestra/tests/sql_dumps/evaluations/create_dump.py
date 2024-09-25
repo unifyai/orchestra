@@ -249,7 +249,6 @@ async def test_create_data_trigger_eval(
 async def test_create_data_clientside(
     client: AsyncClient,
 ):
-
     @event.listens_for(Engine, "before_cursor_execute")
     def receive_before_cursor_execute(
         conn, cursor, statement, parameters, context, executemany
