@@ -7,12 +7,8 @@ from fastapi.param_functions import Depends
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.beta_list_dao import BetaListDAO
 from orchestra.db.dao.credit_card_fingerprint import CreditCardFingerprintDAO
-from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
-from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.custom_router_dao import CustomRouterDAO
 from orchestra.db.dao.datapoint_dao import DatapointDAO
-from orchestra.db.dao.dataset_evaluation_dao import DatasetEvaluationDAO
-from orchestra.db.dao.dataset_evaluation_task_dao import DatasetEvaluationTaskDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.metric_dao import MetricDAO
 from orchestra.db.dao.modality_dao import ModalityDAO
@@ -25,7 +21,6 @@ from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     BenchmarkRun,
     CreditCardFingerprint,
-    CustomApiKey,
     Datapoint,
     Endpoint,
     Metric,
@@ -38,8 +33,6 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     BenchmarkRunModelResponse,
     CreditCardFingerprintModelResponse,
-    CustomApiKeyModelResponse,
-    CustomEndpointModelResponse,
     CustomRouterRequest,
     DatapointModelRequest,
     DatapointModelResponse,
@@ -421,68 +414,6 @@ def get_task(
     return task_dao.filter(name=name)
 
 
-@router.get("/get_custom_api_keys", response_model=List[CustomApiKeyModelResponse])
-def get_custom_api_keys(
-    user_id: str,
-    custom_api_key_dao: CustomApiKeyDAO = Depends(),
-) -> List[CustomApiKey]:
-    return custom_api_key_dao.get_user_keys(user_id=user_id)
-
-
-@router.get("/get_custom_endpoints", response_model=List[CustomEndpointModelResponse])
-def get_custom_endpoints(
-    user_id: str,
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
-) -> List[CustomApiKey]:
-    return custom_endpoint_dao.get_user_endpoints(user_id=user_id)
-
-
-@router.put("/create_custom_api_key")
-def create_custom_api_key_model(
-    user_id: str,
-    key: str,
-    value: str,
-    custom_api_key_dao: CustomApiKeyDAO = Depends(),
-) -> None:
-    """
-    Creates custom api key model in the database.
-
-    """
-    custom_api_key_dao.create_custom_api_key(
-        user_id=user_id,
-        key=key,
-        value=value,
-    )
-
-
-@router.put("/create_custom_endpoint")
-def create_custom_endpoint_model(
-    user_id: str,
-    name: str,
-    url: str,
-    key_name: str,
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
-    custom_api_key_dao: CustomApiKeyDAO = Depends(),
-) -> None:
-    """
-    Creates custom endpoint model in the database.
-
-    """
-
-    try:
-        key_id = custom_api_key_dao.filter(user_id=user_id, key=key_name)[0].id
-    except Exception:
-        raise HTTPException(status_code=404, detail="Custom API Key not found.")
-
-    custom_endpoint_dao.create_custom_endpoint(
-        user_id=user_id,
-        name=name,
-        mdl_name=name,
-        url=url,
-        key_id=key_id,
-    )
-
-
 @router.put("/create_datapoint")
 def create_datapoint_model(
     new_datapoint_object: DatapointModelRequest,
@@ -711,35 +642,6 @@ def create_beta_list(
     beta_list_dao.create_beta_list(email=email, type=type)
 
 
-@router.put("/create_dataset_evaluation")
-def create_dataset_evaluation_model(
-    new_dataset_evaluation_object: DatasetEvaluationModelRequest,
-    dataset_evaluation_dao: DatasetEvaluationDAO = Depends(),
-) -> None:
-    """
-    Creates database evaluation model in the database.
-    """
-    existing = dataset_evaluation_dao.filter(
-        mdl_name=new_dataset_evaluation_object.mdl_name,
-        dataset_name=new_dataset_evaluation_object.dataset_name,
-        prompt=new_dataset_evaluation_object.prompt,
-    )
-    if existing:
-        raise HTTPException(
-            status_code=400,
-            detail="Dataset evaluation already exists for this model, dataset and prompt.",
-        )
-    dataset_evaluation_dao.create_dataset_evaluation(
-        mdl_name=new_dataset_evaluation_object.mdl_name,
-        dataset_name=new_dataset_evaluation_object.dataset_name,
-        prompt=new_dataset_evaluation_object.prompt,
-        gt_score=new_dataset_evaluation_object.gt_score,
-        score=new_dataset_evaluation_object.score,
-        input_tokens=new_dataset_evaluation_object.input_tokens,
-        output_tokens=new_dataset_evaluation_object.output_tokens,
-    )
-
-
 @router.put("/update_benchmark_run")
 def update_benchmark_run(  # noqa: WPS211
     id: int,  # noqa: WPS125
@@ -868,53 +770,6 @@ def update_user_autorecharge_qty(  # noqa: WPS211
     """
     users_dao.set_autorecharge_qty(user_id=id, qty=qty)
     users_dao.session.commit()
-
-
-@router.put("/update_dataset_evaluation_task")
-def update_dataset_evaluation_task_status(  # noqa: WPS211
-    user_id: str,  # noqa: WPS125
-    name: str,
-    status: str,
-    dataset_evaluation_task: DatasetEvaluationTaskDAO = Depends(),
-) -> None:
-    """
-    Update the status of a dataset evaluation task.
-    """
-    dataset_evaluation_task.update_dataset_evaluation_task(
-        user_id=user_id,
-        name=name,
-        status=status,
-    )
-    dataset_evaluation_task.session.commit()
-
-
-@router.put("/update_dataset_evaluation")
-def update_dataset_evaluation(
-    dataset_evaluation_object: DatasetEvaluationModelRequest,
-    dataset_evaluation_dao: DatasetEvaluationDAO = Depends(),
-) -> None:
-    """
-    Updates database evaluation model in the database.
-    """
-    existing = dataset_evaluation_dao.filter(
-        mdl_name=dataset_evaluation_object.mdl_name,
-        dataset_name=dataset_evaluation_object.dataset_name,
-        prompt=dataset_evaluation_object.prompt,
-    )
-    if not existing:
-        raise HTTPException(
-            status_code=400,
-            detail="Dataset evaluation doesn't exist for this model, dataset and prompt.",
-        )
-    dataset_evaluation_dao.update_dataset_evaluation(
-        mdl_name=dataset_evaluation_object.mdl_name,
-        dataset_name=dataset_evaluation_object.dataset_name,
-        prompt=dataset_evaluation_object.prompt,
-        gt_score=dataset_evaluation_object.gt_score,
-        score=dataset_evaluation_object.score,
-        input_tokens=dataset_evaluation_object.input_tokens,
-        output_tokens=dataset_evaluation_object.output_tokens,
-    )
 
 
 @router.put("/create_custom_router")

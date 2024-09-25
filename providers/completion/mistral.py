@@ -18,39 +18,39 @@ class Mistral(BaseCompletionProvider):
         return "ORCHESTRA_MISTRAL_AI_API_KEY"
 
     @property
-    def base_url(self):
-        return "https://api.mistral.ai/v1"
+    def litellm_api_key_var(self) -> str:
+        return "MISTRAL_API_KEY"
 
 
 supported_models = {
     "mixtral-8x22b-instruct-v0.1": {
-        "endpoint": "open-mixtral-8x22b",
+        "endpoint": "mistral/open-mixtral-8x22b",
         "context_window": 65536,
         "cost": {"prompt": 2, "completion": 6},
     },
     "mistral-7b-instruct-v0.3": {
-        "endpoint": "open-mistral-7b",
+        "endpoint": "mistral/open-mistral-7b",
         "context_window": 32768,
         "cost": {"prompt": 0.25, "completion": 0.25},
     },
     "mixtral-8x7b-instruct-v0.1": {
-        "endpoint": "open-mixtral-8x7b",
+        "endpoint": "mistral/open-mixtral-8x7b",
         "context_window": 32768,
         "cost": {"prompt": 0.7, "completion": 0.7},
     },
     "mistral-small": {
-        "endpoint": "mistral-small-latest",
+        "endpoint": "mistral/mistral-small-latest",
         "context_window": 32768,
-        "cost": {"prompt": 1, "completion": 3},
+        "cost": {"prompt": 0.2, "completion": 0.6},
     },
     "mistral-large": {
-        "endpoint": "mistral-large-latest",
+        "endpoint": "mistral/mistral-large-latest",
         "context_window": 32768,
-        "cost": {"prompt": 4, "completion": 12},
+        "cost": {"prompt": 2, "completion": 6},
     },
     "mistral-nemo": {
-        "endpoint": "open-mistral-nemo-2407",
+        "endpoint": "mistral/open-mistral-nemo-2407",
         "context_window": 128000,
-        "cost": {"prompt": 0.3, "completion": 0.3},
+        "cost": {"prompt": 0.15, "completion": 0.15},
     },
 }

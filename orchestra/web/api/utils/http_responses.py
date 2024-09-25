@@ -117,6 +117,16 @@ user_id_not_found = HTTPException(
     detail="Specified user-id not found.",
 )
 
+custom_api_key_not_found = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail="Custom API key not found.",
+)
+
+custom_endpoint_not_found = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail="Custom endpoint not found.",
+)
+
 
 def dataset_does_not_exist(dataset=""):
     return HTTPException(
@@ -129,6 +139,13 @@ def evaluation_does_not_exist(dataset=""):
     return HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail=f"The evaluation for {dataset} does not exist.",
+    )
+
+
+def evaluator_not_found(evaluator):
+    return HTTPException(
+        status.HTTP_404_NOT_FOUND,
+        detail=f"The evaluator {evaluator} does not exist in your account",
     )
 
 

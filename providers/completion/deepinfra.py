@@ -18,64 +18,74 @@ class Deepinfra(BaseCompletionProvider):
         return "ORCHESTRA_DEEPINFRA_API_KEY"
 
     @property
-    def base_url(self):
-        return "https://api.deepinfra.com/v1/openai"
+    def litellm_api_key_var(self) -> str:
+        return "DEEPINFRA_API_KEY"
 
 
 supported_models = {
-    "mixtral-8x22b-instruct-v0.1": {
-        "endpoint": "mistralai/Mixtral-8x22B-Instruct-v0.1",
-        "context_window": 65536,
-        "cost": {"prompt": 0.65, "completion": 0.65},
+    "llama-3.1-8b-chat": {
+        "endpoint": "deepinfra/meta-llama/Meta-Llama-3.1-8B-Instruct",
+        "context_window": 128000,
+        "cost": {"prompt": 0.055, "completion": 0.055},
     },
-    "gemma-7b-it": {
-        "endpoint": "google/gemma-7b-it",
-        "context_window": 8192,
-        "cost": {"prompt": 0.07, "completion": 0.07},
+    "llama-3.1-70b-chat": {
+        "endpoint": "deepinfra/meta-llama/Meta-Llama-3.1-70B-Instruct",
+        "context_window": 128000,
+        "cost": {"prompt": 0.35, "completion": 0.4},
+    },
+    "llama-3.1-405b-chat": {
+        "endpoint": "deepinfra/meta-llama/Meta-Llama-3.1-405B-Instruct",
+        "context_window": 32000,
+        "cost": {"prompt": 1.79, "completion": 1.79},
+    },
+    "llama-3-8b-chat": {
+        "endpoint": "deepinfra/meta-llama/Meta-Llama-3-8B-Instruct",
+        "context_window": 8000,
+        "cost": {"prompt": 0.055, "completion": 0.055},
+    },
+    "llama-3-70b-chat": {
+        "endpoint": "deepinfra/meta-llama/Meta-Llama-3-70B-Instruct",
+        "context_window": 8000,
+        "cost": {"prompt": 0.35, "completion": 0.4},
+    },
+    "gemma-2-9b-it": {
+        "endpoint": "deepinfra/google/gemma-2-9b-it",
+        "context_window": 8000,
+        "cost": {"prompt": 0.06, "completion": 0.06},
+    },
+    "gemma-2-27b-it": {
+        "endpoint": "deepinfra/google/gemma-2-27b-it",
+        "context_window": 8000,
+        "cost": {"prompt": 0.27, "completion": 0.27},
     },
     "mixtral-8x7b-instruct-v0.1": {
-        "endpoint": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+        "endpoint": "deepinfra/mistralai/Mixtral-8x7B-Instruct-v0.1",
         "context_window": 32768,
         "cost": {"prompt": 0.24, "completion": 0.24},
     },
     "mistral-7b-instruct-v0.3": {
-        "endpoint": "mistralai/Mistral-7B-Instruct-v0.3",
+        "endpoint": "deepinfra/mistralai/Mistral-7B-Instruct-v0.3",
         "context_window": 32768,
-        "cost": {"prompt": 0.064, "completion": 0.064},
+        "cost": {"prompt": 0.055, "completion": 0.055},
     },
-    "phind-codellama-34b-v2": {
-        "endpoint": "Phind/Phind-CodeLlama-34B-v2",
-        "context_window": 16384,
-        "cost": {"prompt": 0.6, "completion": 0.6},
-    },
-    "llama-3-8b-chat": {
-        "endpoint": "meta-llama/Meta-Llama-3-8B-Instruct",
-        "context_window": 8000,
-        "cost": {"prompt": 0.064, "completion": 0.064},
-    },
-    "llama-3-70b-chat": {
-        "endpoint": "meta-llama/Meta-Llama-3-70B-Instruct",
-        "context_window": 8000,
-        "cost": {"prompt": 0.56, "completion": 0.77},
+    "mistral-nemo": {
+        "endpoint": "mistralai/Mistral-Nemo-Instruct-2407",
+        "context_window": 128000,
+        "cost": {"prompt": 0.13, "completion": 0.13},
     },
     "qwen-2-7b-instruct": {
-        "endpoint": "Qwen/Qwen2-72B-Instruct",
+        "endpoint": "deepinfra/Qwen/Qwen2-72B-Instruct",
         "context_window": 32000,
-        "cost": {"prompt": 0.56, "completion": 0.77},
+        "cost": {"prompt": 0.055, "completion": 0.055},
     },
     "qwen-2-72b-instruct": {
-        "endpoint": "Qwen/Qwen2-7B-Instruct",
+        "endpoint": "deepinfra/Qwen/Qwen2-7B-Instruct",
         "context_window": 32000,
-        "cost": {"prompt": 0.07, "completion": 0.07},
+        "cost": {"prompt": 0.35, "completion": 0.40},
     },
-    "phi-3-medium-4k-instruct": {
-        "endpoint": "microsoft/Phi-3-medium-4k-instruct",
-        "context_window": 4000,
-        "cost": {"prompt": 0.14, "completion": 0.14},
-    },
-    "nemotron-4-340b-instruct": {
-        "endpoint": "nvidia/Nemotron-4-340B-Instruct",
-        "context_window": 4000,
-        "cost": {"prompt": 4.2, "completion": 4.2},
+    "qwen-2.5-72b-instruct": {
+        "endpoint": "deepinfra/Qwen/Qwen2.5-72B-Instruct",
+        "context_window": 32000,
+        "cost": {"prompt": 0.35, "completion": 0.40},
     },
 }

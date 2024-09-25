@@ -152,4 +152,10 @@ application_default_credentials.json
 # SQL Dump files
 *.dump.sql
 
-dataset_evaluation/save_files
+# tmp test files
+save_files
+scores.json
+
+# docs
+mint.json
+api-reference/

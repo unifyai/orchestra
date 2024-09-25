@@ -18,88 +18,53 @@ class TogetherAI(BaseCompletionProvider):
         return "ORCHESTRA_TOGETHER_AI_API_KEY"
 
     @property
-    def base_url(self):
-        return "https://api.together.xyz/v1/"
+    def litellm_api_key_var(self) -> str:
+        return "TOGETHERAI_API_KEY"
 
 
 supported_models = {
     "llama-3.1-8b-chat": {
-        "endpoint": "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
-        "context": 8192,
+        "endpoint": "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+        "context_window": 8192,
         "cost": {"prompt": 0.18, "completion": 0.18},
     },
     "llama-3.1-70b-chat": {
-        "endpoint": "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
-        "context": 8192,
+        "endpoint": "together_ai/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+        "context_window": 8192,
         "cost": {"prompt": 0.88, "completion": 0.88},
     },
     "llama-3.1-405b-chat": {
-        "endpoint": "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
-        "context": 32768,
+        "endpoint": "together_ai/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
+        "context_window": 32768,
         "cost": {"prompt": 5, "completion": 5},
     },
     "llama-3-70b-chat": {
-        "endpoint": "meta-llama/Llama-3-70b-chat-hf",
+        "endpoint": "together_ai/meta-llama/Meta-Llama-3-70B-Instruct-Turbo",
         "context_window": 8192,
         "cost": {"prompt": 0.9, "completion": 0.9},
     },
     "llama-3-8b-chat": {
-        "endpoint": "meta-llama/Llama-3-8b-chat-hf",
+        "endpoint": "together_ai/meta-llama/Meta-Llama-3-8B-Instruct-Turbo",
         "context_window": 8192,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
     "mixtral-8x22b-instruct-v0.1": {
-        "endpoint": "mistralai/Mixtral-8x22B-Instruct-v0.1",
+        "endpoint": "together_ai/mistralai/Mixtral-8x22B-Instruct-v0.1",
         "context_window": 65536,
         "cost": {"prompt": 1.2, "completion": 1.2},
     },
-    "gemma-2b-it": {
-        "endpoint": "google/gemma-2b-it",
-        "context_window": 8192,
-        "cost": {"prompt": 0.1, "completion": 0.1},
-    },
-    "gemma-7b-it": {
-        "endpoint": "google/gemma-7b-it",
-        "context_window": 8192,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
-    "codellama-13b-instruct": {
-        "endpoint": "togethercomputer/CodeLlama-13b-Instruct",
-        "context_window": 16384,
-        "cost": {"prompt": 0.3, "completion": 0.3},
-    },
-    "codellama-7b-instruct": {
-        "endpoint": "togethercomputer/CodeLlama-7b-Instruct",
-        "context_window": 16384,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
-    "codellama-70b-instruct": {
-        "endpoint": "codellama/CodeLlama-70b-Instruct-hf",
-        "content": 4096,
-        "cost": {"prompt": 0.9, "completion": 0.9},
-    },
-    "deepseek-coder-33b-instruct": {
-        "endpoint": "deepseek-ai/deepseek-coder-33b-instruct",
-        "context_window": 16384,
-        "cost": {"prompt": 0.8, "completion": 0.8},
-    },
     "mistral-7b-instruct-v0.3": {
-        "endpoint": "mistralai/Mistral-7B-Instruct-v0.3",
+        "endpoint": "together_ai/mistralai/Mistral-7B-Instruct-v0.3",
         "context_window": 32768,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
     "mixtral-8x7b-instruct-v0.1": {
-        "endpoint": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+        "endpoint": "together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
         "context_window": 32768,
         "cost": {"prompt": 0.6, "completion": 0.6},
     },
-    "phind-codellama-34b-v2": {
-        "endpoint": "Phind/Phind-CodeLlama-34B-v2",
-        "context_window": 16384,
-        "cost": {"prompt": 0.8, "completion": 0.8},
-    },
     "qwen-2-72b-instruct": {
-        "endpoint": "Qwen/Qwen2-72B-Instruct",
+        "endpoint": "together_ai/Qwen/Qwen2-72B-Instruct",
         "context_window": 32768,
         "cost": {"prompt": 0.9, "completion": 0.9},
     },

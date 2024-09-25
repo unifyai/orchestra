@@ -76,7 +76,7 @@ tools = [
 
 
 async def get_credits(client):
-    response = await client.get("/v0/get_credits", headers=HEADERS)
+    response = await client.get("/v0/credits", headers=HEADERS)
     return response.json()["credits"]
 
 
@@ -125,7 +125,13 @@ def get_chat_completions_payload(model, provider, stream):
     return {"model": f"{model}@{provider}", **_partial_openai_payload(stream=stream)}
 
 
-def get_chat_completions_payload_fallback(model_str, stream):
+def get_chat_completions_payload_fallback(models, stream):
+    return [
+        {"model": model, **_partial_openai_payload(stream=stream)} for model in models
+    ]
+
+
+def get_chat_completions_arrow_payload_fallback(model_str, stream):
     return {"model": model_str, **_partial_openai_payload(stream=stream)}
 
 
@@ -187,7 +193,7 @@ def get_chat_completions_payload_tool_use(model_str):
         {
             "role": "user",
             "content": "what is the weather going to be like in Glasgow, Scotland over the next 2 days",
-        }
+        },
     )
     payload = {"messages": messages, "tools": tools, "model": model_str}
     return payload

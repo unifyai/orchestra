@@ -21,6 +21,10 @@ class LeptonAI(BaseCompletionProvider):
         return "ORCHESTRA_LEPTON_AI_API_KEY"
 
     @property
+    def litellm_api_key_var(self) -> str:
+        return ""
+
+    @property
     def base_url(self):
         return "https://{0}.lepton.run/api/v1/".format(self.provider_endpoint)
 
@@ -35,15 +39,10 @@ class LeptonAI(BaseCompletionProvider):
 
 
 supported_models = {
-    "gemma-7b-it": {
-        "endpoint": "gemma-7b",
+    "gemma-2-9b-it": {
+        "endpoint": "gemma2-9b",
         "context_window": 8192,
         "cost": {"prompt": 0.07, "completion": 0.07},
-    },
-    "mixtral-8x7b-instruct-v0.1": {
-        "endpoint": "mixtral-8x7b",
-        "context_window": 32768,
-        "cost": {"prompt": 0.5, "completion": 0.5},
     },
     "llama-3-8b-chat": {
         "endpoint": "llama3-8b",
@@ -55,9 +54,39 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 0.8, "completion": 0.8},
     },
+    "llama-3.1-8b-chat": {
+        "endpoint": "llama3-1-8b",
+        "context_window": 131072,
+        "cost": {"prompt": 0.07, "completion": 0.07},
+    },
+    "llama-3.1-70b-chat": {
+        "endpoint": "llama3-1-70b",
+        "context_window": 131072,
+        "cost": {"prompt": 0.8, "completion": 0.8},
+    },
+    "llama-3.1-405b-chat": {
+        "endpoint": "llama-3-1-405b",
+        "context_window": 131072,
+        "cost": {"prompt": 2.8, "completion": 2.8},
+    },
+    "mixtral-8x7b-instruct-v0.1": {
+        "endpoint": "mixtral-8x7b",
+        "context_window": 32768,
+        "cost": {"prompt": 0.5, "completion": 0.5},
+    },
     "mistral-7b-instruct-v0.3": {
         "endpoint": "mistral-7b",
         "context_window": 32768,
         "cost": {"prompt": 0.07, "completion": 0.07},
+    },
+    "mistral-nemo": {
+        "endpoint": "mistral-nemo",
+        "context_window": 128000,
+        "cost": {"prompt": 0.18, "completion": 0.18},
+    },
+    "qwen-2-72b-instruct": {
+        "endpoint": "qwen2-72b",
+        "context_window": 128000,
+        "cost": {"prompt": 0.8, "completion": 0.8},
     },
 }

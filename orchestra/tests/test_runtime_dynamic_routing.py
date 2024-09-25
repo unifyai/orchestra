@@ -1,72 +1,91 @@
+from typing import Any, Dict, Tuple
+
 import pytest
 from fastapi import HTTPException
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
-from orchestra.web.api.utils.dynamic_routing import dynamic_routing, parse_endpoint
+from orchestra.web.api.utils.dynamic_routing import Router
 from orchestra.web.api.utils.http_responses import (
-    provider_not_found_under_conditions,
     invalid_provider_str,
+    provider_not_found_under_conditions,
 )
 
 # TODO: Add test for same value in metric
 
-TEST_VALID_CONFIGS = [
-    "lowest-input-cost",
-    "lowest-output-cost",
-    "lowest-input-cost-per-token",
-    "lowest-output-cost-per-token",
-    "lowest-itl",
-    "itl",
-    "highest-tks-per-sec",
-    "highest-output-tks-per-sec",
-    "lowest-ttft",
-    "ttft",
+TEST_CASES = [
+    (
+        "input-cost",
+        {
+            "metric": "input-cost",
+            "key": "keyword",
+            "value": "lowest",
+        },
+    ),
+    (
+        "oc>10",
+        {
+            "metric": "output-cost",
+            "key": "checks",
+            "value": [
+                {
+                    "threshold": 10,
+                    "op": ">",
+                },
+            ],
+        },
+    ),
+    (
+        "highest-i",
+        {
+            "metric": "itl",
+            "key": "keyword",
+            "value": "highest",
+        },
+    ),
+    (
+        "ttft>10|ttft<30",
+        {
+            "metric": "ttft",
+            "key": "checks",
+            "value": [
+                {
+                    "threshold": 10,
+                    "op": ">",
+                },
+                {
+                    "threshold": 30,
+                    "op": "<",
+                },
+            ],
+        },
+    ),
 ]
 
-TEST_VALID_PRICE_THRESHOLDS = [
-    "",
-    "<0.1ic",
-    "<10ic",
-    "<0.1oc",
-    "<10oc",
-]
 
-
-@pytest.mark.parametrize("price_threshold", TEST_VALID_PRICE_THRESHOLDS)
-@pytest.mark.parametrize("provider", TEST_VALID_CONFIGS)
+@pytest.mark.parametrize("test_case", TEST_CASES)
 def test_valid_performance_based_routing(  # type: ignore[return]
     dbsession,
-    provider: str,
-    price_threshold: str,
+    test_case: Tuple[str, Dict[str, Any]],
 ) -> str:
     endpoint_dao = EndpointDAO(dbsession)
     benchmark_run_dao = BenchmarkRunDAO(dbsession)
+    provider, threshold = test_case
 
-    if "input-cost" in provider and "ic" in price_threshold:
-        pytest.skip()
-    if "output-cost" in provider and "oc" in price_threshold:
-        pytest.skip()
-
-    target_metric, metrics_thresholds = parse_endpoint(provider + price_threshold)
-    _, selected_provider = dynamic_routing(
+    metrics_and_thresholds = Router(
+        f"claude-3.5-sonnet@{provider}",
+        "",
         endpoint_dao,
         benchmark_run_dao,
-        target_metric,
-        models=("pbr-model",),
-        metrics_thresholds=metrics_thresholds,
-    )
+    ).metrics_and_thresholds
 
-    expected_provider = {
-        "lowest-input-cost": "lowest-input-cost-per-token",
-        "lowest-output-cost": "lowest-output-cost-per-token",
-        "highest-tks-per-sec": "lowest-itl",
-        "highest-output-tks-per-sec": "lowest-itl",
-        "itl": "lowest-itl",
-        "ttft": "lowest-ttft",
-    }.get(provider, provider)
-
-    assert selected_provider == f"{expected_provider + price_threshold}-provider"
+    metric = threshold["metric"]
+    if threshold["key"] == "checks":
+        for i, check in enumerate(metrics_and_thresholds[metric]["checks"]):
+            assert check["threshold"] == threshold["value"][i]["threshold"]
+            assert check["op"] == threshold["value"][i]["op"]
+    else:
+        assert metrics_and_thresholds[metric]["keyword"] == threshold["value"]
 
 
 def test_new_dynamic_routing(  # type: ignore[return]
@@ -77,17 +96,12 @@ def test_new_dynamic_routing(  # type: ignore[return]
     # datapoint_dao = DatapointDAO(dbsession)
     endpoint_dao = EndpointDAO(dbsession)
 
-    model, provider = dynamic_routing(
+    model, provider, _ = Router(
+        "llama-3.1-8b-chat@quality|input-cost<=0.8|output-cost<=0.8|itl>1|itl<20",
+        "",
         endpoint_dao,
         benchmark_run_dao,
-        # "input_cost_per_token",
-        "itl",
-        models=("pbr-model",),
-        metrics_thresholds={
-            # "itl": 750,
-            "input_cost_per_token": 10,
-        },
-    )
+    )()
 
     print(model, provider)
 
@@ -97,14 +111,12 @@ def test_empty_lut(dbsession) -> str:  # type: ignore[return]
     benchmark_run_dao = BenchmarkRunDAO(dbsession)
 
     with pytest.raises(HTTPException) as err:
-        target_metric, metrics_thresholds = parse_endpoint("lowest-ttft")
-        _ = dynamic_routing(
+        Router(
+            "pbr-model-empty-lut@ttft",
+            "",
             endpoint_dao,
             benchmark_run_dao,
-            target_metric,
-            models=("pbr-model-empty-lut",),
-            metrics_thresholds=metrics_thresholds,
-        )
+        )()
     assert err.value.status_code == 500
 
 
@@ -131,14 +143,12 @@ def test_no_models_within_threshold(dbsession) -> str:  # type: ignore[return]
     benchmark_run_dao = BenchmarkRunDAO(dbsession)
 
     with pytest.raises(HTTPException) as err:
-        target_metric, metrics_thresholds = parse_endpoint("lowest-ttft<0.0001ic")
-        _ = dynamic_routing(
+        Router(
+            "llama-3.1-8b-chat@itl<1|itl<20",
+            "",
             endpoint_dao,
             benchmark_run_dao,
-            target_metric,
-            models=("pbr-model",),
-            metrics_thresholds=metrics_thresholds,
-        )
+        )()
     assert err.value.status_code == provider_not_found_under_conditions.status_code
     assert err.value.detail == provider_not_found_under_conditions.detail
 
@@ -148,6 +158,11 @@ def test_invalid_provider(dbsession) -> str:  # type: ignore[return]
     benchmark_run_dao = BenchmarkRunDAO(dbsession)
 
     with pytest.raises(HTTPException) as err:
-        target_metric, metrics_thresholds = parse_endpoint("dog")
+        Router(
+            "llama-3.1-8b-chat@itr>1|itr<20",
+            "",
+            endpoint_dao,
+            benchmark_run_dao,
+        )()
     assert err.value.status_code == invalid_provider_str.status_code
     assert err.value.detail == invalid_provider_str.detail

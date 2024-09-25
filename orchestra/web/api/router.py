@@ -5,19 +5,23 @@ from fastapi.routing import APIRouter
 
 from orchestra.web.api import (  # noqa: WPS235
     admin,
-    benchmarks,
-    chat_completion,
-    custom_endpoint,
-    dataset,
-    dataset_evaluation,
-    endpoint,
-    eval_batch,
-    inference,
-    model,
+    credits,
+    custom_api_keys,
+    custom_endpoints,
+    datasets,
+    default_prompt,
+    docs,
+    efficiency_benchmarks,
+    evaluations,
+    evaluators,
+    llm_queries,
+    logging,
     monitoring,
     provider,
-    routing,
-    users,
+    router_configurations,
+    router_deployment,
+    router_training,
+    supported_endpoints,
 )
 from orchestra.web.api.dependencies import auth_admin_key, auth_api_key
 
@@ -26,63 +30,81 @@ ADMIN_AUTH = [Depends(auth_admin_key)] if not os.environ.get("ON_PREM") else Non
 
 api_router = APIRouter()
 api_router.include_router(
-    users.router,
-    tags=["User"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    model.public_router,
-    tags=["Model and Endpoints"],
+    supported_endpoints.router,
+    tags=["Supported Endpoints"],
     include_in_schema=True,
-)
-api_router.include_router(
-    inference.router,
-    tags=["Querying LLMs"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    chat_completion.router,
-    tags=["Querying LLMs"],
+    llm_queries.router,
+    tags=["LLM Queries"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    custom_endpoint.router,
-    tags=["Custom Endpoints and API keys"],
+    logging.router,
+    tags=["Logging"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    dataset.router,
-    tags=["Dataset"],
+    custom_endpoints.router,
+    tags=["Custom Endpoints"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    dataset_evaluation.router,
-    tags=["Dataset Evaluation"],
+    custom_api_keys.router,
+    tags=["Custom API keys"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    routing.router,
-    tags=["Routing"],
+    datasets.router,
+    tags=["Datasets"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    endpoint.public_router,
-    tags=["Model and Endpoints"],
-    include_in_schema=True,
+    evaluators.router,
+    tags=["Evaluators"],
+    dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    model.router,
-    prefix="/admin",
-    tags=["model"],
+    default_prompt.router,
+    tags=["Default Prompts"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    evaluations.router,
+    tags=["Evaluations"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    evaluations.admin_router,
+    tags=["Evaluations"],
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )
 api_router.include_router(
-    endpoint.router,
-    prefix="/admin",
-    tags=["endpoint"],
-    include_in_schema=False,
-    dependencies=ADMIN_AUTH,
+    efficiency_benchmarks.router,
+    tags=["Efficiency Benchmarks"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    router_training.router,
+    tags=["Router Training"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    router_deployment.router,
+    tags=["Router Deployment"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    router_configurations.router,
+    tags=["Router Configurations"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    credits.router,
+    tags=["Credits"],
+    dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
     provider.router,
@@ -92,11 +114,6 @@ api_router.include_router(
     dependencies=ADMIN_AUTH,
 )
 api_router.include_router(
-    eval_batch.router,
-    include_in_schema=False,
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
     admin.router,
     prefix="/admin",
     tags=["admin"],
@@ -104,4 +121,4 @@ api_router.include_router(
     dependencies=ADMIN_AUTH,
 )
 api_router.include_router(monitoring.router)
-api_router.include_router(benchmarks.router, tags=["benchmarks"])
+api_router.include_router(docs.router)

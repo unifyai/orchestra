@@ -21,16 +21,21 @@ blob_name = f"/0/dataset.jsonl"
 
 
 def ratings_from_sample(sample, cfg=default_cfg):
+    if cfg is None:
+        cfg = default_cfg
     try:
         score_mapping = {e["label"]: e["score"] for e in cfg}
         judge_response = json.loads(extract_json(sample))
         rating = judge_response["assistant_rating"]
+        while isinstance(rating, list):
+            rating = rating[0]
         if rating in score_mapping:
             score = score_mapping[rating]
         elif rating.lower() in score_mapping:  # TODO: more comprehensive
             score = score_mapping[rating.lower()]
         return float(score)
     except Exception as e:
+        print(e)
         return 0
 
 
@@ -41,5 +46,4 @@ def calc_quality(judgements_path, cfg=default_cfg):
             entry = json.loads(line)
             prompt_score = ratings_from_sample(entry["judge_response"], cfg)
             scores.append(prompt_score)
-    print(scores)
     return sum(scores) / len(scores)

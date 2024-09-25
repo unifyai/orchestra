@@ -23,8 +23,8 @@ class OpenAI(BaseCompletionProvider):
         return "ORCHESTRA_OPENAI_API_KEY"
 
     @property
-    def base_url(self):
-        return "https://api.openai.com/v1"
+    def litellm_api_key_var(self) -> str:
+        return "OPENAI_API_KEY"
 
 
 supported_models = {
@@ -48,9 +48,34 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 5, "completion": 15},
     },
+    "gpt-4o-2024-08-06": {
+        "endpoint": "gpt-4o-2024-08-06",
+        "context_window": 128000,
+        "cost": {"prompt": 2.5, "completion": 10},
+    },
+    "gpt-4o-2024-05-13": {
+        "endpoint": "gpt-4o-2024-05-13",
+        "context_window": 128000,
+        "cost": {"prompt": 5, "completion": 15},
+    },
     "gpt-4o-mini": {
         "endpoint": "gpt-4o-mini",
         "context_window": 128000,
         "cost": {"prompt": 0.15, "completion": 0.6},
+    },
+    "chatgpt-4o-latest": {
+        "endpoint": "chatgpt-4o-latest",
+        "context_window": 128000,
+        "cost": {"prompt": 5, "completion": 15},
+    },
+    "o1-preview": {
+        "endpoint": "o1-preview",
+        "context_window": 128000,
+        "cost": {"prompt": 15, "completion": 60},
+    },
+    "o1-mini": {
+        "endpoint": "o1-mini",
+        "context_window": 128000,
+        "cost": {"prompt": 3, "completion": 12},
     },
 }

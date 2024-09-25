@@ -1,7 +1,6 @@
-import google.auth
-from providers.completion.base_completion_provider import BaseCompletionProvider
+from typing import Any, List
 
-from orchestra.settings import settings
+from providers.completion.base_completion_provider import BaseCompletionProvider
 
 
 class VertexAI(BaseCompletionProvider):
@@ -17,42 +16,129 @@ class VertexAI(BaseCompletionProvider):
         self.supported_models = supported_models
 
     @property
-    def api_key(self) -> str:
-        # TODO: check if this doesn't add TTFT, prob does
-        creds, _ = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        )
-        auth_req = google.auth.transport.requests.Request()
-        creds.refresh(auth_req)
-        return creds.token
+    def api_key_var(self) -> str:
+        return "ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON"
 
     @property
-    def base_url(self):
-        return (
-            "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/"
-            f"{settings.vertexai_project}/locations/{settings.vertexai_location}/endpoints/openapi"
-        )
+    def litellm_api_key_var(self) -> str:
+        return "GOOGLE_APPLICATION_CREDENTIALS"
+
+    def __call__(
+        self,
+        messages: List,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> Any:  # noqa: WPS210
+        if self.hub_model in self.supported_models:
+            kwargs_region = kwargs.pop("region", None)
+            region = (
+                kwargs_region
+                if kwargs_region
+                else self.supported_models[self.hub_model]["region"]
+            )
+            kwargs["vertex_location"] = region
+        return super().__call__(messages, stream, **kwargs)
+
+    def __call_async__(
+        self,
+        messages: List,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        if self.hub_model in self.supported_models:
+            kwargs_region = kwargs.pop("region", None)
+            region = (
+                kwargs_region
+                if kwargs_region
+                else self.supported_models[self.hub_model]["region"]
+            )
+            kwargs["vertex_location"] = region
+        return super().__call__(messages, stream, **kwargs)
 
 
 supported_models = {
     "gemini-1.5-pro": {
-        "endpoint": "google/gemini-1.5-pro",
+        "endpoint": "vertex_ai/gemini-1.5-pro",
+        "region": "us-west1",
+        "context_window": 128000,
+        "cost": {"prompt": 3.5, "completion": 10.5},
+    },
+    "gemini-1.5-pro-001": {
+        "endpoint": "vertex_ai/gemini-1.5-pro-001",
+        "region": "us-west1",
         "context_window": 128000,
         "cost": {"prompt": 3.5, "completion": 10.5},
     },
     "gemini-1.5-flash": {
-        "endpoint": "google/gemini-1.5-flash",
+        "endpoint": "vertex_ai/gemini-1.5-flash",
+        "region": "us-west1",
         "context_window": 128000,
-        "cost": {"prompt": 0.35, "completion": 1.05},
+        "cost": {"prompt": 0.075, "completion": 0.3},
     },
-    # "gemma-2-9b-it": {
-    #     "endpoint": "google/gemma2-9b-it",
-    #     "context_window": 8192,
-    #     "cost": {"prompt": 0.2, "completion": 0.2},
-    # },
-    # "gemma-2-27b-it": {
-    #     "endpoint": "google/gemma2-27b-it",
-    #     "context_window": 8192,
-    #     "cost": {}
-    # }
+    "gemini-1.5-flash-001": {
+        "endpoint": "vertex_ai/gemini-1.5-flash-001",
+        "region": "us-west1",
+        "context_window": 128000,
+        "cost": {"prompt": 0.075, "completion": 0.3},
+    },
+    "gemini-1.0-pro": {
+        "endpoint": "vertex_ai/gemini-1.0-pro",
+        "region": "us-west1",
+        "context_window": 32000,
+        "cost": {"prompt": 0.5, "completion": 1.5},
+    },
+    "gemini-1.0-pro-001": {
+        "endpoint": "vertex_ai/gemini-1.0-pro-001",
+        "region": "us-west1",
+        "context_window": 32000,
+        "cost": {"prompt": 0.5, "completion": 1.5},
+    },
+    "gemini-1.0-pro-002": {
+        "endpoint": "vertex_ai/gemini-1.0-pro-002",
+        "region": "us-west1",
+        "context_window": 32000,
+        "cost": {"prompt": 0.5, "completion": 1.5},
+    },
+    "claude-3-haiku": {
+        "endpoint": "vertex_ai/claude-3-haiku@20240307",
+        "region": "us-east5",
+        "context_window": 200000,
+        "cost": {"prompt": 0.25, "completion": 1.25},
+    },
+    "claude-3-sonnet": {
+        "endpoint": "vertex_ai/claude-3-sonnet@20240229",
+        "region": "us-east5",
+        "context_window": 200000,
+        "cost": {"prompt": 3, "completion": 15},
+    },
+    "claude-3-opus": {
+        "endpoint": "vertex_ai/claude-3-opus@20240229",
+        "region": "us-east5",
+        "context_window": 200000,
+        "cost": {"prompt": 15, "completion": 75},
+    },
+    "claude-3.5-sonnet": {
+        "endpoint": "vertex_ai/claude-3-5-sonnet@20240620",
+        "region": "us-east5",
+        "context_window": 200000,
+        "cost": {"prompt": 3, "completion": 15},
+    },
+    "llama-3.1-405b-chat": {
+        "endpoint": "vertex_ai/meta/llama3-405b-instruct-maas",
+        "region": "us-central1",
+        "context_window": 128000,
+        "cost": {"prompt": 5.32, "completion": 16},
+    },
+    "mistral-large": {
+        "endpoint": "vertex_ai/mistral-large",
+        "region": "europe-west4",
+        "context_window": 32768,
+        "cost": {"prompt": 3, "completion": 9},
+    },
+    "mistral-nemo": {
+        "endpoint": "vertex_ai/mistral-nemo",
+        "region": "europe-west4",
+        "context_window": 128000,
+        "cost": {"prompt": 0.3, "completion": 0.3},
+    },
 }

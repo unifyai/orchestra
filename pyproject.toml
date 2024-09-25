@@ -37,7 +37,7 @@ boto3 = "^1.34.131"
 botocore = "^1.34.131"
 google-cloud-aiplatform = "^1.38.1"
 psycopg2-binary = "^2.9.9"
-tiktoken = "^0.5.2"
+tiktoken = "0.7.0"
 openai = "^1.12.0"
 aiohttp = "^3.9.1"
 replicate = "^0.23.1"
@@ -52,7 +52,8 @@ google-cloud-pubsub = "^2.21.5"
 google-cloud-secret-manager = "^2.20.1"
 pytest-xdist = {extras = ["psutils"], version = "^3.6.1"}
 redis = "^5.0.7"
-
+litellm = "^1.48.0"
+unifyai = "^0.9.6"
 
 [tool.poetry.dev-dependencies]
 pytest = "^7.2.1"
@@ -101,6 +102,9 @@ env = [
     "ORCHESTRA_SENTRY_DSN=",
 ]
 addopts = "--cov --cov-report=lcov:lcov.info --cov-report=term"
+markers = [
+    "manual: marks tests as manual",
+]
 
 [fastapi-template.options]
 project_name = "orchestra"

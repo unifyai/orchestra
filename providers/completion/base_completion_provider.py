@@ -2,8 +2,11 @@ import logging
 import os
 from typing import Any, Dict, List
 
+import litellm
 import tiktoken
 from fastapi import HTTPException
+
+# from litellm.utils import get_model_info  # Uncomment later
 from openai import (
     APIError,
     APITimeoutError,
@@ -15,6 +18,10 @@ from openai import (
     Stream,
 )
 
+from orchestra.web.api.utils.helpers import (
+    check_litellm_supported_args,
+    filter_kwargs_for_openai_client,
+)
 from orchestra.web.api.utils.http_responses import server_error_with_digest
 
 logger = logging.getLogger(__name__)
@@ -39,6 +46,15 @@ class BaseCompletionProvider:
     def api_key_var(self) -> str:
         """
         Get the provider api key var NAME.
+
+        :raises NotImplementedError: This method should be implemented in a subclass.
+        """
+        raise NotImplementedError("This method should be implemented in a subclass")
+
+    @property
+    def litellm_api_key_var(self) -> str:
+        """
+        Get the provider api key var NAME for using litellm.
 
         :raises NotImplementedError: This method should be implemented in a subclass.
         """
@@ -97,32 +113,56 @@ class BaseCompletionProvider:
         output["id"] = out.get("id")
         output["object"] = out.get("object", "chat.completion.chunk")
         output["usage"] = out.get("usage") if out.get("usage") else {}
+        if "estimated_cost" in output["usage"]:
+            output["usage"].pop("estimated_cost")
         output["choices"] = out.get("choices") if out.get("choices") else []
         return output  # noqa: WPS420
 
-    def compute_cost(
-        self,
-        prompt_tks,
-        output_tks,
-    ) -> float:
-        """
-        Returns a deffered op to compute the cost of a completion.
+    # Uncomment later
+    # def update_supported_models(self):
+    #     for key in self.supported_models:
+    #         endpoint = self.supported_models[key]["endpoint"]
+    #         try:
+    #             model_info = get_model_info(endpoint)
+    #             self.supported_models[key] = {
+    #                 **self.supported_models[key],
+    #                 "context_window": model_info["max_input_tokens"],
+    #                 "cost": {
+    #                     "prompt": model_info["input_cost_per_token"] * PRICING_PER_TOKENS,
+    #                     "completion": model_info["output_cost_per_token"] * PRICING_PER_TOKENS
+    #                 }
+    #             }
+    #         except Exception as e:
+    #             if "vertex" in endpoint:
+    #                 print(e)  # Just for debugging
+    #             pass
 
-        :param prompt_tks: The number of tokens in the prompt.
-        :type prompt_tks: int
-        :param output_tks: The number of tokens in the completion.
-        :type output_tks: int
-
-        :return: cost.
-        """
+    def compute_cost(self, prompt_tks, output_tks) -> float:
         prompt_cost = prompt_tks * self.prompt_cost / PRICING_PER_TOKENS
         completion_cost = output_tks * self.completion_cost / PRICING_PER_TOKENS
         return prompt_cost + completion_cost
+
+    def get_response_cost(
+        self,
+        response,
+        prompt_tokens,
+        completion_tokens,
+        using_litellm,
+    ):
+        cost = self.compute_cost(prompt_tokens, completion_tokens)
+        return cost
+        # if not using_litellm:
+        #     return cost
+        # hidden_param_cost = response._hidden_params.get("response_cost")
+        # litellm_cost = hidden_param_cost if hidden_param_cost is not None else cost
+        # return litellm_cost
 
     def get_usage_info(  # noqa: WPS210
         self,
         completions: List[str],
         messages: List[Dict],
+        response: Any,
+        using_litellm: bool,
     ) -> Dict:
         """
         Returns a usage dict with cost and token data when streaming.
@@ -131,6 +171,10 @@ class BaseCompletionProvider:
         :type completions: str
         :param messages: List of input prompts.
         :type messages: List[Dict]
+        :param response: Response from the llm
+        :type response: Any
+        :param using_litellm: Whether or not litellm was used
+        :type using_litellm: bool
 
         :return: a loaded usage dict
         """
@@ -144,7 +188,12 @@ class BaseCompletionProvider:
             tokens = [encoding.encode(completion) for completion in completions]
             completion_tokens = sum(len(token) for token in tokens)
             return {
-                "cost": self.compute_cost(prompt_tokens, completion_tokens),
+                "cost": self.get_response_cost(
+                    response,
+                    prompt_tokens,
+                    completion_tokens,
+                    using_litellm,
+                ),
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": prompt_tokens + completion_tokens,
@@ -159,23 +208,50 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-
+        kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
+        using_litellm = bool(self.litellm_api_key_var)
         try:  # noqa: WPS225
-            response = client.chat.completions.create(
-                model=self.provider_endpoint,
-                messages=messages,
-                stream=stream,
-                **kwargs,
-            )
+            if not using_litellm:
+                client = kwargs.pop(
+                    "client",
+                    OpenAI(api_key=self.api_key, base_url=self.base_url),
+                )
+                response = client.chat.completions.create(
+                    model=self.provider_endpoint,
+                    messages=messages,
+                    stream=stream,
+                    extra_body=extra_body,
+                    **kwargs,
+                )
+            else:
+                # extra_body can't be passed to anthropic or vertex_ai
+                check_litellm_supported_args(kwargs, self.provider_endpoint)
+                provider_prefix = self.provider_endpoint.split("/")[0]
+                if provider_prefix not in ["anthropic", "bedrock", "vertex_ai"]:
+                    kwargs["extra_body"] = extra_body
+                os.environ[self.litellm_api_key_var] = self.api_key
+                drop_params = extra_body.pop("drop_params", True)
+                response = litellm.completion(
+                    model=self.provider_endpoint,
+                    messages=messages,
+                    stream=stream,
+                    drop_params=drop_params,
+                    **kwargs,
+                )
+
             if isinstance(response, Stream) or stream:
-                return (SyncGeneratorWrapper(self, response, messages), None)
+                return (
+                    SyncGeneratorWrapper(self, response, messages, using_litellm),
+                    None,
+                )
 
             # TODO: Maybe remove this dump unless neccesary?
             response_dict = self._modify_output(response.model_dump(), stream=stream)
-            return response_dict, self.compute_cost(
+            return response_dict, self.get_response_cost(
+                response,
                 response.usage.prompt_tokens,
                 response.usage.completion_tokens,
+                using_litellm,
             )
         # TODO: These needs to be processed correctly in our endpoint
         except APITimeoutError as error:
@@ -201,23 +277,49 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
-
+        kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
+        using_litellm = bool(self.litellm_api_key_var)
         try:  # noqa: WPS225
-            response = client.chat.completions.create(
-                model=self.provider_endpoint,
-                messages=messages,
-                stream=stream,
-                **kwargs,
-            )
+            if not using_litellm:
+                client = kwargs.pop(
+                    "client",
+                    AsyncOpenAI(api_key=self.api_key, base_url=self.base_url),
+                )
+                response = client.chat.completions.create(
+                    model=self.provider_endpoint,
+                    messages=messages,
+                    stream=stream,
+                    extra_body=extra_body,
+                    **kwargs,
+                )
+            else:
+                # extra_body can't be passed to anthropic or vertex_ai
+                check_litellm_supported_args(kwargs, self.provider_endpoint)
+                provider_prefix = self.provider_endpoint.split("/")[0]
+                if provider_prefix not in ["anthropic", "bedrock", "vertex_ai"]:
+                    kwargs["extra_body"] = extra_body
+                os.environ[self.litellm_api_key_var] = self.api_key
+                drop_params = extra_body.pop("drop_params", True)
+                response = litellm.acompletion(
+                    model=self.provider_endpoint,
+                    messages=messages,
+                    stream=stream,
+                    drop_params=drop_params,
+                    **kwargs,
+                )
             if isinstance(response, AsyncStream) or stream:
-                return (AsyncGeneratorWrapper(self, response, messages), None)
+                return (
+                    AsyncGeneratorWrapper(self, response, messages, using_litellm),
+                    None,
+                )
 
             # TODO: Maybe remove this dump unless neccesary?
             response_dict = self._modify_output(response.model_dump(), stream=stream)
-            return response_dict, self.compute_cost(
+            return response_dict, self.get_response_cost(
+                response,
                 response.usage.prompt_tokens,
                 response.usage.completion_tokens,
+                using_litellm,
             )
         # TODO: These needs to be processed correctly in our endpoint
         except APITimeoutError as error:
@@ -235,10 +337,11 @@ class BaseCompletionProvider:
 
 
 class BaseGeneratorWrapper:
-    def __init__(self, provider, response, messages):
+    def __init__(self, provider, response, messages, using_litellm):
         self.provider = provider
         self._response = response
         self._messages = messages
+        self._using_litellm = using_litellm
         self.total_cost = None
 
     def generator_iteration(self, part, whole):
@@ -274,9 +377,11 @@ class BaseGeneratorWrapper:
         :yield: part_dict.
         """
         if part_dict and part_dict.get("usage"):
-            part_dict["usage"]["cost"] = self.provider.compute_cost(
+            part_dict["usage"]["cost"] = self.provider.get_response_cost(
+                self._response,
                 part_dict["usage"]["prompt_tokens"],
                 part_dict["usage"]["completion_tokens"],
+                self._using_litellm,
             )
         else:
             if part_dict is None:
@@ -284,6 +389,8 @@ class BaseGeneratorWrapper:
             part_dict["usage"] = self.provider.get_usage_info(
                 whole,
                 self._messages,
+                self._response,
+                self._using_litellm,
             )
         self.total_cost = part_dict["usage"]["cost"]
         yield part_dict

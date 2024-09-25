@@ -44,7 +44,6 @@ def get_app() -> FastAPI:
     app = FastAPI(
         title="UnifyAI HTTP API Reference",
         version=metadata.version("orchestra"),
-        docs_url="/v0/docs",
         redoc_url="/v0/redoc",
         openapi_url="/v0/openapi.json",
         swagger_ui_parameters={"defaultModelsExpandDepth": -1},
