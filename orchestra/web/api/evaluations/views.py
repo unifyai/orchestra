@@ -610,6 +610,8 @@ def get_evaluations(
                 status_code=404,
                 detail="If sub_scorers=True, need to specify both endpoint and evaluator, and per_prompt must be false.",
             )
+
+    if evaluator:
         raw_evaluators = evaluator_dao.filter(name=evaluator)
         if not raw_evaluators or raw_evaluators[0].user_id not in [None, user_id]:
             raise evaluator_not_found(evaluator)
