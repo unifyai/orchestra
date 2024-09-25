@@ -30,6 +30,9 @@ class CustomProvider(BaseCompletionProvider):
     def api_key(self) -> str:
         return self.custom_api_key.value
 
+    def litellm_api_key_var(self) -> str:
+        return self.custom_api_key.key
+
     @property
     def base_url(self):
         return self.custom_endpoint.url
