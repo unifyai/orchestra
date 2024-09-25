@@ -54,3 +54,13 @@ class StoredPromptDAO:
         query = query.options(joinedload(StoredPrompt.extra_fields))
         rows = self.session.execute(query)
         return list(rows.scalars().unique().fetchall())
+
+    def check_ids_valid(self, user_id, prompt_ids):
+        query = (
+            select(StoredPrompt.id)
+            .where(StoredPrompt.user_id == user_id)
+            .where(StoredPrompt.id.in_(prompt_ids))
+        )
+        matching_ids = self.session.execute(query).scalars().all()
+        invalid_ids = set(prompt_ids).difference(set(matching_ids))
+        return invalid_ids

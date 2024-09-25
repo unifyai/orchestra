@@ -18,6 +18,7 @@ class JudgementDAO:
         judge_endpoint_str: int,
         evaluator_id: int,
         judgement: str,
+        judgement_score: float,
     ) -> None:
         self.session.add(
             Judgement(
@@ -25,6 +26,7 @@ class JudgementDAO:
                 judge_endpoint_str=judge_endpoint_str,
                 evaluator_id=evaluator_id,
                 judgement=judgement,
+                judgement_score=judgement_score,
             ),
         )
 

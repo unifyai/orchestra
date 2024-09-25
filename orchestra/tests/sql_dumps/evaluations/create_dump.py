@@ -64,6 +64,8 @@ HEADERS = {
 
 
 PATH_FOR_DUMP = os.path.join(os.path.dirname(__file__), "./tmp_dump_trigger.jsonl")
+# wipe the file
+open(PATH_FOR_DUMP, "w").close()
 
 
 @pytest.mark.manual
@@ -123,28 +125,47 @@ async def test_create_data_trigger_eval(
 
     # create evaluator
     eval_name = "test_eval"
-    system_prompt = "dummy system prompt"
+    judge_prompt = {
+        "messages": [
+            {
+                "role": "system",
+                "content": """As a judge, rate the assistant's answer to the user prompt.""",
+            },
+            {
+                "role": "user",
+                "content": """
+    <user_prompt>
+    {user_prompt}
+    </user_prompt>
+
+    <assistant_response>
+    {response}
+    </assistant_respose>
+
+    follow these rating rules:
+    <rating rules>
+    {class_config}
+    </rating rules>""",
+            },
+        ],
+        "temperature": 0.7,
+    }
     judge_model = "llama-3-8b-chat@aws-bedrock"
 
     url = "/v0/evaluator"
     params = {
         "name": eval_name,
-        "system_prompt": system_prompt,
+        "judge_prompt": judge_prompt,
         "judge_models": judge_model,
     }
     response = await client.post(url, json=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
-    # create evaluator
-    eval_name = "test_eval_2"
-    system_prompt = "dummy system prompt"
-    judge_model = "llama-3-8b-chat@aws-bedrock"
-
     url = "/v0/evaluator"
     params = {
-        "name": eval_name,
-        "system_prompt": system_prompt,
-        "judge_models": judge_model,
+        "name": "test_eval_multi_judge",
+        "judge_prompt": judge_prompt,
+        "judge_models": ["llama-3-8b-chat@aws-bedrock", "gpt-3.5-turbo@openai"],
     }
     response = await client.post(url, json=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
@@ -152,7 +173,7 @@ async def test_create_data_trigger_eval(
     # create second
     # create dataset
 
-    file_path = "./orchestra/tests/sample_datasets/new_prompts.jsonl"
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws.jsonl"
     dataset = "test_dataset_eval"
     response = await upload_dataset(client, file_path, dataset)
     assert response.status_code == 200, response.json()
@@ -186,7 +207,7 @@ async def test_create_data_trigger_eval(
         "url": url,
         "dataset": dataset,
         "endpoint": endpoint,
-        "evaluator": "test_eval_2",
+        "evaluator": "test_eval_multi_judge",
     }
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
@@ -202,3 +223,66 @@ async def test_create_data_trigger_eval(
     assert endpoint in scores[eval_name]
     assert "score" in scores[eval_name][endpoint]
     assert "progress" in scores[eval_name][endpoint]
+
+    url = "/v0/evaluation"
+    params = {"dataset": dataset, "evaluator": eval_name}
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    scores = response.json()
+    assert eval_name in scores
+    assert endpoint in scores[eval_name]
+    assert "score" in scores[eval_name][endpoint]
+    assert "progress" in scores[eval_name][endpoint]
+
+    url = "/v0/evaluation"
+    params = {"dataset": dataset, "evaluator": eval_name}
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    scores = response.json()
+    assert eval_name in scores
+    assert endpoint in scores[eval_name]
+    assert "score" in scores[eval_name][endpoint]
+    assert "progress" in scores[eval_name][endpoint]
+
+
+@pytest.mark.manual
+async def test_create_data_clientside(
+    client: AsyncClient,
+):
+    @event.listens_for(Engine, "before_cursor_execute")
+    def receive_before_cursor_execute(
+        conn, cursor, statement, parameters, context, executemany
+    ):
+        "listen for the 'before_cursor_execute' event"
+        obj = {"statement": statement, "parameters": parameters}
+        if (
+            statement.startswith("SELECT")
+            or statement.startswith("DROP")
+            or statement.startswith("UPDATE users")
+        ):
+            return
+        with open(PATH_FOR_DUMP, "a") as f:
+            f.write(json.dumps(obj, default=str))
+            f.write("\n")
+            f.flush()
+
+    # create test dataset
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws.jsonl"
+    dataset = "test_dataset"
+    response = await upload_dataset(client, file_path, dataset)
+    assert response.status_code == 200, response.json()
+
+    url = "/v0/evaluator"
+    eval_name = "test_eval_clientside"
+    params = {
+        "name": eval_name,
+        "client_side": True,
+    }
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    url = "/v0/evaluation"
+    params = {"dataset": dataset, "evaluator": eval_name}
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    scores = response.json()

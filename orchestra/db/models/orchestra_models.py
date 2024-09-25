@@ -546,6 +546,7 @@ class Judgement(Base):
         nullable=False,
     )
     judgement = sa.Column(sa.String(), nullable=False)
+    judgement_score = sa.Column(sa.Numeric(), nullable=True)
     __table_args__ = (
         sa.UniqueConstraint(
             "response_id",
