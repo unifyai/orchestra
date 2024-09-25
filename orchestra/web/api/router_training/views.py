@@ -16,12 +16,9 @@ from orchestra.web.api.utils.gcp import (
     list_dir,
     read_from_bucket,
     send_pubsub_msg,
-<<<<<<< HEAD:orchestra/web/api/routing/views.py
     vertex_ai_endpoint_exists,
     vertex_ai_endpoint_list,
     vertex_ai_endpoint_undeploy,
-=======
->>>>>>> main:orchestra/web/api/router_training/views.py
 )
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
@@ -214,7 +211,6 @@ def train_router(
     return {"info": "Router training started! You will receive an email soon!"}
 
 
-<<<<<<< HEAD:orchestra/web/api/routing/views.py
 @router.get(
     "/router/train/list",
     responses={
@@ -248,8 +244,6 @@ def get_trained_routers(
     return routers_metadata
 
 
-=======
->>>>>>> main:orchestra/web/api/router_training/views.py
 @router.delete(
     "/router",
     responses={
@@ -313,7 +307,6 @@ def rename_router(
     """
     Renames the specified router from `name` to `new_name`.
     """
-<<<<<<< HEAD:orchestra/web/api/routing/views.py
     user_id = request_fastapi.state.user_id
     # Check if the files exist
     if not router_training_exists(user_id, name):
@@ -367,9 +360,6 @@ def delete_router(
     #   un-deploy router
     #   modify entry in the db
     return {"info": "Router deletion started."}
-=======
-    raise NotImplemented  # ToDo: implement
->>>>>>> main:orchestra/web/api/router_training/views.py
 
 
 @router.get(
@@ -402,7 +392,6 @@ def list_routers(
     `/router/deploy/list` `GET` endpoint.
     """
     user_id = request_fastapi.state.user_id
-<<<<<<< HEAD:orchestra/web/api/routing/views.py
     routers_metadata = _list_deployed_routers(user_id)
     trained_routers = _list_trained_routers(user_id)
     ret = {
@@ -410,13 +399,6 @@ def list_routers(
         for router_name in sorted(routers_metadata)
     }
     return ret
-=======
-    routers = _list_trained_routers(user_id)
-    # TODO: Do this correctly
-    routers_metadata = {}
-    for rtr in routers:
-        routers_metadata[rtr] = {"dataset": "", "endpoints": [""]}
-    return routers_metadata
 
 
 @router.get("/get_dataset_evaluation")
@@ -434,4 +416,3 @@ def get_dataset_evaluation(
     points = read_from_bucket(bucket_name, blob_name)
 
     return points
->>>>>>> main:orchestra/web/api/router_training/views.py
