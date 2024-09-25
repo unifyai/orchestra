@@ -963,6 +963,29 @@ async def test_list_evaluation_responses_from_prompt_ids(
     await _helper_test_list_evaluations(client, params, expected_scores)
 
 
+async def test_list_evaluation_sub_scorers(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(dbsession)
+    params = {
+        "dataset": "test_dataset_eval",
+        "evaluator": "test_eval_multi_judge",
+        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "sub_scorers": True,
+    }
+    expected_scores = {
+        "test_eval_multi_judge": {
+            "llama-3-8b-chat@aws-bedrock": {
+                "score": 0.5,
+                "progress": 100.0,
+                "sub_scores": {
+                    "gpt-3.5-turbo@openai": {"0.0": 1, "1.0": 1},
+                    "llama-3-8b-chat@aws-bedrock": {"0.5": 2},
+                },
+            }
+        }
+    }
+    await _helper_test_list_evaluations(client, params, expected_scores)
+
+
 # Deletion Tests
 
 

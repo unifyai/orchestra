@@ -1,3 +1,4 @@
+from collections import defaultdict
 import json
 from typing import List, Optional
 
@@ -132,17 +133,21 @@ class EvaluationDAO:
         per_prompt: bool,
         responses: bool,
         rationales: bool,
+        sub_scorers: bool,
         num_judges: int,
     ):
         """given endpoint, evaluator, promptids, finds all responses, judgements from that"""
+
+        GET_RATIONALES = rationales or sub_scorers
+
         query = (
             select(
                 StoredPromptResponse.prompt_id,
                 Evaluation.score,
                 StoredPromptResponse.response if responses else literal(None),
                 Judgement.judgement if rationales else literal(None),
-                Judgement.judge_endpoint_str if rationales else literal(None),
-                Judgement.judgement_score if rationales else literal(None),
+                Judgement.judge_endpoint_str if GET_RATIONALES else literal(None),
+                Judgement.judgement_score if GET_RATIONALES else literal(None),
             )
             .select_from(StoredPromptResponse)
             .join(Judgement, StoredPromptResponse.id == Judgement.response_id)
@@ -164,6 +169,23 @@ class EvaluationDAO:
 
         result_dict = {}
 
+        # this for loop creates a dictionary of the form
+        # {
+        #     prompt_id: {
+        #         "id": x,
+        #         "response": x,
+        #         "score": x,
+        #         "evaluation": [
+        #             {"endpoint": x, "rationale": x, "rationale_score": x}, # first judge
+        #             ...,
+        #         ],
+        #     }
+        # }
+
+        # for each judge, for each class, the tally
+        if sub_scorers:
+            sub_score_dict = defaultdict(lambda: defaultdict(int))
+
         for row in rows:
             prompt_id = row.prompt_id
 
@@ -184,8 +206,13 @@ class EvaluationDAO:
                 evaluation_entry = {"endpoint": row.judge_endpoint_str}
                 evaluation_entry["rationale"] = row.judgement
                 evaluation_entry["rationale_score"] = float(row.judgement_score)
-
                 result_dict[prompt_id]["evaluation"].append(evaluation_entry)
+
+            if sub_scorers:
+                jm = row.judge_endpoint_str
+                score = float(row.judgement_score)
+                sub_score_dict[jm][score] += 1
+
         per_prompt_data = list(result_dict.values())
         if not per_prompt_data:
             ret = "There was an error finding the evaluations selected."
@@ -197,6 +224,12 @@ class EvaluationDAO:
         else:
             progress = len(per_prompt_data) / len(prompt_ids)
         ret = {"score": mean_score, "progress": 100 * progress}
+        if sub_scorers:
+            sub_score_dict = {
+                k: {k: v for k, v in sorted(v.items(), key=lambda t: t[0])}
+                for k, v in sorted(sub_score_dict.items(), key=lambda t: t[0])
+            }
+            ret["sub_scores"] = sub_score_dict
         if per_prompt:
             ret["per_prompt"] = per_prompt_data
         return ret

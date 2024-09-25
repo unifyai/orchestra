@@ -493,6 +493,7 @@ def get_rationales(
     per_prompt: bool,
     responses: bool,
     rationales: bool,
+    sub_scorers: bool,
     num_judges: int,
 ):
     rationales = evaluation_dao.fetch_rationales(
@@ -502,6 +503,7 @@ def get_rationales(
         per_prompt=per_prompt,
         responses=responses,
         rationales=rationales,
+        sub_scorers=sub_scorers,
         num_judges=num_judges,
     )
     return rationales
@@ -558,7 +560,11 @@ def get_evaluations(
         "By default set to `False`.",
         example=False,
     ),
-    sub_scorers: bool = Query(default=False, description="If `True`, returns more in-depth summary statistics of the evaluation."),
+    sub_scorers: bool = Query(
+        default=False,
+        description="If `True`, returns more in-depth summary statistics of the evaluation. "
+        "Requires specification of both endpoint and evaluator, and per_prompt must be set to false.",
+    ),
     dataset_dao: DatasetDAO = Depends(),
     evaluator_dao: EvaluatorDAO = Depends(),
     evaluation_dao: EvaluationDAO = Depends(),
@@ -598,8 +604,12 @@ def get_evaluations(
                 status_code=404,
                 detail="If per_prompt=True, need to specify both endpoint and evaluator",
             )
-
-    if evaluator:
+    if sub_scorers:
+        if per_prompt or not evaluator or not endpoint:
+            raise HTTPException(
+                status_code=404,
+                detail="If sub_scorers=True, need to specify both endpoint and evaluator, and per_prompt must be false.",
+            )
         raw_evaluators = evaluator_dao.filter(name=evaluator)
         if not raw_evaluators or raw_evaluators[0].user_id not in [None, user_id]:
             raise evaluator_not_found(evaluator)
@@ -614,7 +624,7 @@ def get_evaluations(
 
     ret = {}
 
-    if per_prompt:
+    if per_prompt or sub_scorers:
         num_judges = len(json.loads(raw_evaluators[0].judge_models))
         rationales = get_rationales(
             prompt_ids=prompt_ids,
@@ -624,6 +634,7 @@ def get_evaluations(
             per_prompt=per_prompt,
             responses=return_response,
             rationales=return_rationale,
+            sub_scorers=sub_scorers,
             num_judges=num_judges,
         )
         ret = {evaluator: {endpoint: rationales}}
