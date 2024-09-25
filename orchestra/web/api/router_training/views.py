@@ -6,8 +6,6 @@ import os
 from typing import Any, Dict, List, Union
 
 from fastapi import APIRouter, Query, Request
-from google.cloud import storage
-
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.web.api.utils import gcp, on_prem
@@ -16,9 +14,6 @@ from orchestra.web.api.utils.gcp import (
     list_dir,
     read_from_bucket,
     send_pubsub_msg,
-    vertex_ai_endpoint_exists,
-    vertex_ai_endpoint_list,
-    vertex_ai_endpoint_undeploy,
 )
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
@@ -91,20 +86,11 @@ def find_invalid_endpoints(endpoints):
 def _list_trained_routers(user_id: str):
     bucket_name = "custom_router_data"
     blobs = list_dir(bucket_name, f"custom_router/{user_id}")
-    bucket = storage.Client().bucket(bucket_name)
-    routers_metadata = {}
+    trained_routers = []
     for b in blobs:
-        if "model.pth" in b.name:
-            metadata_path = b.name.replace("model.pth", "metadata.json")
-            metadata_blob = bucket.blob(metadata_path)
-            try:
-                metadata_contents = metadata_blob.download_as_bytes().decode("utf-8")
-                metadata = json.loads(metadata_contents)
-            except:
-                metadata = {"dataset": "", "endpoints": [""]}
-            router_name = b.id.split("/")[3]
-            routers_metadata[router_name] = metadata
-    return routers_metadata
+        if "model.pth" in b.id:
+            trained_routers.append(b.id.split("/")[3])
+    return trained_routers
 
 
 def send_to_train_server(action, **data):
@@ -188,7 +174,6 @@ def train_router(
     artifacts to a live endpoint, via the `/router/deploy` `POST` endpoint.
     """
     user_id = request_fastapi.state.user_id
-    api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
     # Check if the router already exists
     if router_training_exists(user_id, name):
         raise router_training_already_exists
@@ -203,45 +188,11 @@ def train_router(
     send_to_train_server(
         action="train",
         user_id=user_id,
-        api_key=api_key,
         name=name,
         dataset=dataset,
         endpoints=endpoints,
     )
     return {"info": "Router training started! You will receive an email soon!"}
-
-
-@router.get(
-    "/router/train/list",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "router_1": {
-                            "dataset": "dataset_1",
-                            "endpoints": ["model@provider", "..."],
-                        },
-                        "...": {"..."},
-                    },
-                },
-            },
-        },
-    },
-)
-@handle_on_prem(endpoint="/router/train/list", method="get")
-def get_trained_routers(
-    request_fastapi: Request,
-) -> Dict[str, Dict[str, Union[str, List[str]]]]:
-    """
-    Fetches a list of the trained routers and relevant metadata. These routers are training
-    artifacts and therefore don't imply an active, deployed router. To fetch a list of
-    deployed routers, you can use the /router/deploy/list GET endpoint.
-    """
-    user_id = request_fastapi.state.user_id
-    routers_metadata = _list_trained_routers(user_id)
-    return routers_metadata
 
 
 @router.delete(
@@ -307,59 +258,7 @@ def rename_router(
     """
     Renames the specified router from `name` to `new_name`.
     """
-    user_id = request_fastapi.state.user_id
-    # Check if the files exist
-    if not router_training_exists(user_id, name):
-        raise router_training_does_not_exist
-    # Check if the router is already deployed
-    if router_is_deployed(user_id, name):
-        raise router_already_deployed
-    # Send the request with the job to the router deployment service
-    send_to_deploy_server(action="deploy", user_id=user_id, name=name)
-    return {"info": "Router deployment started! You will receive an email soon!"}
-
-
-@router.delete(
-    "/router/deploy",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "info": "Router deletion started! You will receive an email soon!",
-                    },
-                },
-            },
-        },
-        400: {
-            "description": "Router Not Deployed",
-            "content": {
-                "application/json": {
-                    "example": {"detail": "This router is not deployed!"},
-                },
-            },
-        },
-    },
-)
-@handle_on_prem(endpoint="/router/deploy", method="delete")
-def delete_router(
-    request_fastapi: Request,
-    name: str = Query(..., description="Name of the router to un-deploy."),
-) -> Dict[str, str]:
-    """
-    Deactivates a previously deployed router.
-    """
-    user_id = request_fastapi.state.user_id
-    # Check if the router exists
-    if not router_is_deployed(user_id, name):
-        raise router_is_not_deployed
-    # Send the request with the job to the router deployment service
-    # send_to_deploy_server(action="delete", user_id=user_id, name=name)
-    vertex_ai_endpoint_undeploy(user_id=user_id, name=name)
-    #   un-deploy router
-    #   modify entry in the db
-    return {"info": "Router deletion started."}
+    raise NotImplemented  # ToDo: implement
 
 
 @router.get(
@@ -392,13 +291,12 @@ def list_routers(
     `/router/deploy/list` `GET` endpoint.
     """
     user_id = request_fastapi.state.user_id
-    routers_metadata = _list_deployed_routers(user_id)
-    trained_routers = _list_trained_routers(user_id)
-    ret = {
-        router_name: trained_routers[router_name]
-        for router_name in sorted(routers_metadata)
-    }
-    return ret
+    routers = _list_trained_routers(user_id)
+    # TODO: Do this correctly
+    routers_metadata = {}
+    for rtr in routers:
+        routers_metadata[rtr] = {"dataset": "", "endpoints": [""]}
+    return routers_metadata
 
 
 @router.get("/get_dataset_evaluation")
