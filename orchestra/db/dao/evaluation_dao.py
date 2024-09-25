@@ -215,7 +215,8 @@ class EvaluationDAO:
 
         per_prompt_data = list(result_dict.values())
         if not per_prompt_data:
-            ret = "There was an error finding the evaluations selected."
+            ret = "Couldn't find any evaluations."
+            return ret
         mean_score = sum(er["score"] for er in per_prompt_data) / len(per_prompt_data)
         if rationales:
             progress = sum(len(er["evaluation"]) for er in per_prompt_data) / (
