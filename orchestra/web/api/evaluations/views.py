@@ -4,10 +4,20 @@ Includes endpoints related to dataset evaluations.
 
 import json
 import os
-from typing import Dict, Optional
+import re
+from typing import Dict, Optional, Union, List
 
 import requests
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    Body,
+)
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.dataset_dao import DatasetDAO
@@ -31,6 +41,11 @@ router = APIRouter()
 admin_router = APIRouter()
 
 # utils
+
+
+def is_csv_of_integers(s):
+    pattern = r"^(\d+,)*\d+$"
+    return bool(re.match(pattern, s))
 
 
 # TODO: Move to utils (duplicated in routing)
@@ -102,6 +117,44 @@ def send_to_dataset_evaluation_server(action, **data):
     print(f"Published: {str({'action': action, **data, 'orchestra_url': url})}")
 
 
+def check_dataset_prompt_arg(dataset, prompts):
+    if (dataset is None) == (prompts is None):
+        raise HTTPException(
+            status_code=400,
+            detail="You must specify exactly one of `dataset`, `prompts`.",
+        )
+
+
+def get_prompt_ids(dataset, prompts, user_id, dataset_dao, stored_prompt_dao):
+    check_dataset_prompt_arg(dataset, prompts)
+    if dataset:
+        dataset_id = get_dataset_id(dataset_dao, user_id, dataset)
+        if dataset_id is None:
+            raise dataset_does_not_exist(dataset)
+        prompt_ids = dataset_dao.fetch_prompts_ids_in_dataset(user_id, dataset)
+        prompt_ids = [p["id"] for p in prompt_ids]
+        return prompt_ids
+
+    # otherwise it's prompts
+
+    if not is_csv_of_integers(prompts):
+        raise HTTPException(
+            status_code=400,
+            detail="Error parsing `prompts`: "
+            "Please ensure `prompts` is a comma-separated string of integers, "
+            "with no whitespace.",
+        )
+
+    prompt_ids = [int(c) for c in prompts.split(",")]
+    missing_ids = stored_prompt_dao.check_ids_valid(user_id, prompt_ids)
+    if missing_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=f"The following prompt_ids are invalid: {', '.join(str(_id) for _id in missing_ids)}",
+        )
+    return prompt_ids
+
+
 ###########################
 # endpoints
 ###########################
@@ -156,9 +209,15 @@ def trigger_evaluation(
         description="Name of the default prompt to use.",
         example="default_prompt1",
     ),
-    dataset: str = Query(
-        description="Name of the uploaded dataset to evaluate.",
+    dataset: Optional[str] = Query(
+        default=None,
+        description="Name of the uploaded dataset to evaluate. Must pass exactly one of `dataset`, `prompts`.",
         example="dataset1",
+    ),
+    prompts: Optional[str] = Query(
+        default=None,
+        description="Specify the prompts to evaluate. Pass a string of comma separated integers. Must pass exactly one of `dataset`, `prompts`.",
+        example="34,89,127",
     ),
     endpoint: str = Query(
         description=(
@@ -174,13 +233,16 @@ def trigger_evaluation(
         json_schema_extra={"example": "client_scores.jsonl"},
     ),
     dataset_dao: DatasetDAO = Depends(),
+    stored_prompt_dao: StoredPromptDAO = Depends(),
+    stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
     evaluator_dao: EvaluatorDAO = Depends(),
+    judgement_dao: JudgementDAO = Depends(),
     default_prompt_dao: DefaultPromptDAO = Depends(),
     evaluation_dao: EvaluationDAO = Depends(),
 ) -> Dict[str, str]:
     """
     Uses the named `evaluator` to trigger an evaluation of quality scores for the
-    selected LLM `endpoint` on the selected `dataset`. You can upload custom scores (and
+    selected LLM `endpoint` on the selected `dataset`, or selected `prompts` (by prompt_id). You can upload custom scores (and
     bypass the LLM judge entirely) by uploading a file via the `client_side_scores`
     argument. Once the evaluation has finished, you can access the scores using the
     `/v0/evaluation` endpoint. If a custom prompt is specified, its fields will overwrite
@@ -196,10 +258,19 @@ def trigger_evaluation(
     if invalid_endpoints:
         raise invalid_training_endpoints(invalid_endpoints)
 
-    # dataset_id
-    dataset_id = get_dataset_id(dataset_dao, user_id, dataset)
-    if dataset_id is None:
-        raise dataset_does_not_exist(dataset)
+    if prompts and client_side_scores:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Client-side scores for individual prompts not yet supported.",
+        )
+
+    prompt_ids = get_prompt_ids(
+        dataset=dataset,
+        prompts=prompts,
+        user_id=user_id,
+        dataset_dao=dataset_dao,
+        stored_prompt_dao=stored_prompt_dao,
+    )
 
     # evaluator_id
     raw_evaluators = evaluator_dao.filter(name=evaluator)
@@ -230,13 +301,37 @@ def trigger_evaluation(
             lines = file.decode().split("\n")
             lines = [json.loads(l) for l in lines if l != ""]
             for ix, line in enumerate(lines):
-                if set(line.keys()) != set(["prompt_id", "score"]):
-                    raise HTTPException(status_code=400, detail=f"Error in line {ix}")
-        except:
+                _expected_keys = set(["prompt_id", "score"])
+                _found_keys = set(line.keys())
+                _optional_keys = set(["response", "rationale"])
+                if _missing := _expected_keys.difference(_found_keys):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Error in line {ix}: missing: {', '.join(_missing)}",
+                    )
+                if _extra := _found_keys.difference(
+                    _expected_keys.union(_optional_keys)
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Error in line {ix}: extra key: {', '.join(_extra)}. Only allowed keys: {', '.join(_expected_keys.union(_optional_keys))}",
+                    )
+        except HTTPException as e:
+            raise e
+        except Exception as e:
             raise HTTPException(
                 status_code=400,
                 detail="Error processing uploaded scores",
             )
+
+        # _model, _provider = endpoint.split("@")
+        # if _provider != "external":
+        #     raise HTTPException(
+        #         status_code=400,
+        #         detail=f"Error with {endpoint}: "
+        #         "When submitting client-side scores, endpoint must be an `external` model, "
+        #         "specified as e.g. `model@external`.",
+        #     )
 
         # check whether the evaluator is a client side one:
         if (
@@ -248,7 +343,6 @@ def trigger_evaluation(
                 detail=f"The evaluator {evaluator} is not a client-side evaluator "
                 f"(as client_side != True)",
             )
-        # dataset_prompts = dataset_dao.fetch_dataset(user_id=user_id, name=dataset)
         # upload the data
         for l in lines:
             prompt_id = l["prompt_id"]
@@ -258,6 +352,34 @@ def trigger_evaluation(
                     status_code=400,
                     detail=f"Error with score from prompt_id: {prompt_id}, score: {score}",
                 )
+            rationale = l.get("rationale", "")
+
+            num_tokens = 0
+
+            stored_prompt_response_dao.create(
+                prompt_id=prompt_id,
+                prompt_variation_id=None,
+                endpoint_str=endpoint,
+                response=l.get("response", ""),
+                num_tokens=num_tokens,
+            )
+
+            raw_ids = stored_prompt_response_dao.filter(
+                prompt_id=prompt_id,
+                prompt_variation_id=None,
+                endpoint_str=endpoint,
+            )
+            response_id = raw_ids[0].id
+            judge_model = "client_side"
+
+            judgement_dao.create(
+                response_id=response_id,
+                judge_endpoint_str=judge_model,
+                evaluator_id=evaluator_id,
+                judgement=rationale,
+                judgement_score=score,
+            )
+            ## add evaluation with the score
             evaluation_dao.create(
                 prompt_id=prompt_id,
                 prompt_variation_id=None,
@@ -273,7 +395,7 @@ def trigger_evaluation(
         user_id=user_id,
         user_email=user_email,
         api_key=api_key,
-        dataset=dataset,
+        prompts=prompt_ids,
         endpoint=endpoint,
         evaluator=evaluator,
         evaluator_id=evaluator_id,
@@ -351,12 +473,11 @@ def admin_trigger_eval(
 
 
 def get_grouped_evaluations(
-    dataset_prompts,
+    prompt_ids: list[int],
     per_prompt: bool,
     evaluation_dao: EvaluationDAO,
 ):
     """Get the score for one dataset grouped by endpoint + evaluator (optionally per_prompt)"""
-    prompt_ids = [prompt["id"] for prompt in dataset_prompts]
     scores = evaluation_dao.fetch_evaluation_scores(
         prompt_ids=prompt_ids,
         per_prompt=per_prompt,
@@ -364,12 +485,42 @@ def get_grouped_evaluations(
     return scores
 
 
+def get_rationales(
+    prompt_ids: list[int],
+    endpoint: str,
+    evaluator: str,
+    evaluation_dao: EvaluationDAO,
+    per_prompt: bool,
+    responses: bool,
+    rationales: bool,
+    sub_scorers: bool,
+    num_judges: int,
+):
+    rationales = evaluation_dao.fetch_rationales(
+        prompt_ids=prompt_ids,
+        endpoint=endpoint,
+        evaluator=evaluator,
+        per_prompt=per_prompt,
+        responses=responses,
+        rationales=rationales,
+        sub_scorers=sub_scorers,
+        num_judges=num_judges,
+    )
+    return rationales
+
+
 @router.get("/evaluation")
 def get_evaluations(
     request_fastapi: Request,
-    dataset: str = Query(
-        description="Name of the dataset to fetch evaluation from.",
+    dataset: Optional[str] = Query(
+        default=None,
+        description="Name of the uploaded dataset to get evaluations for. Must pass exactly one of `dataset`, `prompts`.",
         example="dataset1",
+    ),
+    prompts: Optional[str] = Query(
+        default=None,
+        description="Specify the prompts to get evaluations for. Pass a string of comma separated integers. Must pass exactly one of `dataset`, `prompts`.",
+        example="34,89,127",
     ),
     endpoint: str = Query(
         default=None,
@@ -397,27 +548,67 @@ def get_evaluations(
         "of the endpoint (ITL, TTFT, cost). By default set to `False`. ",
         example=False,
     ),
+    return_response: bool = Query(
+        default=False,
+        description="If `True`, returns the LLM response to the prompt. This argument requires `per_prompt=True`."
+        "By default set to `False`.",
+        example=False,
+    ),
+    return_rationale: bool = Query(
+        default=False,
+        description="If `True`, returns the reasoning behind the score. This argument requires `per_prompt=True`."
+        "By default set to `False`.",
+        example=False,
+    ),
+    sub_scorers: bool = Query(
+        default=False,
+        description="If `True`, returns more in-depth summary statistics of the evaluation. "
+        "Requires specification of both endpoint and evaluator, and per_prompt must be set to false.",
+    ),
     dataset_dao: DatasetDAO = Depends(),
     evaluator_dao: EvaluatorDAO = Depends(),
     evaluation_dao: EvaluationDAO = Depends(),
+    stored_prompt_dao: StoredPromptDAO = Depends(),
     latest_benchmark_dao: LatestBenchmarkDAO = Depends(),
 ) -> Dict:
     """
-    Fetches evaluation results on a given dataset, for a specific endpoint (optional)
+    Fetches evaluation results on a given dataset or for specific prompts, for a specific endpoint (optional)
     based on a specific evaluator (optional). If no `evaluator` is provided, then scores
     are returned for all valid evaluators. Similarly, if no `endpoint` is provided, then
     scores are returned for all valid endpoints.
     """
     # ToDo: implement the logic where the endpoint (required) is considered in the input
     user_id = request_fastapi.state.user_id
-    if not dataset_exists(dataset_dao, user_id, dataset):
-        raise dataset_does_not_exist(dataset)
 
+    prompt_ids = get_prompt_ids(
+        dataset=dataset,
+        prompts=prompts,
+        user_id=user_id,
+        dataset_dao=dataset_dao,
+        stored_prompt_dao=stored_prompt_dao,
+    )
+
+    if return_rationale and not per_prompt:
+        raise HTTPException(
+            status_code=404,
+            detail="If return_rationale=True, need to also have per_prompt=True.",
+        )
+    if return_response and not per_prompt:
+        raise HTTPException(
+            status_code=404,
+            detail="If return_response=True, need to also have per_prompt=True.",
+        )
     if per_prompt:
         if not endpoint or not evaluator:
             raise HTTPException(
                 status_code=404,
                 detail="If per_prompt=True, need to specify both endpoint and evaluator",
+            )
+    if sub_scorers:
+        if per_prompt or not evaluator or not endpoint:
+            raise HTTPException(
+                status_code=404,
+                detail="If sub_scorers=True, need to specify both endpoint and evaluator, and per_prompt must be false.",
             )
 
     if evaluator:
@@ -433,23 +624,31 @@ def get_evaluations(
                 detail=f"Could not find endpoint: {'.'.join(invalid_endpoints)}",
             )
 
-    # multiple judges
-    # exception handling
-
     ret = {}
 
-    dataset_prompts_ids = dataset_dao.fetch_prompts_ids_in_dataset(
-        user_id=user_id,
-        name=dataset,
-    )
-
-    # TODO: This doesn't account for prompt
-    # variations / default prompts when per_prompt=True
-    eval_results = get_grouped_evaluations(
-        dataset_prompts=dataset_prompts_ids,
-        per_prompt=per_prompt,
-        evaluation_dao=evaluation_dao,
-    )
+    if per_prompt or sub_scorers:
+        num_judges = len(json.loads(raw_evaluators[0].judge_models))
+        rationales = get_rationales(
+            prompt_ids=prompt_ids,
+            endpoint=endpoint,
+            evaluator=evaluator,
+            evaluation_dao=evaluation_dao,
+            per_prompt=per_prompt,
+            responses=return_response,
+            rationales=return_rationale,
+            sub_scorers=sub_scorers,
+            num_judges=num_judges,
+        )
+        ret = {evaluator: {endpoint: rationales}}
+        return ret
+    else:
+        # TODO: This doesn't account for prompt
+        # variations / default prompts when per_prompt=True
+        eval_results = get_grouped_evaluations(
+            prompt_ids=prompt_ids,
+            per_prompt=per_prompt,
+            evaluation_dao=evaluation_dao,
+        )
 
     latest_benchmarks = []
     if include_runtime:
@@ -469,7 +668,7 @@ def get_evaluations(
 
     acc = {}  # stores scores to aggregate
     endpoints = set()
-    num_prompts = len(dataset_prompts_ids)
+    num_prompts = len(prompt_ids)
 
     for er in eval_results:
         if evaluator is not None and er.evaluator != evaluator:
@@ -536,9 +735,15 @@ def get_evaluations(
 )
 def delete_evaluations(
     request_fastapi: Request,
-    dataset: str = Query(
-        description="Name of the dataset to delete the evaluation for.",
+    dataset: Optional[str] = Query(
+        default=None,
+        description="Name of the uploaded dataset to get delete evaluations for. Must pass exactly one of `dataset`, `prompts`.",
         example="dataset1",
+    ),
+    prompts: Optional[str] = Query(
+        default=None,
+        description="Specify the prompts to delete evaluations for. Pass a string of comma separated integers. Must pass exactly one of `dataset`, `prompts`.",
+        example="34,89,127",
     ),
     endpoint: str = Query(
         default=None,
@@ -557,6 +762,7 @@ def delete_evaluations(
     endpoint_dao: EndpointDAO = Depends(),
     evaluator_dao: EvaluatorDAO = Depends(),
     evaluation_dao: EvaluationDAO = Depends(),
+    stored_prompt_dao: StoredPromptDAO = Depends(),
 ):
     """
     Deletes evaluations on a given dataset, for a specific endpoint (optional) based on
@@ -565,8 +771,14 @@ def delete_evaluations(
     evaluations for all valid endpoints are deleted.
     """
     user_id = request_fastapi.state.user_id
-    if not dataset_exists(dataset_dao, user_id, dataset):
-        raise dataset_does_not_exist(dataset)
+
+    prompt_ids = get_prompt_ids(
+        dataset=dataset,
+        prompts=prompts,
+        user_id=user_id,
+        dataset_dao=dataset_dao,
+        stored_prompt_dao=stored_prompt_dao,
+    )
 
     # check endpoint and evaluator are valid
     if endpoint:
@@ -583,7 +795,7 @@ def delete_evaluations(
 
     try:
         result = evaluation_dao.delete_evaluations(
-            dataset_name=dataset,
+            prompt_ids=prompt_ids,
             endpoint=endpoint,
             evaluator=evaluator,
         )
@@ -625,14 +837,16 @@ def upload_judgements(
     prompt_id: int,
     endpoint_str: str,
     evaluator_id: str,
-    judge_endpoint_str: str,
-    judgement: str,
-    score: str,
+    judge_model_list: list = Body(),
+    judgement_list: list = Body(),
+    judgement_scores: list = Body(),
     prompt_variation_id: Optional[int] = None,
     stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
     judgement_dao: JudgementDAO = Depends(),
+    evaluator_dao: EvaluatorDAO = Depends(),
     evaluation_dao: EvaluationDAO = Depends(),
 ):
+
     try:
         raw_ids = stored_prompt_response_dao.filter(
             prompt_id=prompt_id,
@@ -643,18 +857,25 @@ def upload_judgements(
     except Exception as e:
         raise e
 
-    judgement_dao.create(
-        response_id=response_id,
-        judge_endpoint_str=judge_endpoint_str,
-        evaluator_id=evaluator_id,
-        judgement=judgement,
-    )
+    for judge_model, judgement, score in zip(
+        judge_model_list, judgement_list, judgement_scores
+    ):
+        judgement_dao.create(
+            response_id=response_id,
+            judge_endpoint_str=judge_model,
+            evaluator_id=evaluator_id,
+            judgement=judgement,
+            judgement_score=score,
+        )
+
+    mean_score = sum(judgement_scores) / len(judgement_scores)
+
     evaluation_dao.create(
         prompt_id=prompt_id,
         prompt_variation_id=prompt_variation_id,
         evaluator_id=evaluator_id,
         endpoint_str=endpoint_str,
-        score=score,
+        score=mean_score,
     )
 
 

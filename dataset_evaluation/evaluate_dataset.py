@@ -15,7 +15,7 @@ from utils.fetch_queries import generate_response
 @dataclass
 class BenchmarkConfig:
     action: str
-    dataset: str
+    prompts: list[int]
     endpoint: str
     evaluator: str
     evaluator_id: str
@@ -33,7 +33,7 @@ body = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dataset Evaluation Completed</title>
+    <title>Evaluation Completed</title>
     <style>
         /* Styling for the email */
         body {
@@ -83,8 +83,8 @@ body = """
         <!-- Green bar at the top -->
     </div>
     <div class="content">
-        <h2>Hello! The Dataset Evaluation has finished 🚀</h2>
-        <p>The evaluation of <<ENDPOINT>> on <<DATASET>> is ready, you can check out the results in <a href="https://console.unify.ai">your console</a>.</p>
+        <h2>Hello! The Evaluation you triggered has finished 🚀</h2>
+        <p>The evaluation of <<ENDPOINT>> is ready, you can check out the results in <a href="https://console.unify.ai">your console</a>.</p>
     </div>
     <div class="subheader">
         <!-- Green bar at the top -->
@@ -112,7 +112,7 @@ body = """
 """
 
 
-def send_email(user_email, endpoint, dataset):
+def send_email(user_email, endpoint):
     email_server = smtplib.SMTP("smtp.gmail.com", 587)
     email_server.starttls()
     email_addr = os.getenv("EMAIL_ADDR", "auth@unify.ai")
@@ -130,10 +130,9 @@ def send_email(user_email, endpoint, dataset):
     msg["From"] = f"Unify <auth@unify.ai>"
     msg["To"] = user_email
     msg["Bcc"] = "guillermo@unify.ai"
-    msg["Subject"] = "Your dataset evaluation is ready!"
+    msg["Subject"] = "Your evaluation is ready!"
     local_body = body
     local_body = local_body.replace("<<ENDPOINT>>", endpoint)
-    local_body = local_body.replace("<<DATASET>>", dataset)
     msg.set_content(local_body, subtype="html")
 
     email_server.send_message(msg)
@@ -186,8 +185,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     # load eval_config
     eval_config = await fetch_evaluator_config(client, cfg)
 
-    # TODO: change this, we only need the ids
-    prompts = await fetch_dataset(client, cfg)
+    prompts = cfg.prompts
 
     BATCH_SIZE = 5  # TODO: change
     semaphore = asyncio.Semaphore(BATCH_SIZE)
@@ -195,30 +193,30 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     ## TODO: add exception handling of some sort
     # the generate_* functions return success/fail, and we could retry them here,
     tasks = [
-        generate_response(p["id"], cfg.endpoint, cfg, client, semaphore)
-        for p in prompts
+        generate_response(p_id, cfg.endpoint, cfg, client, semaphore)
+        for p_id in prompts
     ]
     successful_responses = await asyncio.gather(*tasks)
 
     semaphore = asyncio.Semaphore(BATCH_SIZE)
     tasks = [
         generate_judgement(
-            prompt_id=p["id"],
+            prompt_id=p_id,
             endpoint_str=cfg.endpoint,
             cfg=cfg,
             eval_config=eval_config,
             client=client,
             semaphore=semaphore,
         )
-        for p in prompts
+        for p_id in prompts
     ]
     sucessful_judgements = await asyncio.gather(*tasks)
 
     # send mail
-    if not os.environ.get("ON_PREM") and user_email is not None:
-        send_email(user_email, cfg.endpoint, cfg.dataset)
+    if not os.environ.get("ON_PREM") and user_email is not None and len(prompts) >= 100:
+        send_email(user_email, cfg.endpoint)
         logging.info(
-            f"Email sent to {user_email} for {cfg.endpoint}:{cfg.dataset}",
+            f"Email sent to {user_email} for {cfg.endpoint}",
         )
 
 
