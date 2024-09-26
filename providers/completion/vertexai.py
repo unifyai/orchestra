@@ -63,6 +63,12 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 3.5, "completion": 10.5},
     },
+    "gemini-1.5-pro-002": {
+        "endpoint": "vertex_ai/gemini-1.5-pro-002",
+        "region": "us-west1",
+        "context_window": 128000,
+        "cost": {"prompt": 3.5, "completion": 10.5},
+    },
     "gemini-1.5-pro-001": {
         "endpoint": "vertex_ai/gemini-1.5-pro-001",
         "region": "us-west1",
@@ -71,6 +77,12 @@ supported_models = {
     },
     "gemini-1.5-flash": {
         "endpoint": "vertex_ai/gemini-1.5-flash",
+        "region": "us-west1",
+        "context_window": 128000,
+        "cost": {"prompt": 0.075, "completion": 0.3},
+    },
+    "gemini-1.5-flash-002": {
+        "endpoint": "vertex_ai/gemini-1.5-flash-002",
         "region": "us-west1",
         "context_window": 128000,
         "cost": {"prompt": 0.075, "completion": 0.3},
@@ -123,11 +135,35 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 3, "completion": 15},
     },
+    "llama-3.1-8b-chat": {
+        "endpoint": "vertex_ai/meta/llama3-8b-instruct-maas",
+        "region": "us-central1",
+        "context_window": 128000,
+        "cost": {"prompt": 0.22, "completion": 0.22},
+    },
+    "llama-3.1-70b-chat": {
+        "endpoint": "vertex_ai/meta/llama3-70b-instruct-maas",
+        "region": "us-central1",
+        "context_window": 128000,
+        "cost": {"prompt": 0.99, "completion": 0.99},
+    },
     "llama-3.1-405b-chat": {
         "endpoint": "vertex_ai/meta/llama3-405b-instruct-maas",
         "region": "us-central1",
         "context_window": 128000,
         "cost": {"prompt": 5.32, "completion": 16},
+    },
+    "llama-3.2-11b-chat": {
+        "endpoint": "vertex_ai/meta/llama-3.2-90b-vision-instruct-maas",
+        "region": "us-central1",
+        "context_window": 128000,
+        "cost": {"prompt": 0.35, "completion": 0.35}
+    },
+    "llama-3.2-90b-chat": {
+        "endpoint": "vertex_ai/meta/llama-3.2-90b-vision-instruct-maas",
+        "region": "us-central1",
+        "context_window": 128000,
+        "cost": {"prompt": 2, "completion": 2}
     },
     "mistral-large": {
         "endpoint": "vertex_ai/mistral-large",

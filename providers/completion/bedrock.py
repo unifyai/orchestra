@@ -59,6 +59,16 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
 
 
 supported_models = {
+    # "llama-3.2-1b-chat": {
+    #     "endpoint": "bedrock/us.meta.llama3-2-1b-instruct-v1:0",
+    #     "context_window": 131072,
+    #     "cost": {"prompt": 0.1, "completion": 0.1}
+    # },
+    # "llama-3.2-3b-chat": {
+    #     "endpoint": "bedrock/us.meta.llama3-2-3b-instruct-v1:0",
+    #     "context_window": 131072,
+    #     "cost": {"prompt": 0.15, "completion": 0.15}
+    # },
     "llama-3.1-8b-chat": {
         "endpoint": "bedrock/meta.llama3-1-8b-instruct-v1:0",
         "context_window": 128000,
