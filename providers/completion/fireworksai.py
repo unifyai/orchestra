@@ -23,6 +23,26 @@ class FireworksAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "llama-3.2-1b-chat": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3p2-1b-instruct",
+        "context_window": 131072,
+        "cost": {"prompt": 0.1, "completion": 0.1},
+    },
+    "llama-3.2-3b-chat": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3p2-3b-instruct",
+        "context_window": 131072,
+        "cost": {"prompt": 0.1, "completion": 0.1},
+    },
+    "llama-3.2-11b-chat": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct",
+        "context_window": 131072,
+        "cost": {"prompt": 0.2, "completion": 0.2},
+    },
+    "llama-3.2-90b-chat": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3p2-90b-vision-instruct",
+        "context_window": 131072,
+        "cost": {"prompt": 0.9, "completion": 0.9},
+    },
     "llama-3.1-8b-chat": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct",
         "context_window": 131072,
@@ -53,11 +73,6 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
-    "mistral-7b-instruct-v0.2": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/mistral-7b-v0p2",
-        "context_window": 32768,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
     "mistral-nemo": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/mistral-nemo-instruct-2407",
         "context_window": 128000,
@@ -72,5 +87,20 @@ supported_models = {
         "endpoint": "fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct",
         "context_window": 32768,
         "cost": {"prompt": 0.5, "completion": 0.5},
+    },
+    "qwen-2.5-7b-instruct": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/qwen-v2p5-7b-instruct",
+        "context_window": 32768,
+        "cost": {"prompt": 0.2, "completion": 0.2},
+    },
+    "qwen-2.5-14b-instruct": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/qwen-v2p5-14b-instruct",
+        "context_window": 32768,
+        "cost": {"prompt": 0.2, "completion": 0.2},
+    },
+    "qwen-2.5-72b-instruct": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/qwen-v2p5-72b-instruct",
+        "context_window": 32768,
+        "cost": {"prompt": 0.9, "completion": 0.9},
     },
 }

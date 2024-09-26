@@ -41,16 +41,16 @@ supported_models = {
     "mistral-small": {
         "endpoint": "mistral/mistral-small-latest",
         "context_window": 32768,
-        "cost": {"prompt": 1, "completion": 3},
+        "cost": {"prompt": 0.2, "completion": 0.6},
     },
     "mistral-large": {
         "endpoint": "mistral/mistral-large-latest",
         "context_window": 32768,
-        "cost": {"prompt": 3, "completion": 9},
+        "cost": {"prompt": 2, "completion": 6},
     },
     "mistral-nemo": {
         "endpoint": "mistral/open-mistral-nemo-2407",
         "context_window": 128000,
-        "cost": {"prompt": 0.3, "completion": 0.3},
+        "cost": {"prompt": 0.15, "completion": 0.15},
     },
 }

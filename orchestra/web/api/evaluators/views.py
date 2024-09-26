@@ -3,7 +3,6 @@ Includes endpoints related to evaluators.
 """
 
 import json
-import string
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from providers.completion import PROVIDER_CLASSES
@@ -126,16 +125,6 @@ Be as objective as possible."""
             ],
         )
 
-    else:
-        judge_msg = judge_prompt.messages[-1]["content"]
-        formatter = string.Formatter()
-        placeholders = [i[1] for i in formatter.parse(judge_msg) if i[1] is not None]
-        if not set({"user_prompt", "response", "class_config"}).issubset(placeholders):
-            raise HTTPException(
-                status_code=400,
-                detail="placeholders `user_prompt`, `response` and `class_config` must be in your judge prompt.",
-            )
-
     class_config = request.class_config
     if class_config is None:
         class_config = [
@@ -143,12 +132,14 @@ Be as objective as possible."""
             {"label": "very_good", "score": 0.8},
             {"label": "good", "score": 0.5},
             {"label": "bad", "score": 0.0},
-            {"label": "irrelevant", "score": 0.0},
+            # {"label": "irrelevant", "score": 0.0},
         ]
     result = evaluator_dao.create(
         user_id=user_id,
         name=request.name,
         judge_prompt=judge_prompt.model_dump_json(),
+        prompt_parser=json.dumps(request.prompt_parser),
+        response_parser=json.dumps(request.response_parser),
         class_config=json.dumps(class_config),
         judge_models=judge_models,
         client_side=request.client_side,
