@@ -166,12 +166,14 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             available_credits = float(user.credits if user else 0)
 
         model, provider, region = model_region_priority_list[0]
+        provider_str = (
+            provider if provider == "custom" else provider.replace("custom_", "")
+        )
         try_provider = 0
         router_choices = None
         using_router = model.startswith("router")
         router_str = provider if using_router else None
         num_tries_provider = min(5, len(model_region_priority_list))
-        provider_str = provider.split("_")[-1] if use_custom_keys else None
 
         if using_router:
             if os.environ.get("ON_PREM"):
