@@ -1,6 +1,7 @@
 import sqlalchemy as sa
 from sqlalchemy import Index, func
 from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import ARRAY
 
 from orchestra.db.base import Base
 
@@ -655,13 +656,28 @@ class Evaluation(Base):
 
 class Router(Base):
     """Model class for the router table."""
+
     __tablename__ == "router"
 
     id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = ...
-    name = ...
-    endpoints = ...
-    evaluator = ...
-    prompts = ... 
-    gcp_router_id = ...
-    deployed = ...
+    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=True)
+    name = sa.Column(sa.String(), nullable=False)
+    endpoints = sa.Column(ARRAY(sa.String), nullable=False)
+    evaluator_id = sa.Column(
+        sa.Integer(), sa.ForeignKey("evaluators.id"), nullable=False
+    )
+    trained = sa.Column(sa.Boolean(), default=False, nullable=False)
+    gcp_router_id = sa.Column(sa.String(), nullable=True)
+    deployed = sa.Column(sa.Boolean(), default=False, nullable=False)
+
+    __table_args__ == (sa.UniqueConstraint("user_id", "name", name="uq_router_name"),)
+
+
+class RouterTrainingData(Base):
+    __tablename__ == "router_training_data"
+
+    id = sa.Column(sa.Integer(), primary_key=True)
+    router_id = sa.Column(sa.Integer(), sa.ForeignKey("router.id"), nullable=False)
+    train_data_id = sa.Column(
+        sa.Integer(), sa.ForeignKey("evaluation.id"), nullable=False
+    )

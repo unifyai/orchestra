@@ -29,28 +29,6 @@ router = APIRouter()
 # utils
 
 
-def dataset_exists(user_id, name):
-    # TODO: This needs to take public datasets into account as
-    # well.
-    bucket_name = "uploaded_datasets"
-    if os.environ.get("ON_PREM"):
-        id_to_name = on_prem.internal_id_to_displayname(user_id)
-    else:
-        id_to_name = gcp.internal_id_to_displayname(user_id)
-    name_to_id = {name: id_ for id_, name in id_to_name.items()}
-    internal_id = name_to_id.get(name, name)
-    blob_name = f"{user_id}/{internal_id}/0/dataset.jsonl"
-    if blob_exists(bucket_name, blob_name):
-        return True
-    return False
-
-
-def router_training_exists(user_id, name, router_dao):
-    if ret:
-        return False
-    return True
-
-
 def is_standard_endpoint(model: str, provider: str):
     if provider in PROVIDER_CLASSES:
         lm = PROVIDER_CLASSES[provider](model)
@@ -77,15 +55,6 @@ def find_invalid_endpoints(endpoints):
             continue
     return invalid_endpoints
 
-
-def _list_trained_routers(user_id: str):
-    bucket_name = "custom_router_data"
-    blobs = list_dir(bucket_name, f"custom_router/{user_id}")
-    trained_routers = []
-    for b in blobs:
-        if "model.pth" in b.id:
-            trained_routers.append(b.id.split("/")[3])
-    return trained_routers
 
 
 def send_to_train_server(action, **data):
@@ -150,7 +119,7 @@ def send_to_train_server(action, **data):
 @handle_on_prem(endpoint="/router/train", method="none")
 def train_router(
     request_fastapi: Request,
-    name: str = Query(description="Name of the router.", example="router1"),
+    name: str = Query(description="Name of the router.", example="my_router"),
     dataset: Optional[str] = Query(
         default=None,
         description="Name of the uploaded dataset to train a router on. Must pass exactly one of `dataset`, `prompts`.",
@@ -200,11 +169,25 @@ def train_router(
         dataset_dao=dataset_dao,
         stored_prompt_dao=stored_prompt_dao,
     )
- 
+
     # Check that the endpoints are valid
     invalid_endpoints = find_invalid_endpoints(endpoints)
     if invalid_endpoints:
         raise invalid_training_endpoints(invalid_endpoints)
+
+    # check the evaluations exist
+
+    # create in the router db
+    router_id = router_dao.create(
+        user_id=user_id,
+        name=name,
+    )
+
+
+    # TODO: do I care about endpoints, evaluator id etc ??
+    # TODO: email!
+    # TODO: endpoint to update on if trained
+    # TODO: endpoint to update on if deployed + id etc 
 
     # Send train job to the training server
     send_to_train_server(
@@ -212,8 +195,8 @@ def train_router(
         user_id=user_id,
         user_email=user_email,
         api_key=api_key,
-        prompts=prompt_ids,
-        name=name,
+        prompt_ids=prompt_ids,
+        router_id=router_id,
         endpoints=endpoints,
         evaluator=evaluator,
     )
@@ -235,9 +218,7 @@ def train_router(
                 "application/json": {
                     "example": {
                         "detail": (
-                            "This router training doesn't exist. "
-                            "Please, choose a different one or "
-                            "trigger the training first."
+                            "You don't have a router with the name: my_router"
                         ),
                     },
                 },
@@ -250,21 +231,24 @@ def delete_router(
     request_fastapi: Request,
     name: str = Query(
         description="Name of the router to delete.",
-        example="router1",
+        example="my_router",
     ),
+    router_dao: RouterDAO = Depends(),
 ) -> Dict[str, str]:
     """
     Deletes a specific trained router, as well as all the training files etc.
     """
     user_id = request_fastapi.state.user_id
-    # Check if the router files exist
-    if not router_training_exists(user_id, name):
-        raise router_training_does_not_exist
-    # Delete the trained router files
-    send_to_train_server(action="delete", user_id=user_id, name=name)
-    #   delete_training_files(router)
-    #   set_router_training_status("deleted")
-    #   router training -> id, user_id, name, dataset, status
+    name_exists = router_dao.filter(user_id=user_id, name=name)
+    if not name_exists:
+        raise HTTPException(
+            status_code=400, detail=f"You don't have a router with the name: {name}"
+        )
+
+    # TODO: delete training artifacts + from gcp
+
+    router_dao.delete(user_id=user_id, name=name)
+
     return {"info": "Trained router deleted!"}
 
 
@@ -279,11 +263,27 @@ def rename_router(
         description="The new name for the router.",
         example="new_name",
     ),
+    router_dao: RouterDAO = Depends(),
 ):
     """
     Renames the specified router from `name` to `new_name`.
     """
-    raise NotImplemented  # ToDo: implement
+    user_id = request_fastapi.state.user_id
+
+    name_exists = router_dao.filter(user_id=user_id, name=name)
+    if not name_exists:
+        raise HTTPException(
+            status_code=400, detail=f"You don't have a router with the name: {name}"
+        )
+
+    new_name_exists = router_dao.filter(user_id=user_id, name=new_name)
+    if new_name_exists:
+        raise HTTPException(
+            status_code=400,
+            detail=f"A router with the name: {new_name} already exists!",
+        )
+
+    updated_router = router_dao.rename(user_id=user_id, name=name, new_name=new_name)
 
 
 @router.get(
@@ -308,7 +308,7 @@ def rename_router(
 @handle_on_prem(endpoint="/router/list", method="none")
 def list_routers(
     request_fastapi: Request,
-) -> Dict[str, Dict[str, Union[str, List[str]]]]:
+) -> list[str]:
     """
     Lists all the trained routers and the relevant metadata.
     These routers are training artifacts and therefore don't imply an active,
@@ -316,14 +316,15 @@ def list_routers(
     `/router/deploy/list` `GET` endpoint.
     """
     user_id = request_fastapi.state.user_id
-    routers = _list_trained_routers(user_id)
-    # TODO: Do this correctly
-    routers_metadata = {}
-    for rtr in routers:
-        routers_metadata[rtr] = {"dataset": "", "endpoints": [""]}
-    return routers_metadata
+
+    raw = router_dao.filter(user_id=user_id)
+
+    # TODO: return more information (dataset, evaluator, endpoints etc)
+    routers_list = [r.name for r in raw]
+    return routers_list
 
 
+# old function for frontend
 @router.get("/get_dataset_evaluation")
 @handle_on_prem(endpoint="/get_dataset_evaluation", method="get")
 def get_dataset_evaluation(

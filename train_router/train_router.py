@@ -115,102 +115,10 @@ def create_vm():
     return instance_client.get(project=project_id, zone=zone, instance=instance_name)
 
 
-@dataclass
-class TrainRequest:
-    train_cfg: dict
-    bucket_path: str
-
-
-def evaluation_available(user_id, dataset_name, endpoint, judge_name):
-    bucket_name = "uploaded_datasets"
-    blob_dir = f"{user_id}/{dataset_name}/0/{endpoint}/"
-
-    blob_names = [
-        blob_dir + "responses.jsonl",
-        blob_dir + f'{judge_name.replace("@", "___")}_judgements.jsonl',
-    ]
-
-    for blob_name in blob_names:
-        blob = storage.Client().bucket(bucket_name).blob(blob_name)
-        try:
-            blob.reload()
-        except NotFound:
-            return False
-    return True
-
-
-def start_evaluation(api_key, base_url, dataset, endpoint, judge_name):
-    url = base_url + "/v0/evaluation"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-    }
-    payload = {"dataset": dataset, "endpoint": endpoint, "judge_models": [judge_name]}
-    logging.info(payload)
-    response = requests.post(url, json=payload, headers=headers)
-
-    logging.info(response.status_code)
-    logging.info(response.text)
-
-
-def extract_judgement(text):
-
-    score_mapping = {
-        "irrelevant": 0,
-        "very_bad": 0,
-        "very_good": 0.8,
-        "very bad": 0,
-        "bad": 0,
-        "good": 0.5,
-        "satisfactory": 0.5,
-        "very good": 0.8,
-        "excellent": 1.0,
-    }
-
-    json_text = re.search(
-        '\{[\n\r\s]*"assistant_rating":.*?\}', text, flags=re.DOTALL | re.MULTILINE
-    )
-    if json_text is None:
-        return float("nan")
-
-    judge_response = json_text.group(0)
-    try:
-        rating = json.loads(judge_response)["assistant_rating"]
-        try:
-            rating = score_mapping[rating.lower()]
-        except Exception as e:
-            return 0.0
-        return rating
-
-    except:
-        return float("nan")
-
-
-def create_train_data(user_id, dataset, endpoints, judge_name):
-    bucket_name = "uploaded_datasets"
-    all_prompts = []
-    id_to_prompt = {}
-    id_model_to_score = {}
-    for endpoint in endpoints:
-        blob_name = f"{user_id}/{dataset}/0/{endpoint}/{judge_name.replace('@', '___')}_judgements.jsonl"
-        blob = storage.Client().bucket(bucket_name).blob(blob_name)
-        ret = blob.download_as_bytes().decode("utf-8").split("\n")
-        for line in ret:
-            if line:
-                data = json.loads(line)
-                data["score"] = extract_judgement(data["judge_response"])
-                del data["judge_response"]
-                all_prompts.append(data)
-                id_to_prompt[data["id_"]] = data["prompt"]
-                id_model_to_score[(data["id_"], endpoint)] = data["score"]
-
-    # partition:
-    combined_files = []
-    for id_ in id_to_prompt:
-        scores_per_endpoint = {e: id_model_to_score[(id_, e)] for e in endpoints}
-        combined_files.append(
-            {"id_": id_, "prompt": id_to_prompt[id_], "scores": scores_per_endpoint}
-        )
-
+def create_train_data(user_id, api_key, prompt_ids, endpoints, evaluator):
+    # download all the prompts with prompt_ids ...
+    # download all the scores with prompt_ids ... per endpoint per evaluator
+    # combine
     n = len(combined_files)
     random.shuffle(combined_files)
     train_frac = 0.8
@@ -219,44 +127,25 @@ def create_train_data(user_id, dataset, endpoints, judge_name):
     train_data = combined_files[valid_num:]
     valid_data = combined_files[:valid_num]
 
-    return train_data, valid_data
-
 
 def main(
     user_id,
+    user_email,
     api_key,
-    router_name,
-    dataset,
+    prompt_ids,
+    router_id,
     endpoints,
+    evaluator,
     orchestra_url,
-    judge_name="gpt-4o@openai",
 ):
     logging.info("starting TRAINING")
-    for e in endpoints:
-        if not evaluation_available(user_id, dataset, e, judge_name):
-            logging.info(
-                f"STARTING EVALUATION FOR {orchestra_url} {user_id} {dataset} {e}"
-            )
-            print(f"starting evaluation for {e}")
-            start_evaluation(api_key, orchestra_url, dataset, e, judge_name)
 
-    timeout = 2 * 3600
-    start_time = time.time()
-    while (time.time() - start_time) < timeout:
-        logging.info(f"SEEING IF ALL EVALUATIONS ARE AVAILABLE for {dataset}")
-        if all(
-            [evaluation_available(user_id, dataset, e, judge_name) for e in endpoints]
-        ):
-            break
-        time.sleep(10)
-    else:
-        raise Exception
+    # TODO: retrieve correct evaluation data
 
-    logging.info("ALL EVALS AVAILABLE, BEGINNING TRAINING")
-    train_data, valid_data = create_train_data(user_id, dataset, endpoints, judge_name)
-    # TODO: train data
+    train_data, valid_data = create_train_data(
+        user_id, api_key, prompt_ids, endpoints, evaluator
+    )
     unrolled_data = []
-
     for td in train_data:
         for e, score in td["scores"].items():
             unrolled_data.append(
@@ -269,15 +158,17 @@ def main(
             )
     train_data = unrolled_data
 
-    run_name = f"{user_id}_{router_name}_{int(time.time() * 100) % 1000}"
-    dir = os.path.dirname(os.path.abspath(__file__))
-    run_folder = os.path.join(dir, "save_files", run_name)
+    # start
+
+    run_name = f"{user_id}_{router_id}"
+    _dir = os.path.dirname(os.path.abspath(__file__))
+    run_folder = os.path.join(_dir, "save_files", run_name)
     train_job_files_folder = os.path.join(run_folder, "train_job_files")
 
     os.makedirs(run_folder, exist_ok=True)
 
     shutil.copytree(
-        os.path.join(dir, "reference_gpu_vm_files"), run_folder, dirs_exist_ok=True
+        os.path.join(_dir, "reference_gpu_vm_files"), run_folder, dirs_exist_ok=True
     )
 
     with open(os.path.join(train_job_files_folder, "train_data.jsonl"), "w") as f:
@@ -293,7 +184,7 @@ def main(
         json.dump(
             {
                 "user_id": user_id,
-                "router_name": router_name,
+                "router_id": router_id,
                 "dataset": dataset,
                 "endpoints": endpoints,
             },
@@ -303,9 +194,15 @@ def main(
     # For now: uses a vm that's already created + nvidia installed...
     # vm_data = create_vm()
 
-    project_id = "saas-368716"
-    zone = "europe-west1-b"
-    instance_name = "router-training-gpu1"
+    gcp_config = {
+        "project_id": "saas-368716",
+        "zone": "europe-west1-b",
+        "instance_name": "router-training-gpu1",
+    }
+
+    project_id = gcp_config["project_id"]
+    zone = gcp_config["zone"]
+    instance_name = gcp_config["instance_name"]
 
     # start the instance
     logging.info("starting gpu")
