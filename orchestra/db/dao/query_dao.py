@@ -2,15 +2,12 @@ import datetime
 from typing import List, Optional
 
 from fastapi import Depends
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
-
-from sqlalchemy import select, and_, func, or_
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import Session, aliased
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Query, Tag, QueryTagAssociation
+from orchestra.db.models.orchestra_models import Query, QueryTagAssociation, Tag
 
 
 class QueryDAO:
@@ -30,6 +27,7 @@ class QueryDAO:
         credits: float,
         query_body: str,
         response_body: str,
+        status_code: int,
         signature: Optional[str] = None,
         used_router: Optional[bool] = None,
         router: Optional[str] = None,
@@ -57,6 +55,7 @@ class QueryDAO:
             signature=signature,
             used_router=used_router,
             router=router,
+            status_code=status_code,
         )
         self.session.add(new_query)
 
@@ -75,7 +74,9 @@ class QueryDAO:
                     self.session.flush()
 
                 query_tag_association = QueryTagAssociation(
-                    user_id=user_id, query_id=new_query.id, tag_id=tag.id
+                    user_id=user_id,
+                    query_id=new_query.id,
+                    tag_id=tag.id,
                 )
 
                 try:
@@ -113,6 +114,7 @@ class QueryDAO:
         tags: Optional[list[str]] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        status_code: Optional[int] = None,
     ) -> List[Query]:
         query = select(Query)
         if user_id:
@@ -142,11 +144,13 @@ class QueryDAO:
             query = query.where(Query.used_router == used_router)
         if router:
             query = query.where(Query.router == router)
-
+        if status_code:
+            query = query.where(Query.status_code == status_code)
         if tags:
             tag_alias = aliased(Tag)
             query = query.join(
-                QueryTagAssociation, Query.id == QueryTagAssociation.query_id
+                QueryTagAssociation,
+                Query.id == QueryTagAssociation.query_id,
             )
             query = query.join(tag_alias, QueryTagAssociation.tag_id == tag_alias.id)
             tag_filters = [tag_alias.tag_name == tag for tag in tags]
@@ -169,6 +173,7 @@ class QueryDAO:
                     "response_body": q.response_body,
                     "at": q.at,
                     "credits": q.credits,
-                }
+                    "status_code": q.status_code,
+                },
             )
         return ret
