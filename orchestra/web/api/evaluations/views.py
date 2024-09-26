@@ -18,8 +18,9 @@ from fastapi import (
     UploadFile,
     Body,
 )
-from providers.completion import PROVIDER_CLASSES
+from sqlalchemy.exc import IntegrityError
 
+from providers.completion import PROVIDER_CLASSES
 from orchestra.db.dao.dataset_dao import DatasetDAO
 from orchestra.db.dao.default_prompt_dao import DefaultPromptDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
@@ -843,6 +844,7 @@ def upload_judgements(
     judge_model_list: list = Body(),
     judgement_list: list = Body(),
     judgement_scores: list = Body(),
+    cache_hits: list = Body(),
     prompt_variation_id: Optional[int] = None,
     stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
     judgement_dao: JudgementDAO = Depends(),
@@ -863,6 +865,8 @@ def upload_judgements(
     for judge_model, judgement, score in zip(
         judge_model_list, judgement_list, judgement_scores
     ):
+        if judge_model in cache_hits:
+            continue
         judgement_dao.create(
             response_id=response_id,
             judge_endpoint_str=judge_model,
@@ -873,13 +877,21 @@ def upload_judgements(
 
     mean_score = sum(judgement_scores) / len(judgement_scores)
 
-    evaluation_dao.create(
+    # TODO: check if it's in rather than trying to add blindly.
+    existing_evaluation = evaluation_dao.filter(
         prompt_id=prompt_id,
         prompt_variation_id=prompt_variation_id,
         evaluator_id=evaluator_id,
         endpoint_str=endpoint_str,
-        score=mean_score,
     )
+    if not existing_evaluation:
+        evaluation_dao.create(
+            prompt_id=prompt_id,
+            prompt_variation_id=prompt_variation_id,
+            evaluator_id=evaluator_id,
+            endpoint_str=endpoint_str,
+            score=mean_score,
+        )
 
 
 @admin_router.get("/dataset/load_prompt")
@@ -911,16 +923,19 @@ def load_response(
 def load_judgement(
     request_fastapi: Request,
     prompt_id: str,
-    prompt_variation_id: Optional[str],
     endpoint_str: str,
-    evaluator_id,
-    evaluation_dao: EvaluationDAO = Depends(),
+    evaluator_id: str,
+    judge_endpoint_str: str,
+    prompt_variation_id: Optional[str] = None,
+    judgement_dao: JudgementDAO = Depends(),
 ):
-    ret = evaluation_dao.filter(
+
+    ret = judgement_dao.find_judgement_response(
         prompt_id=prompt_id,
-        prompt_variation_id=prompt_variation_id,
-        evaluator_id=evaluator_id,
+        prompt_variation_id=int(prompt_variation_id) if prompt_variation_id else None,
         endpoint_str=endpoint_str,
+        evaluator_id=evaluator_id,
+        judge_endpoint_str=judge_endpoint_str,
     )
     return ret
 
