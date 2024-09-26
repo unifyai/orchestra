@@ -166,9 +166,6 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             available_credits = float(user.credits if user else 0)
 
         model, provider, region = model_region_priority_list[0]
-        provider_str = (
-            provider if provider == "custom" else provider.replace("custom_", "")
-        )
         try_provider = 0
         router_choices = None
         using_router = model.startswith("router")
@@ -203,6 +200,49 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
         try:
             while try_provider >= 0 and try_provider < num_tries_provider:
+                # get the current model, provider and region from the list
+                model, provider, region = model_region_priority_list[try_provider]
+                provider_str = (
+                    provider
+                    if provider == "custom"
+                    else provider.replace("custom_", "")
+                )
+
+                # fetch custom api key
+                custom_api_key, custom_endpoint = None, None
+                if use_custom_keys:
+                    # the request is made to a regular endpoint
+                    # but using custom keys with the provider
+                    if "custom" not in provider:
+                        try:
+                            custom_api_key = custom_api_key_dao.filter(
+                                user_id=user_id,
+                                key=provider,
+                            )[0].value
+                        except IndexError:
+                            raise custom_api_key_not_found
+                    # the request is made to a custom endpoint
+                    # either to an existing provider or a custom provider
+                    else:
+                        try:
+                            custom_endpoint = custom_endpoint_dao.filter(
+                                user_id=user_id,
+                                name=model,
+                            )[0]
+                        except IndexError:
+                            raise custom_endpoint_not_found
+                        try:
+                            custom_api_key = custom_api_key_dao.filter(
+                                id=custom_endpoint.key_id,
+                            )[0].value
+                        except IndexError:
+                            raise custom_api_key_not_found
+                        provider_str = (
+                            provider
+                            if provider == "custom"
+                            else provider.replace("custom_", "")
+                        )
+
                 # routing
                 if provider_str not in PROVIDER_CLASSES or using_router:
                     # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
@@ -240,45 +280,6 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                             model,
                             provider,
                             region,
-                        )
-
-                # get the current model, provider and region from the list
-                model, provider, region = model_region_priority_list[try_provider]
-                provider_str = provider
-
-                # fetch custom api key
-                custom_api_key, custom_endpoint = None, None
-                if use_custom_keys:
-                    # the request is made to a regular endpoint
-                    # but using custom keys with the provider
-                    if "custom" not in provider:
-                        try:
-                            custom_api_key = custom_api_key_dao.filter(
-                                user_id=user_id,
-                                key=provider,
-                            )[0].value
-                        except IndexError:
-                            raise custom_api_key_not_found
-                    # the request is made to a custom endpoint
-                    # either to an existing provider or a custom provider
-                    else:
-                        try:
-                            custom_endpoint = custom_endpoint_dao.filter(
-                                user_id=user_id,
-                                name=model,
-                            )[0]
-                        except IndexError:
-                            raise custom_endpoint_not_found
-                        try:
-                            custom_api_key = custom_api_key_dao.filter(
-                                id=custom_endpoint.key_id,
-                            )[0].value
-                        except IndexError:
-                            raise custom_api_key_not_found
-                        provider_str = (
-                            provider
-                            if provider == "custom"
-                            else provider.replace("custom_", "")
                         )
 
                 # get the provider class
