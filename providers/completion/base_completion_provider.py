@@ -291,7 +291,7 @@ class BaseCompletionProvider:
                     response.usage.completion_tokens,
                     using_litellm,
                 )
-                if self.custom_api_key
+                if not self.custom_api_key
                 else 0,
             )
         # TODO: These needs to be processed correctly in our endpoint
@@ -388,7 +388,7 @@ class BaseCompletionProvider:
                     response.usage.completion_tokens,
                     using_litellm,
                 )
-                if self.custom_api_key
+                if not self.custom_api_key
                 else 0,
             )
         # TODO: These needs to be processed correctly in our endpoint
