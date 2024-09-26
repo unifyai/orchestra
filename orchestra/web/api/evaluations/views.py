@@ -242,11 +242,14 @@ def trigger_evaluation(
 ) -> Dict[str, str]:
     """
     Uses the named `evaluator` to trigger an evaluation of quality scores for the
-    selected LLM `endpoint` on the selected `dataset`, or selected `prompts` (by prompt_id). You can upload custom scores (and
-    bypass the LLM judge entirely) by uploading a file via the `client_side_scores`
-    argument. Once the evaluation has finished, you can access the scores using the
-    `/v0/evaluation` endpoint. If a custom prompt is specified, its fields will overwrite
-    the corresponding fields in each one of the evaluated prompts.
+    selected LLM `endpoint` on the selected `dataset`, or selected `prompts` (by
+    prompt_id). You can upload custom scores (and bypass the LLM judge entirely) by
+    uploading a file via the `client_side_scores` argument. Once the evaluation has
+    finished, you can access the scores using the `/v0/evaluation` endpoint. If a custom
+    prompt is specified, its fields will overwrite the corresponding fields in each one
+    of the evaluated prompts. If a response for a given prompt has already been
+    provided for the selected endpoint, during another evaluation, then this response
+    will be re-used during the current evaluation.
     """
 
     user_id = request_fastapi.state.user_id
