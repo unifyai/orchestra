@@ -22,6 +22,7 @@ from orchestra.web.api.utils.http_responses import (
     router_training_does_not_exist,
 )
 from orchestra.web.api.utils.on_prem import handle_on_prem
+from orchestra.web.api.evaluations.views import get_prompt_ids
 
 router = APIRouter()
 
@@ -44,15 +45,9 @@ def dataset_exists(user_id, name):
     return False
 
 
-def router_training_exists(user_id, name):
-    # TODO: The router directory with files needs a
-    # metadata.json with the datasets it has been trained on
-    bucket_name = "custom_router_data"
-    dr = f"custom_router/{user_id}/{name}/"
-    files = ["config.yaml", "model_mapping.json", "model.pth"]
-    for f in files:
-        if not blob_exists(bucket_name, dr + f):
-            return False
+def router_training_exists(user_id, name, router_dao):
+    if ret:
+        return False
     return True
 
 
@@ -96,7 +91,15 @@ def _list_trained_routers(user_id: str):
 def send_to_train_server(action, **data):
     topic = "projects/saas-368716/topics/train_router"
     url = "https://api.unify.ai"  # TODO: Deal with staging/test
-    send_pubsub_msg(topic, {"action": action, **data, "orchestra_url": url})
+    send_pubsub_msg(
+        topic,
+        {
+            "action": action,
+            **data,
+            "orchestra_url": url,
+            "admin_key": os.environ.get("ORCHESTRA_ADMIN_KEY"),
+        },
+    )
 
 
 # endpoints
@@ -148,13 +151,15 @@ def send_to_train_server(action, **data):
 def train_router(
     request_fastapi: Request,
     name: str = Query(description="Name of the router.", example="router1"),
-    dataset: str = Query(
-        description=(
-            "Name of the dataset to train the router on."
-            " To use a dataset, you need to first upload it to your account"
-            " using the `/dataset` POST endpoints."
-        ),
+    dataset: Optional[str] = Query(
+        default=None,
+        description="Name of the uploaded dataset to train a router on. Must pass exactly one of `dataset`, `prompts`.",
         example="dataset1",
+    ),
+    prompts: Optional[str] = Query(
+        default=None,
+        description="Specify the prompts to train a router on. Pass a string of comma separated integers. Must pass exactly one of `dataset`, `prompts`.",
+        example="34,89,127",
     ),
     endpoints: List[str] = Query(
         description=(
@@ -167,6 +172,14 @@ def train_router(
             "llama-3.1-405b-chat@fireworks-ai",
         ],
     ),
+    evaluator: str = Query(
+        default="default_evaluator",
+        description="Name of the evaluator to use to train the router. If not specified, 'default_evaluator' will be used.",
+        example="eval1",
+    ),
+    dataset_dao: DatasetDAO = Depends(),
+    stored_prompt_dao: StoredPromptDAO = Depends(),
+    router_dao: RouterDAO = Depends(),
 ) -> Dict[str, str]:
     """
     Train a router based on a specified training dataset and a set of endpoints to route
@@ -174,23 +187,35 @@ def train_router(
     artifacts to a live endpoint, via the `/router/deploy` `POST` endpoint.
     """
     user_id = request_fastapi.state.user_id
-    # Check if the router already exists
+    # Check if the name is unique
     if router_training_exists(user_id, name):
-        raise router_training_already_exists
-    # Check if the dataset exists
-    if not dataset_exists(user_id, dataset):
-        raise dataset_does_not_exist
+        raise HTTPException(
+            status_code=400, detail=f"You already have a router named {name}"
+        )
+
+    prompt_ids = get_prompt_ids(
+        dataset=dataset,
+        prompts=prompts,
+        user_id=user_id,
+        dataset_dao=dataset_dao,
+        stored_prompt_dao=stored_prompt_dao,
+    )
+ 
     # Check that the endpoints are valid
     invalid_endpoints = find_invalid_endpoints(endpoints)
     if invalid_endpoints:
         raise invalid_training_endpoints(invalid_endpoints)
+
     # Send train job to the training server
     send_to_train_server(
         action="train",
         user_id=user_id,
+        user_email=user_email,
+        api_key=api_key,
+        prompts=prompt_ids,
         name=name,
-        dataset=dataset,
         endpoints=endpoints,
+        evaluator=evaluator,
     )
     return {"info": "Router training started! You will receive an email soon!"}
 
