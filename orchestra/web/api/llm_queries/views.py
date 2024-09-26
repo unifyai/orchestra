@@ -250,7 +250,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 custom_api_key, custom_endpoint = None, None
                 if use_custom_keys:
                     # the request is made to a regular endpoint
-                    # but for using custom keys for provider
+                    # but using custom keys with the provider
                     if "custom" not in provider:
                         try:
                             custom_api_key = custom_api_key_dao.filter(
