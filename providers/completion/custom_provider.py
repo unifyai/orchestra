@@ -9,19 +9,16 @@ class CustomProvider(BaseCompletionProvider):
 
     def __init__(
         self,
-        hub_model,  # this is the alias
-        custom_endpoint_dao,
-        custom_api_key_dao,
-        user_id,
+        hub_model,
+        custom_endpoint=None,
         custom_api_key=None,
-    ):
-        super().__init__(hub_model, custom_api_key=custom_api_key)
-        self.custom_api_key_dao = custom_api_key_dao
-        self.custom_endpoint_dao = custom_endpoint_dao
-        self.custom_endpoint = custom_endpoint_dao.filter(user_id, hub_model)[0]
-        self.custom_api_key = self.custom_api_key_dao.filter(
-            id=self.custom_endpoint.key_id,
-        )[0]
+    ):  # this is the alias
+        super().__init__(
+            hub_model,
+            "custom",
+            custom_endpoint=custom_endpoint,
+            custom_api_key=custom_api_key,
+        )
         model_name = self.custom_endpoint.mdl_name  # get the actual name
         # if null, default to the alias
         self.hub_model = model_name if model_name else hub_model
@@ -30,6 +27,7 @@ class CustomProvider(BaseCompletionProvider):
     def api_key(self) -> str:
         return self.custom_api_key.value
 
+    @property
     def litellm_api_key_var(self) -> str:
         return self.custom_api_key.key
 

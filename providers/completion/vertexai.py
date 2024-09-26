@@ -11,8 +11,13 @@ class VertexAI(BaseCompletionProvider):
     Pricing is per million tokens: https://ai.google.dev/pricing
     """
 
-    def __init__(self, hub_model, custom_api_key=None):
-        super().__init__(hub_model, custom_api_key=custom_api_key)
+    def __init__(self, hub_model, custom_endpoint=None, custom_api_key=None):
+        super().__init__(
+            hub_model,
+            "vertex_ai",
+            custom_endpoint=custom_endpoint,
+            custom_api_key=custom_api_key,
+        )
         self.supported_models = supported_models
 
     @property
@@ -29,14 +34,15 @@ class VertexAI(BaseCompletionProvider):
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:  # noqa: WPS210
+        kwargs_region = kwargs.pop("region", None)
+        region = kwargs_region
         if self.hub_model in self.supported_models:
-            kwargs_region = kwargs.pop("region", None)
             region = (
                 kwargs_region
                 if kwargs_region
                 else self.supported_models[self.hub_model]["region"]
             )
-            kwargs["vertex_location"] = region
+        kwargs["vertex_location"] = region
         return super().__call__(messages, stream, **kwargs)
 
     def __call_async__(

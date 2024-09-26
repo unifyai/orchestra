@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from typing import Any, Dict, List
@@ -18,6 +19,7 @@ from openai import (
     Stream,
 )
 
+from orchestra.db.models.orchestra_models import CustomEndpoint
 from orchestra.web.api.utils.helpers import (
     check_litellm_supported_args,
     filter_kwargs_for_openai_client,
@@ -37,8 +39,16 @@ class BaseCompletionProvider:
     # TODO: Make this a property and enforce definition with NotImplemented
     supported_models: Dict[str, Any] = {}
 
-    def __init__(self, hub_model, custom_api_key=None) -> None:
+    def __init__(
+        self,
+        hub_model,
+        litellm_provider_prefix,
+        custom_endpoint=None,
+        custom_api_key=None,
+    ) -> None:
         self.hub_model: str = hub_model
+        self.litellm_provider_prefix: str = litellm_provider_prefix
+        self.custom_endpoint: CustomEndpoint = custom_endpoint
         self.custom_api_key: str = custom_api_key
         self.supported_models: Dict[str, Any] = {}
 
@@ -73,6 +83,8 @@ class BaseCompletionProvider:
     def provider_endpoint(self):
         # TODO: Docs
         # TODO: Add logic to raise an error if self.supported_models is empty
+        if self.custom_endpoint:
+            return self.custom_endpoint.mdl_name
         return self.supported_models[self.hub_model]["endpoint"]
 
     @property
@@ -209,7 +221,7 @@ class BaseCompletionProvider:
         **kwargs: Any,
     ) -> Any:
         kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
-        using_litellm = bool(self.litellm_api_key_var)
+        using_litellm = bool(self.litellm_provider_prefix)
         try:  # noqa: WPS225
             if not using_litellm:
                 client = kwargs.pop(
@@ -224,15 +236,39 @@ class BaseCompletionProvider:
                     **kwargs,
                 )
             else:
-                # extra_body can't be passed to anthropic or vertex_ai
-                check_litellm_supported_args(kwargs, self.provider_endpoint)
-                provider_prefix = self.provider_endpoint.split("/")[0]
-                if provider_prefix not in ["anthropic", "bedrock", "vertex_ai"]:
+                # set credentials from custom api keys
+                if self.custom_api_key:
+                    if self.custom_api_key.startswith("{"):
+                        custom_api_key = json.loads(self.custom_api_key)
+                        kwargs = {
+                            **kwargs,
+                            **custom_api_key,
+                        }
+                    else:
+                        kwargs["api_key"] = self.custom_api_key
+                else:
+                    os.environ[self.litellm_api_key_var] = self.api_key
+
+                # add provider prefix for custom endpoints
+                model = self.provider_endpoint
+                if self.custom_endpoint:
+                    model = self.litellm_provider_prefix + "/" + model
+
+                # check if the kwargs are accepted by litellm
+                check_litellm_supported_args(kwargs, model)
+
+                # extra_body can't be passed to anthropic, bedrock or vertex_ai
+                if self.litellm_provider_prefix not in [
+                    "anthropic",
+                    "bedrock",
+                    "vertex_ai",
+                ]:
                     kwargs["extra_body"] = extra_body
-                os.environ[self.litellm_api_key_var] = self.api_key
                 drop_params = extra_body.pop("drop_params", True)
+
+                # llm call
                 response = litellm.completion(
-                    model=self.provider_endpoint,
+                    model=model,
                     messages=messages,
                     stream=stream,
                     drop_params=drop_params,
@@ -247,11 +283,16 @@ class BaseCompletionProvider:
 
             # TODO: Maybe remove this dump unless neccesary?
             response_dict = self._modify_output(response.model_dump(), stream=stream)
-            return response_dict, self.get_response_cost(
-                response,
-                response.usage.prompt_tokens,
-                response.usage.completion_tokens,
-                using_litellm,
+            return (
+                response_dict,
+                self.get_response_cost(
+                    response,
+                    response.usage.prompt_tokens,
+                    response.usage.completion_tokens,
+                    using_litellm,
+                )
+                if self.provider_endpoint in self.supported_models
+                else 0,
             )
         # TODO: These needs to be processed correctly in our endpoint
         except APITimeoutError as error:
@@ -278,7 +319,7 @@ class BaseCompletionProvider:
         **kwargs: Any,
     ) -> Any:
         kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
-        using_litellm = bool(self.litellm_api_key_var)
+        using_litellm = bool(self.litellm_provider_prefix)
         try:  # noqa: WPS225
             if not using_litellm:
                 client = kwargs.pop(
@@ -293,15 +334,39 @@ class BaseCompletionProvider:
                     **kwargs,
                 )
             else:
-                # extra_body can't be passed to anthropic or vertex_ai
-                check_litellm_supported_args(kwargs, self.provider_endpoint)
-                provider_prefix = self.provider_endpoint.split("/")[0]
-                if provider_prefix not in ["anthropic", "bedrock", "vertex_ai"]:
+                # set credentials from custom api keys
+                if self.custom_api_key:
+                    if self.custom_api_key.startswith("{"):
+                        custom_api_key = json.loads(self.custom_api_key)
+                        kwargs = {
+                            **kwargs,
+                            **custom_api_key,
+                        }
+                    else:
+                        kwargs["api_key"] = self.custom_api_key
+                else:
+                    os.environ[self.litellm_api_key_var] = self.api_key
+
+                # add provider prefix for custom endpoints
+                model = self.provider_endpoint
+                if self.custom_endpoint:
+                    model = self.litellm_provider_prefix + "/" + model
+
+                # check if the kwargs are accepted by litellm
+                check_litellm_supported_args(kwargs, model)
+
+                # extra_body can't be passed to anthropic, bedrock or vertex_ai
+                if self.litellm_provider_prefix not in [
+                    "anthropic",
+                    "bedrock",
+                    "vertex_ai",
+                ]:
                     kwargs["extra_body"] = extra_body
-                os.environ[self.litellm_api_key_var] = self.api_key
                 drop_params = extra_body.pop("drop_params", True)
+
+                # llm call
                 response = litellm.acompletion(
-                    model=self.provider_endpoint,
+                    model=model,
                     messages=messages,
                     stream=stream,
                     drop_params=drop_params,
@@ -315,11 +380,16 @@ class BaseCompletionProvider:
 
             # TODO: Maybe remove this dump unless neccesary?
             response_dict = self._modify_output(response.model_dump(), stream=stream)
-            return response_dict, self.get_response_cost(
-                response,
-                response.usage.prompt_tokens,
-                response.usage.completion_tokens,
-                using_litellm,
+            return (
+                response_dict,
+                self.get_response_cost(
+                    response,
+                    response.usage.prompt_tokens,
+                    response.usage.completion_tokens,
+                    using_litellm,
+                )
+                if self.provider_endpoint in self.supported_models
+                else 0,
             )
         # TODO: These needs to be processed correctly in our endpoint
         except APITimeoutError as error:

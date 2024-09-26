@@ -94,12 +94,12 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     if router is None:
         router = ""
 
-    if provider == "custom":
+    if "custom" in provider:
         endpoint_id = None
         try:
             custom_endpoint_id = int(
                 custom_endpoint_dao.filter(
-                    user_id=request_fastapi.state_user_id,
+                    user_id=user_id,
                     name=model,
                 )[0].id,
             )
