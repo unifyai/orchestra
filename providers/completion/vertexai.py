@@ -157,13 +157,13 @@ supported_models = {
         "endpoint": "vertex_ai/meta/llama-3.2-90b-vision-instruct-maas",
         "region": "us-central1",
         "context_window": 128000,
-        "cost": {"prompt": 0.35, "completion": 0.35}
+        "cost": {"prompt": 0.35, "completion": 0.35},
     },
     "llama-3.2-90b-chat": {
         "endpoint": "vertex_ai/meta/llama-3.2-90b-vision-instruct-maas",
         "region": "us-central1",
         "context_window": 128000,
-        "cost": {"prompt": 2, "completion": 2}
+        "cost": {"prompt": 2, "completion": 2},
     },
     "mistral-large": {
         "endpoint": "vertex_ai/mistral-large",
