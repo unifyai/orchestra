@@ -54,4 +54,5 @@ def create_query_model(
         used_router=new_query_object.used_router,
         router=new_query_object.router,
         tags=new_query_object.tags,
+        status_code=new_query_object.status_code,
     )

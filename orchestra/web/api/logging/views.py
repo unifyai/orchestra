@@ -5,9 +5,9 @@ Includes endpoints related to logging.
 import json
 import os
 from datetime import datetime
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union
 
-from fastapi import APIRouter, HTTPException, Query, Request, Body
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
@@ -59,6 +59,11 @@ def get_queries(
         description="The query history is returned in pages, with up to 100 prompts per page. Increase the page number to see older prompts.",
         example="1",
     ),
+    failures: Union[bool, Literal["only"]] = Query(
+        False,
+        description="indicates whether to includes failures in the return (when set as True ), or whether to return failures exlusively (when set as 'only').",
+        example=False,
+    ),
     query_dao: QueryDAO = Depends(),
     endpoint_dao: EndpointDAO = Depends(),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
@@ -107,7 +112,8 @@ def get_queries(
     LIMIT = 100
     if page_number < 1:
         raise HTTPException(
-            status_code=404, detail=f"Page number: {page_number} must be at least 1."
+            status_code=404,
+            detail=f"Page number: {page_number} must be at least 1.",
         )
     offset = (page_number - 1) * LIMIT
     ret = query_dao.filter(
@@ -120,6 +126,7 @@ def get_queries(
         end_time=end_time,
         limit=LIMIT,
         offset=offset,
+        status_code=200 if failures == False else (400 if failures == "only" else None),
     )
     return ret
 
@@ -142,7 +149,7 @@ def log_query(
                 "model": "llama-3.1-8b-chat_ollama@external",
                 "max_tokens": 100,
                 "temperature": 0.5,
-            }
+            },
         },
     ),
     response_body: Optional[Dict[str, Any]] = Body(
@@ -167,9 +174,9 @@ def log_query(
                             "content": "Sir Isaac Newton was an English mathematician, physicist, and astronomer who lived from 1643 to 1727.\\n\\nHe is widely recognized as one of the most influential scientists in history, and his work laid the foundation for the Scientific Revolution of the 17th century.\\n\\nNewton's most famous achievement is his theory of universal gravitation, which he presented in his groundbreaking book \"Philosophi\\u00e6 Naturalis Principia Mathematica\" in 1687.\\n\\nAccording to Newton's theory, every",
                             "role": "assistant",
                         },
-                    }
+                    },
                 ],
-            }
+            },
         },
     ),
     tags: Optional[list[str]] = Body(None, description="Tags for later filtering."),
@@ -201,6 +208,7 @@ def log_query(
             credits=0,
             query_body=json.dumps(query_body),
             response_body=json.dumps(response_body),
+            status_code=200,
             tags=tags,
         )
         return {"info": "Query logged successfully"}

@@ -21,6 +21,7 @@ class QueryModelRequest(BaseModel):
     custom_endpoint_id: Optional[int]
     local_endpoint_id: Optional[int]
     credits: float
+    status_code: int
     query_body: Optional[str]
     response_body: Optional[str]
     signature: Optional[str]
@@ -47,6 +48,7 @@ class QueryModelResponse(BaseModel):
     model_provider_str: str
     endpoint_id: int
     credits: float
+    status_code: int
     query_body: Optional[str]
     response_body: Optional[str]
     signature: Optional[str]
