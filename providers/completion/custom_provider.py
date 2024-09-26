@@ -15,7 +15,7 @@ class CustomProvider(BaseCompletionProvider):
     ):  # this is the alias
         super().__init__(
             hub_model,
-            "custom",
+            "",
             custom_endpoint=custom_endpoint,
             custom_api_key=custom_api_key,
         )
