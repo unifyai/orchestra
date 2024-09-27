@@ -41,7 +41,7 @@ subscription_name = (
 )
 if os.getenv("STAGING"):
     subscription_name = (
-        f"projects/{project_name}/subscriptions/staging-dataset_evaluation-sub"
+        f"projects/{project_name}/subscriptions/staging_dataset_evaluation-sub"
     )
 
 

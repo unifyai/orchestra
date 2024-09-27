@@ -5,7 +5,7 @@ from typing import List, Union
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.param_functions import Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
@@ -86,6 +86,8 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     try_request = 0
     num_tries = min(5, len(request_priority_list))
     region = None
+    # breakpoint()
+    request_failed, err = False, None
 
     while try_request >= 0 and try_request < num_tries:
         request = request_priority_list[try_request]
@@ -307,26 +309,18 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                             raise e
                     else:
                         raise e
+            # raise HTTPException(400, "some error")
         except HTTPException as e:
             if e.status_code in [400, 403, 404, 429] or e.status_code >= 500:
                 try_request += 1
                 if try_request >= num_tries:
-                    raise e
+                    request_failed, err = True, e
+                    break
+                # raise e
             else:
-                raise e
-
-    # TODO: Handle when response is None
-    if not response:
-        return ChatCompletionResponse(
-            model=request.model,
-            created=0,
-            id="",
-            choices=[],
-            object="chat.completion",
-            usage={},
-        )
-
-    db_operations_kwargs = {}
+                request_failed, err = True, e
+                break
+                # raise e
 
     # convert str to list
     tags = request.tags
@@ -354,6 +348,32 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         "users_dao": users_dao,
     }
 
+    if request_failed:
+        background_tasks.add_task(
+            db_operations,
+            cost=0,
+            processing_time=0,
+            usage=0,
+            response_body=json.dumps({"detail": err.detail}),
+            status_code=err.status_code,
+            **db_operations_kwargs,
+        )
+        return JSONResponse(
+            status_code=err.status_code,
+            content={"detail": err.detail},
+        )
+
+    # TODO: Handle when response is None
+    if not response:
+        return ChatCompletionResponse(
+            model=request.model,
+            created=0,
+            id="",
+            choices=[],
+            object="chat.completion",
+            usage={},
+        )
+
     processing_time = (time.time() - t0) * 1000
 
     if stream:
@@ -376,6 +396,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     if store_prompt
                     else ""
                 ),  # TODO this isn't the whole response
+                status_code=200,
                 **db_operations_kwargs,
             )
 
@@ -388,6 +409,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             processing_time=processing_time,
             usage=response["usage"],
             response_body=json.dumps(response) if store_response_body else "",
+            status_code=200,
             **db_operations_kwargs,
         )
 

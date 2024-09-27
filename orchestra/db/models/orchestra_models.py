@@ -385,6 +385,7 @@ class Query(Base):
     signature = sa.Column(sa.String(), nullable=True)
     used_router = sa.Column(sa.Boolean(), nullable=True)
     router = sa.Column(sa.String, nullable=True)
+    status_code = sa.Column(sa.Integer(), nullable=False)
     tags = relationship("QueryTagAssociation", back_populates="query")
     __table_args__ = (sa.Index("ix_user_endpoint", "user_id", "endpoint_id"),)
 
@@ -546,6 +547,7 @@ class Judgement(Base):
         nullable=False,
     )
     judgement = sa.Column(sa.String(), nullable=False)
+    judgement_score = sa.Column(sa.Numeric(), nullable=True)
     __table_args__ = (
         sa.UniqueConstraint(
             "response_id",

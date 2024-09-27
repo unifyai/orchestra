@@ -1,9 +1,11 @@
+from collections import defaultdict
+import json
 from typing import List, Optional
 
 from fastapi import Depends
-from sqlalchemy import Float, cast, delete, join, select
+from sqlalchemy import Float, cast, delete, join, select, and_
 from sqlalchemy.orm import Session
-from sqlalchemy.sql import func
+from sqlalchemy.sql import func, literal
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
@@ -12,6 +14,8 @@ from orchestra.db.models.orchestra_models import (
     Evaluation,
     Evaluator,
     StoredPrompt,
+    StoredPromptResponse,
+    Judgement,
 )
 
 
@@ -86,14 +90,14 @@ class EvaluationDAO:
             query = select(
                 Evaluator.name.label("evaluator"),
                 Evaluation.endpoint_str,
-                cast(func.avg(Evaluation.score).label("score") * 100, Float),
+                cast(func.avg(Evaluation.score).label("score"), Float),
                 Evaluation.prompt_id,
             )
         else:
             query = select(
                 Evaluator.name.label("evaluator"),
                 Evaluation.endpoint_str,
-                cast(func.avg(Evaluation.score).label("score") * 100, Float),
+                cast(func.avg(Evaluation.score).label("score"), Float),
                 func.count(Evaluation.score).label("num_scores"),
             )
 
@@ -120,6 +124,116 @@ class EvaluationDAO:
             results.append(score)
 
         return results
+
+    def fetch_rationales(
+        self,
+        prompt_ids,
+        endpoint,
+        evaluator,
+        per_prompt: bool,
+        responses: bool,
+        rationales: bool,
+        sub_scorers: bool,
+        num_judges: int,
+    ):
+        """given endpoint, evaluator, promptids, finds all responses, judgements from that"""
+
+        GET_RATIONALES = rationales or sub_scorers
+
+        query = (
+            select(
+                StoredPromptResponse.prompt_id,
+                Evaluation.score,
+                StoredPromptResponse.response if responses else literal(None),
+                Judgement.judgement if rationales else literal(None),
+                Judgement.judge_endpoint_str if GET_RATIONALES else literal(None),
+                Judgement.judgement_score if GET_RATIONALES else literal(None),
+            )
+            .select_from(StoredPromptResponse)
+            .join(Judgement, StoredPromptResponse.id == Judgement.response_id)
+            .join(Evaluator, Evaluator.id == Judgement.evaluator_id)
+            .join(
+                Evaluation,
+                and_(
+                    StoredPromptResponse.prompt_id == Evaluation.prompt_id,
+                    Evaluator.id == Evaluation.evaluator_id,
+                ),
+            )
+            .where(StoredPromptResponse.prompt_id.in_(prompt_ids))
+            .where(StoredPromptResponse.endpoint_str == endpoint)
+            .where(Evaluator.name == evaluator)
+            .where(Evaluation.endpoint_str == endpoint)
+        )
+
+        rows = self.session.execute(query)
+
+        result_dict = {}
+
+        # this for loop creates a dictionary of the form
+        # {
+        #     prompt_id: {
+        #         "id": x,
+        #         "response": x,
+        #         "score": x,
+        #         "evaluation": [
+        #             {"endpoint": x, "rationale": x, "rationale_score": x}, # first judge
+        #             ...,
+        #         ],
+        #     }
+        # }
+
+        # for each judge, for each class, the tally
+        if sub_scorers:
+            sub_score_dict = defaultdict(lambda: defaultdict(int))
+
+        for row in rows:
+            prompt_id = row.prompt_id
+
+            if prompt_id not in result_dict:
+                result_dict[prompt_id] = {"id": prompt_id}
+                if responses:
+                    try:
+                        # TODO: What do we want the response to actually be?
+                        s = json.loads(row.response)["choices"][0]["message"]["content"]
+                    except:
+                        s = row.response
+                    result_dict[prompt_id]["response"] = s
+                result_dict[prompt_id]["score"] = float(row.score)
+                if rationales:
+                    result_dict[prompt_id]["evaluation"] = []
+
+            if rationales:
+                evaluation_entry = {"endpoint": row.judge_endpoint_str}
+                evaluation_entry["rationale"] = row.judgement
+                evaluation_entry["rationale_score"] = float(row.judgement_score)
+                result_dict[prompt_id]["evaluation"].append(evaluation_entry)
+
+            if sub_scorers:
+                jm = row.judge_endpoint_str
+                score = float(row.judgement_score)
+                sub_score_dict[jm][score] += 1
+
+        per_prompt_data = list(result_dict.values())
+        if not per_prompt_data:
+            ret = "Couldn't find any evaluations."
+            return ret
+        mean_score = sum(er["score"] for er in per_prompt_data) / len(per_prompt_data)
+        if rationales:
+            progress = sum(len(er["evaluation"]) for er in per_prompt_data) / (
+                num_judges * len(prompt_ids)
+            )
+        else:
+            progress = len(per_prompt_data) / len(prompt_ids)
+        ret = {"score": mean_score, "progress": 100 * progress}
+        if sub_scorers:
+            sub_score_dict = {
+                k: {k: v for k, v in sorted(v.items(), key=lambda t: t[0])}
+                for k, v in sorted(sub_score_dict.items(), key=lambda t: t[0])
+            }
+            ret["sub_scores"] = sub_score_dict
+        if per_prompt:
+            ret["per_prompt"] = per_prompt_data
+        return ret
 
     def get_evaluator_names(self, dataset_id: int, endpoint_str: str):
 
@@ -162,14 +276,9 @@ class EvaluationDAO:
 
         return endpoints
 
-    def delete_evaluations(self, dataset_name: str, endpoint: str, evaluator: str):
+    def delete_evaluations(self, prompt_ids: list[int], endpoint: str, evaluator: str):
         query = delete(Evaluation).where(
-            Evaluation.prompt_id.in_(
-                select(StoredPrompt.id)
-                .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
-                .join(Dataset, DatasetPrompt.dataset_id == Dataset.id)
-                .where(Dataset.name == dataset_name),
-            ),
+            Evaluation.prompt_id.in_(prompt_ids),
         )
 
         if endpoint:
