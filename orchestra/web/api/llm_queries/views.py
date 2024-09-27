@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import time
 from typing import List, Union
@@ -237,7 +236,6 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                             raise custom_api_key_not_found
 
                 # routing
-                logging.info(f"using_router {using_router}")
                 if provider_str not in PROVIDER_CLASSES or using_router:
                     # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
                     num_tokens_est = 0
@@ -277,7 +275,6 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                         )
 
                 # get the current model, provider and region from the list
-                logging.info(f"model_region_priority_list {model_region_priority_list}")
                 model, provider, region = model_region_priority_list[try_provider]
                 provider_str = (
                     provider
