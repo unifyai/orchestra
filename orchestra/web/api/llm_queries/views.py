@@ -31,6 +31,7 @@ from orchestra.web.api.utils.dynamic_routing import (
 from orchestra.web.api.utils.helpers import filter_orchestra_only_args
 from orchestra.web.api.utils.http_responses import (
     custom_api_key_not_found,
+    custom_endpoint_not_found,
     insufficient_credits_error,
     invalid_messages,
     invalid_model_str,
@@ -167,21 +168,14 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             available_credits = float(user.credits if user else 0)
 
         model, provider, region = model_region_priority_list[0]
+        provider_str = (
+            provider if provider == "custom" else provider.replace("custom_", "")
+        )
         try_provider = 0
         router_choices = None
         using_router = model.startswith("router")
         router_str = provider if using_router else None
         num_tries_provider = min(5, len(model_region_priority_list))
-
-        custom_api_key = None
-        if use_custom_keys:
-            try:
-                custom_api_key = custom_api_key_dao.filter(
-                    user_id=user_id,
-                    key=provider,
-                )[0].value
-            except IndexError:
-                raise custom_api_key_not_found
 
         if using_router:
             if os.environ.get("ON_PREM"):
@@ -211,7 +205,8 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
         try:
             while try_provider >= 0 and try_provider < num_tries_provider:
-                if provider not in PROVIDER_CLASSES or using_router:
+                # routing
+                if provider_str not in PROVIDER_CLASSES or using_router:
                     # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
                     num_tokens_est = 0
                     for msg in messages:
@@ -249,14 +244,51 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                             region,
                         )
 
+                # get the current model, provider and region from the list
                 model, provider, region = model_region_priority_list[try_provider]
-
-                extra_args = tuple()
-                if provider == "custom":
-                    extra_args = (custom_endpoint_dao, custom_api_key_dao, user_id)
-                lm = PROVIDER_CLASSES[provider](
-                    model, *extra_args, custom_api_key=custom_api_key
+                provider_str = (
+                    provider
+                    if provider == "custom"
+                    else provider.replace("custom_", "")
                 )
+
+                # fetch custom api key
+                custom_api_key, custom_endpoint = None, None
+                if use_custom_keys:
+                    # the request is made to a regular endpoint
+                    # but using custom keys with the provider
+                    if "custom" not in provider:
+                        try:
+                            custom_api_key = custom_api_key_dao.filter(
+                                user_id=user_id,
+                                key=provider,
+                            )[0].value
+                        except IndexError:
+                            raise custom_api_key_not_found
+                    # the request is made to a custom endpoint
+                    # either to an existing provider or a custom provider
+                    else:
+                        try:
+                            custom_endpoint = custom_endpoint_dao.filter(
+                                user_id=user_id,
+                                name=model,
+                            )[0]
+                        except IndexError:
+                            raise custom_endpoint_not_found
+                        try:
+                            custom_api_key = custom_api_key_dao.filter(
+                                id=custom_endpoint.key_id,
+                            )[0].value
+                        except IndexError:
+                            raise custom_api_key_not_found
+
+                # get the provider class
+                lm = PROVIDER_CLASSES[provider_str](
+                    model,
+                    custom_endpoint=custom_endpoint,
+                    custom_api_key=custom_api_key,
+                )
+
                 if not on_prem and available_credits <= 0 and not use_custom_keys:
                     raise insufficient_credits_error
 
