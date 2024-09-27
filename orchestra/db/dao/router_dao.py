@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -61,6 +61,6 @@ class RouterDAO:
     def rename(self, user_id, name, new_name):
         query = select(Router).where(Router.user_id == user_id).where(Router.name==name)
         raw = self.session.execute(query)
-        entry = raw.scalars.first()
+        entry = raw.scalars().first()
         if entry is not None:
             setattr(entry, "name", new_name)

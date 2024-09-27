@@ -4,6 +4,10 @@ import time
 
 from httpx import AsyncClient
 
+import orchestra
+from .test_evaluation import _seed_evaluations_db
+
+
 ## UTILS
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
@@ -13,79 +17,140 @@ HEADERS = {
 }
 
 
-sample_path = "./orchestra/tests/sample_datasets/with_refx10.jsonl"
-
-
-def _upload_dataset(client, dataset_name, data_path):
-    data = {"name": dataset_name}
-    with open(data_path, "rb") as f:
-        file_content = f.read()
-    files = {"file": ("test.jsonl", file_content, "application/x-jsonlines")}
-    response = client.post("/v0/dataset", data=data, files=files, headers=HEADERS)
-    return response
-
-
 ## TESTS
 
 
-async def test_train_router(client: AsyncClient):
-    dataset_name = f"1_test_train_router_{int(time.time()*1000 % 100000)}"
-    response = await _upload_dataset(
-        client, dataset_name=dataset_name, data_path=sample_path
+async def test_train_router(client: AsyncClient, monkeypatch, dbsession):
+
+    # mocking pubsub
+    def mock_send_to_train_server(action, **data):
+        assert "user_id" in data
+        assert "api_key" in data
+        data.pop("user_id")
+        data.pop("api_key")
+        assert data == {
+            # "user_id": "XXX",
+            # "api_key": "XXX",
+            "prompt_ids": [1, 2, 3],
+            "router_id": 1,
+            "endpoints": [
+                "llama-3-8b-chat@aws-bedrock",
+                "llama-3-70b-chat@aws-bedrock",
+            ],
+            "evaluator_id": 1,
+        }
+
+    monkeypatch.setattr(
+        orchestra.web.api.router_training.views,
+        "send_to_train_server",
+        mock_send_to_train_server,
     )
-    assert response.status_code == 200, str(response.json())
+
+    ### test begins
+    await _seed_evaluations_db(
+        dbsession,
+        path="./orchestra/tests/sql_dumps/evaluations/dump_router_train.jsonl",
+    )
 
     url = "/v0/router/train"
-    router_name = f"123_test_router_train_{int(time.time()*1000 % 100000)}"
-    endpoints = ["llama-3.1-8b-chat@aws-bedrock", "claude-3-haiku@aws-bedrock"]
-    params = {"name": router_name, "dataset": dataset_name, "endpoints": endpoints}
+    params = {
+        "name": "my_test_router",
+        "prompts": "1,2,3",
+        "endpoints": ["llama-3-8b-chat@aws-bedrock", "llama-3-70b-chat@aws-bedrock"],
+        "evaluator": "test_eval",
+    }
     response = await client.post(url, params=params, headers=HEADERS)
-    assert response.status_code == 200
-
-    # check if it's actually trained
-    for tries in range(10):
-        url = "/v0/router/train/list"
-        response = await client.get(url, headers=HEADERS)
-        if router_name not in response.json():
-            await asyncio.sleep(30)
-        else:
-            break
-
-    # delete it
-    url = "/v0/router/train"
-    params = {"name": router_name}
-    response = await client.delete(url, params=params, headers=HEADERS)
-    assert response.status_code == 200
-
-    # check if it's deleted
-    url = "/v0/router/train/list"
-    response = await client.get(url, headers=HEADERS)
-    assert router_name not in response.json()
+    assert response.status_code == 200, response.json()
+    assert response.json() == {
+        "info": "Router training started! You will receive an email soon!"
+    }
 
 
 # provisionally testing all three endpoints in a single test
-# def test_train_delete_router(client: AsyncClient):
-#     url = "/v0/router/train"
-#     assert False
+async def test_train_delete_router(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(
+        dbsession,
+        path="./orchestra/tests/sql_dumps/evaluations/dump_trained_routers.jsonl",
+    )
+    url = "/v0/router"
+    params = {"name": "my_test_router"}
+    response = await client.delete(url, params=params, headers=HEADERS)
+
+    url = "/v0/router/list"
+    response = await client.get(url, headers=HEADERS)
+    assert response.status_code == 200, repsonse.json()
+    print(response.json())
+    assert response.json() == ""
 
 
-# def test_train_list_router(client: AsyncClient):
-#     url = "/v0/router/train/list"
-#     assert False
+async def test_list_router(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(
+        dbsession,
+        path="./orchestra/tests/sql_dumps/evaluations/dump_trained_routers.jsonl",
+    )
+    url = "/v0/router/list"
+    response = await client.get(url, headers=HEADERS)
+    assert response.status_code == 200, repsonse.json()
+    print(response.json())
+    assert response.json() == ""
+
+
+async def test_rename_router(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(
+        dbsession,
+        path="./orchestra/tests/sql_dumps/evaluations/dump_trained_routers.jsonl",
+    )
+    url = "/v0/router/rename"
+    params = {"name": "my_test_router", "new_name": "my_new_test_router"}
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
 
 ###
 
 
-# def test_deploy_router(client: AsyncClient):
-#     url = "/v0/router/deploy"
-#     assert False
+async def test_deploy_router(client: AsyncClient, monkeypatch, dbsession):
+
+    def mock_send_to_deploy_server(action, **data):
+        data.pop("user_id")
+        assert data == {
+            #'user_id': 'XXX',
+            "router_id": 2,
+        }
+
+    monkeypatch.setattr(
+        orchestra.web.api.router_deployment.views,
+        "send_to_deploy_server",
+        mock_send_to_deploy_server,
+    )
+
+    await _seed_evaluations_db(
+        dbsession,
+        path="./orchestra/tests/sql_dumps/evaluations/dump_trained_routers.jsonl",
+    )
+
+    url = "/v0/router/deploy"
+    params = {"name": "my_test_router_2"}
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
 
 
-# def test_deploy_delete_router(client: AsyncClient):
-#     url = "/v0/router/deploy"
-#     assert False
+async def test_deploy_undeploy(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(
+        dbsession,
+        path="./orchestra/tests/sql_dumps/evaluations/dump_trained_routers.jsonl",
+    )
+    url = "/v0/router/deploy"
+    response = await client.delete(url, params={"name": "my_test_router_2"}, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    print(response.json())
 
-
-# def test_deploy_list_router(client: AsyncClient):
-#     url = "/v0/router/deploy/list"
-#     assert False
+async def test_deploy_list_router(client: AsyncClient, dbsession):
+    await _seed_evaluations_db(
+        dbsession,
+        path="./orchestra/tests/sql_dumps/evaluations/dump_trained_routers.jsonl",
+    )
+    url = "/v0/router/deploy/list"
+    response = await client.get(url, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    print(response.json())

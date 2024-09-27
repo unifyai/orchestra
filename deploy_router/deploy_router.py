@@ -16,7 +16,7 @@ def download_blob(bucket_name, source_blob_name, destination_file_name):
         blob.download_to_filename(destination_file_name + filename)
 
 
-def deploy(user_id: str, router_name: str, orchestra_url: str):
+def deploy(user_id: str, router_id: str, orchestra_url: str):
     # fetch the router files + weights from bucket
     # TODO: cleanup old weights
     # if os.path.isdir("router_files"):
@@ -24,7 +24,7 @@ def deploy(user_id: str, router_name: str, orchestra_url: str):
     if not os.path.isdir("router_files"):
         os.mkdir("router_files")
 
-    save_path = f"router_files/{user_id}/{router_name}/"
+    save_path = f"router_files/{user_id}/{router_id}/"
     if os.path.isdir(save_path):
         print(f"overwriting files in {save_path}")
     else:
@@ -32,13 +32,13 @@ def deploy(user_id: str, router_name: str, orchestra_url: str):
 
     download_blob(
         bucket_name="custom_router_data",
-        source_blob_name=f"custom_router/{user_id}/{router_name}",
+        source_blob_name=f"custom_router/{user_id}/{router_id}",
         destination_file_name=save_path,
     )
     # TODO: check if it overwrites ??
 
     docker_path = (
-        f"europe-west1-docker.pkg.dev/saas-368716/router/{user_id}/{router_name}"
+        f"europe-west1-docker.pkg.dev/saas-368716/router/{user_id}/{router_id}"
     )
 
     # TODO: use the docker sdk
@@ -63,7 +63,7 @@ def deploy(user_id: str, router_name: str, orchestra_url: str):
     project = "saas-368716"
     aiplatform.init(project=project, location=location)
 
-    display_name = f"{user_id}_{router_name}"
+    display_name = f"{user_id}_{router_id}"
 
     print("uploading model")
     model = aiplatform.Model.upload(
@@ -93,7 +93,7 @@ def deploy(user_id: str, router_name: str, orchestra_url: str):
     # send this back to orchestra so we know where it's pointed
     payload = {
         "user_id": user_id,
-        "router_name": router_name,
+        "router_name": router_id,
         "router_id": endpoint.name,
     }
     print(payload)
