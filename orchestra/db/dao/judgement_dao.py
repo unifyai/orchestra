@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Judgement
+from orchestra.db.models.orchestra_models import Judgement, StoredPromptResponse
 
 
 class JudgementDAO:
@@ -43,5 +43,29 @@ class JudgementDAO:
             query = query.where(Judgement.response_id == response_id)
         if evaluator_id:
             query = query.where(Judgement.evaluator_id == evaluator_id)
+        rows = self.session.execute(query)
+        return list(rows.scalars().fetchall())
+
+    def find_judgement_response(
+        self,
+        prompt_id,
+        prompt_variation_id,
+        endpoint_str,
+        evaluator_id,
+        judge_endpoint_str,
+    ):
+        query = (
+            select(Judgement.judgement)
+            .join(
+                StoredPromptResponse,
+                StoredPromptResponse.id == Judgement.response_id,
+            )
+            .where(StoredPromptResponse.prompt_id == prompt_id)
+            .where(StoredPromptResponse.prompt_variation_id == prompt_variation_id)
+            .where(StoredPromptResponse.endpoint_str == endpoint_str)
+            .where(Judgement.evaluator_id == evaluator_id)
+            .where(Judgement.judge_endpoint_str == judge_endpoint_str)
+        )
+
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())

@@ -521,6 +521,7 @@ class StoredPromptResponse(Base):
             "prompt_variation_id",
             "endpoint_str",
             name="uq_prompt_response",
+            postgresql_nulls_not_distinct=True,
         ),
     )
 
@@ -650,5 +651,6 @@ class Evaluation(Base):
             "evaluator_id",
             "endpoint_str",
             name="uq_evaluation",
+            postgresql_nulls_not_distinct=True,
         ),
     )
