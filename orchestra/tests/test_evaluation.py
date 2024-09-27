@@ -199,6 +199,124 @@ async def test_trigger_eval(
     assert "per_prompt" in scores[eval_name][endpoint]
 
 
+async def test_trigger_eval_duplicate(
+    client: AsyncClient,
+    tmp_path,
+    monkeypatch,
+):
+    def mock_send_to_dataset_evaluation_server(action, **data):
+        data.pop("user_email", "")
+        message_data = json.dumps(
+            {
+                "action": action,
+                **data,
+                "orchestra_url": "",
+                "admin_key": os.environ.get("ORCHESTRA_ADMIN_KEY"),
+            },
+        )
+        save_dir = tmp_path / "save_files"
+        if action == "evaluate":
+            asyncio.run(
+                evaluate_dataset(
+                    message_data,
+                    save_dir,
+                    shared_volume="",
+                    client=client,
+                ),
+            )
+        elif action == "refresh_scores":
+            user_id = data["user_id"]
+            asyncio.run(refresh_scores_for_user(user_id, save_dir))
+        else:
+            raise NotImplementedError
+
+    monkeypatch.setattr(
+        orchestra.web.api.evaluations.views,
+        "send_to_dataset_evaluation_server",
+        mock_send_to_dataset_evaluation_server,
+    )
+
+    # create evaluator
+    eval_name = "test_eval"
+    judge_prompt = {
+        "messages": [
+            {
+                "role": "system",
+                "content": """As a judge, rate the assistant's answer to the user prompt.""",
+            },
+            {
+                "role": "user",
+                "content": """
+    <user_prompt>
+    {user_message}
+    </user_prompt>
+
+    <ref_ans>
+    {ref_ans}
+    </ref_ans>
+
+    <assistant_response>
+    {assistant_response}
+    </assistant_respose>
+    """,
+            },
+        ],
+        "temperature": 0.7,
+    }
+
+    judge_model = "llama-3-8b-chat@aws-bedrock"
+
+    url = "/v0/evaluator"
+    params = {
+        "name": eval_name,
+        "judge_prompt": judge_prompt,
+        "prompt_parser": {
+            "user_message": "['messages'][-1]['content']",
+            "ref_ans": "['extra_fields']['ref_answer']",
+        },
+        "judge_models": judge_model,
+    }
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # create dataset
+
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws.jsonl"
+    dataset = "test_dataset_eval"
+    response = await upload_dataset(client, file_path, dataset)
+    assert response.status_code == 200, response.json()
+
+    # trigger duplicate eval
+
+    url = "/v0/evaluation"
+    endpoint = "llama-3-8b-chat@aws-bedrock"
+    params = {
+        "url": url,
+        "endpoint": endpoint,
+        "dataset": dataset,
+        "evaluator": eval_name,
+    }
+
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    url = "/v0/queries"
+    response = await client.get(url, headers=HEADERS)
+    assert len(response.json()) == 4
+
+    # retrigger
+    url = "/v0/evaluation"
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # check no extra queries
+    url = "/v0/queries"
+    response = await client.get(url, headers=HEADERS)
+    assert len(response.json()) == 4
+
+    # TODO: check the evaluation didn't get double-uploaded
+
+
 # TODO: Parametrise this test to use mostly the same code as above
 async def test_trigger_eval_with_default_prompt(
     client: AsyncClient,
