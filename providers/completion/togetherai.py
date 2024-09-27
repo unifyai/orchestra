@@ -9,8 +9,13 @@ class TogetherAI(BaseCompletionProvider):
     Pricing is per million tokens: https://www.together.ai/pricing
     """
 
-    def __init__(self, hub_model, custom_api_key=None):
-        super().__init__(hub_model, custom_api_key=custom_api_key)
+    def __init__(self, hub_model, custom_endpoint=None, custom_api_key=None):
+        super().__init__(
+            hub_model,
+            "together_ai",
+            custom_endpoint=custom_endpoint,
+            custom_api_key=custom_api_key,
+        )
         self.supported_models = supported_models
 
     @property
