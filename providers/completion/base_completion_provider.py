@@ -27,6 +27,7 @@ from orchestra.web.api.utils.helpers import (
 from orchestra.web.api.utils.http_responses import server_error_with_digest
 
 logger = logging.getLogger(__name__)
+logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 
 # Pricing info of providers with pay-per-token model is
 # standardized to per million tokens.
