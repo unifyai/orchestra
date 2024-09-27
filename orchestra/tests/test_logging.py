@@ -25,7 +25,7 @@ async def test_logging_queries(client: AsyncClient):
 async def test_logging_failed_queries(client: AsyncClient):
     endpoint = "/v0/chat/completions"
     data = get_chat_completions_payload("llama-3-8b-chat", "aws-bedrock", stream=False)
-    data["messages"][1]["content"] *= 50_000
+    data["region"] = "us-east-2"
     response = await client.post(endpoint, headers=HEADERS, json=data)
     assert response.status_code == 400
 
