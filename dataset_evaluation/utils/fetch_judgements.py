@@ -141,12 +141,20 @@ def calc_score(eval_config, judgement_str):
     return score
 
 
+def parse_jgmt(jgmt):
+    if isinstance(jgmt, dict):
+        return jgmt["choices"][0]["message"]["content"]
+    elif isinstance(jgmt, str):
+        return jgmt
+
+
 async def send_judgements_to_db(
     prompt_id,
     prompt_variation_id,
     endpoint_str,
     judge_model_list,
     judgement_list,
+    cache_hits,
     admin_key,
     client,
     cfg,
@@ -158,7 +166,8 @@ async def send_judgements_to_db(
         "Authorization": f"Bearer {admin_key}",
         "Content-Type": "application/json",
     }
-    judgement_list = [j["choices"][0]["message"]["content"] for j in judgement_list]
+
+    judgement_list = [parse_jgmt(j) for j in judgement_list]
     judgement_scores = [calc_score(eval_config, j_str) for j_str in judgement_list]
     params = {
         "prompt_id": prompt_id,
@@ -170,6 +179,7 @@ async def send_judgements_to_db(
         "judge_model_list": judge_model_list,
         "judgement_list": judgement_list,
         "judgement_scores": judgement_scores,
+        "cache_hits": cache_hits,
     }
 
     if prompt_variation_id:
@@ -198,19 +208,6 @@ async def generate_judgement(
                     client=client,
                 )
                 prompt_variation_id = response[0]["id"]
-
-            # check we haven't already generated this one
-            # TODO: cache the jury stuff properly
-            # judgement = await load_judgement(
-            #     prompt_id=prompt_id,
-            #     prompt_variation_id=prompt_variation_id,
-            #     endpoint_str=endpoint_str,
-            #     evaluator_id=cfg.evaluator_id,
-            #     admin_key=cfg.admin_key,
-            #     client=client,
-            # )
-            # if judgement:
-            #     return (True, prompt_id, prompt_variation_id)
 
             # get the prompt from the db
             prompt_data = await load_prompt(
@@ -258,6 +255,7 @@ async def generate_judgement(
             judge_prompt = create_judge_prompt(data, eval_config)
 
             judge_to_responses = {}
+            cache_hits = []
             for judge_model in eval_config["judge_models"]:
                 if isinstance(judge_prompt, str):
                     judge_prompt = {
@@ -266,6 +264,25 @@ async def generate_judgement(
                         ],
                     }
                 payload = {"model": judge_model, **judge_prompt}
+
+                try:
+                    # check we haven't already generated this one
+                    judgement = await load_judgement(
+                        prompt_id=prompt_id,
+                        prompt_variation_id=prompt_variation_id,
+                        endpoint_str=endpoint_str,
+                        evaluator_id=cfg.evaluator_id,
+                        judge_endpoint_str=judge_model,
+                        admin_key=cfg.admin_key,
+                        client=client,
+                    )
+                    if judgement:
+                        print("cache hit")
+                        cache_hits.append(judge_model)
+                        judge_to_responses[judge_model] = judgement[0]
+                        continue
+                except Exception as e:
+                    print(f"error searching judgement cache: {e}")
 
                 url = f"/v0/chat/completions"
                 headers = {"Authorization": f"Bearer {cfg.api_key}"}
@@ -287,6 +304,7 @@ async def generate_judgement(
                 endpoint_str=endpoint_str,
                 judge_model_list=judge_model_list,
                 judgement_list=responses_list,
+                cache_hits=cache_hits,
                 admin_key=cfg.admin_key,
                 client=client,
                 cfg=cfg,
@@ -298,5 +316,5 @@ async def generate_judgement(
 
             return (True, prompt_id, prompt_variation_id)
     except Exception as e:
-        print(e)
+        print(f"general error with judgement: {e}")
         return (False, prompt_id, prompt_variation_id)
