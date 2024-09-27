@@ -45,7 +45,7 @@ async def load_judgement(
     judge_endpoint_str: str,
     admin_key: str,
     client: AsyncClient,
-    prompt_variation_id: Optional[int]=None,
+    prompt_variation_id: Optional[int] = None,
 ):
     url = "/v0/dataset/load_judgement"
     HEADERS = {
@@ -58,7 +58,7 @@ async def load_judgement(
         "prompt_variation_id": prompt_variation_id,
         "endpoint_str": endpoint_str,
         "evaluator_id": evaluator_id,
-        "judge_endpoint_str": judge_endpoint_str
+        "judge_endpoint_str": judge_endpoint_str,
     }
     ret = await client.get(url, params=params, headers=HEADERS)
     return ret.json()

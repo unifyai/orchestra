@@ -651,6 +651,6 @@ class Evaluation(Base):
             "evaluator_id",
             "endpoint_str",
             name="uq_evaluation",
-            postgresql_nulls_not_distinct=True
+            postgresql_nulls_not_distinct=True,
         ),
     )

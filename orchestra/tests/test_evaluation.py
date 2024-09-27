@@ -199,7 +199,6 @@ async def test_trigger_eval(
     assert "per_prompt" in scores[eval_name][endpoint]
 
 
-
 async def test_trigger_eval_duplicate(
     client: AsyncClient,
     tmp_path,
@@ -316,7 +315,6 @@ async def test_trigger_eval_duplicate(
     assert len(response.json()) == 4
 
     # TODO: check the evaluation didn't get double-uploaded
-
 
 
 # TODO: Parametrise this test to use mostly the same code as above
