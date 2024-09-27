@@ -115,10 +115,12 @@ def create_vm():
     return instance_client.get(project=project_id, zone=zone, instance=instance_name)
 
 
-def create_train_data(user_id, api_key, prompt_ids, endpoints, evaluator):
+def create_train_data(user_id, api_key, admin_api_key, prompt_ids, endpoints, evaluator):
     # download all the prompts with prompt_ids ...
     # download all the scores with prompt_ids ... per endpoint per evaluator
     # combine
+
+    url = "/v0/evaluations/get_router_data"
     n = len(combined_files)
     random.shuffle(combined_files)
     train_frac = 0.8
@@ -132,6 +134,7 @@ def main(
     user_id,
     user_email,
     api_key,
+    admin_api_key,
     prompt_ids,
     router_id,
     endpoints,
@@ -143,7 +146,7 @@ def main(
     # TODO: retrieve correct evaluation data
 
     train_data, valid_data = create_train_data(
-        user_id, api_key, prompt_ids, endpoints, evaluator
+        user_id, api_key, admin_api_key, prompt_ids, endpoints, evaluator
     )
     unrolled_data = []
     for td in train_data:

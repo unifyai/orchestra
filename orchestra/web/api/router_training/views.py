@@ -152,6 +152,7 @@ def train_router(
     ),
     dataset_dao: DatasetDAO = Depends(),
     evaluator_dao: EvaluatorDAO = Depends(),
+    evaluations_dao: EvaluationDAO = Depends(),
     stored_prompt_dao: StoredPromptDAO = Depends(),
     router_dao: RouterDAO = Depends(),
 ) -> Dict[str, str]:
@@ -183,7 +184,6 @@ def train_router(
     if invalid_endpoints:
         raise invalid_training_endpoints(invalid_endpoints)
 
-    # check the evaluations exist
 
     # check if the evaluator exists
     evaluator_id = evaluator_dao.filter(user_id=user_id, name=evaluator)
@@ -192,6 +192,10 @@ def train_router(
             status_code=400, detail=f"You don't have an evaluator named: {evaluator}"
         )
     evaluator_id = evaluator_id[0].id
+    
+    # TODO: check the evaluations exist
+    # e.g. what if all the evaluations haven't finished
+    # or no evaluations exist
 
     # create in the router db
     router_id = router_dao.create(
@@ -201,7 +205,6 @@ def train_router(
         evaluator_id=evaluator_id,
     )
 
-    # TODO: do I care about endpoints, evaluator id etc ??
     # TODO: email!
     # TODO: endpoint to update on if trained
     # TODO: endpoint to update on if deployed + id etc

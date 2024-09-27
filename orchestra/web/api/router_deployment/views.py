@@ -182,7 +182,7 @@ def undeploy_router(
         )
 
     router_dao.update(router_info.id, deployed=False)
-    send_to_deploy_server(action="delete", user_id=user_id, name=name)
+    send_to_deploy_server(action="delete", user_id=user_id, router_id=router_info.id)
     return {"info": "Router deletion started! You will receive an email soon!"}
 
 
