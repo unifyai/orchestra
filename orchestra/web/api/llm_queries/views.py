@@ -84,10 +84,8 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         request_priority_list = [request]
 
     try_request = 0
-    num_tries = min(1, len(request_priority_list))
+    num_tries = min(5, len(request_priority_list))
     region = None
-    # breakpoint()
-    request_failed, err = False, None
 
     request_failed, err = False, None
 
