@@ -1,10 +1,11 @@
 """Renamed column in Evaluator to judge_prompt
 
 Revision ID: f1131ce1eefb
-Revises: 6deeccc0faa5
+Revises: 7693e2fac6fe
 Create Date: 2024-09-18 12:37:44.034906
 
 """
+
 import sqlalchemy as sa
 from alembic import op
 
