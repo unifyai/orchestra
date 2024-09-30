@@ -4,10 +4,12 @@ from pydantic import BaseModel
 
 
 class UserRequest(BaseModel):
-    email: str
+    email: Optional[str] = None
+    user_id: Optional[str] = None
     image: Optional[str] = None
-    emailVerified: Optional[str] = None
     name: Optional[str] = None
+    last_name: Optional[str] = None
+    job_title: Optional[str] = None
 
 
 class AccountRequest(BaseModel):
@@ -20,7 +22,3 @@ class AccountRequest(BaseModel):
     token_type: str
     id_token: str
     userId: Optional[str] = None
-
-
-class SessionRequest(BaseModel):
-    placeholder: str
