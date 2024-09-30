@@ -2,14 +2,14 @@ import copy
 import json
 import string
 
-from utils.helpers import (
+from .helpers import (
     get_llm_response,
     load_judgement,
     load_prompt,
     load_prompt_variation,
     load_response,
 )
-from utils.parsing_judge import ratings_from_sample
+from .parsing_judge import ratings_from_sample
 
 default_cfg = [
     {"label": "excellent", "score": 1.0},
@@ -125,7 +125,7 @@ def create_judge_prompt(data, eval_config):
         "content"
     ].format(**user_prompt_placeholders)
 
-    if not judge_prompt["messages"][0]["role"] != "system":
+    if judge_prompt["messages"][0]["role"] != "system":
         judge_prompt["messages"][-1]["content"] += "\n\n" + create_judge_rubric(
             class_cfg,
         )

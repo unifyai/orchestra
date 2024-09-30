@@ -17,14 +17,12 @@ router = APIRouter()
 
 
 template_no_ref = """
-{class_config}
-
 [start of user question]
-{user_prompt}
+{user_message}
 [end of user quesstion]
 
 [start of assistant answer]
-{response}
+{assistant_message}
 [end of assistant answer]"""
 
 # TODO: Move to utils (duplicated in routing)
