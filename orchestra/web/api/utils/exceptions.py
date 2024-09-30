@@ -29,7 +29,7 @@ class Error(Exception):
 
 class AuthenticationError(Error):
     def __init__(self, litellm_error: litellm.AuthenticationError):
-        self.message = "UnifyError: " + litellm_error.message.strip(
+        self.message = "UnifyAuthenticationError: " + litellm_error.message.strip(
             "litellm.AuthenticationError: ",
         )
         super().__init__(litellm_error)
@@ -37,7 +37,7 @@ class AuthenticationError(Error):
 
 class NotFoundError(Error):
     def __init__(self, litellm_error: litellm.NotFoundError):
-        self.message = "UnifyError: " + litellm_error.message.strip(
+        self.message = "UnifyNotFoundError: " + litellm_error.message.strip(
             "litellm.NotFoundError: ",
         )
         super().__init__(litellm_error)
@@ -45,7 +45,7 @@ class NotFoundError(Error):
 
 class BadRequestError(Error):
     def __init__(self, litellm_error: litellm.BadRequestError):
-        self.message = "UnifyError: " + litellm_error.message.strip(
+        self.message = "UnifyBadRequestError: " + litellm_error.message.strip(
             "litellm.BadRequestError: ",
         )
         super().__init__(litellm_error)
@@ -53,7 +53,7 @@ class BadRequestError(Error):
 
 class UnprocessableEntityError(Error):
     def __init__(self, litellm_error: litellm.UnprocessableEntityError):
-        self.message = "UnifyError: " + litellm_error.message.strip(
+        self.message = "UnifyUnprocessableEntityError: " + litellm_error.message.strip(
             "litellm.UnprocessableEntityError: ",
         )
         super().__init__(litellm_error)
@@ -61,13 +61,15 @@ class UnprocessableEntityError(Error):
 
 class Timeout(Error):
     def __init__(self, litellm_error: litellm.Timeout):
-        self.message = "UnifyError: " + litellm_error.message.strip("litellm.Timeout: ")
+        self.message = "UnifyTimeout: " + litellm_error.message.strip(
+            "litellm.Timeout: ",
+        )
         super().__init__(litellm_error)
 
 
 class RateLimitError(Error):
     def __init__(self, litellm_error: litellm.RateLimitError):
-        self.message = "UnifyError: " + litellm_error.message.strip(
+        self.message = "UnifyRateLimitError: " + litellm_error.message.strip(
             "litellm.RateLimitError: ",
         )
         super().__init__(litellm_error)
@@ -75,8 +77,11 @@ class RateLimitError(Error):
 
 class ContextWindowExceededError(Error):
     def __init__(self, litellm_error: litellm.ContextWindowExceededError):
-        self.message = "UnifyError: " + litellm_error.message.strip(
-            "litellm.ContextWindowExceededError: ",
+        self.message = (
+            "UnifyContextWindowExceededError: "
+            + litellm_error.message.strip(
+                "litellm.ContextWindowExceededError: ",
+            )
         )
         super().__init__(litellm_error)
 
@@ -84,7 +89,7 @@ class ContextWindowExceededError(Error):
 class RejectedRequestError(BadRequestError):
     def __init__(self, litellm_error: litellm.BadRequestError):
         super().__init__(litellm_error)
-        self.message = "UnifyError: " + self.message.strip(
+        self.message = "UnifyRejectedRequestError: " + self.message.strip(
             "litellm.RejectedRequestError: ",
         )
 
@@ -92,14 +97,14 @@ class RejectedRequestError(BadRequestError):
 class ContentPolicyViolationError(BadRequestError):
     def __init__(self, litellm_error: litellm.BadRequestError):
         super().__init__(litellm_error)
-        self.message = "UnifyError: " + self.message.strip(
+        self.message = "UnifyContentPolicyViolationError: " + self.message.strip(
             "litellm.ContentPolicyViolationError: ",
         )
 
 
 class ServiceUnavailableError(Error):
     def __init__(self, litellm_error: litellm.ServiceUnavailableError):
-        self.message = "UnifyError: " + litellm_error.message.strip(
+        self.message = "UnifyServiceUnavailableError: " + litellm_error.message.strip(
             "litellm.ServiceUnavailableError: ",
         )
         super().__init__(litellm_error)
@@ -115,7 +120,7 @@ class InternalServerError(Error):
 
 class APIError(Error):
     def __init__(self, litellm_error: litellm.APIError):
-        self.message = "UnifyError: " + litellm_error.message.strip(
+        self.message = "UnifyAPIError: " + litellm_error.message.strip(
             "litellm.APIError: ",
         )
         super().__init__(litellm_error)
@@ -123,7 +128,7 @@ class APIError(Error):
 
 class APIConnectionError(Error):
     def __init__(self, litellm_error: litellm.APIConnectionError):
-        self.message = "UnifyError: " + litellm_error.message.strip(
+        self.message = "UnifyAPIConnectionError: " + litellm_error.message.strip(
             "litellm.APIConnectionError: ",
         )
         super().__init__(litellm_error)
@@ -131,8 +136,11 @@ class APIConnectionError(Error):
 
 class APIResponseValidationError(Error):
     def __init__(self, litellm_error: litellm.APIResponseValidationError):
-        self.message = "UnifyError: " + litellm_error.message.strip(
-            "litellm.APIResponseValidationError: ",
+        self.message = (
+            "UnifyAPIResponseValidationError: "
+            + litellm_error.message.strip(
+                "litellm.APIResponseValidationError: ",
+            )
         )
         super().__init__(litellm_error)
 
@@ -140,7 +148,7 @@ class APIResponseValidationError(Error):
 class JSONSchemaValidationError(APIError):
     def __init__(self, litellm_error: litellm.APIError):
         super().__init__(litellm_error)
-        self.message = "UnifyError: " + self.message.strip(
+        self.message = "UnifyJSONSchemaValidationError: " + self.message.strip(
             "litellm.JSONSchemaValidationError: ",
         )
 
@@ -148,6 +156,6 @@ class JSONSchemaValidationError(APIError):
 class UnsupportedParamsError(BadRequestError):
     def __init__(self, litellm_error: litellm.BadRequestError):
         super().__init__(litellm_error)
-        self.message = "UnifyError: " + self.message.strip(
+        self.message = "UnifyUnsupportedParamsError: " + self.message.strip(
             "litellm.UnsupportedParamsError: ",
         )
