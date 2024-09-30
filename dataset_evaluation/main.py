@@ -29,10 +29,19 @@ running = False
 n = sdnotify.SystemdNotifier()
 
 # Pub/Sub subscription
-subscription_name = "projects/saas-368716/subscriptions/dataset_evaluation-sub"
+using_pubsub = not os.environ.get("ON_PREM") or os.environ.get("PUBSUB_MESSAGING_TOPIC")
+project_name = os.environ.get("PUBSUB_PROJECT_NAME", "saas-368716")
+subscription_name = (
+    f"projects/{project_name}/subscriptions/"
+    + os.environ.get(
+        "PUBSUB_MESSAGING_TOPIC",
+        "dataset_evaluation",
+    )
+    + "-sub"
+)
 if os.getenv("STAGING"):
     subscription_name = (
-        "projects/saas-368716/subscriptions/staging-dataset_evaluation-sub"
+        f"projects/{project_name}/subscriptions/staging_dataset_evaluation-sub"
     )
 
 
@@ -48,9 +57,7 @@ def signal_handler(signal, frame):
 def pub_sub_callback(message):
     global running
     running = True
-    message_data = (
-        message["data"].decode() if os.environ.get("ON_PREM") else message.data
-    )
+    message_data = message["data"].decode() if not using_pubsub else message.data
     global shutdown_flag
     if not shutdown_flag:
         try:
@@ -60,14 +67,14 @@ def pub_sub_callback(message):
                 process = subprocess.Popen(
                     ["venv/bin/python3", "evaluate_dataset.py", message_data],
                 )
-                if os.environ.get("ON_PREM"):
+                if not using_pubsub:
                     process.wait()
             elif data["action"] == "refresh_scores":
                 process = subprocess.Popen(
                     ["venv/bin/python3", "refresh_scores.py", message_data],
                 )
                 # TODO: What does the on prem wait do?
-                if os.environ.get("ON_PREM"):
+                if not using_pubsub:
                     process.wait()
         except json.decoder.JSONDecodeError:
             logging.error(f"Error parsing message: {message_data}")
@@ -81,9 +88,9 @@ def pub_sub_callback(message):
             # (i.e. spawning a subprocess).
             # NOTE: If there is an error with the message format, it should be
             # logged and acknowledged, otherwise the message will keep coming.
-            if not os.environ.get("ON_PREM"):
+            if using_pubsub:
                 message.ack()
-    elif not os.environ.get("ON_PREM"):
+    elif using_pubsub:
         message.nack()
     running = False
 
@@ -101,7 +108,7 @@ if __name__ == "__main__":
     # Notify systemd that the service is ready
     n.notify("READY=1")
 
-    if os.environ.get("ON_PREM"):
+    if not using_pubsub:
         r = redis.Redis(host=os.environ.get("REDIS_HOST", "host.docker.internal"))
         p = r.pubsub()
         p.subscribe(**{subscription_name.split("/")[-1]: push_msg_to_queue})
@@ -117,7 +124,7 @@ if __name__ == "__main__":
 
     while not shutdown_flag:
         try:
-            if not os.environ.get("ON_PREM"):
+            if using_pubsub:
                 future.result(timeout=10)
             elif not q.empty() and not running:
                 pub_sub_callback(q.get())
@@ -130,7 +137,7 @@ if __name__ == "__main__":
     logging.info("All tasks finished correctly! Stopping the service.")
     logging.info("Cancelling subscription...")
 
-    if os.environ.get("ON_PREM"):
+    if not using_pubsub:
         thread.stop()
     else:
         future.cancel()

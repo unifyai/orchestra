@@ -12,8 +12,13 @@ class LeptonAI(BaseCompletionProvider):
     Pricing is per million tokens: https://www.lepton.ai/pricing
     """
 
-    def __init__(self, hub_model, custom_api_key=None):
-        super().__init__(hub_model, custom_api_key=custom_api_key)
+    def __init__(self, hub_model, custom_endpoint=None, custom_api_key=None):
+        super().__init__(
+            hub_model,
+            "",
+            custom_endpoint=custom_endpoint,
+            custom_api_key=custom_api_key,
+        )
         self.supported_models = supported_models
 
     @property
@@ -56,17 +61,17 @@ supported_models = {
     },
     "llama-3.1-8b-chat": {
         "endpoint": "llama3-1-8b",
-        "context_window": 131072,
+        "context_window": 128000,
         "cost": {"prompt": 0.07, "completion": 0.07},
     },
     "llama-3.1-70b-chat": {
         "endpoint": "llama3-1-70b",
-        "context_window": 131072,
+        "context_window": 128000,
         "cost": {"prompt": 0.8, "completion": 0.8},
     },
     "llama-3.1-405b-chat": {
         "endpoint": "llama-3-1-405b",
-        "context_window": 131072,
+        "context_window": 128000,
         "cost": {"prompt": 2.8, "completion": 2.8},
     },
     "mixtral-8x7b-instruct-v0.1": {
@@ -78,6 +83,11 @@ supported_models = {
         "endpoint": "mistral-7b",
         "context_window": 32768,
         "cost": {"prompt": 0.07, "completion": 0.07},
+    },
+    "mistral-nemo": {
+        "endpoint": "mistral-nemo",
+        "context_window": 128000,
+        "cost": {"prompt": 0.18, "completion": 0.18},
     },
     "qwen-2-72b-instruct": {
         "endpoint": "qwen2-72b",

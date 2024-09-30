@@ -9,8 +9,13 @@ class Mistral(BaseCompletionProvider):
     Pricing is per million tokens: https://docs.mistral.ai/platform/pricing
     """
 
-    def __init__(self, hub_model, custom_api_key=None):
-        super().__init__(hub_model, custom_api_key=custom_api_key)
+    def __init__(self, hub_model, custom_endpoint=None, custom_api_key=None):
+        super().__init__(
+            hub_model,
+            "mistral",
+            custom_endpoint=custom_endpoint,
+            custom_api_key=custom_api_key,
+        )
         self.supported_models = supported_models
 
     @property
@@ -41,16 +46,16 @@ supported_models = {
     "mistral-small": {
         "endpoint": "mistral/mistral-small-latest",
         "context_window": 32768,
-        "cost": {"prompt": 1, "completion": 3},
+        "cost": {"prompt": 0.2, "completion": 0.6},
     },
     "mistral-large": {
         "endpoint": "mistral/mistral-large-latest",
-        "context_window": 32768,
-        "cost": {"prompt": 3, "completion": 9},
+        "context_window": 128000,
+        "cost": {"prompt": 2, "completion": 6},
     },
     "mistral-nemo": {
         "endpoint": "mistral/open-mistral-nemo-2407",
         "context_window": 128000,
-        "cost": {"prompt": 0.3, "completion": 0.3},
+        "cost": {"prompt": 0.15, "completion": 0.15},
     },
 }

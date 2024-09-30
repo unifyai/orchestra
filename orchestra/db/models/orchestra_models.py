@@ -322,19 +322,33 @@ class Query(Base):
 
     __tablename__ = "query"
 
-    id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), index=True, nullable=False)
-    at = Column(TIMESTAMP, nullable=False)
-    model_provider_str = Column(String(), nullable=False)
-    endpoint_id = Column(Integer(), ForeignKey("endpoint.id"), index=True)
-    custom_endpoint_id = Column(Integer(), ForeignKey("custom_endpoint.id"), index=True)
-    local_endpoint_id = Column(Integer(), ForeignKey("local_endpoint.id"), index=True)
-    credits = Column(Numeric(), nullable=False)
-    query_body = Column(String(), nullable=False)
-    response_body = Column(String(), nullable=False)
-    signature = Column(String())
-    used_router = Column(Boolean())
-    router = Column(String)
+    id = sa.Column(sa.Integer(), primary_key=True)
+    user_id = sa.Column(
+        sa.String(),
+        sa.ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+    at = sa.Column(sa.TIMESTAMP(), nullable=False)
+    model_provider_str = sa.Column(sa.String(), nullable=False)
+    endpoint_id = sa.Column(sa.Integer(), sa.ForeignKey("endpoint.id"), index=True)
+    custom_endpoint_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("custom_endpoint.id"),
+        index=True,
+    )
+    local_endpoint_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("local_endpoint.id"),
+        index=True,
+    )
+    credits = sa.Column(sa.Numeric(), nullable=False)
+    query_body = sa.Column(sa.String(), nullable=False)
+    response_body = sa.Column(sa.String(), nullable=False)
+    signature = sa.Column(sa.String(), nullable=True)
+    used_router = sa.Column(sa.Boolean(), nullable=True)
+    router = sa.Column(sa.String, nullable=True)
+    status_code = sa.Column(sa.Integer(), nullable=False)
     tags = relationship("QueryTagAssociation", back_populates="query")
     __table_args__ = (Index("ix_user_endpoint", "user_id", "endpoint_id"),)
 
@@ -376,6 +390,7 @@ class StoredPrompt(Base):
             unique=True,
         ),
     )
+    extra_fields = relationship("StoredPromptExtraField")
 
 
 class DefaultPrompt(Base):
@@ -443,6 +458,7 @@ class StoredPromptResponse(Base):
             "prompt_variation_id",
             "endpoint_str",
             name="uq_prompt_response",
+            postgresql_nulls_not_distinct=True,
         ),
     )
 
@@ -452,11 +468,25 @@ class Judgement(Base):
 
     __tablename__ = "judgement"
 
-    id = Column(Integer(), primary_key=True)
-    response_id = Column(Integer(), ForeignKey("stored_prompt_response.id"), index=True)
-    judge_endpoint_str = Column(String(), nullable=False)
-    evaluator_id = Column(Integer(), ForeignKey("evaluator.id"), nullable=False)
-    judgement = Column(String(), nullable=False)
+    id = sa.Column(sa.Integer(), primary_key=True)
+    response_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("stored_prompt_response.id"),
+        index=True,
+        nullable=True,
+    )
+    judge_endpoint_str = sa.Column(
+        sa.String(),
+        nullable=False,
+    )
+    evaluator_id = sa.Column(
+        sa.Integer(),
+        sa.ForeignKey("evaluator.id"),
+        nullable=False,
+    )
+    judgement = sa.Column(sa.String(), nullable=False)
+    judgement_score = sa.Column(sa.Numeric(), nullable=True)
+
     __table_args__ = (
         UniqueConstraint(
             "response_id",
@@ -489,14 +519,31 @@ class Evaluator(Base):
 
     __tablename__ = "evaluator"
 
-    id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), index=True)
-    name = Column(String(), nullable=False)
-    system_prompt = Column(String(), nullable=False)
-    class_config = Column(String(), nullable=False)
-    judge_models = Column(String(), nullable=False)
-    client_side = Column(Boolean(), nullable=False)
-    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_userid_evaluator"),)
+    id = sa.Column(sa.Integer(), primary_key=True)
+    user_id = sa.Column(
+        sa.String(),
+        sa.ForeignKey("users.id"),
+        index=True,
+        nullable=True,
+    )
+    name = sa.Column(sa.String(), nullable=False)
+    judge_prompt = sa.Column(sa.String(), nullable=False)
+    prompt_parser = sa.Column(
+        sa.String(),
+        nullable=False,
+        default="{\"user_message\": \"['messages'][-1]['content']\"}",
+    )
+    response_parser = sa.Column(
+        sa.String(),
+        nullable=False,
+        default="{\"assistant_message\": \"['message']['content']\"}",
+    )
+    class_config = sa.Column(sa.String(), nullable=False)
+    judge_models = sa.Column(sa.String(), nullable=False)
+    client_side = sa.Column(sa.Boolean(), nullable=False)
+    __table_args__ = (
+        sa.UniqueConstraint("user_id", "name", name="uq_userid_evaluator"),
+    )
 
 
 class Evaluation(Base):
@@ -521,6 +568,7 @@ class Evaluation(Base):
             "evaluator_id",
             "endpoint_str",
             name="uq_evaluation",
+            postgresql_nulls_not_distinct=True,
         ),
     )
 

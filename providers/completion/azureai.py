@@ -12,8 +12,13 @@ class AzureAI(BaseCompletionProvider):
     Pricing is per million tokens: https://ai.azure.com/explore/models?wsid=/subscriptions/f4cde163-8224-40b0-a18b-6340fe52f8d3/resourceGroups/sso/providers/Microsoft.MachineLearningServices/workspaces/sso-1&tid=714aedce-c300-4844-8404-0dd5b92edb51
     """
 
-    def __init__(self, hub_model, custom_api_key=None):
-        super().__init__(hub_model, custom_api_key=custom_api_key)
+    def __init__(self, hub_model, custom_endpoint=None, custom_api_key=None):
+        super().__init__(
+            hub_model,
+            "azure" if "gpt" in hub_model else "azure_ai",
+            custom_endpoint=custom_endpoint,
+            custom_api_key=custom_api_key,
+        )
         self.supported_models = supported_models
         self.project = os.environ.get("AZURE_PROJECT")
         self.region = os.environ.get("AZURE_REGION")
@@ -99,6 +104,12 @@ supported_models = {
         "version": "2023-03-15-preview",
         "context_window": 128000,
         "cost": {"prompt": 2.5, "completion": 10},
+    },
+    "gpt-4o-2024-05-13": {
+        "endpoint": "azure/gpt-4o-2024-05-13",
+        "version": "2023-03-15-preview",
+        "context_window": 128000,
+        "cost": {"prompt": 5, "completion": 15},
     },
     "llama-3.1-405b-chat": {
         "endpoint": "azure_ai/Meta-Llama-3-1-405B-Instruct-aog",

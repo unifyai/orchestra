@@ -1,9 +1,9 @@
 name: On-prem Docker Build
 
 on:
-  schedule:
-    # runs everyday at 23:00 UTC
-  - cron: '0 23 * * *'
+  # schedule:
+  #   # runs everyday at 23:00 UTC
+  # - cron: '0 23 * * *'
   workflow_dispatch:
 
 jobs:
@@ -39,17 +39,17 @@ jobs:
     - name: Pull and Push Orchestra Image
       run: |
         docker pull europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra:latest
-        docker tag europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra:latest ${{ secrets.DOCKERHUB_USERNAME }}/orchestra-on-prem:latest
-        docker push ${{ secrets.DOCKERHUB_USERNAME }}/orchestra-on-prem:latest
+        docker tag europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/orchestra/orchestra:latest unifyai/orchestra-on-prem:latest
+        docker push unifyai/orchestra-on-prem:latest
 
     - name: Pull and Push Console Image
       run: |
         docker pull europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/unify-interfaces/saas-web-app:latest
-        docker tag europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/unify-interfaces/saas-web-app:latest ${{ secrets.DOCKERHUB_USERNAME }}/unify-interfaces-on-prem:latest
-        docker push ${{ secrets.DOCKERHUB_USERNAME }}/unify-interfaces-on-prem:latest
+        docker tag europe-west3-docker.pkg.dev/saas-368716/cloud-run-source-deploy/unify-interfaces/saas-web-app:latest unifyai/unify-interfaces-on-prem:latest
+        docker push unifyai/unify-interfaces-on-prem:latest
 
     - name: Build and push Dataset Evaluation Image
       run: |
         cd dataset_evaluation
-        docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/dataset-evaluation-on-prem:latest -f Dockerfile .
-        docker push ${{ secrets.DOCKERHUB_USERNAME }}/dataset-evaluation-on-prem:latest
+        docker build -t unifyai/dataset-evaluation-on-prem:latest -f Dockerfile .
+        docker push unifyai/dataset-evaluation-on-prem:latest

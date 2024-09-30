@@ -11,8 +11,13 @@ class VertexAI(BaseCompletionProvider):
     Pricing is per million tokens: https://ai.google.dev/pricing
     """
 
-    def __init__(self, hub_model, custom_api_key=None):
-        super().__init__(hub_model, custom_api_key=custom_api_key)
+    def __init__(self, hub_model, custom_endpoint=None, custom_api_key=None):
+        super().__init__(
+            hub_model,
+            "vertex_ai",
+            custom_endpoint=custom_endpoint,
+            custom_api_key=custom_api_key,
+        )
         self.supported_models = supported_models
 
     @property
@@ -29,14 +34,15 @@ class VertexAI(BaseCompletionProvider):
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:  # noqa: WPS210
+        kwargs_region = kwargs.pop("region", None)
+        region = kwargs_region
         if self.hub_model in self.supported_models:
-            kwargs_region = kwargs.pop("region", None)
             region = (
                 kwargs_region
                 if kwargs_region
                 else self.supported_models[self.hub_model]["region"]
             )
-            kwargs["vertex_location"] = region
+        kwargs["vertex_location"] = region
         return super().__call__(messages, stream, **kwargs)
 
     def __call_async__(
@@ -63,6 +69,12 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 3.5, "completion": 10.5},
     },
+    "gemini-1.5-pro-002": {
+        "endpoint": "vertex_ai/gemini-1.5-pro-002",
+        "region": "us-west1",
+        "context_window": 128000,
+        "cost": {"prompt": 3.5, "completion": 10.5},
+    },
     "gemini-1.5-pro-001": {
         "endpoint": "vertex_ai/gemini-1.5-pro-001",
         "region": "us-west1",
@@ -71,6 +83,12 @@ supported_models = {
     },
     "gemini-1.5-flash": {
         "endpoint": "vertex_ai/gemini-1.5-flash",
+        "region": "us-west1",
+        "context_window": 128000,
+        "cost": {"prompt": 0.075, "completion": 0.3},
+    },
+    "gemini-1.5-flash-002": {
+        "endpoint": "vertex_ai/gemini-1.5-flash-002",
         "region": "us-west1",
         "context_window": 128000,
         "cost": {"prompt": 0.075, "completion": 0.3},
@@ -123,22 +141,46 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 3, "completion": 15},
     },
+    "llama-3.1-8b-chat": {
+        "endpoint": "vertex_ai/meta/llama3-8b-instruct-maas",
+        "region": "us-central1",
+        "context_window": 128000,
+        "cost": {"prompt": 0.22, "completion": 0.22},
+    },
+    "llama-3.1-70b-chat": {
+        "endpoint": "vertex_ai/meta/llama3-70b-instruct-maas",
+        "region": "us-central1",
+        "context_window": 128000,
+        "cost": {"prompt": 0.99, "completion": 0.99},
+    },
     "llama-3.1-405b-chat": {
         "endpoint": "vertex_ai/meta/llama3-405b-instruct-maas",
         "region": "us-central1",
         "context_window": 128000,
         "cost": {"prompt": 5.32, "completion": 16},
     },
+    "llama-3.2-11b-chat": {
+        "endpoint": "vertex_ai/meta/llama-3.2-90b-vision-instruct-maas",
+        "region": "us-central1",
+        "context_window": 128000,
+        "cost": {"prompt": 0.35, "completion": 0.35},
+    },
+    "llama-3.2-90b-chat": {
+        "endpoint": "vertex_ai/meta/llama-3.2-90b-vision-instruct-maas",
+        "region": "us-central1",
+        "context_window": 128000,
+        "cost": {"prompt": 2, "completion": 2},
+    },
     "mistral-large": {
         "endpoint": "vertex_ai/mistral-large",
         "region": "europe-west4",
-        "context_window": 32768,
-        "cost": {"prompt": 3, "completion": 9},
+        "context_window": 128000,
+        "cost": {"prompt": 2, "completion": 6},
     },
     "mistral-nemo": {
         "endpoint": "vertex_ai/mistral-nemo",
         "region": "europe-west4",
         "context_window": 128000,
-        "cost": {"prompt": 0.3, "completion": 0.3},
+        "cost": {"prompt": 0.15, "completion": 0.15},
     },
 }
