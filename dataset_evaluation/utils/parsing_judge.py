@@ -6,13 +6,15 @@ default_cfg = [
     {"label": "very_good", "score": 0.8},
     {"label": "good", "score": 0.5},
     {"label": "bad", "score": 0.0},
-    {"label": "irrelevant", "score": 0.0},
+    # {"label": "irrelevant", "score": 0.0},
 ]
 
 
 def extract_json(text):
     json_text = re.search(
-        '\{[\n\r\s]*"assistant_rating":.*?\}', text, flags=re.DOTALL | re.MULTILINE
+        '\{[\n\r\s]*"assistant_rating":.*?\}',
+        text,
+        flags=re.DOTALL | re.MULTILINE,
     ).group(0)
     return json_text
 
@@ -36,14 +38,4 @@ def ratings_from_sample(sample, cfg=default_cfg):
         return float(score)
     except Exception as e:
         print(e)
-        return 0
-
-
-def calc_quality(judgements_path, cfg=default_cfg):
-    scores = []
-    with open(judgements_path) as f:
-        for line in f:
-            entry = json.loads(line)
-            prompt_score = ratings_from_sample(entry["judge_response"], cfg)
-            scores.append(prompt_score)
-    return sum(scores) / len(scores)
+        return None
