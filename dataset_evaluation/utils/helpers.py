@@ -1,6 +1,59 @@
+import asyncio
+import random
 from typing import Optional
 
 from httpx import AsyncClient
+
+
+class RateLimitException(Exception):
+    pass
+
+
+# define a retry decorator
+def retry_with_exponential_backoff(
+    initial_delay: float = 1,
+    exponential_base: float = 2,
+    jitter: bool = True,
+    max_retries: int = 10,
+    errors: tuple = (Exception,),
+):
+    """Retry a function with exponential backoff."""
+
+    def wrapper(async_func):
+        async def wrapped(*args, **kwargs):
+            # Initialize variables
+            num_retries = 0
+            delay = initial_delay
+
+            # Loop until a successful response or max_retries is hit or an exception is raised
+            while True:
+                try:
+                    return await async_func(*args, **kwargs)
+
+                # Retry on specific errors
+                except errors as e:
+                    # Increment retries
+                    num_retries += 1
+
+                    # Check if max retries has been reached
+                    if num_retries > max_retries:
+                        raise Exception(
+                            f"Maximum number of retries ({max_retries}) exceeded.",
+                        )
+
+                    # Increment the delay
+                    delay *= exponential_base * (1 + jitter * random.random())
+
+                    # Sleep for the delay
+                    await asyncio.sleep(delay)
+
+                # Raise exceptions for any errors not specified
+                except Exception as e:
+                    raise e
+
+        return wrapped
+
+    return wrapper
 
 
 async def load_prompt(prompt_id: int, admin_key: str, client: AsyncClient):
@@ -109,6 +162,11 @@ async def store_prompt_variation(
     return ret.json()
 
 
+@retry_with_exponential_backoff(errors=(RateLimitException,))
 async def get_llm_response(payload, url, headers, client):
     ret = await client.post(url, json=payload, headers=headers)
+    if ret.status_code != 200:
+        if ret["detail"].startswith("UnifyRateLimitError:"):
+            raise RateLimitException
+
     return ret.json()
