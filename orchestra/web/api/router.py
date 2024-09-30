@@ -22,6 +22,7 @@ from orchestra.web.api import (  # noqa: WPS235
     router_deployment,
     router_training,
     supported_endpoints,
+    users,
 )
 from orchestra.web.api.dependencies import auth_admin_key, auth_api_key
 
@@ -117,6 +118,13 @@ api_router.include_router(
     admin.router,
     prefix="/admin",
     tags=["admin"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
+    users.admin_router,
+    prefix="/admin",
+    tags=["Users"],
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )

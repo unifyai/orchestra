@@ -1,5 +1,18 @@
+import uuid
+
 import sqlalchemy as sa
-from sqlalchemy import Index, func
+from sqlalchemy import (
+    TIMESTAMP,
+    Boolean,
+    Column,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import relationship
 
 from orchestra.db.base import Base
@@ -10,16 +23,11 @@ class Model(Base):
 
     __tablename__ = "model"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    mdl_code = sa.Column(sa.String())
-    uploaded_at = sa.Column(sa.TIMESTAMP(), nullable=False)
-    task = sa.Column(sa.String(), sa.ForeignKey("task.name"), nullable=False)
-
-    active = sa.Column(
-        sa.Boolean(),
-        server_default="f",
-        nullable=False,
-    )  # type: ignore
+    id = Column(Integer(), primary_key=True)
+    mdl_code = Column(String())
+    uploaded_at = Column(TIMESTAMP, nullable=False)
+    task = Column(String(), ForeignKey("task.name"), nullable=False)
+    active = Column(Boolean(), server_default="f", nullable=False)  # type: ignore
 
 
 class Task(Base):
@@ -27,8 +35,8 @@ class Task(Base):
 
     __tablename__ = "task"
 
-    name = sa.Column(sa.String(), primary_key=True)
-    modality = sa.Column(sa.String(), sa.ForeignKey("modality.name"), nullable=False)
+    name = Column(String(), primary_key=True)
+    modality = Column(String(), ForeignKey("modality.name"), nullable=False)
 
 
 class Modality(Base):
@@ -36,7 +44,7 @@ class Modality(Base):
 
     __tablename__ = "modality"
 
-    name = sa.Column(sa.String(), primary_key=True)
+    name = Column(String(), primary_key=True)
 
 
 class Endpoint(Base):
@@ -44,15 +52,11 @@ class Endpoint(Base):
 
     __tablename__ = "endpoint"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    mdl_id = sa.Column(sa.Integer(), sa.ForeignKey("model.id"), nullable=False)
-    provider_id = sa.Column(sa.Integer(), sa.ForeignKey("provider.id"), nullable=False)
-    created_at = sa.Column(sa.TIMESTAMP(), nullable=False)
-    active = sa.Column(
-        sa.Boolean(),
-        server_default="f",
-        nullable=False,
-    )  # type: ignore
+    id = Column(Integer(), primary_key=True)
+    mdl_id = Column(Integer(), ForeignKey("model.id"), nullable=False)
+    provider_id = Column(Integer(), ForeignKey("provider.id"), nullable=False)
+    created_at = Column(TIMESTAMP, nullable=False)
+    active = Column(Boolean(), server_default="f", nullable=False)  # type: ignore
 
 
 class Provider(Base):
@@ -60,10 +64,10 @@ class Provider(Base):
 
     __tablename__ = "provider"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    name = sa.Column(sa.String(), nullable=False)
-    display_name = sa.Column(sa.String(), nullable=False)
-    image_url = sa.Column(sa.String(), nullable=False)
+    id = Column(Integer(), primary_key=True)
+    name = Column(String(), nullable=False)
+    display_name = Column(String(), nullable=False)
+    image_url = Column(String(), nullable=False)
 
 
 class Datapoint(Base):
@@ -71,16 +75,12 @@ class Datapoint(Base):
 
     __tablename__ = "datapoint"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    benchmark_run_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("benchmark_run.id"),
-        nullable=False,
-    )
-    metric_name = sa.Column(sa.String(), sa.ForeignKey("metric.name"), nullable=False)
-    value = sa.Column(sa.Numeric(), nullable=False)
-    tooltip = sa.Column(sa.String())
-    measured_at = sa.Column(sa.TIMESTAMP(), nullable=False)
+    id = Column(Integer(), primary_key=True)
+    benchmark_run_id = Column(Integer(), ForeignKey("benchmark_run.id"), nullable=False)
+    metric_name = Column(String(), ForeignKey("metric.name"), nullable=False)
+    value = Column(Numeric(), nullable=False)
+    tooltip = Column(String())
+    measured_at = Column(TIMESTAMP, nullable=False)
 
 
 class BenchmarkRegime(Base):
@@ -88,7 +88,7 @@ class BenchmarkRegime(Base):
 
     __tablename__ = "benchmark_regime"
 
-    name = sa.Column(sa.String(), primary_key=True)
+    name = Column(String(), primary_key=True)
 
 
 class BenchmarkRegion(Base):
@@ -96,7 +96,7 @@ class BenchmarkRegion(Base):
 
     __tablename__ = "benchmark_region"
 
-    name = sa.Column(sa.String(), primary_key=True)
+    name = Column(String(), primary_key=True)
 
 
 class BenchmarkSeqLen(Base):
@@ -104,7 +104,7 @@ class BenchmarkSeqLen(Base):
 
     __tablename__ = "benchmark_seq_len"
 
-    name = sa.Column(sa.String(), primary_key=True)
+    name = Column(String(), primary_key=True)
 
 
 class BenchmarkRun(Base):
@@ -112,28 +112,12 @@ class BenchmarkRun(Base):
 
     __tablename__ = "benchmark_run"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    endpoint_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("endpoint.id"),
-        nullable=False,
-    )
-    regime = sa.Column(
-        sa.String(),
-        sa.ForeignKey("benchmark_regime.name"),
-        nullable=False,
-    )
-    region = sa.Column(
-        sa.String(),
-        sa.ForeignKey("benchmark_region.name"),
-        nullable=False,
-    )
-    seq_len = sa.Column(
-        sa.String(),
-        sa.ForeignKey("benchmark_seq_len.name"),
-        nullable=False,
-    )
-    measured_at = sa.Column(sa.TIMESTAMP(), nullable=False)
+    id = Column(Integer(), primary_key=True)
+    endpoint_id = Column(Integer(), ForeignKey("endpoint.id"), nullable=False)
+    regime = Column(String(), ForeignKey("benchmark_regime.name"), nullable=False)
+    region = Column(String(), ForeignKey("benchmark_region.name"), nullable=False)
+    seq_len = Column(String(), ForeignKey("benchmark_seq_len.name"), nullable=False)
+    measured_at = Column(TIMESTAMP, nullable=False)
 
 
 class Metric(Base):
@@ -141,12 +125,12 @@ class Metric(Base):
 
     __tablename__ = "metric"
 
-    name = sa.Column(sa.String(), primary_key=True)
-    units = sa.Column(sa.String(), nullable=False)
-    display_name = sa.Column(sa.String(), nullable=False)
-    tooltip = sa.Column(sa.String())
-    priority = sa.Column(sa.Integer(), nullable=False)
-    plottable = sa.Column(sa.Boolean(), nullable=False)  # type: ignore
+    name = Column(String(), primary_key=True)
+    units = Column(String(), nullable=False)
+    display_name = Column(String(), nullable=False)
+    tooltip = Column(String())
+    priority = Column(Integer(), nullable=False)
+    plottable = Column(Boolean(), nullable=False)  # type: ignore
 
 
 class QueryOld(Base):
@@ -154,15 +138,15 @@ class QueryOld(Base):
 
     __tablename__ = "query_old"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
-    at = sa.Column(sa.TIMESTAMP(), nullable=False)
-    endpoint_id = sa.Column(sa.Integer(), sa.ForeignKey("endpoint.id"), nullable=False)
-    credits = sa.Column(sa.Numeric(), nullable=False)
-    prompt = sa.Column(sa.String(), nullable=True)
-    signature = sa.Column(sa.String(), nullable=True)
-    used_router = sa.Column(sa.Boolean(), nullable=True)
-    router = sa.Column(sa.String, nullable=True)
+    id = Column(Integer(), primary_key=True)
+    user_id = Column(String(), ForeignKey("users.id"), nullable=False)
+    at = Column(TIMESTAMP, nullable=False)
+    endpoint_id = Column(Integer(), ForeignKey("endpoint.id"), nullable=False)
+    credits = Column(Numeric(), nullable=False)
+    prompt = Column(String())
+    signature = Column(String())
+    used_router = Column(Boolean())
+    router = Column(String)
 
 
 class Users(Base):
@@ -171,13 +155,13 @@ class Users(Base):
     __tablename__ = "users"
 
     # IMPORTANT: If any change happens here the DB trigger must be updated as well!
-    id = sa.Column(sa.String(), primary_key=True)
-    credits = sa.Column(sa.Numeric(), nullable=False)
-    stripe_customer_id = sa.Column(sa.String(), nullable=True)
-    autorecharge = sa.Column(sa.Boolean, nullable=False)
-    autorecharge_threshold = sa.Column(sa.Numeric, nullable=False)
-    autorecharge_qty = sa.Column(sa.Numeric, nullable=False)
-    store_prompts = sa.Column(sa.Boolean, nullable=True)
+    id = Column(String(), primary_key=True)
+    credits = Column(Numeric(), nullable=False)
+    stripe_customer_id = Column(String())
+    autorecharge = Column(Boolean, nullable=False)
+    autorecharge_threshold = Column(Numeric, nullable=False)
+    autorecharge_qty = Column(Numeric, nullable=False)
+    store_prompts = Column(Boolean)
 
 
 class Recharge(Base):
@@ -185,12 +169,12 @@ class Recharge(Base):
 
     __tablename__ = "recharge"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    at = sa.Column(sa.TIMESTAMP(), nullable=False)
-    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
-    quantity = sa.Column(sa.Numeric(), nullable=False)
-    type = sa.Column(sa.String(), sa.ForeignKey("recharge_type.type"), nullable=False)
-    transaction_id = sa.Column(sa.String(), nullable=True)
+    id = Column(Integer(), primary_key=True)
+    at = Column(TIMESTAMP, nullable=False)
+    user_id = Column(String(), ForeignKey("users.id"), nullable=False)
+    quantity = Column(Numeric(), nullable=False)
+    type = Column(String(), ForeignKey("recharge_type.type"), nullable=False)
+    transaction_id = Column(String())
 
 
 class RechargeType(Base):
@@ -198,7 +182,7 @@ class RechargeType(Base):
 
     __tablename__ = "recharge_type"
 
-    type = sa.Column(sa.String(), primary_key=True)
+    type = Column(String(), primary_key=True)
 
 
 class BetaList(Base):
@@ -206,9 +190,9 @@ class BetaList(Base):
 
     __tablename__ = "beta_list"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    email = sa.Column(sa.String(), nullable=False)
-    type = sa.Column(sa.String(), nullable=False)
+    id = Column(Integer(), primary_key=True)
+    email = Column(String(), nullable=False)
+    type = Column(String(), nullable=False)
 
 
 class CustomApiKey(Base):
@@ -216,10 +200,10 @@ class CustomApiKey(Base):
 
     __tablename__ = "custom_api_key"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
-    key = sa.Column(sa.String(), nullable=False)
-    value = sa.Column(sa.String(), nullable=False)
+    id = Column(Integer(), primary_key=True)
+    user_id = Column(String(), ForeignKey("users.id"), nullable=False)
+    key = Column(String(), nullable=False)
+    value = Column(String(), nullable=False)
 
 
 class CustomEndpoint(Base):
@@ -227,12 +211,12 @@ class CustomEndpoint(Base):
 
     __tablename__ = "custom_endpoint"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
-    name = sa.Column(sa.String(), nullable=False)
-    mdl_name = sa.Column(sa.String(), nullable=True)
-    url = sa.Column(sa.String(), nullable=False)
-    key_id = sa.Column(sa.Integer(), sa.ForeignKey("custom_api_key.id"), nullable=False)
+    id = Column(Integer(), primary_key=True)
+    user_id = Column(String(), ForeignKey("users.id"), nullable=False)
+    name = Column(String(), nullable=False)
+    mdl_name = Column(String())
+    url = Column(String(), nullable=False)
+    key_id = Column(Integer(), ForeignKey("custom_api_key.id"), nullable=False)
 
 
 class CustomRouter(Base):
@@ -240,10 +224,10 @@ class CustomRouter(Base):
 
     __tablename__ = "custom_router"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=True)
-    router_name = sa.Column(sa.String(), nullable=False)
-    router_id = sa.Column(sa.String(), nullable=False)
+    id = Column(Integer(), primary_key=True)
+    user_id = Column(String(), ForeignKey("users.id"))
+    router_name = Column(String(), nullable=False)
+    router_id = Column(String(), nullable=False)
 
 
 class CreditCardFingerprint(Base):
@@ -251,9 +235,9 @@ class CreditCardFingerprint(Base):
 
     __tablename__ = "credit_card_fingerprint"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
-    fingerprint = sa.Column(sa.String(), nullable=False)
+    id = Column(Integer(), primary_key=True)
+    user_id = Column(String(), ForeignKey("users.id"), nullable=False)
+    fingerprint = Column(String(), nullable=False)
 
 
 class LatestBenchmark(Base):
@@ -261,20 +245,20 @@ class LatestBenchmark(Base):
 
     __tablename__ = "latest_benchmark"
 
-    endpoint_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("endpoint.id"),
-        nullable=False,
+    endpoint_id = Column(
+        Integer(),
+        ForeignKey("endpoint.id"),
         primary_key=True,
+        nullable=False,
     )
-    regime = sa.Column(sa.String(), primary_key=True)
-    region = sa.Column(sa.String(), primary_key=True)
-    seq_len = sa.Column(sa.String(), primary_key=True)
-    input_cost = sa.Column(sa.Numeric())
-    output_cost = sa.Column(sa.Numeric())
-    ttft = sa.Column(sa.Numeric())
-    itl = sa.Column(sa.Numeric())
-    measured_at = sa.Column(sa.TIMESTAMP(), nullable=False)
+    regime = Column(String(), primary_key=True)
+    region = Column(String(), primary_key=True)
+    seq_len = Column(String(), primary_key=True)
+    input_cost = Column(Numeric())
+    output_cost = Column(Numeric())
+    ttft = Column(Numeric())
+    itl = Column(Numeric())
+    measured_at = Column(TIMESTAMP, nullable=False)
 
 
 class CustomEndpointBenchmark(Base):
@@ -282,15 +266,15 @@ class CustomEndpointBenchmark(Base):
 
     __tablename__ = "custom_endpoint_benchmark"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    custom_endpoint_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("custom_endpoint.id"),
+    id = Column(Integer(), primary_key=True)
+    custom_endpoint_id = Column(
+        Integer(),
+        ForeignKey("custom_endpoint.id"),
         nullable=False,
     )
-    metric_name = sa.Column(sa.String(), nullable=False)
-    value = sa.Column(sa.Numeric(), nullable=False)
-    measured_at = sa.Column(sa.TIMESTAMP(), nullable=False)
+    metric_name = Column(String(), nullable=False)
+    value = Column(Numeric(), nullable=False)
+    measured_at = Column(TIMESTAMP, nullable=False)
 
 
 class Tag(Base):
@@ -298,41 +282,20 @@ class Tag(Base):
 
     __tablename__ = "tags"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(
-        sa.String(),
-        sa.ForeignKey("users.id"),
-        nullable=False,
-        index=True,
-    )
-    tag_name = sa.Column(sa.String(), nullable=False)
+    id = Column(Integer(), primary_key=True)
+    user_id = Column(String(), ForeignKey("users.id"), index=True, nullable=False)
+    tag_name = Column(String(), nullable=False)
     queries = relationship("QueryTagAssociation", back_populates="tag")
-    __table_args__ = (sa.UniqueConstraint("user_id", "tag_name", name="uq_user_tag"),)
+    __table_args__ = (UniqueConstraint("user_id", "tag_name", name="uq_user_tag"),)
 
 
 class QueryTagAssociation(Base):
     """Model class for map between tags and queries"""
 
     __tablename__ = "query_tag_association"
-    user_id = sa.Column(
-        sa.String(),
-        sa.ForeignKey("users.id"),
-        primary_key=True,
-        index=True,
-    )
-    query_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("query.id"),
-        primary_key=True,
-        index=True,
-    )
-    tag_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("tags.id"),
-        primary_key=True,
-        index=True,
-    )
-
+    user_id = Column(String(), ForeignKey("users.id"), primary_key=True, index=True)
+    query_id = Column(Integer(), ForeignKey("query.id"), primary_key=True, index=True)
+    tag_id = Column(Integer(), ForeignKey("tags.id"), primary_key=True, index=True)
     tag = relationship("Tag", back_populates="queries")
     query = relationship("Query", back_populates="tags")
 
@@ -348,10 +311,10 @@ class LocalEndpoint(Base):
 
     __tablename__ = "local_endpoint"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=False)
-    name = sa.Column(sa.String(), nullable=False)
-    __table_args__ = (sa.UniqueConstraint("user_id", "name", name="uq_user_endpoint"),)
+    id = Column(Integer(), primary_key=True)
+    user_id = Column(String(), ForeignKey("users.id"), nullable=False)
+    name = Column(String(), nullable=False)
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_user_endpoint"),)
 
 
 class Query(Base):
@@ -359,35 +322,35 @@ class Query(Base):
 
     __tablename__ = "query"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(
-        sa.String(),
-        sa.ForeignKey("users.id"),
+    id = Column(Integer(), primary_key=True)
+    user_id = Column(
+        String(),
+        ForeignKey("users.id"),
         nullable=False,
         index=True,
     )
-    at = sa.Column(sa.TIMESTAMP(), nullable=False)
-    model_provider_str = sa.Column(sa.String(), nullable=False)
-    endpoint_id = sa.Column(sa.Integer(), sa.ForeignKey("endpoint.id"), index=True)
-    custom_endpoint_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("custom_endpoint.id"),
+    at = Column(sa.TIMESTAMP(), nullable=False)
+    model_provider_str = Column(String(), nullable=False)
+    endpoint_id = Column(Integer(), ForeignKey("endpoint.id"), index=True)
+    custom_endpoint_id = Column(
+        Integer(),
+        ForeignKey("custom_endpoint.id"),
         index=True,
     )
-    local_endpoint_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("local_endpoint.id"),
+    local_endpoint_id = Column(
+        Integer(),
+        ForeignKey("local_endpoint.id"),
         index=True,
     )
-    credits = sa.Column(sa.Numeric(), nullable=False)
-    query_body = sa.Column(sa.String(), nullable=False)
-    response_body = sa.Column(sa.String(), nullable=False)
-    signature = sa.Column(sa.String(), nullable=True)
-    used_router = sa.Column(sa.Boolean(), nullable=True)
-    router = sa.Column(sa.String, nullable=True)
-    status_code = sa.Column(sa.Integer(), nullable=False)
+    credits = Column(Numeric(), nullable=False)
+    query_body = Column(String(), nullable=False)
+    response_body = Column(String(), nullable=False)
+    signature = Column(String())
+    used_router = Column(Boolean())
+    router = Column(String())
+    status_code = Column(Integer(), nullable=False)
     tags = relationship("QueryTagAssociation", back_populates="query")
-    __table_args__ = (sa.Index("ix_user_endpoint", "user_id", "endpoint_id"),)
+    __table_args__ = (Index("ix_user_endpoint", "user_id", "endpoint_id"),)
 
 
 # TODO: CASCADE DELETE FOR PROMPTS -> EVALUATIONS
@@ -398,15 +361,10 @@ class Dataset(Base):
 
     __tablename__ = "dataset"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(
-        sa.String(),
-        sa.ForeignKey("users.id"),
-        index=True,
-        nullable=True,
-    )
-    name = sa.Column(sa.String(), nullable=False)
-    __table_args__ = (sa.UniqueConstraint("user_id", "name", name="uq_userid_name"),)
+    id = Column(Integer(), primary_key=True)
+    user_id = Column(String(), ForeignKey("users.id"), index=True)
+    name = Column(String(), nullable=False)
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_userid_name"),)
 
 
 class StoredPrompt(Base):
@@ -414,19 +372,14 @@ class StoredPrompt(Base):
 
     __tablename__ = "stored_prompt"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(
-        sa.String(),
-        sa.ForeignKey("users.id"),
-        index=True,
-        nullable=True,
-    )
-    system_msg = sa.Column(sa.String(), index=True, nullable=True)
-    messages = sa.Column(sa.String(), nullable=False)
-    prompt_kwargs = sa.Column(sa.String(), nullable=False)
-    ref_answer = sa.Column(sa.String(), nullable=True)
-    num_tokens = sa.Column(sa.Integer(), nullable=False)
-    timestamp = sa.Column(sa.TIMESTAMP(), nullable=False)
+    id = Column(Integer(), primary_key=True)
+    user_id = Column(String(), ForeignKey("users.id"), index=True)
+    system_msg = Column(String(), index=True)
+    messages = Column(String(), nullable=False)
+    prompt_kwargs = Column(String(), nullable=False)
+    ref_answer = Column(String())
+    num_tokens = Column(Integer(), nullable=False)
+    timestamp = Column(TIMESTAMP, nullable=False)
     __table_args__ = (
         Index(
             "uq_userid_prompt",
@@ -445,15 +398,10 @@ class DefaultPrompt(Base):
 
     __tablename__ = "default_prompt"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(
-        sa.String(),
-        sa.ForeignKey("users.id"),
-        index=True,
-        nullable=True,
-    )
-    name = sa.Column(sa.String(), nullable=False)
-    prompt = sa.Column(sa.String(), nullable=True)
+    id = Column(Integer(), primary_key=True)
+    user_id = Column(String(), ForeignKey("users.id"), index=True)
+    name = Column(String(), nullable=False)
+    prompt = Column(String())
 
 
 class StoredPromptVariation(Base):
@@ -461,16 +409,16 @@ class StoredPromptVariation(Base):
 
     __tablename__ = "stored_prompt_variation"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    prompt_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("stored_prompt.id"),
+    id = Column(Integer(), primary_key=True)
+    prompt_id = Column(
+        Integer(),
+        ForeignKey("stored_prompt.id"),
         index=True,
         nullable=False,
     )
-    default_prompt_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("default_prompt.id"),
+    default_prompt_id = Column(
+        Integer(),
+        ForeignKey("default_prompt.id"),
         index=True,
         nullable=False,
     )
@@ -483,15 +431,10 @@ class StoredPromptExtraField(Base):
 
     __tablename__ = "stored_prompt_extra_field"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    prompt_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("stored_prompt.id"),
-        index=True,
-        nullable=True,
-    )
-    field = sa.Column(sa.String(), nullable=False)
-    value = sa.Column(sa.String(), nullable=False)
+    id = Column(Integer(), primary_key=True)
+    prompt_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
+    field = Column(String(), nullable=False)
+    value = Column(String(), nullable=False)
 
 
 class StoredPromptResponse(Base):
@@ -499,24 +442,18 @@ class StoredPromptResponse(Base):
 
     __tablename__ = "stored_prompt_response"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    prompt_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("stored_prompt.id"),
+    id = Column(Integer(), primary_key=True)
+    prompt_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
+    prompt_variation_id = Column(
+        Integer(),
+        ForeignKey("stored_prompt_variation.id"),
         index=True,
-        nullable=True,
     )
-    prompt_variation_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("stored_prompt_variation.id"),
-        index=True,
-        nullable=True,
-    )
-    endpoint_str = sa.Column(sa.String(), nullable=False)
-    response = sa.Column(sa.String(), nullable=False)
-    num_tokens = sa.Column(sa.Integer(), nullable=False)
+    endpoint_str = Column(String(), nullable=False)
+    response = Column(String(), nullable=False)
+    num_tokens = Column(Integer(), nullable=False)
     __table_args__ = (
-        sa.UniqueConstraint(
+        UniqueConstraint(
             "prompt_id",
             "prompt_variation_id",
             "endpoint_str",
@@ -531,26 +468,15 @@ class Judgement(Base):
 
     __tablename__ = "judgement"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    response_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("stored_prompt_response.id"),
-        index=True,
-        nullable=True,
-    )
-    judge_endpoint_str = sa.Column(
-        sa.String(),
-        nullable=False,
-    )
-    evaluator_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("evaluator.id"),
-        nullable=False,
-    )
-    judgement = sa.Column(sa.String(), nullable=False)
-    judgement_score = sa.Column(sa.Numeric(), nullable=True)
+    id = Column(Integer(), primary_key=True)
+    response_id = Column(Integer(), ForeignKey("stored_prompt_response.id"), index=True)
+    judge_endpoint_str = Column(String(), nullable=False)
+    evaluator_id = Column(Integer(), ForeignKey("evaluator.id"), nullable=False)
+    judgement = Column(String(), nullable=False)
+    judgement_score = Column(Numeric())
+
     __table_args__ = (
-        sa.UniqueConstraint(
+        UniqueConstraint(
             "response_id",
             "judge_endpoint_str",
             "evaluator_id",
@@ -564,21 +490,11 @@ class DatasetPrompt(Base):
 
     __tablename__ = "dataset_prompt"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    dataset_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("dataset.id"),
-        index=True,
-        nullable=True,
-    )
-    prompt_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("stored_prompt.id"),
-        index=True,
-        nullable=True,
-    )
+    id = Column(Integer(), primary_key=True)
+    dataset_id = Column(Integer(), ForeignKey("dataset.id"), index=True)
+    prompt_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
     __table_args__ = (
-        sa.UniqueConstraint(
+        UniqueConstraint(
             "dataset_id",
             "prompt_id",
             name="uq_dataset_prompt",
@@ -591,28 +507,23 @@ class Evaluator(Base):
 
     __tablename__ = "evaluator"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(
-        sa.String(),
-        sa.ForeignKey("users.id"),
-        index=True,
-        nullable=True,
-    )
-    name = sa.Column(sa.String(), nullable=False)
-    judge_prompt = sa.Column(sa.String(), nullable=False)
-    prompt_parser = sa.Column(
-        sa.String(),
+    id = Column(Integer(), primary_key=True)
+    user_id = Column(String(), ForeignKey("users.id"), index=True)
+    name = Column(String(), nullable=False)
+    judge_prompt = Column(String(), nullable=False)
+    prompt_parser = Column(
+        String(),
         nullable=False,
         default="{\"user_message\": \"['messages'][-1]['content']\"}",
     )
-    response_parser = sa.Column(
-        sa.String(),
+    response_parser = Column(
+        String(),
         nullable=False,
         default="{\"assistant_message\": \"['message']['content']\"}",
     )
-    class_config = sa.Column(sa.String(), nullable=False)
-    judge_models = sa.Column(sa.String(), nullable=False)
-    client_side = sa.Column(sa.Boolean(), nullable=False)
+    class_config = Column(String(), nullable=False)
+    judge_models = Column(String(), nullable=False)
+    client_side = Column(Boolean(), nullable=False)
     __table_args__ = (
         sa.UniqueConstraint("user_id", "name", name="uq_userid_evaluator"),
     )
@@ -623,29 +534,18 @@ class Evaluation(Base):
 
     __tablename__ = "evaluation"
 
-    id = sa.Column(sa.Integer(), primary_key=True)
-    prompt_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("stored_prompt.id"),
+    id = Column(Integer(), primary_key=True)
+    prompt_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
+    prompt_variation_id = Column(
+        Integer(),
+        ForeignKey("stored_prompt_variation.id"),
         index=True,
-        nullable=True,
     )
-    prompt_variation_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("stored_prompt_variation.id"),
-        index=True,
-        nullable=True,
-    )
-    evaluator_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("evaluator.id"),
-        index=True,
-        nullable=True,
-    )
-    endpoint_str = sa.Column(sa.String(), nullable=False)
-    score = sa.Column(sa.Numeric(), nullable=False)
+    evaluator_id = Column(Integer(), ForeignKey("evaluator.id"), index=True)
+    endpoint_str = Column(String(), nullable=False)
+    score = Column(Numeric(), nullable=False)
     __table_args__ = (
-        sa.UniqueConstraint(
+        UniqueConstraint(
             "prompt_id",
             "prompt_variation_id",
             "evaluator_id",
@@ -654,3 +554,85 @@ class Evaluation(Base):
             postgresql_nulls_not_distinct=True,
         ),
     )
+
+
+class AuthUser(Base):
+    __tablename__ = "auth_user"
+
+    id = Column(String, primary_key=True, default=uuid.uuid4)
+    email = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String)
+    last_name = Column(String)
+    job_title = Column(String)
+    # Account tier, developer, professional, enterprise
+    tier = Column(String, nullable=False, server_default="developer")
+    # Toggles managed by usage quotas
+    queries_enabled = Column(Boolean, nullable=False, server_default="true")
+    evaluations_enabled = Column(Boolean, nullable=False, server_default="true")
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+
+
+# Account table (for external providers like Google, GitHub)
+# Each user can have multiple accounts
+class Account(Base):
+    __tablename__ = "account"
+
+    id = Column(String, primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, ForeignKey("auth_user.id", ondelete="CASCADE"))
+    provider = Column(String, nullable=False)  # OAuth provider name
+    provider_type = Column(String, nullable=False)
+    provider_account_id = Column(String, nullable=False)
+    access_token = Column(String)  # OAuth access token (optional)
+    # TODO: This can be removed? refreshtokens
+    refresh_token = Column(String)  # OAuth refresh token (optional)
+    # Expiration time for OAuth token (optional)
+    expires_at = Column(TIMESTAMP)
+
+
+class Organization(Base):
+    __tablename__ = "organization"
+
+    id = Column(Integer, primary_key=True)
+    owner_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    name = Column(String, unique=True, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class OrganizationMember(Base):
+    __tablename__ = "organization_member"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    level = Column(
+        String,
+        nullable=False,
+    )  # owner, admin, user -> owner is duplicated info? :/
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class ApiKey(Base):
+    __tablename__ = "api_key"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String)
+    user_id = Column(String, ForeignKey("auth_user.id", ondelete="CASCADE"))
+    organization_id = Column(Integer, ForeignKey("organization.id", ondelete="CASCADE"))
+    key = Column(String, unique=True, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("user_id", "name"),)
