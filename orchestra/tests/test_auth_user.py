@@ -1,9 +1,11 @@
+import os
+
 import pytest
 from httpx import AsyncClient
 
 HEADERS = {
     "accept": "application/json",
-    "Authorization": "Bearer test_admin_key",
+    "Authorization": f"Bearer {os.getenv("ORCHESTRA_ADMIN_KEY")}",
 }
 
 
