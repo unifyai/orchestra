@@ -61,17 +61,17 @@ supported_models = {
     },
     "llama-3.1-8b-chat": {
         "endpoint": "llama3-1-8b",
-        "context_window": 131072,
+        "context_window": 128000,
         "cost": {"prompt": 0.07, "completion": 0.07},
     },
     "llama-3.1-70b-chat": {
         "endpoint": "llama3-1-70b",
-        "context_window": 131072,
+        "context_window": 128000,
         "cost": {"prompt": 0.8, "completion": 0.8},
     },
     "llama-3.1-405b-chat": {
         "endpoint": "llama-3-1-405b",
-        "context_window": 131072,
+        "context_window": 128000,
         "cost": {"prompt": 2.8, "completion": 2.8},
     },
     "mixtral-8x7b-instruct-v0.1": {
