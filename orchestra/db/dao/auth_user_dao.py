@@ -15,8 +15,18 @@ class AuthUserDAO:
     def create(  # noqa: WPS211
         self,
         email: str,
+        name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        job_title: Optional[str] = None,
     ) -> None:
-        self.session.add(AuthUser(email=email))
+        self.session.add(
+            AuthUser(
+                email=email,
+                name=name,
+                last_name=last_name,
+                job_title=job_title,
+            ),
+        )
 
     def filter(
         self,
@@ -35,15 +45,29 @@ class AuthUserDAO:
         self,
         id: int,  # noqa: WPS125
         name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        job_title: Optional[str] = None,
+        tier: Optional[str] = None,
+        queries_enabled: Optional[bool] = None,
+        evaluations_enabled: Optional[bool] = None,
     ) -> None:
-        # query = select(DefaultPrompt)
-        # query = query.where(DefaultPrompt.id == id)
-        # raw = self.session.execute(query)
-        # entry = raw.scalars().first()
-        # if entry is not None:
-        #     if name:
-        #         setattr(entry, "name", name)  # noqa: B010
-        pass
+        query = select(AuthUser)
+        query = query.where(AuthUser.id == id)
+        raw = self.session.execute(query)
+        entry = raw.scalars().first()
+        if entry is not None:
+            if name:
+                setattr(entry, "name", name)
+            if last_name:
+                setattr(entry, "last_name", last_name)
+            if job_title:
+                setattr(entry, "job_title", job_title)
+            if tier:
+                setattr(entry, "tier", tier)
+            if queries_enabled:
+                setattr(entry, "queries_enabled", queries_enabled)
+            if evaluations_enabled:
+                setattr(entry, "evaluations_enabled", evaluations_enabled)
 
     def delete(self, id: str):
         try:
