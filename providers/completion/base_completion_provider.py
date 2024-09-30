@@ -7,16 +7,6 @@ import litellm
 import tiktoken
 from fastapi import HTTPException
 
-# from litellm.utils import get_model_info  # Uncomment later
-from openai import (
-    APIError,
-    AsyncStream,
-    BadRequestError,
-    OpenAI,
-    RateLimitError,
-    Stream,
-)
-
 from orchestra.db.models.orchestra_models import CustomEndpoint
 from orchestra.web.api.utils.exceptions import (
     APIConnectionError,
@@ -40,6 +30,9 @@ from orchestra.web.api.utils.helpers import (
     filter_kwargs_for_openai_client,
 )
 from orchestra.web.api.utils.http_responses import server_error_with_digest
+
+# from litellm.utils import get_model_info  # Uncomment later
+
 
 logger = logging.getLogger(__name__)
 logging.getLogger("LiteLLM").setLevel(logging.WARNING)
