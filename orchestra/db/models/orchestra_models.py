@@ -386,6 +386,7 @@ class Query(Base):
     signature = sa.Column(sa.String(), nullable=True)
     used_router = sa.Column(sa.Boolean(), nullable=True)
     router = sa.Column(sa.String, nullable=True)
+    status_code = sa.Column(sa.Integer(), nullable=False)
     tags = relationship("QueryTagAssociation", back_populates="query")
     __table_args__ = (sa.Index("ix_user_endpoint", "user_id", "endpoint_id"),)
 
@@ -521,6 +522,7 @@ class StoredPromptResponse(Base):
             "prompt_variation_id",
             "endpoint_str",
             name="uq_prompt_response",
+            postgresql_nulls_not_distinct=True,
         ),
     )
 
@@ -650,6 +652,7 @@ class Evaluation(Base):
             "evaluator_id",
             "endpoint_str",
             name="uq_evaluation",
+            postgresql_nulls_not_distinct=True,
         ),
     )
 

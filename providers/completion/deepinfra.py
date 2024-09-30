@@ -9,8 +9,13 @@ class Deepinfra(BaseCompletionProvider):
     Pricing is per million tokens: https://deepinfra.com/pricing
     """
 
-    def __init__(self, hub_model, custom_api_key=None):
-        super().__init__(hub_model, custom_api_key=custom_api_key)
+    def __init__(self, hub_model, custom_endpoint=None, custom_api_key=None):
+        super().__init__(
+            hub_model,
+            "deepinfra",
+            custom_endpoint=custom_endpoint,
+            custom_api_key=custom_api_key,
+        )
         self.supported_models = supported_models
 
     @property
@@ -23,6 +28,26 @@ class Deepinfra(BaseCompletionProvider):
 
 
 supported_models = {
+    "llama-3.2-1b-chat": {
+        "endpoint": "meta-llama/Llama-3.2-1B-Instruct",
+        "context_window": 128000,
+        "cost": {"prompt": 0.01, "completion": 0.02},
+    },
+    "llama-3.2-3b-chat": {
+        "endpoint": "meta-llama/Llama-3.2-3B-Instruct",
+        "context_window": 128000,
+        "cost": {"prompt": 0.03, "completion": 0.05},
+    },
+    "llama-3.2-11b-chat": {
+        "endpoint": "meta-llama/Llama-3.2-11B-Vision-Instruct",
+        "context_window": 128000,
+        "cost": {"prompt": 0.055, "completion": 0.055},
+    },
+    "llama-3.2-90b-chat": {
+        "endpoint": "meta-llama/Llama-3.2-90B-Vision-Instruct",
+        "context_window": 128000,
+        "cost": {"prompt": 0.35, "completion": 0.40},
+    },
     "llama-3.1-8b-chat": {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3.1-8B-Instruct",
         "context_window": 128000,

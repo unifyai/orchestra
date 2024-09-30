@@ -199,6 +199,124 @@ async def test_trigger_eval(
     assert "per_prompt" in scores[eval_name][endpoint]
 
 
+async def test_trigger_eval_duplicate(
+    client: AsyncClient,
+    tmp_path,
+    monkeypatch,
+):
+    def mock_send_to_dataset_evaluation_server(action, **data):
+        data.pop("user_email", "")
+        message_data = json.dumps(
+            {
+                "action": action,
+                **data,
+                "orchestra_url": "",
+                "admin_key": os.environ.get("ORCHESTRA_ADMIN_KEY"),
+            },
+        )
+        save_dir = tmp_path / "save_files"
+        if action == "evaluate":
+            asyncio.run(
+                evaluate_dataset(
+                    message_data,
+                    save_dir,
+                    shared_volume="",
+                    client=client,
+                ),
+            )
+        elif action == "refresh_scores":
+            user_id = data["user_id"]
+            asyncio.run(refresh_scores_for_user(user_id, save_dir))
+        else:
+            raise NotImplementedError
+
+    monkeypatch.setattr(
+        orchestra.web.api.evaluations.views,
+        "send_to_dataset_evaluation_server",
+        mock_send_to_dataset_evaluation_server,
+    )
+
+    # create evaluator
+    eval_name = "test_eval"
+    judge_prompt = {
+        "messages": [
+            {
+                "role": "system",
+                "content": """As a judge, rate the assistant's answer to the user prompt.""",
+            },
+            {
+                "role": "user",
+                "content": """
+    <user_prompt>
+    {user_message}
+    </user_prompt>
+
+    <ref_ans>
+    {ref_ans}
+    </ref_ans>
+
+    <assistant_response>
+    {assistant_response}
+    </assistant_respose>
+    """,
+            },
+        ],
+        "temperature": 0.7,
+    }
+
+    judge_model = "llama-3-8b-chat@aws-bedrock"
+
+    url = "/v0/evaluator"
+    params = {
+        "name": eval_name,
+        "judge_prompt": judge_prompt,
+        "prompt_parser": {
+            "user_message": "['messages'][-1]['content']",
+            "ref_ans": "['extra_fields']['ref_answer']",
+        },
+        "judge_models": judge_model,
+    }
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # create dataset
+
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws.jsonl"
+    dataset = "test_dataset_eval"
+    response = await upload_dataset(client, file_path, dataset)
+    assert response.status_code == 200, response.json()
+
+    # trigger duplicate eval
+
+    url = "/v0/evaluation"
+    endpoint = "llama-3-8b-chat@aws-bedrock"
+    params = {
+        "url": url,
+        "endpoint": endpoint,
+        "dataset": dataset,
+        "evaluator": eval_name,
+    }
+
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    url = "/v0/queries"
+    response = await client.get(url, headers=HEADERS)
+    assert len(response.json()) == 4
+
+    # retrigger
+    url = "/v0/evaluation"
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # check no extra queries
+    url = "/v0/queries"
+    response = await client.get(url, headers=HEADERS)
+    assert len(response.json()) == 4
+
+    # TODO: check the evaluation didn't get double-uploaded
+
+
 # TODO: Parametrise this test to use mostly the same code as above
 async def test_trigger_eval_with_default_prompt(
     client: AsyncClient,
@@ -246,7 +364,7 @@ async def test_trigger_eval_with_default_prompt(
     url = "/v0/evaluator"
     params = {
         "name": eval_name,
-        "judge_prompt": judge_prompt,
+        # "judge_prompt": judge_prompt,
         "judge_models": judge_model,
     }
     response = await client.post(url, json=params, headers=HEADERS)
@@ -427,7 +545,8 @@ async def test_client_side_scores(
     dbsession,
 ):
     await _seed_evaluations_db(
-        dbsession, path="./orchestra/tests/sql_dumps/evaluations/dump_clientside.jsonl"
+        dbsession,
+        path="./orchestra/tests/sql_dumps/evaluations/dump_clientside.jsonl",
     )
 
     eval_name = "test_eval_clientside"
@@ -464,8 +583,8 @@ async def test_client_side_scores(
     scores = response.json()
     assert scores == {
         "test_eval_clientside": {
-            "llama-3-8b-chat@aws-bedrock": {"score": 0.5, "progress": 100.0}
-        }
+            "llama-3-8b-chat@aws-bedrock": {"score": 0.5, "progress": 100.0},
+        },
     }
 
 
@@ -474,7 +593,8 @@ async def test_client_side_rationales(
     dbsession,
 ):
     await _seed_evaluations_db(
-        dbsession, path="./orchestra/tests/sql_dumps/evaluations/dump_clientside.jsonl"
+        dbsession,
+        path="./orchestra/tests/sql_dumps/evaluations/dump_clientside.jsonl",
     )
 
     eval_name = "test_eval_clientside"
@@ -529,7 +649,7 @@ async def test_client_side_rationales(
                                 "endpoint": "client_side",
                                 "rationale": "Correct answer",
                                 "rationale_score": 1.0,
-                            }
+                            },
                         ],
                     },
                     {
@@ -541,12 +661,12 @@ async def test_client_side_rationales(
                                 "endpoint": "client_side",
                                 "rationale": "Incorrect answer",
                                 "rationale_score": 0.0,
-                            }
+                            },
                         ],
                     },
                 ],
-            }
-        }
+            },
+        },
     }
 
 
@@ -555,7 +675,8 @@ async def test_client_side_no_rationales(
     dbsession,
 ):
     await _seed_evaluations_db(
-        dbsession, path="./orchestra/tests/sql_dumps/evaluations/dump_clientside.jsonl"
+        dbsession,
+        path="./orchestra/tests/sql_dumps/evaluations/dump_clientside.jsonl",
     )
 
     eval_name = "test_eval_clientside"
@@ -608,7 +729,7 @@ async def test_client_side_no_rationales(
                                 "endpoint": "client_side",
                                 "rationale": "",
                                 "rationale_score": 1.0,
-                            }
+                            },
                         ],
                     },
                     {
@@ -620,12 +741,12 @@ async def test_client_side_no_rationales(
                                 "endpoint": "client_side",
                                 "rationale": "",
                                 "rationale_score": 0.0,
-                            }
+                            },
                         ],
                     },
                 ],
-            }
-        }
+            },
+        },
     }
 
 
@@ -664,7 +785,8 @@ async def get_evaluation_scores(client, params):
 
 
 async def _seed_evaluations_db(
-    dbsession, path="./orchestra/tests/sql_dumps/evaluations/dump_trigger.jsonl"
+    dbsession,
+    path="./orchestra/tests/sql_dumps/evaluations/dump_trigger.jsonl",
 ):
     await populate_from_file(path=path, session=dbsession)
 
@@ -682,13 +804,14 @@ async def test_list_evaluation_evaluator_and_endpoint(client: AsyncClient, dbses
         "endpoint": "llama-3-8b-chat@aws-bedrock",
     }
     expected_scores = {
-        "test_eval": {"llama-3-8b-chat@aws-bedrock": {"score": 0.4, "progress": 100.0}}
+        "test_eval": {"llama-3-8b-chat@aws-bedrock": {"score": 0.4, "progress": 100.0}},
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
 
 
 async def test_list_evaluation_evaluator_and_endpoint_via_prompts(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     await _seed_evaluations_db(dbsession)
     params = {
@@ -697,7 +820,7 @@ async def test_list_evaluation_evaluator_and_endpoint_via_prompts(
         "endpoint": "llama-3-8b-chat@aws-bedrock",
     }
     expected_scores = {
-        "test_eval": {"llama-3-8b-chat@aws-bedrock": {"score": 0.4, "progress": 100.0}}
+        "test_eval": {"llama-3-8b-chat@aws-bedrock": {"score": 0.4, "progress": 100.0}},
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
 
@@ -713,7 +836,7 @@ async def test_list_evaluation_endpoint(client: AsyncClient, dbsession):
     expected_scores = {
         "test_eval": {"llama-3-8b-chat@aws-bedrock": {"score": 0.4, "progress": 100.0}},
         "test_eval_multi_judge": {
-            "llama-3-8b-chat@aws-bedrock": {"score": 0.5, "progress": 100.0}
+            "llama-3-8b-chat@aws-bedrock": {"score": 0.5, "progress": 100.0},
         },
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
@@ -731,7 +854,7 @@ async def test_list_evaluation_evaluator(client: AsyncClient, dbsession):
         "test_eval": {
             "gpt-3.5-turbo@openai": {"score": 0.65, "progress": 100.0},
             "llama-3-8b-chat@aws-bedrock": {"score": 0.4, "progress": 100.0},
-        }
+        },
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
 
@@ -749,7 +872,7 @@ async def test_list_evaluation_all(client: AsyncClient, dbsession):
             "llama-3-8b-chat@aws-bedrock": {"score": 0.4, "progress": 100.0},
         },
         "test_eval_multi_judge": {
-            "llama-3-8b-chat@aws-bedrock": {"score": 0.5, "progress": 100.0}
+            "llama-3-8b-chat@aws-bedrock": {"score": 0.5, "progress": 100.0},
         },
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
@@ -769,8 +892,8 @@ async def test_list_evaluation_per_prompt(client: AsyncClient, dbsession):
                 "per_prompt": [{"id": 1, "score": 0.8}, {"id": 2, "score": 0.0}],
                 "score": 0.4,
                 "progress": 100.0,
-            }
-        }
+            },
+        },
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
 
@@ -787,7 +910,7 @@ async def test_list_evaluation_rationale_no_perprompt(client: AsyncClient, dbses
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 404, response.json()
     assert response.json() == {
-        "detail": "If return_rationale=True, need to also have per_prompt=True."
+        "detail": "If return_rationale=True, need to also have per_prompt=True.",
     }
 
 
@@ -842,8 +965,8 @@ async def test_list_evaluation_rationale_response(client: AsyncClient, dbsession
                         ],
                     },
                 ],
-            }
-        }
+            },
+        },
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
 
@@ -896,8 +1019,8 @@ async def test_list_evaluation_rationale(client: AsyncClient, dbsession):
                         ],
                     },
                 ],
-            }
-        }
+            },
+        },
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
 
@@ -928,14 +1051,15 @@ async def test_list_evaluation_responses(client: AsyncClient, dbsession):
                         "score": 0.25,
                     },
                 ],
-            }
-        }
+            },
+        },
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
 
 
 async def test_list_evaluation_responses_from_prompt_ids(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     await _seed_evaluations_db(dbsession)
     params = {
@@ -957,8 +1081,8 @@ async def test_list_evaluation_responses_from_prompt_ids(
                         "score": 0.25,
                     },
                 ],
-            }
-        }
+            },
+        },
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
 
@@ -980,8 +1104,8 @@ async def test_list_evaluation_sub_scorers(client: AsyncClient, dbsession):
                     "gpt-3.5-turbo@openai": {"0.0": 1, "1.0": 1},
                     "llama-3-8b-chat@aws-bedrock": {"0.5": 2},
                 },
-            }
-        }
+            },
+        },
     }
     await _helper_test_list_evaluations(client, params, expected_scores)
 
@@ -1013,7 +1137,7 @@ async def test_delete_evaluation_endpoint_and_evaluator(client: AsyncClient, dbs
     expected_scores = {
         "test_eval": {"gpt-3.5-turbo@openai": {"score": 0.65, "progress": 100.0}},
         "test_eval_multi_judge": {
-            "llama-3-8b-chat@aws-bedrock": {"score": 0.5, "progress": 100.0}
+            "llama-3-8b-chat@aws-bedrock": {"score": 0.5, "progress": 100.0},
         },
     }
     all_params = {"dataset": "test_dataset_eval"}
@@ -1021,7 +1145,8 @@ async def test_delete_evaluation_endpoint_and_evaluator(client: AsyncClient, dbs
 
 
 async def test_delete_evaluation_endpoint_and_evaluator_from_prompt_ids(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
 
     await _seed_evaluations_db(dbsession)
@@ -1046,7 +1171,7 @@ async def test_delete_evaluation_endpoint_and_evaluator_from_prompt_ids(
     expected_scores = {
         "test_eval": {"gpt-3.5-turbo@openai": {"score": 0.65, "progress": 100.0}},
         "test_eval_multi_judge": {
-            "llama-3-8b-chat@aws-bedrock": {"score": 0.5, "progress": 100.0}
+            "llama-3-8b-chat@aws-bedrock": {"score": 0.5, "progress": 100.0},
         },
     }
     all_params = {"dataset": "test_dataset_eval"}

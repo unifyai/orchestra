@@ -12,8 +12,13 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
     Pricing is per thousand tokens: https://aws.amazon.com/bedrock/pricing/
     """
 
-    def __init__(self, hub_model, custom_api_key=None):
-        super().__init__(hub_model, custom_api_key=custom_api_key)
+    def __init__(self, hub_model, custom_endpoint=None, custom_api_key=None):
+        super().__init__(
+            hub_model,
+            "bedrock",
+            custom_endpoint=custom_endpoint,
+            custom_api_key=custom_api_key,
+        )
         self.supported_models = supported_models
 
     @property
@@ -107,7 +112,7 @@ supported_models = {
     "mistral-large": {
         "endpoint": "bedrock/mistral.mistral-large-2407-v1:0",
         "context_window": 128000,
-        "cost": {"prompt": 4, "completion": 12},
+        "cost": {"prompt": 2, "completion": 6},
     },
     "command-r-plus": {
         "endpoint": "bedrock/cohere.command-r-plus-v1:0",

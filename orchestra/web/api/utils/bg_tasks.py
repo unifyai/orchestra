@@ -58,6 +58,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     provider: str,
     query_body: str,
     response_body: str,
+    status_code: int,
     model_dao: ModelDAO,
     provider_dao: ProviderDAO,
     endpoint_dao: EndpointDAO,
@@ -94,12 +95,12 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     if router is None:
         router = ""
 
-    if provider == "custom":
+    if "custom" in provider:
         endpoint_id = None
         try:
             custom_endpoint_id = int(
                 custom_endpoint_dao.filter(
-                    user_id=request_fastapi.state_user_id,
+                    user_id=user_id,
                     name=model,
                 )[0].id,
             )
@@ -128,12 +129,13 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         used_router=used_router,
         router=router,
         tags=tags,
+        status_code=status_code,
     )
 
     create_query_model(query_model_request, query_dao=query_dao)
     user = users_dao.get_user_with_id(user_id)
 
-    if not os.environ.get("ON_PREM"):
+    if not os.environ.get("ON_PREM") and status_code == 200:
         users_dao.recharge_credit(user_id, -cost)
         if (
             user.autorecharge

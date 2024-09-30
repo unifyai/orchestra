@@ -9,8 +9,13 @@ class FireworksAI(BaseCompletionProvider):
     Pricing is per million tokens: https://fireworks.ai/pricing
     """
 
-    def __init__(self, hub_model, custom_api_key=None):
-        super().__init__(hub_model, custom_api_key=custom_api_key)
+    def __init__(self, hub_model, custom_endpoint=None, custom_api_key=None):
+        super().__init__(
+            hub_model,
+            "fireworks_ai",
+            custom_endpoint=custom_endpoint,
+            custom_api_key=custom_api_key,
+        )
         self.supported_models = supported_models
 
     @property
@@ -65,11 +70,6 @@ supported_models = {
     },
     "llama-3-8b-chat": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3-8b-instruct",
-        "context_window": 8192,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
-    "gemma-2-9b-it": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/gemma2-9b-it",
         "context_window": 8192,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },

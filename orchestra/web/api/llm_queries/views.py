@@ -5,7 +5,7 @@ from typing import List, Union
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.param_functions import Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
@@ -31,6 +31,7 @@ from orchestra.web.api.utils.dynamic_routing import (
 from orchestra.web.api.utils.helpers import filter_orchestra_only_args
 from orchestra.web.api.utils.http_responses import (
     custom_api_key_not_found,
+    custom_endpoint_not_found,
     insufficient_credits_error,
     invalid_messages,
     invalid_model_str,
@@ -85,6 +86,8 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     try_request = 0
     num_tries = min(5, len(request_priority_list))
     region = None
+    # breakpoint()
+    request_failed, err = False, None
 
     while try_request >= 0 and try_request < num_tries:
         request = request_priority_list[try_request]
@@ -165,21 +168,14 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             available_credits = float(user.credits if user else 0)
 
         model, provider, region = model_region_priority_list[0]
+        provider_str = (
+            provider if provider == "custom" else provider.replace("custom_", "")
+        )
         try_provider = 0
         router_choices = None
         using_router = model.startswith("router")
         router_str = provider if using_router else None
         num_tries_provider = min(5, len(model_region_priority_list))
-
-        custom_api_key = None
-        if use_custom_keys:
-            try:
-                custom_api_key = custom_api_key_dao.filter(
-                    user_id=user_id,
-                    key=provider,
-                )[0].value
-            except IndexError:
-                raise custom_api_key_not_found
 
         if using_router:
             if os.environ.get("ON_PREM"):
@@ -209,7 +205,8 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
         try:
             while try_provider >= 0 and try_provider < num_tries_provider:
-                if provider not in PROVIDER_CLASSES or using_router:
+                # routing
+                if provider_str not in PROVIDER_CLASSES or using_router:
                     # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
                     num_tokens_est = 0
                     for msg in messages:
@@ -247,14 +244,51 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                             region,
                         )
 
+                # get the current model, provider and region from the list
                 model, provider, region = model_region_priority_list[try_provider]
-
-                extra_args = tuple()
-                if provider == "custom":
-                    extra_args = (custom_endpoint_dao, custom_api_key_dao, user_id)
-                lm = PROVIDER_CLASSES[provider](
-                    model, *extra_args, custom_api_key=custom_api_key
+                provider_str = (
+                    provider
+                    if provider == "custom"
+                    else provider.replace("custom_", "")
                 )
+
+                # fetch custom api key
+                custom_api_key, custom_endpoint = None, None
+                if use_custom_keys:
+                    # the request is made to a regular endpoint
+                    # but using custom keys with the provider
+                    if "custom" not in provider:
+                        try:
+                            custom_api_key = custom_api_key_dao.filter(
+                                user_id=user_id,
+                                key=provider,
+                            )[0].value
+                        except IndexError:
+                            raise custom_api_key_not_found
+                    # the request is made to a custom endpoint
+                    # either to an existing provider or a custom provider
+                    else:
+                        try:
+                            custom_endpoint = custom_endpoint_dao.filter(
+                                user_id=user_id,
+                                name=model,
+                            )[0]
+                        except IndexError:
+                            raise custom_endpoint_not_found
+                        try:
+                            custom_api_key = custom_api_key_dao.filter(
+                                id=custom_endpoint.key_id,
+                            )[0].value
+                        except IndexError:
+                            raise custom_api_key_not_found
+
+                # get the provider class
+                lm = PROVIDER_CLASSES[provider_str](
+                    model,
+                    custom_endpoint=custom_endpoint,
+                    custom_api_key=custom_api_key,
+                )
+
                 if not on_prem and available_credits <= 0 and not use_custom_keys:
                     raise insufficient_credits_error
 
@@ -273,26 +307,18 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                             raise e
                     else:
                         raise e
+            # raise HTTPException(400, "some error")
         except HTTPException as e:
             if e.status_code in [400, 403, 404, 429] or e.status_code >= 500:
                 try_request += 1
                 if try_request >= num_tries:
-                    raise e
+                    request_failed, err = True, e
+                    break
+                # raise e
             else:
-                raise e
-
-    # TODO: Handle when response is None
-    if not response:
-        return ChatCompletionResponse(
-            model=request.model,
-            created=0,
-            id="",
-            choices=[],
-            object="chat.completion",
-            usage={},
-        )
-
-    db_operations_kwargs = {}
+                request_failed, err = True, e
+                break
+                # raise e
 
     # convert str to list
     tags = request.tags
@@ -320,6 +346,32 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         "users_dao": users_dao,
     }
 
+    if request_failed:
+        background_tasks.add_task(
+            db_operations,
+            cost=0,
+            processing_time=0,
+            usage=0,
+            response_body=json.dumps({"detail": err.detail}),
+            status_code=err.status_code,
+            **db_operations_kwargs,
+        )
+        return JSONResponse(
+            status_code=err.status_code,
+            content={"detail": err.detail},
+        )
+
+    # TODO: Handle when response is None
+    if not response:
+        return ChatCompletionResponse(
+            model=request.model,
+            created=0,
+            id="",
+            choices=[],
+            object="chat.completion",
+            usage={},
+        )
+
     processing_time = (time.time() - t0) * 1000
 
     if stream:
@@ -342,6 +394,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     if store_prompt
                     else ""
                 ),  # TODO this isn't the whole response
+                status_code=200,
                 **db_operations_kwargs,
             )
 
@@ -354,6 +407,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             processing_time=processing_time,
             usage=response["usage"],
             response_body=json.dumps(response) if store_response_body else "",
+            status_code=200,
             **db_operations_kwargs,
         )
 

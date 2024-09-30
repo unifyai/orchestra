@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from typing import Any, Dict, List
@@ -5,19 +6,27 @@ from typing import Any, Dict, List
 import litellm
 import tiktoken
 from fastapi import HTTPException
+from openai import AsyncStream, OpenAI, Stream
 
 # from litellm.utils import get_model_info  # Uncomment later
-from openai import (
+from orchestra.db.models.orchestra_models import CustomEndpoint
+from orchestra.web.api.utils.exceptions import (
+    APIConnectionError,
     APIError,
-    APITimeoutError,
-    AsyncOpenAI,
-    AsyncStream,
+    APIResponseValidationError,
+    AuthenticationError,
     BadRequestError,
-    OpenAI,
+    ContentPolicyViolationError,
+    ContextWindowExceededError,
+    InternalServerError,
+    JSONSchemaValidationError,
+    NotFoundError,
     RateLimitError,
-    Stream,
+    ServiceUnavailableError,
+    Timeout,
+    UnprocessableEntityError,
+    UnsupportedParamsError,
 )
-
 from orchestra.web.api.utils.helpers import (
     check_litellm_supported_args,
     filter_kwargs_for_openai_client,
@@ -25,6 +34,7 @@ from orchestra.web.api.utils.helpers import (
 from orchestra.web.api.utils.http_responses import server_error_with_digest
 
 logger = logging.getLogger(__name__)
+logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 
 # Pricing info of providers with pay-per-token model is
 # standardized to per million tokens.
@@ -37,8 +47,16 @@ class BaseCompletionProvider:
     # TODO: Make this a property and enforce definition with NotImplemented
     supported_models: Dict[str, Any] = {}
 
-    def __init__(self, hub_model, custom_api_key=None) -> None:
+    def __init__(
+        self,
+        hub_model,
+        litellm_provider_prefix,
+        custom_endpoint=None,
+        custom_api_key=None,
+    ) -> None:
         self.hub_model: str = hub_model
+        self.litellm_provider_prefix: str = litellm_provider_prefix
+        self.custom_endpoint: CustomEndpoint = custom_endpoint
         self.custom_api_key: str = custom_api_key
         self.supported_models: Dict[str, Any] = {}
 
@@ -73,6 +91,8 @@ class BaseCompletionProvider:
     def provider_endpoint(self):
         # TODO: Docs
         # TODO: Add logic to raise an error if self.supported_models is empty
+        if self.custom_endpoint:
+            return self.custom_endpoint.mdl_name
         return self.supported_models[self.hub_model]["endpoint"]
 
     @property
@@ -202,14 +222,16 @@ class BaseCompletionProvider:
         except Exception:  # TODO: This need to be scoped down and prob moved inside
             return {"cost": 0, "prompt_tokens": 0, "completion_tokens": 0}
 
-    def __call__(  # noqa: D102, WPS211, C901, WPS231, WPS238, WPS210
-        self,
-        messages: List,  # type: ignore
-        stream: bool = False,
-        **kwargs: Any,
-    ) -> Any:
+    def run_with_exceptions(
+        self, async_call: bool, messages: List, stream: bool = False, **kwargs: Any
+    ):
         kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
-        using_litellm = bool(self.litellm_api_key_var)
+        using_litellm = bool(self.litellm_provider_prefix)
+        litellm_call_fn = litellm.completion if not async_call else litellm.acompletion
+        stream_type = Stream if not async_call else AsyncStream
+        generator_wrapper = (
+            SyncGeneratorWrapper if not async_call else AsyncGeneratorWrapper
+        )
         try:  # noqa: WPS225
             if not using_litellm:
                 client = kwargs.pop(
@@ -224,52 +246,183 @@ class BaseCompletionProvider:
                     **kwargs,
                 )
             else:
-                # extra_body can't be passed to anthropic or vertex_ai
-                check_litellm_supported_args(kwargs, self.provider_endpoint)
-                provider_prefix = self.provider_endpoint.split("/")[0]
-                if provider_prefix not in ["anthropic", "bedrock", "vertex_ai"]:
+                # set credentials from custom api keys
+                if self.custom_api_key:
+                    if self.custom_api_key.startswith("{"):
+                        custom_api_key = json.loads(self.custom_api_key)
+                        kwargs = {
+                            **kwargs,
+                            **custom_api_key,
+                        }
+                    else:
+                        kwargs["api_key"] = self.custom_api_key
+                else:
+                    os.environ[self.litellm_api_key_var] = self.api_key
+
+                # add provider prefix for custom endpoints
+                model = self.provider_endpoint
+                if self.custom_endpoint:
+                    model = self.litellm_provider_prefix + "/" + model
+
+                # check if the kwargs are accepted by litellm
+                check_litellm_supported_args(kwargs, model)
+
+                # extra_body can't be passed to anthropic, bedrock or vertex_ai
+                if self.litellm_provider_prefix not in [
+                    "anthropic",
+                    "bedrock",
+                    "vertex_ai",
+                ]:
                     kwargs["extra_body"] = extra_body
-                os.environ[self.litellm_api_key_var] = self.api_key
                 drop_params = extra_body.pop("drop_params", True)
-                response = litellm.completion(
-                    model=self.provider_endpoint,
+
+                # llm call
+                response = litellm_call_fn(
+                    model=model,
                     messages=messages,
                     stream=stream,
                     drop_params=drop_params,
                     **kwargs,
                 )
 
-            if isinstance(response, Stream) or stream:
+            if isinstance(response, stream_type) or stream:
                 return (
-                    SyncGeneratorWrapper(self, response, messages, using_litellm),
+                    generator_wrapper(self, response, messages, using_litellm),
                     None,
                 )
 
             # TODO: Maybe remove this dump unless neccesary?
             response_dict = self._modify_output(response.model_dump(), stream=stream)
-            return response_dict, self.get_response_cost(
-                response,
-                response.usage.prompt_tokens,
-                response.usage.completion_tokens,
-                using_litellm,
+            return (
+                response_dict,
+                self.get_response_cost(
+                    response,
+                    response.usage.prompt_tokens,
+                    response.usage.completion_tokens,
+                    using_litellm,
+                )
+                if not self.custom_api_key
+                else 0,
             )
-        # TODO: These needs to be processed correctly in our endpoint
-        except APITimeoutError as error:
-            logger.error(f"Raised openai.APITimeoutError, Error: {error}")
-            raise HTTPException(status_code=408, detail=str(error))  # noqa: WPS432
-        except RateLimitError as error:
-            logger.error(f"Raised openai.RateLimitError, Error: {error}")
-            raise HTTPException(status_code=429, detail=str(error))  # noqa: WPS432
-        except BadRequestError as error:
-            logger.error(f"Raised openai.BadRequestError, Error: {error}")
-            raise HTTPException(status_code=400, detail=str(error))  # noqa: WPS432
-        except APIError as error:
-            logger.error(f"Raised openai.APIError, Error: {error}")
-            raise HTTPException(status_code=400, detail=str(error))  # noqa: WPS432
+        except litellm.AuthenticationError as error:
+            error = AuthenticationError(error)
+            logger.error(f"Raised AuthenticationError, Error: {error}")
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            )  # noqa: WPS432
+        except litellm.NotFoundError as error:
+            error = NotFoundError(error)
+            logger.error(f"Raised NotFoundError, Error: {error}")
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            )  # noqa: WPS432
+        except litellm.BadRequestError as error:
+            error = BadRequestError(error)
+            logger.error(f"Raised NotFoundError, Error: {error}")
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            )  # noqa: WPS432
+        except litellm.UnprocessableEntityError as error:
+            error = UnprocessableEntityError(error)
+            logger.error(f"Raised UnprocessableEntityError, Error: {error}")
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            )  # noqa: WPS432
+        except litellm.Timeout as error:
+            error = Timeout(error)
+            logger.error(f"Raised Timeout, Error: {error}")
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            )  # noqa: WPS432
+        except litellm.RateLimitError as error:
+            error = RateLimitError(error)
+            logger.error(f"Raised RateLimitError, Error: {error}")
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            )  # noqa: WPS432
+        except litellm.ContextWindowExceededError as error:
+            error = ContextWindowExceededError(error)
+            logger.error(f"Raised ContextWindowExceededError, Error: {error}")
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            )  # noqa: WPS432
+        except litellm.ContentPolicyViolationError as error:
+            error = ContentPolicyViolationError(error)
+            logger.error(f"Raised ContentPolicyViolationError, Error: {error}")
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            )  # noqa: WPS432
+        except litellm.ServiceUnavailableError as error:
+            error = ServiceUnavailableError(error)
+            logger.error(f"Raised ServiceUnavailableError, Error: {error}")
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            )  # noqa: WPS432
+        except litellm.InternalServerError as error:
+            error = InternalServerError(error)
+            logger.error(f"Raised InternalServerError, Error: {error}")
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            )  # noqa: WPS432
+        except litellm.APIError as error:
+            error = APIError(error)
+            logger.error(f"Raised APIError, Error: {error}")
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            )  # noqa: WPS432
+        except litellm.APIConnectionError as error:
+            error = APIConnectionError(error)
+            logger.error(f"Raised APIConnectionError, Error: {error}")
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            )  # noqa: WPS432
+        except litellm.APIResponseValidationError as error:
+            error = APIResponseValidationError(error)
+            logger.error(f"Raised APIResponseValidationError, Error: {error}")
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            )  # noqa: WPS432
+        except litellm.JSONSchemaValidationError as error:
+            error = JSONSchemaValidationError(error)
+            logger.error(f"Raised JSONSchemaValidationError, Error: {error}")
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            )  # noqa: WPS432
+        except litellm.UnsupportedParamsError as error:
+            error = UnsupportedParamsError(error)
+            logger.error(f"Raised UnsupportedParamsError, Error: {error}")
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            )  # noqa: WPS432
         except Exception as e:
             error, digest = server_error_with_digest(str(e))
             logger.error(f"Digest {digest}: {e}")
             raise error
+
+    def __call__(  # noqa: D102, WPS211, C901, WPS231, WPS238, WPS210
+        self,
+        messages: List,  # type: ignore
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        return self.run_with_exceptions(
+            async_call=False, messages=messages, stream=stream, **kwargs
+        )
 
     def __call_async__(  # noqa: D102, WPS211, C901, WPS231, WPS238, WPS210
         self,
@@ -277,63 +430,9 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
-        using_litellm = bool(self.litellm_api_key_var)
-        try:  # noqa: WPS225
-            if not using_litellm:
-                client = kwargs.pop(
-                    "client",
-                    AsyncOpenAI(api_key=self.api_key, base_url=self.base_url),
-                )
-                response = client.chat.completions.create(
-                    model=self.provider_endpoint,
-                    messages=messages,
-                    stream=stream,
-                    extra_body=extra_body,
-                    **kwargs,
-                )
-            else:
-                # extra_body can't be passed to anthropic or vertex_ai
-                check_litellm_supported_args(kwargs, self.provider_endpoint)
-                provider_prefix = self.provider_endpoint.split("/")[0]
-                if provider_prefix not in ["anthropic", "bedrock", "vertex_ai"]:
-                    kwargs["extra_body"] = extra_body
-                os.environ[self.litellm_api_key_var] = self.api_key
-                drop_params = extra_body.pop("drop_params", True)
-                response = litellm.acompletion(
-                    model=self.provider_endpoint,
-                    messages=messages,
-                    stream=stream,
-                    drop_params=drop_params,
-                    **kwargs,
-                )
-            if isinstance(response, AsyncStream) or stream:
-                return (
-                    AsyncGeneratorWrapper(self, response, messages, using_litellm),
-                    None,
-                )
-
-            # TODO: Maybe remove this dump unless neccesary?
-            response_dict = self._modify_output(response.model_dump(), stream=stream)
-            return response_dict, self.get_response_cost(
-                response,
-                response.usage.prompt_tokens,
-                response.usage.completion_tokens,
-                using_litellm,
-            )
-        # TODO: These needs to be processed correctly in our endpoint
-        except APITimeoutError as error:
-            logger.error(f"Raised openai.APITimeoutError, Error: {error}")
-            raise HTTPException(status_code=408, detail=str(error))  # noqa: WPS432
-        except RateLimitError as error:
-            logger.error(f"Raised openai.RateLimitError, Error: {error}")
-            raise HTTPException(status_code=429, detail=str(error))  # noqa: WPS432
-        except BadRequestError as error:
-            logger.error(f"Raised openai.BadRequestError, Error: {error}")
-            raise HTTPException(status_code=400, detail=str(error))  # noqa: WPS432
-        except APIError as error:
-            logger.error(f"Raised openai.APIError, Error: {error}")
-            raise HTTPException(status_code=400, detail=str(error))  # noqa: WPS432
+        return self.run_with_exceptions(
+            async_call=True, messages=messages, stream=stream, **kwargs
+        )
 
 
 class BaseGeneratorWrapper:
