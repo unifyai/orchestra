@@ -28,6 +28,21 @@ class TogetherAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "llama-3.2-3b-chat": {
+        "endpoint": "together_ai/meta-llama/Llama-3.2-3B-Instruct-Turbo",
+        "context_window": 131072,
+        "cost": {"prompt": 0.06, "completion": 0.06},
+    },
+    "llama-3.2-11b-chat": {
+        "endpoint": "together_ai/meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo",
+        "context_window": 131072,
+        "cost": {"prompt": 0.18, "completion": 0.18},
+    },
+    "llama-3.2-90b-chat": {
+        "endpoint": "together_ai/meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo",
+        "context_window": 131072,
+        "cost": {"prompt": 1.2, "completion": 1.2},
+    },
     "llama-3.1-8b-chat": {
         "endpoint": "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
         "context_window": 8192,
@@ -40,8 +55,8 @@ supported_models = {
     },
     "llama-3.1-405b-chat": {
         "endpoint": "together_ai/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
-        "context_window": 32768,
-        "cost": {"prompt": 5, "completion": 5},
+        "context_window": 130815,
+        "cost": {"prompt": 3.5, "completion": 3.5},
     },
     "llama-3-70b-chat": {
         "endpoint": "together_ai/meta-llama/Meta-Llama-3-70B-Instruct-Turbo",
@@ -52,6 +67,16 @@ supported_models = {
         "endpoint": "together_ai/meta-llama/Meta-Llama-3-8B-Instruct-Turbo",
         "context_window": 8192,
         "cost": {"prompt": 0.2, "completion": 0.2},
+    },
+    "gemma-2-9b-it": {
+        "endpoint": "together_ai/google/gemma-2-9b-it",
+        "context_window": 8192,
+        "cost": {"prompt": 0.3, "completion": 0.3},
+    },
+    "gemma-2-27b-it": {
+        "endpoint": "together_ai/google/gemma-2-27b-it",
+        "context_window": 8192,
+        "cost": {"prompt": 0.8, "completion": 0.8},
     },
     "mixtral-8x22b-instruct-v0.1": {
         "endpoint": "together_ai/mistralai/Mixtral-8x22B-Instruct-v0.1",
