@@ -1,11 +1,21 @@
 import asyncio
+import json
 import os
 import time
+import sys
 
 from httpx import AsyncClient
 
 import orchestra
 from .test_evaluation import _seed_evaluations_db
+
+
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, project_root)
+train_router_path = os.path.join(project_root, "train_router")
+sys.path.insert(0, train_router_path)
+from train_router.router_training import train_router
 
 
 ## UTILS
@@ -20,7 +30,7 @@ HEADERS = {
 ## TESTS
 
 
-async def test_train_router(client: AsyncClient, monkeypatch, dbsession):
+async def test_train_router_pre_pubsub(client: AsyncClient, monkeypatch, dbsession):
 
     # mocking pubsub
     def mock_send_to_train_server(action, **data):
@@ -104,6 +114,62 @@ async def test_rename_router(client: AsyncClient, dbsession):
     params = {"name": "my_test_router", "new_name": "my_new_test_router"}
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
+
+#####
+
+
+async def test_train_router_e2e(client: AsyncClient, monkeypatch, tmp_path, dbsession):
+    # mocking pubsub
+    def mock_send_to_train_server(action, **data):
+        data.pop("user_email", "")
+        message_data = json.dumps(
+            {
+                "action": action,
+                **data,
+                "orchestra_url": "",
+                "admin_key": os.environ.get("ORCHESTRA_ADMIN_KEY"),
+            },
+        )
+        save_dir = tmp_path / "save_files"
+        if action == "train":
+            asyncio.run(
+                train_router(
+                    message_data,
+                    save_dir,
+                    client=client,
+                ),
+            )
+        else:
+            raise NotImplementedError
+        
+
+    monkeypatch.setattr(
+        orchestra.web.api.router_training.views,
+        "send_to_train_server",
+        mock_send_to_train_server,
+    )
+
+    ### test begins
+    await _seed_evaluations_db(
+        dbsession,
+        path="./orchestra/tests/sql_dumps/evaluations/dump_router_train.jsonl",
+    )
+
+    url = "/v0/router/train"
+    params = {
+        "name": "my_test_router",
+        "prompts": "1,2,3",
+        "endpoints": ["llama-3-8b-chat@aws-bedrock", "gpt-3.5-turbo@openai"],
+        "evaluator": "test_eval",
+    }
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    assert response.json() == {
+        "info": "Router training started! You will receive an email soon!"
+    }
+
+
+
 
 
 ###

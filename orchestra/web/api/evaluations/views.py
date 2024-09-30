@@ -945,3 +945,15 @@ def create_prompt_variation(
         prompt_id=prompt_id,
         default_prompt_id=default_prompt_id,
     )
+
+
+
+@admin_router.get("/get_prompts")
+def load_prompts(
+    prompt_ids: str,
+    user_id,
+    stored_prompt_dao: StoredPromptDAO = Depends(),
+):
+    prompt_ids = [int(i) for i in prompt_ids.split(",") if i]
+    ret = stored_prompt_dao.get_prompts(prompt_ids=prompt_ids, user_id=user_id)
+    return ret

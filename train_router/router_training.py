@@ -12,10 +12,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, List
 
-import google.cloud.compute_v1 as compute_v1
+# import google.cloud.compute_v1 as compute_v1
 from google.api_core.extended_operation import ExtendedOperation
-from google.cloud import storage
-from google.cloud.exceptions import NotFound
 
 logging.basicConfig(filename="router_training.log", level=logging.INFO)
 
@@ -115,12 +113,63 @@ def create_vm():
     return instance_client.get(project=project_id, zone=zone, instance=instance_name)
 
 
-def create_train_data(user_id, api_key, admin_api_key, prompt_ids, endpoints, evaluator):
+async def create_train_data(
+    user_id, api_key, admin_key, prompt_ids, endpoints, evaluator, client
+):
     # download all the prompts with prompt_ids ...
     # download all the scores with prompt_ids ... per endpoint per evaluator
     # combine
 
-    url = "/v0/evaluations/get_router_data"
+    ## getting
+
+    url = "/v0/get_prompts"
+
+    params = {"prompt_ids": ",".join(str(p) for p in prompt_ids), "user_id": user_id}
+
+    HEADERS = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {admin_key}",
+        "Content-Type": "application/json",
+    }
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    prompts = response.json()
+    id_to_prompt = {e["id"]:json.loads(e["messages"])[0]["content"] for e in prompts}
+
+    id_model_to_score = {}
+    for endpoint in endpoints:
+        try:
+            url = "/v0/evaluation"
+            HEADERS = {
+                "accept": "application/json",
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            params = {
+                "prompts": ",".join(str(i) for i in prompt_ids),
+                "endpoint": endpoint,
+                "evaluator": evaluator,
+                "user_id": user_id,
+                "per_prompt": True,
+            }
+            response = await client.get(url, params=params, headers=HEADERS)
+            endpoint_scores = response.json()
+            endpoint_scores = endpoint_scores[evaluator][endpoint]["per_prompt"]
+            for entry in endpoint_scores:
+                _id = entry["id"]
+                id_model_to_score[(_id, endpoint)] = entry["score"]
+        except Exception as e:
+            print(e)
+            pass
+    
+    breakpoint()
+    combined_files = []
+    for id_ in id_to_prompt:
+        scores_per_endpoint = {e: id_model_to_score[(id_, e)] for e in endpoints}
+        combined_files.append(
+            {"id_": id_, "message": id_to_prompt[id_], "scores": scores_per_endpoint}
+        )
+
     n = len(combined_files)
     random.shuffle(combined_files)
     train_frac = 0.8
@@ -128,32 +177,38 @@ def create_train_data(user_id, api_key, admin_api_key, prompt_ids, endpoints, ev
 
     train_data = combined_files[valid_num:]
     valid_data = combined_files[:valid_num]
+    return train_data, valid_data
 
 
-def main(
-    user_id,
-    user_email,
-    api_key,
-    admin_api_key,
-    prompt_ids,
-    router_id,
-    endpoints,
-    evaluator,
-    orchestra_url,
+async def train_router(
+    msg,
+    save_dir=None,
+    client=None,
 ):
-    logging.info("starting TRAINING")
+    msg = json.loads(msg)
+    user_id = msg["user_id"]
+    # user_email = msg["user_email"]
+    api_key = msg["api_key"]
+    admin_key = msg["admin_key"]
+    prompt_ids = msg["prompt_ids"]
+    router_id = msg["router_id"]
+    endpoints = msg["endpoints"]
+    evaluator = msg["evaluator"]
+    orchestra_url = msg["orchestra_url"]
 
+    logging.info("starting TRAINING")
     # TODO: retrieve correct evaluation data
 
-    train_data, valid_data = create_train_data(
-        user_id, api_key, admin_api_key, prompt_ids, endpoints, evaluator
+    train_data, valid_data = await create_train_data(
+        user_id, api_key, admin_key, prompt_ids, endpoints, evaluator, client
     )
+
     unrolled_data = []
     for td in train_data:
         for e, score in td["scores"].items():
             unrolled_data.append(
                 {
-                    "id_": td["id_"],
+                    "id_": td["id"],
                     "prompt": td["prompt"],
                     "model_provider": e,
                     "score": score,
@@ -162,7 +217,8 @@ def main(
     train_data = unrolled_data
 
     # start
-
+    breakpoint()
+    assert False
     run_name = f"{user_id}_{router_id}"
     _dir = os.path.dirname(os.path.abspath(__file__))
     run_folder = os.path.join(_dir, "save_files", run_name)
@@ -219,7 +275,7 @@ def main(
     subprocess.run(command, shell=True)
 
     # check if nvidia is installed
-    command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="sudo /opt/deeplearning/install-driver.sh" """
+    # command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="sudo /opt/deeplearning/install-driver.sh" """
     # subprocess.run(command, shell=True)
 
     logging.info("move files")
@@ -250,7 +306,7 @@ if __name__ == "__main__":
     endpoints = args["endpoints"]
     orchestra_url = args["orchestra_url"]
 
-    main(
+    train_router(
         user_id=user_id,
         api_key=api_key,
         router_name=router_name,

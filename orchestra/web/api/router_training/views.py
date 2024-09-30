@@ -218,7 +218,7 @@ def train_router(
         prompt_ids=prompt_ids,
         router_id=router_id,
         endpoints=endpoints,
-        evaluator_id=evaluator_id,
+        evaluator=evaluator,
     )
     return {"info": "Router training started! You will receive an email soon!"}
 

@@ -402,7 +402,7 @@ async def test_create_data_for_router(
 
     # create trigger evaluation
     url = "/v0/evaluation"
-    endpoint = "llama-3-70b-chat@aws-bedrock"
+    endpoint = "gpt-3.5-turbo@openai"
     params = {
         "url": url,
         "dataset": dataset,
