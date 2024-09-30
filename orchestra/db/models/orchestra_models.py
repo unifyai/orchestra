@@ -531,6 +531,13 @@ class AuthUser(Base):
     id = Column(String, primary_key=True, default=uuid.uuid4)
     email = Column(String, unique=True, index=True, nullable=False)
     name = Column(String)
+    last_name = Column(String)
+    job_title = Column(String)
+    # Account tier, developer, professional, enterprise
+    tier = Column(String, nullable=False, server_default="developer")
+    # Toggles managed by usage quotas
+    queries_enabled = Column(Boolean, nullable=False, server_default="true")
+    evaluations_enabled = Column(Boolean, nullable=False, server_default="true")
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
 
@@ -541,7 +548,7 @@ class Account(Base):
     __tablename__ = "account"
 
     id = Column(String, primary_key=True, default=uuid.uuid4)
-    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"))
+    user_id = Column(String, ForeignKey("auth_user.id", ondelete="CASCADE"))
     provider = Column(String, nullable=False)  # OAuth provider name
     provider_type = Column(String, nullable=False)
     provider_account_id = Column(String, nullable=False)
@@ -552,11 +559,49 @@ class Account(Base):
     expires_at = Column(TIMESTAMP)
 
 
-# Session table
-class Session(Base):
-    __tablename__ = "session"
+class Organization(Base):
+    __tablename__ = "organization"
 
-    session_token = Column(String, primary_key=True, index=True)
-    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"))
-    expires_at = Column(TIMESTAMP, nullable=False)
+    id = Column(Integer, primary_key=True)
+    owner_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    name = Column(String, unique=True, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class OrganizationMember(Base):
+    __tablename__ = "organization_member"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    level = Column(
+        String,
+        nullable=False,
+    )  # owner, admin, user -> owner is duplicated info? :/
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class ApiKey(Base):
+    __tablename__ = "api_key"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String)
+    user_id = Column(String, ForeignKey("auth_user.id", ondelete="CASCADE"))
+    organization_id = Column(Integer, ForeignKey("organization.id", ondelete="CASCADE"))
+    key = Column(String, unique=True, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("user_id", "name"),)
