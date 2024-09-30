@@ -1,10 +1,11 @@
 """Added status_code column
 
 Revision ID: 193e0a1d573f
-Revises: d19661e28ed5
+Revises: 0e9eef357b46
 Create Date: 2024-09-25 14:05:20.992902
 
 """
+
 import sqlalchemy as sa
 from alembic import op
 
