@@ -306,105 +306,105 @@ class BaseCompletionProvider:
             )
         except litellm.AuthenticationError as error:
             error = AuthenticationError(error)
-            logger.error(f"Raised litellm.AuthenticationError, Error: {error}")
+            logger.error(f"Raised AuthenticationError, Error: {error}")
             raise HTTPException(
                 status_code=error.status_code,
                 detail=str(error),
             )  # noqa: WPS432
         except litellm.NotFoundError as error:
             error = NotFoundError(error)
-            logger.error(f"Raised litellm.NotFoundError, Error: {error}")
+            logger.error(f"Raised NotFoundError, Error: {error}")
             raise HTTPException(
                 status_code=error.status_code,
                 detail=str(error),
             )  # noqa: WPS432
         except litellm.BadRequestError as error:
             error = BadRequestError(error)
-            logger.error(f"Raised litellm.NotFoundError, Error: {error}")
+            logger.error(f"Raised NotFoundError, Error: {error}")
             raise HTTPException(
                 status_code=error.status_code,
                 detail=str(error),
             )  # noqa: WPS432
         except litellm.UnprocessableEntityError as error:
             error = UnprocessableEntityError(error)
-            logger.error(f"Raised litellm.UnprocessableEntityError, Error: {error}")
+            logger.error(f"Raised UnprocessableEntityError, Error: {error}")
             raise HTTPException(
                 status_code=error.status_code,
                 detail=str(error),
             )  # noqa: WPS432
         except litellm.Timeout as error:
             error = Timeout(error)
-            logger.error(f"Raised litellm.Timeout, Error: {error}")
+            logger.error(f"Raised Timeout, Error: {error}")
             raise HTTPException(
                 status_code=error.status_code,
                 detail=str(error),
             )  # noqa: WPS432
         except litellm.RateLimitError as error:
             error = RateLimitError(error)
-            logger.error(f"Raised litellmRateLimitError, Error: {error}")
+            logger.error(f"Raised RateLimitError, Error: {error}")
             raise HTTPException(
                 status_code=error.status_code,
                 detail=str(error),
             )  # noqa: WPS432
         except litellm.ContextWindowExceededError as error:
             error = ContextWindowExceededError(error)
-            logger.error(f"Raised litellm.ContextWindowExceededError, Error: {error}")
+            logger.error(f"Raised ContextWindowExceededError, Error: {error}")
             raise HTTPException(
                 status_code=error.status_code,
                 detail=str(error),
             )  # noqa: WPS432
         except litellm.ContentPolicyViolationError as error:
             error = ContentPolicyViolationError(error)
-            logger.error(f"Raised litellm.ContentPolicyViolationError, Error: {error}")
+            logger.error(f"Raised ContentPolicyViolationError, Error: {error}")
             raise HTTPException(
                 status_code=error.status_code,
                 detail=str(error),
             )  # noqa: WPS432
         except litellm.ServiceUnavailableError as error:
             error = ServiceUnavailableError(error)
-            logger.error(f"Raised litellm.ServiceUnavailableError, Error: {error}")
+            logger.error(f"Raised ServiceUnavailableError, Error: {error}")
             raise HTTPException(
                 status_code=error.status_code,
                 detail=str(error),
             )  # noqa: WPS432
         except litellm.InternalServerError as error:
             error = InternalServerError(error)
-            logger.error(f"Raised litellm.InternalServerError, Error: {error}")
+            logger.error(f"Raised InternalServerError, Error: {error}")
             raise HTTPException(
                 status_code=error.status_code,
                 detail=str(error),
             )  # noqa: WPS432
         except litellm.APIError as error:
             error = APIError(error)
-            logger.error(f"Raised litellm.APIError, Error: {error}")
+            logger.error(f"Raised APIError, Error: {error}")
             raise HTTPException(
                 status_code=error.status_code,
                 detail=str(error),
             )  # noqa: WPS432
         except litellm.APIConnectionError as error:
             error = APIConnectionError(error)
-            logger.error(f"Raised litellm.APIConnectionError, Error: {error}")
+            logger.error(f"Raised APIConnectionError, Error: {error}")
             raise HTTPException(
                 status_code=error.status_code,
                 detail=str(error),
             )  # noqa: WPS432
         except litellm.APIResponseValidationError as error:
             error = APIResponseValidationError(error)
-            logger.error(f"Raised litellm.APIResponseValidationError, Error: {error}")
+            logger.error(f"Raised APIResponseValidationError, Error: {error}")
             raise HTTPException(
                 status_code=error.status_code,
                 detail=str(error),
             )  # noqa: WPS432
         except litellm.JSONSchemaValidationError as error:
             error = JSONSchemaValidationError(error)
-            logger.error(f"Raised litellm.JSONSchemaValidationError, Error: {error}")
+            logger.error(f"Raised JSONSchemaValidationError, Error: {error}")
             raise HTTPException(
                 status_code=error.status_code,
                 detail=str(error),
             )  # noqa: WPS432
         except litellm.UnsupportedParamsError as error:
             error = UnsupportedParamsError(error)
-            logger.error(f"Raised litellm.UnsupportedParamsError, Error: {error}")
+            logger.error(f"Raised UnsupportedParamsError, Error: {error}")
             raise HTTPException(
                 status_code=error.status_code,
                 detail=str(error),
