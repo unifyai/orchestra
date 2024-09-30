@@ -4,7 +4,6 @@ import string
 
 from utils.helpers import (
     get_llm_response,
-    load_judgement,
     load_prompt,
     load_prompt_variation,
     load_response,
@@ -70,18 +69,16 @@ def create_judge_prompt(data, eval_config):
     judge_prompt = eval_config["judge_prompt"]
     class_cfg = eval_config.get("class_cfg", None) or default_cfg
 
-    # ig those should be be accesible through indexing
+    # ig those should not be be accesible through indexing
     # TODO: do this properly
     data["prompt"].pop("user_id")
     data["prompt"].pop("id")
     data["prompt"]["extra_fields"] = {
         i["field"]: i["value"] for i in data["prompt"]["extra_fields"]
     }
-
     prompt_parser_formatter = get_format_kwargs("prompt_parser", data, eval_config)
     response_parser_formatter = get_format_kwargs("response_parser", data, eval_config)
 
-    # breakpoint()
     judge_prompt = copy.deepcopy(judge_prompt)
     # what goes into the system prompt
     system_prompt_placeholders = {}
@@ -125,7 +122,8 @@ def create_judge_prompt(data, eval_config):
         "content"
     ].format(**user_prompt_placeholders)
 
-    if not judge_prompt["messages"][0]["role"] != "system":
+    if judge_prompt["messages"][0]["role"] != "system":
+        # append to last user message ?
         judge_prompt["messages"][-1]["content"] += "\n\n" + create_judge_rubric(
             class_cfg,
         )
