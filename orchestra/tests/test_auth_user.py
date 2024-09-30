@@ -5,7 +5,7 @@ from httpx import AsyncClient
 
 HEADERS = {
     "accept": "application/json",
-    "Authorization": f"Bearer {os.getenv("ORCHESTRA_ADMIN_KEY")}",
+    "Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}",
 }
 
 
