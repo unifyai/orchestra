@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 import litellm
 import tiktoken
 from fastapi import HTTPException
+from openai import AsyncStream, OpenAI, Stream
 
 # from litellm.utils import get_model_info  # Uncomment later
 from orchestra.db.models.orchestra_models import CustomEndpoint
@@ -419,7 +420,7 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        self.run_with_exceptions(
+        return self.run_with_exceptions(
             async_call=False, messages=messages, stream=stream, **kwargs
         )
 
@@ -429,7 +430,7 @@ class BaseCompletionProvider:
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
-        self.run_with_exceptions(
+        return self.run_with_exceptions(
             async_call=True, messages=messages, stream=stream, **kwargs
         )
 
