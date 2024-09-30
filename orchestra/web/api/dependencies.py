@@ -5,6 +5,7 @@ from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from requests import request  # type: ignore
 
+from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.settings import settings
 from orchestra.web.api.utils.http_responses import (
     admin_not_authorized,
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 def auth_api_key(
     request_fastapi: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
+    api_key_dao: ApiKeyDAO = Depends(),
 ) -> None:
     """
     Authenticate an API key.
@@ -34,9 +36,13 @@ def auth_api_key(
         headers={},
     )
 
-    # TODO: This may be missleading and should have a different http code
-    # (db-connector issue)
+    # TODO: Fully remove db connector
     if auth_ret.status_code == 404:
+        db_api_key = api_key_dao.filter(key=apikey)
+        if db_api_key is not None:
+            request_fastapi.state.user_id = db_api_key[0][0].user_id
+            request_fastapi.state.user_email = ""  # TODO
+            return
         raise invalid_api_key
     elif auth_ret.status_code != 200:  # noqa: WPS432
         error, digest = server_error_with_digest(auth_ret.text)
