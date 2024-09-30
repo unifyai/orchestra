@@ -174,13 +174,13 @@ supported_models = {
     "mistral-large": {
         "endpoint": "vertex_ai/mistral-large",
         "region": "europe-west4",
-        "context_window": 32768,
-        "cost": {"prompt": 3, "completion": 9},
+        "context_window": 128000,
+        "cost": {"prompt": 2, "completion": 6},
     },
     "mistral-nemo": {
         "endpoint": "vertex_ai/mistral-nemo",
         "region": "europe-west4",
         "context_window": 128000,
-        "cost": {"prompt": 0.3, "completion": 0.3},
+        "cost": {"prompt": 0.15, "completion": 0.15},
     },
 }

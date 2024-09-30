@@ -32,20 +32,10 @@ class OctoAI(BaseCompletionProvider):
 
 
 supported_models = {
-    "mistral-7b-instruct-v0.3": {
-        "endpoint": "mistral-7b-instruct",
-        "context_window": 32768,
-        "cost": {"prompt": 0.15, "completion": 0.15},
-    },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "mixtral-8x7b-instruct",
         "context_window": 32768,
         "cost": {"prompt": 0.45, "completion": 0.45},
-    },
-    "mistral-nemo": {
-        "endpoint": "mistral-nemo-instruct",
-        "context_window": 128000,
-        "cost": {"prompt": 0.2, "completion": 0.2},
     },
     "llama-3-70b-chat": {
         "endpoint": "meta-llama-3-70b-instruct",

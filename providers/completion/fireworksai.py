@@ -73,11 +73,6 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
-    "gemma-2-9b-it": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/gemma2-9b-it",
-        "context_window": 8192,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
     "mistral-nemo": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/mistral-nemo-instruct-2407",
         "context_window": 128000,
