@@ -16,6 +16,7 @@ async def test_create_user(client: AsyncClient):
         "email": "testuser@example.com",
         "name": "Test User",
         "job_title": "Developer",
+        "image": "http://...",
     }
 
     response = await client.post(url, json=params, headers=HEADERS)

@@ -564,6 +564,7 @@ class AuthUser(Base):
     name = Column(String)
     last_name = Column(String)
     job_title = Column(String)
+    image = Column(String)
     # Account tier, developer, professional, enterprise
     tier = Column(String, nullable=False, server_default="developer")
     # Toggles managed by usage quotas
