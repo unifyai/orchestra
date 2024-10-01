@@ -1,6 +1,6 @@
 from typing import List, Optional
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
@@ -66,3 +66,11 @@ class RouterDAO:
         entry = raw.scalars().first()
         if entry is not None:
             setattr(entry, "name", new_name)
+
+    def delete(self, user_id, name):
+        query = (
+            delete(Router).where(Router.user_id == user_id).where(Router.name == name)
+        )
+        self.session.execute(query)
+
+

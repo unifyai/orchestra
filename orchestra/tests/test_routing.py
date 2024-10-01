@@ -51,7 +51,7 @@ async def test_train_router_pre_pubsub(client: AsyncClient, monkeypatch, dbsessi
                 "llama-3-8b-chat@aws-bedrock",
                 "llama-3-70b-chat@aws-bedrock",
             ],
-            "evaluator_id": 1,
+            "evaluator": "test_eval",
         }
 
     monkeypatch.setattr(
@@ -89,12 +89,12 @@ async def test_train_delete_router(client: AsyncClient, dbsession):
     url = "/v0/router"
     params = {"name": "my_test_router"}
     response = await client.delete(url, params=params, headers=HEADERS)
+    assert response.json() == {"info": "Trained router deleted!"}
 
     url = "/v0/router/list"
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == 200, repsonse.json()
-    print(response.json())
-    assert response.json() == ""
+    assert response.json() == ['my_test_router_2', 'my_test_router_3']
 
 
 async def test_list_router(client: AsyncClient, dbsession):
@@ -205,7 +205,7 @@ async def test_deploy_undeploy(client: AsyncClient, dbsession):
     )
     url = "/v0/router/deploy"
     response = await client.delete(
-        url, params={"name": "my_test_router_2"}, headers=HEADERS
+        url, params={"name": "my_test_router_3"}, headers=HEADERS
     )
     assert response.status_code == 200, response.json()
     print(response.json())
