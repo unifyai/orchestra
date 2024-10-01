@@ -56,7 +56,7 @@ class ChatCompletionRequest(BaseModel):
         "stream terminated by a `data: [DONE]` message.",
         json_schema_extra={"example": False},
     )
-    temperature: float = Field(
+    temperature: Optional[float] = Field(
         1.0,
         description="What sampling temperature to use, between 0 and 2. Higher "
         "values like 0.8 will make the output more random, while lower values like 0.2 "

@@ -4,11 +4,12 @@ Includes endpoints related to evaluators.
 
 import json
 
+import unify
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.evaluator_dao import EvaluatorDAO
-from orchestra.web.api.evaluators.schema import EvaluatorConfig, Prompt
+from orchestra.web.api.evaluators.schema import EvaluatorConfig
 from orchestra.web.api.utils.http_responses import evaluator_not_found
 
 router = APIRouter()
@@ -100,7 +101,9 @@ def create_evaluator(
     # system_prompt = request.system_prompt
     judge_prompt = request.judge_prompt
     if isinstance(judge_prompt, str):
-        judge_prompt = Prompt(messages=[{"role": "user", "content": judge_prompt}])
+        judge_prompt = unify.Prompt(
+            messages=[{"role": "user", "content": judge_prompt}],
+        )
     # if system_prompt is None:
 
     if judge_prompt is None:
@@ -110,7 +113,7 @@ Your job is to evaluate how good the assistant's answer is.
 Your evaluation should consider correctness and helpfulness. Identify any mistakes.
 
 Be as objective as possible."""
-        judge_prompt = Prompt(
+        judge_prompt = unify.Prompt(
             messages=[
                 {
                     "role": "system",
