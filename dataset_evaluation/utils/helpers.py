@@ -166,7 +166,7 @@ async def store_prompt_variation(
 async def get_llm_response(payload, url, headers, client):
     ret = await client.post(url, json=payload, headers=headers)
     if ret.status_code != 200:
-        if ret["detail"].startswith("UnifyRateLimitError:"):
+        if ret.json()["detail"].startswith("UnifyRateLimitError:"):
             raise RateLimitException
 
     return ret.json()
