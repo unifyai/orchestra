@@ -99,8 +99,8 @@ def deploy_router(
     Deploys a trained router to a live endpoint.
 
     To use this router, replace the model in the endpoint string with the
-    router name. E.g. you can use `router-abc` by calling the
-    `router-abc@q:1` endpoint.
+    router name. E.g. you can use a router named `test_router` by calling the
+    `router_test_router@q:1` endpoint.
 
     """
     user_id = request_fastapi.state.user_id

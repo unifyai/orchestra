@@ -7,6 +7,8 @@ import sys
 from httpx import AsyncClient
 
 import orchestra
+from orchestra.tests.utils import get_chat_completions_payload
+
 from .test_evaluation import _seed_evaluations_db
 
 
@@ -218,3 +220,15 @@ async def test_deploy_list_router(client: AsyncClient, dbsession):
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == 200, response.json()
     print(response.json())
+
+
+## test doesn't work
+# async def test_msg_router(client: AsyncClient, dbsession):
+#     await _seed_evaluations_db(
+#         dbsession,
+#         path="./orchestra/tests/sql_dumps/evaluations/dump_trained_routers.jsonl",
+#     )
+#     endpoint = "/v0/chat/completions"
+#     data = get_chat_completions_payload(model="router_my_test_router_3", provider="q:1", stream=False)
+#     response = await client.post(endpoint, headers=HEADERS, json=data)
+#     assert response.status_code == 200, response.json()

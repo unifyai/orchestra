@@ -576,16 +576,6 @@ class Router(Base):
     __table_args__ = (sa.UniqueConstraint("user_id", "name", name="uq_router_name"),)
 
 
-class RouterTrainingData(Base):
-    __tablename__ = "router_training_data"
-
-    id = sa.Column(sa.Integer(), primary_key=True)
-    router_id = sa.Column(sa.Integer(), sa.ForeignKey("router.id"), nullable=False)
-    train_data_id = sa.Column(
-        sa.Integer(), sa.ForeignKey("evaluation.id"), nullable=False
-    )
-
-
 class AuthUser(Base):
     __tablename__ = "auth_user"
 
