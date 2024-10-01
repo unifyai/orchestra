@@ -1,0 +1,10 @@
+{"prompt": {"messages": [{"role": "user", "content": "Who wrote the play 'Romeo and Juliet'?"}]}, "ref_answer": "William Shakespeare", "topic": "Literature"}
+{"prompt": {"messages": [{"role": "user", "content": "What is the chemical symbol for gold?"}]}, "ref_answer": "Au", "topic": "Chemistry"}
+{"prompt": {"messages": [{"role": "user", "content": "In which year did World War II end?"}]}, "ref_answer": "1945", "topic": "History"}
+{"prompt": {"messages": [{"role": "user", "content": "What is the largest planet in our solar system?"}]}, "ref_answer": "Jupiter", "topic": "Astronomy"}
+{"prompt": {"messages": [{"role": "user", "content": "Who painted the Mona Lisa?"}]}, "ref_answer": "Leonardo da Vinci", "topic": "Art"}
+{"prompt": {"messages": [{"role": "user", "content": "Who wrote the philosophical work 'Thus Spoke Zarathustra'?"}]}, "ref_answer": "Friedrich Nietzsche", "topic": "Philosophy"}
+{"prompt": {"messages": [{"role": "user", "content": "What is the half-life of carbon-14 used in radiocarbon dating?"}]}, "ref_answer": "5,730 years", "topic": "Physics"}
+{"prompt": {"messages": [{"role": "user", "content": "In which year did the Reign of Terror occur during the French Revolution?"}]}, "ref_answer": "1793-1794", "topic": "History"}
+{"prompt": {"messages": [{"role": "user", "content": "What is the name of the closest known exoplanet to Earth?"}]}, "ref_answer": "Proxima Centauri b", "topic": "Astronomy"}
+{"prompt": {"messages": [{"role": "user", "content": "Who composed the opera 'The Ring of the Nibelung'?"}]}, "ref_answer": "Richard Wagner", "topic": "Music"}
