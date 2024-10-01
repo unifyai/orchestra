@@ -1,6 +1,6 @@
 # we need a yaml config (done)
 # train step should calculate some metrics and return them along side the loss
-
+import requests
 import random
 import json
 import os
@@ -411,16 +411,15 @@ if __name__ == "__main__":
         user_config = json.load(f)
 
     user_id = user_config["user_id"]
-    router_name = user_config["router_name"]
+    router_id = user_config["router_id"]
 
     bucket_name = "custom_router_data"
-    directory = f"custom_router/{user_id}/{router_name}/"
+    directory = f"custom_router/{user_id}/{router_id}/"
 
     file_path = weight_path
     file_name = "model_epoch_5.pth"
 
     router_metadata = {
-        "dataset": user_config["dataset"],
         "endpoints": user_config["endpoints"],
     }
 
@@ -434,3 +433,13 @@ if __name__ == "__main__":
         blob_name = directory + file_name
         blob = storage.Client().bucket(bucket_name).blob(blob_name)
         blob.upload_from_filename(file_path)
+
+    # set the router as "trained"
+    payload = {
+        "router_id": router_id,
+    }
+    url = f"{os.getenv('ORCHESTRA_BASE_URL')}/update_router_trained"
+    print(url)
+    headers = {"Authorization": f'Bearer {os.getenv("ORCHESTRA_ADMIN_KEY")}'}
+    response = requests.post(url=url, json=payload, headers=headers)
+    print(response.text)

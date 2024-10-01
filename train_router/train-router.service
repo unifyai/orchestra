@@ -8,6 +8,7 @@ WorkingDirectory=/opt/train_router/
 Restart=always
 RestartSec=10
 User=serviceuser
+EnvironmentFile=/etc/environment
 
 [Install]
 WantedBy=multi-user.target

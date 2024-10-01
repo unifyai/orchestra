@@ -3,6 +3,8 @@ import os
 import sys
 import subprocess
 
+from httpx import AsyncClient, Limits
+
 import requests
 from google.cloud import aiplatform, storage
 
@@ -16,11 +18,27 @@ def download_blob(bucket_name, source_blob_name, destination_file_name):
         blob.download_to_filename(destination_file_name + filename)
 
 
-def deploy(user_id: str, router_id: str, orchestra_url: str):
+def deploy_router(msg, client=None):
     # fetch the router files + weights from bucket
     # TODO: cleanup old weights
     # if os.path.isdir("router_files"):
     #     os.remove("router_files")
+    msg = json.loads(msg)
+    user_id = msg["user_id"]
+    router_id = msg["router_id"]
+    orchestra_url=msg["orchestra_url"]
+    admin_key = msg["admin_key"]
+
+
+    if client is None:
+        limits = Limits(
+            max_keepalive_connections=None,
+            max_connections=None,
+            keepalive_expiry=30,
+        )
+        client = AsyncClient(base_url=orchestra_url, limits=limits, timeout=60)
+
+
     if not os.path.isdir("router_files"):
         os.mkdir("router_files")
 
@@ -93,13 +111,13 @@ def deploy(user_id: str, router_id: str, orchestra_url: str):
     # send this back to orchestra so we know where it's pointed
     payload = {
         "user_id": user_id,
-        "router_name": router_id,
-        "router_id": endpoint.name,
+        "router_id": router_id,
+        "gcp_router_id": endpoint.name,
     }
     print(payload)
-    url = f"{orchestra_url}/v0/admin/create_custom_router"
-    headers = {"Authorization": f'Bearer {os.getenv("ORCHESTRA_ADMIN_KEY")}'}
-    response = requests.put(url=url, json=payload, headers=headers)
+    url = f"{orchestra_url}/v0/update_router_deployed"
+    headers = {"Authorization": f'Bearer {admin_key}'}
+    response = requests.post(url=url, json=payload, headers=headers)
     print(response.text)
 
     # TODO: clean up docker image
@@ -107,6 +125,4 @@ def deploy(user_id: str, router_id: str, orchestra_url: str):
 
 if __name__ == "__main__":
     msg = sys.argv[1]
-    msg = json.loads(msg)
-
-    deploy(msg["user_id"], msg["name"], msg["orchestra_url"])
+    deploy_router(msg)

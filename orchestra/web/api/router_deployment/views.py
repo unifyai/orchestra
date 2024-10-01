@@ -111,8 +111,12 @@ def deploy_router(
         )
     router_info = router_exists[0]
     if router_info.deployed:
+        if router_info.gcp_router_id:  
+            raise HTTPException(
+                status_code=400, detail=f"The router: {name} is already deployed."
+            )
         raise HTTPException(
-            status_code=400, detail=f"The router: {name} is already deployed."
+            status_code=400, detail=f"The router: {name} is being deployed, please check back later."
         )
 
     if not router_info.trained:

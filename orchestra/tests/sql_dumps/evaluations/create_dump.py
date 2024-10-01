@@ -347,52 +347,16 @@ async def test_create_data_for_router(
 
     # create evaluator
     eval_name = "test_eval"
-    judge_prompt = {
-        "messages": [
-            {
-                "role": "system",
-                "content": """As a judge, rate the assistant's answer to the user prompt.""",
-            },
-            {
-                "role": "user",
-                "content": """
-    <user_prompt>
-    {user_prompt}
-    </user_prompt>
-
-    <assistant_response>
-    {response}
-    </assistant_respose>
-
-    follow these rating rules:
-    <rating rules>
-    {class_config}
-    </rating rules>""",
-            },
-        ],
-        "temperature": 0.7,
-    }
     judge_model = "llama-3-8b-chat@aws-bedrock"
 
     url = "/v0/evaluator"
     params = {
         "name": eval_name,
-        "judge_prompt": judge_prompt,
         "judge_models": judge_model,
     }
     response = await client.post(url, json=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
-    url = "/v0/evaluator"
-    params = {
-        "name": "test_eval_multi_judge",
-        "judge_prompt": judge_prompt,
-        "judge_models": ["llama-3-8b-chat@aws-bedrock", "gpt-3.5-turbo@openai"],
-    }
-    response = await client.post(url, json=params, headers=HEADERS)
-    assert response.status_code == 200, response.json()
-
-    # create second
     # create dataset
 
     file_path = "./orchestra/tests/sample_datasets/prompts_router_train.jsonl"

@@ -12,6 +12,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, List
 
+from httpx import AsyncClient, Limits
+
 # import google.cloud.compute_v1 as compute_v1
 from google.api_core.extended_operation import ExtendedOperation
 
@@ -134,7 +136,7 @@ async def create_train_data(
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     prompts = response.json()
-    id_to_prompt = {e["id"]:json.loads(e["messages"])[0]["content"] for e in prompts}
+    id_to_prompt = {e["id"]: json.loads(e["messages"])[0]["content"] for e in prompts}
 
     id_model_to_score = {}
     for endpoint in endpoints:
@@ -161,13 +163,17 @@ async def create_train_data(
         except Exception as e:
             print(e)
             pass
-    
-    breakpoint()
+
     combined_files = []
     for id_ in id_to_prompt:
-        scores_per_endpoint = {e: id_model_to_score[(id_, e)] for e in endpoints}
+        scores_per_endpoint = {}
+        for e in endpoints:
+            try:
+                scores_per_endpoint[e] = id_model_to_score[(id_, e)]
+            except:
+                scores_per_endpoint[e] = 0  # TODO: what to do here instead
         combined_files.append(
-            {"id_": id_, "message": id_to_prompt[id_], "scores": scores_per_endpoint}
+            {"id_": id_, "prompt": id_to_prompt[id_], "scores": scores_per_endpoint}
         )
 
     n = len(combined_files)
@@ -180,11 +186,8 @@ async def create_train_data(
     return train_data, valid_data
 
 
-async def train_router(
-    msg,
-    save_dir=None,
-    client=None,
-):
+async def train_router(msg, save_dir=None, client=None):
+
     msg = json.loads(msg)
     user_id = msg["user_id"]
     # user_email = msg["user_email"]
@@ -195,6 +198,15 @@ async def train_router(
     endpoints = msg["endpoints"]
     evaluator = msg["evaluator"]
     orchestra_url = msg["orchestra_url"]
+
+    if client is None:
+        limits = Limits(
+            max_keepalive_connections=None,
+            max_connections=None,
+            keepalive_expiry=30,
+        )
+        client = AsyncClient(base_url=orchestra_url, limits=limits, timeout=60)
+
 
     logging.info("starting TRAINING")
     # TODO: retrieve correct evaluation data
@@ -208,7 +220,7 @@ async def train_router(
         for e, score in td["scores"].items():
             unrolled_data.append(
                 {
-                    "id_": td["id"],
+                    "id_": td["id_"],
                     "prompt": td["prompt"],
                     "model_provider": e,
                     "score": score,
@@ -217,9 +229,8 @@ async def train_router(
     train_data = unrolled_data
 
     # start
-    breakpoint()
-    assert False
-    run_name = f"{user_id}_{router_id}"
+    import random
+    run_name = f"{user_id}_{router_id}_{random.randint(10000,99999)}"
     _dir = os.path.dirname(os.path.abspath(__file__))
     run_folder = os.path.join(_dir, "save_files", run_name)
     train_job_files_folder = os.path.join(run_folder, "train_job_files")
@@ -244,7 +255,7 @@ async def train_router(
             {
                 "user_id": user_id,
                 "router_id": router_id,
-                "dataset": dataset,
+                "evaluator": evaluator,
                 "endpoints": endpoints,
             },
             f,
@@ -270,7 +281,7 @@ async def train_router(
 
     # prune old docker containers
     logging.info("pruning docker")
-    docker_prune_cmd = "docker container prune -f"
+    docker_prune_cmd = "docker system prune -f"
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="{docker_prune_cmd}" """
     subprocess.run(command, shell=True)
 
@@ -279,7 +290,7 @@ async def train_router(
     # subprocess.run(command, shell=True)
 
     logging.info("move files")
-    command = f"""gcloud compute scp --project={project_id} --zone={zone} --recurse {run_folder} {instance_name}:~/{run_name}"""
+    command = f"""gcloud compute scp --project={project_id} --zone={zone} --recurse {run_folder} {instance_name}:~/{run_name}/"""
     subprocess.run(command, shell=True)
 
     # build & run the docker container
@@ -289,28 +300,13 @@ async def train_router(
     subprocess.run(command, shell=True)
 
     logging.info("running docker container")
-    docker_run_cmd = "docker run -d --gpus all -it router_training"
+    docker_run_cmd = f"docker run --env ORCHESTRA_BASE_URL='{orchestra_url}' --env ORCHESTRA_ADMIN_KEY='{admin_key}' -d --gpus all -it router_training"
     command = f"""gcloud compute ssh {instance_name} --project={project_id} --zone={zone} --command="{docker_run_cmd}" """
     subprocess.run(command, shell=True)
 
 
 if __name__ == "__main__":
-    args = sys.argv[1]
+    msg = sys.argv[1]
     args = json.loads(args)
 
-    # Access the arguments
-    user_id = args["user_id"]
-    api_key = args["api_key"]
-    router_name = args["name"]
-    dataset = args["dataset"]
-    endpoints = args["endpoints"]
-    orchestra_url = args["orchestra_url"]
-
-    train_router(
-        user_id=user_id,
-        api_key=api_key,
-        router_name=router_name,
-        dataset=dataset,
-        endpoints=endpoints,
-        orchestra_url=orchestra_url,
-    )
+    train_router(msg)

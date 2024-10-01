@@ -42,7 +42,7 @@ def pub_sub_callback(message):
                 subprocess.Popen(
                     [
                         "venv/bin/python3",
-                        "deploy_router.py",
+                        "router_deployment.py",
                         message.data,
                     ],
                 )

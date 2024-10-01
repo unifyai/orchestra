@@ -17,6 +17,9 @@ train_router_path = os.path.join(project_root, "train_router")
 sys.path.insert(0, train_router_path)
 from train_router.router_training import train_router
 
+deploy_router_path = os.path.join(project_root, "deploy_router")
+sys.path.insert(0, deploy_router_path)
+from deploy_router.router_deployment import deploy_router
 
 ## UTILS
 
@@ -126,7 +129,7 @@ async def test_train_router_e2e(client: AsyncClient, monkeypatch, tmp_path, dbse
             {
                 "action": action,
                 **data,
-                "orchestra_url": "",
+                "orchestra_url": "https://api.unify.ai/v0",
                 "admin_key": os.environ.get("ORCHESTRA_ADMIN_KEY"),
             },
         )
@@ -158,7 +161,7 @@ async def test_train_router_e2e(client: AsyncClient, monkeypatch, tmp_path, dbse
     url = "/v0/router/train"
     params = {
         "name": "my_test_router",
-        "prompts": "1,2,3",
+        "prompts": "1,2,3,4,5,6,7,8,9",
         "endpoints": ["llama-3-8b-chat@aws-bedrock", "gpt-3.5-turbo@openai"],
         "evaluator": "test_eval",
     }
@@ -171,8 +174,6 @@ async def test_train_router_e2e(client: AsyncClient, monkeypatch, tmp_path, dbse
 
 
 
-
-###
 
 
 async def test_deploy_router(client: AsyncClient, monkeypatch, dbsession):
