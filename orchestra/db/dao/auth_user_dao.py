@@ -18,6 +18,7 @@ class AuthUserDAO:
         name: Optional[str] = None,
         last_name: Optional[str] = None,
         job_title: Optional[str] = None,
+        image: Optional[str] = None,
     ) -> None:
         self.session.add(
             AuthUser(
@@ -25,6 +26,7 @@ class AuthUserDAO:
                 name=name,
                 last_name=last_name,
                 job_title=job_title,
+                image=image,
             ),
         )
 
@@ -47,6 +49,7 @@ class AuthUserDAO:
         name: Optional[str] = None,
         last_name: Optional[str] = None,
         job_title: Optional[str] = None,
+        image: Optional[str] = None,
         tier: Optional[str] = None,
         queries_enabled: Optional[bool] = None,
         evaluations_enabled: Optional[bool] = None,
@@ -62,6 +65,8 @@ class AuthUserDAO:
                 setattr(entry, "last_name", last_name)
             if job_title:
                 setattr(entry, "job_title", job_title)
+            if image:
+                setattr(entry, "image", image)
             if tier:
                 setattr(entry, "tier", tier)
             if queries_enabled:
