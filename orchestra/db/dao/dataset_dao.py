@@ -104,13 +104,25 @@ class DatasetDAO:
             dataset_prompts.append(prompt_data)
         return sorted(dataset_prompts, key=lambda p: p["id"])
 
-    def fetch_dataset(self, user_id: str, name: str) -> list[dict]:
+    def fetch_dataset(
+        self,
+        user_id: str,
+        name: str,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> list[dict]:
         dataset_id = self.get_dataset_id(user_id, name)[0]
         query = (
             select(StoredPrompt, DatasetPrompt)
             .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
             .where(DatasetPrompt.dataset_id == dataset_id)
+            .order_by(StoredPrompt.id)  # Add an order_by clause for consistent pagination
         )
+        if limit is not None:
+            query = query.limit(limit)
+        if offset is not None:
+            query = query.offset(offset)
+        
         result = self.session.execute(query).fetchall()
 
         dataset_prompts = []
