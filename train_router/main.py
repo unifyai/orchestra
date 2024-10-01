@@ -20,7 +20,7 @@ shutdown_flag = False
 n = sdnotify.SystemdNotifier()
 
 # Pub/Sub subscription
-subscription_name = "projects/saas-368716/subscriptions/deploy_router-sub"
+subscription_name = "projects/saas-368716/subscriptions/train_router-sub"
 
 
 # Function to handle graceful shutdown
@@ -38,14 +38,17 @@ def pub_sub_callback(message):
         try:
             d = json.loads(message.data)
             logging.info(f"entry: {d}")
-            if d["action"] == "deploy":
+            if d["action"] == "train":
+                logging.info("trying to run subprocess popen")
                 subprocess.Popen(
                     [
                         "venv/bin/python3",
-                        "router_deployment.py",
+                        "router_training.py",
                         message.data,
                     ],
                 )
+            elif d["action"] == "delete":
+                subprocess.Popen(["venv/bin/python3", "delete_router.py", message.data])
             else:
                 logging.error(f"Unknown action: {message.data}")
         except json.decoder.JSONDecodeError:

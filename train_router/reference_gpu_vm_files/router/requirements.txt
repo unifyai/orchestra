@@ -1,0 +1,5 @@
+torch
+transformers
+sentencepiece
+pandas
+google-cloud-storage==2.17.0
