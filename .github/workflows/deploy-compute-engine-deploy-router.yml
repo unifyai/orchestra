@@ -14,7 +14,7 @@ on:
     branches:
     - main
     - staging
-    - train_router_2
+    - trained_router_oct
 
 jobs:
   deploy:
