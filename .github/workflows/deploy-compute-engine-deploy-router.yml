@@ -54,7 +54,7 @@ jobs:
 
     - name: Copy deploy_router to VM
       run: |
-        gcloud compute scp ${{ env.GH_WORKDIR }}/deploy_router.py ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }}:${{ env.GCLOUD_WORKDIR }} --zone ${{ env.GCLOUD_ZONE }}
+        gcloud compute scp ${{ env.GH_WORKDIR }}/router_deployment.py ${{ env.GCLOUD_USERNAME }}@${{ env.GCLOUD_INSTANCE }}:${{ env.GCLOUD_WORKDIR }} --zone ${{ env.GCLOUD_ZONE }}
 
     - name: Copy service file to VM
       run: |
