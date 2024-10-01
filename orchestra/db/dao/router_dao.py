@@ -59,7 +59,9 @@ class RouterDAO:
         return list(rows.scalars().fetchall())
 
     def rename(self, user_id, name, new_name):
-        query = select(Router).where(Router.user_id == user_id).where(Router.name==name)
+        query = (
+            select(Router).where(Router.user_id == user_id).where(Router.name == name)
+        )
         raw = self.session.execute(query)
         entry = raw.scalars().first()
         if entry is not None:

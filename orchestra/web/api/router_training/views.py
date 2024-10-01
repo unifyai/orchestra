@@ -184,7 +184,6 @@ def train_router(
     if invalid_endpoints:
         raise invalid_training_endpoints(invalid_endpoints)
 
-
     # check if the evaluator exists
     evaluator_id = evaluator_dao.filter(user_id=user_id, name=evaluator)
     if not evaluator_id:
@@ -192,7 +191,7 @@ def train_router(
             status_code=400, detail=f"You don't have an evaluator named: {evaluator}"
         )
     evaluator_id = evaluator_id[0].id
-    
+
     # TODO: check the evaluations exist
     # e.g. what if all the evaluations haven't finished
     # or no evaluations exist

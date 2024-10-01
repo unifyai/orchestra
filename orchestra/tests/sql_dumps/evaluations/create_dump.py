@@ -288,8 +288,6 @@ async def test_create_data_clientside(
     scores = response.json()
 
 
-
-
 @pytest.mark.manual
 async def test_create_data_for_router(
     client: AsyncClient,
@@ -375,7 +373,7 @@ async def test_create_data_for_router(
     }
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
-    
+
     url = "/v0/evaluation"
     endpoint = "llama-3-8b-chat@aws-bedrock"
     params = {
@@ -386,8 +384,6 @@ async def test_create_data_for_router(
     }
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
-
-
 
     ############################
 
@@ -422,10 +418,10 @@ async def test_create_data_for_router(
     assert "progress" in scores[eval_name][endpoint]
 
 
-
 @pytest.mark.manual
-async def test_create_data_for_trained_router(client: AsyncClient, monkeypatch, dbsession):
-
+async def test_create_data_for_trained_router(
+    client: AsyncClient, monkeypatch, dbsession
+):
     @event.listens_for(Engine, "before_cursor_execute")
     def receive_before_cursor_execute(
         conn, cursor, statement, parameters, context, executemany

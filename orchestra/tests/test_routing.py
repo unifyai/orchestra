@@ -10,7 +10,6 @@ import orchestra
 from .test_evaluation import _seed_evaluations_db
 
 
-
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, project_root)
 train_router_path = os.path.join(project_root, "train_router")
@@ -118,6 +117,7 @@ async def test_rename_router(client: AsyncClient, dbsession):
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
+
 #####
 
 
@@ -144,7 +144,6 @@ async def test_train_router_e2e(client: AsyncClient, monkeypatch, tmp_path, dbse
             )
         else:
             raise NotImplementedError
-        
 
     monkeypatch.setattr(
         orchestra.web.api.router_training.views,
@@ -172,12 +171,7 @@ async def test_train_router_e2e(client: AsyncClient, monkeypatch, tmp_path, dbse
     }
 
 
-
-
-
-
 async def test_deploy_router(client: AsyncClient, monkeypatch, dbsession):
-
     def mock_send_to_deploy_server(action, **data):
         data.pop("user_id")
         assert data == {
@@ -208,9 +202,12 @@ async def test_deploy_undeploy(client: AsyncClient, dbsession):
         path="./orchestra/tests/sql_dumps/evaluations/dump_trained_routers.jsonl",
     )
     url = "/v0/router/deploy"
-    response = await client.delete(url, params={"name": "my_test_router_2"}, headers=HEADERS)
+    response = await client.delete(
+        url, params={"name": "my_test_router_2"}, headers=HEADERS
+    )
     assert response.status_code == 200, response.json()
     print(response.json())
+
 
 async def test_deploy_list_router(client: AsyncClient, dbsession):
     await _seed_evaluations_db(

@@ -26,9 +26,8 @@ def deploy_router(msg, client=None):
     msg = json.loads(msg)
     user_id = msg["user_id"]
     router_id = msg["router_id"]
-    orchestra_url=msg["orchestra_url"]
+    orchestra_url = msg["orchestra_url"]
     admin_key = msg["admin_key"]
-
 
     if client is None:
         limits = Limits(
@@ -37,7 +36,6 @@ def deploy_router(msg, client=None):
             keepalive_expiry=30,
         )
         client = AsyncClient(base_url=orchestra_url, limits=limits, timeout=60)
-
 
     if not os.path.isdir("router_files"):
         os.mkdir("router_files")
@@ -116,7 +114,7 @@ def deploy_router(msg, client=None):
     }
     print(payload)
     url = f"{orchestra_url}/v0/update_router_deployed"
-    headers = {"Authorization": f'Bearer {admin_key}'}
+    headers = {"Authorization": f"Bearer {admin_key}"}
     response = requests.post(url=url, json=payload, headers=headers)
     print(response.text)
 
