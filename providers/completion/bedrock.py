@@ -64,16 +64,16 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
 
 
 supported_models = {
-    # "llama-3.2-1b-chat": {
-    #     "endpoint": "bedrock/us.meta.llama3-2-1b-instruct-v1:0",
-    #     "context_window": 131072,
-    #     "cost": {"prompt": 0.1, "completion": 0.1}
-    # },
-    # "llama-3.2-3b-chat": {
-    #     "endpoint": "bedrock/us.meta.llama3-2-3b-instruct-v1:0",
-    #     "context_window": 131072,
-    #     "cost": {"prompt": 0.15, "completion": 0.15}
-    # },
+    "llama-3.2-1b-chat": {
+        "endpoint": "bedrock/us.meta.llama3-2-1b-instruct-v1:0",
+        "context_window": 131072,
+        "cost": {"prompt": 0.1, "completion": 0.1},
+    },
+    "llama-3.2-3b-chat": {
+        "endpoint": "bedrock/us.meta.llama3-2-3b-instruct-v1:0",
+        "context_window": 131072,
+        "cost": {"prompt": 0.15, "completion": 0.15},
+    },
     "llama-3.1-8b-chat": {
         "endpoint": "bedrock/meta.llama3-1-8b-instruct-v1:0",
         "context_window": 128000,
@@ -120,22 +120,22 @@ supported_models = {
         "cost": {"prompt": 3, "completion": 15},
     },
     "claude-3-haiku": {
-        "endpoint": "bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+        "endpoint": "bedrock/us.anthropic.claude-3-haiku-20240307-v1:0",
         "context_window": 200000,
         "cost": {"prompt": 0.25, "completion": 1.25},
     },
     "claude-3-sonnet": {
-        "endpoint": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        "endpoint": "bedrock/us.anthropic.claude-3-sonnet-20240229-v1:0",
         "context_window": 200000,
         "cost": {"prompt": 3, "completion": 15},
     },
     "claude-3-opus": {
-        "endpoint": "bedrock/anthropic.claude-3-opus-20240229-v1:0",
+        "endpoint": "bedrock/us.anthropic.claude-3-opus-20240229-v1:0",
         "context_window": 200000,
         "cost": {"prompt": 15, "completion": 75},
     },
     "claude-3.5-sonnet": {
-        "endpoint": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "endpoint": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
         "context_window": 200000,
         "cost": {"prompt": 3, "completion": 15},
     },
