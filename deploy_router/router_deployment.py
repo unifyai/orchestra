@@ -23,6 +23,8 @@ def deploy_router(msg, client=None):
     # TODO: cleanup old weights
     # if os.path.isdir("router_files"):
     #     os.remove("router_files")
+    print("start deployment")
+
     msg = json.loads(msg)
     user_id = msg["user_id"]
     router_id = msg["router_id"]
@@ -46,6 +48,7 @@ def deploy_router(msg, client=None):
     else:
         os.makedirs(save_path)
 
+    print("downloading weights")
     download_blob(
         bucket_name="custom_router_data",
         source_blob_name=f"custom_router/{user_id}/{router_id}",
@@ -59,13 +62,14 @@ def deploy_router(msg, client=None):
 
     # TODO: use the docker sdk
     # build the docker container
+    print("building docker container")
     subprocess.run(
         f"sudo docker build --build-arg root_path={save_path} . -t {docker_path}",
         shell=True,
     )
 
     ## push the docker container to artifact registry
-
+    print("pushing docker container to registry")
     subprocess.run(
         "gcloud auth print-access-token | sudo docker login   -u oauth2accesstoken   --password-stdin europe-west1-docker.pkg.dev",
         shell=True,
@@ -112,7 +116,6 @@ def deploy_router(msg, client=None):
         "router_id": router_id,
         "gcp_router_id": endpoint.name,
     }
-    print(payload)
     url = f"{orchestra_url}/v0/update_router_deployed"
     headers = {"Authorization": f"Bearer {admin_key}"}
     response = requests.post(url=url, json=payload, headers=headers)
