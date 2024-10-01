@@ -41,7 +41,7 @@ async def create_user(
     return {
         "id": user[0][0].id,
         "name": user[0][0].name,
-        "image": "",  # TODO user[0][0].image,
+        "image": user[0][0].image,
         "email": user[0][0].email,
     }
 
@@ -62,7 +62,7 @@ async def get_user(
         "name": user[0][0].name,
         "lastName": user[0][0].last_name,
         "jobTitle": user[0][0].job_title,
-        "image": "",  # TODO user[0][0].image,
+        "image": user[0][0].image,
         "email": user[0][0].email,
         "createdAt": user[0][0].created_at,
         "apiKey": api_key[0][0].key,
@@ -84,7 +84,7 @@ async def get_user_by_email(
         "name": user[0][0].name,
         "lastName": user[0][0].last_name,
         "jobTitle": user[0][0].job_title,
-        "image": "",  # TODO user[0][0].image,
+        "image": user[0][0].image,
         "email": user[0][0].email,
         "createdAt": user[0][0].created_at,
         "apiKey": api_key[0][0].key,
@@ -114,7 +114,7 @@ async def get_user_by_account(
         "name": user[0][0].name,
         "lastName": user[0][0].last_name,
         "jobTitle": user[0][0].job_title,
-        "image": "",  # TODO user[0][0].image,
+        "image": user[0][0].image,
         "email": user[0][0].email,
         "createdAt": user[0][0].created_at,
         "apiKey": api_key[0][0].key,
