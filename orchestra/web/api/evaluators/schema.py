@@ -17,15 +17,21 @@ class EvaluatorConfig(BaseModel):
     )
     prompt_parser: Optional[Dict[str, List[Union[str, int]]]] = Field(
         default={"user_message": ["messages", -1, "content"]},
-        description="Dict with str  keys and indexing logic values. Default value of: `{'user_message': '['messages'][-1]['content']'}` "
+        description="Dict with str  keys and indexing logic values. Default value of: `{'user_message': ['messages', -1, 'content']}` "
         "This is used by the system prompt to replace each key {some_key} with prompt.dict()\<indexing_logic\> "
         "The default value will replace all occurances of {user_message} with prompt.dict()['messages'][-1]['content'] in the judge prompt.",
     )
     response_parser: Optional[Dict[str, List[Union[str, int]]]] = Field(
         default={"assistant_message": ["message", "content"]},
-        description="Dict with str  keys and indexing logic values. Default value of: `{'assistant_response': '['message']['content']'}` "
+        description="Dict with str  keys and indexing logic values. Default value of: `{'assistant_response': ['message', 'content']}` "
         "This is used by the system prompt to replace each key {some_key} with response.dict()\<indexing_logic\> "
         "The default value will replace all occurances of {assisntant_message} with response.dict()['message']['content'] in the judge prompt.",
+    )
+    extra_parser: Optional[Dict[str, List[Union[str, int]]]] = Field(
+        default=None,
+        description="Dict with str  keys and indexing logic values. Default value of: `None` "
+        "This is used by the system prompt to replace each key {some_key} with datum.dict()\<indexing_logic\> "
+        "which can be used to index into extra fields stored within each item in the dataset.",
     )
     class_config: Optional[List[Dict[str, Union[str, float]]]] = Field(
         default=None,
@@ -33,11 +39,9 @@ class EvaluatorConfig(BaseModel):
             """If set, describes the list of classifications that the LLM judge uses to
             score each prompt. For example:
 ```
-[{"label": "Excellent", "score": 1.0, "description": "A perfect answer with no factual
-mistakes"},
-{"label": "Good", "score": 0.5, "description": "An average answer"},
-{"label": "Bad", "score": 0.0, "description": "An incorrect answer, containing a
-significant factual mistake"}]
+[{"label": "Excellent", "score": 1.0},
+{"label": "Good", "score": 0.5},
+{"label": "Bad", "score": 0.0}]
 ```
 """
         ),
