@@ -124,6 +124,17 @@ def deploy_router(msg, client=None):
     # TODO: clean up docker image
 
 
+def undeploy_router(msg):
+    msg = json.loads(msg)
+    endpoint_name = msg["gcp_router_id"]
+    endpoint = aiplatform.Endpoint(endpoint_name=endpoint_name)
+    endpoint.undeploy_all()
+
+
 if __name__ == "__main__":
     msg = sys.argv[1]
-    deploy_router(msg)
+    d = json.loads(msg)
+    if d["action"] == "deploy":
+        deploy_router(msg)
+    elif d["action"] == "undeploy":
+        undeploy_router(msg)

@@ -20,7 +20,7 @@ from train_router.router_training import train_router
 
 deploy_router_path = os.path.join(project_root, "deploy_router")
 sys.path.insert(0, deploy_router_path)
-from deploy_router.router_deployment import deploy_router
+from deploy_router.router_deployment import deploy_router, undeploy_router
 
 ## UTILS
 
@@ -94,7 +94,7 @@ async def test_train_delete_router(client: AsyncClient, dbsession):
     url = "/v0/router/list"
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == 200, repsonse.json()
-    assert response.json() == ['my_test_router_2', 'my_test_router_3']
+    assert response.json() == ["my_test_router_2", "my_test_router_3"]
 
 
 async def test_list_router(client: AsyncClient, dbsession):
@@ -105,7 +105,7 @@ async def test_list_router(client: AsyncClient, dbsession):
     url = "/v0/router/list"
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == 200, repsonse.json()
-    assert response.json() == ['my_test_router', 'my_test_router_2', 'my_test_router_3']
+    assert response.json() == ["my_test_router", "my_test_router_2", "my_test_router_3"]
 
 
 async def test_rename_router(client: AsyncClient, dbsession):
@@ -197,17 +197,44 @@ async def test_deploy_router(client: AsyncClient, monkeypatch, dbsession):
     assert response.status_code == 200, response.json()
 
 
-async def test_deploy_undeploy(client: AsyncClient, dbsession):
+@pytest.mark.skip(
+    reason="can't actually test undeploying without waiting for it to deploy (~45mins)"
+)
+async def test_deploy_undeploy(client: AsyncClient, monkeypatch, dbsession):
     await _seed_evaluations_db(
         dbsession,
         path="./orchestra/tests/sql_dumps/evaluations/dump_trained_routers.jsonl",
+    )
+
+    def mock_send_to_deploy_server(action, **data):
+        data.pop("user_email", "")
+        message_data = json.dumps(
+            {
+                "action": action,
+                **data,
+                "orchestra_url": "https://api.unify.ai/v0",
+                "admin_key": os.environ.get("ORCHESTRA_ADMIN_KEY"),
+            },
+        )
+        if action == "undeploy":
+            asyncio.run(
+                undeploy_router(
+                    message_data,
+                ),
+            )
+        else:
+            raise NotImplementedError
+
+    monkeypatch.setattr(
+        orchestra.web.api.router_deployment.views,
+        "send_to_deploy_server",
+        mock_send_to_deploy_server,
     )
     url = "/v0/router/deploy"
     response = await client.delete(
         url, params={"name": "my_test_router_3"}, headers=HEADERS
     )
     assert response.status_code == 200, response.json()
-    print(response.json())
 
 
 async def test_deploy_list_router(client: AsyncClient, dbsession):

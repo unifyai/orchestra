@@ -1,7 +1,7 @@
 """
 Includes endpoints for router deployment.
 """
-
+import os
 from typing import Dict, List, Union
 
 from fastapi import APIRouter, Query, Request, Depends, HTTPException
@@ -188,7 +188,9 @@ def undeploy_router(
         )
 
     router_dao.update(router_info.id, deployed=False)
-    send_to_deploy_server(action="delete", user_id=user_id, router_id=router_info.id)
+    send_to_deploy_server(
+        action="undeploy", user_id=user_id, gcp_router_id=router_info.gcp_router_id
+    )
     return {"info": "Router deletion started! You will receive an email soon!"}
 
 
@@ -215,7 +217,7 @@ def undeploy_router(
 def list_deployed_routers(
     request_fastapi: Request,
     router_dao: RouterDAO = Depends(),
-) -> Dict[str, Dict[str, Union[str, List[str]]]]:
+) -> list:
     """
     Fetches a list of the *deployed* routers and relevant metadata (excluding the
     trained but undeployed routers). To fetch a list of *all* trained routers (both

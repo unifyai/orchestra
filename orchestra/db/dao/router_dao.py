@@ -72,5 +72,3 @@ class RouterDAO:
             delete(Router).where(Router.user_id == user_id).where(Router.name == name)
         )
         self.session.execute(query)
-
-

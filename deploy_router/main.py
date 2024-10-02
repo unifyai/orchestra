@@ -38,16 +38,14 @@ def pub_sub_callback(message):
         try:
             d = json.loads(message.data)
             logging.info(f"entry: {d}")
-            if d["action"] == "deploy":
-                subprocess.Popen(
-                    [
-                        "venv/bin/python3",
-                        "router_deployment.py",
-                        message.data,
-                    ],
-                )
-            else:
-                logging.error(f"Unknown action: {message.data}")
+            subprocess.Popen(
+                [
+                    "venv/bin/python3",
+                    "router_deployment.py",
+                    message.data,
+                ],
+            )
+
         except json.decoder.JSONDecodeError:
             logging.error(f"Error parsing message: {message.data}")
         except:
