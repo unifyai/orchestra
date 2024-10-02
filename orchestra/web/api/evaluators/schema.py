@@ -1,4 +1,4 @@
-from typing import Optional, Union, Dict
+from typing import Optional, Union, Dict, List
 
 import unify
 from pydantic import BaseModel, Field
@@ -27,7 +27,7 @@ class EvaluatorConfig(BaseModel):
         "This is used by the system prompt to replace each key {some_key} with response.dict()\<indexing_logic\> "
         "The default value will replace all occurances of {assisntant_message} with response.dict()['message']['content'] in the judge prompt.",
     )
-    class_config: Optional[list] = Field(
+    class_config: Optional[List[Dict[str, Union[str, float]]]] = Field(
         default=None,
         description=(
             """If set, describes the list of classifications that the LLM judge uses to
@@ -42,7 +42,7 @@ significant factual mistake"}]
 """
         ),
     )
-    judge_models: Union[str, list[str]] = Field(
+    judge_models: Union[str, List[str]] = Field(
         default="claude-3.5-sonnet@aws-bedrock",
         description="Specifies the LLM(s) to be used as the judge. This can be a "
         "string containing a single model name or a list of model names.",
