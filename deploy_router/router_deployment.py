@@ -1,5 +1,9 @@
+import json
 import os
+import sys
 import subprocess
+
+from httpx import AsyncClient, Limits
 
 import requests
 from google.cloud import aiplatform, storage
@@ -14,40 +18,58 @@ def download_blob(bucket_name, source_blob_name, destination_file_name):
         blob.download_to_filename(destination_file_name + filename)
 
 
-def deploy(user_id: str, router_name: str, orchestra_url: str):
+def deploy_router(msg, client=None):
     # fetch the router files + weights from bucket
     # TODO: cleanup old weights
     # if os.path.isdir("router_files"):
     #     os.remove("router_files")
+    print("start deployment")
+
+    msg = json.loads(msg)
+    user_id = msg["user_id"]
+    router_id = msg["router_id"]
+    orchestra_url = msg["orchestra_url"]
+    admin_key = msg["admin_key"]
+
+    if client is None:
+        limits = Limits(
+            max_keepalive_connections=None,
+            max_connections=None,
+            keepalive_expiry=30,
+        )
+        client = AsyncClient(base_url=orchestra_url, limits=limits, timeout=60)
+
     if not os.path.isdir("router_files"):
         os.mkdir("router_files")
 
-    save_path = f"router_files/{user_id}/{router_name}/"
+    save_path = f"router_files/{user_id}/{router_id}/"
     if os.path.isdir(save_path):
         print(f"overwriting files in {save_path}")
     else:
         os.makedirs(save_path)
 
+    print("downloading weights")
     download_blob(
         bucket_name="custom_router_data",
-        source_blob_name=f"custom_router/{user_id}/{router_name}",
+        source_blob_name=f"custom_router/{user_id}/{router_id}",
         destination_file_name=save_path,
     )
     # TODO: check if it overwrites ??
 
     docker_path = (
-        f"europe-west1-docker.pkg.dev/saas-368716/router/{user_id}/{router_name}"
+        f"europe-west1-docker.pkg.dev/saas-368716/router/{user_id}/{router_id}"
     )
 
     # TODO: use the docker sdk
     # build the docker container
+    print("building docker container")
     subprocess.run(
         f"sudo docker build --build-arg root_path={save_path} . -t {docker_path}",
         shell=True,
     )
 
     ## push the docker container to artifact registry
-
+    print("pushing docker container to registry")
     subprocess.run(
         "gcloud auth print-access-token | sudo docker login   -u oauth2accesstoken   --password-stdin europe-west1-docker.pkg.dev",
         shell=True,
@@ -61,7 +83,7 @@ def deploy(user_id: str, router_name: str, orchestra_url: str):
     project = "saas-368716"
     aiplatform.init(project=project, location=location)
 
-    display_name = f"{user_id}_{router_name}"
+    display_name = f"{user_id}_{router_id}"
 
     print("uploading model")
     model = aiplatform.Model.upload(
@@ -91,24 +113,28 @@ def deploy(user_id: str, router_name: str, orchestra_url: str):
     # send this back to orchestra so we know where it's pointed
     payload = {
         "user_id": user_id,
-        "router_name": router_name,
-        "router_id": endpoint.name,
+        "router_id": router_id,
+        "gcp_router_id": endpoint.name,
     }
-    print(payload)
-    url = f"{orchestra_url}/v0/admin/create_custom_router"
-    headers = {"Authorization": f'Bearer {os.getenv("ORCHESTRA_ADMIN_KEY")}'}
-    response = requests.put(url=url, json=payload, headers=headers)
+    url = f"{orchestra_url}/v0/update_router_deployed"
+    headers = {"Authorization": f"Bearer {admin_key}"}
+    response = requests.post(url=url, json=payload, headers=headers)
     print(response.text)
 
     # TODO: clean up docker image
 
 
-if __name__ == "__main__":
-    import argparse
+def undeploy_router(msg):
+    msg = json.loads(msg)
+    endpoint_name = msg["gcp_router_id"]
+    endpoint = aiplatform.Endpoint(endpoint_name=endpoint_name)
+    endpoint.undeploy_all()
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--user_id", required=True)
-    parser.add_argument("--router_name", required=True)
-    parser.add_argument("--orchestra_url", required=True)
-    args = parser.parse_args()
-    deploy(args.user_id, args.router_name, args.orchestra_url)
+
+if __name__ == "__main__":
+    msg = sys.argv[1]
+    d = json.loads(msg)
+    if d["action"] == "deploy":
+        deploy_router(msg)
+    elif d["action"] == "undeploy":
+        undeploy_router(msg)
