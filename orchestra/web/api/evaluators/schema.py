@@ -15,14 +15,14 @@ class EvaluatorConfig(BaseModel):
         description="An optional custom system prompt to provide specific instructions "
         "to the judge on how to score the answers.",
     )
-    prompt_parser: Optional[Dict[str, str]] = Field(
-        default={"user_message": "['messages'][-1]['content']"},
+    prompt_parser: Optional[Dict[str, List[Union[str, int]]]] = Field(
+        default={"user_message": ["messages", -1, "content"]},
         description="Dict with str  keys and indexing logic values. Default value of: `{'user_message': '['messages'][-1]['content']'}` "
         "This is used by the system prompt to replace each key {some_key} with prompt.dict()\<indexing_logic\> "
         "The default value will replace all occurances of {user_message} with prompt.dict()['messages'][-1]['content'] in the judge prompt.",
     )
-    response_parser: Optional[Dict[str, str]] = Field(
-        default={"assistant_message": "['message']['content']"},
+    response_parser: Optional[Dict[str, List[Union[str, int]]]] = Field(
+        default={"assistant_message": ["message", "content"]},
         description="Dict with str  keys and indexing logic values. Default value of: `{'assistant_response': '['message']['content']'}` "
         "This is used by the system prompt to replace each key {some_key} with response.dict()\<indexing_logic\> "
         "The default value will replace all occurances of {assisntant_message} with response.dict()['message']['content'] in the judge prompt.",
