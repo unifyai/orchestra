@@ -29,22 +29,22 @@ class Deepinfra(BaseCompletionProvider):
 
 supported_models = {
     "llama-3.2-1b-chat": {
-        "endpoint": "meta-llama/Llama-3.2-1B-Instruct",
+        "endpoint": "deepinfra/meta-llama/Llama-3.2-1B-Instruct",
         "context_window": 128000,
         "cost": {"prompt": 0.01, "completion": 0.02},
     },
     "llama-3.2-3b-chat": {
-        "endpoint": "meta-llama/Llama-3.2-3B-Instruct",
+        "endpoint": "deepinfra/meta-llama/Llama-3.2-3B-Instruct",
         "context_window": 128000,
         "cost": {"prompt": 0.03, "completion": 0.05},
     },
     "llama-3.2-11b-chat": {
-        "endpoint": "meta-llama/Llama-3.2-11B-Vision-Instruct",
+        "endpoint": "deepinfra/meta-llama/Llama-3.2-11B-Vision-Instruct",
         "context_window": 128000,
         "cost": {"prompt": 0.055, "completion": 0.055},
     },
     "llama-3.2-90b-chat": {
-        "endpoint": "meta-llama/Llama-3.2-90B-Vision-Instruct",
+        "endpoint": "deepinfra/meta-llama/Llama-3.2-90B-Vision-Instruct",
         "context_window": 128000,
         "cost": {"prompt": 0.35, "completion": 0.40},
     },
