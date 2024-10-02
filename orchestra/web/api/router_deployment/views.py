@@ -1,9 +1,10 @@
 """
 Includes endpoints for router deployment.
 """
+import os
 from typing import Dict, List, Union
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, Depends, HTTPException
 
 from orchestra.web.api.utils.gcp import (
     blob_exists,
@@ -17,6 +18,7 @@ from orchestra.web.api.utils.http_responses import (
     router_training_does_not_exist,
 )
 from orchestra.web.api.utils.on_prem import handle_on_prem
+from orchestra.db.dao.router_dao import RouterDAO
 
 router = APIRouter()
 
@@ -35,28 +37,18 @@ def router_training_exists(user_id, name):
     return True
 
 
-def router_is_deployed(user_id, name):
-    # TODO: Implement checks to ensure no one can deploy a router if
-    # the name is already in use.
-    endpoint = f"{user_id}_{name}"
-    if vertex_ai_endpoint_exists(endpoint):
-        return True
-    return False
-
-
-def _list_deployed_routers(user_id: str):
-    router_endpoints = vertex_ai_endpoint_list()
-    clean_routers = []
-    for r in router_endpoints:
-        if user_id in r:
-            clean_routers.append(r.removeprefix(f"{user_id}_"))
-    return clean_routers
-
-
 def send_to_deploy_server(action, **data):
     topic = "projects/saas-368716/topics/deploy_router"
     url = "https://api.unify.ai"  # TODO: Deal with staging/test
-    send_pubsub_msg(topic, {"action": action, **data, "orchestra_url": url})
+    send_pubsub_msg(
+        topic,
+        {
+            "action": action,
+            **data,
+            "orchestra_url": url,
+            "admin_key": os.environ.get("ORCHESTRA_ADMIN_KEY"),
+        },
+    )
 
 
 # endpoints
@@ -101,24 +93,45 @@ def deploy_router(
         description="Name of the router to deploy.",
         example="router1",
     ),
+    router_dao: RouterDAO = Depends(),
 ) -> Dict[str, str]:
     """
     Deploys a trained router to a live endpoint.
 
     To use this router, replace the model in the endpoint string with the
-    router name. E.g. you can use `router-abc` by calling the
-    `router-abc@q:1` endpoint.
+    router name. E.g. you can use a router named `test_router` by calling the
+    `router_test_router@q:1` endpoint.
 
     """
     user_id = request_fastapi.state.user_id
-    # Check if the files exist
-    if not router_training_exists(user_id, name):
-        raise router_training_does_not_exist
-    # Check if the router is already deployed
-    if router_is_deployed(user_id, name):
-        raise router_already_deployed
+    router_exists = router_dao.filter(user_id=user_id, name=name)
+
+    if not router_exists:
+        raise HTTPException(
+            status_code=400, detail=f"You don't have a router with the name: {name}"
+        )
+    router_info = router_exists[0]
+    if router_info.deployed:
+        if router_info.gcp_router_id:
+            raise HTTPException(
+                status_code=400, detail=f"The router: {name} is already deployed."
+            )
+        raise HTTPException(
+            status_code=400,
+            detail=f"The router: {name} is being deployed, please check back later.",
+        )
+
+    if not router_info.trained:
+        raise HTTPException(
+            status_code=400, detail=f"The router: {name} has not finished training."
+        )
+
     # Send the request with the job to the router deployment service
-    send_to_deploy_server(action="deploy", user_id=user_id, name=name)
+
+    # TODO: move the deployed things elsewhere
+    router_dao.update(router_info.id, deployed=True)
+
+    send_to_deploy_server(action="deploy", user_id=user_id, router_id=router_info.id)
     return {"info": "Router deployment started! You will receive an email soon!"}
 
 
@@ -153,20 +166,31 @@ def undeploy_router(
         description="Name of the router to un-deploy.",
         example="router1",
     ),
+    router_dao: RouterDAO = Depends(),
 ) -> Dict[str, str]:
     """
     Deactivates and deletes a previously deployed router, but keeps the training
     artifacts for this router, such that it can be redeployed if desired without needing
     to retrain.
     """
+
     user_id = request_fastapi.state.user_id
-    # Check if the router exists
-    if not router_is_deployed(user_id, name):
-        raise router_is_not_deployed
-    # Send the request with the job to the router deployment service
-    send_to_deploy_server(action="delete", user_id=user_id, name=name)
-    #   un-deploy router
-    #   modify entry in the db
+    router_exists = router_dao.filter(user_id=user_id, name=name)
+
+    if not router_exists:
+        raise HTTPException(
+            status_code=400, detail=f"You don't have a router with the name: {name}"
+        )
+    router_info = router_exists[0]
+    if not router_info.deployed:
+        raise HTTPException(
+            status_code=400, detail=f"The router: {name} is not deployed."
+        )
+
+    router_dao.update(router_info.id, deployed=False)
+    send_to_deploy_server(
+        action="undeploy", user_id=user_id, gcp_router_id=router_info.gcp_router_id
+    )
     return {"info": "Router deletion started! You will receive an email soon!"}
 
 
@@ -192,7 +216,8 @@ def undeploy_router(
 @handle_on_prem(endpoint="/router/deploy/list", method="get")
 def list_deployed_routers(
     request_fastapi: Request,
-) -> Dict[str, Dict[str, Union[str, List[str]]]]:
+    router_dao: RouterDAO = Depends(),
+) -> list:
     """
     Fetches a list of the *deployed* routers and relevant metadata (excluding the
     trained but undeployed routers). To fetch a list of *all* trained routers (both
@@ -203,9 +228,7 @@ def list_deployed_routers(
 
     """
     user_id = request_fastapi.state.user_id
-    routers = _list_deployed_routers(user_id)
-    # TODO: Do this correctly
-    routers_metadata = {}
-    for rtr in routers:
-        routers_metadata[rtr] = {"dataset": "", "endpoints": [""]}
-    return routers_metadata
+    raw = router_dao.filter(user_id=user_id)
+    # TODO: return more information (dataset, evaluator, endpoints etc)
+    routers_list = [r.name for r in raw if r.deployed]
+    return routers_list
