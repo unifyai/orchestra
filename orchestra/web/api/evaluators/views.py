@@ -126,6 +126,15 @@ Be as objective as possible."""
             ],
         )
 
+    prompt_parser = json.dumps({
+        k: str(v).replace(", ", "][")
+        for k, v in request.prompt_parser.items()
+    })
+    response_parser = json.dumps({
+        k: str(v).replace(", ", "][")
+        for k, v in request.response_parser.items()
+    })
+
     class_config = request.class_config
     if class_config is None:
         class_config = [
@@ -139,8 +148,8 @@ Be as objective as possible."""
         user_id=user_id,
         name=request.name,
         judge_prompt=judge_prompt.model_dump_json(),
-        prompt_parser=json.dumps(request.prompt_parser),
-        response_parser=json.dumps(request.response_parser),
+        prompt_parser=prompt_parser,
+        response_parser=response_parser,
         class_config=json.dumps(class_config),
         judge_models=judge_models,
         client_side=request.client_side,
@@ -193,7 +202,18 @@ def get_evaluator(
     ]
     if not evaluators:
         raise evaluator_not_found(name)
-    return evaluators[0]
+    evaluator = evaluators[0]
+    evaluator.prompt_parser = json.dumps({
+        k: [int(item) if item.lstrip("-").isdigit() else item[1:-1]
+            for item in v[1:-1].split("][")]
+        for k, v in json.loads(evaluator.prompt_parser).items()
+    })
+    evaluator.response_parser = json.dumps({
+        k: [int(item) if item.lstrip("-").isdigit() else item[1:-1]
+            for item in v[1:-1].split("][")]
+        for k, v in json.loads(evaluator.response_parser).items()
+    })
+    return evaluator
 
 
 @router.delete(
