@@ -576,7 +576,7 @@ def get_evaluations(
     ),
     limit: int = Query(
         100,
-        description="The number of entries to return.",
+        description="The number of entries to return, if returning lots of prompt data.",
         example="100",
     ),
     offset: int = Query(
@@ -670,6 +670,8 @@ def get_evaluations(
             sub_scorers=sub_scorers,
             num_judges=num_judges,
         )
+        if "per_prompt" in rationales:
+            rationales["per_prompt"] = rationales["per_prompt"][offset: offset+limit]
         ret = {evaluator: {endpoint: rationales}}
         return ret
     else:
@@ -747,7 +749,7 @@ def get_evaluations(
                     ret[_evaluator][endpoint_str]["ttft"] = float(ttft)
                     ret[_evaluator][endpoint_str]["input_cost"] = float(input_cost)
                     ret[_evaluator][endpoint_str]["output_cost"] = float(output_cost)
-
+    
     return ret
 
 
