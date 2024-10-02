@@ -12,6 +12,7 @@ from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.custom_router_dao import CustomRouterDAO
+from orchestra.db.dao.router_dao import RouterDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
@@ -56,6 +57,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
     custom_router_dao: CustomRouterDAO = Depends(),
+    router_dao: RouterDAO = Depends(),
 ) -> Union[ChatCompletionResponse, StreamingResponse]:
     """
     OpenAI compatible `/chat/completions` endpoint for LLM inference.
@@ -184,6 +186,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 # parse router string
                 tmp = model.split("_", 1)
                 if len(tmp) == 1:
+                    # TODO: unify the two tables (router & custom_router)
                     endpoint_id = get_router_endpoint_id(
                         custom_router_dao,
                         user_id=None,
@@ -192,17 +195,20 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 else:
                     router_name = tmp[1]
                     try:
-                        endpoint_id = get_router_endpoint_id(
-                            custom_router_dao,
-                            user_id,
-                            router_name,
-                        )
+                        router_data = router_dao.filter(
+                            user_id=user_id, name=router_name
+                        )[0]
+                        if not hasattr(router_data, "gcp_router_id"):
+                            raise HTTPException(
+                                400, detail="This router is not currently deployed."
+                            )
+                        endpoint_id = router_data.gcp_router_id
+                        print(endpoint_id)
                     except:
                         # TODO: add proper error message for this
                         raise invalid_model_str
 
         t0 = time.time()
-
         try:
             while try_provider >= 0 and try_provider < num_tries_provider:
                 # routing
@@ -223,7 +229,6 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                                 endpoint_dao,
                                 benchmark_run_dao,
                             )
-                            # TODO: add error message if the router is not deployed
                             router_choices = router(
                                 messages[-1]["content"],
                                 endpoint_id,

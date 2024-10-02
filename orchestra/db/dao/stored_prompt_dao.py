@@ -64,3 +64,12 @@ class StoredPromptDAO:
         matching_ids = self.session.execute(query).scalars().all()
         invalid_ids = set(prompt_ids).difference(set(matching_ids))
         return invalid_ids
+
+    def get_prompts(self, prompt_ids: list, user_id: str):
+        query = (
+            select(StoredPrompt)
+            .where(StoredPrompt.user_id == user_id)
+            .where(StoredPrompt.id.in_(prompt_ids))
+        )
+        rows = self.session.execute(query)
+        return list(rows.scalars().unique().fetchall())

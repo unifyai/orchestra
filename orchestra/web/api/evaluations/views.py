@@ -27,6 +27,7 @@ from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.evaluation_dao import EvaluationDAO
 from orchestra.db.dao.evaluator_dao import EvaluatorDAO
 from orchestra.db.dao.judgement_dao import JudgementDAO
+from orchestra.db.dao.router_dao import RouterDAO
 from orchestra.db.dao.latest_benchmark_dao import LatestBenchmarkDAO
 from orchestra.db.dao.stored_prompt_dao import StoredPromptDAO
 from orchestra.db.dao.stored_prompt_response_dao import StoredPromptResponseDAO
@@ -963,3 +964,35 @@ def create_prompt_variation(
         prompt_id=prompt_id,
         default_prompt_id=default_prompt_id,
     )
+
+
+@admin_router.get("/get_prompts")
+def load_prompts(
+    prompt_ids: str,
+    user_id,
+    stored_prompt_dao: StoredPromptDAO = Depends(),
+):
+    prompt_ids = [int(i) for i in prompt_ids.split(",") if i]
+    ret = stored_prompt_dao.get_prompts(prompt_ids=prompt_ids, user_id=user_id)
+    return ret
+
+
+@admin_router.post("/update_router_trained")
+def update_router_trained(
+    router_id: str,
+    user_id,
+    router_dao: RouterDAO = Depends(),
+):
+    router_dao.update(id=router_id, trained=True)
+    return {"info": "Success"}
+
+
+@admin_router.post("/update_router_deployed")
+def update_router_deployed(
+    user_id: str,
+    router_id: str,
+    gcp_router_id: str,
+    router_dao: RouterDAO = Depends(),
+):
+    router_dao.update(id=router_id, gcp_router_id=int(gcp_router_id))
+    return {"info": "Success"}
