@@ -170,14 +170,24 @@ async def test_create_api_key(client: AsyncClient):
 @pytest.mark.anyio
 async def test_reset_api_key(client: AsyncClient):
     url = "/v0/admin/auth-user"
-    params = {"email": "testuser@example.com"}
+    params = {"email": "testuser@api_key.com"}
     response = await client.post(url, json=params, headers=HEADERS)
-    user_id = response.json()["id"]
 
-    url = "/v0/admin/api_key/reset"
-    params = {"user_id": user_id}
-    response = await client.post(url, params=params, headers=HEADERS)
-    assert response.status_code == 200, response.json()
+    url = f"/v0/admin/auth-user/by-email?email=testuser@api_key.com"
+    response = await client.get(url, headers=HEADERS)
+    user_id = response.json()["id"]
+    old_api_key = response.json()["apiKey"]
+
+    url = f"/v0/admin/api_key/reset"
+    response = await client.post(url, params={"user_id": user_id}, headers=HEADERS)
+    new_api_key_in_response = response.json()
+
+    url = f"/v0/admin/auth-user/by-email?email=testuser@api_key.com"
+    response = await client.get(url, headers=HEADERS)
+    new_api_key_in_db = response.json()["apiKey"]
+
+    assert new_api_key_in_response == new_api_key_in_db
+    assert new_api_key_in_db != old_api_key
 
 
 @pytest.mark.anyio

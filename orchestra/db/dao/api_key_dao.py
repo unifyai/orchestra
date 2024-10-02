@@ -74,6 +74,7 @@ class ApiKeyDAO:
         try:
             api_key = self.session.query(ApiKey).filter_by(id=id).one()
             self.session.delete(api_key)
+            self.session.commit()
         except:
             self.session.rollback()
             raise ValueError
