@@ -51,7 +51,7 @@ supported_models = {
     "gpt-4o": {
         "endpoint": "gpt-4o",
         "context_window": 128000,
-        "cost": {"prompt": 5, "completion": 15},
+        "cost": {"prompt": 2.5, "completion": 10},
     },
     "gpt-4o-2024-08-06": {
         "endpoint": "gpt-4o-2024-08-06",
