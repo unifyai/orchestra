@@ -5,6 +5,7 @@ import time
 import sys
 
 from httpx import AsyncClient
+import pytest
 
 import orchestra
 from orchestra.tests.utils import get_chat_completions_payload
