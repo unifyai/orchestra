@@ -143,6 +143,7 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     {"prompt": "This is the third prompt", "ref_answer": "Third reference answer"}
     ```
     """
+
     if "../" in name or name[0] == "/":
         raise invalid_dataset_name
     file_content = file.file.read()
@@ -166,7 +167,8 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         raise HTTPException(400, detail=f"Incorrect data format")
 
     result = _add_data(
-        dataset_dao=dataset_dao, user_id=user_id, dataset_name=name, data=data_to_upload
+        dataset_dao=dataset_dao, user_id=user_id, dataset_name=name,
+        data=data_to_upload, ignore_duplicates=False
     )
     if "info" in result:
         return {"info": "Dataset uploaded successfully!"}
@@ -444,6 +446,7 @@ def _add_data(
     user_id: str,
     dataset_name: str,
     data: Union[dict, list[dict]],
+    ignore_duplicates: bool
 ):
     if isinstance(data, dict):
         data = [data]
@@ -466,6 +469,10 @@ def _add_data(
             successes.append(ix)
             continue
         if isinstance(result, dict) and "error" in result:
+            if ignore_duplicates and result["error"] == ("This prompt is already "
+                                                         "in the dataset"):
+                continue
+
             failures[ix] = result["error"]
         else:
             failures[ix] = None
@@ -546,10 +553,18 @@ def add_data(
             ],
         },
     ),
+    ignore_duplicates: bool = Body(
+        description="Whether to ignore attempted duplicate entries. If False, an "
+                    "exception is raised when attempting to add duplicate data.",
+        json_schema_extra={"example": False},
+        default=True
+    ),
     dataset_dao: DatasetDAO = Depends(),
 ):
+
     user_id = request_fastapi.state.user_id
 
     return _add_data(
-        dataset_dao=dataset_dao, user_id=user_id, dataset_name=name, data=data
+        dataset_dao=dataset_dao, user_id=user_id, dataset_name=name, data=data,
+        ignore_duplicates=ignore_duplicates
     )
