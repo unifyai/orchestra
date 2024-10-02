@@ -134,6 +134,11 @@ Be as objective as possible."""
         k: str(v).replace(", ", "][")
         for k, v in request.response_parser.items()
     })
+    if request.extra_parser is not None:
+        extra_parser = json.dumps({
+            k: str(v).replace(", ", "][")
+            for k, v in request.extra_parser.items()
+        })
 
     class_config = request.class_config
     if class_config is None:
@@ -150,6 +155,7 @@ Be as objective as possible."""
         judge_prompt=judge_prompt.model_dump_json(),
         prompt_parser=prompt_parser,
         response_parser=response_parser,
+        # extra_parser=extra_parser,  # ToDo: uncomment once this has been added to DB
         class_config=json.dumps(class_config),
         judge_models=judge_models,
         client_side=request.client_side,
@@ -213,6 +219,11 @@ def get_evaluator(
             for item in v[1:-1].split("][")]
         for k, v in json.loads(evaluator.response_parser).items()
     })
+    # evaluator.extra_parser = json.dumps({
+    #     k: [int(item) if item.lstrip("-").isdigit() else item[1:-1]
+    #         for item in v[1:-1].split("][")]
+    #     for k, v in json.loads(evaluator.extra_parser).items()
+    # })
     return evaluator
 
 

@@ -5,7 +5,6 @@ from fastapi.param_functions import Depends
 
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
-from orchestra.db.models.orchestra_models import Model
 from orchestra.web.api.utils.http_responses import overspecified_model_provider
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
