@@ -105,8 +105,7 @@ async def test_list_router(client: AsyncClient, dbsession):
     url = "/v0/router/list"
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == 200, repsonse.json()
-    print(response.json())
-    assert response.json() == ""
+    assert response.json() == ['my_test_router', 'my_test_router_2', 'my_test_router_3']
 
 
 async def test_rename_router(client: AsyncClient, dbsession):
