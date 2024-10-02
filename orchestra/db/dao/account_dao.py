@@ -72,6 +72,7 @@ class AccountDAO:
         try:
             account = self.session.query(Account).filter_by(id=id).one()
             self.session.delete(account)
+            self.session.commit()
         except:
             self.session.rollback()
             raise ValueError

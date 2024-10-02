@@ -27,4 +27,5 @@ class DatasetPromptDAO:
         )
         for dp in dataset_prompts:
             self.session.delete(dp)
+        self.session.commit()
         return {"info": "Dataset deleted successfully"}

@@ -61,6 +61,7 @@ class OrganizationDAO:
         try:
             org = self.session.query(Organization).filter_by(id=id).one()
             self.session.delete(org)
+            self.session.commit()
         except:
             self.session.rollback()
             raise ValueError

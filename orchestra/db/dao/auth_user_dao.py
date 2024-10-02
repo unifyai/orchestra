@@ -78,6 +78,7 @@ class AuthUserDAO:
         try:
             auth_user = self.session.query(AuthUser).filter_by(id=id).one()
             self.session.delete(auth_user)
+            self.session.commit()
         except:
             self.session.rollback()
             raise ValueError
