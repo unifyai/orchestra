@@ -5,30 +5,29 @@ Includes endpoints related to dataset evaluations.
 import json
 import os
 import re
-from typing import Dict, Optional, Union, List
+from typing import Dict, Optional
 
 import requests
 from fastapi import (
     APIRouter,
+    Body,
     Depends,
     File,
     HTTPException,
     Query,
     Request,
     UploadFile,
-    Body,
 )
-from sqlalchemy.exc import IntegrityError
-
 from providers.completion import PROVIDER_CLASSES
+
 from orchestra.db.dao.dataset_dao import DatasetDAO
 from orchestra.db.dao.default_prompt_dao import DefaultPromptDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.evaluation_dao import EvaluationDAO
 from orchestra.db.dao.evaluator_dao import EvaluatorDAO
 from orchestra.db.dao.judgement_dao import JudgementDAO
-from orchestra.db.dao.router_dao import RouterDAO
 from orchestra.db.dao.latest_benchmark_dao import LatestBenchmarkDAO
+from orchestra.db.dao.router_dao import RouterDAO
 from orchestra.db.dao.stored_prompt_dao import StoredPromptDAO
 from orchestra.db.dao.stored_prompt_response_dao import StoredPromptResponseDAO
 from orchestra.db.dao.stored_prompt_variation_dao import StoredPromptVariationDAO
@@ -315,7 +314,7 @@ def trigger_evaluation(
                         detail=f"Error in line {ix}: missing: {', '.join(_missing)}",
                     )
                 if _extra := _found_keys.difference(
-                    _expected_keys.union(_optional_keys)
+                    _expected_keys.union(_optional_keys),
                 ):
                     raise HTTPException(
                         status_code=400,
@@ -570,6 +569,11 @@ def get_evaluations(
         description="If `True`, returns more in-depth summary statistics of the evaluation. "
         "Requires specification of both endpoint and evaluator, and per_prompt must be set to false.",
     ),
+    ignore_missing: bool = Query(
+        default=True,
+        description="If `True`, then an empty dict is returned in cases where the dataset, agent or evaluator "
+        "do not exist on the platform. If False, then an exception is raised if any of these do not exist.",
+    ),
     dataset_dao: DatasetDAO = Depends(),
     evaluator_dao: EvaluatorDAO = Depends(),
     evaluation_dao: EvaluationDAO = Depends(),
@@ -585,13 +589,21 @@ def get_evaluations(
     # ToDo: implement the logic where the endpoint (required) is considered in the input
     user_id = request_fastapi.state.user_id
 
-    prompt_ids = get_prompt_ids(
-        dataset=dataset,
-        prompts=prompts,
-        user_id=user_id,
-        dataset_dao=dataset_dao,
-        stored_prompt_dao=stored_prompt_dao,
-    )
+    try:
+        prompt_ids = get_prompt_ids(
+            dataset=dataset,
+            prompts=prompts,
+            user_id=user_id,
+            dataset_dao=dataset_dao,
+            stored_prompt_dao=stored_prompt_dao,
+        )
+    except HTTPException:
+        if ignore_missing:
+            return {}
+        raise HTTPException(
+            status_code=404,
+            detail="The dataset and/or prompts requesting evaluations for do not exist.",
+        )
 
     if return_rationale and not per_prompt:
         raise HTTPException(
@@ -619,11 +631,15 @@ def get_evaluations(
     if evaluator:
         raw_evaluators = evaluator_dao.filter(name=evaluator)
         if not raw_evaluators or raw_evaluators[0].user_id not in [None, user_id]:
+            if ignore_missing:
+                return {}
             raise evaluator_not_found(evaluator)
 
     if endpoint:
         invalid_endpoints = find_invalid_endpoints([endpoint])
         if invalid_endpoints:
+            if ignore_missing:
+                return {}
             raise HTTPException(
                 status_code=400,
                 detail=f"Could not find endpoint: {'.'.join(invalid_endpoints)}",
@@ -864,7 +880,9 @@ def upload_judgements(
         raise e
 
     for judge_model, judgement, score in zip(
-        judge_model_list, judgement_list, judgement_scores
+        judge_model_list,
+        judgement_list,
+        judgement_scores,
     ):
         if judge_model in cache_hits:
             continue
