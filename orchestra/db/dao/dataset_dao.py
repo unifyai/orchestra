@@ -122,7 +122,7 @@ class DatasetDAO:
                 "prompt_kwargs": json.loads(stored_prompt.prompt_kwargs),
                 "num_tokens": stored_prompt.num_tokens,
                 "timestamp": stored_prompt.timestamp,
-                }
+            }
             for extra_key, extra_value in stored_prompt.extra_fields.items():
                 prompt_data[extra_key] = extra_value
 
@@ -151,7 +151,7 @@ class DatasetDAO:
         system_msg = json.dumps(system_msg)
         messages = json.dumps(messages)
         prompt_kwargs = json.dumps(prompt_kwargs)
-        
+
         # add extra fields
         extra_fields = {}
         for field, value in prompt_data.items():

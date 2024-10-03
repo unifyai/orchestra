@@ -74,7 +74,6 @@ def create_judge_prompt(data, eval_config):
     data["prompt"].pop("user_id")
     data["prompt"].pop("id")
 
-
     prompt_parser_formatter = get_format_kwargs("prompt_parser", data, eval_config)
     response_parser_formatter = get_format_kwargs("response_parser", data, eval_config)
 
