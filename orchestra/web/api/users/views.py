@@ -206,6 +206,20 @@ async def reset_user_quotas(
     return "User quotas reset successfully!"
 
 
+@admin_router.put("/auth-user/quotas/reset/all")
+async def reset_user_quotas(
+    auth_user_dao: AuthUserDAO = Depends(),
+):
+    users = auth_user_dao.filter()
+    for user in users:
+        auth_user_dao.update(
+            id=user[0].id,
+            queries_enabled=True,
+            evaluations_enabled=True,
+        )
+    return f"User quotas reset successfully for {len(users)} users"
+
+
 @admin_router.get("/api_key/list")
 async def list_user_api_keys(
     user_id: str,
