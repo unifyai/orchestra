@@ -167,8 +167,11 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         raise HTTPException(400, detail=f"Incorrect data format")
 
     result = _add_data(
-        dataset_dao=dataset_dao, user_id=user_id, dataset_name=name,
-        data=data_to_upload, ignore_duplicates=False
+        dataset_dao=dataset_dao,
+        user_id=user_id,
+        dataset_name=name,
+        data=data_to_upload,
+        ignore_duplicates=False,
     )
     if "info" in result:
         return {"info": "Dataset uploaded successfully!"}
@@ -354,7 +357,8 @@ def rename_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     existing_dataset = dataset_dao.filter(user_id=user_id, name=name)
     if not existing_dataset:
         raise HTTPException(
-            status_code=400, detail=f"You don't have a dataset named {name}"
+            status_code=400,
+            detail=f"You don't have a dataset named {name}",
         )
 
     if name == new_name:
@@ -363,7 +367,8 @@ def rename_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     clash_name = dataset_dao.filter(user_id=user_id, name=new_name)
     if clash_name:
         raise HTTPException(
-            status_code=400, detail=f"You already have a dataset named {new_name}."
+            status_code=400,
+            detail=f"You already have a dataset named {new_name}.",
         )
 
     dataset_dao.rename(
@@ -446,7 +451,7 @@ def _add_data(
     user_id: str,
     dataset_name: str,
     data: Union[dict, list[dict]],
-    ignore_duplicates: bool
+    ignore_duplicates: bool,
 ):
     if isinstance(data, dict):
         data = [data]
@@ -463,14 +468,17 @@ def _add_data(
         except:
             failures[ix] = "An unknown error occured"
         result = dataset_dao.add_prompt_to_dataset(
-            user_id=user_id, dataset_name=dataset_name, prompt_data=datum
+            user_id=user_id,
+            dataset_name=dataset_name,
+            prompt_data=datum,
         )
         if not result:
             successes.append(ix)
             continue
         if isinstance(result, dict) and "error" in result:
-            if ignore_duplicates and result["error"] == ("This prompt is already "
-                                                         "in the dataset"):
+            if ignore_duplicates and result["error"] == (
+                "This prompt is already " "in the dataset"
+            ):
                 continue
 
             failures[ix] = result["error"]
@@ -555,9 +563,9 @@ def add_data(
     ),
     ignore_duplicates: bool = Body(
         description="Whether to ignore attempted duplicate entries. If False, an "
-                    "exception is raised when attempting to add duplicate data.",
+        "exception is raised when attempting to add duplicate data.",
         json_schema_extra={"example": False},
-        default=True
+        default=True,
     ),
     dataset_dao: DatasetDAO = Depends(),
 ):
@@ -565,6 +573,9 @@ def add_data(
     user_id = request_fastapi.state.user_id
 
     return _add_data(
-        dataset_dao=dataset_dao, user_id=user_id, dataset_name=name, data=data,
-        ignore_duplicates=ignore_duplicates
+        dataset_dao=dataset_dao,
+        user_id=user_id,
+        dataset_name=name,
+        data=data,
+        ignore_duplicates=ignore_duplicates,
     )
