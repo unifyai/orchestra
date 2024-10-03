@@ -522,6 +522,7 @@ class Evaluator(Base):
         nullable=False,
         default="{\"assistant_message\": \"['message']['content']\"}",
     )
+    extra_parser = Column(String())
     class_config = Column(String(), nullable=False)
     judge_models = Column(String(), nullable=False)
     client_side = Column(Boolean(), nullable=False)
