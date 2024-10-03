@@ -15,7 +15,7 @@ This repo includes the code for orchestra, the server in charge of the model hub
 - TODO: Tests (unit, integration, load testing, manual)
 - TODO: Adding model, providers, and model endpoints
 - TODO: [Telemetry](./Telemetry.md)
-- TODO: GCP services in use and flows
+- [Google Cloud](./GCP.md): GCP services being used.
 - [CI/CD](./.github/workflows/README.md)
 - [Pub/Sub](./PubSub.md): How to set up and interact with Pub/Sub message queues.
 
