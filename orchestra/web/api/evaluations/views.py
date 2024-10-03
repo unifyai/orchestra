@@ -526,10 +526,11 @@ def get_evaluations(
         description="Specify the prompts to get evaluations for. Pass a string of comma separated integers. Must pass exactly one of `dataset`, `prompts`.",
         example="34,89,127",
     ),
-    endpoint: str = Query(
+    agent: str = Query(
         default=None,
-        description="The endpoint to fetch the evaluation for. "
-        "If `None`, returns all available evaluations for the dataset and evaluator pair.",
+        description="The agent to fetch the evaluation for, can be an endpoint string or "
+        "an arbitrarily named client-side agent. If `None`, returns all available "
+        "evaluations for the dataset and evaluator pair.",
         example="gpt-4o-mini@openai",
     ),
     evaluator: str = Query(
@@ -616,13 +617,13 @@ def get_evaluations(
             detail="If return_response=True, need to also have per_prompt=True.",
         )
     if per_prompt:
-        if not endpoint or not evaluator:
+        if not agent or not evaluator:
             raise HTTPException(
                 status_code=404,
                 detail="If per_prompt=True, need to specify both endpoint and evaluator",
             )
     if sub_scorers:
-        if per_prompt or not evaluator or not endpoint:
+        if per_prompt or not evaluator or not agent:
             raise HTTPException(
                 status_code=404,
                 detail="If sub_scorers=True, need to specify both endpoint and evaluator, and per_prompt must be false.",
@@ -635,8 +636,8 @@ def get_evaluations(
                 return {}
             raise evaluator_not_found(evaluator)
 
-    if endpoint:
-        invalid_endpoints = find_invalid_endpoints([endpoint])
+    if agent:
+        invalid_endpoints = find_invalid_endpoints([agent])
         if invalid_endpoints:
             if ignore_missing:
                 return {}
@@ -651,7 +652,7 @@ def get_evaluations(
         num_judges = len(json.loads(raw_evaluators[0].judge_models))
         rationales = get_rationales(
             prompt_ids=prompt_ids,
-            endpoint=endpoint,
+            endpoint=agent,
             evaluator=evaluator,
             evaluation_dao=evaluation_dao,
             per_prompt=per_prompt,
@@ -660,7 +661,7 @@ def get_evaluations(
             sub_scorers=sub_scorers,
             num_judges=num_judges,
         )
-        ret = {evaluator: {endpoint: rationales}}
+        ret = {evaluator: {agent: rationales}}
         return ret
     else:
         # TODO: This doesn't account for prompt
@@ -694,7 +695,7 @@ def get_evaluations(
     for er in eval_results:
         if evaluator is not None and er.evaluator != evaluator:
             continue
-        if endpoint is not None and er.endpoint_str != endpoint:
+        if agent is not None and er.endpoint_str != agent:
             continue
 
         if er.evaluator not in ret:  # check evaluator_name
