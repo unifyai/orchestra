@@ -479,6 +479,7 @@ async def test_dataset_extra_fields_added(client: AsyncClient):
     dataset = dataset.json()
     assert "topic" in dataset[0]
 
+
 @pytest.mark.xfail
 @pytest.mark.anyio
 async def test_extra_fields_repeated(client: AsyncClient, dbsession):
@@ -511,6 +512,7 @@ async def test_extra_fields_repeated(client: AsyncClient, dbsession):
         new_mitochondria_prompt_with_id,
     ]
     _helper_check_downloads_match(expected, actual)
+
 
 async def test_add_prompt_invalid_pydantic(client: AsyncClient, dbsession):
     await _seed_datasets_db(dbsession)
