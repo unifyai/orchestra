@@ -10,6 +10,12 @@ class EvaluatorConfig(BaseModel):
         "the evaluation.",
         json_schema_extra={"example": "eval1"},
     )
+    description: Optional[str]= Field(
+        description="Description for the purpose of this evaluator. "
+                    "In the case of Evaluators defined in the Python client, this is "
+                    "the docstring by default, if it exists.",
+        json_schema_extra={"example": "The clarity of the generated summary"},
+    )
     judge_prompt: Optional[Union[str, unify.Prompt]] = Field(
         default=None,
         description="An optional custom system prompt to provide specific instructions "

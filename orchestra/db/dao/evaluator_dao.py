@@ -16,6 +16,7 @@ class EvaluatorDAO:
         self,
         user_id: str,
         name: str,
+        description: str,
         judge_prompt: str,
         prompt_parser: str,
         response_parser: str,
@@ -29,6 +30,7 @@ class EvaluatorDAO:
                 Evaluator(
                     user_id=user_id,
                     name=name,
+                    description=description,
                     judge_prompt=judge_prompt,
                     prompt_parser=prompt_parser,
                     response_parser=response_parser,

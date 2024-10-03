@@ -152,6 +152,7 @@ Be as objective as possible."""
     result = evaluator_dao.create(
         user_id=user_id,
         name=request.name,
+        description=request.description,
         judge_prompt=judge_prompt.model_dump_json(),
         prompt_parser=prompt_parser,
         response_parser=response_parser,

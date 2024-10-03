@@ -511,6 +511,7 @@ class Evaluator(Base):
     id = Column(Integer(), primary_key=True)
     user_id = Column(String(), ForeignKey("users.id"), index=True)
     name = Column(String(), nullable=False)
+    description = Column(String())
     judge_prompt = Column(String(), nullable=False)
     prompt_parser = Column(
         String(),
