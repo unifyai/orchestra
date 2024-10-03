@@ -96,6 +96,7 @@ mitochondria_prompt = {
     "prompt": {
         "messages": [{"role": "user", "content": "What is the powerhouse of the cell?"}]
     },
+    "topic": "Biology",
 }
 mitochondria_prompt_with_id = {"id": 8, "num_tokens": 8, **mitochondria_prompt}
 
@@ -475,8 +476,42 @@ async def test_dataset_extra_fields_added(client: AsyncClient):
     assert response.status_code == 200, response.json()
 
     dataset = await client.get("/v0/dataset", headers=headers, params={"name": name})
-    dataset = json.loads(dataset.text)
-    assert "ref_answer" in dataset[0]
+    dataset = dataset.json()
+    assert "topic" in dataset[0]
+
+
+@pytest.mark.xfail
+@pytest.mark.anyio
+async def test_extra_fields_repeated(client: AsyncClient, dbsession):
+    await _seed_datasets_db(dbsession)
+    name = "test_upload_dataset"
+
+    new_prompt = mitochondria_prompt
+    data = {"name": name, "data": new_prompt}
+    response = await client.post("/v0/dataset/data", headers=headers, json=data)
+    assert response.status_code == 200, response.json()
+    assert response.json() == {"info": "Data added successfully"}
+
+    # add again, with a new extra_field
+    new_prompt_2 = mitochondria_prompt.copy()
+    new_prompt_2["topic"] = "biochemistry"
+    new_prompt_2["difficulty"] = "medium"
+
+    data = {"name": name, "data": new_prompt_2}
+    response = await client.post("/v0/dataset/data", headers=headers, json=data)
+    assert response.status_code == 200, response.json()
+    assert response.json() == {"info": "Data added successfully"}
+    prompt = actual[3]
+
+    new_mitochondria_prompt_with_id = {"id": 8, "num_tokens": 8, **new_prompt_2}
+
+    actual = await _download_dataset(client, name)
+    expected = [
+        madrid_prompt_with_id,
+        squareroot_prompt_with_id,
+        new_mitochondria_prompt_with_id,
+    ]
+    _helper_check_downloads_match(expected, actual)
 
 
 async def test_add_prompt_invalid_pydantic(client: AsyncClient, dbsession):
