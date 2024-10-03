@@ -405,7 +405,7 @@ async def test_atomic_prompt_add_duplicate(client: AsyncClient, dbsession):
     name = "test_upload_dataset"
 
     new_prompt = madrid_prompt
-    data = {"name": name, "data": new_prompt}
+    data = {"name": name, "data": new_prompt, "ignore_duplicates": False}
     response = await client.post("/v0/dataset/data", headers=headers, json=data)
     assert response.status_code == 400, response.json()
     assert response.json() == {
@@ -451,7 +451,7 @@ async def test_atomic_prompt_add_multiple_with_some_duplicates(
         madrid_prompt,
         squareroot_prompt,
     ]
-    data = {"name": name, "data": new_prompts}
+    data = {"name": name, "data": new_prompts, "ignore_duplicates": False}
     response = await client.post("/v0/dataset/data", headers=headers, json=data)
     assert response.status_code == 400, response.json()
     assert response.json() == {
