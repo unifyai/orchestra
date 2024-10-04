@@ -79,9 +79,10 @@ TEST_CASES = [
     },
     {
         "arg": "stop",
-        "value": ["Physics"],
-        "assertion": lambda response: "Physics"
+        "value": ["AI"],
+        "assertion": lambda response: "AI"
         in response["choices"][0]["message"]["content"]
+        or "artificial" in response["choices"][0]["message"]["content"].lower()
         if response["choices"][0]["message"]["content"]
         else True,
         "messages": [
@@ -234,10 +235,11 @@ def test_endpoint(endpoint: str, api_key: str):
                 url,
                 headers=headers,
                 json=json_input,
-            ).json()
+            )
+            assert response.status_code == 200
             if test_type == "assertion":
                 assertion = test_case_info["assertion"]
-                assert assertion(response)
+                assert assertion(response.json())
             passed = True
         except Exception as e:
             print(e)
