@@ -671,7 +671,7 @@ def get_evaluations(
             num_judges=num_judges,
         )
         if "per_prompt" in rationales:
-            rationales["per_prompt"] = rationales["per_prompt"][offset: offset+limit]
+            rationales["per_prompt"] = rationales["per_prompt"][offset : offset + limit]
         ret = {evaluator: {endpoint: rationales}}
         return ret
     else:
@@ -749,7 +749,7 @@ def get_evaluations(
                     ret[_evaluator][endpoint_str]["ttft"] = float(ttft)
                     ret[_evaluator][endpoint_str]["input_cost"] = float(input_cost)
                     ret[_evaluator][endpoint_str]["output_cost"] = float(output_cost)
-    
+
     return ret
 
 

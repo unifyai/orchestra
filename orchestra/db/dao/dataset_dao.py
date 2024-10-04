@@ -116,13 +116,15 @@ class DatasetDAO:
             select(StoredPrompt, DatasetPrompt)
             .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
             .where(DatasetPrompt.dataset_id == dataset_id)
-            .order_by(StoredPrompt.id)  # Add an order_by clause for consistent pagination
+            .order_by(
+                StoredPrompt.id
+            )  # Add an order_by clause for consistent pagination
         )
         if limit is not None:
             query = query.limit(limit)
         if offset is not None:
             query = query.offset(offset)
-        
+
         result = self.session.execute(query).fetchall()
 
         dataset_prompts = []
