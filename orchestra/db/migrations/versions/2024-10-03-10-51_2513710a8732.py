@@ -27,7 +27,7 @@ def upgrade() -> None:
         sa.Column(
             "extra_fields",
             postgresql.JSONB(astext_type=sa.Text()),
-            server_default={},
+            default=dict,
             nullable=False,
         ),
     )
