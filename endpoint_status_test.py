@@ -261,9 +261,9 @@ def write_results():
         results = json.load(f)
     endpoints = list(results.keys())
     columns = list(results[endpoints[0]].keys())
-    with open("status_page.mdx", "w") as f:
+    with open("endpoint_status.mdx", "w") as f:
         f.write(
-            "---\n" "title: 'Status Page'\n" "---\n\n",
+            "---\n" "title: 'Endpoint Status'\n" "---\n\n",
         )
         f.write("| Endpoint |")
         lengths = [8]
@@ -289,6 +289,6 @@ if __name__ == "__main__":
     api_key = os.environ.get("API_KEY")
     url = f"{BASE_URL}/endpoints"
     headers = {"Authorization": f"Bearer {api_key}"}
-    endpoints = requests.request("GET", url, headers=headers).json()
+    endpoints = sorted(requests.request("GET", url, headers=headers).json())
     test_all_endpoints(endpoints, api_key)
     write_results()
