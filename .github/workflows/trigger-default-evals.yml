@@ -21,4 +21,4 @@ jobs:
       run: |
         export API_KEY=${{ secrets.USER_API_KEY }}
         python3 -m pip install requests
-        python3 test_all_endpoints.py
+        python3 trigger_default_evals.py
