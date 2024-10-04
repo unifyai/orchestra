@@ -28,7 +28,7 @@ def upgrade() -> None:
             "extra_fields",
             postgresql.JSONB(astext_type=sa.Text()),
             default=dict,
-            nullable=False,
+            nullable=True,
         ),
     )
 
