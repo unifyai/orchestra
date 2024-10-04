@@ -259,7 +259,7 @@ def test_all_endpoints(endpoints: List[str], api_key: str) -> Dict[str, bool]:
 def write_results():
     with open("results.json") as f:
         results = json.load(f)
-    endpoints = list(results.keys())
+    endpoints = sorted(list(results.keys()))
     columns = list(results[endpoints[0]].keys())
     with open("endpoint_status.mdx", "w") as f:
         f.write(
