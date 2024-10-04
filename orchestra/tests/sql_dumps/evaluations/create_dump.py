@@ -135,17 +135,17 @@ async def test_create_data_trigger_eval(
                 "role": "user",
                 "content": """
     <user_prompt>
-    {user_prompt}
+    {user_message}
     </user_prompt>
 
-    <assistant_response>
-    {response}
-    </assistant_respose>
+    <ref_ans>
+    {ref_ans}
+    </ref_ans>
 
-    follow these rating rules:
-    <rating rules>
-    {class_config}
-    </rating rules>""",
+    <assistant_response>
+    {assistant_response}
+    </assistant_respose>
+    """,
             },
         ],
         "temperature": 0.7,
@@ -156,6 +156,10 @@ async def test_create_data_trigger_eval(
     params = {
         "name": eval_name,
         "judge_prompt": judge_prompt,
+        "prompt_parser": {
+            "user_message": ["messages", -1, "content"],
+            "ref_ans": ["extra_fields", "ref_answer"],
+        },
         "judge_models": judge_model,
     }
     response = await client.post(url, json=params, headers=HEADERS)

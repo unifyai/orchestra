@@ -14,7 +14,6 @@ from orchestra.db.models.orchestra_models import (
     Dataset,
     DatasetPrompt,
     StoredPrompt,
-    StoredPromptExtraField,
 )
 
 
@@ -105,13 +104,27 @@ class DatasetDAO:
             dataset_prompts.append(prompt_data)
         return sorted(dataset_prompts, key=lambda p: p["id"])
 
-    def fetch_dataset(self, user_id: str, name: str) -> list[dict]:
+    def fetch_dataset(
+        self,
+        user_id: str,
+        name: str,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> list[dict]:
         dataset_id = self.get_dataset_id(user_id, name)[0]
         query = (
             select(StoredPrompt, DatasetPrompt)
             .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
             .where(DatasetPrompt.dataset_id == dataset_id)
+            .order_by(
+                StoredPrompt.id
+            )  # Add an order_by clause for consistent pagination
         )
+        if limit is not None:
+            query = query.limit(limit)
+        if offset is not None:
+            query = query.offset(offset)
+
         result = self.session.execute(query).fetchall()
 
         dataset_prompts = []
@@ -124,15 +137,8 @@ class DatasetDAO:
                 "num_tokens": stored_prompt.num_tokens,
                 "timestamp": stored_prompt.timestamp,
             }
-            # Query to get extra fields for this prompt
-            extra_fields_query = select(
-                StoredPromptExtraField.field, StoredPromptExtraField.value
-            ).where(
-                StoredPromptExtraField.prompt_id == stored_prompt.id,
-            )
-            extra_fields = self.session.execute(extra_fields_query).fetchall()
-            for extra_field in extra_fields:
-                prompt_data[extra_field.field] = extra_field.value
+            for extra_key, extra_value in stored_prompt.extra_fields.items():
+                prompt_data[extra_key] = extra_value
 
             dataset_prompts.append(prompt_data)
 
@@ -156,10 +162,16 @@ class DatasetDAO:
             k: v for k, v in prompt.items() if k not in ["system_msg", "messages"]
         }
         num_tokens = prompt.get("num_tokens", count_tokens(messages))
-
         system_msg = json.dumps(system_msg)
         messages = json.dumps(messages)
         prompt_kwargs = json.dumps(prompt_kwargs)
+
+        # add extra fields
+        extra_fields = {}
+        for field, value in prompt_data.items():
+            if field in ["prompt", "num_tokens", "timestamp"]:
+                continue
+            extra_fields[field] = value
 
         existing_prompt = (
             self.session.query(StoredPrompt)
@@ -167,6 +179,7 @@ class DatasetDAO:
             .where(StoredPrompt.system_msg == system_msg)
             .where(StoredPrompt.messages == messages)
             .where(StoredPrompt.prompt_kwargs == prompt_kwargs)
+            .where(StoredPrompt.extra_fields == extra_fields)
         ).first()
 
         if existing_prompt:
@@ -177,7 +190,7 @@ class DatasetDAO:
                 system_msg=system_msg,  # TODO: This is broken I think
                 messages=messages,
                 prompt_kwargs=prompt_kwargs,
-                ref_answer=None,
+                extra_fields=extra_fields,
                 num_tokens=num_tokens,
                 timestamp=prompt.get("timestamp", datetime.utcnow()),
             )
@@ -189,17 +202,6 @@ class DatasetDAO:
                 return {
                     "error": "An error occurred while adding the prompt. Please check the format is correct, and try again."
                 }
-            # add extra fields
-            for field, value in prompt_data.items():
-                if field in ["prompt", "num_tokens", "timestamp"]:
-                    continue
-                extra_field = StoredPromptExtraField(
-                    prompt_id=prompt_id,
-                    field=field,
-                    value=value,
-                )
-                self.session.add(extra_field)
-                self.session.flush()
 
         existing_dataset_prompt = (
             self.session.query(DatasetPrompt)
