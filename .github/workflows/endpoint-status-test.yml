@@ -36,7 +36,7 @@ jobs:
         export API_KEY=${{ secrets.USER_API_KEY }}
         python3 -m pip install requests
         python3 endpoint_status_test.py
-        mv status_page.mdx ../unify-docs/status_page/status_page.mdx
+        mv endpoint_status.mdx ../unify-docs/endpoint_status/endpoint_status.mdx
         cd ..
 
     - name: Set up SSH key
