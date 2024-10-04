@@ -8,7 +8,7 @@ def get_evaluated_endpoints(api_key: str):
     url = "https://api.unify.ai/v0/evaluation?dataset=Open+Hermes&evaluator=default_evaluator"
     headers = {"Authorization": f"Bearer {api_key}"}
     response = requests.request("GET", url, headers=headers)
-    return response.json()
+    return list(response.json()["default_evaluator"].keys())
 
 
 def get_all_endpoints(api_key: str):
