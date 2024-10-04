@@ -19,7 +19,7 @@ class StoredPromptDAO:
         system_msg: Optional[str],
         messages: str,
         prompt_kwargs: str,
-        ref_answer: Optional[str],
+        extra_fields: dict,
         num_tokens: int,
         timestamp: datetime.datetime,
     ) -> None:
@@ -29,7 +29,7 @@ class StoredPromptDAO:
                 system_msg=system_msg,
                 messages=messages,
                 prompt_kwargs=prompt_kwargs,
-                ref_answer=ref_answer,
+                extra_fields=extra_fields,
                 num_tokens=num_tokens,
                 timestamp=timestamp,
             ),
@@ -51,7 +51,6 @@ class StoredPromptDAO:
             query = query.where(StoredPrompt.system_msg == system_msg)
         if messages:
             query = query.where(StoredPrompt.messages == messages)
-        query = query.options(joinedload(StoredPrompt.extra_fields))
         rows = self.session.execute(query)
         return list(rows.scalars().unique().fetchall())
 

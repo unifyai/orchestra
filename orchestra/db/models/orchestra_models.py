@@ -14,7 +14,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.orm import relationship
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 
 from orchestra.db.base import Base
 
@@ -378,20 +378,19 @@ class StoredPrompt(Base):
     system_msg = Column(String(), index=True)
     messages = Column(String(), nullable=False)
     prompt_kwargs = Column(String(), nullable=False)
-    ref_answer = Column(String())
+    extra_fields = Column(JSONB, default={}, nullable=False)
     num_tokens = Column(Integer(), nullable=False)
     timestamp = Column(TIMESTAMP, nullable=False)
     __table_args__ = (
         Index(
             "uq_userid_prompt",
             func.hash_record_extended(
-                func.row(user_id, system_msg, messages, prompt_kwargs),
+                func.row(user_id, system_msg, messages, prompt_kwargs, extra_fields),
                 0,
             ),
             unique=True,
         ),
     )
-    extra_fields = relationship("StoredPromptExtraField")
 
 
 class DefaultPrompt(Base):
@@ -423,19 +422,6 @@ class StoredPromptVariation(Base):
         index=True,
         nullable=False,
     )
-
-
-# TODO: Add StoredPromptExtraField
-# id, prompt_id, field, value
-class StoredPromptExtraField(Base):
-    """Model class for the prompt extra field table."""
-
-    __tablename__ = "stored_prompt_extra_field"
-
-    id = Column(Integer(), primary_key=True)
-    prompt_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
-    field = Column(String(), nullable=False)
-    value = Column(String(), nullable=False)
 
 
 class StoredPromptResponse(Base):
