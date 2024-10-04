@@ -217,6 +217,16 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
     name: str = Query(description="Name of the dataset.", example="dataset1"),
+    limit: int = Query(
+        100,
+        description="The number of entries to return.",
+        example="100",
+    ),
+    offset: int = Query(
+        0,
+        description="The number of entries to skip before starting to return results.",
+        example="0",
+    ),
     dataset_dao: DatasetDAO = Depends(),
 ):
     """
@@ -224,9 +234,9 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     """
     if "../" in name or name[0] == "/":
         raise invalid_dataset_name
+
     entries = dataset_dao.fetch_dataset(
-        user_id=request_fastapi.state.user_id,
-        name=name,
+        user_id=request_fastapi.state.user_id, name=name, limit=limit, offset=offset
     )
     if not entries:
         raise dataset_does_not_exist(name)
