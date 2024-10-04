@@ -42,16 +42,15 @@ def get_format_kwargs(parser, data, eval_config):
     for key, val in json.loads(eval_config[parser]).items():
         format_value = ""
         item = data["prompt" if parser == "prompt_parser" else "model_response"]
-        idx_chain = val[1:-1].split("][")
+        idx_chain = val
         for idx in idx_chain:
-            if idx.lstrip("-").isdigit():
-                idx = int(idx)
+            if isinstance(idx, int):
                 if isinstance(item, list):
                     if len(item) < idx:
                         break
             else:
                 # str idx
-                idx = idx[1:-1]
+                idx = idx
                 if isinstance(item, dict):
                     if idx not in item:
                         break
