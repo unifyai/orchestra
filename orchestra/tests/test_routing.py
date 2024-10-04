@@ -122,7 +122,7 @@ async def test_rename_router(client: AsyncClient, dbsession):
 
 #####
 
-
+# I don't think this test "works" on the CI (probably for pubsub permissions), but it works locally.
 async def test_train_router_e2e(client: AsyncClient, monkeypatch, tmp_path, dbsession):
     # mocking pubsub
     def mock_send_to_train_server(action, **data):
