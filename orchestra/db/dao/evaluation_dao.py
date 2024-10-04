@@ -1,9 +1,9 @@
-from collections import defaultdict
 import json
+from collections import defaultdict
 from typing import List, Optional
 
 from fastapi import Depends
-from sqlalchemy import Float, cast, delete, join, select, and_
+from sqlalchemy import Float, and_, cast, delete, join, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func, literal
 
@@ -13,9 +13,9 @@ from orchestra.db.models.orchestra_models import (
     DatasetPrompt,
     Evaluation,
     Evaluator,
+    Judgement,
     StoredPrompt,
     StoredPromptResponse,
-    Judgement,
 )
 
 
@@ -203,7 +203,7 @@ class EvaluationDAO:
                     result_dict[prompt_id]["evaluation"] = []
 
             if rationales:
-                evaluation_entry = {"endpoint": row.judge_endpoint_str}
+                evaluation_entry = {"agent": row.judge_endpoint_str}
                 evaluation_entry["rationale"] = row.judgement
                 evaluation_entry["rationale_score"] = float(row.judgement_score)
                 result_dict[prompt_id]["evaluation"].append(evaluation_entry)

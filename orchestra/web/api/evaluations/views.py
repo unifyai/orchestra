@@ -220,10 +220,11 @@ def trigger_evaluation(
         description="Specify the prompts to evaluate. Pass a string of comma separated integers. Must pass exactly one of `dataset`, `prompts`.",
         example="34,89,127",
     ),
-    endpoint: str = Query(
+    agent: str = Query(
         description=(
-            "Name of the endpoint to evaluate."
-            " Endpoints must be specified using the `model@provider` format."
+            "The agent to fetch the evaluation for, can be an endpoint string or "
+            "an arbitrarily named client-side agent. If `None`, returns all available "
+            "evaluations for the dataset and evaluator pair."
         ),
         example="gpt-4o-mini@openai",
     ),
@@ -258,7 +259,7 @@ def trigger_evaluation(
     api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
 
     # Check that the endpoints are valid
-    invalid_endpoints = find_invalid_endpoints([endpoint])
+    invalid_endpoints = find_invalid_endpoints([agent])
     if invalid_endpoints:
         raise invalid_training_endpoints(invalid_endpoints)
 
@@ -363,7 +364,7 @@ def trigger_evaluation(
             stored_prompt_response_dao.create(
                 prompt_id=prompt_id,
                 prompt_variation_id=None,
-                endpoint_str=endpoint,
+                endpoint_str=agent,
                 response=l.get("response", ""),
                 num_tokens=num_tokens,
             )
@@ -371,7 +372,7 @@ def trigger_evaluation(
             raw_ids = stored_prompt_response_dao.filter(
                 prompt_id=prompt_id,
                 prompt_variation_id=None,
-                endpoint_str=endpoint,
+                endpoint_str=agent,
             )
             response_id = raw_ids[0].id
             judge_model = "client_side"
@@ -388,7 +389,7 @@ def trigger_evaluation(
                 prompt_id=prompt_id,
                 prompt_variation_id=None,
                 evaluator_id=evaluator_id,
-                endpoint_str=endpoint,
+                endpoint_str=agent,
                 score=score,
             )
         return {"info": "Evaluation uploaded!"}
@@ -400,7 +401,7 @@ def trigger_evaluation(
         user_email=user_email,
         api_key=api_key,
         prompts=prompt_ids,
-        endpoint=endpoint,
+        endpoint=agent,
         evaluator=evaluator,
         evaluator_id=evaluator_id,
         default_prompt=default_prompt_dict,
@@ -526,11 +527,11 @@ def get_evaluations(
         description="Specify the prompts to get evaluations for. Pass a string of comma separated integers. Must pass exactly one of `dataset`, `prompts`.",
         example="34,89,127",
     ),
-    endpoint: str = Query(
+    agent: str = Query(
         default=None,
-        description="The endpoint to fetch the evaluation for. "
-        "If `None`, returns all available evaluations for the dataset and evaluator pair.",
-        example="gpt-4o-mini@openai",
+        description="The agent to fetch the evaluation for, can be an endpoint string or "
+        "an arbitrarily named client-side agent. If `None`, returns all available "
+        "evaluations for the dataset and evaluator pair.",
     ),
     evaluator: str = Query(
         default=None,
@@ -598,6 +599,7 @@ def get_evaluations(
     """
     # ToDo: implement the logic where the endpoint (required) is considered in the input
     user_id = request_fastapi.state.user_id
+    # breakpoint()
 
     try:
         prompt_ids = get_prompt_ids(
@@ -626,13 +628,13 @@ def get_evaluations(
             detail="If return_response=True, need to also have per_prompt=True.",
         )
     if per_prompt:
-        if not endpoint or not evaluator:
+        if not agent or not evaluator:
             raise HTTPException(
                 status_code=404,
                 detail="If per_prompt=True, need to specify both endpoint and evaluator",
             )
     if sub_scorers:
-        if per_prompt or not evaluator or not endpoint:
+        if per_prompt or not evaluator or not agent:
             raise HTTPException(
                 status_code=404,
                 detail="If sub_scorers=True, need to specify both endpoint and evaluator, and per_prompt must be false.",
@@ -645,8 +647,8 @@ def get_evaluations(
                 return {}
             raise evaluator_not_found(evaluator)
 
-    if endpoint:
-        invalid_endpoints = find_invalid_endpoints([endpoint])
+    if agent:
+        invalid_endpoints = find_invalid_endpoints([agent])
         if invalid_endpoints:
             if ignore_missing:
                 return {}
@@ -661,7 +663,7 @@ def get_evaluations(
         num_judges = len(json.loads(raw_evaluators[0].judge_models))
         rationales = get_rationales(
             prompt_ids=prompt_ids,
-            endpoint=endpoint,
+            endpoint=agent,
             evaluator=evaluator,
             evaluation_dao=evaluation_dao,
             per_prompt=per_prompt,
@@ -672,7 +674,7 @@ def get_evaluations(
         )
         if "per_prompt" in rationales:
             rationales["per_prompt"] = rationales["per_prompt"][offset : offset + limit]
-        ret = {evaluator: {endpoint: rationales}}
+        ret = {evaluator: {agent: rationales}}
         return ret
     else:
         # TODO: This doesn't account for prompt
@@ -706,7 +708,7 @@ def get_evaluations(
     for er in eval_results:
         if evaluator is not None and er.evaluator != evaluator:
             continue
-        if endpoint is not None and er.endpoint_str != endpoint:
+        if agent is not None and er.endpoint_str != agent:
             continue
 
         if er.evaluator not in ret:  # check evaluator_name
@@ -778,10 +780,10 @@ def delete_evaluations(
         description="Specify the prompts to delete evaluations for. Pass a string of comma separated integers. Must pass exactly one of `dataset`, `prompts`.",
         example="34,89,127",
     ),
-    endpoint: str = Query(
+    agent: str = Query(
         default=None,
-        description="The endpoint to delete the evaluation for. "
-        "If `None`, deletes the evaluations for all endpoints.",
+        description="The agent to delete the evaluation for. "
+        "If `None`, deletes the evaluations for all agents.",
         example="gpt-4o-mini@openai",
     ),
     evaluator: str = Query(
@@ -814,8 +816,8 @@ def delete_evaluations(
     )
 
     # check endpoint and evaluator are valid
-    if endpoint:
-        invalid_endpoints = find_invalid_endpoints([endpoint])
+    if agent:
+        invalid_endpoints = find_invalid_endpoints([agent])
         if invalid_endpoints:
             raise HTTPException(
                 status_code=404,
@@ -829,7 +831,7 @@ def delete_evaluations(
     try:
         result = evaluation_dao.delete_evaluations(
             prompt_ids=prompt_ids,
-            endpoint=endpoint,
+            endpoint=agent,
             evaluator=evaluator,
         )
         return {
