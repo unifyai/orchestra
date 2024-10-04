@@ -130,8 +130,8 @@ async def test_trigger_eval(
         "name": eval_name,
         "judge_prompt": judge_prompt,
         "prompt_parser": {
-            "user_message": "['messages'][-1]['content']",
-            "ref_ans": "['extra_fields']['ref_answer']",
+            "user_message": ["messages", -1, "content"],
+            "ref_ans": ["extra_fields", "ref_answer"],
         },
         "judge_models": judge_model,
     }
@@ -271,8 +271,8 @@ async def test_trigger_eval_duplicate(
         "name": eval_name,
         "judge_prompt": judge_prompt,
         "prompt_parser": {
-            "user_message": "['messages'][-1]['content']",
-            "ref_ans": "['extra_fields']['ref_answer']",
+            "user_message": ["messages", -1, "content"],
+            "ref_ans": ["extra_fields", "ref_answer"],
         },
         "judge_models": judge_model,
     }

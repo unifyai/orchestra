@@ -2,6 +2,7 @@
 Includes endpoints related to evaluators.
 """
 
+import copy
 import json
 
 import unify
@@ -205,7 +206,7 @@ def get_evaluator(
     ]
     if not evaluators:
         raise evaluator_not_found(name)
-    evaluator = evaluators[0]
+    evaluator = copy.deepcopy(evaluators[0])
     evaluator.prompt_parser = json.dumps(
         {
             k: [
