@@ -574,6 +574,16 @@ def get_evaluations(
         description="If `True`, then an empty dict is returned in cases where the dataset, agent or evaluator "
         "do not exist on the platform. If False, then an exception is raised if any of these do not exist.",
     ),
+    limit: int = Query(
+        100,
+        description="The number of entries to return, if returning lots of prompt data.",
+        example="100",
+    ),
+    offset: int = Query(
+        0,
+        description="The number of entries to skip before starting to return results.",
+        example="0",
+    ),
     dataset_dao: DatasetDAO = Depends(),
     evaluator_dao: EvaluatorDAO = Depends(),
     evaluation_dao: EvaluationDAO = Depends(),
@@ -660,6 +670,8 @@ def get_evaluations(
             sub_scorers=sub_scorers,
             num_judges=num_judges,
         )
+        if "per_prompt" in rationales:
+            rationales["per_prompt"] = rationales["per_prompt"][offset : offset + limit]
         ret = {evaluator: {endpoint: rationales}}
         return ret
     else:
