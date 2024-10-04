@@ -2151,13 +2151,13 @@ referencing = ">=0.31.0"
 
 [[package]]
 name = "litellm"
-version = "1.48.12"
+version = "1.48.14"
 description = "Library to easily interface with LLM API providers"
 optional = false
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 files = [
-    {file = "litellm-1.48.12-py3-none-any.whl", hash = "sha256:d3f246c3c87b3c26d9d41ad9937da36a5c7c263d9267bb9bbb8554cc85a1c22c"},
-    {file = "litellm-1.48.12.tar.gz", hash = "sha256:38d7f6cf828646532be694310004d8e543664f53054c4923a63e80f761c74c5f"},
+    {file = "litellm-1.48.14-py3-none-any.whl", hash = "sha256:d5f86cd7c06d6657151d09b032a1107ca57b9207d796e497a7e0ac001a8fbe6c"},
+    {file = "litellm-1.48.14.tar.gz", hash = "sha256:eed3e1b3b9de8784e88a71318f6ac1157aa15664e70c0936380d90b0c7ec6629"},
 ]
 
 [package.dependencies]
@@ -5084,4 +5084,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.9"
-content-hash = "dffa512f7e25a4992342f1e065843d1fb7cbd5b8436358e07cbc5466e4d26a8f"
+content-hash = "73887a48eed671ca8bb12a4d10deba667b29840794df1173668ce93cced7dd6e"
