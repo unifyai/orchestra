@@ -465,6 +465,20 @@ def _add_data(
     data: Union[dict, list[dict]],
     ignore_duplicates: bool,
 ) -> Dict[str, List[int]]:
+    if dataset_name != "all_data":
+        usr_datasets = \
+            [d.name for d in dataset_dao.filter() if d.user_id in [None, user_id]]
+        if "all_data" not in usr_datasets:
+            dataset_dao.create(user_id=user_id, name="all_data")
+        # ToDo: remove this code above once this default dataset is hardcoded
+        _add_data(
+            dataset_dao,
+            user_id,
+            "all_data",
+            data,
+            True
+        )
+
     if isinstance(data, dict):
         data = [data]
 
