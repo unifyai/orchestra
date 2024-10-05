@@ -1,5 +1,5 @@
 import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 from fastapi import Depends
 from sqlalchemy import select
@@ -34,6 +34,20 @@ class StoredPromptDAO:
                 timestamp=timestamp,
             ),
         )
+
+    def delete(
+        self,
+        id: int,
+        user_id: str,
+    ) -> Dict[str, str]:
+        prompt = (
+            self.session.query(StoredPrompt)
+            .filter_by(id=id, user_id=user_id)
+            .one()
+        )
+        self.session.delete(prompt)
+        self.session.commit()
+        return {"info": "Prompt deleted successfully"}
 
     def filter(  # noqa: WPS211, C901
         self,

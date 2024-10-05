@@ -138,6 +138,7 @@ async def test_upload_dataset(client: AsyncClient):
 
     response = await fetch_datasets(client)
     assert name in response.json()
+    assert "all_data" in response.json()
 
 
 @pytest.mark.anyio
@@ -212,6 +213,8 @@ async def test_list_datasets(client: AsyncClient):
     assert set(names) <= set(datasets)
     # No repeated elements
     assert len(datasets) == len(set(datasets))
+    # Includes all data
+    assert "all_data" in datasets
 
 
 @pytest.mark.anyio
@@ -400,6 +403,27 @@ async def test_atomic_prompt_delete_multiple(client: AsyncClient, dbsession):
     actual = await _download_dataset(client, name)
     expected = [
         shakespeare_prompt_with_id,
+    ]
+    _helper_check_downloads_match(expected, actual)
+
+
+@pytest.mark.anyio
+async def test_atomic_prompt_delete_from_all(client: AsyncClient, dbsession):
+    await _seed_datasets_db(dbsession)
+    name = "test_upload_dataset"
+    _id = 1
+
+    data = {"name": "all_data", "data_ids": _id}
+    response = await client.delete(
+        "/v0/dataset/data",
+        headers=headers,
+        params=data,
+    )
+    assert response.status_code == 200, response.json()
+
+    actual = await _download_dataset(client, name)
+    expected = [
+        squareroot_prompt_with_id,
     ]
     _helper_check_downloads_match(expected, actual)
 
