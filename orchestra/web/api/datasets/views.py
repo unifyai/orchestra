@@ -16,6 +16,7 @@ from fastapi import (
 from pydantic import ValidationError
 from unify import Prompt
 
+from orchestra.db.dao.stored_prompt_dao import StoredPromptDAO
 from orchestra.db.dao.dataset_dao import DatasetDAO
 from orchestra.db.dao.dataset_prompt_dao import DatasetPromptDAO
 from orchestra.web.api.utils.http_responses import (
@@ -445,18 +446,27 @@ def delete_data(
         example=["001", "002", "003"],
     ),
     dataset_dao: DatasetDAO = Depends(),
+    prompt_dao: StoredPromptDAO = Depends()
 ):
     if (isinstance(data_ids, list) and not data_ids) or data_ids == "":
         return {"info": "data_ids argument was empty. Nothing to delete."}
+    user_id = request_fastapi.state.user_id
+    names = [d.name for d in dataset_dao.filter(user_id=[None, user_id])] \
+        if name == "all_data" else [name]
     rets = list()
-    for datum_id in data_ids:
-        rets.append(
-            dataset_dao.remove_prompt_from_dataset(
-                user_id=request_fastapi.state.user_id,
-                dataset_name=name,
-                prompt_id=datum_id,
-            ),
-        )
+    for n in names:
+        for datum_id in data_ids:
+            if dataset_dao.contains_prompt(user_id, n, datum_id):
+                rets.append(
+                    dataset_dao.remove_prompt_from_dataset(
+                        user_id=request_fastapi.state.user_id,
+                        dataset_name=n,
+                        prompt_id=datum_id,
+                    ),
+                )
+    if name == "all_data":
+        rets += [prompt_dao.delete(int(did), request_fastapi.state.user_id)
+                 for did in data_ids]
     error_rets = [ret["error"] for ret in rets if "error" in ret]
     if error_rets:
         return {"error": "\n".join(error_rets)}

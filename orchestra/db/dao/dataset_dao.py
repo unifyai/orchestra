@@ -90,6 +90,16 @@ class DatasetDAO:
         except:
             return []
 
+    def contains_prompt(self, user_id: str, name: str, prompt_id: str) -> bool:
+        dataset_id = self.get_dataset_id(user_id, name)[0]
+        return bool(
+            (
+                self.session.query(DatasetPrompt)
+                .where(DatasetPrompt.dataset_id == dataset_id)
+                .where(DatasetPrompt.prompt_id == prompt_id)
+            ).first()
+        )
+
     def fetch_prompts_ids_in_dataset(self, user_id: str, name: str) -> list[dict]:
         dataset_id = self.get_dataset_id(user_id, name)[0]
         query = (
