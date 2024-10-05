@@ -325,7 +325,10 @@ async def test_atomic_prompt_add_single(client: AsyncClient, dbsession):
     data = {"name": name, "data": new_prompt}
     response = await client.post("/v0/dataset/data", headers=headers, json=data)
     assert response.status_code == 200, response.json()
-    assert response.json() == {"info": "Data added successfully"}
+    response_json = response.json()
+    assert isinstance(response_json, dict) and \
+           isinstance(response_json["already_present"], list) and \
+           isinstance(response_json["added"], list)
 
     actual = await _download_dataset(client, name)
     expected = [
@@ -490,7 +493,10 @@ async def test_extra_fields_repeated(client: AsyncClient, dbsession):
     data = {"name": name, "data": new_prompt}
     response = await client.post("/v0/dataset/data", headers=headers, json=data)
     assert response.status_code == 200, response.json()
-    assert response.json() == {"info": "Data added successfully"}
+    response_json = response.json()
+    assert isinstance(response_json, dict) and \
+           isinstance(response_json["already_present"], list) and \
+           isinstance(response_json["added"], list)
 
     # add again, with a new extra_field
     new_prompt_2 = mitochondria_prompt.copy()
@@ -500,8 +506,10 @@ async def test_extra_fields_repeated(client: AsyncClient, dbsession):
     data = {"name": name, "data": new_prompt_2}
     response = await client.post("/v0/dataset/data", headers=headers, json=data)
     assert response.status_code == 200, response.json()
-    assert response.json() == {"info": "Data added successfully"}
-    prompt = actual[3]
+    response_json = response.json()
+    assert isinstance(response_json, dict) and \
+           isinstance(response_json["already_present"], list) and \
+           isinstance(response_json["added"], list)
 
     new_mitochondria_prompt_with_id = {"id": 8, "num_tokens": 8, **new_prompt_2}
 
