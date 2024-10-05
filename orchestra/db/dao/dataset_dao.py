@@ -187,7 +187,8 @@ class DatasetDAO:
                 prompt_id = new_prompt.id
             except:
                 return {
-                    "error": "An error occurred while adding the prompt. Please check the format is correct, and try again."
+                    "error": "An error occurred while adding the prompt. Please check the format is correct, and try again.",
+                    "prompt_id": new_prompt.id
                 }
             # add extra fields
             for field, value in prompt_data.items():
@@ -207,7 +208,10 @@ class DatasetDAO:
             .where(DatasetPrompt.prompt_id == prompt_id)
         ).first()
         if existing_dataset_prompt:
-            return {"error": "This prompt is already in the dataset"}
+            return {
+                "error": "This prompt is already in the dataset",
+                "prompt_id": prompt_id
+            }
 
         dataset_prompt = DatasetPrompt(dataset_id=dataset_id, prompt_id=prompt_id)
         try:
@@ -216,7 +220,8 @@ class DatasetDAO:
             return prompt_id
         except:
             return {
-                "error": "An error occurred while adding the prompt. Please check the format is correct, and try again."
+                "error": "An error occurred while adding the prompt. Please check the format is correct, and try again.",
+                "prompt_id": prompt_id
             }
 
     def remove_prompt_from_dataset(self, user_id, dataset_name, prompt_id):

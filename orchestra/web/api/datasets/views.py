@@ -122,7 +122,7 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         ),
     ],
     dataset_dao: DatasetDAO = Depends(),
-) -> List[int]:
+) -> Dict[str, List[int]]:
     """
     Uploads a custom dataset to your account.
 
@@ -454,11 +454,12 @@ def _add_data(
     dataset_name: str,
     data: Union[dict, list[dict]],
     ignore_duplicates: bool,
-) -> List[int]:
+) -> Dict[str, List[int]]:
     if isinstance(data, dict):
         data = [data]
 
     prompt_ids_added = []
+    prompt_ids_already_present = []
     failures = {}
     for ix, datum in enumerate(data):
         # validate the pydantic
@@ -481,14 +482,17 @@ def _add_data(
             if ignore_duplicates and prompt_id_or_error["error"] == (
                 "This prompt is already in the dataset"
             ):
-                continue
-
-            failures[ix] = prompt_id_or_error["error"]
+                prompt_ids_already_present.append(prompt_id_or_error["prompt_id"])
+            else:
+                failures[ix] = prompt_id_or_error["error"]
         else:
             failures[ix] = None
 
     if not failures:
-        return prompt_ids_added
+        return {
+                "already_present": prompt_ids_already_present,
+                "added": prompt_ids_added
+        }
 
     error_msg_formatted = "Errors:\n"
     for ix, msg in failures.items():
@@ -570,7 +574,7 @@ def add_data(
         default=True,
     ),
     dataset_dao: DatasetDAO = Depends(),
-) -> List[int]:
+) -> Dict[str, List[int]]:
 
     user_id = request_fastapi.state.user_id
 
