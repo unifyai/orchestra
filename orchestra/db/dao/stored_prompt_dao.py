@@ -35,6 +35,19 @@ class StoredPromptDAO:
             ),
         )
 
+    def delete(
+        self,
+        id: int,
+        user_id: str,
+    ) -> None:
+        prompt = (
+            self.session.query(StoredPrompt)
+            .filter_by(id=id, user_id=user_id)
+            .one()
+        )
+        self.session.delete(prompt)
+        self.session.commit()
+
     def filter(  # noqa: WPS211, C901
         self,
         id: Optional[int] = None,  # noqa: WPS125
