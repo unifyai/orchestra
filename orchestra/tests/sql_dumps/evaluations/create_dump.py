@@ -16,18 +16,14 @@ import sys
 import pytest
 from dotenv import find_dotenv, load_dotenv
 from httpx import AsyncClient
-from sqlalchemy import text
-
-
 from sqlalchemy import Engine, event
-from dotenv import find_dotenv, load_dotenv
 
 import orchestra
 from orchestra.tests.test_evaluation import _seed_evaluations_db
 
 # TODO: Less hacky way for this?
 project_root = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."),
 )
 sys.path.insert(0, project_root)
 dataset_eval_path = os.path.join(project_root, "dataset_evaluation")
@@ -76,7 +72,12 @@ async def test_create_data_trigger_eval(
 ):
     @event.listens_for(Engine, "before_cursor_execute")
     def receive_before_cursor_execute(
-        conn, cursor, statement, parameters, context, executemany
+        conn,
+        cursor,
+        statement,
+        parameters,
+        context,
+        executemany,
     ):
         "listen for the 'before_cursor_execute' event"
         obj = {"statement": statement, "parameters": parameters}
@@ -255,7 +256,12 @@ async def test_create_data_clientside(
 ):
     @event.listens_for(Engine, "before_cursor_execute")
     def receive_before_cursor_execute(
-        conn, cursor, statement, parameters, context, executemany
+        conn,
+        cursor,
+        statement,
+        parameters,
+        context,
+        executemany,
     ):
         "listen for the 'before_cursor_execute' event"
         obj = {"statement": statement, "parameters": parameters}
@@ -300,7 +306,12 @@ async def test_create_data_for_router(
 ):
     @event.listens_for(Engine, "before_cursor_execute")
     def receive_before_cursor_execute(
-        conn, cursor, statement, parameters, context, executemany
+        conn,
+        cursor,
+        statement,
+        parameters,
+        context,
+        executemany,
     ):
         "listen for the 'before_cursor_execute' event"
         obj = {"statement": statement, "parameters": parameters}
@@ -424,11 +435,18 @@ async def test_create_data_for_router(
 
 @pytest.mark.manual
 async def test_create_data_for_trained_router(
-    client: AsyncClient, monkeypatch, dbsession
+    client: AsyncClient,
+    monkeypatch,
+    dbsession,
 ):
     @event.listens_for(Engine, "before_cursor_execute")
     def receive_before_cursor_execute(
-        conn, cursor, statement, parameters, context, executemany
+        conn,
+        cursor,
+        statement,
+        parameters,
+        context,
+        executemany,
     ):
         "listen for the 'before_cursor_execute' event"
         obj = {"statement": statement, "parameters": parameters}

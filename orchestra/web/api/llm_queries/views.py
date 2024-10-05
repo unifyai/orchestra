@@ -12,11 +12,11 @@ from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.custom_router_dao import CustomRouterDAO
-from orchestra.db.dao.router_dao import RouterDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.query_dao import QueryDAO
+from orchestra.db.dao.router_dao import RouterDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.llm_queries.schema import (
     ChatCompletionRequest,
@@ -196,11 +196,13 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     router_name = tmp[1]
                     try:
                         router_data = router_dao.filter(
-                            user_id=user_id, name=router_name
+                            user_id=user_id,
+                            name=router_name,
                         )[0]
                         if not hasattr(router_data, "gcp_router_id"):
                             raise HTTPException(
-                                400, detail="This router is not currently deployed."
+                                400,
+                                detail="This router is not currently deployed.",
                             )
                         endpoint_id = router_data.gcp_router_id
                         print(endpoint_id)

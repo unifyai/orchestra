@@ -1,7 +1,7 @@
 import json
 from typing import Dict, List, Union
 
-from google.cloud import aiplatform, pubsub_v1, storage, aiplatform_v1
+from google.cloud import aiplatform, aiplatform_v1, pubsub_v1, storage
 from google.cloud.exceptions import NotFound
 
 from orchestra.web.api.utils.http_responses import evaluation_does_not_exist

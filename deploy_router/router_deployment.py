@@ -1,12 +1,11 @@
 import json
 import os
-import sys
 import subprocess
-
-from httpx import AsyncClient, Limits
+import sys
 
 import requests
 from google.cloud import aiplatform, storage
+from httpx import AsyncClient, Limits
 
 
 def download_blob(bucket_name, source_blob_name, destination_file_name):

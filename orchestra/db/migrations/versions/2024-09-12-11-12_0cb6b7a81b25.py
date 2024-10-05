@@ -32,16 +32,21 @@ def upgrade() -> None:
     )
     op.add_column("evaluation", sa.Column("endpoint_str", sa.String(), nullable=False))
     op.add_column(
-        "judgement", sa.Column("judge_endpoint_str", sa.String(), nullable=False)
+        "judgement",
+        sa.Column("judge_endpoint_str", sa.String(), nullable=False),
     )
     op.add_column("judgement", sa.Column("evaluator_id", sa.Integer(), nullable=False))
     op.drop_constraint(
-        "judgement_judge_endpoint_id_fkey", "judgement", type_="foreignkey"
+        "judgement_judge_endpoint_id_fkey",
+        "judgement",
+        type_="foreignkey",
     )
     op.create_foreign_key(None, "judgement", "evaluator", ["evaluator_id"], ["id"])
     op.drop_column("judgement", "judge_endpoint_id")
     op.create_unique_constraint(
-        "uq_user_endpoint", "local_endpoint", ["user_id", "name"]
+        "uq_user_endpoint",
+        "local_endpoint",
+        ["user_id", "name"],
     )
     op.create_unique_constraint("uq_user_tag", "tags", ["user_id", "tag_name"])
     # ### end Alembic commands ###
@@ -54,7 +59,10 @@ def downgrade() -> None:
     op.add_column(
         "judgement",
         sa.Column(
-            "judge_endpoint_id", sa.INTEGER(), autoincrement=False, nullable=False
+            "judge_endpoint_id",
+            sa.INTEGER(),
+            autoincrement=False,
+            nullable=False,
         ),
     )
     op.drop_constraint(None, "judgement", type_="foreignkey")
