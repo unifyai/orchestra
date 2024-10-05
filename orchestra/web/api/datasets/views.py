@@ -122,7 +122,7 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         ),
     ],
     dataset_dao: DatasetDAO = Depends(),
-) -> Dict[str, str]:
+) -> Dict[str, List[int]]:
     """
     Uploads a custom dataset to your account.
 
@@ -142,6 +142,9 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     {"prompt": "This is the second prompt", "ref_answer": "Second reference answer"}
     {"prompt": "This is the third prompt", "ref_answer": "Third reference answer"}
     ```
+
+    Returns:
+        The list of unique prompt ids in the dataset.
     """
 
     if "../" in name or name[0] == "/":
@@ -166,15 +169,14 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     except:
         raise HTTPException(400, detail=f"Incorrect data format")
 
-    result = _add_data(
+    prompt_ids = _add_data(
         dataset_dao=dataset_dao,
         user_id=user_id,
         dataset_name=name,
         data=data_to_upload,
         ignore_duplicates=False,
     )
-    if "info" in result:
-        return {"info": "Dataset uploaded successfully!"}
+    return prompt_ids
 
 
 # download dataset
@@ -462,51 +464,55 @@ def _add_data(
     dataset_name: str,
     data: Union[dict, list[dict]],
     ignore_duplicates: bool,
-):
+) -> Dict[str, List[int]]:
     if isinstance(data, dict):
         data = [data]
 
-    successes = []
+    prompt_ids_added = []
+    prompt_ids_already_present = []
     failures = {}
     for ix, datum in enumerate(data):
         # validate the pydantic
         try:
-            ret = Prompt.parse_obj(datum["prompt"])
+            Prompt.parse_obj(datum["prompt"])
         except ValidationError as e:
             failures[ix] = e
             continue
         except:
             failures[ix] = "An unknown error occured"
-        result = dataset_dao.add_prompt_to_dataset(
+        prompt_id_or_error = dataset_dao.add_prompt_to_dataset(
             user_id=user_id,
             dataset_name=dataset_name,
             prompt_data=datum,
         )
-        if not result:
-            successes.append(ix)
+        if isinstance(prompt_id_or_error, int):
+            prompt_ids_added.append(prompt_id_or_error)
             continue
-        if isinstance(result, dict) and "error" in result:
-            if ignore_duplicates and result["error"] == (
-                "This prompt is already " "in the dataset"
+        if isinstance(prompt_id_or_error, dict) and "error" in prompt_id_or_error:
+            if ignore_duplicates and prompt_id_or_error["error"] == (
+                "This prompt is already in the dataset"
             ):
-                continue
-
-            failures[ix] = result["error"]
+                prompt_ids_already_present.append(prompt_id_or_error["prompt_id"])
+            else:
+                failures[ix] = prompt_id_or_error["error"]
         else:
             failures[ix] = None
 
     if not failures:
-        return {"info": "Data added successfully"}
+        return {
+                "already_present": prompt_ids_already_present,
+                "added": prompt_ids_added
+        }
 
     error_msg_formatted = "Errors:\n"
     for ix, msg in failures.items():
         if msg is not None:
             error_msg_formatted += f"Error with prompt {ix+1}: {msg}\n"
 
-    if successes:
+    if prompt_ids_added:
         msg = (
             f"There was an error while adding some of the prompts.\n"
-            f"There were {len(successes)} prompts added successfuly, and {len(failures)} errors.\n"
+            f"There were {len(prompt_ids_added)} prompts added successfuly, and {len(failures)} errors.\n"
         )
     else:
         if len(failures) == 1:
@@ -578,14 +584,15 @@ def add_data(
         default=True,
     ),
     dataset_dao: DatasetDAO = Depends(),
-):
+) -> Dict[str, List[int]]:
 
     user_id = request_fastapi.state.user_id
 
-    return _add_data(
+    prompt_ids = _add_data(
         dataset_dao=dataset_dao,
         user_id=user_id,
         dataset_name=name,
         data=data,
         ignore_duplicates=ignore_duplicates,
     )
+    return prompt_ids
