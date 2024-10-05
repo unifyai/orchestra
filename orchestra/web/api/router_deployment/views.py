@@ -2,23 +2,13 @@
 Includes endpoints for router deployment.
 """
 import os
-from typing import Dict, List, Union
+from typing import Dict
 
-from fastapi import APIRouter, Query, Request, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from orchestra.web.api.utils.gcp import (
-    blob_exists,
-    send_pubsub_msg,
-    vertex_ai_endpoint_exists,
-    vertex_ai_endpoint_list,
-)
-from orchestra.web.api.utils.http_responses import (
-    router_already_deployed,
-    router_is_not_deployed,
-    router_training_does_not_exist,
-)
-from orchestra.web.api.utils.on_prem import handle_on_prem
 from orchestra.db.dao.router_dao import RouterDAO
+from orchestra.web.api.utils.gcp import blob_exists, send_pubsub_msg
+from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 
@@ -108,13 +98,15 @@ def deploy_router(
 
     if not router_exists:
         raise HTTPException(
-            status_code=400, detail=f"You don't have a router with the name: {name}"
+            status_code=400,
+            detail=f"You don't have a router with the name: {name}",
         )
     router_info = router_exists[0]
     if router_info.deployed:
         if router_info.gcp_router_id:
             raise HTTPException(
-                status_code=400, detail=f"The router: {name} is already deployed."
+                status_code=400,
+                detail=f"The router: {name} is already deployed.",
             )
         raise HTTPException(
             status_code=400,
@@ -123,7 +115,8 @@ def deploy_router(
 
     if not router_info.trained:
         raise HTTPException(
-            status_code=400, detail=f"The router: {name} has not finished training."
+            status_code=400,
+            detail=f"The router: {name} has not finished training.",
         )
 
     # Send the request with the job to the router deployment service
@@ -179,17 +172,21 @@ def undeploy_router(
 
     if not router_exists:
         raise HTTPException(
-            status_code=400, detail=f"You don't have a router with the name: {name}"
+            status_code=400,
+            detail=f"You don't have a router with the name: {name}",
         )
     router_info = router_exists[0]
     if not router_info.deployed:
         raise HTTPException(
-            status_code=400, detail=f"The router: {name} is not deployed."
+            status_code=400,
+            detail=f"The router: {name} is not deployed.",
         )
 
     router_dao.update(router_info.id, deployed=False)
     send_to_deploy_server(
-        action="undeploy", user_id=user_id, gcp_router_id=router_info.gcp_router_id
+        action="undeploy",
+        user_id=user_id,
+        gcp_router_id=router_info.gcp_router_id,
     )
     return {"info": "Router deletion started! You will receive an email soon!"}
 

@@ -2,9 +2,8 @@ import os
 from collections import defaultdict
 from datetime import datetime
 
-
-import yaml
 import pandas as pd
+import yaml
 from utils.data_utils import ratings_from_sample
 
 # import wandb

@@ -73,7 +73,7 @@ madrid_prompt = {
     "topic": "Geography",
     "difficulty": "Easy",
     "prompt": {
-        "messages": [{"role": "user", "content": "What is the capital of Spain?"}]
+        "messages": [{"role": "user", "content": "What is the capital of Spain?"}],
     },
 }
 madrid_prompt_with_id = {"id": 1, "num_tokens": 7, **madrid_prompt}
@@ -86,15 +86,17 @@ squareroot_prompt = {
             {
                 "role": "user",
                 "content": "What is the square root of 1009 to 1 decimal place",
-            }
-        ]
+            },
+        ],
     },
 }
 squareroot_prompt_with_id = {"id": 2, "num_tokens": 14, **squareroot_prompt}
 
 mitochondria_prompt = {
     "prompt": {
-        "messages": [{"role": "user", "content": "What is the powerhouse of the cell?"}]
+        "messages": [
+            {"role": "user", "content": "What is the powerhouse of the cell?"},
+        ],
     },
     "topic": "Biology",
 }
@@ -105,7 +107,7 @@ river_prompt = {
         "messages": [
             {"role": "user", "content": "What is the longest river in Europe?"},
         ],
-    }
+    },
 }
 river_prompt_with_id = {"id": 9, "num_tokens": 8, **river_prompt}
 
@@ -118,8 +120,8 @@ shakespeare_prompt = {
             {
                 "role": "user",
                 "content": "Who wrote the play 'Romeo and Juliet'?",
-            }
-        ]
+            },
+        ],
     },
 }
 shakespeare_prompt_with_id = {"id": 3, "num_tokens": 11, **shakespeare_prompt}
@@ -240,8 +242,8 @@ async def test_download_dataset_prompts_only(client: AsyncClient):
             "num_tokens": 7,
             "prompt": {
                 "messages": [
-                    {"role": "user", "content": "What is the capital of Spain?"}
-                ]
+                    {"role": "user", "content": "What is the capital of Spain?"},
+                ],
             },
         },
         {
@@ -252,8 +254,8 @@ async def test_download_dataset_prompts_only(client: AsyncClient):
                     {
                         "role": "user",
                         "content": "What is the square root of 1009 to 1 decimal place",
-                    }
-                ]
+                    },
+                ],
             },
         },
     ]
@@ -315,7 +317,7 @@ async def test_rename_dataset_invalid_newname(client: AsyncClient, dbsession):
     response = await client.post("/v0/dataset/rename", headers=headers, params=params)
     assert response.status_code == 400, response.json()
     assert response.json() == {
-        "detail": f"You already have a dataset named {new_name}."
+        "detail": f"You already have a dataset named {new_name}.",
     }
 
 
@@ -329,9 +331,11 @@ async def test_atomic_prompt_add_single(client: AsyncClient, dbsession):
     response = await client.post("/v0/dataset/data", headers=headers, json=data)
     assert response.status_code == 200, response.json()
     response_json = response.json()
-    assert isinstance(response_json, dict) and \
-           isinstance(response_json["already_present"], list) and \
-           isinstance(response_json["added"], list)
+    assert (
+        isinstance(response_json, dict)
+        and isinstance(response_json["already_present"], list)
+        and isinstance(response_json["added"], list)
+    )
 
     actual = await _download_dataset(client, name)
     expected = [
@@ -437,7 +441,7 @@ async def test_atomic_prompt_add_duplicate(client: AsyncClient, dbsession):
     response = await client.post("/v0/dataset/data", headers=headers, json=data)
     assert response.status_code == 400, response.json()
     assert response.json() == {
-        "detail": "There was an error adding the prompt.\nErrors:\nError with prompt 1: This prompt is already in the dataset\n"
+        "detail": "There was an error adding the prompt.\nErrors:\nError with prompt 1: This prompt is already in the dataset\n",
     }
 
     actual = await _download_dataset(client, name)
@@ -468,7 +472,8 @@ async def test_atomic_prompt_add_from_other_dataset(client: AsyncClient, dbsessi
 
 
 async def test_atomic_prompt_add_multiple_with_some_duplicates(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     await _seed_datasets_db(dbsession)
     name = "test_upload_dataset"
@@ -483,7 +488,7 @@ async def test_atomic_prompt_add_multiple_with_some_duplicates(
     response = await client.post("/v0/dataset/data", headers=headers, json=data)
     assert response.status_code == 400, response.json()
     assert response.json() == {
-        "detail": "There was an error while adding some of the prompts.\nThere were 2 prompts added successfuly, and 2 errors.\nErrors:\nError with prompt 3: This prompt is already in the dataset\nError with prompt 4: This prompt is already in the dataset\n"
+        "detail": "There was an error while adding some of the prompts.\nThere were 2 prompts added successfuly, and 2 errors.\nErrors:\nError with prompt 3: This prompt is already in the dataset\nError with prompt 4: This prompt is already in the dataset\n",
     }
     actual = await _download_dataset(client, name)
     expected = [
@@ -518,9 +523,11 @@ async def test_extra_fields_repeated(client: AsyncClient, dbsession):
     response = await client.post("/v0/dataset/data", headers=headers, json=data)
     assert response.status_code == 200, response.json()
     response_json = response.json()
-    assert isinstance(response_json, dict) and \
-           isinstance(response_json["already_present"], list) and \
-           isinstance(response_json["added"], list)
+    assert (
+        isinstance(response_json, dict)
+        and isinstance(response_json["already_present"], list)
+        and isinstance(response_json["added"], list)
+    )
 
     # add again, with a new extra_field
     new_prompt_2 = mitochondria_prompt.copy()
@@ -531,9 +538,11 @@ async def test_extra_fields_repeated(client: AsyncClient, dbsession):
     response = await client.post("/v0/dataset/data", headers=headers, json=data)
     assert response.status_code == 200, response.json()
     response_json = response.json()
-    assert isinstance(response_json, dict) and \
-           isinstance(response_json["already_present"], list) and \
-           isinstance(response_json["added"], list)
+    assert (
+        isinstance(response_json, dict)
+        and isinstance(response_json["already_present"], list)
+        and isinstance(response_json["added"], list)
+    )
 
     new_mitochondria_prompt_with_id = {"id": 8, "num_tokens": 8, **new_prompt_2}
 
@@ -553,7 +562,7 @@ async def test_add_prompt_invalid_pydantic(client: AsyncClient, dbsession):
     bad_prompt = {
         "prompt": {
             "messages": [
-                {"role": "user", "content": "What is the powerhouse of the cell?"}
+                {"role": "user", "content": "What is the powerhouse of the cell?"},
             ],
             "fake_kw": 123,
         },
@@ -562,5 +571,5 @@ async def test_add_prompt_invalid_pydantic(client: AsyncClient, dbsession):
     response = await client.post("/v0/dataset/data", headers=headers, json=data)
     assert response.status_code == 400, response.json()
     assert response.json() == {
-        "detail": "There was an error adding the prompt.\nErrors:\nError with prompt 1: 1 validation error for Prompt\nfake_kw\n  Extra inputs are not permitted [type=extra_forbidden, input_value=123, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.9/v/extra_forbidden\n"
+        "detail": "There was an error adding the prompt.\nErrors:\nError with prompt 1: 1 validation error for Prompt\nfake_kw\n  Extra inputs are not permitted [type=extra_forbidden, input_value=123, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.9/v/extra_forbidden\n",
     }

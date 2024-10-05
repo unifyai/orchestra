@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.sql import table, column
+from sqlalchemy.sql import column, table
 
 # revision identifiers, used by Alembic.
 revision = "2513710a8732"
@@ -33,7 +33,9 @@ def upgrade() -> None:
     )
 
     stored_prompt = table(
-        "stored_prompt", column("id", sa.Integer), column("extra_fields", JSONB)
+        "stored_prompt",
+        column("id", sa.Integer),
+        column("extra_fields", JSONB),
     )
     stored_prompt_extra_field = table(
         "stored_prompt_extra_field",
@@ -48,20 +50,22 @@ def upgrade() -> None:
         sa.select(
             stored_prompt_extra_field.c.prompt_id,
             sa.func.json_object_agg(
-                stored_prompt_extra_field.c.field, stored_prompt_extra_field.c.value
+                stored_prompt_extra_field.c.field,
+                stored_prompt_extra_field.c.value,
             ).label("extra_fields"),
-        ).group_by(stored_prompt_extra_field.c.prompt_id)
+        ).group_by(stored_prompt_extra_field.c.prompt_id),
     ).fetchall()
 
     for row in results:
         connection.execute(
             stored_prompt.update()
             .where(stored_prompt.c.id == row.prompt_id)
-            .values(extra_fields=row.extra_fields)
+            .values(extra_fields=row.extra_fields),
         )
 
     op.drop_index(
-        "ix_stored_prompt_extra_field_prompt_id", table_name="stored_prompt_extra_field"
+        "ix_stored_prompt_extra_field_prompt_id",
+        table_name="stored_prompt_extra_field",
     )
     op.drop_table("stored_prompt_extra_field")
 
@@ -71,8 +75,8 @@ def upgrade() -> None:
         "stored_prompt",
         [
             sa.text(
-                "hash_record_extended(row(user_id, system_msg, messages, prompt_kwargs, extra_fields), 0)"
-            )
+                "hash_record_extended(row(user_id, system_msg, messages, prompt_kwargs, extra_fields), 0)",
+            ),
         ],
         unique=True,
     )
@@ -92,8 +96,8 @@ def downgrade() -> None:
         "stored_prompt",
         [
             sa.text(
-                "hash_record_extended(ROW(user_id, system_msg, messages, prompt_kwargs), 0::bigint)"
-            )
+                "hash_record_extended(ROW(user_id, system_msg, messages, prompt_kwargs), 0::bigint)",
+            ),
         ],
         unique=True,
     )

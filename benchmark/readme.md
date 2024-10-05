@@ -29,7 +29,7 @@ python benchmark/perf.py
 ```
 ## Testing Benchmarks
 
-First, set up a local database environment. 
+First, set up a local database environment.
 ```
 docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:15.2-bullseye
 ```
@@ -71,38 +71,38 @@ TRUNCATE TABLE benchmark_run CASCADE;
 ```
 To view all benchmarks that were just run
 ```
-SELECT 
+SELECT
     model.mdl_code,
     benchmark_run.regime,
     benchmark_run.region,
     benchmark_run.seq_len,
-    metric_name, 
-    value    
-FROM 
-    datapoint 
-JOIN 
-    benchmark_run ON datapoint.benchmark_run_id = benchmark_run.id 
+    metric_name,
+    value
+FROM
+    datapoint
 JOIN
-    endpoint ON benchmark_run.endpoint_id = endpoint.id 
-JOIN 
+    benchmark_run ON datapoint.benchmark_run_id = benchmark_run.id
+JOIN
+    endpoint ON benchmark_run.endpoint_id = endpoint.id
+JOIN
     model ON endpoint.mdl_id = model.id;
 ```
 To view data specific to ttft:
 ```
-SELECT 
+SELECT
     model.mdl_code,
     benchmark_run.regime,
     benchmark_run.region,
     benchmark_run.seq_len,
-    metric_name, 
-    value    
-FROM 
-    datapoint 
-JOIN 
-    benchmark_run ON datapoint.benchmark_run_id = benchmark_run.id 
+    metric_name,
+    value
+FROM
+    datapoint
 JOIN
-    endpoint ON benchmark_run.endpoint_id = endpoint.id 
-JOIN 
+    benchmark_run ON datapoint.benchmark_run_id = benchmark_run.id
+JOIN
+    endpoint ON benchmark_run.endpoint_id = endpoint.id
+JOIN
     model ON endpoint.mdl_id = model.id
 WHERE
     metric_name = 'ttft';
@@ -111,20 +111,20 @@ To view data specific to `itl`, `cold_start`, `e2e_latency`, `output_tks_per_sec
 
 If you'd like to view data corresponding to a specific model, say `llama-2-7b-chat`, then run the following command. You may of course add the where clause from the previous command for metric specific data.
 ```
-SELECT 
+SELECT
     model.mdl_code,
     benchmark_run.regime,
     benchmark_run.region,
     benchmark_run.seq_len,
-    metric_name, 
-    value    
-FROM 
-    datapoint 
-JOIN 
-    benchmark_run ON datapoint.benchmark_run_id = benchmark_run.id 
+    metric_name,
+    value
+FROM
+    datapoint
 JOIN
-    endpoint ON benchmark_run.endpoint_id = endpoint.id 
-JOIN 
+    benchmark_run ON datapoint.benchmark_run_id = benchmark_run.id
+JOIN
+    endpoint ON benchmark_run.endpoint_id = endpoint.id
+JOIN
     model ON endpoint.mdl_id = model.id
 WHERE
     model.mdl_code = 'llama-2-7b-chat';

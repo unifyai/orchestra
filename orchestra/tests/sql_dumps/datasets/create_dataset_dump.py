@@ -8,22 +8,13 @@
 # haven't figured out what causes it to get cut off
 
 
-import asyncio
 import json
 import os
-import sys
 
 import pytest
 from dotenv import find_dotenv, load_dotenv
 from httpx import AsyncClient
-from sqlalchemy import text
-
-import orchestra
-
 from sqlalchemy import Engine, event
-
-from dotenv import find_dotenv, load_dotenv
-
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 test_user_id = os.getenv("AUTH_ACCOUNT_USER_ID")
@@ -77,7 +68,12 @@ async def test_upload_dataset(
 ):
     @event.listens_for(Engine, "before_cursor_execute")
     def receive_before_cursor_execute(
-        conn, cursor, statement, parameters, context, executemany
+        conn,
+        cursor,
+        statement,
+        parameters,
+        context,
+        executemany,
     ):
         "listen for the 'before_cursor_execute' event"
         obj = {"statement": statement, "parameters": parameters}

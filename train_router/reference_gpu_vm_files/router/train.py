@@ -1,40 +1,41 @@
 # we need a yaml config (done)
 # train step should calculate some metrics and return them along side the loss
-import requests
-import random
-import json
-import os
 import argparse
-import warnings
-import shutil
+import json
 import math
+import os
+import random
+import shutil
+import warnings
 from functools import cache
 
+import requests
 import torch
+from google.cloud import storage
+from torch.optim.lr_scheduler import LambdaLR
 
 # import wandb
 from torch.utils.data import DataLoader
-from torch.optim.lr_scheduler import LambdaLR
 from transformers import AutoTokenizer, DataCollatorWithPadding
-from google.cloud import storage
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 warnings.filterwarnings("ignore")
 
+from models.load_model import load_model
+from utils.data_utils import CoMPDataset
 from utils.train_utils import (
     METRICS,
+    MetricTracker,
+    create_dirs,
     load_datasets,
     load_train_config,
-    MetricTracker,
-    log_to_wandb,
-    create_dirs,
 )
-from utils.data_utils import CoMPDataset
-from models.load_model import load_model
 
 parser = argparse.ArgumentParser(prog="train", description="trains a router model")
 parser.add_argument(
-    "-cf", "--config_file", help="yaml config file for the training run"
+    "-cf",
+    "--config_file",
+    help="yaml config file for the training run",
 )
 parser.add_argument("-s", "--seed", default=0)
 parser.add_argument("-tn", "--train_num", type=int, default=100000, required=False)
@@ -61,14 +62,20 @@ def train(model, optimizer, train_dataloader, val_dataloader, config):
     scheduler = LambdaLR(optimizer, lr_lambda=warmup_lambda)
     for epoch in range(1, config["train"]["epochs"]):
         for i, (prompt_id, attn_mask, model_id, target_score) in enumerate(
-            train_dataloader
+            train_dataloader,
         ):
             with torch.autocast(
-                device_type=config["train"]["device"], dtype=torch.float16
+                device_type=config["train"]["device"],
+                dtype=torch.float16,
             ):
                 model.train()
                 loss, metrics = train_step(
-                    model, prompt_id, attn_mask, model_id, target_score, config
+                    model,
+                    prompt_id,
+                    attn_mask,
+                    model_id,
+                    target_score,
+                    config,
                 )
             # print(loss.shape, loss)
             scaler.scale(loss).backward()
@@ -132,7 +139,8 @@ def train_step(model, prompt_id, attn_mask, model_id, target_score, config):
     score = model(prompt_id, model_id, attn_mask)
 
     loss = config["train"]["loss_fn"](
-        score.view(-1), target_score.float().view(-1).to(config["train"]["device"])
+        score.view(-1),
+        target_score.float().view(-1).to(config["train"]["device"]),
     )
 
     with torch.no_grad():
@@ -148,7 +156,8 @@ def validate(model, val_dataloader, config):
     for prompt_id, attn_mask, model_id, target_score in val_dataloader:
         score = model(prompt_id, model_id, attn_mask)
         loss = config["train"]["loss_fn"](
-            score.view(-1), target_score.float().view(-1).to(config["train"]["device"])
+            score.view(-1),
+            target_score.float().view(-1).to(config["train"]["device"]),
         )
 
         val_metric_tracker.update("loss", loss.item())
@@ -203,7 +212,8 @@ def run_batch_inference(model, tokenizer, prompts: list, max_length, num_models)
         return_tensors="pt",
     ).to("cuda")
     embs = model.get_prompt_embs(
-        prompt_id=toks["input_ids"], attn_mask=toks["attention_mask"]
+        prompt_id=toks["input_ids"],
+        attn_mask=toks["attention_mask"],
     )
     model_emb = model.get_latent_rep(torch.arange(num_models, device="cuda"))
     stacked_embs = embs.unsqueeze(1).repeat(1, model_emb.size(0), 1)
@@ -233,7 +243,11 @@ def validate_all_models(model, val_path):
         if not b_prompts:
             continue
         batch_ret = run_batch_inference(
-            model, tokenizer, b_prompts, config["train"]["max_num_tokens"], num_models
+            model,
+            tokenizer,
+            b_prompts,
+            config["train"]["max_num_tokens"],
+            num_models,
         ).squeeze(-1)
         gts = [id_to_gt[bi] for bi in b_ids]
         ground_truth = torch.tensor(gts, device="cuda")
@@ -352,7 +366,7 @@ if __name__ == "__main__":
                 "params": rest_params,
                 "lr": float(config["train"]["optimizer"]["rest_lr"]),
             },
-        ]
+        ],
     )
 
     comp = comp.to(config["train"]["device"])
@@ -402,7 +416,8 @@ if __name__ == "__main__":
 
     config_path = os.path.join(config["train"]["created_dir"], "config.yaml")
     model_mapping_path = os.path.join(
-        config["train"]["created_dir"], "model_mapping.json"
+        config["train"]["created_dir"],
+        "model_mapping.json",
     )
     metadata_path = os.path.join(config["train"]["created_dir"], "metadata.jsonl")
     # upload weights to bucket

@@ -4,11 +4,12 @@
 
 import asyncio
 import json
-import pytest
-import requests
-import time
 import os
 import sys
+import time
+
+import pytest
+import requests
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from evaluate_dataset import evaluate_dataset
@@ -98,7 +99,7 @@ def test_basic_dataset_evaluation():
 @pytest.mark.skip()
 def test_two_judges_dataset_evaluation():
     _generic_test_dataset_evaluation(
-        judge_models=["llama-3-8b-chat@aws-bedrock", "claude-3-haiku@aws-bedrock"]
+        judge_models=["llama-3-8b-chat@aws-bedrock", "claude-3-haiku@aws-bedrock"],
     )
 
 

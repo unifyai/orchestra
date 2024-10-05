@@ -1,4 +1,5 @@
 from typing import List
+
 from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -14,10 +15,13 @@ class CustomRouterDAO:
         self.session = session
 
     def create_custom_router(
-        self, user_id: str, router_name: str, router_id: str
+        self,
+        user_id: str,
+        router_name: str,
+        router_id: str,
     ) -> None:
         self.session.add(
-            CustomRouter(user_id=user_id, router_name=router_name, router_id=router_id)
+            CustomRouter(user_id=user_id, router_name=router_name, router_id=router_id),
         )
 
     def get_router_id(self, user_id: str, router_name) -> List[CustomRouter]:

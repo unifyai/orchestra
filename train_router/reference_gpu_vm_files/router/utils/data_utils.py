@@ -1,14 +1,16 @@
-import re
 import json
+import re
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset
-import numpy as np
 
 
 def extract_json(text):
     json_text = re.search(
-        '\{[\n\r\s]+"assistant_rating":.*?\}', text, flags=re.DOTALL | re.MULTILINE
+        '\{[\n\r\s]+"assistant_rating":.*?\}',
+        text,
+        flags=re.DOTALL | re.MULTILINE,
     )
     if json_text is None:
         return json_text
@@ -28,7 +30,7 @@ def ratings_from_sample(sample, score_mapping=None):
         return sample["score"]
     response_key = "judge_response" if "judge_response" in sample else "model_response"
     clean_sample = clean_judge_responses(
-        sample[response_key] if hasattr(sample, "keys") else sample
+        sample[response_key] if hasattr(sample, "keys") else sample,
     )
     judge_response = extract_json(clean_sample)
     if judge_response is None:
@@ -79,7 +81,10 @@ class CoMPDataset(Dataset):
         prompt = sample["prompt"]
         prompt = prompt.strip()
         tokenized_inputs = self.tokenizer(
-            prompt, max_length=self.max_length, truncation=True, return_tensors="pt"
+            prompt,
+            max_length=self.max_length,
+            truncation=True,
+            return_tensors="pt",
         )
         prompt_id = tokenized_inputs["input_ids"].squeeze()
         attn_mask = tokenized_inputs["attention_mask"].squeeze()

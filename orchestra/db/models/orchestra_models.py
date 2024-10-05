@@ -13,8 +13,8 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 
 from orchestra.db.base import Base
 
@@ -553,7 +553,9 @@ class Router(Base):
     name = sa.Column(sa.String(), nullable=False)
     endpoints = sa.Column(sa.String(), nullable=False)
     evaluator_id = sa.Column(
-        sa.Integer(), sa.ForeignKey("evaluator.id"), nullable=False
+        sa.Integer(),
+        sa.ForeignKey("evaluator.id"),
+        nullable=False,
     )
     trained = sa.Column(sa.Boolean(), default=False, nullable=False)
     gcp_router_id = sa.Column(sa.String(), nullable=True)

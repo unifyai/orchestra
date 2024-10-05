@@ -1,4 +1,5 @@
 import math
+
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
@@ -7,8 +8,8 @@ from starlette import status
 
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.routines.recharging import recharge_credits
-from orchestra.web.api.admin.views import get_user
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS
+from orchestra.web.api.admin.views import get_user
 
 
 # TODO: Limit + increase has to be stored in the user

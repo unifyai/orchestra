@@ -1,10 +1,6 @@
-import os
-from typing import List, Tuple
-
 from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
@@ -25,7 +21,8 @@ class LocalEndpointDAO:
 
         # try and find the endpoint
         stmt = select(LocalEndpoint.id).where(
-            LocalEndpoint.user_id == user_id, LocalEndpoint.name == name
+            LocalEndpoint.user_id == user_id,
+            LocalEndpoint.name == name,
         )
         endpoint = list(self.session.execute(stmt).fetchall())
         if endpoint:
@@ -39,7 +36,8 @@ class LocalEndpointDAO:
             self.session.commit()
 
             existing_stmt = select(LocalEndpoint.id).where(
-                LocalEndpoint.user_id == user_id, LocalEndpoint.name == name
+                LocalEndpoint.user_id == user_id,
+                LocalEndpoint.name == name,
             )
             return self.session.execute(existing_stmt).scalar_one()
         except:
