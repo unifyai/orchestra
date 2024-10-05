@@ -1,13 +1,11 @@
 import json
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import tiktoken
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
-from psycopg2 import errors as psycopg2_errors
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
@@ -43,17 +41,20 @@ class DatasetDAO:
 
     def filter(  # noqa: WPS211, C901
         self,
-        id: Optional[int] = None,  # noqa: WPS125
-        user_id: Optional[str] = None,
-        name: Optional[str] = None,
+        id: Optional[Union[int, List[int]]] = None,  # noqa: WPS125
+        user_id: Optional[Union[str, List[str]]] = None,
+        name: Optional[Union[str, List[str]]] = None,
     ) -> List[Dataset]:
         query = select(Dataset)
         if id:
-            query = query.where(Dataset.id == id)
+            id = id if isinstance(id, list) else [id]
+            query = query.where(or_(*[Dataset.id == i for i in id]))
         if user_id:
-            query = query.where(Dataset.user_id == user_id)
+            user_id = user_id if isinstance(user_id, list) else [user_id]
+            query = query.where(or_(*[Dataset.user_id == uid for uid in user_id]))
         if name:
-            query = query.where(Dataset.name == name)
+            name = name if isinstance(name, list) else [name]
+            query = query.where(or_(*[Dataset.name == n for n in name]))
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())
 
