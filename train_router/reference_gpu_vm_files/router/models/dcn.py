@@ -3,7 +3,6 @@
 
 import torch
 import torch.nn as nn
-
 from transformers import AutoModel
 
 
@@ -11,10 +10,10 @@ class CrossNetwork(nn.Module):
     def __init__(self, num_cross_layers, num_fc_layers, d_e, dropout):
         super().__init__()
         self.cross_layers = nn.ModuleList(
-            [nn.Linear(d_e, d_e) for _ in range(num_cross_layers)]
+            [nn.Linear(d_e, d_e) for _ in range(num_cross_layers)],
         )
         self.fc_layers = nn.ModuleList(
-            [nn.Linear(d_e, d_e) for _ in range(num_fc_layers)]
+            [nn.Linear(d_e, d_e) for _ in range(num_fc_layers)],
         )
         # self.fc_layers = nn.ModuleList([nn.Linear(d_e, 4*d_e), nn.Linear(4*d_e, d_e)])
         self.act_fn = nn.functional.gelu
@@ -51,13 +50,17 @@ class DCN(nn.Module):
         self.dev = device
         self.dropout = torch.nn.Dropout(dropout)
         self.cn = CrossNetwork(
-            num_cross_layers=3, num_fc_layers=3, d_e=d_cn, dropout=dropout
+            num_cross_layers=3,
+            num_fc_layers=3,
+            d_e=d_cn,
+            dropout=dropout,
         )
 
     def forward(self, prompt_id, model_id, attn_mask):
         prompt_id = prompt_id.to(self.dev)
         prompt_emb = self.prompt_encoder(
-            input_ids=prompt_id, attention_mask=attn_mask.to(self.dev)
+            input_ids=prompt_id,
+            attention_mask=attn_mask.to(self.dev),
         ).last_hidden_state
         model_id = model_id.to(self.dev)
         model_emb = self.model_embedding(model_id)
@@ -71,7 +74,8 @@ class DCN(nn.Module):
     def get_prompt_embs(self, prompt_id, attn_mask):
         prompt_id = prompt_id.to(self.dev)
         prompt_emb = self.prompt_encoder(
-            input_ids=prompt_id, attention_mask=attn_mask.to(self.dev)
+            input_ids=prompt_id,
+            attention_mask=attn_mask.to(self.dev),
         ).last_hidden_state
         x = prompt_emb[:, 0]
         x = self.prompt_proj(x)

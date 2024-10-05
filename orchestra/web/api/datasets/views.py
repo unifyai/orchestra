@@ -238,7 +238,10 @@ def download_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         raise invalid_dataset_name
 
     entries = dataset_dao.fetch_dataset(
-        user_id=request_fastapi.state.user_id, name=name, limit=limit, offset=offset
+        user_id=request_fastapi.state.user_id,
+        name=name,
+        limit=limit,
+        offset=offset,
     )
     if not entries:
         raise dataset_does_not_exist(name)
@@ -303,7 +306,7 @@ def delete_dataset(
         raise HTTPException(
             status_code=400,
             detail="You can't delete the all_data dataset, "
-                   "which contains all data in your account.",
+            "which contains all data in your account.",
         )
     user_id = request_fastapi.state.user_id
     dataset_id = dataset_dao.filter(user_id=user_id, name=name)
@@ -480,7 +483,7 @@ def _add_data(
             user_id,
             "all_data",
             data,
-            True
+            True,
         )
 
     if isinstance(data, dict):
@@ -518,8 +521,8 @@ def _add_data(
 
     if not failures:
         return {
-                "already_present": prompt_ids_already_present,
-                "added": prompt_ids_added
+            "already_present": prompt_ids_already_present,
+            "added": prompt_ids_added,
         }
 
     error_msg_formatted = "Errors:\n"

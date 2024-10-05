@@ -4,15 +4,11 @@ from typing import List, Optional, Union
 
 import tiktoken
 from fastapi import Depends
-from sqlalchemy import select, or_
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import (
-    Dataset,
-    DatasetPrompt,
-    StoredPrompt,
-)
+from orchestra.db.models.orchestra_models import Dataset, DatasetPrompt, StoredPrompt
 
 
 def count_tokens(messages):
@@ -118,7 +114,7 @@ class DatasetDAO:
             .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
             .where(DatasetPrompt.dataset_id == dataset_id)
             .order_by(
-                StoredPrompt.id
+                StoredPrompt.id,
             )  # Add an order_by clause for consistent pagination
         )
         if limit is not None:
@@ -202,7 +198,7 @@ class DatasetDAO:
             except:
                 return {
                     "error": "An error occurred while adding the prompt. Please check the format is correct, and try again.",
-                    "prompt_id": new_prompt.id
+                    "prompt_id": new_prompt.id,
                 }
 
         existing_dataset_prompt = (
@@ -213,7 +209,7 @@ class DatasetDAO:
         if existing_dataset_prompt:
             return {
                 "error": "This prompt is already in the dataset",
-                "prompt_id": prompt_id
+                "prompt_id": prompt_id,
             }
 
         dataset_prompt = DatasetPrompt(dataset_id=dataset_id, prompt_id=prompt_id)
@@ -224,7 +220,7 @@ class DatasetDAO:
         except:
             return {
                 "error": "An error occurred while adding the prompt. Please check the format is correct, and try again.",
-                "prompt_id": prompt_id
+                "prompt_id": prompt_id,
             }
 
     def remove_prompt_from_dataset(self, user_id, dataset_name, prompt_id):

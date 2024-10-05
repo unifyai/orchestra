@@ -31,7 +31,9 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_unique_constraint(
-        "uq_dataset_eval_user_id", "dataset_evaluation_task", ["user_id", "name"]
+        "uq_dataset_eval_user_id",
+        "dataset_evaluation_task",
+        ["user_id", "name"],
     )
     # ### end Alembic commands ###
 

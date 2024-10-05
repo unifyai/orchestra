@@ -1,6 +1,7 @@
-from typing import List, Optional
+from typing import Optional
+
 from fastapi import Depends
-from sqlalchemy import select, delete
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
