@@ -411,9 +411,8 @@ def list_datasets(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     Lists all the datasets stored in the user account by name.
     """
     user_id = request_fastapi.state.user_id
-    dataset_info = dataset_dao.filter()
-    ret = [d.name for d in dataset_info if d.user_id in [None, user_id]]
-    return sorted(ret)
+    dataset_info = dataset_dao.filter(user_id=[None, user_id])
+    return sorted([d.name for d in dataset_info])
 
 
 @router.delete(
