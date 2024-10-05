@@ -299,6 +299,12 @@ def delete_dataset(
     """
     Deletes a previously updated dataset and any relevant artifacts from your account.
     """
+    if name == "all_data":
+        raise HTTPException(
+            status_code=400,
+            detail="You can't delete the all_data dataset, "
+                   "which contains all data in your account.",
+        )
     user_id = request_fastapi.state.user_id
     dataset_id = dataset_dao.filter(user_id=user_id, name=name)
     if not dataset_id:
