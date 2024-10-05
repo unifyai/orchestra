@@ -288,6 +288,7 @@ def write_results():
 
 
 if __name__ == "__main__":
+    print("Entered status test script")
     api_key = os.environ.get("API_KEY")
     url = f"{BASE_URL}/endpoints"
     headers = {"Authorization": f"Bearer {api_key}"}
