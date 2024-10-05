@@ -456,13 +456,14 @@ def delete_data(
     rets = list()
     for n in names:
         for datum_id in data_ids:
-            rets.append(
-                dataset_dao.remove_prompt_from_dataset(
-                    user_id=request_fastapi.state.user_id,
-                    dataset_name=n,
-                    prompt_id=datum_id,
-                ),
-            )
+            if dataset_dao.contains_prompt(user_id, n, datum_id):
+                rets.append(
+                    dataset_dao.remove_prompt_from_dataset(
+                        user_id=request_fastapi.state.user_id,
+                        dataset_name=n,
+                        prompt_id=datum_id,
+                    ),
+                )
     if name == "all_data":
         rets += [prompt_dao.delete(int(did), request_fastapi.state.user_id)
                  for did in data_ids]
