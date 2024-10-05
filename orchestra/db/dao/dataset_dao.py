@@ -213,6 +213,7 @@ class DatasetDAO:
         try:
             self.session.add(dataset_prompt)
             self.session.flush()
+            return prompt_id
         except:
             return {
                 "error": "An error occurred while adding the prompt. Please check the format is correct, and try again."
