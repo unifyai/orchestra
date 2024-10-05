@@ -470,6 +470,7 @@ def _add_data(
             [d.name for d in dataset_dao.filter() if d.user_id in [None, user_id]]
         if "all_data" not in usr_datasets:
             dataset_dao.create(user_id=user_id, name="all_data")
+        # ToDo: remove this code above once this default dataset is hardcoded
         _add_data(
             dataset_dao,
             user_id,
