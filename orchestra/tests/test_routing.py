@@ -1,17 +1,14 @@
 import asyncio
 import json
 import os
-import time
 import sys
 
-from httpx import AsyncClient
 import pytest
+from httpx import AsyncClient
 
 import orchestra
-from orchestra.tests.utils import get_chat_completions_payload
 
 from .test_evaluation import _seed_evaluations_db
-
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, project_root)
@@ -21,7 +18,7 @@ from train_router.router_training import train_router
 
 deploy_router_path = os.path.join(project_root, "deploy_router")
 sys.path.insert(0, deploy_router_path)
-from deploy_router.router_deployment import deploy_router, undeploy_router
+from deploy_router.router_deployment import undeploy_router
 
 ## UTILS
 
@@ -77,7 +74,7 @@ async def test_train_router_pre_pubsub(client: AsyncClient, monkeypatch, dbsessi
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     assert response.json() == {
-        "info": "Router training started! You will receive an email soon!"
+        "info": "Router training started! You will receive an email soon!",
     }
 
 
@@ -169,7 +166,7 @@ async def test_train_router_e2e(client: AsyncClient, monkeypatch, tmp_path, dbse
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     assert response.json() == {
-        "info": "Router training started! You will receive an email soon!"
+        "info": "Router training started! You will receive an email soon!",
     }
 
 
@@ -199,7 +196,7 @@ async def test_deploy_router(client: AsyncClient, monkeypatch, dbsession):
 
 
 @pytest.mark.skip(
-    reason="can't actually test undeploying without waiting for it to deploy (~45mins)"
+    reason="can't actually test undeploying without waiting for it to deploy (~45mins)",
 )
 async def test_deploy_undeploy(client: AsyncClient, monkeypatch, dbsession):
     await _seed_evaluations_db(
@@ -233,7 +230,9 @@ async def test_deploy_undeploy(client: AsyncClient, monkeypatch, dbsession):
     )
     url = "/v0/router/deploy"
     response = await client.delete(
-        url, params={"name": "my_test_router_3"}, headers=HEADERS
+        url,
+        params={"name": "my_test_router_3"},
+        headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
 

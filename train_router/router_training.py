@@ -3,19 +3,14 @@ import logging
 import math
 import os
 import random
-import re
-import requests
 import shutil
 import subprocess
 import sys
-import time
-from dataclasses import dataclass
-from typing import Any, List
-
-from httpx import AsyncClient, Limits
+from typing import Any
 
 # import google.cloud.compute_v1 as compute_v1
 from google.api_core.extended_operation import ExtendedOperation
+from httpx import AsyncClient, Limits
 
 logging.basicConfig(filename="router_training.log", level=logging.INFO)
 
@@ -116,7 +111,13 @@ def create_vm():
 
 
 async def create_train_data(
-    user_id, api_key, admin_key, prompt_ids, endpoints, evaluator, client
+    user_id,
+    api_key,
+    admin_key,
+    prompt_ids,
+    endpoints,
+    evaluator,
+    client,
 ):
     # download all the prompts with prompt_ids ...
     # download all the scores with prompt_ids ... per endpoint per evaluator
@@ -162,7 +163,6 @@ async def create_train_data(
                 id_model_to_score[(_id, endpoint)] = entry["score"]
         except Exception as e:
             print(e)
-            pass
 
     combined_files = []
     for id_ in id_to_prompt:
@@ -173,7 +173,7 @@ async def create_train_data(
             except:
                 scores_per_endpoint[e] = 0  # TODO: what to do here instead
         combined_files.append(
-            {"id_": id_, "prompt": id_to_prompt[id_], "scores": scores_per_endpoint}
+            {"id_": id_, "prompt": id_to_prompt[id_], "scores": scores_per_endpoint},
         )
 
     n = len(combined_files)
@@ -211,7 +211,13 @@ async def train_router(msg, save_dir=None, client=None):
     # TODO: retrieve correct evaluation data
 
     train_data, valid_data = await create_train_data(
-        user_id, api_key, admin_key, prompt_ids, endpoints, evaluator, client
+        user_id,
+        api_key,
+        admin_key,
+        prompt_ids,
+        endpoints,
+        evaluator,
+        client,
     )
 
     unrolled_data = []
@@ -223,7 +229,7 @@ async def train_router(msg, save_dir=None, client=None):
                     "prompt": td["prompt"],
                     "model_provider": e,
                     "score": score,
-                }
+                },
             )
     train_data = unrolled_data
 
@@ -238,7 +244,9 @@ async def train_router(msg, save_dir=None, client=None):
     os.makedirs(run_folder, exist_ok=True)
 
     shutil.copytree(
-        os.path.join(_dir, "reference_gpu_vm_files"), run_folder, dirs_exist_ok=True
+        os.path.join(_dir, "reference_gpu_vm_files"),
+        run_folder,
+        dirs_exist_ok=True,
     )
 
     with open(os.path.join(train_job_files_folder, "train_data.jsonl"), "w") as f:
