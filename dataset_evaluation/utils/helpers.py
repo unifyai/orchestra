@@ -56,20 +56,20 @@ def retry_with_exponential_backoff(
     return wrapper
 
 
-async def load_prompt(prompt_id: int, admin_key: str, client: AsyncClient):
+async def load_prompt(datum_id: int, admin_key: str, client: AsyncClient):
     url = "/v0/dataset/load_prompt"
     HEADERS = {
         "accept": "application/json",
         "Authorization": f"Bearer {admin_key}",
         "Content-Type": "application/json",
     }
-    params = {"prompt_id": prompt_id}
+    params = {"datum_id": datum_id}
     ret = await client.get(url, params=params, headers=HEADERS)
     return ret.json()[0]
 
 
 async def load_response(
-    prompt_id: int,
+    datum_id: int,
     prompt_variation_id: Optional[int],
     endpoint_str: str,
     admin_key: str,
@@ -82,7 +82,7 @@ async def load_response(
         "Content-Type": "application/json",
     }
     params = {
-        "prompt_id": prompt_id,
+        "datum_id": datum_id,
         "endpoint_str": endpoint_str,
     }
     if prompt_variation_id:
@@ -92,7 +92,7 @@ async def load_response(
 
 
 async def load_judgement(
-    prompt_id: int,
+    datum_id: int,
     endpoint_str: str,
     evaluator_id: str,
     judge_endpoint_str: str,
@@ -107,7 +107,7 @@ async def load_judgement(
         "Content-Type": "application/json",
     }
     params = {
-        "prompt_id": prompt_id,
+        "datum_id": datum_id,
         "prompt_variation_id": prompt_variation_id,
         "endpoint_str": endpoint_str,
         "evaluator_id": evaluator_id,
@@ -118,7 +118,7 @@ async def load_judgement(
 
 
 async def load_prompt_variation(
-    prompt_id: str,
+    datum_id: str,
     default_prompt_id: str,
     admin_key: str,
     client: AsyncClient,
@@ -130,7 +130,7 @@ async def load_prompt_variation(
         "Content-Type": "application/json",
     }
     params = {
-        "prompt_id": prompt_id,
+        "datum_id": datum_id,
         "default_prompt_id": default_prompt_id,
     }
     ret = await client.get(url, params=params, headers=HEADERS)
@@ -138,7 +138,7 @@ async def load_prompt_variation(
 
 
 async def store_prompt_variation(
-    prompt_id: str,
+    datum_id: str,
     default_prompt_id: str,
     admin_key: str,
     client: AsyncClient,
@@ -150,7 +150,7 @@ async def store_prompt_variation(
         "Content-Type": "application/json",
     }
     params = {
-        "prompt_id": prompt_id,
+        "datum_id": datum_id,
         "default_prompt_id": default_prompt_id,
     }
 

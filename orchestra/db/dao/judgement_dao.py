@@ -48,7 +48,7 @@ class JudgementDAO:
 
     def find_judgement_response(
         self,
-        prompt_id,
+        datum_id,
         prompt_variation_id,
         endpoint_str,
         evaluator_id,
@@ -60,7 +60,7 @@ class JudgementDAO:
                 StoredPromptResponse,
                 StoredPromptResponse.id == Judgement.response_id,
             )
-            .where(StoredPromptResponse.prompt_id == prompt_id)
+            .where(StoredPromptResponse.datum_id == datum_id)
             .where(StoredPromptResponse.prompt_variation_id == prompt_variation_id)
             .where(StoredPromptResponse.endpoint_str == endpoint_str)
             .where(Judgement.evaluator_id == evaluator_id)

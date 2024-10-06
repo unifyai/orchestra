@@ -114,20 +114,20 @@ async def create_train_data(
     user_id,
     api_key,
     admin_key,
-    prompt_ids,
+    datum_ids,
     endpoints,
     evaluator,
     client,
 ):
-    # download all the prompts with prompt_ids ...
-    # download all the scores with prompt_ids ... per endpoint per evaluator
+    # download all the prompts with datum_ids ...
+    # download all the scores with datum_ids ... per endpoint per evaluator
     # combine
 
     ## getting
 
     url = "/v0/get_prompts"
 
-    params = {"prompt_ids": ",".join(str(p) for p in prompt_ids), "user_id": user_id}
+    params = {"datum_ids": ",".join(str(p) for p in datum_ids), "user_id": user_id}
 
     HEADERS = {
         "accept": "application/json",
@@ -149,7 +149,7 @@ async def create_train_data(
                 "Content-Type": "application/json",
             }
             params = {
-                "prompts": ",".join(str(i) for i in prompt_ids),
+                "prompts": ",".join(str(i) for i in datum_ids),
                 "endpoint": endpoint,
                 "evaluator": evaluator,
                 "user_id": user_id,
@@ -193,7 +193,7 @@ async def train_router(msg, save_dir=None, client=None):
     # user_email = msg["user_email"]
     api_key = msg["api_key"]
     admin_key = msg["admin_key"]
-    prompt_ids = msg["prompt_ids"]
+    datum_ids = msg["datum_ids"]
     router_id = msg["router_id"]
     endpoints = msg["endpoints"]
     evaluator = msg["evaluator"]
@@ -214,7 +214,7 @@ async def train_router(msg, save_dir=None, client=None):
         user_id,
         api_key,
         admin_key,
-        prompt_ids,
+        datum_ids,
         endpoints,
         evaluator,
         client,

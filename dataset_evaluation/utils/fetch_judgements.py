@@ -145,7 +145,7 @@ def parse_jgmt(jgmt):
 
 
 async def send_judgements_to_db(
-    prompt_id,
+    datum_id,
     prompt_variation_id,
     endpoint_str,
     judge_model_list,
@@ -166,7 +166,7 @@ async def send_judgements_to_db(
     judgement_list = [parse_jgmt(j) for j in judgement_list]
     judgement_scores = [calc_score(eval_config, j_str) for j_str in judgement_list]
     params = {
-        "prompt_id": prompt_id,
+        "datum_id": datum_id,
         "endpoint_str": endpoint_str,
         "evaluator_id": cfg.evaluator_id,
     }
@@ -186,7 +186,7 @@ async def send_judgements_to_db(
 
 
 async def generate_judgement(
-    prompt_id,
+    datum_id,
     endpoint_str,
     cfg,
     eval_config,
@@ -198,7 +198,7 @@ async def generate_judgement(
             prompt_variation_id = None
             if cfg.default_prompt:
                 response = await load_prompt_variation(
-                    prompt_id=prompt_id,
+                    datum_id=datum_id,
                     default_prompt_id=cfg.default_prompt_id,
                     admin_key=cfg.admin_key,
                     client=client,
@@ -207,7 +207,7 @@ async def generate_judgement(
 
             # get the prompt from the db
             prompt_data = await load_prompt(
-                prompt_id=prompt_id,
+                datum_id=datum_id,
                 admin_key=cfg.admin_key,
                 client=client,
             )
@@ -215,7 +215,7 @@ async def generate_judgement(
             # TODO: exception handling if the response isn't there for some reason
             response_data = (
                 await load_response(
-                    prompt_id=prompt_id,
+                    datum_id=datum_id,
                     prompt_variation_id=prompt_variation_id,
                     endpoint_str=endpoint_str,
                     admin_key=cfg.admin_key,
@@ -264,7 +264,7 @@ async def generate_judgement(
                 try:
                     # check we haven't already generated this one
                     judgement = await load_judgement(
-                        prompt_id=prompt_id,
+                        datum_id=datum_id,
                         prompt_variation_id=prompt_variation_id,
                         endpoint_str=endpoint_str,
                         evaluator_id=cfg.evaluator_id,
@@ -295,7 +295,7 @@ async def generate_judgement(
             responses_list = list(judge_to_responses.values())
 
             db_upload_msg = await send_judgements_to_db(
-                prompt_id=prompt_id,
+                datum_id=datum_id,
                 prompt_variation_id=prompt_variation_id,
                 endpoint_str=endpoint_str,
                 judge_model_list=judge_model_list,
@@ -310,7 +310,7 @@ async def generate_judgement(
                 print(db_upload_msg.text)
                 raise Exception
 
-            return (True, prompt_id, prompt_variation_id)
+            return (True, datum_id, prompt_variation_id)
     except Exception as e:
         print(f"general error with judgement: {e}")
-        return (False, prompt_id, prompt_variation_id)
+        return (False, datum_id, prompt_variation_id)

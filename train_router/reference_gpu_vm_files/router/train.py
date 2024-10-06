@@ -61,7 +61,7 @@ def train(model, optimizer, train_dataloader, val_dataloader, config):
     current_step = 0
     scheduler = LambdaLR(optimizer, lr_lambda=warmup_lambda)
     for epoch in range(1, config["train"]["epochs"]):
-        for i, (prompt_id, attn_mask, model_id, target_score) in enumerate(
+        for i, (datum_id, attn_mask, model_id, target_score) in enumerate(
             train_dataloader,
         ):
             with torch.autocast(
@@ -71,7 +71,7 @@ def train(model, optimizer, train_dataloader, val_dataloader, config):
                 model.train()
                 loss, metrics = train_step(
                     model,
-                    prompt_id,
+                    datum_id,
                     attn_mask,
                     model_id,
                     target_score,
@@ -133,10 +133,10 @@ def train(model, optimizer, train_dataloader, val_dataloader, config):
         print(f"EPOCH {epoch} DONE")
 
 
-def train_step(model, prompt_id, attn_mask, model_id, target_score, config):
+def train_step(model, datum_id, attn_mask, model_id, target_score, config):
     train_metrics = {}
 
-    score = model(prompt_id, model_id, attn_mask)
+    score = model(datum_id, model_id, attn_mask)
 
     loss = config["train"]["loss_fn"](
         score.view(-1),
@@ -153,8 +153,8 @@ def train_step(model, prompt_id, attn_mask, model_id, target_score, config):
 @torch.no_grad()
 def validate(model, val_dataloader, config):
     val_metric_tracker = MetricTracker()
-    for prompt_id, attn_mask, model_id, target_score in val_dataloader:
-        score = model(prompt_id, model_id, attn_mask)
+    for datum_id, attn_mask, model_id, target_score in val_dataloader:
+        score = model(datum_id, model_id, attn_mask)
         loss = config["train"]["loss_fn"](
             score.view(-1),
             target_score.float().view(-1).to(config["train"]["device"]),
@@ -212,7 +212,7 @@ def run_batch_inference(model, tokenizer, prompts: list, max_length, num_models)
         return_tensors="pt",
     ).to("cuda")
     embs = model.get_prompt_embs(
-        prompt_id=toks["input_ids"],
+        datum_id=toks["input_ids"],
         attn_mask=toks["attention_mask"],
     )
     model_emb = model.get_latent_rep(torch.arange(num_models, device="cuda"))
