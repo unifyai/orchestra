@@ -146,10 +146,9 @@ async def test_trigger_eval(
     assert response.status_code == 200, response.json()
 
     # create trigger evaluation
-    url = "/v0/evaluation"
+    url = "/v0/evaluation/trigger"
     agent = "gpt-3.5-turbo@openai"
     params = {
-        "url": url,
         "agent": agent,
         "dataset": dataset,
         "evaluator": eval_name,
@@ -158,10 +157,9 @@ async def test_trigger_eval(
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
-    url = "/v0/evaluation"
+    url = "/v0/evaluation/trigger"
     agent = "llama-3-8b-chat@aws-bedrock"
     params = {
-        "url": url,
         "agent": agent,
         "dataset": dataset,
         "evaluator": eval_name,
@@ -288,7 +286,7 @@ async def test_trigger_eval_duplicate(
 
     # trigger duplicate eval
 
-    url = "/v0/evaluation"
+    url = "/v0/evaluation/trigger"
     agent = "llama-3-8b-chat@aws-bedrock"
     params = {
         "url": url,
@@ -305,7 +303,7 @@ async def test_trigger_eval_duplicate(
     assert len(response.json()) == 4
 
     # retrigger
-    url = "/v0/evaluation"
+    url = "/v0/evaluation/trigger"
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
@@ -382,10 +380,9 @@ async def test_trigger_eval_with_default_prompt(
     assert response.status_code == 200, response.json()
 
     # create trigger evaluation
-    url = "/v0/evaluation"
+    url = "/v0/evaluation/trigger"
     agent = "gpt-3.5-turbo@openai"
     params = {
-        "url": url,
         "dataset": dataset,
         "agent": agent,
         "evaluator": eval_name,
@@ -394,10 +391,9 @@ async def test_trigger_eval_with_default_prompt(
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
-    url = "/v0/evaluation"
+    url = "/v0/evaluation/trigger"
     agent = "llama-3-8b-chat@aws-bedrock"
     params = {
-        "url": url,
         "dataset": dataset,
         "agent": agent,
         "evaluator": eval_name,
@@ -462,10 +458,9 @@ async def test_trigger_pass_dataset(
 
     # create trigger evaluation
 
-    url = "/v0/evaluation"
+    url = "/v0/evaluation/trigger"
     agent = "llama-3-8b-chat@aws-bedrock"
     params = {
-        "url": url,
         "agent": agent,
         "dataset": "test_dataset_eval",
         "evaluator": "test_eval",
@@ -493,10 +488,9 @@ async def test_trigger_pass_prompts(
 
     # create trigger evaluation
 
-    url = "/v0/evaluation"
+    url = "/v0/evaluation/trigger"
     agent = "llama-3-8b-chat@aws-bedrock"
     params = {
-        "url": url,
         "agent": agent,
         "prompts": "1,2",
         "evaluator": "test_eval",
@@ -524,7 +518,7 @@ async def test_trigger_pass_invalid_prompts(
 
     # create trigger evaluation
 
-    url = "/v0/evaluation"
+    url = "/v0/evaluation/trigger"
     agent = "llama-3-8b-chat@aws-bedrock"
     params = {
         "url": url,
@@ -558,12 +552,10 @@ async def test_client_side_scores(
     with open(file_path, "rb") as f:
         file_content = f.read()
     files = {
-        "client_side_scores": ("test.jsonl", file_content, "application/x-jsonlines"),
+        "evaluations": ("test.jsonl", file_content, "application/x-jsonlines"),
     }
 
     params = {
-        "url": url,
-        "dataset": dataset,
         "agent": agent,
         "evaluator": eval_name,
     }
@@ -608,12 +600,10 @@ async def test_client_side_rationales(
     with open(file_path, "rb") as f:
         file_content = f.read()
     files = {
-        "client_side_scores": ("test.jsonl", file_content, "application/x-jsonlines"),
+        "evaluations": ("test.jsonl", file_content, "application/x-jsonlines"),
     }
 
     params = {
-        "url": url,
-        "dataset": dataset,
         "agent": agent,
         "evaluator": eval_name,
     }
@@ -688,12 +678,10 @@ async def test_client_side_no_rationales(
     with open(file_path, "rb") as f:
         file_content = f.read()
     files = {
-        "client_side_scores": ("test.jsonl", file_content, "application/x-jsonlines"),
+        "evaluations": ("test.jsonl", file_content, "application/x-jsonlines"),
     }
 
     params = {
-        "url": url,
-        "dataset": dataset,
         "agent": agent,
         "evaluator": eval_name,
     }
