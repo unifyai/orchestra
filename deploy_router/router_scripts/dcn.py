@@ -58,10 +58,10 @@ class DCN(nn.Module):
             dropout=dropout,
         )
 
-    def forward(self, prompt_id, model_id, attn_mask):
-        prompt_id = prompt_id.to(self.dev)
+    def forward(self, datum_id, model_id, attn_mask):
+        datum_id = datum_id.to(self.dev)
         prompt_emb = self.prompt_encoder(
-            input_ids=prompt_id,
+            input_ids=datum_id,
             attention_mask=attn_mask.to(self.dev),
         ).last_hidden_state
         model_id = model_id.to(self.dev)

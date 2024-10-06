@@ -528,7 +528,7 @@ async def test_trigger_pass_invalid_prompts(
     }
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 400, response.json()
-    assert response.json() == {"detail": "The following prompt_ids are invalid: 3, 99"}
+    assert response.json() == {"detail": "The following datum_ids are invalid: 3, 99"}
 
 
 ########################
@@ -559,6 +559,7 @@ async def test_client_side_scores(
         "agent": agent,
         "evaluator": eval_name,
     }
+    breakpoint()
     response = await client.post(url, params=params, files=files, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
@@ -1045,7 +1046,7 @@ async def test_list_evaluation_responses(client: AsyncClient, dbsession):
     await _helper_test_list_evaluations(client, params, expected_scores)
 
 
-async def test_list_evaluation_responses_from_prompt_ids(
+async def test_list_evaluation_responses_from_datum_ids(
     client: AsyncClient,
     dbsession,
 ):
@@ -1132,7 +1133,7 @@ async def test_delete_evaluation_endpoint_and_evaluator(client: AsyncClient, dbs
     await _helper_test_list_evaluations(client, all_params, expected_scores)
 
 
-async def test_delete_evaluation_endpoint_and_evaluator_from_prompt_ids(
+async def test_delete_evaluation_endpoint_and_evaluator_from_datum_ids(
     client: AsyncClient,
     dbsession,
 ):

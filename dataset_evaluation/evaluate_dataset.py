@@ -201,7 +201,7 @@ async def evaluate_dataset(msg, data_dir, shared_volume="", client=None):
     semaphore = asyncio.Semaphore(BATCH_SIZE)
     tasks = [
         generate_judgement(
-            prompt_id=p_id,
+            datum_id=p_id,
             endpoint_str=cfg.endpoint,
             cfg=cfg,
             eval_config=eval_config,

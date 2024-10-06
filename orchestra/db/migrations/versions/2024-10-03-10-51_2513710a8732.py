@@ -39,7 +39,7 @@ def upgrade() -> None:
     )
     stored_prompt_extra_field = table(
         "stored_prompt_extra_field",
-        column("prompt_id", sa.Integer),
+        column("datum_id", sa.Integer),
         column("field", sa.String),
         column("value", sa.String),
     )
@@ -48,23 +48,23 @@ def upgrade() -> None:
     connection = op.get_bind()
     results = connection.execute(
         sa.select(
-            stored_prompt_extra_field.c.prompt_id,
+            stored_prompt_extra_field.c.datum_id,
             sa.func.json_object_agg(
                 stored_prompt_extra_field.c.field,
                 stored_prompt_extra_field.c.value,
             ).label("extra_fields"),
-        ).group_by(stored_prompt_extra_field.c.prompt_id),
+        ).group_by(stored_prompt_extra_field.c.datum_id),
     ).fetchall()
 
     for row in results:
         connection.execute(
             stored_prompt.update()
-            .where(stored_prompt.c.id == row.prompt_id)
+            .where(stored_prompt.c.id == row.datum_id)
             .values(extra_fields=row.extra_fields),
         )
 
     op.drop_index(
-        "ix_stored_prompt_extra_field_prompt_id",
+        "ix_stored_prompt_extra_field_datum_id",
         table_name="stored_prompt_extra_field",
     )
     op.drop_table("stored_prompt_extra_field")
@@ -106,20 +106,20 @@ def downgrade() -> None:
     op.create_table(
         "stored_prompt_extra_field",
         sa.Column("id", sa.INTEGER(), autoincrement=True, nullable=False),
-        sa.Column("prompt_id", sa.INTEGER(), autoincrement=False, nullable=True),
+        sa.Column("datum_id", sa.INTEGER(), autoincrement=False, nullable=True),
         sa.Column("field", sa.VARCHAR(), autoincrement=False, nullable=False),
         sa.Column("value", sa.VARCHAR(), autoincrement=False, nullable=False),
         sa.ForeignKeyConstraint(
-            ["prompt_id"],
+            ["datum_id"],
             ["stored_prompt.id"],
-            name="stored_prompt_extra_field_prompt_id_fkey",
+            name="stored_prompt_extra_field_datum_id_fkey",
         ),
         sa.PrimaryKeyConstraint("id", name="stored_prompt_extra_field_pkey"),
     )
     op.create_index(
-        "ix_stored_prompt_extra_field_prompt_id",
+        "ix_stored_prompt_extra_field_datum_id",
         "stored_prompt_extra_field",
-        ["prompt_id"],
+        ["datum_id"],
         unique=False,
     )
     # ### end Alembic commands ###

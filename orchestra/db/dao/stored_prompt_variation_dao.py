@@ -14,12 +14,12 @@ class StoredPromptVariationDAO:
 
     def create(  # noqa: WPS211
         self,
-        prompt_id: int,
+        datum_id: int,
         default_prompt_id: int,
     ) -> None:
         self.session.add(
             StoredPromptVariation(
-                prompt_id=prompt_id,
+                datum_id=datum_id,
                 default_prompt_id=default_prompt_id,
             ),
         )
@@ -27,14 +27,14 @@ class StoredPromptVariationDAO:
     def filter(  # noqa: WPS211, C901
         self,
         id: Optional[int] = None,  # noqa: WPS125
-        prompt_id: Optional[int] = None,
+        datum_id: Optional[int] = None,
         default_prompt_id: Optional[int] = None,
     ) -> List[StoredPromptVariation]:
         query = select(StoredPromptVariation)
         if id:
             query = query.where(StoredPromptVariation.id == id)
-        if prompt_id:
-            query = query.where(StoredPromptVariation.prompt_id == prompt_id)
+        if datum_id:
+            query = query.where(StoredPromptVariation.datum_id == datum_id)
         if default_prompt_id:
             query = query.where(
                 StoredPromptVariation.default_prompt_id == default_prompt_id,
@@ -42,11 +42,11 @@ class StoredPromptVariationDAO:
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())
 
-    def delete(self, prompt_id, default_prompt_id):
+    def delete(self, datum_id, default_prompt_id):
         try:
             entry = (
                 self.session.query(StoredPromptVariation)
-                .filter_by(prompt_id=prompt_id, default_prompt_id=default_prompt_id)
+                .filter_by(datum_id=datum_id, default_prompt_id=default_prompt_id)
                 .one()
             )
             self.session.delete(entry)
