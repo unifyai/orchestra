@@ -21,18 +21,18 @@ def upgrade() -> None:
     op.create_table(
         "stored_prompt_variation",
         sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("prompt_id", sa.Integer(), nullable=True),
+        sa.Column("datum_id", sa.Integer(), nullable=True),
         sa.Column("prompt_overrides", sa.String(), nullable=True),
         sa.ForeignKeyConstraint(
-            ["prompt_id"],
+            ["datum_id"],
             ["stored_prompt.id"],
         ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        op.f("ix_stored_prompt_variation_prompt_id"),
+        op.f("ix_stored_prompt_variation_datum_id"),
         "stored_prompt_variation",
-        ["prompt_id"],
+        ["datum_id"],
         unique=False,
     )
     op.add_column(
@@ -84,7 +84,7 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_evaluation_prompt_variation_id"), table_name="evaluation")
     op.drop_column("evaluation", "prompt_variation_id")
     op.drop_index(
-        op.f("ix_stored_prompt_variation_prompt_id"),
+        op.f("ix_stored_prompt_variation_datum_id"),
         table_name="stored_prompt_variation",
     )
     op.drop_table("stored_prompt_variation")

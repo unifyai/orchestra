@@ -58,15 +58,15 @@ def get_cloud_sql_data():
             f"select * from dataset_prompt where dataset_id={hermes_id}",
         )
         print("dataset_prompt")
-        prompt_ids = [dataset_prompt["prompt_id"] for dataset_prompt in dataset_prompts]
+        datum_ids = [dataset_prompt["datum_id"] for dataset_prompt in dataset_prompts]
         stored_prompts = get_rows(
             conn,
-            f"select * from stored_prompt where id in {tuple(prompt_ids)}",
+            f"select * from stored_prompt where id in {tuple(datum_ids)}",
         )
         print("stored_prompt")
         stored_prompt_responses = get_rows(
             conn,
-            f"select * from stored_prompt_response where prompt_id in {tuple(prompt_ids)}",
+            f"select * from stored_prompt_response where datum_id in {tuple(datum_ids)}",
         )
         print("stored_prompt_response")
         response_ids = [
@@ -86,7 +86,7 @@ def get_cloud_sql_data():
         print("judgement")
         evaluations = get_rows(
             conn,
-            f"select * from evaluation where prompt_id in {tuple(prompt_ids)} and evaluator_id={evaluator_id}",
+            f"select * from evaluation where datum_id in {tuple(datum_ids)} and evaluator_id={evaluator_id}",
         )
         print("evaluation")
         data = {

@@ -10,7 +10,7 @@ from utils.helpers import (
 
 
 async def send_response_to_db(
-    prompt_id,
+    datum_id,
     prompt_variation_id,
     endpoint_str,
     admin_key,
@@ -26,7 +26,7 @@ async def send_response_to_db(
     num_tokens = response["usage"]["completion_tokens"]
 
     params = {
-        "prompt_id": prompt_id,
+        "datum_id": datum_id,
         "endpoint_str": endpoint_str,
         "response": json.dumps(response),
         "num_tokens": num_tokens,
@@ -38,7 +38,7 @@ async def send_response_to_db(
 
 
 async def generate_response(
-    prompt_id,
+    datum_id,
     endpoint_str,
     cfg,
     client,
@@ -49,14 +49,14 @@ async def generate_response(
             prompt_variation_id = None
             if cfg.default_prompt:
                 response = await load_prompt_variation(
-                    prompt_id=prompt_id,
+                    datum_id=datum_id,
                     default_prompt_id=cfg.default_prompt_id,
                     admin_key=cfg.admin_key,
                     client=client,
                 )
                 if not response:
                     response = await store_prompt_variation(
-                        prompt_id=prompt_id,
+                        datum_id=datum_id,
                         default_prompt_id=cfg.default_prompt_id,
                         admin_key=cfg.admin_key,
                         client=client,
@@ -65,16 +65,16 @@ async def generate_response(
 
             # check we haven't already got the response:
             response = await load_response(
-                prompt_id=prompt_id,
+                datum_id=datum_id,
                 prompt_variation_id=prompt_variation_id,
                 endpoint_str=endpoint_str,
                 admin_key=cfg.admin_key,
                 client=client,
             )
             if response:
-                return (True, prompt_id, prompt_variation_id)
+                return (True, datum_id, prompt_variation_id)
             # get the prompt from the db
-            prompt_data = await load_prompt(prompt_id, cfg.admin_key, client)
+            prompt_data = await load_prompt(datum_id, cfg.admin_key, client)
 
             default_prompt_dict = {}
             if cfg.default_prompt:
@@ -114,7 +114,7 @@ async def generate_response(
 
             # upload the response
             db_upload_msg = await send_response_to_db(
-                prompt_id=prompt_id,
+                datum_id=datum_id,
                 prompt_variation_id=prompt_variation_id,
                 endpoint_str=endpoint_str,
                 admin_key=cfg.admin_key,
@@ -123,6 +123,6 @@ async def generate_response(
             )
             if db_upload_msg != 200:
                 raise Exception
-            return (True, prompt_id, prompt_variation_id)
+            return (True, datum_id, prompt_variation_id)
     except:
-        return (False, prompt_id, prompt_variation_id)
+        return (False, datum_id, prompt_variation_id)

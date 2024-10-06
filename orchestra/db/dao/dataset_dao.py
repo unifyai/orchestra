@@ -86,21 +86,21 @@ class DatasetDAO:
         except:
             return []
 
-    def contains_prompt(self, user_id: str, name: str, prompt_id: str) -> bool:
+    def contains_prompt(self, user_id: str, name: str, datum_id: str) -> bool:
         dataset_id = self.get_dataset_id(user_id, name)[0]
         return bool(
             (
                 self.session.query(DatasetPrompt)
                 .where(DatasetPrompt.dataset_id == dataset_id)
-                .where(DatasetPrompt.prompt_id == prompt_id)
-            ).first()
+                .where(DatasetPrompt.datum_id == datum_id)
+            ).first(),
         )
 
     def fetch_prompts_ids_in_dataset(self, user_id: str, name: str) -> list[dict]:
         dataset_id = self.get_dataset_id(user_id, name)[0]
         query = (
             select(StoredPrompt.id)
-            .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
+            .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.datum_id)
             .where(DatasetPrompt.dataset_id == dataset_id)
         )
 
@@ -121,7 +121,7 @@ class DatasetDAO:
         dataset_id = self.get_dataset_id(user_id, name)[0]
         query = (
             select(StoredPrompt, DatasetPrompt)
-            .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
+            .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.datum_id)
             .where(DatasetPrompt.dataset_id == dataset_id)
             .order_by(
                 StoredPrompt.id,
@@ -190,7 +190,7 @@ class DatasetDAO:
         ).first()
 
         if existing_prompt:
-            prompt_id = existing_prompt.id
+            datum_id = existing_prompt.id
         else:
             new_prompt = StoredPrompt(
                 user_id=user_id,
@@ -204,36 +204,36 @@ class DatasetDAO:
             try:
                 self.session.add(new_prompt)
                 self.session.flush()
-                prompt_id = new_prompt.id
+                datum_id = new_prompt.id
             except:
                 return {
                     "error": "An error occurred while adding the prompt. Please check the format is correct, and try again.",
-                    "prompt_id": new_prompt.id,
+                    "datum_id": new_prompt.id,
                 }
 
         existing_dataset_prompt = (
             self.session.query(DatasetPrompt)
             .where(DatasetPrompt.dataset_id == dataset_id)
-            .where(DatasetPrompt.prompt_id == prompt_id)
+            .where(DatasetPrompt.datum_id == datum_id)
         ).first()
         if existing_dataset_prompt:
             return {
                 "error": "This prompt is already in the dataset",
-                "prompt_id": prompt_id,
+                "datum_id": datum_id,
             }
 
-        dataset_prompt = DatasetPrompt(dataset_id=dataset_id, prompt_id=prompt_id)
+        dataset_prompt = DatasetPrompt(dataset_id=dataset_id, datum_id=datum_id)
         try:
             self.session.add(dataset_prompt)
             self.session.flush()
-            return prompt_id
+            return datum_id
         except:
             return {
                 "error": "An error occurred while adding the prompt. Please check the format is correct, and try again.",
-                "prompt_id": prompt_id,
+                "datum_id": datum_id,
             }
 
-    def remove_prompt_from_dataset(self, user_id, dataset_name, prompt_id):
+    def remove_prompt_from_dataset(self, user_id, dataset_name, datum_id):
         try:
             dataset_id = self.filter(user_id=user_id, name=dataset_name)[0].id
         except:
@@ -242,7 +242,7 @@ class DatasetDAO:
         try:
             dataset_prompt = (
                 self.session.query(DatasetPrompt)
-                .filter_by(dataset_id=dataset_id, prompt_id=prompt_id)
+                .filter_by(dataset_id=dataset_id, datum_id=datum_id)
                 .one()
             )
 
@@ -251,7 +251,7 @@ class DatasetDAO:
             return {"info": "Dataset entries deleted successfully"}
         except:
             self.session.rollback()
-            return {"error": "Dataset entry {} not found".format(prompt_id)}
+            return {"error": "Dataset entry {} not found".format(datum_id)}
 
     def delete_dataset(self, user_id, name):
         try:

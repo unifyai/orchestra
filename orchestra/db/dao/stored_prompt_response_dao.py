@@ -14,7 +14,7 @@ class StoredPromptResponseDAO:
 
     def create(  # noqa: WPS211
         self,
-        prompt_id: int,
+        datum_id: int,
         endpoint_str: str,
         response: str,
         num_tokens: int,
@@ -22,7 +22,7 @@ class StoredPromptResponseDAO:
     ) -> None:
         self.session.add(
             StoredPromptResponse(
-                prompt_id=prompt_id,
+                datum_id=datum_id,
                 prompt_variation_id=prompt_variation_id,
                 endpoint_str=endpoint_str,
                 response=response,
@@ -33,15 +33,15 @@ class StoredPromptResponseDAO:
     def filter(  # noqa: WPS211, C901
         self,
         id: Optional[int] = None,  # noqa: WPS125
-        prompt_id: Optional[int] = None,
+        datum_id: Optional[int] = None,
         prompt_variation_id: Optional[int] = None,
         endpoint_str: Optional[str] = None,
     ) -> List[StoredPromptResponse]:
         query = select(StoredPromptResponse)
         if id:
             query = query.where(StoredPromptResponse.id == id)
-        if prompt_id:
-            query = query.where(StoredPromptResponse.prompt_id == prompt_id)
+        if datum_id:
+            query = query.where(StoredPromptResponse.datum_id == datum_id)
         if prompt_variation_id:
             query = query.where(
                 StoredPromptResponse.prompt_variation_id == prompt_variation_id,

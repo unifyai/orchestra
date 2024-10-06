@@ -29,7 +29,7 @@ def upgrade() -> None:
     )
     op.alter_column(
         "stored_prompt_variation",
-        "prompt_id",
+        "datum_id",
         existing_type=sa.INTEGER(),
         nullable=False,
     )
@@ -63,7 +63,7 @@ def downgrade() -> None:
     )
     op.alter_column(
         "stored_prompt_variation",
-        "prompt_id",
+        "datum_id",
         existing_type=sa.INTEGER(),
         nullable=True,
     )

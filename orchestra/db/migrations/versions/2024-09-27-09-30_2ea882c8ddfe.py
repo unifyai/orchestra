@@ -20,14 +20,14 @@ def upgrade() -> None:
     op.create_unique_constraint(
         "uq_evaluation",
         "evaluation",
-        ["prompt_id", "prompt_variation_id", "evaluator_id", "endpoint_str"],
+        ["datum_id", "prompt_variation_id", "evaluator_id", "endpoint_str"],
         postgresql_nulls_not_distinct=True,
     )
     op.drop_constraint("uq_prompt_response", "stored_prompt_response", type_="unique")
     op.create_unique_constraint(
         "uq_prompt_response",
         "stored_prompt_response",
-        ["prompt_id", "prompt_variation_id", "endpoint_str"],
+        ["datum_id", "prompt_variation_id", "endpoint_str"],
         postgresql_nulls_not_distinct=True,
     )
     # ### end Alembic commands ###
@@ -39,12 +39,12 @@ def downgrade() -> None:
     op.create_unique_constraint(
         "uq_prompt_response",
         "stored_prompt_response",
-        ["prompt_id", "prompt_variation_id", "endpoint_str"],
+        ["datum_id", "prompt_variation_id", "endpoint_str"],
     )
     op.drop_constraint("uq_evaluation", "evaluation", type_="unique")
     op.create_unique_constraint(
         "uq_evaluation",
         "evaluation",
-        ["prompt_id", "prompt_variation_id", "evaluator_id", "endpoint_str"],
+        ["datum_id", "prompt_variation_id", "evaluator_id", "endpoint_str"],
     )
     # ### end Alembic commands ###

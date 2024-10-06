@@ -39,9 +39,9 @@ def run_inference(model, tokenizer, prompt, model_id, max_length):
         return_tensors="pt",
     ).to(DEVICE)
     n = model_id.size(0)
-    prompt_id = tok["input_ids"].repeat(n, 1)
+    datum_id = tok["input_ids"].repeat(n, 1)
     attn_mask = tok["attention_mask"].repeat(n, 1)
-    ret = model.forward(prompt_id=prompt_id, model_id=model_id, attn_mask=attn_mask)
+    ret = model.forward(datum_id=datum_id, model_id=model_id, attn_mask=attn_mask)
     return ret.flatten()
 
 

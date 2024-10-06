@@ -410,7 +410,7 @@ class StoredPromptVariation(Base):
     __tablename__ = "stored_prompt_variation"
 
     id = Column(Integer(), primary_key=True)
-    prompt_id = Column(
+    datum_id = Column(
         Integer(),
         ForeignKey("stored_prompt.id"),
         index=True,
@@ -430,7 +430,7 @@ class StoredPromptResponse(Base):
     __tablename__ = "stored_prompt_response"
 
     id = Column(Integer(), primary_key=True)
-    prompt_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
+    datum_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
     prompt_variation_id = Column(
         Integer(),
         ForeignKey("stored_prompt_variation.id"),
@@ -441,7 +441,7 @@ class StoredPromptResponse(Base):
     num_tokens = Column(Integer(), nullable=False)
     __table_args__ = (
         UniqueConstraint(
-            "prompt_id",
+            "datum_id",
             "prompt_variation_id",
             "endpoint_str",
             name="uq_prompt_response",
@@ -479,11 +479,11 @@ class DatasetPrompt(Base):
 
     id = Column(Integer(), primary_key=True)
     dataset_id = Column(Integer(), ForeignKey("dataset.id"), index=True)
-    prompt_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
+    datum_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
     __table_args__ = (
         UniqueConstraint(
             "dataset_id",
-            "prompt_id",
+            "datum_id",
             name="uq_dataset_prompt",
         ),
     )
@@ -522,7 +522,7 @@ class Evaluation(Base):
     __tablename__ = "evaluation"
 
     id = Column(Integer(), primary_key=True)
-    prompt_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
+    datum_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
     prompt_variation_id = Column(
         Integer(),
         ForeignKey("stored_prompt_variation.id"),
@@ -533,7 +533,7 @@ class Evaluation(Base):
     score = Column(Numeric(), nullable=False)
     __table_args__ = (
         UniqueConstraint(
-            "prompt_id",
+            "datum_id",
             "prompt_variation_id",
             "evaluator_id",
             "endpoint_str",

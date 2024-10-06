@@ -43,7 +43,7 @@ async def test_train_router_pre_pubsub(client: AsyncClient, monkeypatch, dbsessi
         assert data == {
             # "user_id": "XXX",
             # "api_key": "XXX",
-            "prompt_ids": [1, 2, 3],
+            "datum_ids": [1, 2, 3],
             "router_id": 1,
             "endpoints": [
                 "llama-3-8b-chat@aws-bedrock",

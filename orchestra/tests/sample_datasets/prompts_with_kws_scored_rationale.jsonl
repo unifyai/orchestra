@@ -1,2 +1,2 @@
-{"prompt_id": 1, "response": "Madrid", "score": 1.0, "rationale": "Correct answer"}
-{"prompt_id": 2, "response": "30", "score": 0.0, "rationale": "Incorrect answer"}
+{"datum_id": 1, "response": "Madrid", "score": 1.0, "rationale": "Correct answer"}
+{"datum_id": 2, "response": "30", "score": 0.0, "rationale": "Incorrect answer"}

@@ -1,5 +1,5 @@
 import datetime
-from typing import List, Optional, Dict
+from typing import Dict, List, Optional
 
 from fastapi import Depends
 from sqlalchemy import select
@@ -41,9 +41,7 @@ class StoredPromptDAO:
         user_id: str,
     ) -> Dict[str, str]:
         prompt = (
-            self.session.query(StoredPrompt)
-            .filter_by(id=id, user_id=user_id)
-            .one()
+            self.session.query(StoredPrompt).filter_by(id=id, user_id=user_id).one()
         )
         self.session.delete(prompt)
         self.session.commit()
@@ -68,21 +66,21 @@ class StoredPromptDAO:
         rows = self.session.execute(query)
         return list(rows.scalars().unique().fetchall())
 
-    def check_ids_valid(self, user_id, prompt_ids):
+    def check_ids_valid(self, user_id, datum_ids):
         query = (
             select(StoredPrompt.id)
             .where(StoredPrompt.user_id == user_id)
-            .where(StoredPrompt.id.in_(prompt_ids))
+            .where(StoredPrompt.id.in_(datum_ids))
         )
         matching_ids = self.session.execute(query).scalars().all()
-        invalid_ids = set(prompt_ids).difference(set(matching_ids))
+        invalid_ids = set(datum_ids).difference(set(matching_ids))
         return invalid_ids
 
-    def get_prompts(self, prompt_ids: list, user_id: str):
+    def get_prompts(self, datum_ids: list, user_id: str):
         query = (
             select(StoredPrompt)
             .where(StoredPrompt.user_id == user_id)
-            .where(StoredPrompt.id.in_(prompt_ids))
+            .where(StoredPrompt.id.in_(datum_ids))
         )
         rows = self.session.execute(query)
         return list(rows.scalars().unique().fetchall())
