@@ -30,7 +30,7 @@ def delete_dataset(client, name):
     return client.delete("/v0/dataset", headers=headers, params=params)
 
 
-def fetch_datasets(client):
+def list_datasets(client):
     url = "/v0/dataset/list"
     return client.get(url, headers=headers)
 
@@ -138,7 +138,7 @@ async def test_upload_dataset(client: AsyncClient):
     response = await upload_dataset(client, file_path, name)
     assert response.status_code == 200, response.json()
 
-    response = await fetch_datasets(client)
+    response = await list_datasets(client)
     assert name in response.json()
     assert "all_data" in response.json()
 
@@ -189,7 +189,7 @@ async def test_rename_dataset(client: AsyncClient):
     new_name = "test_new_name"
     params = {"name": name, "new_name": new_name}
     response = await client.post("/v0/dataset/rename", headers=headers, params=params)
-    response = await fetch_datasets(client)
+    response = await list_datasets(client)
     assert new_name in response.json()
     assert name not in response.json()
 
@@ -206,7 +206,7 @@ async def test_list_datasets(client: AsyncClient):
         assert response.status_code == 200, response.json()
 
     # List datasets
-    response = await fetch_datasets(client)
+    response = await list_datasets(client)
     # checks
     datasets = response.json()
     # No full paths
@@ -294,7 +294,7 @@ async def test_rename_dataset_from_seed(client: AsyncClient, dbsession):
     response = await client.post("/v0/dataset/rename", headers=headers, params=params)
     assert response.status_code == 200, response.json()
     assert response.json() == {"info": "Dataset name updated successfully!"}
-    response = await fetch_datasets(client)
+    response = await list_datasets(client)
     assert response.status_code == 200, response.json()
     assert response.json() == ["test_new_name", "test_second_upload_dataset"]
 
@@ -573,3 +573,25 @@ async def test_add_prompt_invalid_pydantic(client: AsyncClient, dbsession):
     assert response.json() == {
         "detail": "There was an error adding the prompt.\nErrors:\nError with prompt 1: 1 validation error for Prompt\nfake_kw\n  Extra inputs are not permitted [type=extra_forbidden, input_value=123, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.9/v/extra_forbidden\n",
     }
+
+
+async def test_delete_dataset(client: AsyncClient):
+    # Upload dataset
+    file_path = "./orchestra/tests/sample_datasets/prompts_with_kws.jsonl"
+    name = "test_upload_dataset"
+    response = await upload_dataset(client, file_path, name)
+    assert response.status_code == 200, response.json()
+
+    # Check in dataset list
+    response = await list_datasets(client)
+    assert name in response.json()
+    assert "all_data" in response.json()
+
+    # Delete dataset
+    response = await delete_dataset(client, name)
+    assert response.status_code == 200, response.json()
+
+    # Check not in dataset list
+    response = await list_datasets(client)
+    assert name not in response.json()
+    assert "all_data" in response.json()
