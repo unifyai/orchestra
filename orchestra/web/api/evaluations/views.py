@@ -162,7 +162,7 @@ def get_prompt_ids(dataset, prompts, user_id, dataset_dao, stored_prompt_dao):
 
 
 @router.post(
-    "/evaluation",
+    "/evaluation/trigger",
     responses={
         200: {
             "description": "Successful Response",
@@ -228,30 +228,20 @@ def trigger_evaluation(
         ),
         example="gpt-4o-mini@openai",
     ),
-    client_side_scores: UploadFile = File(
-        default=None,
-        description="An optional file upload for client-side scores. The file must be in JSONL format and the prompts must match the order of the `dataset`. "
-        "Each entry should include `prompt_id` and `score` keys, with `score` being a float between 0 and 1. The evaluation corresponding to the `evaluator` must have `client_side=True`.",
-        json_schema_extra={"example": "client_scores.jsonl"},
-    ),
     dataset_dao: DatasetDAO = Depends(),
     stored_prompt_dao: StoredPromptDAO = Depends(),
-    stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
     evaluator_dao: EvaluatorDAO = Depends(),
-    judgement_dao: JudgementDAO = Depends(),
     default_prompt_dao: DefaultPromptDAO = Depends(),
-    evaluation_dao: EvaluationDAO = Depends(),
 ) -> Dict[str, str]:
     """
     Uses the named `evaluator` to trigger an evaluation of quality scores for the
     selected LLM `endpoint` on the selected `dataset`, or selected `prompts` (by
-    prompt_id). You can upload custom scores (and bypass the LLM judge entirely) by
-    uploading a file via the `client_side_scores` argument. Once the evaluation has
-    finished, you can access the scores using the `/v0/evaluation` endpoint. If a custom
-    prompt is specified, its fields will overwrite the corresponding fields in each one
-    of the evaluated prompts. If a response for a given prompt has already been
-    provided for the selected endpoint, during another evaluation, then this response
-    will be re-used during the current evaluation.
+    prompt_id). Once the evaluation has finished, you can access the scores using the
+    `/v0/evaluation` endpoint. If a custom prompt is specified, its fields will
+    overwrite the corresponding fields in each one of the evaluated prompts. If a
+    response for a given prompt has already been provided for the selected endpoint,
+    during another evaluation, then this response will be re-used during the current
+    evaluation.
     """
 
     user_id = request_fastapi.state.user_id
@@ -262,12 +252,6 @@ def trigger_evaluation(
     invalid_endpoints = find_invalid_endpoints([agent])
     if invalid_endpoints:
         raise invalid_training_endpoints(invalid_endpoints)
-
-    if prompts and client_side_scores:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Client-side scores for individual prompts not yet supported.",
-        )
 
     prompt_ids = get_prompt_ids(
         dataset=dataset,
@@ -299,101 +283,6 @@ def trigger_evaluation(
         default_prompt_dict = raw_default_prompt[0].prompt
         default_prompt_id = raw_default_prompt[0].id
 
-    if client_side_scores:
-        file = client_side_scores.file.read()
-        # TODO: check whether matches dataset
-        try:
-            lines = file.decode().split("\n")
-            lines = [json.loads(l) for l in lines if l != ""]
-            for ix, line in enumerate(lines):
-                _expected_keys = set(["prompt_id", "score"])
-                _found_keys = set(line.keys())
-                _optional_keys = set(["response", "rationale"])
-                if _missing := _expected_keys.difference(_found_keys):
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Error in line {ix}: missing: {', '.join(_missing)}",
-                    )
-                if _extra := _found_keys.difference(
-                    _expected_keys.union(_optional_keys),
-                ):
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Error in line {ix}: extra key: {', '.join(_extra)}. Only allowed keys: {', '.join(_expected_keys.union(_optional_keys))}",
-                    )
-        except HTTPException as e:
-            raise e
-        except Exception as e:
-            raise HTTPException(
-                status_code=400,
-                detail="Error processing uploaded scores",
-            )
-
-        # _model, _provider = endpoint.split("@")
-        # if _provider != "external":
-        #     raise HTTPException(
-        #         status_code=400,
-        #         detail=f"Error with {endpoint}: "
-        #         "When submitting client-side scores, endpoint must be an `external` model, "
-        #         "specified as e.g. `model@external`.",
-        #     )
-
-        # check whether the evaluator is a client side one:
-        if (
-            not hasattr(raw_evaluators[0], "client_side")
-            or raw_evaluators[0].client_side is not True
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail=f"The evaluator {evaluator} is not a client-side evaluator "
-                f"(as client_side != True)",
-            )
-        # upload the data
-        for l in lines:
-            prompt_id = l["prompt_id"]
-            score = l["score"]
-            if not isinstance(score, float) or score < 0 or score > 1.0:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Error with score from prompt_id: {prompt_id}, score: {score}",
-                )
-            rationale = l.get("rationale", "")
-
-            num_tokens = 0
-
-            stored_prompt_response_dao.create(
-                prompt_id=prompt_id,
-                prompt_variation_id=None,
-                endpoint_str=agent,
-                response=l.get("response", ""),
-                num_tokens=num_tokens,
-            )
-
-            raw_ids = stored_prompt_response_dao.filter(
-                prompt_id=prompt_id,
-                prompt_variation_id=None,
-                endpoint_str=agent,
-            )
-            response_id = raw_ids[0].id
-            judge_model = "client_side"
-
-            judgement_dao.create(
-                response_id=response_id,
-                judge_endpoint_str=judge_model,
-                evaluator_id=evaluator_id,
-                judgement=rationale,
-                judgement_score=score,
-            )
-            ## add evaluation with the score
-            evaluation_dao.create(
-                prompt_id=prompt_id,
-                prompt_variation_id=None,
-                evaluator_id=evaluator_id,
-                endpoint_str=agent,
-                score=score,
-            )
-        return {"info": "Evaluation uploaded!"}
-
     # Send train job to the dataset_evaluation server
     send_to_dataset_evaluation_server(
         action="evaluate",
@@ -408,6 +297,174 @@ def trigger_evaluation(
         default_prompt_id=default_prompt_id,
     )
     return {"info": "Dataset evaluation started! You will receive an email soon!"}
+
+
+@router.post(
+    "/evaluation",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Dataset evaluation successfully Uploaded! ",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Dataset Not Found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "This dataset does not exist!"},
+                },
+            },
+        },
+    },
+)
+def upload_evaluation(
+    request_fastapi: Request,
+    evaluator: str = Query(
+        default="default_evaluator",
+        description="Name of the evaluator used.",
+        example="eval1",
+    ),
+    default_prompt: Optional[str] = Query(
+        default=None,
+        description="Name of the default prompt used.",
+        example="default_prompt1",
+    ),
+    agent: str = Query(
+        description=(
+            "The agent to fetch the evaluation for, can be an endpoint string or "
+            "an arbitrarily named client-side agent. If `None`, returns all available "
+            "evaluations for the dataset and evaluator pair."
+        ),
+        example="gpt-4o-mini@openai",
+    ),
+    evaluations: UploadFile = File(
+        description="The evaluation results to upload. The file must be in JSONL format and the prompts must match the order of the `dataset`. "
+        "Each entry should include `prompt_id` and `score` keys, with `score` being a float between 0 and 1. The evaluation corresponding to the `evaluator` must have `client_side=True`.",
+        json_schema_extra={"example": "client_scores.jsonl"},
+    ),
+    stored_prompt_response_dao: StoredPromptResponseDAO = Depends(),
+    evaluator_dao: EvaluatorDAO = Depends(),
+    judgement_dao: JudgementDAO = Depends(),
+    default_prompt_dao: DefaultPromptDAO = Depends(),
+    evaluation_dao: EvaluationDAO = Depends(),
+) -> Dict[str, str]:
+    """
+    Uploads evaluations, which can then be accessed using the `/v0/evaluation` endpoint.
+    If a custom prompt is specified, its fields will overwrite the corresponding fields
+    in each one of the evaluated prompts. If a response for a given prompt has already
+    been provided for the selected endpoint, during another evaluation, then this
+    response will be re-used during the current evaluation.
+    """
+
+    user_id = request_fastapi.state.user_id
+
+    # evaluator_id
+    raw_evaluators = evaluator_dao.filter(name=evaluator)
+    if not raw_evaluators or raw_evaluators[0].user_id not in [None, user_id]:
+        raise evaluator_not_found(evaluator)
+    evaluator_id = raw_evaluators[0].id
+
+    # default_prompt_id
+    if default_prompt:
+        raw_default_prompt = default_prompt_dao.filter(
+            user_id=user_id,
+            name=default_prompt,
+        )
+        if not raw_default_prompt:
+            raise HTTPException(
+                400,
+                detail=f"The default prompt {default_prompt} does not exist in your account",
+            )
+
+    file = evaluations.file.read()
+    try:
+        lines = file.decode().split("\n")
+        lines = [json.loads(l) for l in lines if l != ""]
+        for ix, line in enumerate(lines):
+            _expected_keys = set(["prompt_id", "score"])
+            _found_keys = set(line.keys())
+            _optional_keys = set(["response", "rationale"])
+            if _missing := _expected_keys.difference(_found_keys):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Error in line {ix}: missing: {', '.join(_missing)}",
+                )
+            if _extra := _found_keys.difference(
+                _expected_keys.union(_optional_keys),
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Error in line {ix}: extra key: {', '.join(_extra)}. Only allowed keys: {', '.join(_expected_keys.union(_optional_keys))}",
+                )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail="Error processing uploaded scores",
+        )
+
+    # check whether the evaluator is a client side one:
+    if (
+        not hasattr(raw_evaluators[0], "client_side")
+        or raw_evaluators[0].client_side is not True
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"The evaluator {evaluator} is not a client-side evaluator "
+            f"(as client_side != True)",
+        )
+
+    # upload the data
+    for l in lines:
+        prompt_id = l["prompt_id"]
+        score = l["score"]
+        if not isinstance(score, float) or score < 0 or score > 1.0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Error with score from prompt_id: {prompt_id}, score: {score}",
+            )
+        rationale = l.get("rationale", "")
+
+        num_tokens = 0
+
+        stored_prompt_response_dao.create(
+            prompt_id=prompt_id,
+            prompt_variation_id=None,
+            endpoint_str=agent,
+            response=l.get("response", ""),
+            num_tokens=num_tokens,
+        )
+
+        raw_ids = stored_prompt_response_dao.filter(
+            prompt_id=prompt_id,
+            prompt_variation_id=None,
+            endpoint_str=agent,
+        )
+        response_id = raw_ids[0].id
+        judge_model = "client_side"
+
+        judgement_dao.create(
+            response_id=response_id,
+            judge_endpoint_str=judge_model,
+            evaluator_id=evaluator_id,
+            judgement=rationale,
+            judgement_score=score,
+        )
+        # add evaluation with the score
+        evaluation_dao.create(
+            prompt_id=prompt_id,
+            prompt_variation_id=None,
+            evaluator_id=evaluator_id,
+            endpoint_str=agent,
+            score=score,
+        )
+    return {"info": "Evaluation uploaded!"}
 
 
 @admin_router.post("/evals/admin_trigger")
