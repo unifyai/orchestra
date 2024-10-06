@@ -16,9 +16,9 @@ from fastapi import (
 from pydantic import ValidationError
 from unify import Prompt
 
-from orchestra.db.dao.stored_prompt_dao import StoredPromptDAO
 from orchestra.db.dao.dataset_dao import DatasetDAO
 from orchestra.db.dao.dataset_prompt_dao import DatasetPromptDAO
+from orchestra.db.dao.stored_prompt_dao import StoredPromptDAO
 from orchestra.web.api.utils.http_responses import (
     dataset_does_not_exist,
     invalid_dataset_name,
@@ -170,14 +170,14 @@ def upload_dataset(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     except:
         raise HTTPException(400, detail=f"Incorrect data format")
 
-    prompt_ids = _add_data(
+    datum_ids = _add_data(
         dataset_dao=dataset_dao,
         user_id=user_id,
         dataset_name=name,
         data=data_to_upload,
         ignore_duplicates=False,
     )
-    return prompt_ids
+    return datum_ids
 
 
 # download dataset
@@ -449,13 +449,16 @@ def delete_data(
         example=["001", "002", "003"],
     ),
     dataset_dao: DatasetDAO = Depends(),
-    prompt_dao: StoredPromptDAO = Depends()
+    prompt_dao: StoredPromptDAO = Depends(),
 ):
     if (isinstance(data_ids, list) and not data_ids) or data_ids == "":
         return {"info": "data_ids argument was empty. Nothing to delete."}
     user_id = request_fastapi.state.user_id
-    names = [d.name for d in dataset_dao.filter(user_id=[None, user_id])] \
-        if name == "all_data" else [name]
+    names = (
+        [d.name for d in dataset_dao.filter(user_id=[None, user_id])]
+        if name == "all_data"
+        else [name]
+    )
     rets = list()
     for n in names:
         for datum_id in data_ids:
@@ -464,12 +467,14 @@ def delete_data(
                     dataset_dao.remove_prompt_from_dataset(
                         user_id=request_fastapi.state.user_id,
                         dataset_name=n,
-                        prompt_id=datum_id,
+                        datum_id=datum_id,
                     ),
                 )
     if name == "all_data":
-        rets += [prompt_dao.delete(int(did), request_fastapi.state.user_id)
-                 for did in data_ids]
+        rets += [
+            prompt_dao.delete(int(did), request_fastapi.state.user_id)
+            for did in data_ids
+        ]
     error_rets = [ret["error"] for ret in rets if "error" in ret]
     if error_rets:
         return {"error": "\n".join(error_rets)}
@@ -499,8 +504,8 @@ def _add_data(
     if isinstance(data, dict):
         data = [data]
 
-    prompt_ids_added = []
-    prompt_ids_already_present = []
+    datum_ids_added = []
+    datum_ids_already_present = []
     failures = {}
     for ix, datum in enumerate(data):
         # validate the pydantic
@@ -511,28 +516,28 @@ def _add_data(
             continue
         except:
             failures[ix] = "An unknown error occured"
-        prompt_id_or_error = dataset_dao.add_prompt_to_dataset(
+        datum_id_or_error = dataset_dao.add_prompt_to_dataset(
             user_id=user_id,
             dataset_name=dataset_name,
             prompt_data=datum,
         )
-        if isinstance(prompt_id_or_error, int):
-            prompt_ids_added.append(prompt_id_or_error)
+        if isinstance(datum_id_or_error, int):
+            datum_ids_added.append(datum_id_or_error)
             continue
-        if isinstance(prompt_id_or_error, dict) and "error" in prompt_id_or_error:
-            if ignore_duplicates and prompt_id_or_error["error"] == (
+        if isinstance(datum_id_or_error, dict) and "error" in datum_id_or_error:
+            if ignore_duplicates and datum_id_or_error["error"] == (
                 "This prompt is already in the dataset"
             ):
-                prompt_ids_already_present.append(prompt_id_or_error["prompt_id"])
+                datum_ids_already_present.append(datum_id_or_error["datum_id"])
             else:
-                failures[ix] = prompt_id_or_error["error"]
+                failures[ix] = datum_id_or_error["error"]
         else:
             failures[ix] = None
 
     if not failures:
         return {
-            "already_present": prompt_ids_already_present,
-            "added": prompt_ids_added,
+            "already_present": datum_ids_already_present,
+            "added": datum_ids_added,
         }
 
     error_msg_formatted = "Errors:\n"
@@ -540,10 +545,10 @@ def _add_data(
         if msg is not None:
             error_msg_formatted += f"Error with prompt {ix+1}: {msg}\n"
 
-    if prompt_ids_added:
+    if datum_ids_added:
         msg = (
             f"There was an error while adding some of the prompts.\n"
-            f"There were {len(prompt_ids_added)} prompts added successfuly, and {len(failures)} errors.\n"
+            f"There were {len(datum_ids_added)} prompts added successfuly, and {len(failures)} errors.\n"
         )
     else:
         if len(failures) == 1:
@@ -619,11 +624,11 @@ def add_data(
 
     user_id = request_fastapi.state.user_id
 
-    prompt_ids = _add_data(
+    datum_ids = _add_data(
         dataset_dao=dataset_dao,
         user_id=user_id,
         dataset_name=name,
         data=data,
         ignore_duplicates=ignore_duplicates,
     )
-    return prompt_ids
+    return datum_ids

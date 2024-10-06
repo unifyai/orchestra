@@ -13,7 +13,7 @@ from orchestra.db.dao.evaluation_dao import EvaluationDAO
 from orchestra.db.dao.evaluator_dao import EvaluatorDAO
 from orchestra.db.dao.router_dao import RouterDAO
 from orchestra.db.dao.stored_prompt_dao import StoredPromptDAO
-from orchestra.web.api.evaluations.views import get_prompt_ids
+from orchestra.web.api.evaluations.views import get_datum_ids
 from orchestra.web.api.utils.gcp import read_from_bucket, send_pubsub_msg
 from orchestra.web.api.utils.http_responses import invalid_training_endpoints
 from orchestra.web.api.utils.on_prem import handle_on_prem
@@ -161,7 +161,7 @@ def train_router(
             detail=f"You already have a router named {name}",
         )
 
-    prompt_ids = get_prompt_ids(
+    datum_ids = get_datum_ids(
         dataset=dataset,
         prompts=prompts,
         user_id=user_id,
@@ -205,7 +205,7 @@ def train_router(
         user_id=user_id,
         # user_email=user_email,
         api_key=api_key,
-        prompt_ids=prompt_ids,
+        datum_ids=datum_ids,
         router_id=router_id,
         endpoints=endpoints,
         evaluator=evaluator,

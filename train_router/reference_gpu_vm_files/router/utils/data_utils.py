@@ -86,7 +86,7 @@ class CoMPDataset(Dataset):
             truncation=True,
             return_tensors="pt",
         )
-        prompt_id = tokenized_inputs["input_ids"].squeeze()
+        datum_id = tokenized_inputs["input_ids"].squeeze()
         attn_mask = tokenized_inputs["attention_mask"].squeeze()
         model_id = self.model_mapping[sample["model_provider"]]
         score = ratings_from_sample(sample, self.score_mapping)
@@ -94,7 +94,7 @@ class CoMPDataset(Dataset):
             score = [1] * (score + 1) + [0] * (self.num_classes - score - 1)
 
         out = {
-            "input_ids": prompt_id,
+            "input_ids": datum_id,
             "attention_mask": attn_mask,
             "model_id": torch.tensor(model_id),
             "target_score": torch.tensor(score, dtype=torch.float),

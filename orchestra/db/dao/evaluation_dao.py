@@ -20,11 +20,11 @@ from orchestra.db.models.orchestra_models import (
 
 
 class EvaluationScore:
-    def __init__(self, evaluator, endpoint_str, score, prompt_id=None, num_scores=None):
+    def __init__(self, evaluator, endpoint_str, score, datum_id=None, num_scores=None):
         self.evaluator = evaluator
         self.endpoint_str = endpoint_str
         self.score = score
-        self.prompt_id = prompt_id
+        self.datum_id = datum_id
         self.num_scores = num_scores
 
 
@@ -34,7 +34,7 @@ class EvaluationDAO:
 
     def create(  # noqa: WPS211
         self,
-        prompt_id: int,
+        datum_id: int,
         prompt_variation_id: Optional[int],
         evaluator_id: int,
         endpoint_str: str,
@@ -42,7 +42,7 @@ class EvaluationDAO:
     ) -> None:
         self.session.add(
             Evaluation(
-                prompt_id=prompt_id,
+                datum_id=datum_id,
                 prompt_variation_id=prompt_variation_id,
                 evaluator_id=evaluator_id,
                 endpoint_str=endpoint_str,
@@ -53,7 +53,7 @@ class EvaluationDAO:
     def filter(  # noqa: WPS211, C901
         self,
         id: Optional[int] = None,  # noqa: WPS125
-        prompt_id: Optional[int] = None,
+        datum_id: Optional[int] = None,
         prompt_variation_id: Optional[int] = None,
         evaluator_id: Optional[int] = None,
         endpoint_str: Optional[str] = None,
@@ -61,8 +61,8 @@ class EvaluationDAO:
         query = select(Evaluation)
         if id:
             query = query.where(Evaluation.id == id)
-        if prompt_id:
-            query = query.where(Evaluation.prompt_id == prompt_id)
+        if datum_id:
+            query = query.where(Evaluation.datum_id == datum_id)
         if prompt_variation_id:
             query = query.where(Evaluation.prompt_variation_id == prompt_variation_id)
         if evaluator_id:
@@ -85,13 +85,13 @@ class EvaluationDAO:
             if score:
                 setattr(entry, "score", score)  # noqa: B010
 
-    def fetch_evaluation_scores(self, prompt_ids, per_prompt=False):
+    def fetch_evaluation_scores(self, datum_ids, per_prompt=False):
         if per_prompt:
             query = select(
                 Evaluator.name.label("evaluator"),
                 Evaluation.endpoint_str,
                 cast(func.avg(Evaluation.score).label("score"), Float),
-                Evaluation.prompt_id,
+                Evaluation.datum_id,
             )
         else:
             query = select(
@@ -102,12 +102,12 @@ class EvaluationDAO:
             )
 
         query = query.filter(Evaluation.evaluator_id == Evaluator.id)
-        query = query.filter(Evaluation.prompt_id.in_(prompt_ids))
+        query = query.filter(Evaluation.datum_id.in_(datum_ids))
 
         query = query.group_by(Evaluator.name)
         query = query.group_by(Evaluation.endpoint_str)
         if per_prompt:
-            query = query.group_by(Evaluation.prompt_id)
+            query = query.group_by(Evaluation.datum_id)
 
         rows = self.session.execute(query)
 
@@ -118,7 +118,7 @@ class EvaluationDAO:
                 evaluator=row[0],
                 endpoint_str=row[1],
                 score=row[2],
-                prompt_id=row[3] if per_prompt else None,
+                datum_id=row[3] if per_prompt else None,
                 num_scores=row[3] if not per_prompt else None,
             )
             results.append(score)
@@ -127,7 +127,7 @@ class EvaluationDAO:
 
     def fetch_rationales(
         self,
-        prompt_ids,
+        datum_ids,
         endpoint,
         evaluator,
         per_prompt: bool,
@@ -142,7 +142,7 @@ class EvaluationDAO:
 
         query = (
             select(
-                StoredPromptResponse.prompt_id,
+                StoredPromptResponse.datum_id,
                 Evaluation.score,
                 StoredPromptResponse.response if responses else literal(None),
                 Judgement.judgement if rationales else literal(None),
@@ -155,11 +155,11 @@ class EvaluationDAO:
             .join(
                 Evaluation,
                 and_(
-                    StoredPromptResponse.prompt_id == Evaluation.prompt_id,
+                    StoredPromptResponse.datum_id == Evaluation.datum_id,
                     Evaluator.id == Evaluation.evaluator_id,
                 ),
             )
-            .where(StoredPromptResponse.prompt_id.in_(prompt_ids))
+            .where(StoredPromptResponse.datum_id.in_(datum_ids))
             .where(StoredPromptResponse.endpoint_str == endpoint)
             .where(Evaluator.name == evaluator)
             .where(Evaluation.endpoint_str == endpoint)
@@ -171,7 +171,7 @@ class EvaluationDAO:
 
         # this for loop creates a dictionary of the form
         # {
-        #     prompt_id: {
+        #     datum_id: {
         #         "id": x,
         #         "response": x,
         #         "score": x,
@@ -187,26 +187,26 @@ class EvaluationDAO:
             sub_score_dict = defaultdict(lambda: defaultdict(int))
 
         for row in rows:
-            prompt_id = row.prompt_id
+            datum_id = row.datum_id
 
-            if prompt_id not in result_dict:
-                result_dict[prompt_id] = {"id": prompt_id}
+            if datum_id not in result_dict:
+                result_dict[datum_id] = {"id": datum_id}
                 if responses:
                     try:
                         # TODO: What do we want the response to actually be?
                         s = json.loads(row.response)["choices"][0]["message"]["content"]
                     except:
                         s = row.response
-                    result_dict[prompt_id]["response"] = s
-                result_dict[prompt_id]["score"] = float(row.score)
+                    result_dict[datum_id]["response"] = s
+                result_dict[datum_id]["score"] = float(row.score)
                 if rationales:
-                    result_dict[prompt_id]["evaluation"] = []
+                    result_dict[datum_id]["evaluation"] = []
 
             if rationales:
                 evaluation_entry = {"agent": row.judge_endpoint_str}
                 evaluation_entry["rationale"] = row.judgement
                 evaluation_entry["rationale_score"] = float(row.judgement_score)
-                result_dict[prompt_id]["evaluation"].append(evaluation_entry)
+                result_dict[datum_id]["evaluation"].append(evaluation_entry)
 
             if sub_scorers:
                 jm = row.judge_endpoint_str
@@ -220,10 +220,10 @@ class EvaluationDAO:
         mean_score = sum(er["score"] for er in per_prompt_data) / len(per_prompt_data)
         if rationales:
             progress = sum(len(er["evaluation"]) for er in per_prompt_data) / (
-                num_judges * len(prompt_ids)
+                num_judges * len(datum_ids)
             )
         else:
-            progress = len(per_prompt_data) / len(prompt_ids)
+            progress = len(per_prompt_data) / len(datum_ids)
         ret = {"score": mean_score, "progress": 100 * progress}
         if sub_scorers:
             sub_score_dict = {
@@ -242,8 +242,8 @@ class EvaluationDAO:
             .distinct()
             .select_from(
                 join(Dataset, DatasetPrompt, Dataset.id == DatasetPrompt.dataset_id)
-                .join(StoredPrompt, DatasetPrompt.prompt_id == StoredPrompt.id)
-                .join(Evaluation, StoredPrompt.id == Evaluation.prompt_id)
+                .join(StoredPrompt, DatasetPrompt.datum_id == StoredPrompt.id)
+                .join(Evaluation, StoredPrompt.id == Evaluation.datum_id)
                 .join(Evaluator, Evaluator.id == Evaluation.evaluator_id),
             )
             .where(Dataset.id == dataset_id)
@@ -263,8 +263,8 @@ class EvaluationDAO:
             .distinct()
             .select_from(
                 join(Dataset, DatasetPrompt, Dataset.id == DatasetPrompt.dataset_id)
-                .join(StoredPrompt, DatasetPrompt.prompt_id == StoredPrompt.id)
-                .join(Evaluation, StoredPrompt.id == Evaluation.prompt_id),
+                .join(StoredPrompt, DatasetPrompt.datum_id == StoredPrompt.id)
+                .join(Evaluation, StoredPrompt.id == Evaluation.datum_id),
             )
             .where(Dataset.id == dataset_id)
             .where(Evaluation.evaluator_id == evaluator_id)
@@ -276,9 +276,9 @@ class EvaluationDAO:
 
         return endpoints
 
-    def delete_evaluations(self, prompt_ids: list[int], endpoint: str, evaluator: str):
+    def delete_evaluations(self, datum_ids: list[int], endpoint: str, evaluator: str):
         query = delete(Evaluation).where(
-            Evaluation.prompt_id.in_(prompt_ids),
+            Evaluation.datum_id.in_(datum_ids),
         )
 
         if endpoint:
