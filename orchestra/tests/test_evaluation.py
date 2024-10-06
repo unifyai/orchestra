@@ -559,7 +559,6 @@ async def test_client_side_scores(
         "agent": agent,
         "evaluator": eval_name,
     }
-    breakpoint()
     response = await client.post(url, params=params, files=files, headers=HEADERS)
     assert response.status_code == 200, response.json()
 

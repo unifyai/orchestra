@@ -360,7 +360,6 @@ def upload_evaluation(
     been provided for the selected endpoint, during another evaluation, then this
     response will be re-used during the current evaluation.
     """
-    breakpoint()
 
     user_id = request_fastapi.state.user_id
 

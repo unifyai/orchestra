@@ -54,7 +54,7 @@ def list_providers(
     if not model and len(private_endpoints_raw) > 0:
         providers.append("custom")
 
-    return sorted(providers) + ["openai"]
+    return sorted(providers)
 
 
 @router.get(
@@ -98,7 +98,7 @@ def list_models(
     if provider and provider != "custom":
         private_models = []
 
-    return sorted(models + private_models) + ["gpt-4o"]
+    return sorted(models + private_models)
 
 
 @router.get(
@@ -160,4 +160,4 @@ def list_endpoints(
     if not model and not provider:
         endpoints += private_endpoints
 
-    return sorted(endpoints) + ["gpt-4o@openai"]
+    return sorted(endpoints)
