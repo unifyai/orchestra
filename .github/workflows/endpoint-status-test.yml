@@ -1,0 +1,71 @@
+name: Endpoint Status Test
+
+on:
+  # schedule:
+  #   # runs everyday at 23:00 UTC
+  # - cron: '0 0,12 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+
+jobs:
+  endpoint_status_test:
+    name: Endpoint Status Test
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+      with:
+        path: orchestra
+
+    - name: Checkout 🛎️ unify-docs
+      uses: actions/checkout@v4
+      with:
+        repository: unifyai/unify-docs
+        path: unify-docs
+
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: "3.10"
+
+    - name: Test all endpoints
+      run: |
+        cd orchestra
+        export API_KEY=${{ secrets.USER_API_KEY }}
+        python3 -m pip install requests
+        echo "installed requests"
+        python3 endpoint_status_test.py
+        mv endpoint_status.mdx ../unify-docs/endpoint_status/endpoint_status.mdx
+        cd ..
+
+    - name: Set up SSH key
+      env:
+        SSH_AUTH_SOCK: /tmp/ssh_agent.sock
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.SSH_DOCS }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan github.com >> ~/.ssh/known_hosts
+        eval "$(ssh-agent -s)"
+        ssh-add ~/.ssh/id_rsa
+
+    - name: Check for changes
+      id: check_changes
+      run: |
+        cd unify-docs
+        git add .
+        git diff --cached --quiet || echo "output_value=changes" >> $GITHUB_OUTPUT
+        cd ..
+
+    - name: Push changes to docs
+      if: steps.check_changes.outputs.output_value == 'changes'
+      run: |
+        cd unify-docs
+        git remote add target git@github.com:unifyai/unify-docs.git
+        git config --global user.name "unify-dev-bot"
+        git config --global user.email "github-bot@unify.ai"
+        git add .
+        git commit -m "updated status page"
+        git push target main

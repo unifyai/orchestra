@@ -1,10 +1,9 @@
 import json
 
-import yaml
 import torch
-from transformers import AutoTokenizer
-
+import yaml
 from dcn import DCN
+from transformers import AutoTokenizer
 
 DEVICE = "cuda"
 
@@ -34,23 +33,23 @@ tokenizer = AutoTokenizer.from_pretrained(config["model"]["prompt_encoder"])
 @torch.inference_mode()
 def run_inference(model, tokenizer, prompt, model_id, max_length):
     tok = tokenizer(
-        [prompt], max_length=max_length, truncation=True, return_tensors="pt"
+        [prompt],
+        max_length=max_length,
+        truncation=True,
+        return_tensors="pt",
     ).to(DEVICE)
     n = model_id.size(0)
-    prompt_id = tok["input_ids"].repeat(n, 1)
+    datum_id = tok["input_ids"].repeat(n, 1)
     attn_mask = tok["attention_mask"].repeat(n, 1)
-    ret = model.forward(prompt_id=prompt_id, model_id=model_id, attn_mask=attn_mask)
+    ret = model.forward(datum_id=datum_id, model_id=model_id, attn_mask=attn_mask)
     return ret.flatten()
 
 
-import uvicorn
 import os
-from enum import Enum
-from typing import List, Optional, Dict
-from pydantic import BaseModel
+from typing import Dict, List
 
-from fastapi import Request, FastAPI, Response
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request
+from pydantic import BaseModel
 
 app = FastAPI(title="Neural scoring function")
 
@@ -72,7 +71,9 @@ async def health():
 
 
 @app.post(
-    AIP_PREDICT_ROUTE, response_model=Predictions, response_model_exclude_unset=True
+    AIP_PREDICT_ROUTE,
+    response_model=Predictions,
+    response_model_exclude_unset=True,
 )
 async def predict(request: Request):
     body = await request.json()
@@ -94,7 +95,7 @@ async def predict(request: Request):
     )
 
     scores = Prediction(
-        scores={model_name: score for model_name, score in zip(MODEL_MAPPING, ret)}
+        scores={model_name: score for model_name, score in zip(MODEL_MAPPING, ret)},
     )
 
     return Predictions(predictions=[scores])

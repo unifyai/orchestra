@@ -3,31 +3,20 @@ Includes endpoints for router training.
 """
 
 import os
-from typing import Any, Dict, List, Union, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Query, Request, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from providers.completion import PROVIDER_CLASSES
 
-from orchestra.web.api.utils import gcp, on_prem
-from orchestra.web.api.utils.gcp import (
-    blob_exists,
-    list_dir,
-    read_from_bucket,
-    send_pubsub_msg,
-)
-from orchestra.web.api.utils.http_responses import (
-    dataset_does_not_exist,
-    invalid_training_endpoints,
-    router_training_already_exists,
-    router_training_does_not_exist,
-)
-from orchestra.web.api.utils.on_prem import handle_on_prem
-from orchestra.web.api.evaluations.views import get_prompt_ids
 from orchestra.db.dao.dataset_dao import DatasetDAO
-from orchestra.db.dao.stored_prompt_dao import StoredPromptDAO
-from orchestra.db.dao.evaluator_dao import EvaluatorDAO
 from orchestra.db.dao.evaluation_dao import EvaluationDAO
+from orchestra.db.dao.evaluator_dao import EvaluatorDAO
 from orchestra.db.dao.router_dao import RouterDAO
+from orchestra.db.dao.stored_prompt_dao import StoredPromptDAO
+from orchestra.web.api.evaluations.views import get_datum_ids
+from orchestra.web.api.utils.gcp import read_from_bucket, send_pubsub_msg
+from orchestra.web.api.utils.http_responses import invalid_training_endpoints
+from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 
@@ -168,10 +157,11 @@ def train_router(
     name_exists = router_dao.filter(user_id=user_id, name=name)
     if name_exists:
         raise HTTPException(
-            status_code=400, detail=f"You already have a router named {name}"
+            status_code=400,
+            detail=f"You already have a router named {name}",
         )
 
-    prompt_ids = get_prompt_ids(
+    datum_ids = get_datum_ids(
         dataset=dataset,
         prompts=prompts,
         user_id=user_id,
@@ -188,7 +178,8 @@ def train_router(
     evaluator_id = evaluator_dao.filter(user_id=user_id, name=evaluator)
     if not evaluator_id:
         raise HTTPException(
-            status_code=400, detail=f"You don't have an evaluator named: {evaluator}"
+            status_code=400,
+            detail=f"You don't have an evaluator named: {evaluator}",
         )
     evaluator_id = evaluator_id[0].id
 
@@ -214,7 +205,7 @@ def train_router(
         user_id=user_id,
         # user_email=user_email,
         api_key=api_key,
-        prompt_ids=prompt_ids,
+        datum_ids=datum_ids,
         router_id=router_id,
         endpoints=endpoints,
         evaluator=evaluator,
@@ -259,7 +250,8 @@ def delete_router(
     name_exists = router_dao.filter(user_id=user_id, name=name)
     if not name_exists:
         raise HTTPException(
-            status_code=400, detail=f"You don't have a router with the name: {name}"
+            status_code=400,
+            detail=f"You don't have a router with the name: {name}",
         )
 
     # TODO: delete training artifacts + from gcp
@@ -291,7 +283,8 @@ def rename_router(
     name_exists = router_dao.filter(user_id=user_id, name=name)
     if not name_exists:
         raise HTTPException(
-            status_code=400, detail=f"You don't have a router with the name: {name}"
+            status_code=400,
+            detail=f"You don't have a router with the name: {name}",
         )
 
     new_name_exists = router_dao.filter(user_id=user_id, name=new_name)

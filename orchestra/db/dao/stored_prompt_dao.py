@@ -1,9 +1,9 @@
 import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import Depends
 from sqlalchemy import select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import StoredPrompt
@@ -19,7 +19,7 @@ class StoredPromptDAO:
         system_msg: Optional[str],
         messages: str,
         prompt_kwargs: str,
-        ref_answer: Optional[str],
+        extra_fields: dict,
         num_tokens: int,
         timestamp: datetime.datetime,
     ) -> None:
@@ -29,11 +29,23 @@ class StoredPromptDAO:
                 system_msg=system_msg,
                 messages=messages,
                 prompt_kwargs=prompt_kwargs,
-                ref_answer=ref_answer,
+                extra_fields=extra_fields,
                 num_tokens=num_tokens,
                 timestamp=timestamp,
             ),
         )
+
+    def delete(
+        self,
+        id: int,
+        user_id: str,
+    ) -> Dict[str, str]:
+        prompt = (
+            self.session.query(StoredPrompt).filter_by(id=id, user_id=user_id).one()
+        )
+        self.session.delete(prompt)
+        self.session.commit()
+        return {"info": "Prompt deleted successfully"}
 
     def filter(  # noqa: WPS211, C901
         self,
@@ -51,25 +63,24 @@ class StoredPromptDAO:
             query = query.where(StoredPrompt.system_msg == system_msg)
         if messages:
             query = query.where(StoredPrompt.messages == messages)
-        query = query.options(joinedload(StoredPrompt.extra_fields))
         rows = self.session.execute(query)
         return list(rows.scalars().unique().fetchall())
 
-    def check_ids_valid(self, user_id, prompt_ids):
+    def check_ids_valid(self, user_id, datum_ids):
         query = (
             select(StoredPrompt.id)
             .where(StoredPrompt.user_id == user_id)
-            .where(StoredPrompt.id.in_(prompt_ids))
+            .where(StoredPrompt.id.in_(datum_ids))
         )
         matching_ids = self.session.execute(query).scalars().all()
-        invalid_ids = set(prompt_ids).difference(set(matching_ids))
+        invalid_ids = set(datum_ids).difference(set(matching_ids))
         return invalid_ids
 
-    def get_prompts(self, prompt_ids: list, user_id: str):
+    def get_prompts(self, datum_ids: list, user_id: str):
         query = (
             select(StoredPrompt)
             .where(StoredPrompt.user_id == user_id)
-            .where(StoredPrompt.id.in_(prompt_ids))
+            .where(StoredPrompt.id.in_(datum_ids))
         )
         rows = self.session.execute(query)
         return list(rows.scalars().unique().fetchall())

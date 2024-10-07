@@ -11,12 +11,12 @@ class DatasetPromptDAO:
 
     def create(  # noqa: WPS211
         self,
-        prompt_id: int,
+        datum_id: int,
         dataset_id: int,
     ) -> None:
         self.session.add(
             DatasetPrompt(
-                prompt_id=prompt_id,
+                datum_id=datum_id,
                 dataset_id=dataset_id,
             ),
         )

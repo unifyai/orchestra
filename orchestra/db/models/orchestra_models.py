@@ -13,8 +13,8 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
-from sqlalchemy.dialects.postgresql import ARRAY
 
 from orchestra.db.base import Base
 
@@ -378,20 +378,19 @@ class StoredPrompt(Base):
     system_msg = Column(String(), index=True)
     messages = Column(String(), nullable=False)
     prompt_kwargs = Column(String(), nullable=False)
-    ref_answer = Column(String())
+    extra_fields = Column(JSONB, default={}, nullable=False)
     num_tokens = Column(Integer(), nullable=False)
     timestamp = Column(TIMESTAMP, nullable=False)
     __table_args__ = (
         Index(
             "uq_userid_prompt",
             func.hash_record_extended(
-                func.row(user_id, system_msg, messages, prompt_kwargs),
+                func.row(user_id, system_msg, messages, prompt_kwargs, extra_fields),
                 0,
             ),
             unique=True,
         ),
     )
-    extra_fields = relationship("StoredPromptExtraField")
 
 
 class DefaultPrompt(Base):
@@ -411,7 +410,7 @@ class StoredPromptVariation(Base):
     __tablename__ = "stored_prompt_variation"
 
     id = Column(Integer(), primary_key=True)
-    prompt_id = Column(
+    datum_id = Column(
         Integer(),
         ForeignKey("stored_prompt.id"),
         index=True,
@@ -425,26 +424,13 @@ class StoredPromptVariation(Base):
     )
 
 
-# TODO: Add StoredPromptExtraField
-# id, prompt_id, field, value
-class StoredPromptExtraField(Base):
-    """Model class for the prompt extra field table."""
-
-    __tablename__ = "stored_prompt_extra_field"
-
-    id = Column(Integer(), primary_key=True)
-    prompt_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
-    field = Column(String(), nullable=False)
-    value = Column(String(), nullable=False)
-
-
 class StoredPromptResponse(Base):
     """Model class for the stored prompt response table."""
 
     __tablename__ = "stored_prompt_response"
 
     id = Column(Integer(), primary_key=True)
-    prompt_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
+    datum_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
     prompt_variation_id = Column(
         Integer(),
         ForeignKey("stored_prompt_variation.id"),
@@ -455,7 +441,7 @@ class StoredPromptResponse(Base):
     num_tokens = Column(Integer(), nullable=False)
     __table_args__ = (
         UniqueConstraint(
-            "prompt_id",
+            "datum_id",
             "prompt_variation_id",
             "endpoint_str",
             name="uq_prompt_response",
@@ -493,11 +479,11 @@ class DatasetPrompt(Base):
 
     id = Column(Integer(), primary_key=True)
     dataset_id = Column(Integer(), ForeignKey("dataset.id"), index=True)
-    prompt_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
+    datum_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
     __table_args__ = (
         UniqueConstraint(
             "dataset_id",
-            "prompt_id",
+            "datum_id",
             name="uq_dataset_prompt",
         ),
     )
@@ -538,7 +524,7 @@ class Evaluation(Base):
     __tablename__ = "evaluation"
 
     id = Column(Integer(), primary_key=True)
-    prompt_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
+    datum_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
     prompt_variation_id = Column(
         Integer(),
         ForeignKey("stored_prompt_variation.id"),
@@ -549,7 +535,7 @@ class Evaluation(Base):
     score = Column(Numeric(), nullable=False)
     __table_args__ = (
         UniqueConstraint(
-            "prompt_id",
+            "datum_id",
             "prompt_variation_id",
             "evaluator_id",
             "endpoint_str",
@@ -569,7 +555,9 @@ class Router(Base):
     name = sa.Column(sa.String(), nullable=False)
     endpoints = sa.Column(sa.String(), nullable=False)
     evaluator_id = sa.Column(
-        sa.Integer(), sa.ForeignKey("evaluator.id"), nullable=False
+        sa.Integer(),
+        sa.ForeignKey("evaluator.id"),
+        nullable=False,
     )
     trained = sa.Column(sa.Boolean(), default=False, nullable=False)
     gcp_router_id = sa.Column(sa.String(), nullable=True)

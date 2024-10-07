@@ -1,21 +1,14 @@
 import json
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import tiktoken
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
-from psycopg2 import errors as psycopg2_errors
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import (
-    Dataset,
-    DatasetPrompt,
-    StoredPrompt,
-    StoredPromptExtraField,
-)
+from orchestra.db.models.orchestra_models import Dataset, DatasetPrompt, StoredPrompt
 
 
 def count_tokens(messages):
@@ -44,17 +37,20 @@ class DatasetDAO:
 
     def filter(  # noqa: WPS211, C901
         self,
-        id: Optional[int] = None,  # noqa: WPS125
-        user_id: Optional[str] = None,
-        name: Optional[str] = None,
+        id: Optional[Union[int, List[int]]] = None,  # noqa: WPS125
+        user_id: Optional[Union[str, List[str]]] = None,
+        name: Optional[Union[str, List[str]]] = None,
     ) -> List[Dataset]:
         query = select(Dataset)
         if id:
-            query = query.where(Dataset.id == id)
+            id = id if isinstance(id, list) else [id]
+            query = query.where(or_(*[Dataset.id == i for i in id]))
         if user_id:
-            query = query.where(Dataset.user_id == user_id)
+            user_id = user_id if isinstance(user_id, list) else [user_id]
+            query = query.where(or_(*[Dataset.user_id == uid for uid in user_id]))
         if name:
-            query = query.where(Dataset.name == name)
+            name = name if isinstance(name, list) else [name]
+            query = query.where(or_(*[Dataset.name == n for n in name]))
         rows = self.session.execute(query)
         return list(rows.scalars().fetchall())
 
@@ -90,11 +86,21 @@ class DatasetDAO:
         except:
             return []
 
+    def contains_prompt(self, user_id: str, name: str, datum_id: str) -> bool:
+        dataset_id = self.get_dataset_id(user_id, name)[0]
+        return bool(
+            (
+                self.session.query(DatasetPrompt)
+                .where(DatasetPrompt.dataset_id == dataset_id)
+                .where(DatasetPrompt.datum_id == datum_id)
+            ).first(),
+        )
+
     def fetch_prompts_ids_in_dataset(self, user_id: str, name: str) -> list[dict]:
         dataset_id = self.get_dataset_id(user_id, name)[0]
         query = (
             select(StoredPrompt.id)
-            .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
+            .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.datum_id)
             .where(DatasetPrompt.dataset_id == dataset_id)
         )
 
@@ -105,13 +111,27 @@ class DatasetDAO:
             dataset_prompts.append(prompt_data)
         return sorted(dataset_prompts, key=lambda p: p["id"])
 
-    def fetch_dataset(self, user_id: str, name: str) -> list[dict]:
+    def fetch_dataset(
+        self,
+        user_id: str,
+        name: str,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> list[dict]:
         dataset_id = self.get_dataset_id(user_id, name)[0]
         query = (
             select(StoredPrompt, DatasetPrompt)
-            .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.prompt_id)
+            .join(DatasetPrompt, StoredPrompt.id == DatasetPrompt.datum_id)
             .where(DatasetPrompt.dataset_id == dataset_id)
+            .order_by(
+                StoredPrompt.id,
+            )  # Add an order_by clause for consistent pagination
         )
+        if limit is not None:
+            query = query.limit(limit)
+        if offset is not None:
+            query = query.offset(offset)
+
         result = self.session.execute(query).fetchall()
 
         dataset_prompts = []
@@ -124,15 +144,8 @@ class DatasetDAO:
                 "num_tokens": stored_prompt.num_tokens,
                 "timestamp": stored_prompt.timestamp,
             }
-            # Query to get extra fields for this prompt
-            extra_fields_query = select(
-                StoredPromptExtraField.field, StoredPromptExtraField.value
-            ).where(
-                StoredPromptExtraField.prompt_id == stored_prompt.id,
-            )
-            extra_fields = self.session.execute(extra_fields_query).fetchall()
-            for extra_field in extra_fields:
-                prompt_data[extra_field.field] = extra_field.value
+            for extra_key, extra_value in stored_prompt.extra_fields.items():
+                prompt_data[extra_key] = extra_value
 
             dataset_prompts.append(prompt_data)
 
@@ -156,10 +169,16 @@ class DatasetDAO:
             k: v for k, v in prompt.items() if k not in ["system_msg", "messages"]
         }
         num_tokens = prompt.get("num_tokens", count_tokens(messages))
-
         system_msg = json.dumps(system_msg)
         messages = json.dumps(messages)
         prompt_kwargs = json.dumps(prompt_kwargs)
+
+        # add extra fields
+        extra_fields = {}
+        for field, value in prompt_data.items():
+            if field in ["prompt", "num_tokens", "timestamp"]:
+                continue
+            extra_fields[field] = value
 
         existing_prompt = (
             self.session.query(StoredPrompt)
@@ -167,58 +186,54 @@ class DatasetDAO:
             .where(StoredPrompt.system_msg == system_msg)
             .where(StoredPrompt.messages == messages)
             .where(StoredPrompt.prompt_kwargs == prompt_kwargs)
+            .where(StoredPrompt.extra_fields == extra_fields)
         ).first()
 
         if existing_prompt:
-            prompt_id = existing_prompt.id
+            datum_id = existing_prompt.id
         else:
             new_prompt = StoredPrompt(
                 user_id=user_id,
                 system_msg=system_msg,  # TODO: This is broken I think
                 messages=messages,
                 prompt_kwargs=prompt_kwargs,
-                ref_answer=None,
+                extra_fields=extra_fields,
                 num_tokens=num_tokens,
                 timestamp=prompt.get("timestamp", datetime.utcnow()),
             )
             try:
                 self.session.add(new_prompt)
                 self.session.flush()
-                prompt_id = new_prompt.id
+                datum_id = new_prompt.id
             except:
                 return {
-                    "error": "An error occurred while adding the prompt. Please check the format is correct, and try again."
+                    "error": "An error occurred while adding the prompt. Please check the format is correct, and try again.",
+                    "datum_id": new_prompt.id,
                 }
-            # add extra fields
-            for field, value in prompt_data.items():
-                if field in ["prompt", "num_tokens", "timestamp"]:
-                    continue
-                extra_field = StoredPromptExtraField(
-                    prompt_id=prompt_id,
-                    field=field,
-                    value=value,
-                )
-                self.session.add(extra_field)
-                self.session.flush()
 
         existing_dataset_prompt = (
             self.session.query(DatasetPrompt)
             .where(DatasetPrompt.dataset_id == dataset_id)
-            .where(DatasetPrompt.prompt_id == prompt_id)
+            .where(DatasetPrompt.datum_id == datum_id)
         ).first()
         if existing_dataset_prompt:
-            return {"error": "This prompt is already in the dataset"}
+            return {
+                "error": "This prompt is already in the dataset",
+                "datum_id": datum_id,
+            }
 
-        dataset_prompt = DatasetPrompt(dataset_id=dataset_id, prompt_id=prompt_id)
+        dataset_prompt = DatasetPrompt(dataset_id=dataset_id, datum_id=datum_id)
         try:
             self.session.add(dataset_prompt)
             self.session.flush()
+            return datum_id
         except:
             return {
-                "error": "An error occurred while adding the prompt. Please check the format is correct, and try again."
+                "error": "An error occurred while adding the prompt. Please check the format is correct, and try again.",
+                "datum_id": datum_id,
             }
 
-    def remove_prompt_from_dataset(self, user_id, dataset_name, prompt_id):
+    def remove_prompt_from_dataset(self, user_id, dataset_name, datum_id):
         try:
             dataset_id = self.filter(user_id=user_id, name=dataset_name)[0].id
         except:
@@ -227,7 +242,7 @@ class DatasetDAO:
         try:
             dataset_prompt = (
                 self.session.query(DatasetPrompt)
-                .filter_by(dataset_id=dataset_id, prompt_id=prompt_id)
+                .filter_by(dataset_id=dataset_id, datum_id=datum_id)
                 .one()
             )
 
@@ -236,7 +251,7 @@ class DatasetDAO:
             return {"info": "Dataset entries deleted successfully"}
         except:
             self.session.rollback()
-            return {"error": "Dataset entry {} not found".format(prompt_id)}
+            return {"error": "Dataset entry {} not found".format(datum_id)}
 
     def delete_dataset(self, user_id, name):
         try:

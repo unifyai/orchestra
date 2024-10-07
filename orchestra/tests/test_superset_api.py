@@ -65,7 +65,7 @@ async def test_extra_headers_anthropic(client: AsyncClient):
         messages=[{"role": "user", "content": "What is 1+1? Answer concisely"}],
         max_tokens=8192,  # The extra header makes this sequence length possible
         extra_body={
-            "extra_headers": {"anthropic-beta": "max-tokens-3-5-sonnet-2024-07-15"}
+            "extra_headers": {"anthropic-beta": "max-tokens-3-5-sonnet-2024-07-15"},
         },
     )
 

@@ -130,8 +130,8 @@ async def test_trigger_eval(
         "name": eval_name,
         "judge_prompt": judge_prompt,
         "prompt_parser": {
-            "user_message": "['messages'][-1]['content']",
-            "ref_ans": "['extra_fields']['ref_answer']",
+            "user_message": ["messages", -1, "content"],
+            "ref_ans": ["extra_fields", "ref_answer"],
         },
         "judge_models": judge_model,
     }
@@ -146,11 +146,10 @@ async def test_trigger_eval(
     assert response.status_code == 200, response.json()
 
     # create trigger evaluation
-    url = "/v0/evaluation"
-    endpoint = "gpt-3.5-turbo@openai"
+    url = "/v0/evaluation/trigger"
+    agent = "gpt-3.5-turbo@openai"
     params = {
-        "url": url,
-        "endpoint": endpoint,
+        "agent": agent,
         "dataset": dataset,
         "evaluator": eval_name,
     }
@@ -158,11 +157,10 @@ async def test_trigger_eval(
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
-    url = "/v0/evaluation"
-    endpoint = "llama-3-8b-chat@aws-bedrock"
+    url = "/v0/evaluation/trigger"
+    agent = "llama-3-8b-chat@aws-bedrock"
     params = {
-        "url": url,
-        "endpoint": endpoint,
+        "agent": agent,
         "dataset": dataset,
         "evaluator": eval_name,
     }
@@ -177,26 +175,26 @@ async def test_trigger_eval(
     assert response.status_code == 200, response.json()
     scores = response.json()
     assert eval_name in scores
-    assert endpoint in scores[eval_name]
-    assert "score" in scores[eval_name][endpoint]
-    assert "progress" in scores[eval_name][endpoint]
+    assert agent in scores[eval_name]
+    assert "score" in scores[eval_name][agent]
+    assert "progress" in scores[eval_name][agent]
     #################################
     # per prompt
     url = "/v0/evaluation"
     params = {
         "dataset": dataset,
         "evaluator": eval_name,
-        "endpoint": endpoint,
+        "agent": agent,
         "per_prompt": True,
     }
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     scores = response.json()
     assert eval_name in scores
-    assert endpoint in scores[eval_name]
-    assert "score" in scores[eval_name][endpoint]
-    assert "progress" in scores[eval_name][endpoint]
-    assert "per_prompt" in scores[eval_name][endpoint]
+    assert agent in scores[eval_name]
+    assert "score" in scores[eval_name][agent]
+    assert "progress" in scores[eval_name][agent]
+    assert "per_prompt" in scores[eval_name][agent]
 
 
 async def test_trigger_eval_duplicate(
@@ -271,8 +269,8 @@ async def test_trigger_eval_duplicate(
         "name": eval_name,
         "judge_prompt": judge_prompt,
         "prompt_parser": {
-            "user_message": "['messages'][-1]['content']",
-            "ref_ans": "['extra_fields']['ref_answer']",
+            "user_message": ["messages", -1, "content"],
+            "ref_ans": ["extra_fields", "ref_answer"],
         },
         "judge_models": judge_model,
     }
@@ -288,11 +286,11 @@ async def test_trigger_eval_duplicate(
 
     # trigger duplicate eval
 
-    url = "/v0/evaluation"
-    endpoint = "llama-3-8b-chat@aws-bedrock"
+    url = "/v0/evaluation/trigger"
+    agent = "llama-3-8b-chat@aws-bedrock"
     params = {
         "url": url,
-        "endpoint": endpoint,
+        "agent": agent,
         "dataset": dataset,
         "evaluator": eval_name,
     }
@@ -305,7 +303,7 @@ async def test_trigger_eval_duplicate(
     assert len(response.json()) == 4
 
     # retrigger
-    url = "/v0/evaluation"
+    url = "/v0/evaluation/trigger"
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
@@ -382,24 +380,22 @@ async def test_trigger_eval_with_default_prompt(
     assert response.status_code == 200, response.json()
 
     # create trigger evaluation
-    url = "/v0/evaluation"
-    endpoint = "gpt-3.5-turbo@openai"
+    url = "/v0/evaluation/trigger"
+    agent = "gpt-3.5-turbo@openai"
     params = {
-        "url": url,
         "dataset": dataset,
-        "endpoint": endpoint,
+        "agent": agent,
         "evaluator": eval_name,
         "default_prompt": default_prompt_name,
     }
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
-    url = "/v0/evaluation"
-    endpoint = "llama-3-8b-chat@aws-bedrock"
+    url = "/v0/evaluation/trigger"
+    agent = "llama-3-8b-chat@aws-bedrock"
     params = {
-        "url": url,
         "dataset": dataset,
-        "endpoint": endpoint,
+        "agent": agent,
         "evaluator": eval_name,
         "default_prompt": default_prompt_name,
     }
@@ -417,16 +413,16 @@ async def test_trigger_eval_with_default_prompt(
     assert response.status_code == 200, response.json()
     scores = response.json()
     assert eval_name in scores
-    assert endpoint in scores[eval_name]
-    assert "score" in scores[eval_name][endpoint]
-    assert "progress" in scores[eval_name][endpoint]
+    assert agent in scores[eval_name]
+    assert "score" in scores[eval_name][agent]
+    assert "progress" in scores[eval_name][agent]
     #################################
     # per prompt
     url = "/v0/evaluation"
     params = {
         "dataset": dataset,
         "evaluator": eval_name,
-        "endpoint": endpoint,
+        "agent": agent,
         "per_prompt": True,
         "default_prompt": default_prompt_name,
     }
@@ -434,10 +430,10 @@ async def test_trigger_eval_with_default_prompt(
     assert response.status_code == 200, response.json()
     scores = response.json()
     assert eval_name in scores
-    assert endpoint in scores[eval_name]
-    assert "score" in scores[eval_name][endpoint]
-    assert "progress" in scores[eval_name][endpoint]
-    assert "per_prompt" in scores[eval_name][endpoint]
+    assert agent in scores[eval_name]
+    assert "score" in scores[eval_name][agent]
+    assert "progress" in scores[eval_name][agent]
+    assert "per_prompt" in scores[eval_name][agent]
 
 
 ####################################################
@@ -462,11 +458,10 @@ async def test_trigger_pass_dataset(
 
     # create trigger evaluation
 
-    url = "/v0/evaluation"
-    endpoint = "llama-3-8b-chat@aws-bedrock"
+    url = "/v0/evaluation/trigger"
+    agent = "llama-3-8b-chat@aws-bedrock"
     params = {
-        "url": url,
-        "endpoint": endpoint,
+        "agent": agent,
         "dataset": "test_dataset_eval",
         "evaluator": "test_eval",
     }
@@ -493,11 +488,10 @@ async def test_trigger_pass_prompts(
 
     # create trigger evaluation
 
-    url = "/v0/evaluation"
-    endpoint = "llama-3-8b-chat@aws-bedrock"
+    url = "/v0/evaluation/trigger"
+    agent = "llama-3-8b-chat@aws-bedrock"
     params = {
-        "url": url,
-        "endpoint": endpoint,
+        "agent": agent,
         "prompts": "1,2",
         "evaluator": "test_eval",
     }
@@ -524,17 +518,17 @@ async def test_trigger_pass_invalid_prompts(
 
     # create trigger evaluation
 
-    url = "/v0/evaluation"
-    endpoint = "llama-3-8b-chat@aws-bedrock"
+    url = "/v0/evaluation/trigger"
+    agent = "llama-3-8b-chat@aws-bedrock"
     params = {
         "url": url,
-        "endpoint": endpoint,
+        "agent": agent,
         "prompts": "1,3,99",
         "evaluator": "test_eval",
     }
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 400, response.json()
-    assert response.json() == {"detail": "The following prompt_ids are invalid: 3, 99"}
+    assert response.json() == {"detail": "The following datum_ids are invalid: 3, 99"}
 
 
 ########################
@@ -553,18 +547,16 @@ async def test_client_side_scores(
 
     url = "/v0/evaluation"
     dataset = "test_dataset"
-    endpoint = "llama-3-8b-chat@aws-bedrock"
+    agent = "llama-3-8b-chat@aws-bedrock"
     file_path = "./orchestra/tests/sample_datasets/prompts_with_kws_scored.jsonl"
     with open(file_path, "rb") as f:
         file_content = f.read()
     files = {
-        "client_side_scores": ("test.jsonl", file_content, "application/x-jsonlines"),
+        "evaluations": ("test.jsonl", file_content, "application/x-jsonlines"),
     }
 
     params = {
-        "url": url,
-        "dataset": dataset,
-        "endpoint": endpoint,
+        "agent": agent,
         "evaluator": eval_name,
     }
     response = await client.post(url, params=params, files=files, headers=HEADERS)
@@ -574,7 +566,7 @@ async def test_client_side_scores(
 
     url = "/v0/evaluation"
     params = {
-        "endpoint": endpoint,
+        "agent": agent,
         "dataset": dataset,
         "evaluator": eval_name,
     }
@@ -601,20 +593,18 @@ async def test_client_side_rationales(
 
     url = "/v0/evaluation"
     dataset = "test_dataset"
-    endpoint = "llama-3-8b-chat@aws-bedrock"
+    agent = "llama-3-8b-chat@aws-bedrock"
     file_path = (
         "./orchestra/tests/sample_datasets/prompts_with_kws_scored_rationale.jsonl"
     )
     with open(file_path, "rb") as f:
         file_content = f.read()
     files = {
-        "client_side_scores": ("test.jsonl", file_content, "application/x-jsonlines"),
+        "evaluations": ("test.jsonl", file_content, "application/x-jsonlines"),
     }
 
     params = {
-        "url": url,
-        "dataset": dataset,
-        "endpoint": endpoint,
+        "agent": agent,
         "evaluator": eval_name,
     }
     response = await client.post(url, params=params, files=files, headers=HEADERS)
@@ -624,7 +614,7 @@ async def test_client_side_rationales(
 
     url = "/v0/evaluation"
     params = {
-        "endpoint": endpoint,
+        "agent": agent,
         "dataset": dataset,
         "evaluator": eval_name,
         "return_rationale": True,
@@ -646,7 +636,7 @@ async def test_client_side_rationales(
                         "score": 1.0,
                         "evaluation": [
                             {
-                                "endpoint": "client_side",
+                                "agent": "client_side",
                                 "rationale": "Correct answer",
                                 "rationale_score": 1.0,
                             },
@@ -658,7 +648,7 @@ async def test_client_side_rationales(
                         "score": 0.0,
                         "evaluation": [
                             {
-                                "endpoint": "client_side",
+                                "agent": "client_side",
                                 "rationale": "Incorrect answer",
                                 "rationale_score": 0.0,
                             },
@@ -683,18 +673,16 @@ async def test_client_side_no_rationales(
 
     url = "/v0/evaluation"
     dataset = "test_dataset"
-    endpoint = "llama-3-8b-chat@aws-bedrock"
+    agent = "llama-3-8b-chat@aws-bedrock"
     file_path = "./orchestra/tests/sample_datasets/prompts_with_kws_scored.jsonl"
     with open(file_path, "rb") as f:
         file_content = f.read()
     files = {
-        "client_side_scores": ("test.jsonl", file_content, "application/x-jsonlines"),
+        "evaluations": ("test.jsonl", file_content, "application/x-jsonlines"),
     }
 
     params = {
-        "url": url,
-        "dataset": dataset,
-        "endpoint": endpoint,
+        "agent": agent,
         "evaluator": eval_name,
     }
     response = await client.post(url, params=params, files=files, headers=HEADERS)
@@ -704,7 +692,7 @@ async def test_client_side_no_rationales(
 
     url = "/v0/evaluation"
     params = {
-        "endpoint": endpoint,
+        "agent": agent,
         "dataset": dataset,
         "evaluator": eval_name,
         "return_rationale": True,
@@ -726,7 +714,7 @@ async def test_client_side_no_rationales(
                         "score": 1.0,
                         "evaluation": [
                             {
-                                "endpoint": "client_side",
+                                "agent": "client_side",
                                 "rationale": "",
                                 "rationale_score": 1.0,
                             },
@@ -738,7 +726,7 @@ async def test_client_side_no_rationales(
                         "score": 0.0,
                         "evaluation": [
                             {
-                                "endpoint": "client_side",
+                                "agent": "client_side",
                                 "rationale": "",
                                 "rationale_score": 0.0,
                             },
@@ -801,7 +789,7 @@ async def test_list_evaluation_evaluator_and_endpoint(client: AsyncClient, dbses
     params = {
         "dataset": "test_dataset_eval",
         "evaluator": "test_eval",
-        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "agent": "llama-3-8b-chat@aws-bedrock",
     }
     expected_scores = {
         "test_eval": {"llama-3-8b-chat@aws-bedrock": {"score": 0.4, "progress": 100.0}},
@@ -817,7 +805,7 @@ async def test_list_evaluation_evaluator_and_endpoint_via_prompts(
     params = {
         "prompts": "1,2",
         "evaluator": "test_eval",
-        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "agent": "llama-3-8b-chat@aws-bedrock",
     }
     expected_scores = {
         "test_eval": {"llama-3-8b-chat@aws-bedrock": {"score": 0.4, "progress": 100.0}},
@@ -831,7 +819,7 @@ async def test_list_evaluation_endpoint(client: AsyncClient, dbsession):
 
     params = {
         "dataset": "test_dataset_eval",
-        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "agent": "llama-3-8b-chat@aws-bedrock",
     }
     expected_scores = {
         "test_eval": {"llama-3-8b-chat@aws-bedrock": {"score": 0.4, "progress": 100.0}},
@@ -883,7 +871,7 @@ async def test_list_evaluation_per_prompt(client: AsyncClient, dbsession):
     params = {
         "dataset": "test_dataset_eval",
         "evaluator": "test_eval",
-        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "agent": "llama-3-8b-chat@aws-bedrock",
         "per_prompt": True,
     }
     expected_scores = {
@@ -919,7 +907,7 @@ async def test_list_evaluation_rationale_response(client: AsyncClient, dbsession
     params = {
         "dataset": "test_dataset_eval",
         "evaluator": "test_eval_multi_judge",
-        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "agent": "llama-3-8b-chat@aws-bedrock",
         "return_rationale": True,
         "return_response": True,
         "per_prompt": True,
@@ -936,12 +924,12 @@ async def test_list_evaluation_rationale_response(client: AsyncClient, dbsession
                         "score": 0.75,
                         "evaluation": [
                             {
-                                "endpoint": "llama-3-8b-chat@aws-bedrock",
+                                "agent": "llama-3-8b-chat@aws-bedrock",
                                 "rationale": '<explanation>\nThe assistant\'s response is a straightforward and accurate answer to the user\'s question. The capital of Spain is indeed Madrid. The answer is clear, concise, and easy to understand. However, the response lacks any additional information or context that might be helpful to the user. Nevertheless, the answer is correct and relevant to the question.\n\nFinal rating: good\n\n{"assistant_rating": "good"}',
                                 "rationale_score": 0.5,
                             },
                             {
-                                "endpoint": "gpt-3.5-turbo@openai",
+                                "agent": "gpt-3.5-turbo@openai",
                                 "rationale": 'The assistant\'s answer is correct and directly addresses the user prompt by providing the capital of Spain, which is Madrid. The response is clear and on point.\n\n{"assistant_rating": "excellent"}',
                                 "rationale_score": 1.0,
                             },
@@ -953,12 +941,12 @@ async def test_list_evaluation_rationale_response(client: AsyncClient, dbsession
                         "score": 0.25,
                         "evaluation": [
                             {
-                                "endpoint": "llama-3-8b-chat@aws-bedrock",
+                                "agent": "llama-3-8b-chat@aws-bedrock",
                                 "rationale": 'The square root of 1009 to 1 decimal place is indeed approximately 32.1. However, the assistant\'s response lacks a clear explanation or justification for the calculation. A simple "because I said so" or "because it\'s correct" is not sufficient.\n\nThe assistant\'s response is straightforward and provides the correct answer, but it does not demonstrate an understanding of the underlying mathematical concept or provide any additional context. A good answer should not only provide the correct answer but also explain the reasoning or process used to arrive at that answer.\n\nBased on the rating rules, I would rate the assistant\'s answer as "good".\n\n{"assistant_rating": "good"}',
                                 "rationale_score": 0.5,
                             },
                             {
-                                "endpoint": "gpt-3.5-turbo@openai",
+                                "agent": "gpt-3.5-turbo@openai",
                                 "rationale": 'The square root of 1009 to 1 decimal place is actually approximately 31.8, not 32.1. The assistant\'s answer is incorrect. Therefore, I would rate this response as "bad".\n\n{"assistant_rating": "bad"}',
                                 "rationale_score": 0.0,
                             },
@@ -976,7 +964,7 @@ async def test_list_evaluation_rationale(client: AsyncClient, dbsession):
     params = {
         "dataset": "test_dataset_eval",
         "evaluator": "test_eval_multi_judge",
-        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "agent": "llama-3-8b-chat@aws-bedrock",
         "return_rationale": True,
         "per_prompt": True,
     }
@@ -991,12 +979,12 @@ async def test_list_evaluation_rationale(client: AsyncClient, dbsession):
                         "score": 0.75,
                         "evaluation": [
                             {
-                                "endpoint": "llama-3-8b-chat@aws-bedrock",
+                                "agent": "llama-3-8b-chat@aws-bedrock",
                                 "rationale": '<explanation>\nThe assistant\'s response is a straightforward and accurate answer to the user\'s question. The capital of Spain is indeed Madrid. The answer is clear, concise, and easy to understand. However, the response lacks any additional information or context that might be helpful to the user. Nevertheless, the answer is correct and relevant to the question.\n\nFinal rating: good\n\n{"assistant_rating": "good"}',
                                 "rationale_score": 0.5,
                             },
                             {
-                                "endpoint": "gpt-3.5-turbo@openai",
+                                "agent": "gpt-3.5-turbo@openai",
                                 "rationale": 'The assistant\'s answer is correct and directly addresses the user prompt by providing the capital of Spain, which is Madrid. The response is clear and on point.\n\n{"assistant_rating": "excellent"}',
                                 "rationale_score": 1.0,
                             },
@@ -1007,12 +995,12 @@ async def test_list_evaluation_rationale(client: AsyncClient, dbsession):
                         "score": 0.25,
                         "evaluation": [
                             {
-                                "endpoint": "llama-3-8b-chat@aws-bedrock",
+                                "agent": "llama-3-8b-chat@aws-bedrock",
                                 "rationale": 'The square root of 1009 to 1 decimal place is indeed approximately 32.1. However, the assistant\'s response lacks a clear explanation or justification for the calculation. A simple "because I said so" or "because it\'s correct" is not sufficient.\n\nThe assistant\'s response is straightforward and provides the correct answer, but it does not demonstrate an understanding of the underlying mathematical concept or provide any additional context. A good answer should not only provide the correct answer but also explain the reasoning or process used to arrive at that answer.\n\nBased on the rating rules, I would rate the assistant\'s answer as "good".\n\n{"assistant_rating": "good"}',
                                 "rationale_score": 0.5,
                             },
                             {
-                                "endpoint": "gpt-3.5-turbo@openai",
+                                "agent": "gpt-3.5-turbo@openai",
                                 "rationale": 'The square root of 1009 to 1 decimal place is actually approximately 31.8, not 32.1. The assistant\'s answer is incorrect. Therefore, I would rate this response as "bad".\n\n{"assistant_rating": "bad"}',
                                 "rationale_score": 0.0,
                             },
@@ -1030,7 +1018,7 @@ async def test_list_evaluation_responses(client: AsyncClient, dbsession):
     params = {
         "dataset": "test_dataset_eval",
         "evaluator": "test_eval_multi_judge",
-        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "agent": "llama-3-8b-chat@aws-bedrock",
         "return_response": True,
         "per_prompt": True,
     }
@@ -1057,7 +1045,7 @@ async def test_list_evaluation_responses(client: AsyncClient, dbsession):
     await _helper_test_list_evaluations(client, params, expected_scores)
 
 
-async def test_list_evaluation_responses_from_prompt_ids(
+async def test_list_evaluation_responses_from_datum_ids(
     client: AsyncClient,
     dbsession,
 ):
@@ -1065,7 +1053,7 @@ async def test_list_evaluation_responses_from_prompt_ids(
     params = {
         "prompts": "2",
         "evaluator": "test_eval_multi_judge",
-        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "agent": "llama-3-8b-chat@aws-bedrock",
         "return_response": True,
         "per_prompt": True,
     }
@@ -1092,7 +1080,7 @@ async def test_list_evaluation_sub_scorers(client: AsyncClient, dbsession):
     params = {
         "dataset": "test_dataset_eval",
         "evaluator": "test_eval_multi_judge",
-        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "agent": "llama-3-8b-chat@aws-bedrock",
         "sub_scorers": True,
     }
     expected_scores = {
@@ -1120,7 +1108,7 @@ async def test_delete_evaluation_endpoint_and_evaluator(client: AsyncClient, dbs
     params = {
         "dataset": "test_dataset_eval",
         "evaluator": "test_eval",
-        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "agent": "llama-3-8b-chat@aws-bedrock",
     }
     # delete evaluation
     response = await client.delete(
@@ -1144,7 +1132,7 @@ async def test_delete_evaluation_endpoint_and_evaluator(client: AsyncClient, dbs
     await _helper_test_list_evaluations(client, all_params, expected_scores)
 
 
-async def test_delete_evaluation_endpoint_and_evaluator_from_prompt_ids(
+async def test_delete_evaluation_endpoint_and_evaluator_from_datum_ids(
     client: AsyncClient,
     dbsession,
 ):
@@ -1154,7 +1142,7 @@ async def test_delete_evaluation_endpoint_and_evaluator_from_prompt_ids(
     params = {
         "prompts": "1,2",
         "evaluator": "test_eval",
-        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "agent": "llama-3-8b-chat@aws-bedrock",
     }
     # delete evaluation
     response = await client.delete(
@@ -1214,7 +1202,7 @@ async def test_delete_no_evaluator(client: AsyncClient, dbsession):
 
     params = {
         "dataset": "test_dataset_eval",
-        "endpoint": "llama-3-8b-chat@aws-bedrock",
+        "agent": "llama-3-8b-chat@aws-bedrock",
     }
 
     # delete evaluation
@@ -1285,7 +1273,7 @@ async def test_delete_bad_endpoint(client: AsyncClient, dbsession):
 
     await _seed_evaluations_db(dbsession)
 
-    params = {"dataset": "test_dataset_eval", "endpoint": "llama-5b@amazon.com"}
+    params = {"dataset": "test_dataset_eval", "agent": "llama-5b@amazon.com"}
 
     # delete evaluation
     response = await client.delete(

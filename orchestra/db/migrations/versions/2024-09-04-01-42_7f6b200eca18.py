@@ -75,13 +75,13 @@ def upgrade() -> None:
         "dataset_prompt",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("dataset_id", sa.Integer(), nullable=True),
-        sa.Column("prompt_id", sa.Integer(), nullable=True),
+        sa.Column("datum_id", sa.Integer(), nullable=True),
         sa.ForeignKeyConstraint(
             ["dataset_id"],
             ["dataset.id"],
         ),
         sa.ForeignKeyConstraint(
-            ["prompt_id"],
+            ["datum_id"],
             ["stored_prompt.id"],
         ),
         sa.PrimaryKeyConstraint("id"),
@@ -93,15 +93,15 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_index(
-        op.f("ix_dataset_prompt_prompt_id"),
+        op.f("ix_dataset_prompt_datum_id"),
         "dataset_prompt",
-        ["prompt_id"],
+        ["datum_id"],
         unique=False,
     )
     op.create_table(
         "evaluation",
         sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("prompt_id", sa.Integer(), nullable=True),
+        sa.Column("datum_id", sa.Integer(), nullable=True),
         sa.Column("evaluator_id", sa.Integer(), nullable=True),
         sa.Column("score", sa.Numeric(), nullable=False),
         sa.ForeignKeyConstraint(
@@ -109,7 +109,7 @@ def upgrade() -> None:
             ["evaluator.id"],
         ),
         sa.ForeignKeyConstraint(
-            ["prompt_id"],
+            ["datum_id"],
             ["stored_prompt.id"],
         ),
         sa.PrimaryKeyConstraint("id"),
@@ -121,46 +121,46 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_index(
-        op.f("ix_evaluation_prompt_id"),
+        op.f("ix_evaluation_datum_id"),
         "evaluation",
-        ["prompt_id"],
+        ["datum_id"],
         unique=False,
     )
     op.create_table(
         "stored_prompt_extra_field",
         sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("prompt_id", sa.Integer(), nullable=True),
+        sa.Column("datum_id", sa.Integer(), nullable=True),
         sa.Column("field", sa.String(), nullable=False),
         sa.Column("value", sa.String(), nullable=False),
         sa.ForeignKeyConstraint(
-            ["prompt_id"],
+            ["datum_id"],
             ["stored_prompt.id"],
         ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        op.f("ix_stored_prompt_extra_field_prompt_id"),
+        op.f("ix_stored_prompt_extra_field_datum_id"),
         "stored_prompt_extra_field",
-        ["prompt_id"],
+        ["datum_id"],
         unique=False,
     )
     op.create_table(
         "stored_prompt_response",
         sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("prompt_id", sa.Integer(), nullable=True),
+        sa.Column("datum_id", sa.Integer(), nullable=True),
         sa.Column("endpoint_str", sa.String(), nullable=False),
         sa.Column("response", sa.String(), nullable=False),
         sa.Column("num_tokens", sa.Integer(), nullable=False),
         sa.ForeignKeyConstraint(
-            ["prompt_id"],
+            ["datum_id"],
             ["stored_prompt.id"],
         ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        op.f("ix_stored_prompt_response_prompt_id"),
+        op.f("ix_stored_prompt_response_datum_id"),
         "stored_prompt_response",
-        ["prompt_id"],
+        ["datum_id"],
         unique=False,
     )
     op.create_table(
@@ -225,19 +225,19 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_judgement_response_id"), table_name="judgement")
     op.drop_table("judgement")
     op.drop_index(
-        op.f("ix_stored_prompt_response_prompt_id"),
+        op.f("ix_stored_prompt_response_datum_id"),
         table_name="stored_prompt_response",
     )
     op.drop_table("stored_prompt_response")
     op.drop_index(
-        op.f("ix_stored_prompt_extra_field_prompt_id"),
+        op.f("ix_stored_prompt_extra_field_datum_id"),
         table_name="stored_prompt_extra_field",
     )
     op.drop_table("stored_prompt_extra_field")
-    op.drop_index(op.f("ix_evaluation_prompt_id"), table_name="evaluation")
+    op.drop_index(op.f("ix_evaluation_datum_id"), table_name="evaluation")
     op.drop_index(op.f("ix_evaluation_evaluator_id"), table_name="evaluation")
     op.drop_table("evaluation")
-    op.drop_index(op.f("ix_dataset_prompt_prompt_id"), table_name="dataset_prompt")
+    op.drop_index(op.f("ix_dataset_prompt_datum_id"), table_name="dataset_prompt")
     op.drop_index(op.f("ix_dataset_prompt_dataset_id"), table_name="dataset_prompt")
     op.drop_table("dataset_prompt")
     op.drop_index(op.f("ix_stored_prompt_user_id"), table_name="stored_prompt")

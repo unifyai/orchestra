@@ -2,6 +2,7 @@
 Includes endpoints related to evaluators.
 """
 
+import copy
 import json
 
 import unify
@@ -126,19 +127,16 @@ Be as objective as possible."""
             ],
         )
 
-    prompt_parser = json.dumps({
-        k: str(v).replace(", ", "][")
-        for k, v in request.prompt_parser.items()
-    })
-    response_parser = json.dumps({
-        k: str(v).replace(", ", "][")
-        for k, v in request.response_parser.items()
-    })
+    prompt_parser = json.dumps(
+        {k: str(v).replace(", ", "][") for k, v in request.prompt_parser.items()},
+    )
+    response_parser = json.dumps(
+        {k: str(v).replace(", ", "][") for k, v in request.response_parser.items()},
+    )
     if request.extra_parser is not None:
-        request.extra_parser = json.dumps({
-            k: str(v).replace(", ", "][")
-            for k, v in request.extra_parser.items()
-        })
+        extra_parser = json.dumps(
+            {k: str(v).replace(", ", "][") for k, v in request.extra_parser.items()},
+        )
 
     class_config = request.class_config
     if class_config is None:
@@ -209,17 +207,25 @@ def get_evaluator(
     ]
     if not evaluators:
         raise evaluator_not_found(name)
-    evaluator = evaluators[0]
-    evaluator.prompt_parser = json.dumps({
-        k: [int(item) if item.lstrip("-").isdigit() else item[1:-1]
-            for item in v[1:-1].split("][")]
-        for k, v in json.loads(evaluator.prompt_parser).items()
-    })
-    evaluator.response_parser = json.dumps({
-        k: [int(item) if item.lstrip("-").isdigit() else item[1:-1]
-            for item in v[1:-1].split("][")]
-        for k, v in json.loads(evaluator.response_parser).items()
-    })
+    evaluator = copy.deepcopy(evaluators[0])
+    evaluator.prompt_parser = json.dumps(
+        {
+            k: [
+                int(item) if item.lstrip("-").isdigit() else item[1:-1]
+                for item in v[1:-1].split("][")
+            ]
+            for k, v in json.loads(evaluator.prompt_parser).items()
+        },
+    )
+    evaluator.response_parser = json.dumps(
+        {
+            k: [
+                int(item) if item.lstrip("-").isdigit() else item[1:-1]
+                for item in v[1:-1].split("][")
+            ]
+            for k, v in json.loads(evaluator.response_parser).items()
+        },
+    )
     # evaluator.extra_parser = json.dumps({
     #     k: [int(item) if item.lstrip("-").isdigit() else item[1:-1]
     #         for item in v[1:-1].split("][")]

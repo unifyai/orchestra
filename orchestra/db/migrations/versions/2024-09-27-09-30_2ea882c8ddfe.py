@@ -5,7 +5,6 @@ Revises: 193e0a1d573f
 Create Date: 2024-09-27 09:30:00.367120
 
 """
-import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -21,14 +20,14 @@ def upgrade() -> None:
     op.create_unique_constraint(
         "uq_evaluation",
         "evaluation",
-        ["prompt_id", "prompt_variation_id", "evaluator_id", "endpoint_str"],
+        ["datum_id", "prompt_variation_id", "evaluator_id", "endpoint_str"],
         postgresql_nulls_not_distinct=True,
     )
     op.drop_constraint("uq_prompt_response", "stored_prompt_response", type_="unique")
     op.create_unique_constraint(
         "uq_prompt_response",
         "stored_prompt_response",
-        ["prompt_id", "prompt_variation_id", "endpoint_str"],
+        ["datum_id", "prompt_variation_id", "endpoint_str"],
         postgresql_nulls_not_distinct=True,
     )
     # ### end Alembic commands ###
@@ -40,12 +39,12 @@ def downgrade() -> None:
     op.create_unique_constraint(
         "uq_prompt_response",
         "stored_prompt_response",
-        ["prompt_id", "prompt_variation_id", "endpoint_str"],
+        ["datum_id", "prompt_variation_id", "endpoint_str"],
     )
     op.drop_constraint("uq_evaluation", "evaluation", type_="unique")
     op.create_unique_constraint(
         "uq_evaluation",
         "evaluation",
-        ["prompt_id", "prompt_variation_id", "evaluator_id", "endpoint_str"],
+        ["datum_id", "prompt_variation_id", "evaluator_id", "endpoint_str"],
     )
     # ### end Alembic commands ###

@@ -16,18 +16,14 @@ import sys
 import pytest
 from dotenv import find_dotenv, load_dotenv
 from httpx import AsyncClient
-from sqlalchemy import text
-
-
 from sqlalchemy import Engine, event
-from dotenv import find_dotenv, load_dotenv
 
 import orchestra
 from orchestra.tests.test_evaluation import _seed_evaluations_db
 
 # TODO: Less hacky way for this?
 project_root = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."),
 )
 sys.path.insert(0, project_root)
 dataset_eval_path = os.path.join(project_root, "dataset_evaluation")
@@ -76,7 +72,12 @@ async def test_create_data_trigger_eval(
 ):
     @event.listens_for(Engine, "before_cursor_execute")
     def receive_before_cursor_execute(
-        conn, cursor, statement, parameters, context, executemany
+        conn,
+        cursor,
+        statement,
+        parameters,
+        context,
+        executemany,
     ):
         "listen for the 'before_cursor_execute' event"
         obj = {"statement": statement, "parameters": parameters}
@@ -135,17 +136,17 @@ async def test_create_data_trigger_eval(
                 "role": "user",
                 "content": """
     <user_prompt>
-    {user_prompt}
+    {user_message}
     </user_prompt>
 
-    <assistant_response>
-    {response}
-    </assistant_respose>
+    <ref_ans>
+    {ref_ans}
+    </ref_ans>
 
-    follow these rating rules:
-    <rating rules>
-    {class_config}
-    </rating rules>""",
+    <assistant_response>
+    {assistant_response}
+    </assistant_respose>
+    """,
             },
         ],
         "temperature": 0.7,
@@ -156,6 +157,10 @@ async def test_create_data_trigger_eval(
     params = {
         "name": eval_name,
         "judge_prompt": judge_prompt,
+        "prompt_parser": {
+            "user_message": ["messages", -1, "content"],
+            "ref_ans": ["extra_fields", "ref_answer"],
+        },
         "judge_models": judge_model,
     }
     response = await client.post(url, json=params, headers=HEADERS)
@@ -251,7 +256,12 @@ async def test_create_data_clientside(
 ):
     @event.listens_for(Engine, "before_cursor_execute")
     def receive_before_cursor_execute(
-        conn, cursor, statement, parameters, context, executemany
+        conn,
+        cursor,
+        statement,
+        parameters,
+        context,
+        executemany,
     ):
         "listen for the 'before_cursor_execute' event"
         obj = {"statement": statement, "parameters": parameters}
@@ -296,7 +306,12 @@ async def test_create_data_for_router(
 ):
     @event.listens_for(Engine, "before_cursor_execute")
     def receive_before_cursor_execute(
-        conn, cursor, statement, parameters, context, executemany
+        conn,
+        cursor,
+        statement,
+        parameters,
+        context,
+        executemany,
     ):
         "listen for the 'before_cursor_execute' event"
         obj = {"statement": statement, "parameters": parameters}
@@ -420,11 +435,18 @@ async def test_create_data_for_router(
 
 @pytest.mark.manual
 async def test_create_data_for_trained_router(
-    client: AsyncClient, monkeypatch, dbsession
+    client: AsyncClient,
+    monkeypatch,
+    dbsession,
 ):
     @event.listens_for(Engine, "before_cursor_execute")
     def receive_before_cursor_execute(
-        conn, cursor, statement, parameters, context, executemany
+        conn,
+        cursor,
+        statement,
+        parameters,
+        context,
+        executemany,
     ):
         "listen for the 'before_cursor_execute' event"
         obj = {"statement": statement, "parameters": parameters}
