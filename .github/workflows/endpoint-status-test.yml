@@ -35,7 +35,6 @@ jobs:
         cd orchestra
         export API_KEY=${{ secrets.USER_API_KEY }}
         python3 -m pip install requests
-        echo "installed requests"
         python3 endpoint_status_test.py
         mv endpoint_status.mdx ../unify-docs/endpoint_status/endpoint_status.mdx
         cd ..
