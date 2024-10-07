@@ -19,7 +19,7 @@ def upgrade() -> None:
     op.create_unique_constraint(
         "uq_evaluation",
         "evaluation",
-        ["datum_id", "prompt_variation_id", "evaluator_id", "endpoint_str"],
+        ["prompt_id", "prompt_variation_id", "evaluator_id", "endpoint_str"],
     )
     op.create_unique_constraint("uq_userid_evaluator", "evaluator", ["user_id", "name"])
     op.create_unique_constraint(
@@ -30,7 +30,7 @@ def upgrade() -> None:
     op.create_unique_constraint(
         "uq_prompt_response",
         "stored_prompt_response",
-        ["datum_id", "prompt_variation_id", "endpoint_str"],
+        ["prompt_id", "prompt_variation_id", "endpoint_str"],
     )
     # ### end Alembic commands ###
 
