@@ -134,10 +134,9 @@ Be as objective as possible."""
         {k: str(v).replace(", ", "][") for k, v in request.response_parser.items()},
     )
     if request.extra_parser is not None:
-        request.extra_parser = json.dumps({
-            k: str(v).replace(", ", "][")
-            for k, v in request.extra_parser.items()
-        })
+        request.extra_parser = json.dumps(
+            {k: str(v).replace(", ", "][") for k, v in request.extra_parser.items()},
+        )
 
     class_config = request.class_config
     if class_config is None:
