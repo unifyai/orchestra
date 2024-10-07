@@ -5,7 +5,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import OrganizationMember
+from orchestra.db.models.orchestra_models import (
+    AuthUser,
+    Organization,
+    OrganizationMember,
+)
 
 
 class OrganizationMemberDAO:
@@ -56,7 +60,7 @@ class OrganizationMemberDAO:
         organization_id: Optional[int] = None,
         level: Optional[str] = None,
     ) -> None:
-        query = select()
+        query = select(OrganizationMember)
         query = query.where(OrganizationMember.id == id)
         raw = self.session.execute(query)
         entry = raw.scalars().first()
@@ -67,6 +71,19 @@ class OrganizationMemberDAO:
                 setattr(entry, "user_id", user_id)
             if organization_id:
                 setattr(entry, "organization_id", organization_id)
+
+    def list_members(self, name: str):
+        query = (
+            select(AuthUser.email, OrganizationMember.level)
+            .join(OrganizationMember, OrganizationMember.user_id == AuthUser.id)
+            .join(Organization, OrganizationMember.organization_id == Organization.id)
+            .where(Organization.name == name)
+        )
+        raw = self.session.execute(query)
+        entries = [
+            {"email": entry.email, "level": entry.level} for entry in raw.fetchall()
+        ]
+        return entries
 
     def delete(self, id: int):
         try:
