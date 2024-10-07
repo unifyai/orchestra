@@ -27,7 +27,7 @@ def upgrade() -> None:
         FROM (
             SELECT id,
                    ROW_NUMBER() OVER (
-                       PARTITION BY dataset_id, datum_id
+                       PARTITION BY dataset_id, prompt_id
                        ORDER BY id
                    ) AS row_num
             FROM dataset_prompt
@@ -39,7 +39,7 @@ def upgrade() -> None:
     op.create_unique_constraint(
         "uq_dataset_prompt",
         "dataset_prompt",
-        ["dataset_id", "datum_id"],
+        ["dataset_id", "prompt_id"],
     )
     op.execute(
         """
