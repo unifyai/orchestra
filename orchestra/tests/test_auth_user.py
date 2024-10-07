@@ -233,18 +233,64 @@ async def test_add_organization_member(client: AsyncClient):
     owner_id = response.json()["id"]
     # create user
     url = "/v0/admin/auth-user"
-    params = {"email": "user@org1.com"}
+    email = "user@org1.co"
+    params = {"email": email}
     response = await client.post(url, json=params, headers=HEADERS)
+    user_id = response.json()["id"]
     # create org
     url = "/v0/admin/organization"
     params = {"name": "Org1", "owner_id": owner_id}
     response = await client.post(url, params=params, headers=HEADERS)
 
+    # check member with mail
+    url = f"/v0/admin/auth-user/by-email?email={email}"
+    response = await client.get(url, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    assert response.json()["organization"]["name"] == None
+    assert response.json()["organization"]["level"] == None
+
     # add member to org
     url = "/v0/admin/organization/member"
-    params = {"name": "Org1", "new_member_email": "user@org1.com"}
+    params = {"name": "Org1", "new_member_email": email}
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
+
+    # check member with mail
+    url = f"/v0/admin/auth-user/by-email?email={email}"
+    response = await client.get(url, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    assert response.json()["organization"]["name"] == "Org1"
+    assert response.json()["organization"]["level"] == "user"
+
+    # check member with user id
+    url = f"/v0/admin/auth-user/by-user-id?user_id={user_id}"
+    response = await client.get(url, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    assert response.json()["id"] == user_id
+    assert response.json()["organization"]["name"] == "Org1"
+    assert response.json()["organization"]["level"] == "user"
+
+    # update user level within the org
+    url = "/v0/admin/organization/member/level"
+    params = {"organization": "Org1", "member_email": email, "new_level": "admin"}
+    response = await client.put(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # check member with mail
+    url = f"/v0/admin/auth-user/by-email?email={email}"
+    response = await client.get(url, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    assert response.json()["organization"]["name"] == "Org1"
+    assert response.json()["organization"]["level"] == "admin"
+
+    # list users in a given org
+    url = f"/v0/admin/organization/list?name=Org1"
+    response = await client.get(url, headers=HEADERS)
+    expected_result = [
+        {"email": "owner@org1.com", "level": "owner"},
+        {"email": "user@org1.co", "level": "admin"},
+    ]
+    assert response.json() == expected_result
 
 
 @pytest.mark.anyio

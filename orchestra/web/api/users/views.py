@@ -51,12 +51,19 @@ async def get_user(
     user_id: str,
     auth_user_dao: AuthUserDAO = Depends(),
     api_key_dao: ApiKeyDAO = Depends(),
+    organization_member_dao: OrganizationMemberDAO = Depends(),
+    organization_dao: OrganizationDAO = Depends(),
 ):
     user = auth_user_dao.filter(id=user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User ID Not Found.")
-        # TODO: check that return None can be remoed here fine
     api_key = api_key_dao.filter(user_id=user[0][0].id)
+    org_member = organization_member_dao.filter(user_id=user[0][0].id)
+    org_name, org_level = None, None
+    if org_member:
+        org_level = org_member[0][0].level
+        org = organization_dao.filter(id=org_member[0][0].organization_id)
+        org_name = org[0][0].name
     return {
         "id": user[0][0].id,
         "name": user[0][0].name,
@@ -66,6 +73,7 @@ async def get_user(
         "email": user[0][0].email,
         "createdAt": user[0][0].created_at,
         "apiKey": api_key[0][0].key,
+        "organization": {"name": org_name, "level": org_level},
     }
 
 
@@ -74,11 +82,19 @@ async def get_user_by_email(
     email: str,
     auth_user_dao: AuthUserDAO = Depends(),
     api_key_dao: ApiKeyDAO = Depends(),
+    organization_member_dao: OrganizationMemberDAO = Depends(),
+    organization_dao: OrganizationDAO = Depends(),
 ):
     user = auth_user_dao.filter(email=email)
     if not user:
         return None
     api_key = api_key_dao.filter(user_id=user[0][0].id)
+    org_member = organization_member_dao.filter(user_id=user[0][0].id)
+    org_name, org_level = None, None
+    if org_member:
+        org_level = org_member[0][0].level
+        org = organization_dao.filter(id=org_member[0][0].organization_id)
+        org_name = org[0][0].name
     return {
         "id": user[0][0].id,
         "name": user[0][0].name,
@@ -88,6 +104,7 @@ async def get_user_by_email(
         "email": user[0][0].email,
         "createdAt": user[0][0].created_at,
         "apiKey": api_key[0][0].key,
+        "organization": {"name": org_name, "level": org_level},
     }
 
 
@@ -98,6 +115,8 @@ async def get_user_by_account(
     account_dao: AccountDAO = Depends(),
     auth_user_dao: AuthUserDAO = Depends(),
     api_key_dao: ApiKeyDAO = Depends(),
+    organization_member_dao: OrganizationMemberDAO = Depends(),
+    organization_dao: OrganizationDAO = Depends(),
 ):
     account = account_dao.filter(
         provider_account_id=provider_account_id,
@@ -109,6 +128,12 @@ async def get_user_by_account(
     if not user:
         return None
     api_key = api_key_dao.filter(user_id=user[0][0].id)
+    org_member = organization_member_dao.filter(user_id=user[0][0].id)
+    org_name, org_level = None, None
+    if org_member:
+        org_level = org_member[0][0].level
+        org = organization_dao.filter(id=org_member[0][0].organization_id)
+        org_name = org[0][0].name
     return {
         "id": account[0][0].id,
         "name": user[0][0].name,
@@ -118,6 +143,7 @@ async def get_user_by_account(
         "email": user[0][0].email,
         "createdAt": user[0][0].created_at,
         "apiKey": api_key[0][0].key,
+        "organization": {"name": org_name, "level": org_level},
     }
 
 
@@ -282,14 +308,17 @@ async def reset_api_key(
     return new_api_key
 
 
-@admin_router.get("/organization/list")  # TODO
+@admin_router.get("/organization/list")
 async def create_organization(
     name: str,
     organization_dao: OrganizationDAO = Depends(),
     organization_member_dao: OrganizationMemberDAO = Depends(),
 ):
-    # TODO
-    return "TODO"
+    org = organization_dao.filter(name=name)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization Not Found.")
+    org_members = organization_member_dao.list_members(name=name)
+    return org_members
 
 
 @admin_router.post("/organization")
@@ -331,3 +360,36 @@ async def add_organization_member(
         level="user",
     )
     return "Member added successfully to the organization!"
+
+
+@admin_router.put("/organization/member/level")
+async def update_organization_member_level(
+    organization: str,
+    member_email: str,
+    new_level: str,
+    auth_user_dao: AuthUserDAO = Depends(),
+    organization_dao: OrganizationDAO = Depends(),
+    organization_member_dao: OrganizationMemberDAO = Depends(),
+):
+    if new_level not in ["user", "admin", "owner"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Level must be one of user, admin, or owner.",
+        )
+    user = auth_user_dao.filter(email=member_email)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    org = organization_dao.filter(name=organization)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+    org_member = organization_member_dao.filter(
+        user_id=user[0][0].id,
+        organization_id=org[0][0].id,
+    )
+    if not org_member:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found in the organization.",
+        )
+    organization_member_dao.update(id=org_member[0][0].id, level=new_level)
+    return "Member level successfully updated!"
