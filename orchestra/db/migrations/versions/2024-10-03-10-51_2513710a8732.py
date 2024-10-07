@@ -1,7 +1,7 @@
 """extra_fields moved inside stored_prompt
 
 Revision ID: 2513710a8732
-Revises: d62c3daf37b9
+Revises: e58264537de7
 Create Date: 2024-10-03 10:51:18.278465
 
 """
@@ -14,7 +14,7 @@ from sqlalchemy.sql import column, table
 
 # revision identifiers, used by Alembic.
 revision = "2513710a8732"
-down_revision = "d62c3daf37b9"
+down_revision = "e58264537de7"
 branch_labels = None
 depends_on = None
 

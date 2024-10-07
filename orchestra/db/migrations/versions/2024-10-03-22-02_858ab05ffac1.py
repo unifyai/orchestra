@@ -1,7 +1,7 @@
 """Added description column for evaluators
 
 Revision ID: 858ab05ffac1
-Revises: e58264537de7
+Revises: 2513710a8732
 Create Date: 2024-10-03 22:02:23.466543
 
 """
@@ -10,7 +10,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "858ab05ffac1"
-down_revision = "e58264537de7"
+down_revision = "2513710a8732"
 branch_labels = None
 depends_on = None
 
