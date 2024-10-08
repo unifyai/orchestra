@@ -3,6 +3,7 @@ Includes endpoints related to logs.
 """
 
 import json
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
@@ -60,7 +61,7 @@ def create_logs(
         project_id = project_dao.filter(
             user_id=request_fastapi.state.user_id,
             # TODO: Add organization id
-            name=request.name,
+            name=request.project,
         )[0][0].id
     except IndexError:
         raise HTTPException(
@@ -74,10 +75,9 @@ def create_logs(
     # Store each log
     for k, v in request.logs.items():
         inferred_type = None  # TODO: Infer the types
-        clean_key = k.strip("/", 1)
+        clean_key = k.split("/", 1)
         log_dao.create(
             log_event_id=log_event_id,
-            project_id=project_id,
             key=clean_key[0],
             value=v,
             version=clean_key[1] if len(clean_key) > 1 else None,
@@ -191,13 +191,13 @@ def delete_log_entry(
             detail=f"Log with id {id} not found in your account.",
         )
         # TODO: Deal with organisation IDs
-    log_id = log_dao.filter(log_event_id=log_event.id, key=entry)
-    if not log_id:
+    log = log_dao.filter(log_event_id=log_event.id, key=entry)
+    if not log:
         raise HTTPException(
             status_code=404,
             detail=f"Log entry {entry} not found in your account for log {id}.",
         )
-    log_dao.delete(id=log_id)
+    log_dao.delete(id=log[0][0].id)
     return {"info": "Log entry deleted successfully!"}
 
 
@@ -284,7 +284,8 @@ def get_logs(
         description="Name of the project to get logs from.",
         example="eval-project",
     ),
-    filter: str = Query(
+    filter_expr: Optional[str] = Query(
+        None,
         description="Boolean string to filter logs. TODO: Detailed page.",
         example="len(output) > 200 and temperature == 0.5",
     ),
@@ -302,7 +303,7 @@ def get_logs(
     except IndexError:
         raise HTTPException(
             status_code=404,
-            detail=f"Log with id {id} not found in your account.",
+            detail=f"Project {project} not found in your account.",
         )
     # TODO: Deal with organisation IDs
     log_events = log_event_dao.filter(project_id=project_obj.id)
@@ -312,8 +313,8 @@ def get_logs(
         # TODO: Add pagination
         log_entries = log_dao.filter(log_event_id=le[0].id)
         entries = {l[0].key: l[0].value for l in log_entries}
-        # TODO: Apply filtering here
-        logs.append({"id": id, "entries": entries})
+        # TODO: Apply filtering here (filter_expr)
+        logs.append({"id": le[0].id, "entries": entries})
     return logs
 
 
@@ -383,6 +384,8 @@ def get_logs_groups(
         entry = log_dao.filter(log_event_id=le[0].id, key=key)
         if entry:
             entry_groups.add(
-                json.dumps({"version": entry[0].version, "value": entry[0].value}),
+                json.dumps(
+                    {"version": entry[0][0].version, "value": entry[0][0].value},
+                ),
             )
     return entry_groups

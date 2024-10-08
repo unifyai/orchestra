@@ -79,8 +79,8 @@ class ProjectDAO:
 
     def delete(self, id: int):
         try:
-            api_key = self.session.query(Project).filter_by(id=id).one()
-            self.session.delete(api_key)
+            project = self.session.query(Project).filter_by(id=id).one()
+            self.session.delete(project)
             self.session.commit()
         except:
             self.session.rollback()

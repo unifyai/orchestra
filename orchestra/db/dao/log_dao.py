@@ -86,8 +86,8 @@ class LogDAO:
 
     def delete(self, id: int):
         try:
-            api_key = self.session.query(Log).filter_by(id=id).one()
-            self.session.delete(api_key)
+            log = self.session.query(Log).filter_by(id=id).one()
+            self.session.delete(log)
             self.session.commit()
         except:
             self.session.rollback()

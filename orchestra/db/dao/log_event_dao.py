@@ -17,11 +17,13 @@ class LogEventDAO:
         project_id: int,
     ) -> None:
 
-        self.session.add(
-            LogEvent(
-                project_id=project_id,
-            ),
+        new_log_event = LogEvent(
+            project_id=project_id,
         )
+
+        self.session.add(new_log_event)
+        self.session.commit()
+        return new_log_event.id
 
     def filter(
         self,
@@ -51,8 +53,8 @@ class LogEventDAO:
 
     def delete(self, id: int):
         try:
-            api_key = self.session.query(LogEvent).filter_by(id=id).one()
-            self.session.delete(api_key)
+            log_event = self.session.query(LogEvent).filter_by(id=id).one()
+            self.session.delete(log_event)
             self.session.commit()
         except:
             self.session.rollback()

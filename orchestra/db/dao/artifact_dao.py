@@ -67,8 +67,8 @@ class ArtifactDAO:
 
     def delete(self, id: int):
         try:
-            api_key = self.session.query(Artifact).filter_by(id=id).one()
-            self.session.delete(api_key)
+            artifact = self.session.query(Artifact).filter_by(id=id).one()
+            self.session.delete(artifact)
             self.session.commit()
         except:
             self.session.rollback()
