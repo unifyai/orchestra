@@ -300,7 +300,7 @@ if __name__ == "__main__":
         headers=headers
     )
     credits = response.json()
-    if credits["credits"] < 100 or response.status_code != 200:
+    if credits["credits"] < 20 or response.status_code != 200:
         exit()
     url = f"{BASE_URL}/endpoints"
     endpoints = sorted(requests.request("GET", url, headers=headers).json())
