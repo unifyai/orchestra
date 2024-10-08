@@ -17,6 +17,7 @@ from orchestra.web.api import (  # noqa: WPS235
     llm_queries,
     logging,
     monitoring,
+    project,
     provider,
     router_configurations,
     router_deployment,
@@ -44,6 +45,11 @@ api_router.include_router(
 api_router.include_router(
     logging.router,
     tags=["Logging"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    project.router,
+    tags=["Log"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
