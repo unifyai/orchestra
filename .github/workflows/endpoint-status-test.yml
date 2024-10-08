@@ -28,14 +28,23 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
-        python-version: "3.10"
+        python-version: "3.9"
+
+    - name: Install deps
+      run: |
+        cd orchestra
+        pip install -U pip
+        pip install poetry
+        poetry install
+        cd ..
+      env:
+        POETRY_VIRTUALENVS_CREATE: false
 
     - name: Test all endpoints
       run: |
         cd orchestra
         export API_KEY=${{ secrets.USER_API_KEY }}
-        python3 -m pip install requests
-        python3 endpoint_status_test.py
+        python endpoint_status_test.py
         mv endpoint_status.mdx ../unify-docs/endpoint_status/endpoint_status.mdx
         cd ..
 
