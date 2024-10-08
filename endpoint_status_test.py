@@ -130,7 +130,7 @@ TEST_CASES = [
     {
         "arg": "stream",
         "value": True,
-        "assertion": lambda response: (isinstance(response, list)),
+        "assertion": lambda response: (isinstance(response, list) and len(response) > 1),
         "messages": [
             {"role": "user", "content": "Explain AI in a couple of sentences."},
         ],
@@ -239,7 +239,10 @@ def test_endpoint(endpoint: str, api_key: str):
             assert response.status_code == 200
             if test_type == "assertion":
                 assertion = test_case_info["assertion"]
-                assert assertion(response.json())
+                if arg == "stream":
+                    assert assertion(response.text.split("\n\n"))
+                else:
+                    assert assertion(response.json())
             passed = True
         except Exception as e:
             print(e)
@@ -288,10 +291,21 @@ def write_results():
 
 
 if __name__ == "__main__":
-    print("Entered status test script")
     api_key = os.environ.get("API_KEY")
-    url = f"{BASE_URL}/endpoints"
     headers = {"Authorization": f"Bearer {api_key}"}
-    endpoints = sorted(requests.request("GET", url, headers=headers).json())
+    response = requests.request(
+        "GET",
+        f"{BASE_URL}/credits",
+        headers=headers
+    )
+    credits = response.json()
+    if credits["credits"] < 20 or response.status_code != 200:
+        exit()
+    url = f"{BASE_URL}/endpoints"
+    endpoints = sorted(requests.request(
+        "GET",
+        f"{BASE_URL}/endpoints",
+        headers=headers
+    ).json())
     test_all_endpoints(endpoints, api_key)
     write_results()
