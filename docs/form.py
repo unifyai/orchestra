@@ -2,7 +2,7 @@ from docs.body import get_param_fields, get_property_details, get_request_code
 
 file_args = {
     "/v0/dataset": {"post": ["file"]},
-    "/v0/evaluation": {"post": ["client_side_scores"]},
+    "/v0/evaluation": {"post": ["evaluations"]},
 }
 
 
