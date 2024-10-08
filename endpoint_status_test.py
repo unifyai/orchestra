@@ -293,6 +293,5 @@ if __name__ == "__main__":
     url = f"{BASE_URL}/endpoints"
     headers = {"Authorization": f"Bearer {api_key}"}
     endpoints = sorted(requests.request("GET", url, headers=headers).json())
-    print(endpoints)
-    # test_all_endpoints(endpoints, api_key)
-    # write_results()
+    test_all_endpoints([endpoints[0]], api_key)
+    write_results()
