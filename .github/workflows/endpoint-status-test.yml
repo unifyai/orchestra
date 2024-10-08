@@ -14,14 +14,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v3
+    - name: Checkout 🛎️ orchestra
+      uses: actions/checkout@v4
       with:
+        fetch-depth: 0
+        repository: unifyai/orchestra
         path: orchestra
+        ssh-key: '${{ secrets.SSH_CLONE }}'
 
     - name: Checkout 🛎️ unify-docs
       uses: actions/checkout@v4
       with:
+        fetch-depth: 0
+        submodules: recursive
         repository: unifyai/unify-docs
         path: unify-docs
 
