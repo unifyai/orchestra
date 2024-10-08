@@ -130,7 +130,7 @@ TEST_CASES = [
     {
         "arg": "stream",
         "value": True,
-        "assertion": lambda response: (isinstance(response, list)),
+        "assertion": lambda response: (isinstance(response, list) and len(response) > 1),
         "messages": [
             {"role": "user", "content": "Explain AI in a couple of sentences."},
         ],
@@ -239,7 +239,10 @@ def test_endpoint(endpoint: str, api_key: str):
             assert response.status_code == 200
             if test_type == "assertion":
                 assertion = test_case_info["assertion"]
-                assert assertion(response.json())
+                if arg == "stream":
+                    assert assertion(response.text.split("\n\n"))
+                else:
+                    assert assertion(response.json())
             passed = True
         except Exception as e:
             print(e)
