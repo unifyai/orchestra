@@ -22,15 +22,17 @@ class LogDAO:
         inferred_type: Optional[str] = None,
     ) -> None:
 
-        self.session.add(
-            Log(
-                log_event_id=log_event_id,
-                key=key,
-                value=value,
-                version=version,
-                inferred_type=inferred_type,
-            ),
+        new_log = Log(
+            log_event_id=log_event_id,
+            key=key,
+            value=value,
+            version=version,
+            inferred_type=inferred_type,
         )
+
+        self.session.add(new_log)
+        self.session.commit()
+        return new_log.id
 
     def filter(
         self,
