@@ -43,10 +43,11 @@ jobs:
     - name: Test all endpoints
       run: |
         cd orchestra
-        export API_KEY=${{ secrets.USER_API_KEY }}
         python endpoint_status_test.py
         mv endpoint_status.mdx ../unify-docs/endpoint_status/endpoint_status.mdx
         cd ..
+      env:
+        API_KEY: ${{ secrets.USER_API_KEY }}
 
     - name: Set up SSH key
       env:
