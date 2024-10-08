@@ -34,7 +34,7 @@ class ApiKeyDAO:
 
     def filter(
         self,
-        id: Optional[id] = None,
+        id: Optional[int] = None,
         user_id: Optional[str] = None,
         organization_id: Optional[int] = None,
         key: Optional[str] = None,
@@ -56,7 +56,7 @@ class ApiKeyDAO:
         id: int,
         name: Optional[str] = None,
         user_id: Optional[str] = None,
-        organization_id: Optional[id] = None,
+        organization_id: Optional[int] = None,
     ) -> None:
         query = select(ApiKey)
         query = query.where(ApiKey.id == id)
