@@ -291,7 +291,6 @@ def write_results():
 
 
 if __name__ == "__main__":
-    print("Entered status test script")
     api_key = os.environ.get("API_KEY")
     headers = {"Authorization": f"Bearer {api_key}"}
     response = requests.request(
@@ -303,6 +302,10 @@ if __name__ == "__main__":
     if credits["credits"] < 20 or response.status_code != 200:
         exit()
     url = f"{BASE_URL}/endpoints"
-    endpoints = sorted(requests.request("GET", url, headers=headers).json())
+    endpoints = sorted(requests.request(
+        "GET",
+        f"{BASE_URL}/endpoints",
+        headers=headers
+    ).json())
     test_all_endpoints(endpoints, api_key)
     write_results()
