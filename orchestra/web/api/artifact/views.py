@@ -2,7 +2,6 @@
 Includes endpoints related to log artifacts.
 """
 
-
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 
 from orchestra.db.dao.artifact_dao import ArtifactDAO
@@ -18,7 +17,7 @@ router = APIRouter()
 
 
 @router.post(
-    "/log/project/{project}/artifacts",
+    "/project/{project}/artifacts",
     responses={
         200: {
             "description": "Successful Response",
@@ -79,7 +78,7 @@ def create_artifacts(
 
 
 @router.delete(
-    "/log/project/{project}/artifacts/{key}",
+    "/project/{project}/artifacts/{key}",
     responses={
         200: {
             "description": "Successful Response",
@@ -146,7 +145,7 @@ def delete_artifact(
 
 
 @router.get(
-    "/log/project/{project}/artifacts",
+    "/project/{project}/artifacts",
     responses={
         200: {
             "description": "Successful Response",

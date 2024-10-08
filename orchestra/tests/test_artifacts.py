@@ -20,14 +20,14 @@ artifact_data = {
 
 def _create_artifacts(client, project_name):
     return client.post(
-        f"/v0/log/project/{project_name}/artifacts",
+        f"/v0/project/{project_name}/artifacts",
         json=artifact_data,
         headers=HEADERS,
     )
 
 
 def _create_project(client, project_name):
-    url = "/v0/log/project"
+    url = "/v0/project"
     project_data = {"name": project_name}
     return client.post(url, json=project_data, headers=HEADERS)
 
@@ -63,7 +63,7 @@ async def test_delete_artifact(client: AsyncClient):
 
     # delete artifacts
     response = await client.delete(
-        f"/v0/log/project/{project_name}/artifacts/{artifact_key}",
+        f"/v0/project/{project_name}/artifacts/{artifact_key}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -77,7 +77,7 @@ async def test_delete_artifact_project_not_found(client: AsyncClient):
 
     # This should return 404 as the project does not exist
     response = await client.delete(
-        f"/v0/log/project/{project_name}/artifacts/{artifact_key}",
+        f"/v0/project/{project_name}/artifacts/{artifact_key}",
         headers=HEADERS,
     )
     assert response.status_code == 404, response.json()
@@ -94,7 +94,7 @@ async def test_delete_artifact_not_found(client: AsyncClient):
 
     # This should return 404 as the artifact does not exist
     response = await client.delete(
-        f"/v0/log/project/{project_name}/artifacts/{artifact_key}",
+        f"/v0/project/{project_name}/artifacts/{artifact_key}",
         headers=HEADERS,
     )
     assert response.status_code == 404, response.json()
@@ -111,7 +111,7 @@ async def test_list_artifacts(client: AsyncClient):
 
     # This should return the list of artifacts
     response = await client.get(
-        f"/v0/log/project/{project_name}/artifacts",
+        f"/v0/project/{project_name}/artifacts",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -124,7 +124,7 @@ async def test_list_artifacts_project_not_found(client: AsyncClient):
 
     # This should return 404 as the project does not exist
     response = await client.get(
-        f"/v0/log/project/{project_name}/artifacts",
+        f"/v0/project/{project_name}/artifacts",
         headers=HEADERS,
     )
     assert response.status_code == 404, response.json()

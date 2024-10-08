@@ -13,7 +13,7 @@ HEADERS = {
 
 @pytest.mark.anyio
 async def test_create_project(client: AsyncClient):
-    url = "/v0/log/project"
+    url = "/v0/project"
     project_data = {"name": "test-project"}
     response = await client.post(url, json=project_data, headers=HEADERS)
     assert response.status_code == 200, response.json()
@@ -22,7 +22,7 @@ async def test_create_project(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_create_existing_project(client: AsyncClient):
-    url = "/v0/log/project"
+    url = "/v0/project"
     project_data = {
         "name": "existing-project",
     }
@@ -41,11 +41,11 @@ async def test_create_existing_project(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_delete_project(client: AsyncClient):
-    url = "/v0/log/project/test-project"
+    url = "/v0/project/test-project"
 
     # Create a project first to delete it
     create_response = await client.post(
-        "/v0/log/project",
+        "/v0/project",
         json={"name": "test-project"},
         headers=HEADERS,
     )
@@ -59,7 +59,7 @@ async def test_delete_project(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_delete_nonexistent_project(client: AsyncClient):
-    url = "/v0/log/project/nonexistent-project"
+    url = "/v0/project/nonexistent-project"
     response = await client.delete(url, headers=HEADERS)
     assert response.status_code == 404
     assert (
@@ -70,8 +70,8 @@ async def test_delete_nonexistent_project(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_rename_project(client: AsyncClient):
-    create_url = "/v0/log/project"
-    rename_url = "/v0/log/project/test-project"
+    create_url = "/v0/project"
+    rename_url = "/v0/project/test-project"
     project_data = {"name": "test-project"}
 
     # Create a project to rename
@@ -87,7 +87,7 @@ async def test_rename_project(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_rename_nonexistent_project(client: AsyncClient):
-    url = "/v0/log/project/rename/nonexistent-project"
+    url = "/v0/project/rename/nonexistent-project"
     project_data = {"name": "renamed-project"}
     response = await client.patch(url, json=project_data, headers=HEADERS)
     assert response.status_code == 404
@@ -100,11 +100,11 @@ async def test_rename_nonexistent_project(client: AsyncClient):
 @pytest.mark.anyio
 async def test_list_projects(client: AsyncClient):
     # Add two projects first
-    await client.post("/v0/log/project", json={"name": "project_a"}, headers=HEADERS)
-    await client.post("/v0/log/project", json={"name": "project_b"}, headers=HEADERS)
+    await client.post("/v0/project", json={"name": "project_a"}, headers=HEADERS)
+    await client.post("/v0/project", json={"name": "project_b"}, headers=HEADERS)
 
     # List the projects
-    url = "/v0/log/project/list"
+    url = "/v0/projects"
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == 200
     projects = response.json()

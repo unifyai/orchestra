@@ -2,7 +2,6 @@
 Includes endpoints related to log projects.
 """
 
-
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 
 from orchestra.db.dao.project_dao import ProjectDAO
@@ -17,7 +16,7 @@ router = APIRouter()
 
 
 @router.post(
-    "/log/project",
+    "/project",
     responses={
         200: {
             "description": "Successful Response",
@@ -72,7 +71,7 @@ def create_project(
 
 
 @router.delete(
-    "/log/project/{name}",
+    "/project/{name}",
     responses={
         200: {
             "description": "Successful Response",
@@ -119,7 +118,7 @@ def delete_project(
 
 
 @router.patch(
-    "/log/project/{name}",
+    "/project/{name}",
     responses={
         200: {
             "description": "Successful Response",
@@ -167,7 +166,7 @@ def rename_project(
 
 
 @router.get(
-    "/log/project/list",
+    "/projects",
     responses={
         200: {
             "description": "Successful Response",
