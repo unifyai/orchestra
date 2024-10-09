@@ -383,21 +383,22 @@ def get_log_groups(
         # TODO: This is super slow prob
         # TODO: Add pagination
         entry = log_dao.filter(log_event_id=le[0].id, key=key)
-        if entry:
-            version = entry[0][0].version
-            value = entry[0][0].value
-            if version is None:
-                found_match = False
-                for k, v in groups.items():
-                    if value in v:
-                        version = k
-                        found_match = True
-                        break
-                if not found_match:
-                    version = str(len(groups))
-            if version not in groups:
-                groups[version] = set()
-            groups[version].add(value)
+        if not entry:
+            continue
+        version = entry[0][0].version
+        value = entry[0][0].value
+        if version is None:
+            found_match = False
+            for k, v in groups.items():
+                if value in v:
+                    version = k
+                    found_match = True
+                    break
+            if not found_match:
+                version = str(len(groups))
+        if version not in groups:
+            groups[version] = set()
+        groups[version].add(value)
     assert all(
         len(v) == 1 for v in groups.values()
     ), "All sets should contain a single unique value"
