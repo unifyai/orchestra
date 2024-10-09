@@ -6,7 +6,8 @@ def _tokenize(s):
         ("NUMBER", r"\d+(\.\d*)?|\.\d+"),  # Integer or decimal number
         ("STRING", r"'([^'\\]*(?:\\.[^'\\]*)*)'|\"([^\"\\]*(?:\\.[^\"\\]*)*)\""),
         # String
-        ("OP", r"==|<=|>=|<|>|(?<!\w)(?:in|and|or|is)(?!\w)"),  # Operators
+        # Operators, note the order to match 'not in' before 'not' and 'in'
+        ("OP", r"==|<=|>=|<|>|(?<!\w)(?:not in|in|not|and|or|is)(?!\w)"),
         ("FUNCTION", r"len"),  # Functions
         ("BOOLEAN", r"(?<!\w)(?:True|False)(?!\w)"),  # Booleans
         ("IDENTIFIER", r"[A-Za-z_][A-Za-z0-9_]*"),  # Identifiers
@@ -73,7 +74,6 @@ class _Parser:
             raise RuntimeError("Unexpected token at end")
         return result
 
-    # expr -> and_expr ( 'or' and_expr )*
     def expr(self):
         node = self.and_expr()
         while self.current_token[0] == "OP" and self.current_token[1] == "or":
@@ -83,7 +83,6 @@ class _Parser:
             node = {"lhs": node, "operand": op, "rhs": right}
         return node
 
-    # and_expr -> comp_expr ( 'and' comp_expr )*
     def and_expr(self):
         node = self.comp_expr()
         while self.current_token[0] == "OP" and self.current_token[1] == "and":
@@ -93,7 +92,6 @@ class _Parser:
             node = {"lhs": node, "operand": op, "rhs": right}
         return node
 
-    # comp_expr -> primary (comp_op primary)*
     def comp_expr(self):
         node = self.primary()
         while self.current_token[0] == "OP" and self.current_token[1] in (
@@ -103,15 +101,24 @@ class _Parser:
             "<=",
             ">=",
             "in",
+            "not in",
             "is",
+            "not",
         ):
             op = self.current_token[1]
             self.advance()
+            # Handle 'not in' operator
+            if (
+                op == "not"
+                and self.current_token[0] == "OP"
+                and self.current_token[1] == "in"
+            ):
+                op = "not in"
+                self.advance()
             right = self.primary()
             node = {"lhs": node, "operand": op, "rhs": right}
         return node
 
-    # primary -> 'len' '(' expr ')' | '(' expr ')' | literal | identifier | boolean
     def primary(self):
         if self.current_token[0] == "FUNCTION" and self.current_token[1] == "len":
             self.advance()
@@ -171,13 +178,13 @@ def evaluate_filter_expression(expr, **variables):
             if operand == "and":
                 lhs = evaluate_filter_expression(expr["lhs"], **variables)
                 if not lhs:
-                    return False  # Short-circuit
+                    return False
                 rhs = evaluate_filter_expression(expr["rhs"], **variables)
                 return lhs and rhs
             elif operand == "or":
                 lhs = evaluate_filter_expression(expr["lhs"], **variables)
                 if lhs:
-                    return True  # Short-circuit
+                    return True
                 rhs = evaluate_filter_expression(expr["rhs"], **variables)
                 return lhs or rhs
             elif operand in ("==", "<", ">", "<=", ">="):
@@ -200,6 +207,10 @@ def evaluate_filter_expression(expr, **variables):
                 lhs = evaluate_filter_expression(expr["lhs"], **variables)
                 rhs = evaluate_filter_expression(expr["rhs"], **variables)
                 return lhs in rhs
+            elif operand == "not in":
+                lhs = evaluate_filter_expression(expr["lhs"], **variables)
+                rhs = evaluate_filter_expression(expr["rhs"], **variables)
+                return lhs not in rhs
             elif operand == "is":
                 lhs = evaluate_filter_expression(expr["lhs"], **variables)
                 rhs = evaluate_filter_expression(expr["rhs"], **variables)
