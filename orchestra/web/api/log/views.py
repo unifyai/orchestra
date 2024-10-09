@@ -3,7 +3,7 @@ Includes endpoints related to logs.
 """
 
 import json
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
@@ -353,7 +353,7 @@ def get_logs(
         },
     },
 )
-def get_logs_groups(
+def get_log_groups(
     request_fastapi: Request,
     project: str = Query(
         description="Name of the project to get logs from.",
@@ -366,10 +366,10 @@ def get_logs_groups(
     project_dao: ProjectDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
     log_dao: LogDAO = Depends(),
-):
+) -> Dict[str, Any]:
     """
-    Returns a list of the different version/values of one entry
-    within a given project based on its key.
+    Returns a dict with the different versions as keys and the values of the remaining
+    items within a given project based on its key.
     """
     try:
         project_obj = project_dao.filter(name=project)[0][0]
@@ -382,18 +382,28 @@ def get_logs_groups(
         )
     # TODO: Deal with organisation IDs
     log_events = log_event_dao.filter(project_id=project_obj.id)
-    entry_groups = set()
+    groups = dict()
     for le in log_events:
         # TODO: This is super slow prob
         # TODO: Add pagination
         entry = log_dao.filter(log_event_id=le[0].id, key=key)
-        if entry:
-            entry_groups.add(
-                json.dumps(
-                    {
-                        "version": entry[0][0].version,
-                        "value": entry[0][0].value,
-                    },
-                ),
-            )
-    return entry_groups
+        if not entry:
+            continue
+        version = entry[0][0].version
+        value = entry[0][0].value
+        if version is None:
+            found_match = False
+            for k, v in groups.items():
+                if value in v:
+                    version = k
+                    found_match = True
+                    break
+            if not found_match:
+                version = str(len(groups))
+        if version not in groups:
+            groups[version] = set()
+        groups[version].add(value)
+    assert all(
+        len(v) == 1 for v in groups.values()
+    ), "All sets should contain a single unique value"
+    return {k: next(iter(v)) for k, v in groups.items()}
