@@ -213,7 +213,7 @@ TEST_CASES = [
 ]
 
 
-def test_endpoint(endpoint: str, api_key: str):
+def run_endpoint(endpoint: str, api_key: str):
     url = f"{BASE_URL}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}"}
     results = dict()
@@ -253,11 +253,11 @@ def test_endpoint(endpoint: str, api_key: str):
     return results
 
 
-def test_all_endpoints(endpoints: List[str], api_key: str) -> Dict[str, bool]:
+def run_all_endpoints(endpoints: List[str], api_key: str) -> Dict[str, bool]:
     final_results = dict()
     for endpoint in endpoints:
         print(f"endpoint: {endpoint}")
-        results = test_endpoint(endpoint, api_key)
+        results = run_endpoint(endpoint, api_key)
         final_results[endpoint] = results
     with open("results.json", "w") as f:
         json.dump(final_results, f)
@@ -303,5 +303,5 @@ if __name__ == "__main__":
     endpoints = sorted(
         requests.request("GET", f"{BASE_URL}/endpoints", headers=headers).json(),
     )
-    test_all_endpoints(endpoints, api_key)
+    run_all_endpoints(endpoints, api_key)
     write_results()
