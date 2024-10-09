@@ -177,19 +177,25 @@ async def test_get_log_not_found(client: AsyncClient):
 
 
 @pytest.mark.parametrize(
-    "expression, values, expected",
+    "expression, values",
     [
         (
             "((a == 5) and (b > 7)) or (len(c) < 10 and 'hello' in d)",
             {"a": 5, "b": 8, "c": "abcdef", "d": "hello world"},
-            True,
         ),
     ],
 )
-def test_log_filter_helper(expression, values, expected):
+def test_log_filter_helper(expression, values):
     express_dict = str_filter_exp_to_dict(expression)
     assert isinstance(express_dict, dict)
     result = evaluate_filter_expression(express_dict, **values)
+    for key, value in values.items():
+        exec(
+            key
+            + "="
+            + ('"{}"'.format(value) if isinstance(value, str) else str(value)),
+        )
+    expected = eval(expression)
     assert result == expected
 
 
