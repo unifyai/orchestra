@@ -16,6 +16,24 @@ log_data = {
         "boolean_input": True,
         "numeric_input": 4.5,
     },
+    "logs_for_grouping": [
+        {
+            "input": "What is 1 + 1?",
+            "system_prompt": "You are an expert mathematician.",
+        },
+        {
+            "input": "What is 2 + 2?",
+            "system_prompt": "You are an expert mathematician.",
+        },
+        {
+            "input": "What is 1 + 1?",
+            "system_prompt": "Respond only with a single digit.",
+        },
+        {
+            "input": "What is 2 + 2?",
+            "system_prompt": "Respond only with a single digit.",
+        },
+    ],
 }
 
 
@@ -25,6 +43,17 @@ def _create_logs(client, project_name):
         json={"project": project_name, "logs": log_data["logs"]},
         headers=HEADERS,
     )
+
+
+async def _create_logs_for_grouping(client, project_name):
+    data = log_data["logs_for_grouping"]
+    for i in range(len(data)):
+        response = await client.post(
+            "/v0/log",
+            json={"project": project_name, "logs": data[i]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
 
 
 def _create_project(client, project_name):
@@ -176,19 +205,24 @@ async def test_get_logs_project_not_found(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_get_log_groups(client: AsyncClient):
-    # TODO: Test this further
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
-    _ = await _create_logs(client, project_name)
+    _ = await _create_logs_for_grouping(client, project_name)
 
     # fetch log groups for a given key
     response = await client.get(
-        f"/v0/logs/groups?project={project_name}&key=input",
+        f"/v0/logs/groups?project={project_name}&key=system_prompt",
         headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
-    assert isinstance(response.json(), dict)  # Ensure it's a dict of grouped entries
+    groups = response.json()
+    assert isinstance(groups, dict)  # Ensure it's a dict of grouped entries
+    assert len(groups) == 2
+    assert groups == {
+        "0": '"You are an expert mathematician."',
+        "1": '"Respond only with a single digit."',
+    }
 
 
 @pytest.mark.anyio
