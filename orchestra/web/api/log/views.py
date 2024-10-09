@@ -3,7 +3,7 @@ Includes endpoints related to logs.
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
@@ -362,7 +362,7 @@ def get_log_groups(
     project_dao: ProjectDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
     log_dao: LogDAO = Depends(),
-) -> Dict[str, List[Any]]:
+) -> Dict[str, Any]:
     """
     Returns a dict with the different versions as keys and the values of the remaining
     items within a given project based on its key.
@@ -383,13 +383,22 @@ def get_log_groups(
         # TODO: This is super slow prob
         # TODO: Add pagination
         entry = log_dao.filter(log_event_id=le[0].id, key=key)
-        counter = 0
         if entry:
             version = entry[0][0].version
+            value = entry[0][0].value
             if version is None:
-                version = str(counter)
-                counter += 1
+                found_match = False
+                for k, v in groups.items():
+                    if value in v:
+                        version = k
+                        found_match = True
+                        break
+                if not found_match:
+                    version = str(len(groups))
             if version not in groups:
-                groups[version] = []
-            groups[version] += [entry[0][0].value]
-    return groups
+                groups[version] = set()
+            groups[version].add(value)
+    assert all(
+        len(v) == 1 for v in groups.values()
+    ), "All sets should contain a single unique value"
+    return {k: next(iter(v)) for k, v in groups.items()}
