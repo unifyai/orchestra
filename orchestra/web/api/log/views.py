@@ -31,16 +31,6 @@ router = APIRouter()
                 },
             },
         },
-        400: {
-            "description": "Non JSON serializable entry.",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Entry <key> is not JSON-serializable.",
-                    },
-                },
-            },
-        },
         404: {
             "description": "Project Not Found",
             "content": {
@@ -86,13 +76,7 @@ def create_logs(
     for k, v in request.logs.items():
         inferred_type = None  # TODO: Infer the types
         clean_key = k.split("/", 1)
-        try:
-            json_v = json.dumps(v)
-        except TypeError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Entry {clean_key} is not JSON-serializable.",
-            )
+        json_v = json.dumps(v)
         log_dao.create(
             log_event_id=log_event_id,
             key=clean_key[0],
