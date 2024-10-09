@@ -371,7 +371,28 @@ class Dataset(Base):
     __table_args__ = (UniqueConstraint("user_id", "name", name="uq_userid_name"),)
 
 
-# TODO: Add DatasetEntry table
+class DatasetEntry(Base):
+    """Model class for the dataset entries table."""
+
+    __tablename__ = "dataset_entry"
+
+    id = Column(String(10), primary_key=True)
+    dataset_id = Column(
+        Integer(),
+        ForeignKey("dataset.id", ondelete="CASCADE"),
+        index=True,
+    )
+    entry = Column(String(), nullable=False)  # JSON serialised
+    entry_hash = Column(String(64), nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint(
+            "dataset_id",
+            "entry_hash",
+            name="uq_dataset_entry_hash",
+        ),
+    )
+
 
 # CLEANUP: Delete this
 class StoredPrompt(Base):
