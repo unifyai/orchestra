@@ -30,7 +30,7 @@ def get_param_details(parameter):
     return name, required, param_type, default, description, example
 
 
-def get_request_code(route, path, examples, params):
+def get_request_code(examples, curl_example, python_example):
     # create the params string
     params_str = "&".join(
         [f'{key}={str(value).replace(" ", "%20")}' for key, value in examples.items()],
@@ -41,27 +41,24 @@ def get_request_code(route, path, examples, params):
         params_str = "?" + params_str
 
     # create the curl example
-    curl_example = [
-        f"curl --request {route.upper()} \\",
-        f"  --url 'https://api.unify.ai{path}{params_str}' \\",
-        f'  --header "Authorization: Bearer $UNIFY_KEY"',
-    ]
+    curl_example[1] = curl_example[1].rstrip("' \\") + params_str + "' \\"
 
     # create the python example
-    python_example = [
-        "import requests",
-        f'url = "https://api.unify.ai{path}{params_str}"',
-        'headers = {"Authorization": "Bearer <token>"}',
-        f'response = requests.request("{route.upper()}", url, headers=headers)',
-        "print(response.text)",
-    ]
+    python_example[1] = python_example[1].rstrip('"') + params_str + '"'
 
     return curl_example, python_example
 
 
-def get_query(path, route, route_config):
-    parameters = route_config["parameters"]
-    query_str = "#### Query Parameters\n\n"  # query header
+def get_query(path, route, route_config, curl_example, python_example):
+    parameters = [
+        parameter
+        for parameter in route_config["parameters"]
+        if parameter["in"] == "query"
+    ]
+    if len(parameters):
+        query_str = "#### Query Parameters\n\n"  # query header
+    else:
+        query_str = ""
     examples = dict()
 
     for parameter in parameters:
@@ -88,10 +85,9 @@ def get_query(path, route, route_config):
 
     # generate curl and python example for the endpoint
     curl_example, python_example = get_request_code(
-        route,
-        path,
         examples,
-        len(parameters),
+        curl_example,
+        python_example,
     )
 
     return query_str, curl_example, python_example

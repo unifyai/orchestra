@@ -7,6 +7,7 @@ from docs.body import get_body, get_property_details
 from docs.form import get_form
 from docs.header import get_auth_string, get_title
 from docs.mint import update_mint
+from docs.path import get_path
 from docs.query import get_query
 
 from orchestra.web.application import get_app
@@ -66,14 +67,15 @@ def get_response_examples(route_config, schemas):
 
 def get_request_details(path, route, route_config, schemas):
     curl_example, python_example = [], []
-    form, body, query = "", "", ""
+    form_str, body_str, query_str = "", "", ""
 
-    # query
+    # path
     if "parameters" not in route_config:
         route_config["parameters"] = []
-    query, curl_example, python_example = get_query(path, route, route_config)
-    if not route_config["parameters"]:
-        query = ""
+    path_str, curl_example, python_example = get_path(path, route, route_config)
+
+    # query
+    query_str, curl_example, python_example = get_query(path, route, route_config, curl_example, python_example)
 
     # form/body
     if "requestBody" in route_config:
@@ -82,7 +84,7 @@ def get_request_details(path, route, route_config, schemas):
 
         # form
         if "form" in list(route_config["requestBody"]["content"].keys())[0]:
-            form, curl_example, python_example = get_form(
+            form_str, curl_example, python_example = get_form(
                 path,
                 route,
                 schemas,
@@ -92,7 +94,7 @@ def get_request_details(path, route, route_config, schemas):
             )
         # body
         else:
-            body, curl_example, python_example = get_body(
+            body_str, curl_example, python_example = get_body(
                 path,
                 route,
                 schemas,
@@ -132,7 +134,7 @@ def get_request_details(path, route, route_config, schemas):
         + "\n"
     )
 
-    return form, body, query, request_examples, response_examples
+    return form_str, body_str, query_str, path_str, request_examples, response_examples
 
 
 def write_pages(paths, openapi_config):
@@ -160,9 +162,10 @@ def write_pages(paths, openapi_config):
 
             # get details about the contents of the page
             (
-                form,
-                body,
-                query,
+                form_str,
+                body_str,
+                query_str,
+                path_str,
                 request_examples,
                 response_examples,
             ) = get_request_details(path, route, route_config, schemas)
@@ -171,9 +174,10 @@ def write_pages(paths, openapi_config):
             with open(f"api-reference/{folder_name}/{file_name}.mdx", "w") as f:
                 f.write(get_title(summary, description, route, path))
                 f.write(get_auth_string())
-                f.write(query)
-                f.write(body)
-                f.write(form)
+                f.write(path_str)
+                f.write(query_str)
+                f.write(body_str)
+                f.write(form_str)
                 f.write(request_examples)
                 f.write(response_examples)
 
