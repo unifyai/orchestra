@@ -13,7 +13,9 @@ HEADERS = {
 artifact_data = {
     "artifacts": {
         "artifact_1": "value_1",
-        "artifact_2": "value_2",
+        "artifact_2": 2,
+        "artifact_3": 3.0,
+        "artifact_4": {"a": 4, 5: [6, 7.0]},
     },
 }
 
