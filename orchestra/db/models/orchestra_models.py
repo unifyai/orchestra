@@ -134,6 +134,7 @@ class Metric(Base):
     plottable = Column(Boolean(), nullable=False)  # type: ignore
 
 
+# CLEANUP: Delete this
 class QueryOld(Base):
     """Model class for the old query table."""
 
@@ -186,6 +187,7 @@ class RechargeType(Base):
     type = Column(String(), primary_key=True)
 
 
+# CLEANUP: Delete this
 class BetaList(Base):
     """Model class for the beta list table."""
 
@@ -368,6 +370,9 @@ class Dataset(Base):
     __table_args__ = (UniqueConstraint("user_id", "name", name="uq_userid_name"),)
 
 
+# TODO: Add DatasetEntry table
+
+# CLEANUP: Delete this
 class StoredPrompt(Base):
     """Model class for the stored prompt table."""
 
@@ -393,6 +398,7 @@ class StoredPrompt(Base):
     )
 
 
+# CLEANUP: Delete this
 class DefaultPrompt(Base):
     """Model class for the default prompt table."""
 
@@ -404,6 +410,7 @@ class DefaultPrompt(Base):
     prompt = Column(String())
 
 
+# CLEANUP: Delete this
 class StoredPromptVariation(Base):
     """Model class for variations of stored prompts table."""
 
@@ -424,6 +431,7 @@ class StoredPromptVariation(Base):
     )
 
 
+# CLEANUP: Delete this
 class StoredPromptResponse(Base):
     """Model class for the stored prompt response table."""
 
@@ -450,6 +458,7 @@ class StoredPromptResponse(Base):
     )
 
 
+# CLEANUP: Delete this
 class Judgement(Base):
     """Model class for the judgement table."""
 
@@ -472,6 +481,7 @@ class Judgement(Base):
     )
 
 
+# CLEANUP: Delete this
 class DatasetPrompt(Base):
     """Model class for the dataset prompt table."""
 
@@ -489,6 +499,7 @@ class DatasetPrompt(Base):
     )
 
 
+# CLEANUP: Delete this
 class Evaluator(Base):
     """Model class for the evaluator table."""
 
@@ -518,6 +529,7 @@ class Evaluator(Base):
     )
 
 
+# CLEANUP: Delete this
 class Evaluation(Base):
     """Model class for the evaluation table."""
 
