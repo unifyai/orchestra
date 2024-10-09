@@ -45,7 +45,7 @@ def create_artifacts(
     request: ArtifactConfig,
     project: str = Path(
         description="Name of the project the artifacts belong to.",
-        json_schema_extra={"example": "eval-project"},
+        example="eval-project",
     ),
     project_dao: ProjectDAO = Depends(),
     artifact_dao: ArtifactDAO = Depends(),
