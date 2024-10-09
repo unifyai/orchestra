@@ -36,7 +36,7 @@ log_data = {
             "system_prompt": "Respond only with a single digit.",
         },
     ],
-    "logs_for_filtering": [
+    "logs_for_filtering_n_metrics": [
         {
             "description": "boiling water",
             "temperature": 100.0,
@@ -84,8 +84,8 @@ async def _create_logs_for_grouping(client, project_name):
         assert response.status_code == 200, response.json()
 
 
-async def _create_logs_for_filtering(client, project_name):
-    data = log_data["logs_for_filtering"]
+async def _create_logs_for_filtering_n_metrics(client, project_name):
+    data = log_data["logs_for_filtering_n_metrics"]
     for i in range(len(data)):
         response = await client.post(
             "/v0/log",
@@ -263,7 +263,7 @@ async def test_get_logs(client: AsyncClient):
 async def test_get_logs_w_filtering(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
-    _ = await _create_logs_for_filtering(client, project_name)
+    _ = await _create_logs_for_filtering_n_metrics(client, project_name)
 
     # temperature > 0.
     response = await client.get(
@@ -318,6 +318,21 @@ async def test_get_logs_w_filtering(client: AsyncClient):
         "state": "gas",
         "safe": False,
     }
+
+
+@pytest.mark.anyio
+async def test_get_log_metrics(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+    _ = await _create_logs_for_filtering_n_metrics(client, project_name)
+
+    # fetch logs for the project
+    response = await client.get(
+        "/v0/logs/metrics",
+        headers=HEADERS,
+        params={"project": project_name, "key": "temperature", "metric": "mean"},
+    )
+    assert response.status_code == 200, response.json()
 
 
 @pytest.mark.anyio

@@ -3,7 +3,7 @@ Includes endpoints related to logs.
 """
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
@@ -12,7 +12,11 @@ from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.web.api.log.schema import LogConfig
 
-from .helpers import evaluate_filter_expression, str_filter_exp_to_dict
+from .helpers import (
+    evaluate_filter_expression,
+    reduction_methods,
+    str_filter_exp_to_dict,
+)
 
 router = APIRouter()
 
@@ -264,10 +268,22 @@ def get_log(
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": {
-                        "artifact_1": "value_1",
-                        "artifact_2": "value_2",
-                    },
+                    "example": [
+                        {
+                            "id": "0",
+                            "entries": {
+                                "key1": "a",
+                                "key2": 1.0,
+                            },
+                        },
+                        {
+                            "id": "1",
+                            "entries": {
+                                "key1": "b",
+                                "key2": 2.0,
+                            },
+                        },
+                    ],
                 },
             },
         },
@@ -321,6 +337,89 @@ def get_logs(
         ):
             logs.append({"id": le[0].id, "entries": entries})
     return logs
+
+
+@router.get(
+    "/logs/metrics",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "key1": 1.23,
+                        "key2": 35,
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "detail": "Project <project> not found in your account.",
+                },
+            },
+        },
+    },
+)
+def get_log_metrics(
+    request_fastapi: Request,
+    project: str = Query(
+        description="Name of the project to get logs from.",
+        example="eval-project",
+    ),
+    key: str = Query(
+        description="The key you would like to extract the reduction metric for.",
+        example="score",
+    ),
+    metric: str = Query(
+        description="The name of the metric you would like to compute.",
+        example="mean",
+    ),
+    filter_expr: Optional[str] = Query(
+        None,
+        description="Boolean string to filter logs. TODO: Detailed page.",
+        example="len(output) > 200 and temperature == 0.5",
+    ),
+    log_event_dao: LogEventDAO = Depends(),
+    project_dao: ProjectDAO = Depends(),
+    log_dao: LogDAO = Depends(),
+) -> Union[float, int, bool]:
+    """
+    Returns the reduction metric for filtered values for a specific key from a project.
+    """
+    try:
+        project_obj = project_dao.filter(name=project)[0][0]
+        if request_fastapi.state.user_id != project_obj.user_id:
+            raise IndexError
+    except IndexError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project} not found in your account.",
+        )
+    # TODO: Deal with organisation IDs
+    log_events = log_event_dao.filter(project_id=project_obj.id)
+    filter_dict = (
+        (str_filter_exp_to_dict(filter_expr)) if filter_expr is not None else {}
+    )
+    # TODO: This is super slow
+    # TODO: Add pagination
+    log_entries = [
+        json.loads(log_dao.filter(log_event_id=e[0].id, key=key)[0][0].value)
+        for e in log_events
+    ]
+    log_entries = [
+        e
+        for e in log_entries
+        if ((not filter_dict) or evaluate_filter_expression(filter_dict, key=e))
+    ]
+    if not log_entries:
+        raise Exception(
+            "No values remaining after applying filtering, "
+            "cannot compute reduction metric",
+        )
+    return reduction_methods[metric](log_entries)
 
 
 @router.get(

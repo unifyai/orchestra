@@ -1,4 +1,5 @@
 import re
+from typing import List, Union
 
 
 def _tokenize(s):
@@ -160,8 +161,8 @@ class _Parser:
             raise RuntimeError(f"Unexpected token {self.current_token}")
 
 
-# Public #
-# -------#
+# Filtering #
+# ----------#
 
 
 def str_filter_exp_to_dict(s):
@@ -235,3 +236,17 @@ def evaluate_filter_expression(expr, **variables):
             return expr
         else:
             raise TypeError(f"Unexpected expression type: {expr}")
+
+
+# Reduction #
+# ----------#
+
+
+def _reduce_mean(values: List[Union[int, float, bool]]) -> float:
+    values = [v for v in values if v is not None]
+    return sum(values) / len(values)
+
+
+reduction_methods = {
+    "mean": _reduce_mean,
+}
