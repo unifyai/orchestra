@@ -36,6 +36,32 @@ log_data = {
             "system_prompt": "Respond only with a single digit.",
         },
     ],
+    "logs_for_filtering": [
+        {
+            "description": "boiling water",
+            "temperature": 100.0,
+            "state": "liquid->gas",
+            "safe": False,
+        },
+        {
+            "description": "freezing water",
+            "temperature": 0.0,
+            "state": "liquid->solid",
+            "safe": True,
+        },
+        {
+            "description": "surface of the sun",
+            "temperature": 6000.0,
+            "state": "gas",
+            "safe": False,
+        },
+        {
+            "description": "freezing nitrogen",
+            "temperature": -210.0,
+            "state": "liquid->solid",
+            "safe": False,
+        },
+    ],
 }
 
 
@@ -49,6 +75,17 @@ def _create_logs(client, project_name):
 
 async def _create_logs_for_grouping(client, project_name):
     data = log_data["logs_for_grouping"]
+    for i in range(len(data)):
+        response = await client.post(
+            "/v0/log",
+            json={"project": project_name, "logs": data[i]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+
+async def _create_logs_for_filtering(client, project_name):
+    data = log_data["logs_for_filtering"]
     for i in range(len(data)):
         response = await client.post(
             "/v0/log",
@@ -215,12 +252,40 @@ async def test_get_logs(client: AsyncClient):
 
     # fetch logs for the project
     response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
-    # TODO: Test filter_expr
 
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), list)  # List of logs is returned
     assert isinstance(response.json()[0]["entries"]["boolean_input"], bool)
     assert isinstance(response.json()[0]["entries"]["numeric_input"], float)
+
+
+@pytest.mark.anyio
+async def test_get_logs_w_filtering(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+    _ = await _create_logs_for_filtering(client, project_name)
+
+    # temperature > X
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "temperature > 0."},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result) == 2
+    assert result[0]["entries"] == {
+        "description": "boiling water",
+        "temperature": 100.0,
+        "state": "liquid->gas",
+        "safe": False,
+    }
+    assert result[1]["entries"] == {
+        "description": "surface of the sun",
+        "temperature": 6000.0,
+        "state": "gas",
+        "safe": False,
+    }
 
 
 @pytest.mark.anyio
