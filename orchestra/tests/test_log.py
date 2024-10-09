@@ -184,8 +184,8 @@ async def test_get_log_not_found(client: AsyncClient):
             {"a": 5, "b": 8, "c": "abcdef", "d": "hello world"},
         ),
         (
-            "submarine == 6.45 and van > 7 or len(ship) < 10 and 'audi' in car",
-            {"submarine": 7.89, "van": 6, "ship": "_" * 10, "car": "porche"},
+            "submarine == 6.45 and van is False or len(ship) < 10 and 'audi' in car",
+            {"submarine": 7.89, "van": True, "ship": "_" * 10, "car": "porsche"},
         ),
         (
             "coffee == 'hot' or ice_cream == 'cold' and temperature == 1.23",
