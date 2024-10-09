@@ -17,7 +17,7 @@ class LogDAO:
         self,
         log_event_id: int,
         key: str,
-        value: Optional[str] = None,
+        value: Optional[str] = None,  # JSON serialised
         version: Optional[str] = None,
         inferred_type: Optional[str] = None,
     ) -> None:
