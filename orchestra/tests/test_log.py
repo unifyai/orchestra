@@ -217,7 +217,7 @@ async def test_get_log_not_found(client: AsyncClient):
     "expression, values",
     [
         (
-            "((a == 5) and (b > 7)) or (len(c) < 10 and 'hello' in d)",
+            "((a == 5) and (b > 7)) or (len(c) < 10 and 'earth' not in d)",
             {"a": 5, "b": 8, "c": "abcdef", "d": "hello world"},
         ),
         (
