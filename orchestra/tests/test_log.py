@@ -265,7 +265,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     _ = await _create_project(client, project_name)
     _ = await _create_logs_for_filtering(client, project_name)
 
-    # temperature > X
+    # temperature > 0.
     response = await client.get(
         f"/v0/logs?project={project_name}",
         params={"filter_expr": "temperature > 0."},
@@ -285,6 +285,22 @@ async def test_get_logs_w_filtering(client: AsyncClient):
         "temperature": 6000.0,
         "state": "gas",
         "safe": False,
+    }
+
+    # safe is True
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "safe is True"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result) == 1
+    assert result[0]["entries"] == {
+        "description": "freezing water",
+        "temperature": 0.0,
+        "state": "liquid->solid",
+        "safe": True,
     }
 
 
