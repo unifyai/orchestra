@@ -5,17 +5,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import ApiKey
+from orchestra.db.models.orchestra_models import Project
 
 
-class ApiKeyDAO:
+class ProjectDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
     def create(  # noqa: WPS211
         self,
-        key: str,
-        name: Optional[str] = None,
+        name: str,
         user_id: Optional[str] = None,
         organization_id: Optional[int] = None,
     ) -> None:
@@ -24,11 +23,10 @@ class ApiKeyDAO:
             raise ValueError("One of user_id or organization_id must be provided.")
 
         self.session.add(
-            ApiKey(
+            Project(
                 name=name,
                 user_id=user_id,
                 organization_id=organization_id,
-                key=key,
             ),
         )
 
@@ -37,17 +35,18 @@ class ApiKeyDAO:
         id: Optional[int] = None,
         user_id: Optional[str] = None,
         organization_id: Optional[int] = None,
-        key: Optional[str] = None,
-    ) -> List[ApiKey]:
-        query = select(ApiKey)
+        name: Optional[str] = None,
+    ) -> List[Project]:
+
+        query = select(Project)
         if id:
-            query = query.where(ApiKey.id == id)
+            query = query.where(Project.id == id)
         if user_id:
-            query = query.where(ApiKey.user_id == user_id)
+            query = query.where(Project.user_id == user_id)
         if organization_id:
-            query = query.where(ApiKey.organization_id == organization_id)
-        if key:
-            query = query.where(ApiKey.key == key)
+            query = query.where(Project.organization_id == organization_id)
+        if name:
+            query = query.where(Project.name == name)
         rows = self.session.execute(query)
         return rows.fetchall()
 
@@ -58,8 +57,8 @@ class ApiKeyDAO:
         user_id: Optional[str] = None,
         organization_id: Optional[int] = None,
     ) -> None:
-        query = select(ApiKey)
-        query = query.where(ApiKey.id == id)
+        query = select(Project)
+        query = query.where(Project.id == id)
         raw = self.session.execute(query)
         entry = raw.scalars().first()
         if entry is not None:
@@ -70,10 +69,18 @@ class ApiKeyDAO:
             if organization_id:
                 setattr(entry, "organization_id", organization_id)
 
+    def rename(self, user_id: str, name: str, new_name: str):
+        try:
+            project_id = self.filter(user_id=user_id, name=name)[0][0].id
+        except:
+            raise ValueError
+
+        self.update(id=project_id, name=new_name)
+
     def delete(self, id: int):
         try:
-            api_key = self.session.query(ApiKey).filter_by(id=id).one()
-            self.session.delete(api_key)
+            project = self.session.query(Project).filter_by(id=id).one()
+            self.session.delete(project)
             self.session.commit()
         except:
             self.session.rollback()
