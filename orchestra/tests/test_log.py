@@ -303,6 +303,22 @@ async def test_get_logs_w_filtering(client: AsyncClient):
         "safe": True,
     }
 
+    # liquid not in state
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "'liquid' not in state"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result) == 1
+    assert result[0]["entries"] == {
+        "description": "surface of the sun",
+        "temperature": 6000.0,
+        "state": "gas",
+        "safe": False,
+    }
+
 
 @pytest.mark.anyio
 async def test_get_logs_project_not_found(client: AsyncClient):
