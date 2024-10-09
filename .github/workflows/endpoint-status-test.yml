@@ -1,9 +1,9 @@
 name: Endpoint Status Test
 
 on:
-  # schedule:
-  #   # runs everyday at 23:00 UTC
-  # - cron: '0 0,12 * * *'
+  schedule:
+    # runs everyday at 23:00 UTC
+  - cron: '0 12 * * *'
   workflow_dispatch:
 permissions:
   contents: write
@@ -14,30 +14,45 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v3
+    - name: Checkout 🛎️ orchestra
+      uses: actions/checkout@v4
       with:
+        fetch-depth: 0
+        repository: unifyai/orchestra
         path: orchestra
+        ssh-key: '${{ secrets.SSH_CLONE }}'
 
     - name: Checkout 🛎️ unify-docs
       uses: actions/checkout@v4
       with:
+        fetch-depth: 0
+        submodules: recursive
         repository: unifyai/unify-docs
         path: unify-docs
 
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
-        python-version: "3.10"
+        python-version: "3.9"
+
+    - name: Install deps
+      run: |
+        cd orchestra
+        pip install -U pip
+        pip install poetry
+        poetry install
+        cd ..
+      env:
+        POETRY_VIRTUALENVS_CREATE: false
 
     - name: Test all endpoints
       run: |
         cd orchestra
-        export API_KEY=${{ secrets.USER_API_KEY }}
-        python3 -m pip install requests
-        python3 endpoint_status_test.py
+        python endpoint_status_test.py
         mv endpoint_status.mdx ../unify-docs/endpoint_status/endpoint_status.mdx
         cd ..
+      env:
+        API_KEY: ${{ secrets.USER_API_KEY }}
 
     - name: Set up SSH key
       env:
