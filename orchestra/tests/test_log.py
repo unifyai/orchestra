@@ -183,6 +183,14 @@ async def test_get_log_not_found(client: AsyncClient):
             "((a == 5) and (b > 7)) or (len(c) < 10 and 'hello' in d)",
             {"a": 5, "b": 8, "c": "abcdef", "d": "hello world"},
         ),
+        (
+            "submarine == 6.45 and van > 7 or len(ship) < 10 and 'audi' in car",
+            {"submarine": 7.89, "van": 6, "ship": "_" * 10, "car": "porche"},
+        ),
+        (
+            "coffee == 'hot' or ice_cream == 'cold' and temperature == 1.23",
+            {"coffee": "hot", "ice_cream": "cold", "temperature": 1.23},
+        ),
     ],
 )
 def test_log_filter_helper(expression, values):
