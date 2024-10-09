@@ -130,7 +130,9 @@ TEST_CASES = [
     {
         "arg": "stream",
         "value": True,
-        "assertion": lambda response: (isinstance(response, list) and len(response) > 1),
+        "assertion": lambda response: (
+            isinstance(response, list) and len(response) > 1
+        ),
         "messages": [
             {"role": "user", "content": "Explain AI in a couple of sentences."},
         ],
@@ -293,19 +295,13 @@ def write_results():
 if __name__ == "__main__":
     api_key = os.environ.get("API_KEY")
     headers = {"Authorization": f"Bearer {api_key}"}
-    response = requests.request(
-        "GET",
-        f"{BASE_URL}/credits",
-        headers=headers
-    )
+    response = requests.request("GET", f"{BASE_URL}/credits", headers=headers)
     credits = response.json()
     if credits["credits"] < 20 or response.status_code != 200:
         exit()
     url = f"{BASE_URL}/endpoints"
-    endpoints = sorted(requests.request(
-        "GET",
-        f"{BASE_URL}/endpoints",
-        headers=headers
-    ).json())
+    endpoints = sorted(
+        requests.request("GET", f"{BASE_URL}/endpoints", headers=headers).json(),
+    )
     test_all_endpoints(endpoints, api_key)
     write_results()
