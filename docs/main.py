@@ -75,7 +75,9 @@ def get_request_details(path, route, route_config, schemas):
     path_str, curl_example, python_example = get_path(path, route, route_config)
 
     # query
-    query_str, curl_example, python_example = get_query(path, route, route_config, curl_example, python_example)
+    query_str, curl_example, python_example = get_query(
+        path, route, route_config, curl_example, python_example
+    )
 
     # form/body
     if "requestBody" in route_config:
