@@ -3,7 +3,7 @@ Includes endpoints related to logs.
 """
 
 import json
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
@@ -349,7 +349,7 @@ def get_logs(
         },
     },
 )
-def get_logs_groups(
+def get_log_groups(
     request_fastapi: Request,
     project: str = Query(
         description="Name of the project to get logs from.",
@@ -362,10 +362,10 @@ def get_logs_groups(
     project_dao: ProjectDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
     log_dao: LogDAO = Depends(),
-):
+) -> Dict[str, List[Any]]:
     """
-    Returns a list of the different version/values of one entry
-    within a given project based on its key.
+    Returns a dict with the different versions as keys and the values of the remaining
+    items within a given project based on its key.
     """
     try:
         project_obj = project_dao.filter(name=project)[0][0]
@@ -378,18 +378,18 @@ def get_logs_groups(
         )
     # TODO: Deal with organisation IDs
     log_events = log_event_dao.filter(project_id=project_obj.id)
-    entry_groups = set()
+    groups = dict()
     for le in log_events:
         # TODO: This is super slow prob
         # TODO: Add pagination
         entry = log_dao.filter(log_event_id=le[0].id, key=key)
+        counter = 0
         if entry:
-            entry_groups.add(
-                json.dumps(
-                    {
-                        "version": entry[0][0].version,
-                        "value": entry[0][0].value,
-                    },
-                ),
-            )
-    return entry_groups
+            version = entry[0][0].version
+            if version is None:
+                version = str(counter)
+                counter += 1
+            if version not in groups:
+                groups[version] = []
+            groups[version] += [entry[0][0].value]
+    return groups

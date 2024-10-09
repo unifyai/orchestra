@@ -175,7 +175,7 @@ async def test_get_logs_project_not_found(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_get_logs_groups(client: AsyncClient):
+async def test_get_log_groups(client: AsyncClient):
     # TODO: Test this further
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
@@ -188,7 +188,7 @@ async def test_get_logs_groups(client: AsyncClient):
     )
 
     assert response.status_code == 200, response.json()
-    assert isinstance(response.json(), list)  # Ensure it's a list of grouped entries
+    assert isinstance(response.json(), dict)  # Ensure it's a dict of grouped entries
 
 
 @pytest.mark.anyio
