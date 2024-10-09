@@ -6,8 +6,9 @@ def _tokenize(s):
         ("NUMBER", r"\d+(\.\d*)?|\.\d+"),  # Integer or decimal number
         ("STRING", r"'([^'\\]*(?:\\.[^'\\]*)*)'|\"([^\"\\]*(?:\\.[^\"\\]*)*)\""),
         # String
-        ("OP", r"==|<=|>=|<|>|in|and|or"),  # Operators
+        ("OP", r"==|<=|>=|<|>|(?<!\w)(?:in|and|or|is)(?!\w)"),  # Operators
         ("FUNCTION", r"len"),  # Functions
+        ("BOOLEAN", r"(?<!\w)(?:True|False)(?!\w)"),  # Booleans
         ("IDENTIFIER", r"[A-Za-z_][A-Za-z0-9_]*"),  # Identifiers
         ("LPAREN", r"\("),
         ("RPAREN", r"\)"),
@@ -27,10 +28,12 @@ def _tokenize(s):
             value = float(value) if "." in value else int(value)
             tokens.append(("NUMBER", value))
         elif kind == "STRING":
-            # Remove quotes and unescape
             if value[0] == "'" or value[0] == '"':
                 value = value[1:-1].encode("utf-8").decode("unicode_escape")
             tokens.append(("STRING", value))
+        elif kind == "BOOLEAN":
+            value = True if value == "True" else False
+            tokens.append(("BOOLEAN", value))
         elif kind == "IDENTIFIER":
             tokens.append(("IDENTIFIER", value))
         elif kind == "FUNCTION":
@@ -100,6 +103,7 @@ class _Parser:
             "<=",
             ">=",
             "in",
+            "is",
         ):
             op = self.current_token[1]
             self.advance()
@@ -107,7 +111,7 @@ class _Parser:
             node = {"lhs": node, "operand": op, "rhs": right}
         return node
 
-    # primary -> 'len' '(' expr ')' | '(' expr ')' | literal | identifier
+    # primary -> 'len' '(' expr ')' | '(' expr ')' | literal | identifier | boolean
     def primary(self):
         if self.current_token[0] == "FUNCTION" and self.current_token[1] == "len":
             self.advance()
@@ -128,6 +132,10 @@ class _Parser:
                 self.advance()
             else:
                 raise RuntimeError('Expected ")"')
+            return node
+        elif self.current_token[0] == "BOOLEAN":
+            node = self.current_token[1]
+            self.advance()
             return node
         elif self.current_token[0] == "IDENTIFIER":
             node = {"type": "identifier", "value": self.current_token[1]}
@@ -192,6 +200,10 @@ def evaluate_filter_expression(expr, **variables):
                 lhs = evaluate_filter_expression(expr["lhs"], **variables)
                 rhs = evaluate_filter_expression(expr["rhs"], **variables)
                 return lhs in rhs
+            elif operand == "is":
+                lhs = evaluate_filter_expression(expr["lhs"], **variables)
+                rhs = evaluate_filter_expression(expr["rhs"], **variables)
+                return lhs is rhs
             else:
                 raise ValueError(f"Unknown operand: {operand}")
         elif "type" in expr:
@@ -208,8 +220,7 @@ def evaluate_filter_expression(expr, **variables):
         else:
             raise ValueError(f"Malformed expression node: {expr}")
     else:
-        # expr is a literal number
-        if isinstance(expr, (int, float)):
+        if isinstance(expr, (int, float, bool)):
             return expr
         else:
             raise TypeError(f"Unexpected expression type: {expr}")
