@@ -412,7 +412,7 @@ def get_log_metrics(
     log_entries = [
         e
         for e in log_entries
-        if ((not filter_dict) or evaluate_filter_expression(filter_dict, key=e))
+        if ((not filter_dict) or evaluate_filter_expression(filter_dict, **{key: e}))
     ]
     if not log_entries:
         raise Exception(

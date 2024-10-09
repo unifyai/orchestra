@@ -326,13 +326,29 @@ async def test_get_log_metrics(client: AsyncClient):
     _ = await _create_project(client, project_name)
     _ = await _create_logs_for_filtering_n_metrics(client, project_name)
 
-    # fetch logs for the project
+    # temperature mean
     response = await client.get(
-        "/v0/logs/metrics",
+        f"/v0/logs/metrics?project={project_name}",
         headers=HEADERS,
-        params={"project": project_name, "key": "temperature", "metric": "mean"},
+        params={"key": "temperature", "metric": "mean"},
     )
     assert response.status_code == 200, response.json()
+    result = response.json()
+    assert result == 1472.5
+
+    # positive temperature mean
+    response = await client.get(
+        f"/v0/logs/metrics?project={project_name}",
+        headers=HEADERS,
+        params={
+            "key": "temperature",
+            "metric": "mean",
+            "filter_expr": "temperature > 0.",
+        },
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert result == 3050.0
 
 
 @pytest.mark.anyio
