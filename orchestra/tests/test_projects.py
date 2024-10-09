@@ -87,7 +87,7 @@ async def test_rename_project(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_rename_nonexistent_project(client: AsyncClient):
-    url = "/v0/project/rename/nonexistent-project"
+    url = "/v0/project/nonexistent-project"
     project_data = {"name": "renamed-project"}
     response = await client.patch(url, json=project_data, headers=HEADERS)
     assert response.status_code == 404
