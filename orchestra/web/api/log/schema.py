@@ -5,10 +5,7 @@ from pydantic import BaseModel, Field
 
 class LogConfig(BaseModel):
     project: str = Field(
-        description=(
-            "Name of the project the stored logs will be associated ",
-            "to.",
-        ),
+        description="Name of the project the stored logs will be associated to.",
         json_schema_extra="eval-project",
     )
     logs: Dict[str, Any] = Field(
