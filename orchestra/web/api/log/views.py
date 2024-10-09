@@ -31,6 +31,16 @@ router = APIRouter()
                 },
             },
         },
+        400: {
+            "description": "Non JSON serializable entry.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Entry <key> is not JSON-serializable.",
+                    },
+                },
+            },
+        },
         404: {
             "description": "Project Not Found",
             "content": {
@@ -76,10 +86,17 @@ def create_logs(
     for k, v in request.logs.items():
         inferred_type = None  # TODO: Infer the types
         clean_key = k.split("/", 1)
+        try:
+            json_v = json.dumps(v)
+        except TypeError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Entry {clean_key} is not JSON-serializable.",
+            )
         log_dao.create(
             log_event_id=log_event_id,
             key=clean_key[0],
-            value=v,
+            value=json_v,
             version=clean_key[1] if len(clean_key) > 1 else None,
             inferred_type=inferred_type,
         )
@@ -250,7 +267,7 @@ def get_log(
         )
     # TODO: Deal with organisation IDs
     log_entries = log_dao.filter(log_event_id=log_event.id)
-    entries = {l[0].key: l[0].value for l in log_entries}
+    entries = {l[0].key: json.loads(l[0].value) for l in log_entries}
     return {"id": id, "entries": entries}
 
 
@@ -312,7 +329,7 @@ def get_logs(
         # TODO: This is super slow
         # TODO: Add pagination
         log_entries = log_dao.filter(log_event_id=le[0].id)
-        entries = {l[0].key: l[0].value for l in log_entries}
+        entries = {l[0].key: json.loads(l[0].value) for l in log_entries}
         # TODO: Apply filtering here (filter_expr)
         logs.append({"id": le[0].id, "entries": entries})
     return logs
@@ -385,7 +402,10 @@ def get_logs_groups(
         if entry:
             entry_groups.add(
                 json.dumps(
-                    {"version": entry[0][0].version, "value": entry[0][0].value},
+                    {
+                        "version": entry[0][0].version,
+                        "value": entry[0][0].value,
+                    },
                 ),
             )
     return entry_groups

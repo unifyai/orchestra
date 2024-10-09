@@ -13,7 +13,8 @@ HEADERS = {
 log_data = {
     "logs": {
         "input": "Some input data",
-        "output": "Some output data",
+        "boolean_input": True,
+        "numeric_input": 4.5,
     },
 }
 
@@ -127,6 +128,8 @@ async def test_get_log(client: AsyncClient):
 
     assert response.status_code == 200, response.json()
     assert "entries" in response.json()  # Log entries are returned
+    assert isinstance(response.json()["entries"]["boolean_input"], bool)
+    assert isinstance(response.json()["entries"]["numeric_input"], float)
 
 
 @pytest.mark.anyio
@@ -154,6 +157,8 @@ async def test_get_logs(client: AsyncClient):
 
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), list)  # List of logs is returned
+    assert isinstance(response.json()[0]["entries"]["boolean_input"], bool)
+    assert isinstance(response.json()[0]["entries"]["numeric_input"], float)
 
 
 @pytest.mark.anyio
