@@ -3,6 +3,8 @@ import os
 import pytest
 from httpx import AsyncClient
 
+from ..web.api.log.helpers import evaluate_filter_expression, str_filter_exp_to_dict
+
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 
 HEADERS = {
@@ -172,6 +174,23 @@ async def test_get_log_not_found(client: AsyncClient):
     assert response.json() == {
         "detail": f"Log with id {log_id} not found in your account.",
     }
+
+
+@pytest.mark.parametrize(
+    "expression, values, expected",
+    [
+        (
+            "((a == 5) and (b > 7)) or (len(c) < 10 and 'hello' in d)",
+            {"a": 5, "b": 8, "c": "abcdef", "d": "hello world"},
+            True,
+        ),
+    ],
+)
+def test_log_filter_helper(expression, values, expected):
+    express_dict = str_filter_exp_to_dict(expression)
+    assert isinstance(express_dict, dict)
+    result = evaluate_filter_expression(express_dict, **values)
+    assert result == expected
 
 
 @pytest.mark.anyio
