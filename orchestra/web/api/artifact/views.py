@@ -1,6 +1,7 @@
 """
 Includes endpoints related to log artifacts.
 """
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 
@@ -66,7 +67,7 @@ def create_artifacts(
             artifact_dao.create(
                 project_id=existing_project[0][0].id,
                 key=k,
-                value=v,
+                value=json.dumps(v),
             )
 
         return {"info": "Artifact(s) created successfully!"}
@@ -192,4 +193,4 @@ def list_artifacts(
             detail=f"Project {project} not found in your account.",
         )
     raw_artifacts = artifact_dao.filter(project_id=project_id)
-    return {ra[0].key: ra[0].value for ra in raw_artifacts}
+    return {ra[0].key: json.loads(ra[0].value) for ra in raw_artifacts}
