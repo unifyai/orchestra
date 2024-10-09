@@ -12,6 +12,8 @@ from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.web.api.log.schema import LogConfig
 
+from .helpers import evaluate_filter_expression, str_filter_exp_to_dict
+
 router = APIRouter()
 
 
@@ -314,8 +316,10 @@ def get_logs(
         # TODO: Add pagination
         log_entries = log_dao.filter(log_event_id=le[0].id)
         entries = {l[0].key: json.loads(l[0].value) for l in log_entries}
-        # TODO: Apply filtering here (filter_expr)
-        logs.append({"id": le[0].id, "entries": entries})
+        if filter_expr is None or evaluate_filter_expression(
+            str_filter_exp_to_dict(filter_expr), **entries
+        ):
+            logs.append({"id": le[0].id, "entries": entries})
     return logs
 
 
