@@ -647,3 +647,76 @@ class ApiKey(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     __table_args__ = (UniqueConstraint("user_id", "name"),)
+
+
+class Project(Base):
+    __tablename__ = "project"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        index=True,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        index=True,
+    )
+    name = Column(String, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+    # we want sql nulls to be distinct in the unique constraints
+    # (postgresql_nulls_not_distinct=False)
+    __table_args__ = (
+        UniqueConstraint("user_id", "name"),
+        UniqueConstraint("organization_id", "name"),
+    )
+
+
+class Artifact(Base):
+    __tablename__ = "artifact"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key = Column(String, nullable=False)
+    value = Column(String)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+
+
+class LogEvent(Base):
+    __tablename__ = "log_event"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+
+
+class Log(Base):
+    __tablename__ = "log"
+
+    id = Column(Integer, primary_key=True)
+    log_event_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key = Column(String, nullable=False)
+    value = Column(String)
+    version = Column(String)
+    inferred_type = Column(String)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
