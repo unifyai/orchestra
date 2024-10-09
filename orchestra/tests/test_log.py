@@ -3,6 +3,8 @@ import os
 import pytest
 from httpx import AsyncClient
 
+from ..web.api.log.helpers import evaluate_filter_expression, str_filter_exp_to_dict
+
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 
 HEADERS = {
@@ -34,6 +36,32 @@ log_data = {
             "system_prompt": "Respond only with a single digit.",
         },
     ],
+    "logs_for_filtering": [
+        {
+            "description": "boiling water",
+            "temperature": 100.0,
+            "state": "liquid->gas",
+            "safe": False,
+        },
+        {
+            "description": "freezing water",
+            "temperature": 0.0,
+            "state": "liquid->solid",
+            "safe": True,
+        },
+        {
+            "description": "surface of the sun",
+            "temperature": 6000.0,
+            "state": "gas",
+            "safe": False,
+        },
+        {
+            "description": "freezing nitrogen",
+            "temperature": -210.0,
+            "state": "liquid->solid",
+            "safe": False,
+        },
+    ],
 }
 
 
@@ -47,6 +75,17 @@ def _create_logs(client, project_name):
 
 async def _create_logs_for_grouping(client, project_name):
     data = log_data["logs_for_grouping"]
+    for i in range(len(data)):
+        response = await client.post(
+            "/v0/log",
+            json={"project": project_name, "logs": data[i]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+
+async def _create_logs_for_filtering(client, project_name):
+    data = log_data["logs_for_filtering"]
     for i in range(len(data)):
         response = await client.post(
             "/v0/log",
@@ -174,6 +213,37 @@ async def test_get_log_not_found(client: AsyncClient):
     }
 
 
+@pytest.mark.parametrize(
+    "expression, values",
+    [
+        (
+            "((a == 5) and (b > 7)) or (len(c) < 10 and 'earth' not in d)",
+            {"a": 5, "b": 8, "c": "abcdef", "d": "hello world"},
+        ),
+        (
+            "submarine == 6.45 and van is False or len(ship) < 10 and 'audi' in car",
+            {"submarine": 7.89, "van": True, "ship": "_" * 10, "car": "porsche"},
+        ),
+        (
+            "coffee == 'hot' or ice_cream == 'cold' and temperature == 1.23",
+            {"coffee": "hot", "ice_cream": "cold", "temperature": 1.23},
+        ),
+    ],
+)
+def test_log_filter_helper(expression, values):
+    express_dict = str_filter_exp_to_dict(expression)
+    assert isinstance(express_dict, dict)
+    result = evaluate_filter_expression(express_dict, **values)
+    for key, value in values.items():
+        exec(
+            key
+            + "="
+            + ('"{}"'.format(value) if isinstance(value, str) else str(value)),
+        )
+    expected = eval(expression)
+    assert result == expected
+
+
 @pytest.mark.anyio
 async def test_get_logs(client: AsyncClient):
     project_name = "eval-project"
@@ -182,12 +252,72 @@ async def test_get_logs(client: AsyncClient):
 
     # fetch logs for the project
     response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
-    # TODO: Test filter_expr
 
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), list)  # List of logs is returned
     assert isinstance(response.json()[0]["entries"]["boolean_input"], bool)
     assert isinstance(response.json()[0]["entries"]["numeric_input"], float)
+
+
+@pytest.mark.anyio
+async def test_get_logs_w_filtering(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+    _ = await _create_logs_for_filtering(client, project_name)
+
+    # temperature > 0.
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "temperature > 0."},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result) == 2
+    assert result[0]["entries"] == {
+        "description": "boiling water",
+        "temperature": 100.0,
+        "state": "liquid->gas",
+        "safe": False,
+    }
+    assert result[1]["entries"] == {
+        "description": "surface of the sun",
+        "temperature": 6000.0,
+        "state": "gas",
+        "safe": False,
+    }
+
+    # safe is True
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "safe is True"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result) == 1
+    assert result[0]["entries"] == {
+        "description": "freezing water",
+        "temperature": 0.0,
+        "state": "liquid->solid",
+        "safe": True,
+    }
+
+    # liquid not in state
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "'liquid' not in state"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result) == 1
+    assert result[0]["entries"] == {
+        "description": "surface of the sun",
+        "temperature": 6000.0,
+        "state": "gas",
+        "safe": False,
+    }
 
 
 @pytest.mark.anyio
