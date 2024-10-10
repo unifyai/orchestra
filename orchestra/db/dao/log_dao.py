@@ -20,7 +20,7 @@ class LogDAO:
         value: Optional[str] = None,  # JSON serialised
         version: Optional[str] = None,
         inferred_type: Optional[str] = None,
-    ) -> None:
+    ) -> Optional[str]:
 
         new_log = Log(
             log_event_id=log_event_id,
