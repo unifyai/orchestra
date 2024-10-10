@@ -145,4 +145,4 @@ async def test_delete_dataset_entry_not_found(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 404, response.json()
-    assert response.json() == {"detail": f"Dataset entry {entry_id} not found"}
+    assert response.json() == {"detail": f"Dataset entry {entry_id} not found."}
