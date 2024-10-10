@@ -258,6 +258,10 @@ def _preprocess(
     return [len(v) if _is_type_for_len(v) else v for v in values if v is not None]
 
 
+def _count(values: List[Union[int, float, bool]]) -> Union[int, float]:
+    return len(_preprocess(values))
+
+
 def _sum(values: List[Union[int, float, bool]]) -> Union[int, float]:
     return sum(_preprocess(values))
 
@@ -299,6 +303,7 @@ def _mode(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
 
 
 reduction_methods = {
+    "count": _count,
     "sum": _sum,
     "mean": _mean,
     "var": _var,
