@@ -3,7 +3,11 @@ import os
 import pytest
 from httpx import AsyncClient
 
-from ..web.api.log.helpers import evaluate_filter_expression, str_filter_exp_to_dict
+from ..web.api.log.helpers import (
+    evaluate_filter_expression,
+    reduction_methods,
+    str_filter_exp_to_dict,
+)
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 
@@ -321,34 +325,24 @@ async def test_get_logs_w_filtering(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_get_log_metrics(client: AsyncClient):
+@pytest.mark.parametrize("key", ["description", "temperature", "state", "safe"])
+@pytest.mark.parametrize(
+    "metric",
+    ["sum", "mean", "var", "std", "min", "max", "median", "mode"],
+)
+async def test_get_log_metrics(client: AsyncClient, key: str, metric: str):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
     _ = await _create_logs_for_filtering_n_metrics(client, project_name)
-
-    # temperature mean
+    data = log_data["logs_for_filtering_n_metrics"]
     response = await client.get(
         f"/v0/logs/metrics?project={project_name}",
         headers=HEADERS,
-        params={"key": "temperature", "metric": "mean"},
+        params={"key": key, "metric": metric},
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert result == 1472.5
-
-    # positive temperature mean
-    response = await client.get(
-        f"/v0/logs/metrics?project={project_name}",
-        headers=HEADERS,
-        params={
-            "key": "temperature",
-            "metric": "mean",
-            "filter_expr": "temperature > 0.",
-        },
-    )
-    assert response.status_code == 200, response.json()
-    result = response.json()
-    assert result == 3050.0
+    assert result == reduction_methods[metric]([d[key] for d in data])
 
 
 @pytest.mark.anyio
