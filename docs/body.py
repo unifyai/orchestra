@@ -166,16 +166,23 @@ def get_body(path, route, schemas, route_config, curl_example, python_example):
         parameters = route_config["parameters"]
         for parameter in parameters:
             (
-                name, required, param_type, default, description, example
+                name,
+                required,
+                param_type,
+                default,
+                description,
+                example,
             ) = get_param_details(parameter)
             default = None if not default else default
-            properties.append({
-                "title": name,
-                "type": param_type,
-                "example": example,
-                "default": default,
-                "description": description,
-            })
+            properties.append(
+                {
+                    "title": name,
+                    "type": param_type,
+                    "example": example,
+                    "default": default,
+                    "description": description,
+                }
+            )
             if required:
                 required_props.append(name)
 
