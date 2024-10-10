@@ -266,7 +266,7 @@ def _var(values: List[Union[int, float, bool]]) -> float:
 
 
 def _std(values: List[Union[int, float, bool]]) -> float:
-    return _std(values) ** 0.5
+    return _var(values) ** 0.5
 
 
 def _min(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
