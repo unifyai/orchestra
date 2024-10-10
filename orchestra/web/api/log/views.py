@@ -505,4 +505,4 @@ def get_log_groups(
     assert all(
         len(v) == 1 for v in groups.values()
     ), "All sets should contain a single unique value"
-    return {k: next(iter(v)) for k, v in groups.items()}
+    return {k: json.loads(next(iter(v))) for k, v in groups.items()}
