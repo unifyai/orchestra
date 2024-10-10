@@ -375,8 +375,8 @@ async def test_get_log_groups(client: AsyncClient):
     assert isinstance(groups, dict)  # Ensure it's a dict of grouped entries
     assert len(groups) == 2
     assert groups == {
-        "0": '"You are an expert mathematician."',
-        "1": '"Respond only with a single digit."',
+        "0": "You are an expert mathematician.",
+        "1": "Respond only with a single digit.",
     }
 
 
