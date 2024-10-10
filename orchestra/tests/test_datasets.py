@@ -1,3 +1,4 @@
+# CLEANUP: Delete this file
 import copy
 import json
 import os

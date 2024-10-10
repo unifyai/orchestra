@@ -134,6 +134,7 @@ class Metric(Base):
     plottable = Column(Boolean(), nullable=False)  # type: ignore
 
 
+# CLEANUP: Delete this
 class QueryOld(Base):
     """Model class for the old query table."""
 
@@ -186,6 +187,7 @@ class RechargeType(Base):
     type = Column(String(), primary_key=True)
 
 
+# CLEANUP: Delete this
 class BetaList(Base):
     """Model class for the beta list table."""
 
@@ -365,9 +367,34 @@ class Dataset(Base):
     id = Column(Integer(), primary_key=True)
     user_id = Column(String(), ForeignKey("users.id"), index=True)
     name = Column(String(), nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
     __table_args__ = (UniqueConstraint("user_id", "name", name="uq_userid_name"),)
 
 
+class DatasetEntry(Base):
+    """Model class for the dataset entries table."""
+
+    __tablename__ = "dataset_entry"
+
+    id = Column(String(10), primary_key=True)
+    dataset_id = Column(
+        Integer(),
+        ForeignKey("dataset.id", ondelete="CASCADE"),
+        index=True,
+    )
+    entry = Column(String(), nullable=False)  # JSON serialised
+    entry_hash = Column(String(64), nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint(
+            "dataset_id",
+            "entry_hash",
+            name="uq_dataset_entry_hash",
+        ),
+    )
+
+
+# CLEANUP: Delete this
 class StoredPrompt(Base):
     """Model class for the stored prompt table."""
 
@@ -393,6 +420,7 @@ class StoredPrompt(Base):
     )
 
 
+# CLEANUP: Delete this
 class DefaultPrompt(Base):
     """Model class for the default prompt table."""
 
@@ -404,6 +432,7 @@ class DefaultPrompt(Base):
     prompt = Column(String())
 
 
+# CLEANUP: Delete this
 class StoredPromptVariation(Base):
     """Model class for variations of stored prompts table."""
 
@@ -424,6 +453,7 @@ class StoredPromptVariation(Base):
     )
 
 
+# CLEANUP: Delete this
 class StoredPromptResponse(Base):
     """Model class for the stored prompt response table."""
 
@@ -450,6 +480,7 @@ class StoredPromptResponse(Base):
     )
 
 
+# CLEANUP: Delete this
 class Judgement(Base):
     """Model class for the judgement table."""
 
@@ -472,6 +503,7 @@ class Judgement(Base):
     )
 
 
+# CLEANUP: Delete this
 class DatasetPrompt(Base):
     """Model class for the dataset prompt table."""
 
@@ -489,6 +521,7 @@ class DatasetPrompt(Base):
     )
 
 
+# CLEANUP: Delete this
 class Evaluator(Base):
     """Model class for the evaluator table."""
 
@@ -518,6 +551,7 @@ class Evaluator(Base):
     )
 
 
+# CLEANUP: Delete this
 class Evaluation(Base):
     """Model class for the evaluation table."""
 

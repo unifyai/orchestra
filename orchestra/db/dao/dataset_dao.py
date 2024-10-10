@@ -23,6 +23,7 @@ class DatasetDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
+    # used in v2
     def create(  # noqa: WPS211
         self,
         user_id: str,
@@ -265,3 +266,34 @@ class DatasetDAO:
             self.session.rollback()
             # TODO: This should be an exception instead of 200
             return {"message": "Unable to delete dataset"}
+
+    # used in v2
+    def list_datasets(self, user_id: str):
+        query = select(Dataset.name).where(
+            or_(Dataset.user_id == user_id, Dataset.user_id == None),
+        )
+        rows = self.session.execute(query)
+        return rows.fetchall()
+
+    # used in v2
+    def get_id(self, user_id: str, name: str, include_public: bool):
+        # include_public=True accounts for public datasets (with user_id=None)
+        query = select(Dataset.id).where(Dataset.name == name)
+        if include_public:
+            query = query.where(
+                or_(Dataset.user_id == user_id, Dataset.user_id == None),
+            )
+        else:
+            query = query.where(Dataset.user_id == user_id)
+        entry = self.session.execute(query).fetchone()
+        return entry.id if entry else None
+
+    # used in v2
+    def delete(self, id: int):
+        try:
+            dataset = self.session.query(Dataset).filter_by(id=id).one()
+            self.session.delete(dataset)
+            self.session.commit()
+        except:
+            self.session.rollback()
+            raise ValueError
