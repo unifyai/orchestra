@@ -94,6 +94,16 @@ def invalid_optimisation_goal(performance_rules: List[str]):
     )
 
 
+model_not_found = HTTPException(
+    status_code=status.HTTP_400_BAD_REQUEST,
+    detail=("Model not found"),
+)
+
+overspecified_model_provider = HTTPException(
+    status_code=status.HTTP_400_BAD_REQUEST,
+    detail=("You can only specify at most one of (model, provider)"),
+)
+
 invalid_api_key = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
     detail="Invalid API key. You can generate one at https://console.unify.ai/login",
@@ -112,22 +122,15 @@ admin_not_authorized = HTTPException(
     detail="Admin access unauthorized, this incident will be reported.",
 )
 
-user_id_not_found = HTTPException(
-    status_code=status.HTTP_404_NOT_FOUND,
-    detail="Specified user-id not found.",
-)
 
-custom_api_key_not_found = HTTPException(
-    status_code=status.HTTP_404_NOT_FOUND,
-    detail="Custom API key not found.",
-)
-
-custom_endpoint_not_found = HTTPException(
-    status_code=status.HTTP_404_NOT_FOUND,
-    detail="Custom endpoint not found.",
-)
+def not_found(item):
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"{item} not found.",
+    )
 
 
+# CLEANUP: Delete
 def dataset_does_not_exist(dataset=""):
     return HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
@@ -135,6 +138,7 @@ def dataset_does_not_exist(dataset=""):
     )
 
 
+# CLEANUP: Delete
 def evaluation_does_not_exist(dataset=""):
     return HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
@@ -142,6 +146,7 @@ def evaluation_does_not_exist(dataset=""):
     )
 
 
+# CLEANUP: Delete
 def evaluator_not_found(evaluator):
     return HTTPException(
         status.HTTP_404_NOT_FOUND,
@@ -155,26 +160,9 @@ provider_not_found_under_conditions = HTTPException(
 )
 
 
-def benchmark_not_found(model_provider_string: str):
-    return HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"We couldn't find benchmarks for {model_provider_string}",
-    )
-
-
 internal_endpoint_not_found = HTTPException(
     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
     detail="Endpoint not found",
-)
-
-model_not_found = HTTPException(
-    status_code=status.HTTP_400_BAD_REQUEST,
-    detail=("Model not found"),
-)
-
-overspecified_model_provider = HTTPException(
-    status_code=status.HTTP_400_BAD_REQUEST,
-    detail=("You can only specify at most one of (model, provider)"),
 )
 
 

@@ -12,6 +12,7 @@ from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.users.schema import AccountRequest, UserRequest
+from orchestra.web.api.utils.http_responses import not_found
 
 admin_router = APIRouter()
 
@@ -56,7 +57,7 @@ async def get_user(
 ):
     user = auth_user_dao.filter(id=user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User ID Not Found.")
+        raise not_found("User ID")
     api_key = api_key_dao.filter(user_id=user[0][0].id)
     org_member = organization_member_dao.filter(user_id=user[0][0].id)
     org_name, org_level = None, None
@@ -154,7 +155,7 @@ async def update_user(
 ):
     user = auth_user_dao.filter(id=updated_user.user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise not_found("User")
     auth_user_dao.update(
         id=updated_user.user_id,
         name=updated_user.name,
@@ -168,7 +169,7 @@ async def update_user(
 async def delete_user(user_id: str, auth_user_dao: AuthUserDAO = Depends()):
     user = auth_user_dao.filter(id=user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found.")
+        raise not_found("User")
     auth_user_dao.delete(id=user_id)
     return "User deleted successfully!"
 
@@ -210,7 +211,7 @@ async def set_user_tier(
 ):
     user = auth_user_dao.filter(id=user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User ID Not Found.")
+        raise not_found("User ID")
     if tier not in ["developer", "professional", "enterprise"]:
         raise HTTPException(
             status_code=400,
@@ -227,7 +228,7 @@ async def reset_user_quotas(
 ):
     user = auth_user_dao.filter(id=user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User ID Not Found.")
+        raise not_found("User ID")
     auth_user_dao.update(id=user_id, queries_enabled=True, evaluations_enabled=True)
     return "User quotas reset successfully!"
 
@@ -253,10 +254,7 @@ async def list_user_api_keys(
 ):
     keys = api_key_dao.filter(user_id=user_id)
     if not keys:
-        raise HTTPException(
-            status_code=404,
-            detail=f"API Keys not found for user {user_id}",
-        )
+        raise not_found("API Keys")
     return keys
 
 
@@ -316,7 +314,7 @@ async def create_organization(
 ):
     org = organization_dao.filter(name=name)
     if not org:
-        raise HTTPException(status_code=404, detail="Organization Not Found.")
+        raise not_found("Organization")
     org_members = organization_member_dao.list_members(name=name)
     return org_members
 
@@ -350,10 +348,10 @@ async def add_organization_member(
 ):
     new_user = auth_user_dao.filter(email=new_member_email)
     if not new_user:
-        raise HTTPException(status_code=404, detail="User not found.")
+        raise not_found("User")
     org = organization_dao.filter(name=name)
     if not org:
-        raise HTTPException(status_code=404, detail="Organization not found.")
+        raise not_found("Organization")
     organization_member_dao.create(
         organization_id=org[0][0].id,
         user_id=new_user[0][0].id,
@@ -378,18 +376,15 @@ async def update_organization_member_level(
         )
     user = auth_user_dao.filter(email=member_email)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found.")
+        raise not_found("User")
     org = organization_dao.filter(name=organization)
     if not org:
-        raise HTTPException(status_code=404, detail="Organization not found.")
+        raise not_found("Organization")
     org_member = organization_member_dao.filter(
         user_id=user[0][0].id,
         organization_id=org[0][0].id,
     )
     if not org_member:
-        raise HTTPException(
-            status_code=404,
-            detail="User not found in the organization.",
-        )
+        raise not_found("User")
     organization_member_dao.update(id=org_member[0][0].id, level=new_level)
     return "Member level successfully updated!"

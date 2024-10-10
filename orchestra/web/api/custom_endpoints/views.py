@@ -1,13 +1,13 @@
 from typing import List
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.models.orchestra_models import CustomEndpoint
 from orchestra.web.api.custom_endpoints.schema import CustomEndpointModelResponse
-from orchestra.web.api.utils.http_responses import custom_endpoint_not_found
+from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
 
@@ -86,7 +86,7 @@ def create_custom_endpoint(
     try:
         key_id = custom_api_key_dao.filter(user_id=user_id, key=key_name)[0].id
     except Exception:
-        raise HTTPException(status_code=404, detail="Custom API Key not found.")
+        raise not_found("Custom API Key")
 
     custom_endpoint_dao.create_custom_endpoint(
         user_id=user_id,
@@ -109,6 +109,14 @@ def create_custom_endpoint(
                 },
             },
         },
+        404: {
+            "description": "Custom Endpoint Not Found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Custom endpoint not found."},
+                },
+            },
+        },
     },
 )
 def delete_custom_endpoint(
@@ -127,7 +135,7 @@ def delete_custom_endpoint(
 
     existing_endpoint = custom_endpoint_dao.filter(user_id=user_id, name=name)
     if not existing_endpoint:
-        raise custom_endpoint_not_found
+        raise not_found("Custom endpoint")
 
     custom_endpoint_dao.delete(
         user_id=user_id,
@@ -177,7 +185,7 @@ def rename_custom_endpoint(
 
     existing_endpoint = custom_endpoint_dao.filter(user_id=user_id, name=name)
     if not existing_endpoint:
-        raise custom_endpoint_not_found
+        raise not_found("Custom endpoint")
 
     custom_endpoint_dao.rename(
         user_id=user_id,

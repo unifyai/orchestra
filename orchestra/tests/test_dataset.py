@@ -60,7 +60,7 @@ async def test_get_dataset_entries_not_found(client: AsyncClient):
         params={"limit": 10, "offset": 0},
     )
     assert response.status_code == 404, response.json()
-    assert response.json() == {"detail": "Dataset not found"}
+    assert response.json() == {"detail": "Dataset not found."}
 
 
 @pytest.mark.anyio
@@ -103,7 +103,7 @@ async def test_delete_dataset_not_found(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 404, response.json()
-    assert response.json() == {"detail": "Dataset not found"}
+    assert response.json() == {"detail": "Dataset not found."}
 
 
 @pytest.mark.anyio
@@ -145,4 +145,4 @@ async def test_delete_dataset_entry_not_found(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 404, response.json()
-    assert response.json() == {"detail": "Dataset entry not found"}
+    assert response.json() == {"detail": f"Dataset entry {entry_id} not found."}

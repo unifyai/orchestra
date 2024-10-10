@@ -27,6 +27,7 @@ template_no_ref = """
 {assistant_message}
 [end of assistant answer]"""
 
+
 # TODO: Move to utils (duplicated in routing)
 def is_standard_endpoint(model: str, provider: str):
     if provider in PROVIDER_CLASSES:
@@ -164,7 +165,7 @@ Be as objective as possible."""
         return {"info": "Evaluator created successfully!"}
     else:
         raise HTTPException(
-            status_code=404,
+            status_code=400,
             detail=f"Could not create evaluator, please check the format and check the name is unique",
         )
 

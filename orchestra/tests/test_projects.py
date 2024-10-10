@@ -62,10 +62,7 @@ async def test_delete_nonexistent_project(client: AsyncClient):
     url = "/v0/project/nonexistent-project"
     response = await client.delete(url, headers=HEADERS)
     assert response.status_code == 404
-    assert (
-        response.json()["detail"]
-        == "Project nonexistent-project not found in your account."
-    )
+    assert response.json()["detail"] == "Project nonexistent-project not found."
 
 
 @pytest.mark.anyio
@@ -91,10 +88,7 @@ async def test_rename_nonexistent_project(client: AsyncClient):
     project_data = {"name": "renamed-project"}
     response = await client.patch(url, json=project_data, headers=HEADERS)
     assert response.status_code == 404
-    assert (
-        response.json()["detail"]
-        == "Project nonexistent-project not found in your account."
-    )
+    assert response.json()["detail"] == "Project nonexistent-project not found."
 
 
 @pytest.mark.anyio
