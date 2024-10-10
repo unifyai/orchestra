@@ -57,12 +57,25 @@ def list_datasets(
                 },
             },
         },
-        404: {"description": "Dataset Not Found"},
+        404: {
+            "description": "Dataset Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Dataset <name> not found in your account."
+                    }
+                }
+            }
+        },
     },
 )
 def get_dataset_entries(
     request: Request,
-    name: str = Path(..., description="Dataset name (can include forward slashes)"),
+    name: str = Path(
+        ...,
+        description="Dataset name (can include forward slashes)",
+        example="my_dataset"
+    ),
     limit: int = Query(10, ge=1, le=200),
     offset: int = Query(0, ge=0),
     dataset_dao: DatasetDAO = Depends(),
