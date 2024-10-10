@@ -3,6 +3,12 @@ import os
 import pytest
 from httpx import AsyncClient
 
+from ..web.api.log.helpers import (
+    evaluate_filter_expression,
+    reduction_methods,
+    str_filter_exp_to_dict,
+)
+
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 
 HEADERS = {
@@ -16,6 +22,50 @@ log_data = {
         "boolean_input": True,
         "numeric_input": 4.5,
     },
+    "logs_for_grouping": [
+        {
+            "input": "What is 1 + 1?",
+            "system_prompt": "You are an expert mathematician.",
+        },
+        {
+            "input": "What is 2 + 2?",
+            "system_prompt": "You are an expert mathematician.",
+        },
+        {
+            "input": "What is 1 + 1?",
+            "system_prompt": "Respond only with a single digit.",
+        },
+        {
+            "input": "What is 2 + 2?",
+            "system_prompt": "Respond only with a single digit.",
+        },
+    ],
+    "logs_for_filtering_n_metrics": [
+        {
+            "description": "boiling water",
+            "temperature": 100.0,
+            "state": "liquid->gas",
+            "safe": False,
+        },
+        {
+            "description": "freezing water",
+            "temperature": 0.0,
+            "state": "liquid->solid",
+            "safe": True,
+        },
+        {
+            "description": "surface of the sun",
+            "temperature": 6000.0,
+            "state": "gas",
+            "safe": False,
+        },
+        {
+            "description": "freezing nitrogen",
+            "temperature": -210.0,
+            "state": "liquid->solid",
+            "safe": False,
+        },
+    ],
 }
 
 
@@ -25,6 +75,28 @@ def _create_logs(client, project_name):
         json={"project": project_name, "logs": log_data["logs"]},
         headers=HEADERS,
     )
+
+
+async def _create_logs_for_grouping(client, project_name):
+    data = log_data["logs_for_grouping"]
+    for i in range(len(data)):
+        response = await client.post(
+            "/v0/log",
+            json={"project": project_name, "logs": data[i]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+
+async def _create_logs_for_filtering_n_metrics(client, project_name):
+    data = log_data["logs_for_filtering_n_metrics"]
+    for i in range(len(data)):
+        response = await client.post(
+            "/v0/log",
+            json={"project": project_name, "logs": data[i]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
 
 
 def _create_project(client, project_name):
@@ -145,6 +217,37 @@ async def test_get_log_not_found(client: AsyncClient):
     }
 
 
+@pytest.mark.parametrize(
+    "expression, values",
+    [
+        (
+            "((a == 5) and (b > 7)) or (len(c) < 10 and 'earth' not in d)",
+            {"a": 5, "b": 8, "c": "abcdef", "d": "hello world"},
+        ),
+        (
+            "submarine == 6.45 and van is False or len(ship) < 10 and 'audi' in car",
+            {"submarine": 7.89, "van": True, "ship": "_" * 10, "car": "porsche"},
+        ),
+        (
+            "coffee == 'hot' or ice_cream == 'cold' and temperature == 1.23",
+            {"coffee": "hot", "ice_cream": "cold", "temperature": 1.23},
+        ),
+    ],
+)
+def test_log_filter_helper(expression, values):
+    express_dict = str_filter_exp_to_dict(expression)
+    assert isinstance(express_dict, dict)
+    result = evaluate_filter_expression(express_dict, **values)
+    for key, value in values.items():
+        exec(
+            key
+            + "="
+            + ('"{}"'.format(value) if isinstance(value, str) else str(value)),
+        )
+    expected = eval(expression)
+    assert result == expected
+
+
 @pytest.mark.anyio
 async def test_get_logs(client: AsyncClient):
     project_name = "eval-project"
@@ -153,12 +256,93 @@ async def test_get_logs(client: AsyncClient):
 
     # fetch logs for the project
     response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
-    # TODO: Test filter_expr
 
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), list)  # List of logs is returned
     assert isinstance(response.json()[0]["entries"]["boolean_input"], bool)
     assert isinstance(response.json()[0]["entries"]["numeric_input"], float)
+
+
+@pytest.mark.anyio
+async def test_get_logs_w_filtering(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+    _ = await _create_logs_for_filtering_n_metrics(client, project_name)
+
+    # temperature > 0.
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "temperature > 0."},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result) == 2
+    assert result[0]["entries"] == {
+        "description": "boiling water",
+        "temperature": 100.0,
+        "state": "liquid->gas",
+        "safe": False,
+    }
+    assert result[1]["entries"] == {
+        "description": "surface of the sun",
+        "temperature": 6000.0,
+        "state": "gas",
+        "safe": False,
+    }
+
+    # safe is True
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "safe is True"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result) == 1
+    assert result[0]["entries"] == {
+        "description": "freezing water",
+        "temperature": 0.0,
+        "state": "liquid->solid",
+        "safe": True,
+    }
+
+    # liquid not in state
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "'liquid' not in state"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result) == 1
+    assert result[0]["entries"] == {
+        "description": "surface of the sun",
+        "temperature": 6000.0,
+        "state": "gas",
+        "safe": False,
+    }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("key", ["description", "temperature", "state", "safe"])
+@pytest.mark.parametrize(
+    "metric",
+    ["sum", "mean", "var", "std", "min", "max", "median", "mode"],
+)
+async def test_get_log_metrics(client: AsyncClient, key: str, metric: str):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+    _ = await _create_logs_for_filtering_n_metrics(client, project_name)
+    data = log_data["logs_for_filtering_n_metrics"]
+    response = await client.get(
+        f"/v0/logs/metrics?project={project_name}",
+        headers=HEADERS,
+        params={"key": key, "metric": metric},
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert result == reduction_methods[metric]([d[key] for d in data])
 
 
 @pytest.mark.anyio
@@ -175,20 +359,25 @@ async def test_get_logs_project_not_found(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_get_logs_groups(client: AsyncClient):
-    # TODO: Test this further
+async def test_get_log_groups(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
-    _ = await _create_logs(client, project_name)
+    _ = await _create_logs_for_grouping(client, project_name)
 
     # fetch log groups for a given key
     response = await client.get(
-        f"/v0/logs/groups?project={project_name}&key=input",
+        f"/v0/logs/groups?project={project_name}&key=system_prompt",
         headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
-    assert isinstance(response.json(), list)  # Ensure it's a list of grouped entries
+    groups = response.json()
+    assert isinstance(groups, dict)  # Ensure it's a dict of grouped entries
+    assert len(groups) == 2
+    assert groups == {
+        "0": "You are an expert mathematician.",
+        "1": "Respond only with a single digit.",
+    }
 
 
 @pytest.mark.anyio
