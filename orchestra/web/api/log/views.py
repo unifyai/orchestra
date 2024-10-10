@@ -167,6 +167,7 @@ def delete_log(
     },
 )
 def update_log(
+    request_fastapi: Request,
     request: UpdateLogConfig,
     id: str = Path(
         description="ID of the log to update.",
@@ -187,7 +188,7 @@ def update_log(
             detail="A log with the specified id does not exist.",
         )
     projects = project_dao.filter(id=log_events[0][0].project_id)
-    if not projects or projects[0][0].user_id != request.fastapi.state.user_id:
+    if not projects or projects[0][0].user_id != request_fastapi.state.user_id:
         raise HTTPException(
             status_code=404,
             detail="A log with the specified id does not exist.",
