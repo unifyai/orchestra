@@ -1,5 +1,5 @@
 import re
-from typing import List, Union
+from typing import Any, List, Union
 
 
 def _tokenize(s):
@@ -242,10 +242,20 @@ def evaluate_filter_expression(expr, **variables):
 # ----------#
 
 
+def _is_type_for_len(v: Any) -> bool:
+    return (
+        isinstance(v, str)
+        or isinstance(v, list)
+        or isinstance(v, dict)
+        or isinstance(v, tuple)
+        or isinstance(v, set)
+    )
+
+
 def _preprocess(
     values: List[Union[int, float, bool, str]],
 ) -> List[Union[int, float, bool]]:
-    return [len(v) if isinstance(v, str) else v for v in values if v is not None]
+    return [len(v) if _is_type_for_len(v) else v for v in values if v is not None]
 
 
 def _sum(values: List[Union[int, float, bool]]) -> Union[int, float]:
