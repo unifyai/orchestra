@@ -1,4 +1,5 @@
 import re
+from typing import List, Union
 
 
 def _tokenize(s):
@@ -160,8 +161,8 @@ class _Parser:
             raise RuntimeError(f"Unexpected token {self.current_token}")
 
 
-# Public #
-# -------#
+# Filtering #
+# ----------#
 
 
 def str_filter_exp_to_dict(s):
@@ -235,3 +236,65 @@ def evaluate_filter_expression(expr, **variables):
             return expr
         else:
             raise TypeError(f"Unexpected expression type: {expr}")
+
+
+# Reduction #
+# ----------#
+
+
+def _preprocess(
+    values: List[Union[int, float, bool, str]],
+) -> List[Union[int, float, bool]]:
+    return [len(v) if isinstance(v, str) else v for v in values if v is not None]
+
+
+def _sum(values: List[Union[int, float, bool]]) -> Union[int, float]:
+    return sum(_preprocess(values))
+
+
+def _mean(values: List[Union[int, float, bool]]) -> float:
+    values = _preprocess(values)
+    return sum(values) / len(values)
+
+
+def _var(values: List[Union[int, float, bool]]) -> float:
+    values = _preprocess(values)
+    num_values = len(values)
+    mean = sum(values) / num_values
+    diffs_squared = [(v - mean) ** 2 for v in values]
+    return sum(diffs_squared) / num_values
+
+
+def _std(values: List[Union[int, float, bool]]) -> float:
+    return _var(values) ** 0.5
+
+
+def _min(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
+    return min(_preprocess(values))
+
+
+def _max(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
+    return max(_preprocess(values))
+
+
+def _median(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
+    values = _preprocess(values)
+    num_values = len(values)
+    return sorted(values)[int(num_values / 2)]
+
+
+def _mode(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
+    values = _preprocess(values)
+    return max(set(values), key=values.count)
+
+
+reduction_methods = {
+    "sum": _sum,
+    "mean": _mean,
+    "var": _var,
+    "std": _std,
+    "min": _min,
+    "max": _max,
+    "median": _median,
+    "mode": _mode,
+}

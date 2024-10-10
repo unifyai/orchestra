@@ -3,7 +3,11 @@ import os
 import pytest
 from httpx import AsyncClient
 
-from ..web.api.log.helpers import evaluate_filter_expression, str_filter_exp_to_dict
+from ..web.api.log.helpers import (
+    evaluate_filter_expression,
+    reduction_methods,
+    str_filter_exp_to_dict,
+)
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 
@@ -36,7 +40,7 @@ log_data = {
             "system_prompt": "Respond only with a single digit.",
         },
     ],
-    "logs_for_filtering": [
+    "logs_for_filtering_n_metrics": [
         {
             "description": "boiling water",
             "temperature": 100.0,
@@ -84,8 +88,8 @@ async def _create_logs_for_grouping(client, project_name):
         assert response.status_code == 200, response.json()
 
 
-async def _create_logs_for_filtering(client, project_name):
-    data = log_data["logs_for_filtering"]
+async def _create_logs_for_filtering_n_metrics(client, project_name):
+    data = log_data["logs_for_filtering_n_metrics"]
     for i in range(len(data)):
         response = await client.post(
             "/v0/log",
@@ -263,7 +267,7 @@ async def test_get_logs(client: AsyncClient):
 async def test_get_logs_w_filtering(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
-    _ = await _create_logs_for_filtering(client, project_name)
+    _ = await _create_logs_for_filtering_n_metrics(client, project_name)
 
     # temperature > 0.
     response = await client.get(
@@ -318,6 +322,27 @@ async def test_get_logs_w_filtering(client: AsyncClient):
         "state": "gas",
         "safe": False,
     }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("key", ["description", "temperature", "state", "safe"])
+@pytest.mark.parametrize(
+    "metric",
+    ["sum", "mean", "var", "std", "min", "max", "median", "mode"],
+)
+async def test_get_log_metrics(client: AsyncClient, key: str, metric: str):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+    _ = await _create_logs_for_filtering_n_metrics(client, project_name)
+    data = log_data["logs_for_filtering_n_metrics"]
+    response = await client.get(
+        f"/v0/logs/metrics?project={project_name}",
+        headers=HEADERS,
+        params={"key": key, "metric": metric},
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert result == reduction_methods[metric]([d[key] for d in data])
 
 
 @pytest.mark.anyio
