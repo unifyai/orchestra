@@ -31,11 +31,10 @@ from orchestra.web.api.utils.dynamic_routing import (
 )
 from orchestra.web.api.utils.helpers import filter_orchestra_only_args
 from orchestra.web.api.utils.http_responses import (
-    custom_api_key_not_found,
-    custom_endpoint_not_found,
     insufficient_credits_error,
     invalid_messages,
     invalid_model_str,
+    not_found,
 )
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
@@ -271,7 +270,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                                 key=provider,
                             )[0].value
                         except IndexError:
-                            raise custom_api_key_not_found
+                            raise not_found("Custom API Key")
                     # the request is made to a custom endpoint
                     # either to an existing provider or a custom provider
                     else:
@@ -281,13 +280,13 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                                 name=model,
                             )[0]
                         except IndexError:
-                            raise custom_endpoint_not_found
+                            raise not_found("Custom endpoint")
                         try:
                             custom_api_key = custom_api_key_dao.filter(
                                 id=custom_endpoint.key_id,
                             )[0].value
                         except IndexError:
-                            raise custom_api_key_not_found
+                            raise not_found("Custom API Key")
 
                 # get the provider class
                 lm = PROVIDER_CLASSES[provider_str](

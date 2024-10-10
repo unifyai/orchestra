@@ -5,12 +5,13 @@ Includes endpoints related to entries.
 import json
 from typing import Any, Dict, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Depends, Path, Query, Request
 
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.web.api.log.schema import CreateLogConfig, UpdateLogConfig
+from orchestra.web.api.utils.http_responses import not_found
 
 from .helpers import (
     evaluate_filter_expression,
@@ -42,7 +43,7 @@ router = APIRouter()
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "A project with this name doesn't exists.",
+                        "detail": "Project not found.",
                     },
                 },
             },
@@ -70,10 +71,7 @@ def create_log(
             name=request.project,
         )[0][0].id
     except IndexError:
-        raise HTTPException(
-            status_code=404,
-            detail="A project with this name doesn't exists.",
-        )
+        raise not_found("Project")
 
     # Create log_event and get its id
     log_event_id = log_event_dao.create(project_id=project_id)
@@ -109,7 +107,7 @@ def create_log(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Log with id <id> not found in your account.",
+                        "detail": "Log with id <id> not found.",
                     },
                 },
             },
@@ -134,10 +132,7 @@ def delete_log(
         if request_fastapi.state.user_id != project_user:
             raise IndexError
     except IndexError:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Log with id {id} not found in your account.",
-        )
+        raise not_found(f"Log with id {id}")
     # TODO: Deal with organisation IDs
     log_event_dao.delete(id=id)
     return {"info": "Log deleted successfully!"}
@@ -159,7 +154,7 @@ def delete_log(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Log with id <id> not found in your account.",
+                        "detail": "Log with id <id> not found.",
                     },
                 },
             },
@@ -183,16 +178,10 @@ def update_log(
     log_event_id = int(id)
     log_events = log_event_dao.filter(id=log_event_id)
     if not log_events:
-        raise HTTPException(
-            status_code=404,
-            detail="A log with the specified id does not exist.",
-        )
+        raise not_found(f"Log with id {id}")
     projects = project_dao.filter(id=log_events[0][0].project_id)
     if not projects or projects[0][0].user_id != request_fastapi.state.user_id:
-        raise HTTPException(
-            status_code=404,
-            detail="A log with the specified id does not exist.",
-        )
+        raise not_found(f"Log with id {id}")
     # Store each key, value pair for the log
     for k, v in request.entries.items():
         inferred_type = type(v).__name__
@@ -224,7 +213,7 @@ def update_log(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Log with <id> not found in your account.",
+                        "detail": "Log with <id> not found.",
                     },
                 },
             },
@@ -234,7 +223,7 @@ def update_log(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Log entry <entry> not found in your account for log <id>.",
+                        "detail": "Log entry <entry> not found.",
                     },
                 },
             },
@@ -264,17 +253,11 @@ def delete_log_entry(
         if request_fastapi.state.user_id != project.user_id:
             raise IndexError
     except IndexError:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Log with id {id} not found in your account.",
-        )
+        raise not_found(f"Log with id {id}")
         # TODO: Deal with organisation IDs
     log = log_dao.filter(log_event_id=log_event.id, key=entry)
     if not log:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Log entry {entry} not found in your account for log {id}.",
-        )
+        raise not_found(f"Log entry {entry}")
     log_dao.delete(id=log[0][0].id)
     return {"info": "Log entry deleted successfully!"}
 
@@ -298,7 +281,7 @@ def delete_log_entry(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Log with id <id> not found in your account.",
+                        "detail": "Log with id <id> not found.",
                     },
                 },
             },
@@ -324,10 +307,7 @@ def get_log(
         if request_fastapi.state.user_id != project.user_id:
             raise IndexError
     except IndexError:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Log with id {id} not found in your account.",
-        )
+        raise not_found(f"Log with id {id}")
     # TODO: Deal with organisation IDs
     log_entries = log_dao.filter(log_event_id=log_event.id)
     entries = {l[0].key: json.loads(l[0].value) for l in log_entries}
@@ -365,7 +345,7 @@ def get_log(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Project <project> not found in your account.",
+                        "detail": "Project <project> not found.",
                     },
                 },
             },
@@ -395,10 +375,7 @@ def get_logs(
         if request_fastapi.state.user_id != project_obj.user_id:
             raise IndexError
     except IndexError:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {project} not found in your account.",
-        )
+        raise not_found(f"Project {project}")
     # TODO: Deal with organisation IDs
     log_events = log_event_dao.filter(project_id=project_obj.id)
     logs = []
@@ -430,7 +407,7 @@ def get_logs(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Project <project> not found in your account.",
+                        "detail": "Project <project> not found.",
                     },
                 },
             },
@@ -468,10 +445,7 @@ def get_logs_metric(
         if request_fastapi.state.user_id != project_obj.user_id:
             raise IndexError
     except IndexError:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {project} not found in your account.",
-        )
+        raise not_found(f"Project {project}")
     # TODO: Deal with organisation IDs
     log_events = log_event_dao.filter(project_id=project_obj.id)
     filter_dict = (
@@ -521,7 +495,7 @@ def get_logs_metric(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Project <project> not found in your account.",
+                        "detail": "Project <project> not found.",
                     },
                 },
             },
@@ -551,10 +525,7 @@ def get_log_groups(
         if request_fastapi.state.user_id != project_obj.user_id:
             raise IndexError
     except IndexError:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {project} not found in your account.",
-        )
+        raise not_found(f"Project {project}")
     # TODO: Deal with organisation IDs
     log_events = log_event_dao.filter(project_id=project_obj.id)
     groups = dict()
