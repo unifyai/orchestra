@@ -277,6 +277,7 @@ class DatasetDAO:
 
     # used in v2
     def get_id(self, user_id: str, name: str, include_public: bool):
+        # include_public=True accounts for public datasets (with user_id=None)
         query = select(Dataset.id).where(Dataset.name == name)
         if include_public:
             query = query.where(

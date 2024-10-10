@@ -44,7 +44,7 @@ def list_datasets(
 
 
 @router.get(
-    "/datasetv2/{name}",
+    "/datasetv2/{name:path}",
     responses={
         200: {
             "description": "Successful Response",
@@ -108,7 +108,7 @@ def get_dataset_entries(
 
 
 @router.get(
-    "/datasetv2/{name}/entry/{id}",
+    "/datasetv2/{name:path}/entry/{id}",
     responses={
         200: {
             "description": "Successful Response",
@@ -192,7 +192,7 @@ def create_dataset(
 
 
 @router.post(
-    "/datasetv2/{name}/entries",
+    "/datasetv2/{name:path}/entries",
     status_code=201,
     responses={
         201: {
@@ -246,7 +246,7 @@ def add_dataset_entries(
 
 
 @router.patch(
-    "/datasetv2/{name}",
+    "/datasetv2/{name:path}",
     responses={
         200: {
             "description": "Dataset Renamed",
@@ -279,7 +279,44 @@ def rename_dataset(
 
 
 @router.delete(
-    "/datasetv2/{name}",
+    "/datasetv2/{name:path}/entry/{id}",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {"info": "Dataset entry deleted successfully!"},
+            },
+        },
+        404: {"description": "Dataset Not Found"},
+        404: {"description": "Dataset Entry Not Found"},
+    },
+)
+def delete_dataset_entry(
+    request: Request,
+    name: str = Path(..., description="Dataset name (can include forward slashes)"),
+    id: str = Path(..., description="Entry ID"),
+    dataset_dao: DatasetDAO = Depends(),
+    dataset_entry_dao: DatasetEntryDAO = Depends(),
+):
+    """
+    Delete a specific entry from a dataset.
+    """
+    dataset_id = dataset_dao.get_id(
+        user_id=request.state.user_id,
+        name=name,
+        include_public=False,
+    )
+    if dataset_id is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    dataset_entry = dataset_entry_dao.filter(id=id, dataset_id=dataset_id)
+    if not dataset_entry:
+        raise HTTPException(status_code=404, detail="Dataset entry not found")
+    dataset_entry_dao.delete(id=id)
+    return "Dataset Entry deleted successfully!"
+
+
+@router.delete(
+    "/datasetv2/{name:path}",
     responses={
         200: {
             "description": "Successful Response",
@@ -307,39 +344,3 @@ def delete_dataset(
         raise HTTPException(status_code=404, detail="Dataset not found")
     dataset_dao.delete(id=dataset_id)
     return "Dataset deleted successfully!"
-
-
-@router.delete(
-    "/datasetv2/{name}/entry/{id}",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {"info": "Dataset entry deleted successfully!"},
-            },
-        },
-        404: {"description": "Dataset or Entry Not Found"},
-    },
-)
-def delete_dataset_entry(
-    request: Request,
-    name: str = Path(..., description="Dataset name (can include forward slashes)"),
-    id: str = Path(..., description="Entry ID"),
-    dataset_dao: DatasetDAO = Depends(),
-    dataset_entry_dao: DatasetEntryDAO = Depends(),
-):
-    """
-    Delete a specific entry from a dataset.
-    """
-    dataset_id = dataset_dao.get_id(
-        user_id=request.state.user_id,
-        name=name,
-        include_public=False,
-    )
-    if dataset_id is None:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    dataset_entry = dataset_entry_dao.filter(id=id, dataset_id=dataset_id)
-    if not dataset_entry:
-        raise HTTPException(status_code=404, detail="Dataset entry not found")
-    dataset_entry_dao.delete(id=id)
-    return "Dataset Entry deleted successfully!"

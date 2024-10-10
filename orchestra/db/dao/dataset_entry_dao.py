@@ -37,7 +37,7 @@ class DatasetEntryDAO:
 
     def filter(
         self,
-        id: Optional[int] = None,
+        id: Optional[str] = None,
         dataset_id: Optional[int] = None,
         entry: Optional[Any] = None,
         offset: int = 0,

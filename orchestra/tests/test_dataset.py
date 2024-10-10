@@ -26,7 +26,7 @@ def _populate_dataset(client, dataset_name):
 
 @pytest.mark.anyio
 async def test_list_datasets(client: AsyncClient):
-    dataset_name = "dataset1"
+    dataset_name = "dir/subdir/dataset1"
     await _create_dataset(client, dataset_name)
 
     response = await client.get("/v0/datasetsv2/", headers=HEADERS)
@@ -37,7 +37,7 @@ async def test_list_datasets(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_get_dataset_entries(client: AsyncClient):
-    dataset_name = "dataset1"
+    dataset_name = "dir/subdir/dataset1"
     await _create_dataset(client, dataset_name)
     await _populate_dataset(client, dataset_name)
 
@@ -53,7 +53,7 @@ async def test_get_dataset_entries(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_get_dataset_entries_not_found(client: AsyncClient):
-    dataset_name = "nonexistent_dataset"
+    dataset_name = "dir/subdir/nonexistent_dataset"
     response = await client.get(
         f"/v0/datasetv2/{dataset_name}",
         headers=HEADERS,
@@ -65,7 +65,7 @@ async def test_get_dataset_entries_not_found(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_create_dataset(client: AsyncClient):
-    dataset_name = "new_dataset"
+    dataset_name = "dir/subdir/new_dataset"
     response = await _create_dataset(client, dataset_name)
     assert response.status_code == 201, response.json()
     assert response.json() == {"info": "Dataset created successfully!"}
@@ -73,7 +73,7 @@ async def test_create_dataset(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_create_existing_dataset(client: AsyncClient):
-    dataset_name = "existing_dataset"
+    dataset_name = "dir/subdir/existing_dataset"
     await _create_dataset(client, dataset_name)
 
     # Try to create the same dataset again
@@ -84,7 +84,7 @@ async def test_create_existing_dataset(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_delete_dataset(client: AsyncClient):
-    dataset_name = "dataset_to_delete"
+    dataset_name = "dir/subdir/dataset_to_delete"
     await _create_dataset(client, dataset_name)
 
     response = await client.delete(
@@ -97,7 +97,7 @@ async def test_delete_dataset(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_delete_dataset_not_found(client: AsyncClient):
-    dataset_name = "nonexistent_dataset"
+    dataset_name = "dir/subdir/nonexistent_dataset"
     response = await client.delete(
         f"/v0/datasetv2/{dataset_name}",
         headers=HEADERS,
@@ -108,7 +108,7 @@ async def test_delete_dataset_not_found(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_delete_dataset_entry(client: AsyncClient):
-    dataset_name = "dataset_with_entry"
+    dataset_name = "dir/subdir/dataset_with_entry"
     _ = await _create_dataset(client, dataset_name)
     ids = await _populate_dataset(client, dataset_name)
 
@@ -119,8 +119,9 @@ async def test_delete_dataset_entry(client: AsyncClient):
     )
     assert len(response.json()) == 3
 
+    _id = ids.json()["added"][0]
     response = await client.delete(
-        f"/v0/datasetv2/{dataset_name}/entry/{ids.json()['added'][0]}",
+        f"/v0/datasetv2/{dataset_name}/entry/{_id}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -135,7 +136,7 @@ async def test_delete_dataset_entry(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_delete_dataset_entry_not_found(client: AsyncClient):
-    dataset_name = "dataset_with_entry"
+    dataset_name = "dir/subdir/dataset_with_entry"
     entry_id = "nonexistent_entry"
     await _create_dataset(client, dataset_name)
 
