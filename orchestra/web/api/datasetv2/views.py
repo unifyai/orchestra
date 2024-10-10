@@ -149,13 +149,9 @@ def get_dataset_entry(
     name: str = Path(
         ...,
         description="Dataset name (can include forward slashes)",
-        example="my_dataset"
+        example="my_dataset",
     ),
-    id: str = Path(
-        ...,
-        description="Entry ID",
-        example="123"
-    ),
+    id: str = Path(..., description="Entry ID", example="123"),
     dataset_dao: DatasetDAO = Depends(),
     dataset_entry_dao: DatasetEntryDAO = Depends(),
 ):
@@ -246,12 +242,12 @@ def add_dataset_entries(
     name: str = Path(
         ...,
         description="Dataset name (can include forward slashes)",
-        example="my_dataset"
+        example="my_dataset",
     ),
     entries: List[Any] = Body(
         ...,
         description="List of entries to add",
-        json_schema_extra={"example": ["id_1", "id_2", "id_3"]}
+        json_schema_extra={"example": ["id_1", "id_2", "id_3"]},
     ),
     dataset_dao: DatasetDAO = Depends(),
     dataset_entry_dao: DatasetEntryDAO = Depends(),
@@ -391,7 +387,7 @@ def delete_dataset(
     name: str = Path(
         ...,
         description="Dataset name (can include forward slashes)",
-        example="my_dataset"
+        example="my_dataset",
     ),
     dataset_dao: DatasetDAO = Depends(),
 ):
