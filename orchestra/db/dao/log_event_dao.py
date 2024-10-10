@@ -15,7 +15,7 @@ class LogEventDAO:
     def create(  # noqa: WPS211
         self,
         project_id: int,
-    ) -> None:
+    ) -> Optional[int]:
 
         new_log_event = LogEvent(
             project_id=project_id,
