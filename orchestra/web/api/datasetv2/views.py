@@ -12,7 +12,7 @@ from starlette import status
 from orchestra.db.dao.dataset_dao import DatasetDAO
 from orchestra.db.dao.dataset_entry_dao import DatasetEntryDAO
 from orchestra.web.api.datasetv2.schema import DatasetInfo, DatasetNewName
-from orchestra.web.api.utils import not_found
+from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
 
