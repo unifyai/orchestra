@@ -2,6 +2,7 @@
 Endpoints related to dataset management and operations.
 """
 
+import json
 from typing import Any, List
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
@@ -38,7 +39,8 @@ def list_datasets(
     """
     Retrieve a list of all datasets.
     """
-    return dataset_dao.list_datasets(user_id=request.state.user_id)
+    datasets = dataset_dao.list_datasets(user_id=request.state.user_id)
+    return [{"name": d.name} for d in datasets]
 
 
 @router.get(
@@ -72,16 +74,24 @@ def get_dataset_entries(
     dataset_id = dataset_dao.get_id(
         user_id=request.state.user_id,
         name=name,
-        inclde_public=True,
+        include_public=True,
     )
     if dataset_id is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
     # Get entries of the dataset
-    entries = dataset_entry_dao.filter(
+    raw_entries = dataset_entry_dao.filter(
         dataset_id=dataset_id,
         limit=limit,
         offset=offset,
     )
+    entries = [
+        {
+            "id": e.id,
+            "entry": json.loads(e.entry),
+            "created_at": e.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        for e in raw_entries
+    ]
     return entries
 
 
@@ -134,10 +144,15 @@ def get_dataset_entry(
     if dataset_id is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
     # Get entry
-    entry = dataset_entry_dao.filter(id=id, dataset_id=dataset_id)
-    if not entry:
+    raw_entry = dataset_entry_dao.filter(id=id, dataset_id=dataset_id)
+    if not raw_entry:
         raise HTTPException(status_code=404, detail="Dataset entry not found")
-    return entry[0]
+    entry = raw_entry[0]
+    return {
+        "id": entry.id,
+        "entry": json.loads(entry.entry),
+        "created_at": entry.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+    }
 
 
 @router.post(
@@ -151,7 +166,7 @@ def get_dataset_entry(
                 },
             },
         },
-        400: {"description": "Dataset Already Exists"},
+        400: {"description": "Dataset already exists"},
     },
 )
 def create_dataset(
@@ -162,25 +177,34 @@ def create_dataset(
     """
     Create a new dataset.
     """
-    try:
-        dataset_dao.create(user_id=request.state.user_id, dataset_name=dataset.name)
-        return JSONResponse(
-            status_code=status.HTTP_201_CREATED,
-            content={"info": "Dataset created successfully!"},
-        )
-    except ValueError:
+    dataset_id = dataset_dao.get_id(
+        user_id=request.state.user_id,
+        name=dataset.name,
+        include_public=True,
+    )
+    if dataset_id is not None:
         raise HTTPException(status_code=400, detail="Dataset already exists")
+    dataset_dao.create(user_id=request.state.user_id, name=dataset.name)
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={"info": "Dataset created successfully!"},
+    )
 
 
-# TODO
 @router.post(
     "/datasetv2/{name}/entries",
-    response_model=List[str],
     status_code=201,
     responses={
         201: {
             "description": "Entries Added",
-            "content": {"application/json": {"example": ["1", "2", "3"]}},
+            "content": {
+                "application/json": {
+                    "example": {
+                        "added": ["id_1", "id_2", "id_3"],
+                        "already_present": ["id_4", "id_5"],
+                    },
+                },
+            },
         },
         404: {"description": "Dataset Not Found"},
     },
@@ -190,18 +214,35 @@ def add_dataset_entries(
     name: str = Path(..., description="Dataset name (can include forward slashes)"),
     entries: List[Any] = Body(..., description="List of entries to add"),
     dataset_dao: DatasetDAO = Depends(),
+    dataset_entry_dao: DatasetEntryDAO = Depends(),
 ):
     """
     Add multiple entries to a dataset.
     """
-    try:
-        return dataset_dao.add_entries(
-            user_id=request.state.user_id,
-            dataset_name=name,
-            entries=entries,
-        )
-    except ValueError:
+    dataset_id = dataset_dao.get_id(
+        user_id=request.state.user_id,
+        name=name,
+        include_public=True,
+    )
+    if dataset_id is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
+
+    existing_ids = []
+    new_ids = []
+
+    for entry in entries:
+        # check if the entry already exists
+        existing_id = dataset_entry_dao.filter(dataset_id=dataset_id, entry=entry)
+        if existing_id:
+            existing_ids.append(existing_id[0][0].id)
+            continue
+        # if not, add it to the dataset
+        _id = dataset_entry_dao.create(dataset_id=dataset_id, entry=json.dumps(entry))
+        new_ids.append(_id)
+    return {
+        "already_present": existing_ids,
+        "added": new_ids,
+    }
 
 
 @router.patch(
@@ -270,7 +311,6 @@ def delete_dataset(
 
 @router.delete(
     "/datasetv2/{name}/entry/{id}",
-    status_code=204,
     responses={
         200: {
             "description": "Successful Response",

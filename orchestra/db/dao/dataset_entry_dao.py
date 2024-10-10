@@ -18,30 +18,36 @@ class DatasetEntryDAO:
     def create(
         self,
         dataset_id: int,
-        entry: Any,
-    ) -> None:
+        entry: str,
+    ) -> str:
         _id = shortuuid.ShortUUID().random(length=10)
         entry = json.dumps(entry)
         entry_hash = hashlib.sha256(entry.encode("utf-8")).hexdigest()
-        self.session.add(
-            DatasetEntry(
-                id=_id,
-                dataset_id=dataset_id,
-                entry=entry,
-                entry_hash=entry_hash,
-            ),
+
+        new_dataset_entry = DatasetEntry(
+            id=_id,
+            dataset_id=dataset_id,
+            entry=entry,
+            entry_hash=entry_hash,
         )
+
+        self.session.add(new_dataset_entry)
+        self.session.commit()
+        return new_dataset_entry.id
 
     def filter(
         self,
         id: Optional[int] = None,
         dataset_id: Optional[int] = None,
+        entry: Optional[Any] = None,
         offset: int = 0,
         limit: Optional[int] = None,
     ) -> List[DatasetEntry]:
         query = select(DatasetEntry.id, DatasetEntry.entry, DatasetEntry.created_at)
         if id:
             query = query.where(DatasetEntry.id == id)
+        if entry:
+            query = query.where(DatasetEntry.entry == json.dumps(entry))
         if dataset_id:
             query = query.where(DatasetEntry.dataset_id == dataset_id)
 
