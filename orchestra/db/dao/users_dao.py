@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Users
-from orchestra.web.api.utils.http_responses import user_id_not_found
+from orchestra.web.api.utils.http_responses import not_found
 
 
 class UsersDAO:
@@ -69,14 +69,14 @@ class UsersDAO:
         try:
             return self.filter(id=id)[0]
         except IndexError:
-            raise user_id_not_found
+            raise not_found("User ID")
 
     def is_telemetry_activated(self, id: str) -> bool:
         try:
             telemetry_activated = self.filter(id=id)[0].store_prompts
             return telemetry_activated if telemetry_activated is not None else True
         except IndexError:
-            raise user_id_not_found
+            raise not_found("User ID")
 
     def recharge_credit(
         self,

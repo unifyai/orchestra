@@ -53,7 +53,7 @@ async def test_create_artifacts_project_not_found(client: AsyncClient):
     response = await _create_artifacts(client, project_name)
 
     assert response.status_code == 404, response.json()
-    assert response.json() == {"detail": "A project with this name doesn't exists."}
+    assert response.json() == {"detail": f"Project {project_name} not found."}
 
 
 @pytest.mark.anyio
@@ -84,7 +84,7 @@ async def test_delete_artifact_project_not_found(client: AsyncClient):
     )
     assert response.status_code == 404, response.json()
     assert response.json() == {
-        "detail": f"Project {project_name} not found in your account.",
+        "detail": f"Project {project_name} not found.",
     }
 
 
@@ -101,7 +101,7 @@ async def test_delete_artifact_not_found(client: AsyncClient):
     )
     assert response.status_code == 404, response.json()
     assert response.json() == {
-        "detail": f"Artifact {artifact_key} not found in this project.",
+        "detail": f"Artifact {artifact_key} not found.",
     }
 
 
@@ -131,5 +131,5 @@ async def test_list_artifacts_project_not_found(client: AsyncClient):
     )
     assert response.status_code == 404, response.json()
     assert response.json() == {
-        "detail": f"Project {project_name} not found in your account.",
+        "detail": f"Project {project_name} not found.",
     }

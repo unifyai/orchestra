@@ -9,6 +9,7 @@ from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.models.orchestra_models import Users
 from orchestra.web.api.credits.schema import CreditsResponse
+from orchestra.web.api.utils.http_responses import not_found
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
@@ -139,17 +140,14 @@ def promo_code(
         "PRODUCTHUNT",
     ]
     if code not in promo_codes:
-        raise HTTPException(status_code=404, detail="Invalid code.")
+        raise not_found("Code")
 
     user_id = request_fastapi.state.user_id
     if user is not None:
         if len(users_dao.filter(id=user)) > 0:
             user_id = user
         else:
-            raise HTTPException(
-                status_code=404,
-                detail="The specified user id doesn't exist.",
-            )
+            raise not_found("User ID")
 
     prev_recharges = recharge_dao.filter(user_id=user_id)
 
