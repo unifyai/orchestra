@@ -350,16 +350,13 @@ def get_logs(
 
 
 @router.get(
-    "/logs/metrics",
+    "/logs/metric/{metric}/{key}",
     responses={
         200: {
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": {
-                        "key1": 1.23,
-                        "key2": 35,
-                    },
+                    "example": 4.56,
                 },
             },
         },
@@ -375,19 +372,19 @@ def get_logs(
         },
     },
 )
-def get_log_metrics(
+def get_logs_metric(
     request_fastapi: Request,
-    project: str = Query(
-        description="Name of the project to get logs from.",
-        example="eval-project",
+    metric: str = Path(
+        description="The name of the metric you would like to compute.",
+        example="mean",
     ),
-    key: str = Query(
+    key: str = Path(
         description="The key you would like to extract the reduction metric for.",
         example="score",
     ),
-    metric: str = Query(
-        description="The name of the metric you would like to compute.",
-        example="mean",
+    project: str = Query(
+        description="Name of the project to get logs from.",
+        example="eval-project",
     ),
     filter_expr: Optional[str] = Query(
         None,
