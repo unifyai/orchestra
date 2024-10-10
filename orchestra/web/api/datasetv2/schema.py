@@ -3,8 +3,8 @@ from pydantic import BaseModel, Field
 
 class DatasetInfo(BaseModel):
     name: str = Field(
-        description="A unique, user-defined name assigned to the dataset.",
-        json_schema_extra={"example": "eval-project"},
+        description="A unique, user-defined name identify a new dataset.",
+        json_schema_extra={"example": "new-dataset"},
     )
 
 
