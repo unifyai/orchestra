@@ -401,16 +401,24 @@ def get_logs(
         )
     # TODO: Deal with organisation IDs
     log_events = log_event_dao.filter(project_id=project_obj.id)
-    logs = []
-    for le in log_events:
-        # TODO: This is super slow
-        # TODO: Add pagination
-        log_entries = log_dao.filter(log_event_id=le[0].id)
-        entries = {l[0].key: json.loads(l[0].value) for l in log_entries}
+    all_logs = log_dao.filter(log_event_id=[le[0].id for le in log_events])
+    # TODO: Add pagination
+    logs = list()
+    formatted_entries = dict()
+    for log in all_logs:
+        log_event_id = log[0].log_event_id
+        if log_event_id not in formatted_entries:
+            formatted_entries[log_event_id] = {}
+        key = log[0].key
+        assert (
+            key not in formatted_entries[log_event_id]
+        ), f"found duplicates for key {key} with log_id {log_event_id}"
+        formatted_entries[log_event_id][key] = json.loads(log[0].value)
+    for log_event_id, log_dict in formatted_entries.items():
         if filter_expr is None or evaluate_filter_expression(
-            str_filter_exp_to_dict(filter_expr), **entries
+            str_filter_exp_to_dict(filter_expr), **log_dict
         ):
-            logs.append({"id": le[0].id, "entries": entries})
+            logs.append({"id": log_event_id, "entries": log_dict})
     return logs
 
 
