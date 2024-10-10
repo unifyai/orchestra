@@ -201,7 +201,7 @@ async def test_delete_log_not_found(client: AsyncClient):
 
     assert response.status_code == 404, response.json()
     assert response.json() == {
-        "detail": f"Log with id {log_id} not found in your account.",
+        "detail": f"Log with id {log_id} not found.",
     }
 
 
@@ -230,7 +230,7 @@ async def test_delete_log_entry_not_found(client: AsyncClient):
 
     assert response.status_code == 404, response.json()
     assert response.json() == {
-        "detail": f"Log with id {log_id} not found in your account.",
+        "detail": f"Log with id {log_id} not found.",
     }
 
     # TODO: There are a couple more exceptions not being tested I think
@@ -261,7 +261,7 @@ async def test_get_log_not_found(client: AsyncClient):
 
     assert response.status_code == 404, response.json()
     assert response.json() == {
-        "detail": f"Log with id {log_id} not found in your account.",
+        "detail": f"Log with id {log_id} not found.",
     }
 
 
@@ -401,7 +401,7 @@ async def test_get_logs_project_not_found(client: AsyncClient):
 
     assert response.status_code == 404, response.json()
     assert response.json() == {
-        "detail": f"Project {project_name} not found in your account.",
+        "detail": f"Project {project_name} not found.",
     }
 
 
@@ -439,5 +439,5 @@ async def test_get_logs_groups_project_not_found(client: AsyncClient):
 
     assert response.status_code == 404, response.json()
     assert response.json() == {
-        "detail": f"Project {project_name} not found in your account.",
+        "detail": f"Project {project_name} not found.",
     }
