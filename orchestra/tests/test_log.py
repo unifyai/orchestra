@@ -330,15 +330,14 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     "metric",
     ["sum", "mean", "var", "std", "min", "max", "median", "mode"],
 )
-async def test_get_log_metrics(client: AsyncClient, key: str, metric: str):
+async def test_get_logs_metric(client: AsyncClient, key: str, metric: str):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
     _ = await _create_logs_for_filtering_n_metrics(client, project_name)
     data = log_data["logs_for_filtering_n_metrics"]
     response = await client.get(
-        f"/v0/logs/metrics?project={project_name}",
+        f"/v0/logs/metric/{metric}/{key}?project={project_name}",
         headers=HEADERS,
-        params={"key": key, "metric": metric},
     )
     assert response.status_code == 200, response.json()
     result = response.json()
