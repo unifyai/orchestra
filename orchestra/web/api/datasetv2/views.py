@@ -147,8 +147,16 @@ def get_dataset_entries(
 )
 def get_dataset_entry(
     request: Request,
-    name: str = Path(..., description="Dataset name (can include forward slashes)"),
-    id: str = Path(..., description="Entry ID"),
+    name: str = Path(
+        ...,
+        description="Dataset name (can include forward slashes)",
+        example="my_dataset"
+    ),
+    id: str = Path(
+        ...,
+        description="Entry ID",
+        example="123"
+    ),
     dataset_dao: DatasetDAO = Depends(),
     dataset_entry_dao: DatasetEntryDAO = Depends(),
 ):
@@ -238,8 +246,16 @@ def create_dataset(
 )
 def add_dataset_entries(
     request: Request,
-    name: str = Path(..., description="Dataset name (can include forward slashes)"),
-    entries: List[Any] = Body(..., description="List of entries to add"),
+    name: str = Path(
+        ...,
+        description="Dataset name (can include forward slashes)",
+        example="my_dataset"
+    ),
+    entries: List[Any] = Body(
+        ...,
+        description="List of entries to add",
+        json_schema_extra={"example": ["id_1", "id_2", "id_3"]}
+    ),
     dataset_dao: DatasetDAO = Depends(),
     dataset_entry_dao: DatasetEntryDAO = Depends(),
 ):
@@ -291,6 +307,7 @@ def rename_dataset(
     name: str = Path(
         ...,
         description="Current dataset name (can include forward slashes)",
+        example="my_dataset",
     ),
     dataset_dao: DatasetDAO = Depends(),
 ):
@@ -331,8 +348,12 @@ def rename_dataset(
 )
 def delete_dataset_entry(
     request: Request,
-    name: str = Path(..., description="Dataset name (can include forward slashes)"),
-    id: str = Path(..., description="Entry ID"),
+    name: str = Path(
+        ...,
+        description="Dataset name (can include forward slashes)",
+        example="my_dataset",
+    ),
+    id: str = Path(..., description="Entry ID", example="123"),
     dataset_dao: DatasetDAO = Depends(),
     dataset_entry_dao: DatasetEntryDAO = Depends(),
 ):
@@ -370,7 +391,11 @@ def delete_dataset_entry(
 )
 def delete_dataset(
     request: Request,
-    name: str = Path(..., description="Dataset name (can include forward slashes)"),
+    name: str = Path(
+        ...,
+        description="Dataset name (can include forward slashes)",
+        example="my_dataset"
+    ),
     dataset_dao: DatasetDAO = Depends(),
 ):
     """

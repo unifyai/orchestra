@@ -1,4 +1,5 @@
 import json
+from docs.query import get_param_details
 
 chat_completions_groups = {
     "model": {
@@ -149,16 +150,34 @@ def get_body(path, route, schemas, route_config, curl_example, python_example):
     body_str = "#### Body\n\n"  # body header
     request_body = route_config["requestBody"]
     schema = list(request_body["content"].values())[0]["schema"]
-    if "$ref" in schema:
-        schema_name = schema["$ref"]
+    if "$ref" in schema or "anyOf" in schema:
+        if "$ref" in schema:
+            schema_name = schema["$ref"]
+        else:
+            schema_name = schema["anyOf"][0]["$ref"]
+        # get schema details
+        schema_name = schema_name.split("#/components/schemas/")[-1]
+        schema_details = schemas[schema_name]
+        required_props = schema_details.get("required", [])
+        properties = get_property_details(schema_details["properties"])
     else:
-        schema_name = schema["anyOf"][0]["$ref"]
-
-    # get schema details
-    schema_name = schema_name.split("#/components/schemas/")[-1]
-    schema_details = schemas[schema_name]
-    required_props = schema_details.get("required", [])
-    properties = get_property_details(schema_details["properties"])
+        properties = []
+        required_props = []
+        parameters = route_config["parameters"]
+        for parameter in parameters:
+            (
+                name, required, param_type, default, description, example
+            ) = get_param_details(parameter)
+            default = None if not default else default
+            properties.append({
+                "title": name,
+                "type": param_type,
+                "example": example,
+                "default": default,
+                "description": description,
+            })
+            if required:
+                required_props.append(name)
 
     # create param field tags
     chat_completions = path == "/v0/chat/completions"
