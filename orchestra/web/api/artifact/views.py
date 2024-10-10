@@ -187,6 +187,6 @@ def list_artifacts(
             name=project,
         )[0][0].id
     except IndexError:
-        raise not_found("Project {project}")
+        raise not_found(f"Project {project}")
     raw_artifacts = artifact_dao.filter(project_id=project_id)
     return {ra[0].key: json.loads(ra[0].value) for ra in raw_artifacts}

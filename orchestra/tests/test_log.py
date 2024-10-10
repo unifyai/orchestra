@@ -141,7 +141,7 @@ async def test_create_logs_project_not_found(client: AsyncClient):
     response = await _create_log(client, project_name)
 
     assert response.status_code == 404, response.json()
-    assert response.json() == {"detail": "A project with this name doesn't exists."}
+    assert response.json() == {"detail": "Project not found."}
 
 
 @pytest.mark.anyio
@@ -173,7 +173,9 @@ async def test_update_log_not_found(client: AsyncClient):
     non_existent_log_id = 1234
     response = await _update_log(client, non_existent_log_id)
     assert response.status_code == 404, response.json()
-    assert response.json() == {"detail": "A log with the specified id does not exist."}
+    assert response.json() == {
+        "detail": f"Log with id {non_existent_log_id} not found.",
+    }
 
 
 @pytest.mark.anyio
