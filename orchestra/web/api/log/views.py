@@ -1,5 +1,5 @@
 """
-Includes endpoints related to logs.
+Includes endpoints related to entries.
 """
 
 import json
@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.web.api.log.schema import LogConfig
+from orchestra.web.api.log.schema import CreateLogConfig, UpdateLogConfig
 
 from .helpers import (
     evaluate_filter_expression,
@@ -33,7 +33,7 @@ router = APIRouter()
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": {"info": "Log(s) created successfully!"},
+                    "example": {"info": "Log created successfully!"},
                 },
             },
         },
@@ -49,15 +49,15 @@ router = APIRouter()
         },
     },
 )
-def create_logs(
+def create_log(
     request_fastapi: Request,
-    request: LogConfig,
+    request: CreateLogConfig,
     project_dao: ProjectDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
     log_dao: LogDAO = Depends(),
 ):
     """
-    Creates one or more logs associated to a project. Logs are
+    Creates a log associated to a project. Logs are
     LLM-call-level data that might depend on other variables.
 
     This method returns the id of the new stored log.
@@ -78,9 +78,9 @@ def create_logs(
     # Create log_event and get its id
     log_event_id = log_event_dao.create(project_id=project_id)
 
-    # Store each log
-    for k, v in request.logs.items():
-        inferred_type = None  # TODO: Infer the types
+    # Store each key, value pair for the log
+    for k, v in request.entries.items():
+        inferred_type = type(v).__name__
         clean_key = k.split("/", 1)
         json_v = json.dumps(v)
         log_dao.create(
@@ -141,6 +141,71 @@ def delete_log(
     # TODO: Deal with organisation IDs
     log_event_dao.delete(id=id)
     return {"info": "Log deleted successfully!"}
+
+
+@router.post(
+    "/log/{id}",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Log updated successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Log Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Log with id <id> not found in your account.",
+                    },
+                },
+            },
+        },
+    },
+)
+def update_log(
+    request_fastapi: Request,
+    request: UpdateLogConfig,
+    id: str = Path(
+        description="ID of the log to update.",
+        example="123",
+    ),
+    log_dao: LogDAO = Depends(),
+    log_event_dao: LogEventDAO = Depends(),
+    project_dao: ProjectDAO = Depends(),
+):
+    """
+    Updates the given log with more data.
+    """
+    log_event_id = int(id)
+    log_events = log_event_dao.filter(id=log_event_id)
+    if not log_events:
+        raise HTTPException(
+            status_code=404,
+            detail="A log with the specified id does not exist.",
+        )
+    projects = project_dao.filter(id=log_events[0][0].project_id)
+    if not projects or projects[0][0].user_id != request_fastapi.state.user_id:
+        raise HTTPException(
+            status_code=404,
+            detail="A log with the specified id does not exist.",
+        )
+    # Store each key, value pair for the log
+    for k, v in request.entries.items():
+        inferred_type = type(v).__name__
+        clean_key = k.split("/", 1)
+        json_v = json.dumps(v)
+        log_dao.create(
+            log_event_id=log_event_id,
+            key=clean_key[0],
+            value=json_v,
+            version=clean_key[1] if len(clean_key) > 1 else None,
+            inferred_type=inferred_type,
+        )
+    return log_event_id
 
 
 @router.delete(
@@ -310,12 +375,12 @@ def get_log(
 def get_logs(
     request_fastapi: Request,
     project: str = Query(
-        description="Name of the project to get logs from.",
+        description="Name of the project to get entries from.",
         example="eval-project",
     ),
     filter_expr: Optional[str] = Query(
         None,
-        description="Boolean string to filter logs. TODO: Detailed page.",
+        description="Boolean string to filter entries. TODO: Detailed page.",
         example="len(output) > 200 and temperature == 0.5",
     ),
     log_event_dao: LogEventDAO = Depends(),
@@ -323,7 +388,7 @@ def get_logs(
     log_dao: LogDAO = Depends(),
 ):
     """
-    Returns a list of filtered logs from a project.
+    Returns a list of filtered entries from a project.
     """
     try:
         project_obj = project_dao.filter(name=project)[0][0]
@@ -383,12 +448,12 @@ def get_logs_metric(
         example="score",
     ),
     project: str = Query(
-        description="Name of the project to get logs from.",
+        description="Name of the project to get entries from.",
         example="eval-project",
     ),
     filter_expr: Optional[str] = Query(
         None,
-        description="Boolean string to filter logs. TODO: Detailed page.",
+        description="Boolean string to filter entries. TODO: Detailed page.",
         example="len(output) > 200 and temperature == 0.5",
     ),
     log_event_dao: LogEventDAO = Depends(),
@@ -466,7 +531,7 @@ def get_logs_metric(
 def get_log_groups(
     request_fastapi: Request,
     project: str = Query(
-        description="Name of the project to get logs from.",
+        description="Name of the project to get entries from.",
         example="eval-project",
     ),
     key: str = Query(
