@@ -85,7 +85,9 @@ def create_project(
             "description": "Project Not Found",
             "content": {
                 "application/json": {
-                    "detail": "Project <name> not found in your account.",
+                    "example": {
+                        "detail": "Project <name> not found in your account.",
+                    },
                 },
             },
         },
@@ -132,7 +134,9 @@ def delete_project(
             "description": "Project Not Found",
             "content": {
                 "application/json": {
-                    "detail": "Project <name> not found in your account.",
+                    "example": {
+                        "detail": "Project <name> not found in your account.",
+                    },
                 },
             },
         },
