@@ -108,7 +108,9 @@ def create_logs(
             "description": "Log Not Found",
             "content": {
                 "application/json": {
-                    "detail": "Log with id <id> not found in your account.",
+                    "example": {
+                        "detail": "Log with id <id> not found in your account.",
+                    },
                 },
             },
         },
@@ -156,7 +158,9 @@ def delete_log(
             "description": "Log Not Found",
             "content": {
                 "application/json": {
-                    "detail": "Log with <id> not found in your account.",
+                    "example": {
+                        "detail": "Log with <id> not found in your account.",
+                    },
                 },
             },
         },
@@ -164,7 +168,9 @@ def delete_log(
             "description": "Log Entry Not Found",
             "content": {
                 "application/json": {
-                    "detail": "Log entry <entry> not found in your account for log <id>.",
+                    "example": {
+                        "detail": "Log entry <entry> not found in your account for log <id>.",
+                    },
                 },
             },
         },
@@ -226,7 +232,9 @@ def delete_log_entry(
             "description": "Log Not Found",
             "content": {
                 "application/json": {
-                    "detail": "Log with id <id> not found in your account.",
+                    "example": {
+                        "detail": "Log with id <id> not found in your account.",
+                    },
                 },
             },
         },
@@ -291,7 +299,9 @@ def get_log(
             "description": "Project Not Found",
             "content": {
                 "application/json": {
-                    "detail": "Project <project> not found in your account.",
+                    "example": {
+                        "detail": "Project <project> not found in your account.",
+                    },
                 },
             },
         },
@@ -357,7 +367,9 @@ def get_logs(
             "description": "Project Not Found",
             "content": {
                 "application/json": {
-                    "detail": "Project <project> not found in your account.",
+                    "example": {
+                        "detail": "Project <project> not found in your account.",
+                    },
                 },
             },
         },
@@ -446,7 +458,9 @@ def get_log_metrics(
             "description": "Project Not Found",
             "content": {
                 "application/json": {
-                    "detail": "Project <project> not found in your account.",
+                    "example": {
+                        "detail": "Project <project> not found in your account.",
+                    },
                 },
             },
         },

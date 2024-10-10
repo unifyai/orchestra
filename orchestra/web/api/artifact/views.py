@@ -93,7 +93,9 @@ def create_artifacts(
             "description": "Project Not Found",
             "content": {
                 "application/json": {
-                    "detail": "Project <name> not found in your account.",
+                    "example": {
+                        "detail": "Project <name> not found in your account.",
+                    },
                 },
             },
         },
@@ -101,7 +103,9 @@ def create_artifacts(
             "description": "Artifact Not Found",
             "content": {
                 "application/json": {
-                    "detail": "Artifact <key> not found in this project.",
+                    "example": {
+                        "detail": "Artifact <key> not found in this project.",
+                    },
                 },
             },
         },
@@ -163,7 +167,9 @@ def delete_artifact(
             "description": "Project Not Found",
             "content": {
                 "application/json": {
-                    "detail": "Project <project> not found in your account.",
+                    "example": {
+                        "detail": "Project <project> not found in your account.",
+                    },
                 },
             },
         },
