@@ -80,7 +80,7 @@ def create_log(
 
     # Store each key, value pair for the log
     for k, v in request.entries.items():
-        inferred_type = None  # TODO: Infer the types
+        inferred_type = type(v).__name__
         clean_key = k.split("/", 1)
         json_v = json.dumps(v)
         log_dao.create(
@@ -195,7 +195,7 @@ def update_log(
         )
     # Store each key, value pair for the log
     for k, v in request.entries.items():
-        inferred_type = None  # TODO: Infer the types
+        inferred_type = type(v).__name__
         clean_key = k.split("/", 1)
         json_v = json.dumps(v)
         log_dao.create(

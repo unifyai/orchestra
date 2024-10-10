@@ -303,10 +303,10 @@ async def test_get_logs(client: AsyncClient):
     _ = await _create_log(client, project_name)
 
     # fetch entries for the project
-    response = await client.get(f"/v0/entries?project={project_name}", headers=HEADERS)
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
 
     assert response.status_code == 200, response.json()
-    assert isinstance(response.json(), list)  # List of entries is returned
+    assert isinstance(response.json(), list)  # List of logs is returned
     assert isinstance(response.json()[0]["entries"]["boolean_input"], bool)
     assert isinstance(response.json()[0]["entries"]["numeric_input"], float)
 
@@ -319,7 +319,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
 
     # temperature > 0.
     response = await client.get(
-        f"/v0/entries?project={project_name}",
+        f"/v0/logs?project={project_name}",
         params={"filter_expr": "temperature > 0."},
         headers=HEADERS,
     )
@@ -341,7 +341,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
 
     # safe is True
     response = await client.get(
-        f"/v0/entries?project={project_name}",
+        f"/v0/logs?project={project_name}",
         params={"filter_expr": "safe is True"},
         headers=HEADERS,
     )
@@ -357,7 +357,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
 
     # liquid not in state
     response = await client.get(
-        f"/v0/entries?project={project_name}",
+        f"/v0/logs?project={project_name}",
         params={"filter_expr": "'liquid' not in state"},
         headers=HEADERS,
     )
@@ -384,7 +384,7 @@ async def test_get_logs_metric(client: AsyncClient, key: str, metric: str):
     _ = await _create_logs_for_filtering_n_metrics(client, project_name)
     data = log_data["logs_for_filtering_n_metrics"]
     response = await client.get(
-        f"/v0/entries/metric/{metric}/{key}?project={project_name}",
+        f"/v0/logs/metric/{metric}/{key}?project={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -397,7 +397,7 @@ async def test_get_logs_project_not_found(client: AsyncClient):
     project_name = "non_existent_project"
 
     # This should return 404 as the project does not exist
-    response = await client.get(f"/v0/entries?project={project_name}", headers=HEADERS)
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
 
     assert response.status_code == 404, response.json()
     assert response.json() == {
@@ -413,13 +413,13 @@ async def test_get_log_groups(client: AsyncClient):
 
     # fetch log groups for a given key
     response = await client.get(
-        f"/v0/entries/groups?project={project_name}&key=system_prompt",
+        f"/v0/logs/groups?project={project_name}&key=system_prompt",
         headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
     groups = response.json()
-    assert isinstance(groups, dict)  # Ensure it's a dict of grouped entries
+    assert isinstance(groups, dict)  # Ensure it's a dict of grouped logs
     assert len(groups) == 2
     assert groups == {
         "0": "You are an expert mathematician.",
@@ -433,7 +433,7 @@ async def test_get_logs_groups_project_not_found(client: AsyncClient):
 
     # This should return 404 as the project does not exist
     response = await client.get(
-        f"/v0/entries/groups?project={project_name}&key=input",
+        f"/v0/logs/groups?project={project_name}&key=input",
         headers=HEADERS,
     )
 
