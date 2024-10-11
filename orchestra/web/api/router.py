@@ -77,14 +77,10 @@ groupings = {
         "Endpoint Metrics",
     ],
     "Benchmarking": [
-        "Datasets",
         "DatasetsV2",
         "Projects",
         "Artifacts",
         "Evals",
-        "Evaluators",
-        "Default Prompts",
-        "Evaluations",
     ],
     "Routing": [
         "Router Training",
