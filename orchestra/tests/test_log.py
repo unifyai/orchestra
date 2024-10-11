@@ -314,6 +314,19 @@ async def test_get_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_empty_logs(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+
+    # fetch entries for the project
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), list)  # List of logs is returned
+    assert len(response.json()) == 0  # Logs are empty
+
+
+@pytest.mark.anyio
 async def test_get_logs_w_filtering(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
