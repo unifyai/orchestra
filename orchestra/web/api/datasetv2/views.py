@@ -12,6 +12,7 @@ from starlette import status
 from orchestra.db.dao.dataset_dao import DatasetDAO
 from orchestra.db.dao.dataset_entry_dao import DatasetEntryDAO
 from orchestra.web.api.datasetv2.schema import DatasetInfo, DatasetNewName
+from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
 
@@ -60,9 +61,7 @@ def list_datasets(
         404: {
             "description": "Dataset Not Found",
             "content": {
-                "application/json": {
-                    "example": {"detail": "Dataset <name> not found in your account."}
-                }
+                "application/json": {"example": {"detail": "Dataset not found."}},
             },
         },
     },
@@ -88,7 +87,7 @@ def get_dataset_entries(
         include_public=True,
     )
     if dataset_id is None:
-        raise HTTPException(status_code=404, detail="Dataset not found")
+        raise not_found("Dataset")
     # Get entries of the dataset
     raw_entries = dataset_entry_dao.filter(
         dataset_id=dataset_id,
@@ -135,20 +134,24 @@ def get_dataset_entries(
         },
         404: {
             "description": "Dataset Not Found",
-            "content": {"application/json": {"example": "Dataset <name> not found."}},
+            "content": {"application/json": {"example": "Dataset not found."}},
         },
         404: {
             "description": "Dataset entry Not Found",
             "content": {
-                "application/json": {"example": "Dataset entry <id> not found."}
+                "application/json": {"example": "Dataset entry <id> not found."},
             },
         },
     },
 )
 def get_dataset_entry(
     request: Request,
-    name: str = Path(..., description="Dataset name (can include forward slashes)"),
-    id: str = Path(..., description="Entry ID"),
+    name: str = Path(
+        ...,
+        description="Dataset name (can include forward slashes)",
+        example="my_dataset",
+    ),
+    id: str = Path(..., description="Entry ID", example="123"),
     dataset_dao: DatasetDAO = Depends(),
     dataset_entry_dao: DatasetEntryDAO = Depends(),
 ):
@@ -161,11 +164,11 @@ def get_dataset_entry(
         include_public=True,
     )
     if dataset_id is None:
-        raise HTTPException(status_code=404, detail="Dataset not found")
+        raise not_found("Dataset")
     # Get entry
     raw_entry = dataset_entry_dao.filter(id=id, dataset_id=dataset_id)
     if not raw_entry:
-        raise HTTPException(status_code=404, detail="Dataset entry not found")
+        raise not_found(f"Dataset entry {id}")
     entry = raw_entry[0]
     return {
         "id": entry.id,
@@ -187,9 +190,7 @@ def get_dataset_entry(
         },
         400: {
             "description": "Dataset already exists",
-            "content": {
-                "application/json": {"example": "Dataset <name> already exists."}
-            },
+            "content": {"application/json": {"example": "Dataset already exists."}},
         },
     },
 )
@@ -232,14 +233,22 @@ def create_dataset(
         },
         404: {
             "description": "Dataset Not Found",
-            "content": {"application/json": {"example": "Dataset <name> not found."}},
+            "content": {"application/json": {"example": "Dataset not found."}},
         },
     },
 )
 def add_dataset_entries(
     request: Request,
-    name: str = Path(..., description="Dataset name (can include forward slashes)"),
-    entries: List[Any] = Body(..., description="List of entries to add"),
+    name: str = Path(
+        ...,
+        description="Dataset name (can include forward slashes)",
+        example="my_dataset",
+    ),
+    entries: List[Any] = Body(
+        ...,
+        description="List of entries to add",
+        json_schema_extra={"example": ["id_1", "id_2", "id_3"]},
+    ),
     dataset_dao: DatasetDAO = Depends(),
     dataset_entry_dao: DatasetEntryDAO = Depends(),
 ):
@@ -252,7 +261,7 @@ def add_dataset_entries(
         include_public=True,
     )
     if dataset_id is None:
-        raise HTTPException(status_code=404, detail="Dataset not found")
+        raise not_found("Dataset")
 
     existing_ids = []
     new_ids = []
@@ -281,7 +290,7 @@ def add_dataset_entries(
         },
         404: {
             "description": "Dataset Not Found",
-            "content": {"application/json": {"example": "Dataset <name> not found."}},
+            "content": {"application/json": {"example": "Dataset not found."}},
         },
     },
 )
@@ -291,6 +300,7 @@ def rename_dataset(
     name: str = Path(
         ...,
         description="Current dataset name (can include forward slashes)",
+        example="my_dataset",
     ),
     dataset_dao: DatasetDAO = Depends(),
 ):
@@ -303,7 +313,7 @@ def rename_dataset(
         include_public=False,
     )
     if dataset_id is None:
-        raise HTTPException(status_code=404, detail="Dataset not found")
+        raise not_found("Dataset")
     dataset_dao.update(id=dataset_id, name=new_name.name)
     return "Dataset renamed successfully!"
 
@@ -319,20 +329,24 @@ def rename_dataset(
         },
         404: {
             "description": "Dataset Not Found",
-            "content": {"application/json": {"example": "Dataset <name> not found."}},
+            "content": {"application/json": {"example": "Dataset not found."}},
         },
         404: {
             "description": "Dataset Entry Not Found",
             "content": {
-                "application/json": {"example": "Dataset entry <id> not found."}
+                "application/json": {"example": "Dataset entry <id> not found."},
             },
         },
     },
 )
 def delete_dataset_entry(
     request: Request,
-    name: str = Path(..., description="Dataset name (can include forward slashes)"),
-    id: str = Path(..., description="Entry ID"),
+    name: str = Path(
+        ...,
+        description="Dataset name (can include forward slashes)",
+        example="my_dataset",
+    ),
+    id: str = Path(..., description="Entry ID", example="123"),
     dataset_dao: DatasetDAO = Depends(),
     dataset_entry_dao: DatasetEntryDAO = Depends(),
 ):
@@ -345,10 +359,10 @@ def delete_dataset_entry(
         include_public=False,
     )
     if dataset_id is None:
-        raise HTTPException(status_code=404, detail="Dataset not found")
+        raise not_found("Dataset")
     dataset_entry = dataset_entry_dao.filter(id=id, dataset_id=dataset_id)
     if not dataset_entry:
-        raise HTTPException(status_code=404, detail="Dataset entry not found")
+        raise not_found(f"Dataset entry {id}")
     dataset_entry_dao.delete(id=id)
     return "Dataset Entry deleted successfully!"
 
@@ -364,13 +378,17 @@ def delete_dataset_entry(
         },
         404: {
             "description": "Dataset Not Found",
-            "content": {"application/json": {"example": "Dataset <name> not found"}},
+            "content": {"application/json": {"example": "Dataset not found"}},
         },
     },
 )
 def delete_dataset(
     request: Request,
-    name: str = Path(..., description="Dataset name (can include forward slashes)"),
+    name: str = Path(
+        ...,
+        description="Dataset name (can include forward slashes)",
+        example="my_dataset",
+    ),
     dataset_dao: DatasetDAO = Depends(),
 ):
     """
@@ -382,6 +400,6 @@ def delete_dataset(
         include_public=False,
     )
     if dataset_id is None:
-        raise HTTPException(status_code=404, detail="Dataset not found")
+        raise not_found("Dataset")
     dataset_dao.delete(id=dataset_id)
     return "Dataset deleted successfully!"

@@ -6,7 +6,7 @@ from fastapi.param_functions import Depends
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
 from orchestra.db.models.orchestra_models import CustomApiKey
 from orchestra.web.api.custom_api_keys.schema import CustomApiKeyModelResponse
-from orchestra.web.api.utils.http_responses import custom_api_key_not_found
+from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
 
@@ -71,7 +71,7 @@ def create_custom_api_key(
             "description": "Custom API key Not Found",
             "content": {
                 "application/json": {
-                    "example": {"detail": "API key not found."},
+                    "example": {"detail": "Custom API key not found."},
                 },
             },
         },
@@ -93,7 +93,7 @@ def get_custom_api_key(
     for api_key in all_keys:
         if api_key.key == name:
             return CustomApiKeyModelResponse(name=api_key.key, value=api_key.value)
-    raise custom_api_key_not_found
+    raise not_found("Custom API Key")
 
 
 @router.delete(
@@ -111,7 +111,7 @@ def get_custom_api_key(
             "description": "Custom API key Not Found",
             "content": {
                 "application/json": {
-                    "example": {"detail": "API key not found."},
+                    "example": {"detail": "Custom API key not found."},
                 },
             },
         },
@@ -133,7 +133,7 @@ def delete_custom_api_key(
 
     existing_key = custom_api_key_dao.filter(user_id=user_id, key=name)
     if not existing_key:
-        raise custom_api_key_not_found
+        raise not_found("Custom API Key")
 
     custom_api_key_dao.delete(
         user_id=user_id,
@@ -157,7 +157,7 @@ def delete_custom_api_key(
             "description": "Custom API key Not Found",
             "content": {
                 "application/json": {
-                    "example": {"detail": "API key not found."},
+                    "example": {"detail": "Custom API key not found."},
                 },
             },
         },
@@ -183,7 +183,7 @@ def rename_custom_api_key(
 
     existing_key = custom_api_key_dao.filter(user_id=user_id, key=name)
     if not existing_key:
-        raise custom_api_key_not_found
+        raise not_found("Custom API Key")
 
     custom_api_key_dao.rename(
         user_id=user_id,

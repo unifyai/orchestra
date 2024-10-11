@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Request
 
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.web.api.project.schema import ProjectConfig
+from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
 
@@ -86,7 +87,7 @@ def create_project(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Project <name> not found in your account.",
+                        "detail": "Project <name> not found.",
                     },
                 },
             },
@@ -112,10 +113,7 @@ def delete_project(
         )[0][0].id
         project_dao.delete(id=project_id)
     except (IndexError, ValueError):
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {name} not found in your account.",
-        )
+        raise not_found(f"Project {name}")
     return {"info": "Project deleted successfully"}
 
 
@@ -135,7 +133,7 @@ def delete_project(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Project <name> not found in your account.",
+                        "detail": "Project <name> not found.",
                     },
                 },
             },
@@ -162,10 +160,7 @@ def rename_project(
             new_name=request.name,
         )
     except ValueError as e:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {name} not found in your account.",
-        )
+        raise not_found(f"Project {name}")
     return {"info": "Project renamed successfully!"}
 
 

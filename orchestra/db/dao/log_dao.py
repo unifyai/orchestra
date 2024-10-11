@@ -1,7 +1,7 @@
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
@@ -20,7 +20,7 @@ class LogDAO:
         value: Optional[str] = None,  # JSON serialised
         version: Optional[str] = None,
         inferred_type: Optional[str] = None,
-    ) -> None:
+    ) -> Optional[str]:
 
         new_log = Log(
             log_event_id=log_event_id,
@@ -36,26 +36,36 @@ class LogDAO:
 
     def filter(
         self,
-        id: Optional[int] = None,
-        log_event_id: Optional[int] = None,
-        key: Optional[str] = None,
-        value: Optional[str] = None,
-        version: Optional[str] = None,
-        inferred_type: Optional[str] = None,
+        id: Optional[Union[int, List[int]]] = None,
+        log_event_id: Optional[Union[int, List[int]]] = None,
+        key: Optional[Union[str, List[str]]] = None,
+        value: Optional[Union[str, List[str]]] = None,
+        version: Optional[Union[str, List[str]]] = None,
+        inferred_type: Optional[Union[str, List[str]]] = None,
     ) -> List[Log]:
         query = select(Log)
         if id:
-            query = query.where(Log.id == id)
+            id = id if isinstance(id, list) else [id]
+            query = query.where(or_(*[Log.id == i for i in id]))
         if log_event_id:
-            query = query.where(Log.log_event_id == log_event_id)
+            log_event_id = (
+                log_event_id if isinstance(log_event_id, list) else [log_event_id]
+            )
+            query = query.where(or_(*[Log.log_event_id == l for l in log_event_id]))
         if key:
-            query = query.where(Log.key == key)
+            key = key if isinstance(key, list) else [key]
+            query = query.where(or_(*[Log.key == k for k in key]))
         if value:
-            query = query.where(Log.value == value)
+            value = value if isinstance(value, list) else [value]
+            query = query.where(or_(*[Log.value == v for v in value]))
         if version:
-            query = query.where(Log.version == version)
+            version = version if isinstance(version, list) else [version]
+            query = query.where(or_(*[Log.version == v for v in version]))
         if inferred_type:
-            query = query.where(Log.inferred_type == inferred_type)
+            inferred_type = (
+                inferred_type if isinstance(inferred_type, list) else [inferred_type]
+            )
+            query = query.where(or_(*[Log.inferred_type == i for i in inferred_type]))
         rows = self.session.execute(query)
         return rows.fetchall()
 
