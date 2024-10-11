@@ -261,6 +261,7 @@ async def test_delete_project_deletes_logs(client: AsyncClient):
     assert response.json()["info"] == "Project deleted successfully"
 
     # Verify the log has gone
+    response = await _get_log(client, log_id)
     assert response.status_code == 404, response.json()
     assert response.json() == {
         "detail": f"Log with id {log_id} not found.",
