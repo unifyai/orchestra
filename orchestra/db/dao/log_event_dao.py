@@ -52,6 +52,7 @@ class LogEventDAO:
                 setattr(entry, "project_id", project_id)
 
     def delete(self, id: Union[int, List[int]]):
+        id = id if isinstance(id, list) else [id]
         try:
             log_events = self.session.query(LogEvent).where(
                 or_(*[LogEvent.id == i for i in id]),
