@@ -54,7 +54,7 @@ class LogDAO:
             query = query.where(or_(*[Log.log_event_id == l for l in log_event_id]))
         if key:
             key = key if isinstance(key, list) else [key]
-            query = query.where(or_(*[Log.key == key]))
+            query = query.where(or_(*[Log.key == k for k in key]))
         if value:
             value = value if isinstance(value, list) else [value]
             query = query.where(or_(*[Log.value == v for v in value]))
