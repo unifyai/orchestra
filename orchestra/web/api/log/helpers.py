@@ -1,3 +1,4 @@
+import json
 import re
 from typing import Any, List, Union
 
@@ -313,3 +314,17 @@ reduction_methods = {
     "median": _median,
     "mode": _mode,
 }
+
+
+def format_logs(all_logs):
+    formatted_entries = dict()
+    for log in all_logs:
+        log_event_id = log[0].log_event_id
+        if log_event_id not in formatted_entries:
+            formatted_entries[log_event_id] = {}
+        key = log[0].key
+        assert (
+            key not in formatted_entries[log_event_id]
+        ), f"found duplicates for key {key} with log_id {log_event_id}"
+        formatted_entries[log_event_id][key] = json.loads(log[0].value)
+    return formatted_entries
