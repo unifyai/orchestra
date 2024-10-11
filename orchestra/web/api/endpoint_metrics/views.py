@@ -259,7 +259,7 @@ def get_endpoint_metrics(
         example="openai",
     ),
     region: str = Query(
-        default="Belgium",
+        default="Iowa",
         description="""Region where the benchmark is run.
         Options are: `"Belgium"`, `"Hong Kong"` or `"Iowa"`.""",
         example="Belgium",
