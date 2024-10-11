@@ -459,12 +459,9 @@ def get_logs_metric(
     filter_dict = (
         (str_filter_exp_to_dict(filter_expr)) if filter_expr is not None else {}
     )
-    # TODO: This is super slow
     # TODO: Add pagination
-    log_entries = [
-        json.loads(log_dao.filter(log_event_id=e[0].id, key=key)[0][0].value)
-        for e in log_events
-    ]
+    log_entries = log_dao.filter(log_event_id=[e[0].id for e in log_events], key=key)
+    log_entries = [json.loads(le[0].value) for le in log_entries]
     log_entries = [
         e
         for e in log_entries
