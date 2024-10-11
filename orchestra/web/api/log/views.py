@@ -138,7 +138,7 @@ def delete_log(
     return {"info": "Log deleted successfully!"}
 
 
-@router.post(
+@router.put(
     "/log/{id}",
     responses={
         200: {
