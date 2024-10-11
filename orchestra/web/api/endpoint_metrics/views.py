@@ -1,5 +1,6 @@
 """
-Includes endpoints related to benchmarks.
+Functions for endpoint metrics, such as input cost, output cost, inter-token-latency,
+time-to-first-token etc.
 """
 
 import os
@@ -143,7 +144,7 @@ def _get_custom_endpoint_benchmark(
 
 
 @router.post(
-    "/benchmark",
+    "/endpoint-metrics",
     responses={
         200: {
             "description": "Successful Response",
@@ -165,7 +166,7 @@ def _get_custom_endpoint_benchmark(
         },
     },
 )
-def append_to_benchmark(
+def log_endpoint_metric(
     request_fastapi: Request,
     endpoint_name: str = Query(
         description="Name of the *custom* endpoint to append benchmark data for.",
@@ -209,11 +210,11 @@ def append_to_benchmark(
         if endpoint_name == endpoint.name:
             endpoint_id = endpoint.id
             break
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail=f"""The endpoint: {endpoint_name} was not found in your account.""",
-        )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"""The endpoint: {endpoint_name} was not found in your account.""",
+            )
     measured_at = datetime.now() if measured_at is None else measured_at
     custom_endpoint_benchmark_dao.upload_benchmark(
         endpoint_id=endpoint_id,
@@ -226,7 +227,7 @@ def append_to_benchmark(
 
 # TODO: Add 404 docstring
 @router.get(
-    "/benchmark",
+    "/endpoint-metrics",
     response_model=List[Dict[str, Union[str, datetime, float, None]]],
     responses={
         200: {
@@ -245,7 +246,7 @@ def append_to_benchmark(
         },
     },
 )
-def get_benchmark(
+def get_endpoint_metrics(
     request_fastapi: Request,
     model: str = Query(
         default=None,
@@ -404,7 +405,7 @@ def get_benchmark(
 
 
 @router.delete(
-    "/benchmark",
+    "/endpoint-metrics",
     responses={
         200: {
             "description": "Successful Response",
@@ -416,7 +417,7 @@ def get_benchmark(
         },
     },
 )
-def delete_benchmark(
+def delete_endpoint_metrics(
     endpoint_name: str = Query(
         description="Name of the *custom* endpoint to submit a benchmark for.",
         example="my_endpoint",
