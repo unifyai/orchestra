@@ -50,31 +50,6 @@ api_router.include_router(  # CLEANUP: Delete this
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )
-api_router.include_router(
-    endpoint_metrics.router,
-    tags=["Efficiency Benchmarks"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    router_training.router,
-    tags=["Router Training"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    router_deployment.router,
-    tags=["Router Deployment"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    router_configurations.router,
-    tags=["Router Configurations"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    credits.router,
-    tags=["Credits"],
-    dependencies=API_KEY_AUTH,
-)
 api_router.include_router(  # CLEANUP: Delete this? Check if it's being used
     provider.router,
     prefix="/admin",
