@@ -16,8 +16,8 @@ HEADERS = {
 }
 
 
-def upload_benchmark(client, endpoint_name, metric_name, value):
-    url = "/v0/benchmark"
+def upload_endpoint_metric(client, endpoint_name, metric_name, value):
+    url = "/v0/endpoint-metrics"
     params = {
         "endpoint_name": endpoint_name,
         "metric_name": metric_name,
@@ -131,7 +131,7 @@ async def test_custom_endpoints(  # noqa: WPS218, E501
 
 
 @pytest.mark.anyio
-async def test_custom_benchmark(  # noqa: WPS218, E501
+async def test_custom_endpoint_metrics(  # noqa: WPS218, E501
     client: AsyncClient,
 ):
 
@@ -154,7 +154,7 @@ async def test_custom_benchmark(  # noqa: WPS218, E501
     assert response.status_code == 200, response.json()
 
     endpoint_name = "test_custom_endpoint"
-    url = "/v0/benchmark"
+    url = "/v0/endpoint-metrics"
     params = {
         "endpoint_name": endpoint_name,
         "metric_name": "time-to-first-token",
@@ -167,7 +167,7 @@ async def test_custom_benchmark(  # noqa: WPS218, E501
     # now list them
     endpoint_name = "test_custom_endpoint"
 
-    url = "/v0/benchmark"
+    url = "/v0/endpoint-metrics"
     params = {
         "model": endpoint_name,
         "provider": "custom",
@@ -181,7 +181,7 @@ async def test_custom_benchmark(  # noqa: WPS218, E501
     assert response.json()[0]["ttft"] == 135
 
 
-async def test_custom_benchmark_get_latest(  # noqa: WPS218, E501
+async def test_custom_endpoint_metrics_get_latest(  # noqa: WPS218, E501
     client: AsyncClient,
 ):
 
@@ -205,18 +205,33 @@ async def test_custom_benchmark_get_latest(  # noqa: WPS218, E501
     assert response.status_code == 200, response.json()
 
     # upload benchmarks
-    response = await upload_benchmark(client, endpoint_name, "time-to-first-token", 135)
+    response = await upload_endpoint_metric(
+        client,
+        endpoint_name,
+        "time-to-first-token",
+        135,
+    )
     assert response.status_code == 200, response.json()
 
-    response = await upload_benchmark(client, endpoint_name, "inter-token-latency", 500)
+    response = await upload_endpoint_metric(
+        client,
+        endpoint_name,
+        "inter-token-latency",
+        500,
+    )
     assert response.status_code == 200, response.json()
 
     await asyncio.sleep(5)
-    response = await upload_benchmark(client, endpoint_name, "time-to-first-token", 133)
+    response = await upload_endpoint_metric(
+        client,
+        endpoint_name,
+        "time-to-first-token",
+        133,
+    )
     assert response.status_code == 200, response.json()
 
     # check we return latest
-    url = "/v0/benchmark"
+    url = "/v0/endpoint-metrics"
     params = {
         "model": endpoint_name,
         "provider": "custom",

@@ -210,11 +210,11 @@ def log_endpoint_metric(
         if endpoint_name == endpoint.name:
             endpoint_id = endpoint.id
             break
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail=f"""The endpoint: {endpoint_name} was not found in your account.""",
-        )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"""The endpoint: {endpoint_name} was not found in your account.""",
+            )
     measured_at = datetime.now() if measured_at is None else measured_at
     custom_endpoint_benchmark_dao.upload_benchmark(
         endpoint_id=endpoint_id,
@@ -227,7 +227,7 @@ def log_endpoint_metric(
 
 # TODO: Add 404 docstring
 @router.get(
-    "/endpoint-metric",
+    "/endpoint-metrics",
     response_model=List[Dict[str, Union[str, datetime, float, None]]],
     responses={
         200: {
@@ -405,7 +405,7 @@ def get_endpoint_metrics(
 
 
 @router.delete(
-    "/endpoint-metric",
+    "/endpoint-metrics",
     responses={
         200: {
             "description": "Successful Response",
@@ -417,7 +417,7 @@ def get_endpoint_metrics(
         },
     },
 )
-def delete_endpoint_metric(
+def delete_endpoint_metrics(
     endpoint_name: str = Query(
         description="Name of the *custom* endpoint to submit a benchmark for.",
         example="my_endpoint",
