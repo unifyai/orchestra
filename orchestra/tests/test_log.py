@@ -234,6 +234,41 @@ async def test_delete_log(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_delete_project_deletes_logs(client: AsyncClient):
+    url = "/v0/project/test-project"
+
+    # Create a project first to delete it
+    create_response = await client.post(
+        "/v0/project",
+        json={"name": "test-project"},
+        headers=HEADERS,
+    )
+    assert create_response.status_code == 200
+
+    # add a log
+    response = await _create_log(client, "test-project")
+    assert response.status_code == 200, response.json()
+    log_id = response.json()
+    assert isinstance(log_id, int)
+
+    # verify it exists
+    response = await _get_log(client, log_id)
+    assert response.status_code == 200, response.json()
+
+    # Now delete the project
+    response = await client.delete(url, headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json()["info"] == "Project deleted successfully"
+
+    # Verify the log has gone
+    response = await _get_log(client, log_id)
+    assert response.status_code == 404, response.json()
+    assert response.json() == {
+        "detail": f"Log with id {log_id} not found.",
+    }
+
+
+@pytest.mark.anyio
 async def test_delete_log_not_found(client: AsyncClient):
     log_id = "123"
 
