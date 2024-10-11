@@ -67,6 +67,35 @@ api_router.include_router(
 
 # API_KEY_AUTH endpoints
 
+groupings = {
+    "Universal API": [
+        "Supported Endpoints",
+        "LLM Queries",
+        "Logging",
+        "Custom Endpoints",
+        "Custom API keys",
+        "Endpoint Metrics",
+    ],
+    "Benchmarking": [
+        "Datasets",
+        "DatasetsV2",
+        "Projects",
+        "Artifacts",
+        "Evals",
+        "Evaluators",
+        "Default Prompts",
+        "Evaluations",
+    ],
+    "Routing": [
+        "Router Training",
+        "Router Deployment",
+        "Router Configurations",
+    ],
+    "Account": [
+        "Credits",
+    ],
+}
+
 # Universal API
 
 api_router.include_router(
