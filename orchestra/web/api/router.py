@@ -13,7 +13,7 @@ from orchestra.web.api import (  # noqa: WPS235
     datasetv2,
     default_prompt,
     docs,
-    efficiency_benchmarks,
+    endpoint_metrics,
     evaluations,
     evaluators,
     llm_queries,
@@ -103,8 +103,8 @@ api_router.include_router(  # CLEANUP: Delete this
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    efficiency_benchmarks.router,
-    tags=["Efficiency Benchmarks"],
+    endpoint_metrics.router,
+    tags=["Endpoint Metrics"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(  # CLEANUP: Delete this
