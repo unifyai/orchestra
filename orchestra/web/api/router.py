@@ -67,14 +67,27 @@ api_router.include_router(
 
 # API_KEY_AUTH endpoints
 
+# Universal API
+
 api_router.include_router(
-    artifact.router,
-    tags=["Log"],
+    supported_endpoints.router,
+    tags=["Supported Endpoints"],
+    include_in_schema=True,
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    credits.router,
-    tags=["Credits"],
+    llm_queries.router,
+    tags=["LLM Queries"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    logging.router,
+    tags=["Logging"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    custom_endpoints.router,
+    tags=["Custom Endpoints"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
@@ -83,10 +96,13 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    custom_endpoints.router,
-    tags=["Custom Endpoints"],
+    endpoint_metrics.router,
+    tags=["Endpoint Metrics"],
     dependencies=API_KEY_AUTH,
 )
+
+# Benchmarking
+
 api_router.include_router(  # CLEANUP: Delete this
     datasets.router,
     tags=["Datasets"],
@@ -97,19 +113,19 @@ api_router.include_router(  # TODO: Change this to dataset
     tags=["DatasetsV2"],
     dependencies=API_KEY_AUTH,
 )
-api_router.include_router(  # CLEANUP: Delete this
-    default_prompt.router,
-    tags=["Default Prompts"],
+api_router.include_router(
+    project.router,
+    tags=["Projects"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    endpoint_metrics.router,
-    tags=["Endpoint Metrics"],
+    artifact.router,
+    tags=["Artifacts"],
     dependencies=API_KEY_AUTH,
 )
-api_router.include_router(  # CLEANUP: Delete this
-    evaluations.router,
-    tags=["Evaluations"],
+api_router.include_router(
+    log.router,
+    tags=["Evals"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(  # CLEANUP: Delete this
@@ -117,29 +133,22 @@ api_router.include_router(  # CLEANUP: Delete this
     tags=["Evaluators"],
     dependencies=API_KEY_AUTH,
 )
-api_router.include_router(
-    llm_queries.router,
-    tags=["LLM Queries"],
+api_router.include_router(  # CLEANUP: Delete this
+    default_prompt.router,
+    tags=["Default Prompts"],
     dependencies=API_KEY_AUTH,
 )
-api_router.include_router(
-    log.router,
-    tags=["Log"],
+api_router.include_router(  # CLEANUP: Delete this
+    evaluations.router,
+    tags=["Evaluations"],
     dependencies=API_KEY_AUTH,
 )
+
+# Routing
+
 api_router.include_router(
-    logging.router,
-    tags=["Logging"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    project.router,
-    tags=["Log"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    router_configurations.router,
-    tags=["Router Configurations"],
+    router_training.router,
+    tags=["Router Training"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
@@ -148,14 +157,16 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    router_training.router,
-    tags=["Router Training"],
+    router_configurations.router,
+    tags=["Router Configurations"],
     dependencies=API_KEY_AUTH,
 )
+
+# Account
+
 api_router.include_router(
-    supported_endpoints.router,
-    tags=["Supported Endpoints"],
-    include_in_schema=True,
+    credits.router,
+    tags=["Credits"],
     dependencies=API_KEY_AUTH,
 )
 
