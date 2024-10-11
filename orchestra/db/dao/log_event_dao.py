@@ -1,7 +1,7 @@
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
@@ -51,10 +51,12 @@ class LogEventDAO:
             if project_id:
                 setattr(entry, "project_id", project_id)
 
-    def delete(self, id: int):
+    def delete(self, id: Union[int, List[int]]):
         try:
-            log_event = self.session.query(LogEvent).filter_by(id=id).one()
-            self.session.delete(log_event)
+            log_events = self.session.query(LogEvent).where(
+                or_(*[LogEvent.id == i for i in id]),
+            )
+            [self.session.delete(le) for le in log_events]
             self.session.commit()
         except:
             self.session.rollback()
