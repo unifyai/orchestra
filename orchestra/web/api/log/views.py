@@ -557,15 +557,12 @@ def get_log_groups(
         )
     # TODO: Deal with organisation IDs
     log_events = log_event_dao.filter(project_id=project_obj.id)
+    all_entries = log_dao.filter(log_event_id=[le[0].id for le in log_events], key=key)
     groups = dict()
-    for le in log_events:
-        # TODO: This is super slow prob
+    for entry in all_entries:
         # TODO: Add pagination
-        entry = log_dao.filter(log_event_id=le[0].id, key=key)
-        if not entry:
-            continue
-        version = entry[0][0].version
-        value = entry[0][0].value
+        version = entry[0].version
+        value = entry[0].value
         if version is None:
             found_match = False
             for k, v in groups.items():
