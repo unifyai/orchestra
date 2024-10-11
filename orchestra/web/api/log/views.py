@@ -208,7 +208,7 @@ def update_log(
                 },
             },
         },
-        404: {
+        404_1: {
             "description": "Log Not Found",
             "content": {
                 "application/json": {
@@ -218,7 +218,7 @@ def update_log(
                 },
             },
         },
-        404: {
+        404_2: {
             "description": "Log Entry Not Found",
             "content": {
                 "application/json": {

@@ -132,11 +132,11 @@ def get_dataset_entries(
                 },
             },
         },
-        404: {
+        404_1: {
             "description": "Dataset Not Found",
             "content": {"application/json": {"example": "Dataset not found."}},
         },
-        404: {
+        404_2: {
             "description": "Dataset entry Not Found",
             "content": {
                 "application/json": {"example": "Dataset entry <id> not found."},
@@ -327,11 +327,11 @@ def rename_dataset(
                 "application/json": {"info": "Dataset entry deleted successfully!"},
             },
         },
-        404: {
+        404_1: {
             "description": "Dataset Not Found",
             "content": {"application/json": {"example": "Dataset not found."}},
         },
-        404: {
+        404_2: {
             "description": "Dataset Entry Not Found",
             "content": {
                 "application/json": {"example": "Dataset entry <id> not found."},

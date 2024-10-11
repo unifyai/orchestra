@@ -43,6 +43,8 @@ def get_response_examples(route_config, schemas):
     response_examples = []
     for code in responses:
         content = list(responses[code]["content"].values())[0]
+        if len(code) > 3:
+            code = code[:3] + f" ({code[-1]})"
         # had to hardcode the response for the 422 error
         if code == "422":
             response = error_422_response

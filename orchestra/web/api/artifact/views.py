@@ -1,15 +1,13 @@
 """
 Includes endpoints related to log artifacts.
 """
-
 import json
 
-from fastapi import APIRouter, Depends, Path, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Request
 
 from orchestra.db.dao.artifact_dao import ArtifactDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.web.api.artifact.schema import ArtifactConfig
-from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
 
@@ -35,7 +33,7 @@ router = APIRouter()
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Project <project> not found.",
+                        "detail": "A project with this name doesn't exists.",
                     },
                 },
             },
@@ -74,7 +72,10 @@ def create_artifacts(
 
         return {"info": "Artifact(s) created successfully!"}
     except:
-        raise not_found(f"Project {project}")
+        raise HTTPException(
+            status_code=404,
+            detail="A project with this name doesn't exists.",
+        )
 
 
 @router.delete(
@@ -88,22 +89,22 @@ def create_artifacts(
                 },
             },
         },
-        404: {
+        404_1: {
             "description": "Project Not Found",
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Project <project> not found.",
+                        "detail": "Project <name> not found in your account.",
                     },
                 },
             },
         },
-        404: {
+        404_2: {
             "description": "Artifact Not Found",
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Artifact <key> not found.",
+                        "detail": "Artifact <key> not found in this project.",
                     },
                 },
             },
@@ -133,11 +134,17 @@ def delete_artifact(
             name=project,
         )[0][0].id
     except IndexError:
-        raise not_found(f"Project {project}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project} not found in your account.",
+        )
     try:
         artifact_id = artifact_dao.filter(project_id=project_id, key=key)[0][0].id
     except IndexError:
-        raise not_found(f"Artifact {key}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Artifact {key} not found in this project.",
+        )
     artifact_dao.delete(id=artifact_id)
     return {"info": "Artifact deleted successfully!"}
 
@@ -161,7 +168,7 @@ def delete_artifact(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Project <project> not found.",
+                        "detail": "Project <project> not found in your account.",
                     },
                 },
             },
@@ -187,6 +194,9 @@ def list_artifacts(
             name=project,
         )[0][0].id
     except IndexError:
-        raise not_found(f"Project {project}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project} not found in your account.",
+        )
     raw_artifacts = artifact_dao.filter(project_id=project_id)
     return {ra[0].key: json.loads(ra[0].value) for ra in raw_artifacts}
