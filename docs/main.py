@@ -10,6 +10,7 @@ from docs.mint import update_mint
 from docs.path import get_path
 from docs.query import get_query
 
+from orchestra.web.api.router import groupings
 from orchestra.web.application import get_app
 
 error_422_response = {
@@ -78,7 +79,11 @@ def get_request_details(path, route, route_config, schemas):
 
     # query
     query_str, curl_example, python_example = get_query(
-        path, route, route_config, curl_example, python_example
+        path,
+        route,
+        route_config,
+        curl_example,
+        python_example,
     )
 
     # form/body
@@ -226,7 +231,7 @@ if __name__ == "__main__":
     openapi_config = write_openapi_file()
     paths = list(openapi_config["paths"].keys())
     pages = write_pages(paths, openapi_config)
-    update_mint(pages)
+    update_mint(pages, groupings)
 
     # write to docs if specified
     if args.write:
