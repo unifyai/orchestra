@@ -103,8 +103,8 @@ api_router.include_router(  # CLEANUP: Delete this
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    efficiency_benchmarks.router,
-    tags=["Efficiency Benchmarks"],
+    endpoint_metrics.router,
+    tags=["Endpoint Metrics"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(  # CLEANUP: Delete this
