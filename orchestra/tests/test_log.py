@@ -86,7 +86,7 @@ def _get_log(client, log_id):
 
 
 def _update_log(client, log_id):
-    return client.post(
+    return client.put(
         f"/v0/log/{log_id}",
         json={"entries": log_data["log_update"]},
         headers=HEADERS,
