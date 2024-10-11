@@ -26,6 +26,10 @@ log_data = {
         "my_list": ["a", "b", "c"],
         "my_dict": {"a": 1, "b": 2, "c": 3},
     },
+    "log_update_w_overwrite": {
+        "boolean_input": False,
+        "numeric_input": 5.4,
+    },
     "logs_for_grouping": [
         {
             "input": "What is 1 + 1?",
@@ -89,6 +93,14 @@ def _update_log(client, log_id):
     return client.put(
         f"/v0/log/{log_id}",
         json={"entries": log_data["log_update"]},
+        headers=HEADERS,
+    )
+
+
+def _update_log_w_overwrite(client, log_id):
+    return client.put(
+        f"/v0/log/{log_id}",
+        json={"entries": log_data["log_update_w_overwrite"]},
         headers=HEADERS,
     )
 
@@ -166,6 +178,33 @@ async def test_update_log(client: AsyncClient):
     assert response.status_code == 200, response.json()
     log = response.json()
     assert len(log["entries"]) == 5
+
+
+@pytest.mark.anyio
+async def test_update_log_overwrites(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+
+    response = await _create_log(client, project_name)
+    assert response.status_code == 200, response.json()
+    log_id = response.json()
+    assert isinstance(log_id, int)
+
+    response = await _get_log(client, log_id)
+    assert response.status_code == 200, response.json()
+    orig_entries = response.json()["entries"]
+    assert len(orig_entries) == 3
+
+    response = await _update_log_w_overwrite(client, log_id)
+    assert response.status_code == 200, response.json()
+
+    response = await _get_log(client, log_id)
+    assert response.status_code == 200, response.json()
+    new_entries = response.json()["entries"]
+    assert len(new_entries) == 3
+    assert new_entries["input"] == orig_entries["input"]
+    assert new_entries["boolean_input"] != orig_entries["boolean_input"]
+    assert new_entries["numeric_input"] != orig_entries["numeric_input"]
 
 
 @pytest.mark.anyio
