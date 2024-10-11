@@ -17,7 +17,7 @@ from orchestra.db.dao.custom_endpoint_benchmark_dao import CustomEndpointBenchma
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.latest_benchmark_dao import LatestBenchmarkDAO
-from orchestra.web.api.utils.http_responses import benchmark_not_found, model_not_found
+from orchestra.web.api.utils.http_responses import model_not_found, not_found
 
 router = APIRouter()
 
@@ -225,6 +225,7 @@ def log_endpoint_metric(
     return {"info": "Benchmark uploaded!"}
 
 
+# TODO: Add 404 docstring
 @router.get(
     "/endpoint-metric",
     response_model=List[Dict[str, Union[str, datetime, float, None]]],
@@ -400,7 +401,7 @@ def get_endpoint_metrics(
         assert len(results) > 0
         return results
     except:
-        raise benchmark_not_found(f"{model}@{provider}")
+        raise not_found(f"Benchmarks for {model}@{provider}")
 
 
 @router.delete(

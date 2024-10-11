@@ -126,4 +126,24 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.3, "completion": 0.61},
     },
+    "llama-3.2-11b-chat": {
+        "endpoint": "azure_ai/Llama-3-2-11B-Vision-Instruct-qi",
+        "context_window": 128000,
+        "cost": {"prompt": 0.37, "completion": 0.37},
+    },
+    "llama-3.2-90b-chat": {
+        "endpoint": "azure_ai/Llama-3-2-90B-Vision-Instruct-xy",
+        "context_window": 128000,
+        "cost": {"prompt": 2.04, "completion": 2.04},
+    },
+    "mistral-nemo": {
+        "endpoint": "azure_ai/Mistral-Nemo-xkgwe",
+        "context_window": 128000,
+        "cost": {"prompt": 0.3, "completion": 0.3},
+    },
+    "mistral-large": {
+        "endpoint": "azure_ai/Mistral-large-2407-nqgjt",
+        "context_window": 128000,
+        "cost": {"prompt": 3, "completion": 9},
+    },
 }

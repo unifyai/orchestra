@@ -15,6 +15,7 @@ from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.local_endpoint_dao import LocalEndpointDAO
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.tag_dao import TagDAO
+from orchestra.web.api.utils.http_responses import not_found
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
@@ -104,15 +105,12 @@ def get_queries(
                     global_endpoint_ids.append(_id)
             except Exception as e:
                 print(e)
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Could not find endpoint: {e_str}",
-                )
+                raise not_found(f"Endpoint")
 
     LIMIT = 100
     if page_number < 1:
         raise HTTPException(
-            status_code=404,
+            status_code=400,
             detail=f"Page number: {page_number} must be at least 1.",
         )
     offset = (page_number - 1) * LIMIT
@@ -214,7 +212,7 @@ def log_query(
         return {"info": "Query logged successfully"}
     except Exception as e:
         print(e)
-        raise HTTPException(status_code=404, detail="Error in logging query")
+        raise HTTPException(status_code=400, detail="Error in logging query")
 
 
 @router.get("/metrics")

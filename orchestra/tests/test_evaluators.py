@@ -1,3 +1,4 @@
+# CLEANUP: Delete this file
 import json
 import os
 
@@ -54,7 +55,7 @@ async def test_create_eval_duplicate(
 
     # make it a second time
     response = await client.post(url, json=params, headers=HEADERS)
-    assert response.status_code == 404, response.json()
+    assert response.status_code == 400, response.json()
 
 
 @pytest.mark.anyio
