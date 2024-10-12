@@ -47,8 +47,6 @@ class CustomApiKeyDAO:
         raw_custom_api_keys = self.session.execute(query)
         fetched = list(raw_custom_api_keys.scalars().fetchall())
         copied = copy.deepcopy(fetched)
-        for cak in copied:
-            cak.value = f"****{cak.value[-4:]}"
         return copied
 
     def rename(self, user_id: str, name: str, new_name: str):

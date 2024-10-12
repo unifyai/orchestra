@@ -50,7 +50,7 @@ async def test_custom_api_keys(  # noqa: WPS218, E501
     # get custom api key
     url = "v0/custom_api_key"
     response = await client.get(url, params={"name": "key_1_test"}, headers=HEADERS)
-    assert json.loads(response.text) == {"name": "key_1_test", "value": "****1234"}
+    assert json.loads(response.text) == {"name": "key_1_test", "value": "1234"}
 
     # list custom api key
     url = "v0/custom_api_key/list"
@@ -60,7 +60,7 @@ async def test_custom_api_keys(  # noqa: WPS218, E501
     # rename the api key
     url = "v0/custom_api_key/rename"
     params = {"name": "key_1_test", "new_name": "renamed_test"}
-    response = await client.post(url, params=params, headers=HEADERS)
+    await client.post(url, params=params, headers=HEADERS)
     url = "v0/custom_api_key/list"
     response = await client.get(url, headers=HEADERS)
     assert not _custom_key_in_list("key_1_test", json.loads(response.text))
@@ -69,7 +69,7 @@ async def test_custom_api_keys(  # noqa: WPS218, E501
     # delete the api key
     url = "v0/custom_api_key"
     params = {"name": "renamed_test"}
-    response = await client.delete(url, params=params, headers=HEADERS)
+    await client.delete(url, params=params, headers=HEADERS)
     url = "v0/custom_api_key/list"
     response = await client.get(url, headers=HEADERS)
     assert not _custom_key_in_list("renamed_test", json.loads(response.text))
