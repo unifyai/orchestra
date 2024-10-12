@@ -4,7 +4,6 @@ Includes endpoints related to log projects.
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 
-from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.web.api.project.schema import ProjectConfig
 from orchestra.web.api.utils.http_responses import not_found
@@ -102,7 +101,6 @@ def delete_project(
         example="eval-project",
     ),
     project_dao: ProjectDAO = Depends(),
-    log_event_dao: LogEventDAO = Depends(),
 ):
     """
     Deletes a project from your account.
@@ -113,8 +111,6 @@ def delete_project(
             # TODO: Deal with org when appropriate
             name=name,
         )[0][0].id
-        log_events = log_event_dao.filter(project_id=project_id)
-        log_event_dao.delete(id=[le[0].id for le in log_events])
         project_dao.delete(id=project_id)
     except (IndexError, ValueError):
         raise not_found(f"Project {name}")
