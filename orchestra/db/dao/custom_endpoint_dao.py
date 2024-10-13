@@ -18,7 +18,7 @@ class CustomEndpointDAO:
         self,
         user_id: str,
         name: str,
-        mdl_name: str,
+        model_arg: str,
         url: str,
         key_id: int,
     ) -> None:
@@ -26,7 +26,7 @@ class CustomEndpointDAO:
             CustomEndpoint(
                 user_id=user_id,
                 name=name,
-                mdl_name=mdl_name,
+                model_arg=model_arg,
                 url=url,
                 key_id=key_id,
             ),
@@ -45,7 +45,7 @@ class CustomEndpointDAO:
         query = (
             select(
                 CustomEndpoint.name,
-                CustomEndpoint.mdl_name,
+                CustomEndpoint.model_arg,
                 CustomEndpoint.url,
                 CustomApiKey.key,
             )

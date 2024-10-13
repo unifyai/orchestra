@@ -1,12 +1,13 @@
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, ConfigDict, validator
 
 
 class CustomEndpointModelResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     name: str
-    mdl_name: str
+    model_arg: str
     url: str
     key: str
 
-    @validator("mdl_name", pre=True, always=True)
-    def set_mdl_name(cls, v, values):
+    @validator("model_arg", pre=True, always=True)
+    def set_model_arg(cls, v, values):
         return v or values.get("name")

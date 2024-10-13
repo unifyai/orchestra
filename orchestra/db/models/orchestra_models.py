@@ -217,7 +217,7 @@ class CustomEndpoint(Base):
     id = Column(Integer(), primary_key=True)
     user_id = Column(String(), ForeignKey("users.id"), nullable=False)
     name = Column(String(), nullable=False)
-    mdl_name = Column(String())
+    model_arg = Column(String())
     url = Column(String(), nullable=False)
     key_id = Column(Integer(), ForeignKey("custom_api_key.id"), nullable=False)
 
