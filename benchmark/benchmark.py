@@ -4,10 +4,10 @@
 # different regions
 import argparse
 import asyncio
-import datetime
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Dict, List, Union
 
 import yaml
@@ -317,7 +317,7 @@ async def commit_benchmark_runs(
             regime=br["regime"],
             region=br["region"],
             seq_len=br["input_policy"],
-            measured_at=datetime.datetime.now(),
+            measured_at=datetime.now(timezone.utc),
         )
         async_session.add(new_br)
         new_brs.append(new_br)
@@ -332,7 +332,7 @@ async def commit_benchmark_runs(
             output_cost=br["output_cost_per_token"],
             ttft=br["ttft"][0],
             itl=br["itl"][0],
-            measured_at=datetime.datetime.now(),
+            measured_at=datetime.now(timezone.utc),
         )
         latest_qry = await async_session.get(
             LatestBenchmark,
@@ -388,7 +388,7 @@ async def add_br_datapoints(  # noqa: WPS210
         for dp in data:
             async_session.add(
                 Datapoint(
-                    measured_at=datetime.datetime.now(),
+                    measured_at=datetime.now(timezone.utc),
                     metric_name=metric,
                     value=dp,
                     benchmark_run_id=br_id,
