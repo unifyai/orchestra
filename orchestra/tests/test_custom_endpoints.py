@@ -90,14 +90,14 @@ async def test_custom_endpoints(  # noqa: WPS218, E501
     # TODO: Finetuned providers are not implemented
     url = "v0/custom_endpoint"
     params = {
-        "name": "endpoint_name",
+        "name": "endpoint_name@custom",
         "url": "https://url.com",
         "key_name": "key_2_test",
         "model_name": "model_name",
         # "provider": "existing_provider",
     }
     endpoint_info = {
-        "name": "endpoint_name",
+        "name": "endpoint_name@custom",
         "url": "https://url.com",
         "key": "key_2_test",
         "mdl_name": "model_name",
@@ -113,17 +113,17 @@ async def test_custom_endpoints(  # noqa: WPS218, E501
 
     # rename the endpoint
     url = "v0/custom_endpoint/rename"
-    params = {"name": "endpoint_name", "new_name": "new_endpoint_name"}
+    params = {"name": "endpoint_name@custom", "new_name": "new_endpoint_name@custom"}
     response = await client.post(url, params=params, headers=HEADERS)
     url = "v0/custom_endpoint/list"
     response = await client.get(url, headers=HEADERS)
     assert endpoint_info not in json.loads(response.text)
-    endpoint_info["name"] = "new_endpoint_name"
+    endpoint_info["name"] = "new_endpoint_name@custom"
     assert endpoint_info in json.loads(response.text)
 
     # delete the endpoint
     url = "v0/custom_endpoint"
-    params = {"name": "new_endpoint_name"}
+    params = {"name": "new_endpoint_name@custom"}
     response = await client.delete(url, params=params, headers=HEADERS)
     url = "v0/custom_endpoint/list"
     response = await client.get(url, headers=HEADERS)
@@ -146,14 +146,14 @@ async def test_custom_endpoint_metrics(  # noqa: WPS218, E501
     # create custom endpoint
     url = "v0/custom_endpoint"
     params = {
-        "name": "test_custom_endpoint",
+        "name": "test_custom_endpoint@custom",
         "url": "https://",
         "key_name": "dummy_key",
     }
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
-    endpoint_name = "test_custom_endpoint"
+    endpoint_name = "test_custom_endpoint@custom"
     url = "/v0/endpoint-metrics"
     params = {
         "endpoint_name": endpoint_name,
@@ -165,12 +165,12 @@ async def test_custom_endpoint_metrics(  # noqa: WPS218, E501
     assert response.status_code == 200, response.json()
 
     # now list them
-    endpoint_name = "test_custom_endpoint"
+    endpoint_name = "test_custom_endpoint@custom"
 
     url = "/v0/endpoint-metrics"
     params = {
-        "model": endpoint_name,
-        "provider": "custom",
+        "model": endpoint_name.split("@")[0],
+        "provider": endpoint_name.split("@")[1],
         "start_time": "2024-01-01",
         "end_time": str(datetime.datetime.now()),
     }
@@ -194,7 +194,7 @@ async def test_custom_endpoint_metrics_get_latest(  # noqa: WPS218, E501
     assert response.status_code == 200, response.json()
 
     # create custom endpoint
-    endpoint_name = "test_custom_endpoint"
+    endpoint_name = "test_custom_endpoint@custom"
     url = "v0/custom_endpoint"
     params = {
         "name": endpoint_name,
