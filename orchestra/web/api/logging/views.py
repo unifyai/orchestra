@@ -4,7 +4,7 @@ Includes endpoints related to logging.
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Literal, Optional, Union
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
