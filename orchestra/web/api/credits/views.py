@@ -1,5 +1,5 @@
-import datetime
 import logging
+from datetime import datetime, timezone
 from typing import Dict
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -164,7 +164,7 @@ def promo_code(
         )
 
     recharge_dao.create_recharge(
-        at=datetime.datetime.now(),
+        at=datetime.now(timezone.utc),
         user_id=user_id,
         quantity=qty,
         type=code,

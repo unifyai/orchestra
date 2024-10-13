@@ -1,6 +1,6 @@
 import sys
 import urllib.parse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import google.auth.transport.requests
 import requests
@@ -44,7 +44,7 @@ if __name__ == "__main__":
 
     # generate all error messages over the past 1 hour
     log_name = "orchestra" + ("-staging" if staging else "")
-    timestamp_filter = (datetime.now() - timedelta(minutes=65)).strftime(
+    timestamp_filter = (datetime.now(timezone.utc) - timedelta(minutes=65)).strftime(
         "%Y-%m-%dT%H:%M:%S.%fZ",
     )
     entries = client.list_entries(

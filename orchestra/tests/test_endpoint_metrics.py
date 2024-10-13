@@ -1,6 +1,6 @@
 import asyncio
-import datetime
 import os
+from datetime import datetime, timezone
 
 import pytest
 from httpx import AsyncClient
@@ -68,7 +68,7 @@ async def test_custom_endpoint_metrics(  # noqa: WPS218, E501
         "model": endpoint_name.split("@")[0],
         "provider": endpoint_name.split("@")[1],
         "start_time": "2024-01-01",
-        "end_time": str(datetime.datetime.now()),
+        "end_time": str(datetime.now(timezone.utc)),
     }
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
@@ -91,7 +91,7 @@ async def test_custom_endpoint_metrics(  # noqa: WPS218, E501
         "model": endpoint_name.split("@")[0],
         "provider": endpoint_name.split("@")[1],
         "start_time": "2024-01-01",
-        "end_time": str(datetime.datetime.now()),
+        "end_time": str(datetime.now(timezone.utc)),
     }
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()

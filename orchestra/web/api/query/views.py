@@ -1,4 +1,4 @@
-import datetime
+from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter
@@ -39,7 +39,7 @@ def create_query_model(
     :param new_query_object: new query model item.
     :param query_dao: DAO for query models.
     """
-    at = datetime.datetime.now()
+    at = datetime.now(timezone.utc)
     query_dao.create_query(
         user_id=new_query_object.user_id,
         at=at,

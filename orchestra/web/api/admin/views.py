@@ -1,4 +1,4 @@
-import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -137,7 +137,7 @@ def get_recharge_models(
 @router.get("/get_recharge", response_model=List[RechargeModelResponse])
 def get_recharge(  # noqa: WPS211
     id: Optional[int] = None,  # noqa: WPS125
-    at: Optional[datetime.datetime] = None,
+    at: Optional[datetime] = None,
     user_id: Optional[str] = None,
     quantity: Optional[int] = None,
     type: Optional[str] = None,  # noqa: WPS125
@@ -187,7 +187,7 @@ def get_benchmark_run(  # noqa: WPS211
     regime: Optional[str] = None,
     region: Optional[str] = None,
     seq_len: Optional[str] = None,
-    measured_at: Optional[datetime.datetime] = None,
+    measured_at: Optional[datetime] = None,
     benchmark_run_dao: BenchmarkRunDAO = Depends(),
 ) -> List[BenchmarkRun]:
     """
@@ -235,7 +235,7 @@ def get_datapoint(  # noqa: WPS211
     benchmark_run_id: Optional[int] = None,
     metric_name: Optional[str] = None,
     value: Optional[float] = None,
-    measured_at: Optional[datetime.datetime] = None,
+    measured_at: Optional[datetime] = None,
     datapoint_dao: DatapointDAO = Depends(),
 ) -> List[Datapoint]:
     """
@@ -280,7 +280,7 @@ def get_endpoint(
     id: Optional[int] = None,  # noqa: WPS125
     mdl_id: Optional[int] = None,
     provider_id: Optional[int] = None,
-    created_at: Optional[datetime.datetime] = None,
+    created_at: Optional[datetime] = None,
     endpoint_dao: EndpointDAO = Depends(),
 ) -> List[Endpoint]:
     """
@@ -445,7 +445,7 @@ def create_endpoint_model(
     :param new_endpoint_object: new endpoint model item.
     :param endpoint_dao: DAO for endpoint models.
     """
-    created_at = datetime.datetime.now()
+    created_at = datetime.now(timezone.utc)
     endpoint_dao.create_endpoint(
         mdl_id=new_endpoint_object.mdl_id,
         provider_id=new_endpoint_object.provider_id,
@@ -501,7 +501,7 @@ def create_model(
     :param new_model_object: new model model item.
     :param model_dao: DAO for model models.
     """
-    uploaded_at = datetime.datetime.now()
+    uploaded_at = datetime.now(timezone.utc)
     model_dao.create_model(
         mdl_code=new_model_object.mdl_code,
         uploaded_at=uploaded_at,
@@ -514,7 +514,7 @@ def create_model(
 def update_model(  # noqa: WPS211
     id: int,  # noqa: WPS125
     mdl_code: Optional[str] = None,
-    uploaded_at: Optional[datetime.datetime] = None,
+    uploaded_at: Optional[datetime] = None,
     task: Optional[str] = None,
     active: Optional[bool] = None,
     model_dao: ModelDAO = Depends(),
@@ -579,7 +579,7 @@ def create_recharge_model(
             detail="Transaction id must be specified when adding a payment.",
         )
 
-    at = datetime.datetime.now()
+    at = datetime.now(timezone.utc)
     user_dao.recharge_credit(
         user_id=new_recharge_object.user_id,
         quantity=new_recharge_object.quantity,
@@ -649,7 +649,7 @@ def update_benchmark_run(  # noqa: WPS211
     regime: Optional[str] = None,
     region: Optional[str] = None,
     seq_len: Optional[str] = None,
-    measured_at: Optional[datetime.datetime] = None,
+    measured_at: Optional[datetime] = None,
     benchmark_run_dao: BenchmarkRunDAO = Depends(),
 ) -> None:
     """
@@ -680,7 +680,7 @@ def update_datapoint(  # noqa: WPS211
     metric_name: Optional[str] = None,
     value: Optional[float] = None,
     tooltip: Optional[str] = None,
-    measured_at: Optional[datetime.datetime] = None,
+    measured_at: Optional[datetime] = None,
     datapoint_dao: DatapointDAO = Depends(),
 ) -> None:
     """

@@ -4,7 +4,7 @@ time-to-first-token etc.
 """
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from itertools import chain
 from typing import Dict, List, Optional, Union
 
@@ -86,13 +86,13 @@ def _get_custom_endpoint_benchmark(
         num_items = 0
         if latest_only:
             start_time = "2024-01-01"
-            end_time = str(datetime.now())
+            end_time = str(datetime.now(timezone.utc))
         elif not start_time_provided and end_time_provided:
             raise Exception(
                 "`start_time` must be provided when" "`end_time` is provided.",
             )
         elif start_time_provided and not end_time_provided:
-            end_time = str(datetime.now())
+            end_time = str(datetime.now(timezone.utc))
         for metric_name in ALLOWED_METRICS:
             inner_rets = custom_endpoint_benchmark_dao.benchmarks_between(
                 endpoint_id=endpoint_id,
@@ -216,7 +216,7 @@ def log_endpoint_metric(
                 status_code=400,
                 detail=f"""The endpoint: {endpoint_name} was not found in your account.""",
             )
-    measured_at = datetime.now() if measured_at is None else measured_at
+    measured_at = datetime.now(timezone.utc) if measured_at is None else measured_at
     custom_endpoint_benchmark_dao.upload_benchmark(
         endpoint_id=endpoint_id,
         metric_name=metric_name,
@@ -388,7 +388,7 @@ def get_endpoint_metrics(
                 "`start_time` must be provided when" "`end_time` is provided.",
             )
         elif start_time_provided and not end_time_provided:
-            end_time = str(datetime.now())
+            end_time = str(datetime.now(timezone.utc))
         results = list(
             chain.from_iterable(
                 [
