@@ -330,8 +330,8 @@ async def commit_benchmark_runs(
             seq_len=br["input_policy"],
             input_cost=br["input_cost_per_token"],
             output_cost=br["output_cost_per_token"],
-            ttft=br["ttft"][0],
-            itl=br["itl"][0],
+            time_to_first_token=br["ttft"][0],
+            inter_token_latency=br["itl"][0],
             measured_at=datetime.now(timezone.utc),
         )
         latest_qry = await async_session.get(
