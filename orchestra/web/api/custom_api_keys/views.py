@@ -1,10 +1,9 @@
-from typing import List
+from typing import Dict, List
 
 from fastapi import APIRouter, Query, Request
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
-from orchestra.db.models.orchestra_models import CustomApiKey
 from orchestra.web.api.custom_api_keys.schema import CustomApiKeyModelResponse
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -29,7 +28,7 @@ def create_custom_api_key(
     name: str = Query(description="Name of the API key.", example="key1"),
     value: str = Query(description="Value of the API key.", example="value1"),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
-) -> None:
+) -> Dict[str, str]:
     """
     Stores a custom API key from an LLM provider in your account. This can be done in
     one of two ways:
@@ -84,7 +83,7 @@ def get_custom_api_key(
         example="key1",
     ),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
-) -> CustomApiKey:
+) -> CustomApiKeyModelResponse:
     """
     Returns the value of the key for the specified custom API key name.
     """
@@ -124,7 +123,7 @@ def delete_custom_api_key(
         example="key1",
     ),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
-) -> None:
+) -> Dict[str, str]:
     """
     Deletes the custom API key from your account.
 
@@ -174,7 +173,7 @@ def rename_custom_api_key(
         example="key2",
     ),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
-) -> None:
+) -> Dict[str, str]:
     """
     Renames the custom API key in your account.
 
@@ -213,7 +212,7 @@ def rename_custom_api_key(
 def list_custom_api_keys(
     request_fastapi: Request,
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
-) -> List[CustomApiKey]:
+) -> List[CustomApiKeyModelResponse]:
     """
     Returns a list of the names for all custom API keys in your account.
     """
