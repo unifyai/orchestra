@@ -93,7 +93,7 @@ def _get_custom_endpoint_benchmark(
             )
         elif start_time_provided and not end_time_provided:
             end_time = str(datetime.now())
-        for metric_name in ALLOWED_METRICS + ["measured_at"]:
+        for metric_name in ALLOWED_METRICS:
             inner_rets = custom_endpoint_benchmark_dao.benchmarks_between(
                 endpoint_id=endpoint_id,
                 metric_name=metric_name,
