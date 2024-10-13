@@ -170,7 +170,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
         model, provider, region = model_region_priority_list[0]
         provider_str = (
-            provider if provider == "custom" else provider.replace("custom_", "")
+            provider if provider == "custom" else provider.replace("custom-", "")
         )
         try_provider = 0
         router_choices = None

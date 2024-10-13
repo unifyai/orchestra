@@ -112,6 +112,11 @@ def _get_custom_endpoint_benchmark(
                 num_items = len(inner_rets)
                 inner_rets.sort(key=lambda x: x.measured_at)
                 rets[short_name] = [item.value for item in inner_rets]
+                if "measured_at" not in rets:
+                    rets["measured_at"] = {}
+                rets["measured_at"][short_name] = [
+                    item.measured_at for item in inner_rets
+                ]
             else:
                 rets[short_name] = None
         if latest_only:
@@ -119,6 +124,8 @@ def _get_custom_endpoint_benchmark(
             for key in rets.keys():
                 if rets[key] is None:
                     single_return[key] = None
+                elif key == "measured_at" and isinstance(rets[key], dict):
+                    single_return[key] = {k: v[-1] for k, v in rets[key].items()}
                 else:
                     single_return[key] = rets[key][-1]
             single_return["endpoint"] = model
@@ -131,6 +138,8 @@ def _get_custom_endpoint_benchmark(
             for key in rets.keys():
                 if rets[key] is None:
                     val[key] = None
+                elif key == "measured_at" and isinstance(rets[key], dict):
+                    val[key] = {k: v[i] for k, v in rets[key].items()}
                 else:
                     val[key] = rets[key][i]
             val["endpoint"] = model
@@ -228,7 +237,18 @@ def log_endpoint_metric(
 # TODO: Add 404 docstring
 @router.get(
     "/endpoint-metrics",
-    response_model=List[Dict[str, Union[str, datetime, float, None]]],
+    response_model=List[
+        Dict[
+            str,
+            Union[
+                str,
+                datetime,
+                float,
+                None,
+                Dict[str, Union[str, datetime]],
+            ],
+        ]
+    ],
     responses={
         200: {
             "description": "Successful Response",
@@ -309,7 +329,7 @@ def get_endpoint_metrics(
     if provider == "custom":
         return _get_custom_endpoint_benchmark(
             request_fastapi,
-            model,
+            f"{model}@{provider}",
             start_time=start_time,
             end_time=end_time,
             custom_endpoint_dao=custom_endpoint_dao,
