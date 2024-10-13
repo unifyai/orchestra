@@ -92,7 +92,7 @@ class BaseCompletionProvider:
         # TODO: Docs
         # TODO: Add logic to raise an error if self.supported_models is empty
         if self.custom_endpoint:
-            return self.custom_endpoint.mdl_name
+            return self.custom_endpoint.model_arg
         return self.supported_models[self.hub_model]["endpoint"]
 
     @property
