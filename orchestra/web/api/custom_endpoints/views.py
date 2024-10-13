@@ -5,7 +5,7 @@ from fastapi.param_functions import Depends
 from starlette import status
 
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
-from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
+from orchestra.db.dao.custom_endpoint_dao import CustomEndpoint, CustomEndpointDAO
 from orchestra.web.api.custom_endpoints.schema import CustomEndpointModelResponse
 from orchestra.web.api.utils.http_responses import not_found
 
