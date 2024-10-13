@@ -1,5 +1,5 @@
 import copy
-import datetime
+from datetime import datetime, timezone
 
 import pytest
 from httpx import AsyncClient
@@ -68,7 +68,7 @@ async def test_queries_filter_endpoint(client: AsyncClient):
 
 async def test_query_timestamped(client: AsyncClient):
 
-    st = str(datetime.datetime.now())
+    st = str(datetime.now(timezone.utc))
 
     endpoint = "/v0/chat/completions"
     data = get_chat_completions_payload("llama-3-8b-chat", "aws-bedrock", stream=False)
@@ -82,7 +82,7 @@ async def test_query_timestamped(client: AsyncClient):
     assert len(response.json()) == 1, response.json()
 
     endpoint = "/v0/queries"
-    data = {"start_time": str(datetime.datetime.now())}
+    data = {"start_time": str(datetime.now(timezone.utc))}
     response = await client.get(endpoint, headers=HEADERS, params=data)
     assert response.status_code == 200, response.json()
     assert len(response.json()) == 0, response.json()

@@ -187,7 +187,7 @@ def log_query(
     local_endpoint_dao: LocalEndpointDAO = Depends(),
 ):
     if not timestamp:
-        timestamp = str(datetime.now())
+        timestamp = str(datetime.now(timezone.utc))
 
     _model_name = endpoint.split("@")[0]
     local_endpoint_id = local_endpoint_dao.get_or_create_local_endpoint(

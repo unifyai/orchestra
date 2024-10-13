@@ -1,6 +1,6 @@
 import os
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 import yaml
@@ -69,7 +69,7 @@ def get_classes():
 
 
 def create_dirs(exp_name=None):
-    dir_name = str(datetime.now()).replace(" ", "_")
+    dir_name = str(datetime.now(timezone.utc)).replace(" ", "_")
     if exp_name:
         dir_name = exp_name + "_" + dir_name
     if not os.path.isdir("artifacts"):

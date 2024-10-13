@@ -1,4 +1,4 @@
-import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -445,7 +445,7 @@ def create_endpoint_model(
     :param new_endpoint_object: new endpoint model item.
     :param endpoint_dao: DAO for endpoint models.
     """
-    created_at = datetime.datetime.now()
+    created_at = datetime.now(timezone.utc)
     endpoint_dao.create_endpoint(
         mdl_id=new_endpoint_object.mdl_id,
         provider_id=new_endpoint_object.provider_id,
@@ -501,7 +501,7 @@ def create_model(
     :param new_model_object: new model model item.
     :param model_dao: DAO for model models.
     """
-    uploaded_at = datetime.datetime.now()
+    uploaded_at = datetime.now(timezone.utc)
     model_dao.create_model(
         mdl_code=new_model_object.mdl_code,
         uploaded_at=uploaded_at,
@@ -579,7 +579,7 @@ def create_recharge_model(
             detail="Transaction id must be specified when adding a payment.",
         )
 
-    at = datetime.datetime.now()
+    at = datetime.now(timezone.utc)
     user_dao.recharge_credit(
         user_id=new_recharge_object.user_id,
         quantity=new_recharge_object.quantity,
