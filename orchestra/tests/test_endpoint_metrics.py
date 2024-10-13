@@ -53,7 +53,7 @@ async def test_custom_endpoint_metrics(  # noqa: WPS218, E501
     url = "/v0/endpoint-metrics"
     params = {
         "endpoint_name": endpoint_name,
-        "metric_name": "time-to-first-token",
+        "metric_name": "time_to_first_token",
         "value": 135,
     }
 
@@ -73,8 +73,8 @@ async def test_custom_endpoint_metrics(  # noqa: WPS218, E501
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     assert len(response.json()) > 0
-    assert "ttft" in response.json()[0]
-    assert response.json()[0]["ttft"] == 135
+    assert "time_to_first_token" in response.json()[0]
+    assert response.json()[0]["time_to_first_token"] == 135
 
     # Delete the metrics
     url = "/v0/endpoint-metrics"
@@ -125,7 +125,7 @@ async def test_custom_endpoint_metrics_get_latest(  # noqa: WPS218, E501
     response = await upload_endpoint_metric(
         client,
         endpoint_name,
-        "time-to-first-token",
+        "time_to_first_token",
         135,
     )
     assert response.status_code == 200, response.json()
@@ -133,7 +133,7 @@ async def test_custom_endpoint_metrics_get_latest(  # noqa: WPS218, E501
     response = await upload_endpoint_metric(
         client,
         endpoint_name,
-        "inter-token-latency",
+        "inter_token_latency",
         500,
     )
     assert response.status_code == 200, response.json()
@@ -142,7 +142,7 @@ async def test_custom_endpoint_metrics_get_latest(  # noqa: WPS218, E501
     response = await upload_endpoint_metric(
         client,
         endpoint_name,
-        "time-to-first-token",
+        "time_to_first_token",
         133,
     )
     assert response.status_code == 200, response.json()
@@ -155,5 +155,5 @@ async def test_custom_endpoint_metrics_get_latest(  # noqa: WPS218, E501
     }
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
-    assert response.json()[0]["ttft"] == 133
-    assert response.json()[0]["itl"] == 500
+    assert response.json()[0]["time_to_first_token"] == 133
+    assert response.json()[0]["inter_token_latency"] == 500

@@ -22,10 +22,10 @@ from orchestra.web.api.utils.http_responses import model_not_found, not_found
 router = APIRouter()
 
 ALLOWED_METRICS = [
-    "input-cost",
-    "output-cost",
-    "time-to-first-token",
-    "inter-token-latency",
+    "input_cost",
+    "output_cost",
+    "time_to_first_token",
+    "inter_token_latency",
 ]
 ALLOWED_METRICS_STR = ""
 for metric in ALLOWED_METRICS:
@@ -81,13 +81,6 @@ def _get_custom_endpoint_benchmark(
                 status_code=400,
                 detail=f"""The endpoint: {model} was not found in your account.""",
             )
-        short_name_to_db_name = {
-            "ttft": "time-to-first-token",
-            "itl": "inter-token-latency",
-            "input-cost": "input-cost",
-            "output-cost": "output-cost",
-            "measured-at": "measured-at",
-        }
         rets = dict()
         latest_only = not start_time_provided and not end_time_provided
         num_items = 0
@@ -100,24 +93,24 @@ def _get_custom_endpoint_benchmark(
             )
         elif start_time_provided and not end_time_provided:
             end_time = str(datetime.now())
-        for short_name, db_name in short_name_to_db_name.items():
+        for metric_name in ALLOWED_METRICS + ["measured_at"]:
             inner_rets = custom_endpoint_benchmark_dao.benchmarks_between(
                 endpoint_id=endpoint_id,
-                metric_name=db_name,
+                metric_name=metric_name,
                 start_time=start_time,
                 end_time=end_time,
             )
             if inner_rets:
                 num_items = len(inner_rets)
                 inner_rets.sort(key=lambda x: x.measured_at)
-                rets[short_name] = [item.value for item in inner_rets]
+                rets[metric_name] = [item.value for item in inner_rets]
                 if "measured_at" not in rets:
                     rets["measured_at"] = {}
-                rets["measured_at"][short_name] = [
+                rets["measured_at"][metric_name] = [
                     item.measured_at for item in inner_rets
                 ]
             else:
-                rets[short_name] = None
+                rets[metric_name] = None
         if latest_only:
             single_return = dict()
             for key in rets.keys():
