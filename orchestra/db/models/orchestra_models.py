@@ -259,8 +259,8 @@ class LatestBenchmark(Base):
     seq_len = Column(String(), primary_key=True)
     input_cost = Column(Numeric())
     output_cost = Column(Numeric())
-    ttft = Column(Numeric())
-    itl = Column(Numeric())
+    time_to_first_token = Column(Numeric())
+    inter_token_latency = Column(Numeric())
     measured_at = Column(TIMESTAMP, nullable=False)
 
 
