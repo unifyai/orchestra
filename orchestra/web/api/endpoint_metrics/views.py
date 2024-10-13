@@ -6,7 +6,7 @@ time-to-first-token etc.
 import os
 from datetime import datetime
 from itertools import chain
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 import requests
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -81,7 +81,6 @@ def _get_custom_endpoint_benchmark(
                 status_code=400,
                 detail=f"""The endpoint: {model} was not found in your account.""",
             )
-
         short_name_to_db_name = {
             "ttft": "time-to-first-token",
             "itl": "inter-token-latency",
@@ -438,13 +437,41 @@ def get_endpoint_metrics(
     },
 )
 def delete_endpoint_metrics(
+    request_fastapi: Request,
     endpoint_name: str = Query(
         description="Name of the *custom* endpoint to submit a benchmark for.",
         example="my_endpoint",
     ),
-):
+    timestamps: Optional[List[datetime]] = Query(
+        None,
+        description="List of timestamps to delete the endpoint metrics for.",
+        example="2024-08-17T19:19:37.289937",
+    ),
+    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+    custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
+) -> Dict[str, str]:
     """
-    Delete *all* benchmark time-series data for a given *custom* endpoint.
+    Delete all benchmark time-series data for a given *custom* endpoint with the
+    specified timestamps. If timestamps are not specified, then *all* benchmark data
+    will be deleted for the specified custom endpoint.
     The time-series benchmark data for *public* endpoints are not deletable.
     """
-    raise NotImplemented  # ToDo: implement
+    user_id = request_fastapi.state.user_id
+    available_endpoints = custom_endpoint_dao.filter(
+        user_id=user_id,
+        name=endpoint_name,
+    )
+    for endpoint in available_endpoints:
+        if endpoint_name == endpoint.name:
+            endpoint_id = endpoint.id
+            break
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"""The endpoint: {endpoint_name} was not found in your account.""",
+        )
+    custom_endpoint_benchmark_dao.delete(
+        endpoint_id,
+        timestamps,
+    )
+    return {"info": "Metrics deleted successfully!"}

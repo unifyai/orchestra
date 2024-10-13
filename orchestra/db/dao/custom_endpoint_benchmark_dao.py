@@ -1,7 +1,8 @@
 from datetime import datetime
+from typing import List, Optional, Union
 
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
@@ -49,3 +50,21 @@ class CustomEndpointBenchmarkDAO:
         )
         data = self.session.execute(query)
         return list(data.scalars().fetchall())
+
+    def delete(
+        self,
+        endpoint_id: Union[int, List[int]],
+        timestamps: Optional[Union[datetime, List[datetime]]] = None,
+    ):
+        endpoint_id = endpoint_id if isinstance(endpoint_id, list) else [endpoint_id]
+        query = delete(CustomEndpointBenchmark).where(
+            or_(
+                *[CustomEndpointBenchmark.custom_endpoint_id == i for i in endpoint_id]
+            ),
+        )
+        if timestamps is not None:
+            timestamps = timestamps if isinstance(timestamps, list) else [timestamps]
+            query = query.where(
+                or_(*[CustomEndpointBenchmark.measured_at == t for t in timestamps]),
+            )
+        self.session.execute(query)
