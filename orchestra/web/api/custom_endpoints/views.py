@@ -1,15 +1,24 @@
-from typing import List
+from typing import Dict, List
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
+from starlette import status
 
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
-from orchestra.db.models.orchestra_models import CustomEndpoint
 from orchestra.web.api.custom_endpoints.schema import CustomEndpointModelResponse
 from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
+
+VALID_CUSTOM_PROVIDERS = (
+    "custom",
+    "custom-openai",
+    "custom-mistral",
+    "custom-vertex-ai",
+    "custom-fireworks-ai",
+    "custom-together-ai",
+)
 
 
 @router.post(
@@ -36,8 +45,11 @@ router = APIRouter()
 def create_custom_endpoint(
     request_fastapi: Request,
     name: str = Query(
-        description="Alias for the custom endpoint. "
-        "This will be the name used to call the endpoint.",
+        description="The endpoint name for your custom endpoint, "
+        "in model@provider format. If it's a custom endpoint following the OpenAI "
+        "format then the provider must be `@custom`, otherwise if it's a fine-tuned "
+        "model from one of the existing providers it can be specified with a "
+        "prepending `custom-`, i.e. `@custom-anthropic`.",
         example="endpoint1",
     ),
     url: str = Query(
@@ -49,49 +61,53 @@ def create_custom_endpoint(
         description="Name of the API key that will be passed as part of the query.",
         example="key1",
     ),
-    model_name: str = Query(
+    model_arg: str = Query(
         None,
         description=(
-            "Named passed to the custom endpoint as model name. "
-            "If not specified, it will default to the endpoint alias."
+            "The value passed to the model arugment of the *underlying* API which is "
+            "being wrapped into Unify. For example, you might call your endpoint "
+            "`llama-3-baseten@custom` to distinguish the custom endpoint within Unify, "
+            "but under the hood need to pass `llama-3.2-90b-chat` to the Baseten "
+            "endpoint."
         ),
         example="llama-3.1-8b-finetuned",
     ),
-    provider: str = Query(
-        None,
-        description=(
-            "If the custom endpoint is for a fine-tuned model which is hosted "
-            "directly via one of the supported providers, then this argument should be "
-            "specified as the provider used. The unification logic will be used for "
-            "this custom fine-tuned model behind the scenes, in the same manner as "
-            "used for the foundation models with the same provider."
-        ),
-        example="together-ai",
-    ),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
-) -> None:
+) -> Dict[str, str]:
     """
     Creates a custom endpoint. This endpoint must either be a fine-tuned model from one
     of the supported providers (`/v0/providers`), in which case the "provider" argument
     must be set accordingly. Otherwise, the endpoint must support the OpenAI
     `/chat/completions` format. To query your custom endpoint, replace your endpoint
-    string with `<name>@custom` when querying any general custom endpoint. You can show
-    all *custom* endpoints by querying `/v0/endpoints` and passing `custom` as the
-    `provider` argument.
+    string with `<endpoint_name>@custom` when querying any general custom endpoint. You
+    can show all *custom* endpoints by querying `/v0/endpoints` and passing `custom` as
+    the `provider` argument.
 
     """
-    # ToDo: add support for provider argument
     user_id = request_fastapi.state.user_id
+    if "@" not in name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid endpoint name {name}. It must be in the format "
+            "of `model@provider`, but no `@` symbol was included in the "
+            "specified name.",
+        )
+    model, provider = name.split("@")
+    if provider not in VALID_CUSTOM_PROVIDERS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid provider. Custom provider must be one of "
+            f"{VALID_CUSTOM_PROVIDERS}, but found {provider}.",
+        )
     try:
         key_id = custom_api_key_dao.filter(user_id=user_id, key=key_name)[0].id
     except Exception:
         raise not_found("Custom API Key")
-
     custom_endpoint_dao.create_custom_endpoint(
         user_id=user_id,
         name=name,
-        mdl_name=model_name if model_name else name,
+        model_arg=model_arg if model_arg else model,
         url=url,
         key_id=key_id,
     )
@@ -126,7 +142,7 @@ def delete_custom_endpoint(
         example="endpoint1",
     ),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
-) -> None:
+) -> Dict[str, str]:
     """
     Deletes a custom endpoint from your account.
 
@@ -176,7 +192,7 @@ def rename_custom_endpoint(
         example="name2",
     ),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
-) -> None:
+) -> Dict[str, str]:
     """
     Renames a custom endpoint in your account.
 
@@ -206,13 +222,13 @@ def rename_custom_endpoint(
                     "example": [
                         {
                             "name": "endpoint_1",
-                            "mdl_name": "llama_finetune",
+                            "model_arg": "llama_finetune",
                             "url": "https://...",
                             "key": "custom_key_1",
                         },
                         {
                             "name": "endpoint_2",
-                            "mdl_name": "mixtral_finetune",
+                            "model_arg": "mixtral_finetune",
                             "url": "https://...",
                             "key": "custom_key_2",
                         },

@@ -87,21 +87,18 @@ async def test_custom_endpoints(  # noqa: WPS218, E501
     assert response.status_code == 200, response.json()
 
     # create custom endpoint
-    # TODO: Finetuned providers are not implemented
     url = "v0/custom_endpoint"
     params = {
         "name": "endpoint_name@custom",
         "url": "https://url.com",
         "key_name": "key_2_test",
-        "model_name": "model_name",
-        # "provider": "existing_provider",
+        "model_arg": "my_model",
     }
     endpoint_info = {
         "name": "endpoint_name@custom",
         "url": "https://url.com",
         "key": "key_2_test",
-        "mdl_name": "model_name",
-        # "provider": "existing_provider",
+        "model_arg": "my_model",
     }
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
@@ -113,8 +110,12 @@ async def test_custom_endpoints(  # noqa: WPS218, E501
 
     # rename the endpoint
     url = "v0/custom_endpoint/rename"
-    params = {"name": "endpoint_name@custom", "new_name": "new_endpoint_name@custom"}
+    params = {
+        "name": "endpoint_name@custom",
+        "new_name": "new_endpoint_name@custom",
+    }
     response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
     url = "v0/custom_endpoint/list"
     response = await client.get(url, headers=HEADERS)
     assert endpoint_info not in json.loads(response.text)
@@ -125,9 +126,33 @@ async def test_custom_endpoints(  # noqa: WPS218, E501
     url = "v0/custom_endpoint"
     params = {"name": "new_endpoint_name@custom"}
     response = await client.delete(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
     url = "v0/custom_endpoint/list"
     response = await client.get(url, headers=HEADERS)
     assert endpoint_info not in json.loads(response.text)
+
+
+@pytest.mark.anyio
+async def test_create_custom_endpoint_no_provider(  # noqa: WPS218, E501
+    client: AsyncClient,
+):
+
+    # create custom api key
+    url = "v0/custom_api_key"
+    params = {"name": "key_2_test", "value": "1234"}
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # create custom endpoint w no provider
+    url = "v0/custom_endpoint"
+    params = {
+        "name": "name",
+        "url": "https://url.com",
+        "key_name": "key_2_test",
+        "model_arg": "model_arg",
+    }
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 400, response.json()
 
 
 @pytest.mark.anyio
@@ -233,8 +258,8 @@ async def test_custom_endpoint_metrics_get_latest(  # noqa: WPS218, E501
     # check we return latest
     url = "/v0/endpoint-metrics"
     params = {
-        "model": endpoint_name,
-        "provider": "custom",
+        "model": endpoint_name.split("@")[0],
+        "provider": endpoint_name.split("@")[1],
     }
     response = await client.get(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
