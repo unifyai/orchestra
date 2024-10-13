@@ -76,6 +76,27 @@ async def test_custom_endpoint_metrics(  # noqa: WPS218, E501
     assert "ttft" in response.json()[0]
     assert response.json()[0]["ttft"] == 135
 
+    # Delete the metrics
+    url = "/v0/endpoint-metrics"
+    params = {
+        "endpoint_name": endpoint_name,
+    }
+    response = await client.delete(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # List again, assert empty
+    endpoint_name = "test_custom_endpoint@custom"
+    url = "/v0/endpoint-metrics"
+    params = {
+        "model": endpoint_name.split("@")[0],
+        "provider": endpoint_name.split("@")[1],
+        "start_time": "2024-01-01",
+        "end_time": str(datetime.datetime.now()),
+    }
+    response = await client.get(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    assert len(response.json()) == 0
+
 
 async def test_custom_endpoint_metrics_get_latest(  # noqa: WPS218, E501
     client: AsyncClient,
