@@ -1,6 +1,6 @@
-import datetime
 import json
 import os
+from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
@@ -36,7 +36,7 @@ def telemetry_to_pub_sub(
         "user_id": user_id,
         "secondary_user_id": secondary_user_id,
         "response_id": "0",
-        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         "model": model,
         "provider": provider,
         "router": router,
