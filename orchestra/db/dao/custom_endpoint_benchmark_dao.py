@@ -42,7 +42,6 @@ class CustomEndpointBenchmarkDAO:
             select(CustomEndpointBenchmark)
             .where(CustomEndpointBenchmark.custom_endpoint_id == endpoint_id)
             .where(CustomEndpointBenchmark.metric_name == metric_name)
-            .where()
             .filter(
                 CustomEndpointBenchmark.measured_at >= start_time,
                 CustomEndpointBenchmark.measured_at <= end_time,
