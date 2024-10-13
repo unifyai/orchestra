@@ -113,6 +113,7 @@ def _get_custom_endpoint_benchmark(
                 rets[metric_name] = None
         if latest_only:
             single_return = dict()
+            some_data = False
             for key in rets.keys():
                 if rets[key] is None:
                     single_return[key] = None
@@ -120,15 +121,19 @@ def _get_custom_endpoint_benchmark(
                     single_return[key] = {k: v[-1] for k, v in rets[key].items()}
                 else:
                     single_return[key] = rets[key][-1]
+                    some_data = True
             single_return["endpoint"] = model
-            return [
-                single_return,
-            ]
+            if some_data:
+                return [
+                    single_return,
+                ]
+            return []
         returns = list()
-        for i in range(max_num_items - 1, -1, -1):
+        for _ in range(max_num_items):
             # ToDo: group these such that the timestamps actually align (with
             #  duplication of metrics across entries where appropriate)
             val = dict()
+            some_data = False
             for key in rets.keys():
                 if rets[key] is None:
                     val[key] = None
@@ -142,10 +147,12 @@ def _get_custom_endpoint_benchmark(
                 elif rets[key]:
                     # take the latest data from the top of stack, if exists
                     val[key] = rets[key].pop()
+                    some_data = True
                 else:
                     val[key] = None
-            val["endpoint"] = model
-            returns.append(val)
+            if some_data:
+                val["endpoint"] = model
+                returns.append(val)
         return reversed(returns)
     except Exception as e:
         raise e
