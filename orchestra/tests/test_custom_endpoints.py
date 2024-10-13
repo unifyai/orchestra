@@ -156,6 +156,29 @@ async def test_create_custom_endpoint_no_provider(  # noqa: WPS218, E501
 
 
 @pytest.mark.anyio
+async def test_create_custom_endpoint_invalid_provider(  # noqa: WPS218, E501
+    client: AsyncClient,
+):
+
+    # create custom api key
+    url = "v0/custom_api_key"
+    params = {"name": "key_2_test", "value": "1234"}
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # create custom endpoint w invalid provider
+    url = "v0/custom_endpoint"
+    params = {
+        "name": "name@imaginary-provider",
+        "url": "https://url.com",
+        "key_name": "key_2_test",
+        "model_arg": "model_arg",
+    }
+    response = await client.post(url, params=params, headers=HEADERS)
+    assert response.status_code == 400, response.json()
+
+
+@pytest.mark.anyio
 async def test_custom_endpoint_metrics(  # noqa: WPS218, E501
     client: AsyncClient,
 ):
