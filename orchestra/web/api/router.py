@@ -111,13 +111,13 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    custom_endpoints.router,
-    tags=["Custom Endpoints"],
+    custom_api_keys.router,
+    tags=["Custom API keys"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    custom_api_keys.router,
-    tags=["Custom API keys"],
+    custom_endpoints.router,
+    tags=["Custom Endpoints"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
