@@ -83,7 +83,7 @@ def _get_custom_endpoint_benchmark(
             )
         rets = dict()
         latest_only = not start_time_provided and not end_time_provided
-        num_items = 0
+        max_num_items = 0
         if latest_only:
             start_time = "2024-01-01"
             end_time = str(datetime.now(timezone.utc))
@@ -101,7 +101,7 @@ def _get_custom_endpoint_benchmark(
                 end_time=end_time,
             )
             if inner_rets:
-                num_items = len(inner_rets)
+                max_num_items = max(max_num_items, len(inner_rets))
                 inner_rets.sort(key=lambda x: x.measured_at)
                 rets[metric_name] = [item.value for item in inner_rets]
                 if "measured_at" not in rets:
@@ -125,18 +125,28 @@ def _get_custom_endpoint_benchmark(
                 single_return,
             ]
         returns = list()
-        for i in range(num_items):
+        for i in range(max_num_items - 1, -1, -1):
+            # ToDo: group these such that the timestamps actually align (with
+            #  duplication of metrics across entries where appropriate)
             val = dict()
             for key in rets.keys():
                 if rets[key] is None:
                     val[key] = None
                 elif key == "measured_at" and isinstance(rets[key], dict):
-                    val[key] = {k: v[i] for k, v in rets[key].items()}
+                    val[key] = {}
+                    for k, v in rets[key].items():
+                        # in case one metric has less than max_num_items
+                        if v:
+                            # take the latest data from the top of stack, if exists
+                            val[key][k] = v.pop()
+                elif rets[key]:
+                    # take the latest data from the top of stack, if exists
+                    val[key] = rets[key].pop()
                 else:
-                    val[key] = rets[key][i]
+                    val[key] = None
             val["endpoint"] = model
             returns.append(val)
-        return returns
+        return reversed(returns)
     except Exception as e:
         raise e
 
