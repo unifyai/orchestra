@@ -1,4 +1,5 @@
-from typing import List, Optional, Union
+import json
+from typing import Any, List, Optional, Union
 
 from fastapi import Depends
 from sqlalchemy import or_, select
@@ -13,7 +14,7 @@ class LogDAO:
         self.session = session
 
     # TODO: Add suffix and ensure that keys with the same suffix have the same value
-    def create(  # noqa: WPS211
+    def create(
         self,
         log_event_id: int,
         key: str,
@@ -33,6 +34,24 @@ class LogDAO:
         self.session.add(new_log)
         self.session.commit()
         return new_log.id
+
+    def create_from_raw_k_v(
+        self,
+        log_event_id: int,
+        raw_k: str,
+        raw_v: Optional[Any] = None,
+    ) -> Optional[str]:
+
+        inferred_type = type(raw_v).__name__
+        clean_key = raw_k.split("/", 1)
+        json_v = json.dumps(raw_v)
+        return self.create(
+            log_event_id=log_event_id,
+            key=clean_key[0],
+            value=json_v,
+            version=clean_key[1] if len(clean_key) > 1 else None,
+            inferred_type=inferred_type,
+        )
 
     def filter(
         self,
