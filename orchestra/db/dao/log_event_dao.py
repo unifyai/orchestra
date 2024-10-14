@@ -5,7 +5,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import LogEvent
+from orchestra.db.models.orchestra_models import LogEvent, Project
 
 
 class LogEventDAO:
@@ -62,3 +62,12 @@ class LogEventDAO:
         except:
             self.session.rollback()
             raise ValueError
+
+    def get_user_id(self, id: int) -> Optional[str]:
+        query = (
+            select(Project.user_id)
+            .join(LogEvent, Project.id == LogEvent.project_id)
+            .where(LogEvent.id == id)
+        )
+        rows = self.session.execute(query)
+        return rows.fetchone()
