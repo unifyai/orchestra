@@ -10,10 +10,16 @@ from ..web.api.log.helpers import (
 )
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
+api_key_second_user = "2nd_api_key"
 
 HEADERS = {
     "accept": "application/json",
     "Authorization": f"Bearer {api_key}",
+}
+
+HEADERS_2 = {
+    "accept": "application/json",
+    "Authorization": f"Bearer {api_key_second_user}",
 }
 
 log_data = {
@@ -77,60 +83,67 @@ log_data = {
 }
 
 
-def _create_log(client, project_name):
+def _create_log(client, project_name, user=1):
+    _headers = HEADERS if user == 1 else HEADERS_2
     return client.post(
         "/v0/log",
         json={"project": project_name, "entries": log_data["log"]},
-        headers=HEADERS,
+        headers=_headers,
     )
 
 
-def _get_log(client, log_id):
-    return client.get(f"/v0/log/{log_id}", headers=HEADERS)
+def _get_log(client, log_id, user=1):
+    _headers = HEADERS if user == 1 else HEADERS_2
+    return client.get(f"/v0/log/{log_id}", headers=_headers)
 
 
-def _update_log(client, log_id):
+def _update_log(client, log_id, user=1):
+    _headers = HEADERS if user == 1 else HEADERS_2
     return client.put(
         f"/v0/log/{log_id}",
         json={"entries": log_data["log_update"]},
-        headers=HEADERS,
+        headers=_headers,
     )
 
 
-def _update_log_w_overwrite(client, log_id):
+def _update_log_w_overwrite(client, log_id, user=1):
+    _headers = HEADERS if user == 1 else HEADERS_2
     return client.put(
         f"/v0/log/{log_id}",
         json={"entries": log_data["log_update_w_overwrite"]},
-        headers=HEADERS,
+        headers=_headers,
     )
 
 
-async def _create_logs_for_grouping(client, project_name):
+async def _create_logs_for_grouping(client, project_name, user=1):
+    _headers = HEADERS if user == 1 else HEADERS_2
     data = log_data["logs_for_grouping"]
     for i in range(len(data)):
         response = await client.post(
             "/v0/log",
             json={"project": project_name, "entries": data[i]},
-            headers=HEADERS,
+            headers=_headers,
         )
         assert response.status_code == 200, response.json()
 
 
-async def _create_logs_for_filtering_n_metrics(client, project_name):
+async def _create_logs_for_filtering_n_metrics(client, project_name, user=1):
+    _headers = HEADERS if user == 1 else HEADERS_2
     data = log_data["logs_for_filtering_n_metrics"]
     for i in range(len(data)):
         response = await client.post(
             "/v0/log",
             json={"project": project_name, "entries": data[i]},
-            headers=HEADERS,
+            headers=_headers,
         )
         assert response.status_code == 200, response.json()
 
 
-def _create_project(client, project_name):
+def _create_project(client, project_name, user=1):
+    _headers = HEADERS if user == 1 else HEADERS_2
     url = "/v0/project"
     project_data = {"name": project_name}
-    return client.post(url, json=project_data, headers=HEADERS)
+    return client.post(url, json=project_data, headers=_headers)
 
 
 @pytest.mark.anyio
@@ -236,17 +249,16 @@ async def test_delete_log(client: AsyncClient):
 @pytest.mark.anyio
 async def test_delete_project_deletes_logs(client: AsyncClient):
     url = "/v0/project/test-project"
+    project_name = "test-project"
 
     # Create a project first to delete it
-    create_response = await client.post(
-        "/v0/project",
-        json={"name": "test-project"},
-        headers=HEADERS,
-    )
+    # check that existing projects don't change the functionality
+    _ = await _create_project(client, project_name, user=2)
+    create_response = await _create_project(client, project_name)
     assert create_response.status_code == 200
 
     # add a log
-    response = await _create_log(client, "test-project")
+    response = await _create_log(client, project_name)
     assert response.status_code == 200, response.json()
     log_id = response.json()
     assert isinstance(log_id, int)
@@ -375,8 +387,11 @@ def test_log_filter_helper(expression, values):
 @pytest.mark.anyio
 async def test_get_logs(client: AsyncClient):
     project_name = "eval-project"
-    _ = await _create_project(client, project_name)
-    _ = await _create_log(client, project_name)
+    # create the same project with another user to ensure the correct one
+    # is fetched
+    _ = await _create_project(client, project_name, user=2)
+    _ = await _create_project(client, project_name, user=1)
+    _ = await _create_log(client, project_name, user=1)
 
     # fetch entries for the project
     response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)

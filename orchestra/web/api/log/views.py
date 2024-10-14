@@ -66,11 +66,10 @@ def create_log(
     """
     # check if the project exists
     try:
-        project_id = project_dao.filter(
-            user_id=request_fastapi.state.user_id,
-            # TODO: Add organization id
-            name=request.project,
-        )[0][0].id
+        # TODO: Add organization id
+        user_id = request_fastapi.state.user_id
+        project = project_dao.filter(user_id=user_id, name=request.project)
+        project_id = project[0][0].id
     except IndexError:
         raise not_found("Project")
 
@@ -79,16 +78,7 @@ def create_log(
 
     # Store each key, value pair for the log
     for k, v in request.entries.items():
-        inferred_type = type(v).__name__
-        clean_key = k.split("/", 1)
-        json_v = json.dumps(v)
-        log_dao.create(
-            log_event_id=log_event_id,
-            key=clean_key[0],
-            value=json_v,
-            version=clean_key[1] if len(clean_key) > 1 else None,
-            inferred_type=inferred_type,
-        )
+        log_dao.create_from_raw_k_v(log_event_id=log_event_id, raw_k=k, raw_v=v)
     return log_event_id
 
 
@@ -117,20 +107,17 @@ def create_log(
 )
 def delete_log(
     request_fastapi: Request,
-    id: str = Path(
+    id: int = Path(
         description="ID of the log to delete from a project.",
         example="123",
     ),
-    project_dao: ProjectDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
 ):
     """
     Deletes a log from a project.
     """
     try:
-        log_event_project = log_event_dao.filter(id=id)[0][0].project_id
-        project_user = project_dao.filter(id=log_event_project)[0][0].user_id
-        if request_fastapi.state.user_id != project_user:
+        if log_event_dao.get_user_id(id=id) != request_fastapi.state.user_id:
             raise IndexError
     except IndexError:
         raise not_found(f"Log with id {id}")
@@ -165,37 +152,22 @@ def delete_log(
 def update_log(
     request_fastapi: Request,
     request: UpdateLogConfig,
-    id: str = Path(
+    id: int = Path(
         description="ID of the log to update.",
         example="123",
     ),
     log_dao: LogDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
-    project_dao: ProjectDAO = Depends(),
 ):
     """
     Updates the given log with more data.
     """
-    log_event_id = int(id)
-    log_events = log_event_dao.filter(id=log_event_id)
-    if not log_events:
-        raise not_found(f"Log with id {id}")
-    projects = project_dao.filter(id=log_events[0][0].project_id)
-    if not projects or projects[0][0].user_id != request_fastapi.state.user_id:
+    if log_event_dao.get_user_id(id=id) != request_fastapi.state.user_id:
         raise not_found(f"Log with id {id}")
     # Store each key, value pair for the log
     for k, v in request.entries.items():
-        inferred_type = type(v).__name__
-        clean_key = k.split("/", 1)
-        json_v = json.dumps(v)
-        log_dao.create(
-            log_event_id=log_event_id,
-            key=clean_key[0],
-            value=json_v,
-            version=clean_key[1] if len(clean_key) > 1 else None,
-            inferred_type=inferred_type,
-        )
-    return log_event_id
+        log_dao.create_from_raw_k_v(log_event_id=id, raw_k=k, raw_v=v)
+    return id
 
 
 @router.delete(
@@ -233,7 +205,7 @@ def update_log(
 )
 def delete_log_entry(
     request_fastapi: Request,
-    id: str = Path(
+    id: int = Path(
         description="ID of the log to delete an entry from.",
         example="123",
     ),
@@ -241,22 +213,16 @@ def delete_log_entry(
         description="Name of the entry to delete from a given log.",
         example="input-str",
     ),
-    project_dao: ProjectDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
     log_dao: LogDAO = Depends(),
 ):
     """
     Deletes a entry from a log.
     """
-    try:
-        log_event = log_event_dao.filter(id=id)[0][0]
-        project = project_dao.filter(id=log_event.project_id)[0][0]
-        if request_fastapi.state.user_id != project.user_id:
-            raise IndexError
-    except IndexError:
+    if log_event_dao.get_user_id(id=id) != request_fastapi.state.user_id:
         raise not_found(f"Log with id {id}")
-        # TODO: Deal with organisation IDs
-    log = log_dao.filter(log_event_id=log_event.id, key=entry)
+    # TODO: Deal with organisation IDs
+    log = log_dao.filter(log_event_id=id, key=entry)
     if not log:
         raise not_found(f"Log entry {entry}")
     log_dao.delete(id=log[0][0].id)
@@ -291,26 +257,20 @@ def delete_log_entry(
 )
 def get_log(
     request_fastapi: Request,
-    id: str = Path(
+    id: int = Path(
         description="ID of the log to fetch.",
         example="123",
     ),
     log_event_dao: LogEventDAO = Depends(),
-    project_dao: ProjectDAO = Depends(),
     log_dao: LogDAO = Depends(),
 ):
     """
     Returns the log associated with a given id.
     """
-    try:
-        log_event = log_event_dao.filter(id=id)[0][0]
-        project = project_dao.filter(id=log_event.project_id)[0][0]
-        if request_fastapi.state.user_id != project.user_id:
-            raise IndexError
-    except IndexError:
+    if log_event_dao.get_user_id(id=id) != request_fastapi.state.user_id:
         raise not_found(f"Log with id {id}")
     # TODO: Deal with organisation IDs
-    log_entries = log_dao.filter(log_event_id=log_event.id)
+    log_entries = log_dao.filter(log_event_id=id)
     entries = {l[0].key: json.loads(l[0].value) for l in log_entries}
     return {"id": id, "entries": entries}
 
@@ -372,9 +332,8 @@ def get_logs(
     Returns a list of filtered entries from a project.
     """
     try:
-        project_obj = project_dao.filter(name=project)[0][0]
-        if request_fastapi.state.user_id != project_obj.user_id:
-            raise IndexError
+        user_id = request_fastapi.state.user_id
+        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
     except IndexError:
         raise not_found(f"Project {project}")
     # TODO: Deal with organisation IDs
@@ -440,9 +399,8 @@ def get_logs_metric(
     Returns the reduction metric for filtered values for a specific key from a project.
     """
     try:
-        project_obj = project_dao.filter(name=project)[0][0]
-        if request_fastapi.state.user_id != project_obj.user_id:
-            raise IndexError
+        user_id = request_fastapi.state.user_id
+        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
     except IndexError:
         raise not_found(f"Project {project}")
     # TODO: Deal with organisation IDs
@@ -520,9 +478,8 @@ def get_log_groups(
     items within a given project based on its key.
     """
     try:
-        project_obj = project_dao.filter(name=project)[0][0]
-        if request_fastapi.state.user_id != project_obj.user_id:
-            raise IndexError
+        user_id = request_fastapi.state.user_id
+        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
     except IndexError:
         raise not_found(f"Project {project}")
     # TODO: Deal with organisation IDs
