@@ -11,7 +11,8 @@ def update_mint(pages, groupings):
     for grouping in groupings:
         results = []
         for group in groupings[grouping]:
-            results.append(groups[group])
+            if group in groups:
+                results.append(groups[group])
         final_results.append(
             {
                 "group": grouping,

@@ -1,4 +1,5 @@
 import json
+
 from docs.query import get_param_details
 
 chat_completions_groups = {
@@ -27,7 +28,7 @@ def get_property_details(schema_properties, files=[]):
             if "type" in prop:
                 property_type = prop["type"]
                 if property_type == "array" and "items" in prop:
-                    property_type = prop["items"]["type"]
+                    property_type = prop["items"].get("type", "Any")
                     property_type = f"[{property_type}]"
             else:  # in case multiple types are defined
                 property_type = " | ".join(
@@ -181,7 +182,7 @@ def get_body(path, route, schemas, route_config, curl_example, python_example):
                     "example": example,
                     "default": default,
                     "description": description,
-                }
+                },
             )
             if required:
                 required_props.append(name)
