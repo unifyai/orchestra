@@ -1,6 +1,7 @@
 """
 Includes endpoints related to log artifacts.
 """
+
 import json
 
 from fastapi import APIRouter, Depends, Path, Request
@@ -57,20 +58,12 @@ def create_artifacts(
     """
 
     try:
-        existing_project = project_dao.filter(
-            user_id=request_fastapi.state.user_id,
-            # TODO: Add organization id
-            name=project,
-        )
-        if not existing_project:
-            raise ValueError
+        # TODO: Add organization id
+        user_id = request_fastapi.state.user_id
+        _project_id = project_dao.filter(user_id=user_id, name=project)[0][0].id
         for k, v in request.artifacts.items():
-            artifact_dao.create(
-                project_id=existing_project[0][0].id,
-                key=k,
-                value=json.dumps(v),
-            )
-
+            v_str = json.dumps(v)
+            artifact_dao.create(project_id=_project_id, key=k, value=v_str)
         return {"info": "Artifact(s) created successfully!"}
     except:
         raise not_found(f"Project {project}")
@@ -126,11 +119,9 @@ def delete_artifact(
     Deletes an artifact from a project.
     """
     try:
-        project_id = project_dao.filter(
-            user_id=request_fastapi.state.user_id,
-            # TODO: Deal with org when appropriate
-            name=project,
-        )[0][0].id
+        # TODO: Deal with org when appropriate
+        user_id = request_fastapi.state.user_id
+        project_id = project_dao.filter(user_id=user_id, name=project)[0][0].id
     except IndexError:
         raise not_found(f"Project {project}")
     try:
@@ -180,11 +171,9 @@ def list_artifacts(
     Returns the key-value pairs of all artifacts in a project.
     """
     try:
-        project_id = project_dao.filter(
-            user_id=request_fastapi.state.user_id,
-            # TODO: Deal with org when appropriate
-            name=project,
-        )[0][0].id
+        # TODO: Deal with org when appropriate
+        user_id = request_fastapi.state.user_id
+        project_id = project_dao.filter(user_id=user_id, name=project)[0][0].id
     except IndexError:
         raise not_found(f"Project {project}")
     raw_artifacts = artifact_dao.filter(project_id=project_id)
