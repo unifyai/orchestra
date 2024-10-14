@@ -184,7 +184,7 @@ def get_dataset_entry(
             "description": "Dataset Created",
             "content": {
                 "application/json": {
-                    "example": {"info": "Dataset created sccessfully!"},
+                    "example": {"info": "Dataset created successfully!"},
                 },
             },
         },
