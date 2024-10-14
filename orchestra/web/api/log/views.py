@@ -158,7 +158,6 @@ def update_log(
     ),
     log_dao: LogDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
-    project_dao: ProjectDAO = Depends(),
 ):
     """
     Updates the given log with more data.
@@ -214,7 +213,6 @@ def delete_log_entry(
         description="Name of the entry to delete from a given log.",
         example="input-str",
     ),
-    project_dao: ProjectDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
     log_dao: LogDAO = Depends(),
 ):
@@ -264,7 +262,6 @@ def get_log(
         example="123",
     ),
     log_event_dao: LogEventDAO = Depends(),
-    project_dao: ProjectDAO = Depends(),
     log_dao: LogDAO = Depends(),
 ):
     """

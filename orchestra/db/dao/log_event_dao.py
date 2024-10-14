@@ -69,5 +69,5 @@ class LogEventDAO:
             .join(LogEvent, Project.id == LogEvent.project_id)
             .where(LogEvent.id == id)
         )
-        rows = self.session.execute(query)
-        return rows.fetchone()
+        rows = self.session.execute(query).fetchone()
+        return rows[0] if rows is not None else None
