@@ -401,6 +401,13 @@ async def test_get_logs(client: AsyncClient):
     assert isinstance(response.json()[0]["entries"]["boolean_input"], bool)
     assert isinstance(response.json()[0]["entries"]["numeric_input"], float)
 
+    # fetch entries for the empty project
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS_2)
+
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), list)  # List of logs is returned
+    assert len(response.json()) == 0
+
 
 @pytest.mark.anyio
 async def test_get_empty_logs(client: AsyncClient):

@@ -2,7 +2,7 @@ import json
 from typing import Any, List, Optional, Union
 
 from fastapi import Depends
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
@@ -62,30 +62,43 @@ class LogDAO:
         version: Optional[Union[str, List[str]]] = None,
         inferred_type: Optional[Union[str, List[str]]] = None,
     ) -> List[Log]:
+        def normalize_input(value):
+            if value is None or isinstance(value, list):
+                return value
+            return [value]
+
+        id = normalize_input(id)
+        log_event_id = normalize_input(log_event_id)
+        key = normalize_input(key)
+        value = normalize_input(value)
+        version = normalize_input(version)
+        inferred_type = normalize_input(inferred_type)
+
+        if (
+            id == []
+            or log_event_id == []
+            or key == []
+            or value == []
+            or version == []
+            or inferred_type == []
+        ):
+            return []
+
         query = select(Log)
         if id:
-            id = id if isinstance(id, list) else [id]
-            query = query.where(or_(*[Log.id == i for i in id]))
+            query = query.where(Log.id.in_(id))
         if log_event_id:
-            log_event_id = (
-                log_event_id if isinstance(log_event_id, list) else [log_event_id]
-            )
-            query = query.where(or_(*[Log.log_event_id == l for l in log_event_id]))
+            query = query.where(Log.log_event_id.in_(log_event_id))
         if key:
-            key = key if isinstance(key, list) else [key]
-            query = query.where(or_(*[Log.key == k for k in key]))
+            query = query.where(Log.key.in_(key))
         if value:
-            value = value if isinstance(value, list) else [value]
-            query = query.where(or_(*[Log.value == v for v in value]))
+            query = query.where(Log.value.in_(value))
         if version:
-            version = version if isinstance(version, list) else [version]
-            query = query.where(or_(*[Log.version == v for v in version]))
+            query = query.where(Log.version.in_(version))
         if inferred_type:
-            inferred_type = (
-                inferred_type if isinstance(inferred_type, list) else [inferred_type]
-            )
-            query = query.where(or_(*[Log.inferred_type == i for i in inferred_type]))
+            query = query.where(Log.inferred_type.in_(inferred_type))
         rows = self.session.execute(query)
+
         return rows.fetchall()
 
     def update(
