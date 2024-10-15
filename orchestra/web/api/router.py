@@ -79,8 +79,9 @@ groupings = {
     ],
     "Benchmarking": [
         "DatasetsV2",
+        "Dataset Artifacts",
         "Projects",
-        "Artifacts",
+        "Project Artifacts",
         "Evals",
     ],
     "Routing": [
@@ -151,7 +152,7 @@ api_router.include_router(
 )
 api_router.include_router(
     artifact.router,
-    tags=["Artifacts"],
+    tags=["Project Artifacts"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
