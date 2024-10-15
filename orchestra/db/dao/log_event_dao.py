@@ -63,6 +63,15 @@ class LogEventDAO:
             self.session.rollback()
             raise ValueError
 
+    def get_ts(self, id: int) -> Optional[str]:
+        query = (
+            select(Project.created_at)
+            .join(LogEvent, Project.id == LogEvent.project_id)
+            .where(LogEvent.id == id)
+        )
+        rows = self.session.execute(query).fetchone()
+        return rows[0] if rows is not None else None
+
     def get_user_id(self, id: int) -> Optional[str]:
         query = (
             select(Project.user_id)
