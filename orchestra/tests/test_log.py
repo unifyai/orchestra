@@ -336,6 +336,7 @@ async def test_get_log(client: AsyncClient):
 
     assert response.status_code == 200, response.json()
     assert "entries" in response.json()  # Log entries are returned
+    assert isinstance(response.json()["ts"], str)
     assert isinstance(response.json()["entries"]["boolean_input"], bool)
     assert isinstance(response.json()["entries"]["numeric_input"], float)
 
@@ -398,6 +399,7 @@ async def test_get_logs(client: AsyncClient):
 
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), list)  # List of logs is returned
+    assert isinstance(response.json()[0]["ts"], str)
     assert isinstance(response.json()[0]["entries"]["boolean_input"], bool)
     assert isinstance(response.json()[0]["entries"]["numeric_input"], float)
 
@@ -437,6 +439,8 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result) == 2
+    assert isinstance(result[0]["ts"], str)
+    assert isinstance(result[1]["ts"], str)
     assert result[0]["entries"] == {
         "description": "boiling water",
         "temperature": 100.0,
