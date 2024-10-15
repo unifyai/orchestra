@@ -267,9 +267,9 @@ def add_dataset_entries(
 
     for entry in request.entries:
         # check if the entry already exists
-        existing_id = dataset_entry_dao.filter(dataset_id=dataset_id, entry=entry)
+        existing_id = dataset_entry_dao.filter(dataset_id=dataset_id, entry=json.dumps(entry))
         if existing_id:
-            existing_ids.append(existing_id[0][0].id)
+            existing_ids.append(existing_id[0].id)
             continue
         # if not, add it to the dataset
         _id = dataset_entry_dao.create(dataset_id=dataset_id, entry=json.dumps(entry))
@@ -314,7 +314,7 @@ def rename_dataset(
     if dataset_id is None:
         raise not_found("Dataset")
     dataset_dao.update(id=dataset_id, name=new_name.name)
-    return "Dataset renamed successfully!"
+    return {"info": "Dataset renamed successfully!"}
 
 
 @router.delete(
@@ -363,7 +363,7 @@ def delete_dataset_entry(
     if not dataset_entry:
         raise not_found(f"Dataset entry {id}")
     dataset_entry_dao.delete(id=id)
-    return "Dataset Entry deleted successfully!"
+    return {"info": "Dataset Entry deleted successfully!"}
 
 
 @router.delete(
@@ -401,4 +401,4 @@ def delete_dataset(
     if dataset_id is None:
         raise not_found("Dataset")
     dataset_dao.delete(id=dataset_id)
-    return "Dataset deleted successfully!"
+    return {"info": "Dataset deleted successfully!"}

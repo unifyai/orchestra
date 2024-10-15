@@ -52,6 +52,16 @@ async def test_get_dataset_entries(client: AsyncClient):
     assert isinstance(response.json(), list)
     assert len(response.json()) == 3
 
+@pytest.mark.anyio
+async def test_create_duplicate_date_entries(client: AsyncClient):
+    dataset_name = "dir/subdir/dataset1"
+    await _create_dataset(client, dataset_name)
+    await _populate_dataset(client, dataset_name)
+    response = await _populate_dataset(client, dataset_name)
+    assert "already_present" in response.json()
+    assert len(response.json()["already_present"]) == 3
+    assert "added" in response.json()
+    assert len(response.json()["added"]) == 0
 
 @pytest.mark.anyio
 async def test_get_dataset_entries_not_found(client: AsyncClient):
@@ -94,7 +104,7 @@ async def test_delete_dataset(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
-    assert response.json() == "Dataset deleted successfully!"
+    assert response.json() == {"info": "Dataset deleted successfully!"}
 
 
 @pytest.mark.anyio
