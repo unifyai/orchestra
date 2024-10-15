@@ -51,7 +51,7 @@ class DatasetArtifactDAO:
         id: int,
         key: Optional[str] = None,
         value: Optional[str] = None,
-        project_id: Optional[int] = None,
+        dataset_id: Optional[int] = None,
     ) -> None:
         query = select(DatasetArtifact)
         query = query.where(DatasetArtifact.id == id)
@@ -62,8 +62,8 @@ class DatasetArtifactDAO:
                 setattr(entry, "key", key)
             if value:
                 setattr(entry, "value", value)
-            if project_id:
-                setattr(entry, "dataset_id", project_id)
+            if dataset_id:
+                setattr(entry, "dataset_id", dataset_id)
 
     def delete(self, id: int):
         try:
