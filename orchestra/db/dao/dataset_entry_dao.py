@@ -21,7 +21,7 @@ class DatasetEntryDAO:
         entry: str,
     ) -> str:
         _id = shortuuid.ShortUUID().random(length=10)
-        entry = json.dumps(entry)
+        # entry = json.dumps(entry)
         entry_hash = hashlib.sha256(entry.encode("utf-8")).hexdigest()
 
         new_dataset_entry = DatasetEntry(
@@ -39,7 +39,7 @@ class DatasetEntryDAO:
         self,
         id: Optional[str] = None,
         dataset_id: Optional[int] = None,
-        entry: Optional[Any] = None,
+        entry: Optional[str] = None,
         offset: int = 0,
         limit: Optional[int] = None,
     ) -> List[DatasetEntry]:
@@ -47,7 +47,7 @@ class DatasetEntryDAO:
         if id:
             query = query.where(DatasetEntry.id == id)
         if entry:
-            query = query.where(DatasetEntry.entry == json.dumps(entry))
+            query = query.where(DatasetEntry.entry == entry)
         if dataset_id:
             query = query.where(DatasetEntry.dataset_id == dataset_id)
 
@@ -57,7 +57,7 @@ class DatasetEntryDAO:
         query = query.order_by(DatasetEntry.created_at)
 
         rows = self.session.execute(query)
-        return rows.fetchall()
+        return list(rows.fetchall())
 
     def delete(self, id: str) -> None:
         try:
