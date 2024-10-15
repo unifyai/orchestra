@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Log
+from orchestra.db.models.orchestra_models import Log, LogEvent
 
 
 class LogDAO:
@@ -84,7 +84,10 @@ class LogDAO:
         ):
             return []
 
-        query = select(Log)
+        query = select(Log, LogEvent.created_at.label("log_event_ts")).join(
+            LogEvent,
+            LogEvent.id == Log.log_event_id,
+        )
         if id:
             query = query.where(Log.id.in_(id))
         if log_event_id:

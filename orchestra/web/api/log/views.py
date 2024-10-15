@@ -238,6 +238,7 @@ def delete_log_entry(
                 "application/json": {
                     "example": {
                         "id": "123",
+                        "ts": "2024-10-30 12:20:03",
                         "entries": {"input": "...", "output": "..."},
                     },
                 },
@@ -270,9 +271,10 @@ def get_log(
     if log_event_dao.get_user_id(id=id) != request_fastapi.state.user_id:
         raise not_found(f"Log with id {id}")
     # TODO: Deal with organisation IDs
+    ts = log_event_dao.get_ts(id=id)
     log_entries = log_dao.filter(log_event_id=id)
     entries = {l[0].key: json.loads(l[0].value) for l in log_entries}
-    return {"id": id, "entries": entries}
+    return {"id": id, "ts": ts, "entries": entries}
 
 
 @router.get(
@@ -285,6 +287,7 @@ def get_log(
                     "example": [
                         {
                             "id": "0",
+                            "ts": "2024-10-30 12:20:03",
                             "entries": {
                                 "key1": "a",
                                 "key2": 1.0,
@@ -292,6 +295,7 @@ def get_log(
                         },
                         {
                             "id": "1",
+                            "ts": "2024-10-30 12:22:14",
                             "entries": {
                                 "key1": "b",
                                 "key2": 2.0,
@@ -344,8 +348,16 @@ def get_logs(
     logs = list()
     filter_dict = str_filter_exp_to_dict(filter_expr) if filter_expr is not None else {}
     for log_event_id, log_dict in formatted_logs.items():
-        if filter_dict == {} or evaluate_filter_expression(filter_dict, **log_dict):
-            logs.append({"id": log_event_id, "entries": log_dict})
+        if filter_dict == {} or evaluate_filter_expression(
+            filter_dict, **log_dict["entries"]
+        ):
+            logs.append(
+                {
+                    "id": log_event_id,
+                    "ts": log_dict["ts"],
+                    "entries": log_dict["entries"],
+                },
+            )
     return logs
 
 
@@ -414,8 +426,10 @@ def get_logs_metric(
     # filter
     filtered_logs = dict()
     for log_event_id, log_dict in formatted_logs.items():
-        if filter_dict == {} or evaluate_filter_expression(filter_dict, **log_dict):
-            filtered_logs[log_event_id] = log_dict
+        if filter_dict == {} or evaluate_filter_expression(
+            filter_dict, **log_dict["entries"]
+        ):
+            filtered_logs[log_event_id] = log_dict["entries"]
     # TODO: Add pagination
     if not filtered_logs:
         raise Exception(
