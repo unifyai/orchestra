@@ -724,6 +724,22 @@ class Artifact(Base):
     updated_at = Column(TIMESTAMP, onupdate=func.now())
 
 
+class DatasetArtifact(Base):
+    __tablename__ = "dataset_artifact"
+
+    id = Column(Integer, primary_key=True)
+    dataset_id = Column(
+        Integer,
+        ForeignKey("dataset.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key = Column(String, nullable=False)
+    value = Column(String)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+
+
 class LogEvent(Base):
     __tablename__ = "log_event"
 
