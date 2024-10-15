@@ -9,6 +9,7 @@ from orchestra.web.api import (  # noqa: WPS235
     credits,
     custom_api_keys,
     custom_endpoints,
+    dataset_artifact,
     datasets,
     datasetv2,
     default_prompt,
@@ -131,6 +132,11 @@ api_router.include_router(
 api_router.include_router(  # CLEANUP: Delete this
     datasets.router,
     tags=["Datasets"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    dataset_artifact.router,
+    tags=["Dataset Artifacts"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(  # TODO: Change this to dataset
