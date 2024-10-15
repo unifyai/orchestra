@@ -3,15 +3,18 @@ Endpoints related to dataset management and operations.
 """
 
 import json
-from typing import Any, List
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import JSONResponse
 from starlette import status
 
 from orchestra.db.dao.dataset_dao import DatasetDAO
 from orchestra.db.dao.dataset_entry_dao import DatasetEntryDAO
-from orchestra.web.api.datasetv2.schema import DatasetInfo, DatasetNewName
+from orchestra.web.api.datasetv2.schema import (
+    DatasetInfo,
+    DatasetNewName,
+    EntriesConfig,
+)
 from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
@@ -238,16 +241,12 @@ def create_dataset(
     },
 )
 def add_dataset_entries(
-    request: Request,
+    request_fastapi: Request,
+    request: EntriesConfig,
     name: str = Path(
         ...,
         description="Dataset name (can include forward slashes)",
         example="my_dataset",
-    ),
-    entries: List[Any] = Body(
-        ...,
-        description="List of entries to add",
-        json_schema_extra={"example": ["id_1", "id_2", "id_3"]},
     ),
     dataset_dao: DatasetDAO = Depends(),
     dataset_entry_dao: DatasetEntryDAO = Depends(),
@@ -256,7 +255,7 @@ def add_dataset_entries(
     Add multiple entries to a dataset.
     """
     dataset_id = dataset_dao.get_id(
-        user_id=request.state.user_id,
+        user_id=request_fastapi.state.user_id,
         name=name,
         include_public=True,
     )
@@ -266,7 +265,7 @@ def add_dataset_entries(
     existing_ids = []
     new_ids = []
 
-    for entry in entries:
+    for entry in request.entries:
         # check if the entry already exists
         existing_id = dataset_entry_dao.filter(dataset_id=dataset_id, entry=entry)
         if existing_id:
