@@ -267,7 +267,9 @@ def add_dataset_entries(
 
     for entry in request.entries:
         # check if the entry already exists
-        existing_id = dataset_entry_dao.filter(dataset_id=dataset_id, entry=json.dumps(entry))
+        existing_id = dataset_entry_dao.filter(
+            dataset_id=dataset_id, entry=json.dumps(entry)
+        )
         if existing_id:
             existing_ids.append(existing_id[0].id)
             continue

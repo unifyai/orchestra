@@ -52,6 +52,7 @@ async def test_get_dataset_entries(client: AsyncClient):
     assert isinstance(response.json(), list)
     assert len(response.json()) == 3
 
+
 @pytest.mark.anyio
 async def test_create_duplicate_date_entries(client: AsyncClient):
     dataset_name = "dir/subdir/dataset1"
@@ -62,6 +63,7 @@ async def test_create_duplicate_date_entries(client: AsyncClient):
     assert len(response.json()["already_present"]) == 3
     assert "added" in response.json()
     assert len(response.json()["added"]) == 0
+
 
 @pytest.mark.anyio
 async def test_get_dataset_entries_not_found(client: AsyncClient):
