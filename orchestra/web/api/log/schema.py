@@ -6,7 +6,9 @@ from pydantic import BaseModel, Field
 class CreateLogConfig(BaseModel):
     project: str = Field(
         description="Name of the project the stored entries will be associated to.",
-        json_schema_extra="eval-project",
+        json_schema_extra={
+            "example": "eval-project",
+        },
     )
     entries: Dict[str, Any] = Field(
         description="Dictionary containing one or more key:value pairs that "
