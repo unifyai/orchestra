@@ -19,7 +19,9 @@ def _create_dataset(client, dataset_name):
 def _populate_dataset(client, dataset_name):
     return client.post(
         f"/v0/datasetv2/{dataset_name}/entries",
-        json=["string entry", 123, True],
+        json={
+            "entries": ["string entry", 123, True],
+        },
         headers=HEADERS,
     )
 
