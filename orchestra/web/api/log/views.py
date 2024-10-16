@@ -351,12 +351,10 @@ def get_logs(
     for log_event_id, log_dict in formatted_logs.items():
         if filter_dict:
             try:
-                fail = evaluate_filter_expression(filter_dict, **log_dict["entries"])
-                print(fail)
-                if fail == False:
+                match = evaluate_filter_expression(filter_dict, **log_dict["entries"])
+                if match == False:
                     continue
             except KeyNotFound:
-                print("knf")
                 continue
 
         logs.append(
