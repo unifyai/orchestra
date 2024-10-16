@@ -14,11 +14,11 @@ from orchestra.web.api.log.schema import CreateLogConfig, UpdateLogConfig
 from orchestra.web.api.utils.http_responses import not_found
 
 from .helpers import (
+    KeyNotFound,
     evaluate_filter_expression,
     format_logs,
     reduction_methods,
     str_filter_exp_to_dict,
-    KeyNotFound,
 )
 
 router = APIRouter()
@@ -63,6 +63,10 @@ def create_log(
     Creates a log associated to a project. Logs are
     LLM-call-level data that might depend on other variables.
 
+    A "explicit_types" dictionary can be passed as part of the `entries`.
+    If present, any matching key inside this dictionary will override the
+    inferred type of that particular entry.
+
     This method returns the id of the new stored log.
     """
     # check if the project exists
@@ -77,9 +81,16 @@ def create_log(
     # Create log_event and get its id
     log_event_id = log_event_dao.create(project_id=project_id)
 
+    explicit_types = request.entries.pop("explicit_types", None)
+
     # Store each key, value pair for the log
     for k, v in request.entries.items():
-        log_dao.create_from_raw_k_v(log_event_id=log_event_id, raw_k=k, raw_v=v)
+        log_dao.create_from_raw_k_v(
+            log_event_id=log_event_id,
+            raw_k=k,
+            raw_v=v,
+            explicit_types=explicit_types,
+        )
     return log_event_id
 
 
@@ -162,12 +173,25 @@ def update_log(
 ):
     """
     Updates the given log with more data.
+
+    A "explicit_types" dictionary can be passed as part of the `entries`.
+    If present, any matching key inside this dictionary will override the
+    inferred type of that particular entry.
+
     """
     if log_event_dao.get_user_id(id=id) != request_fastapi.state.user_id:
         raise not_found(f"Log with id {id}")
+
+    explicit_types = request.entries.pop("explicit_types", None)
+
     # Store each key, value pair for the log
     for k, v in request.entries.items():
-        log_dao.create_from_raw_k_v(log_event_id=id, raw_k=k, raw_v=v)
+        log_dao.create_from_raw_k_v(
+            log_event_id=id,
+            raw_k=k,
+            raw_v=v,
+            explicit_types=explicit_types,
+        )
     return id
 
 
