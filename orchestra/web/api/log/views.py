@@ -18,6 +18,7 @@ from .helpers import (
     format_logs,
     reduction_methods,
     str_filter_exp_to_dict,
+    KeyNotFound,
 )
 
 router = APIRouter()
@@ -348,16 +349,23 @@ def get_logs(
     logs = list()
     filter_dict = str_filter_exp_to_dict(filter_expr) if filter_expr is not None else {}
     for log_event_id, log_dict in formatted_logs.items():
-        if filter_dict == {} or evaluate_filter_expression(
-            filter_dict, **log_dict["entries"]
-        ):
-            logs.append(
-                {
-                    "id": log_event_id,
-                    "ts": log_dict["ts"],
-                    "entries": log_dict["entries"],
-                },
-            )
+        if filter_dict:
+            try:
+                fail = evaluate_filter_expression(filter_dict, **log_dict["entries"])
+                print(fail)
+                if fail == False:
+                    continue
+            except KeyNotFound:
+                print("knf")
+                continue
+
+        logs.append(
+            {
+                "id": log_event_id,
+                "ts": log_dict["ts"],
+                "entries": log_dict["entries"],
+            },
+        )
     return logs
 
 
@@ -426,6 +434,8 @@ def get_logs_metric(
     # filter
     filtered_logs = dict()
     for log_event_id, log_dict in formatted_logs.items():
+        if key not in log_dict["entries"]:
+            continue
         if filter_dict == {} or evaluate_filter_expression(
             filter_dict, **log_dict["entries"]
         ):

@@ -3,6 +3,9 @@ import re
 from typing import Any, List, Union
 
 
+class KeyNotFound(Exception):
+    pass
+
 def _tokenize(s):
     token_specification = [
         ("NUMBER", r"\d+(\.\d*)?|\.\d+"),  # Integer or decimal number
@@ -225,7 +228,7 @@ def evaluate_filter_expression(expr, **variables):
                 if var_name in variables:
                     return variables[var_name]
                 else:
-                    raise ValueError(f"Variable '{var_name}' not provided")
+                    raise KeyNotFound(f"Variable '{var_name}' not provided")
             elif expr["type"] == "string":
                 return expr["value"]
             else:
