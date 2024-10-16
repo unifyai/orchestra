@@ -79,6 +79,9 @@ log_data = {
             "state": "liquid->solid",
             "safe": False,
         },
+        {
+            "description": "lava",
+        },
     ],
 }
 
@@ -504,7 +507,7 @@ async def test_get_logs_metric(client: AsyncClient, key: str, metric: str):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert result == reduction_methods[metric]([d[key] for d in data])
+    assert result == reduction_methods[metric]([d[key] for d in data if key in d])
 
 
 @pytest.mark.anyio
