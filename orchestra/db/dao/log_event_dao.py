@@ -29,12 +29,20 @@ class LogEventDAO:
         self,
         id: Optional[int] = None,
         project_id: Optional[int] = None,
+        offset: int = 0,
+        limit: Optional[int] = None,
     ) -> List[LogEvent]:
         query = select(LogEvent)
         if id:
             query = query.where(LogEvent.id == id)
         if project_id:
             query = query.where(LogEvent.project_id == project_id)
+
+        query = query.offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
+        query = query.order_by(LogEvent.created_at)
+
         rows = self.session.execute(query)
         return rows.fetchall()
 
