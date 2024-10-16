@@ -328,6 +328,8 @@ def get_logs(
         description="Boolean string to filter entries. TODO: Detailed page.",
         example="len(output) > 200 and temperature == 0.5",
     ),
+    limit: int = Query(10, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     log_event_dao: LogEventDAO = Depends(),
     project_dao: ProjectDAO = Depends(),
     log_dao: LogDAO = Depends(),
@@ -341,7 +343,11 @@ def get_logs(
     except IndexError:
         raise not_found(f"Project {project}")
     # TODO: Deal with organisation IDs
-    log_events = log_event_dao.filter(project_id=project_obj.id)
+    log_events = log_event_dao.filter(
+        project_id=project_obj.id,
+        limit=limit,
+        offset=offset,
+    )
     all_logs = log_dao.filter(log_event_id=[le[0].id for le in log_events])
     formatted_logs = format_logs(all_logs)
     # TODO: Add pagination
