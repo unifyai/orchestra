@@ -1,5 +1,5 @@
 import json
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends
 from sqlalchemy import select
@@ -40,11 +40,20 @@ class LogDAO:
         log_event_id: int,
         raw_k: str,
         raw_v: Optional[Any] = None,
+        explicit_types: Optional[Dict] = None,
     ) -> Optional[str]:
 
         inferred_type = type(raw_v).__name__
         clean_key = raw_k.split("/", 1)
         json_v = json.dumps(raw_v)
+
+        # TODO: Narrow down the types that can be passed?
+        if explicit_types and isinstance(explicit_types, Dict):
+            if clean_key[0] in explicit_types:
+                inferred_type = explicit_types[clean_key[0]]
+            if raw_k in explicit_types:
+                inferred_type = explicit_types[raw_k]
+
         return self.create(
             log_event_id=log_event_id,
             key=clean_key[0],
