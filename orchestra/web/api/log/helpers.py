@@ -6,6 +6,7 @@ from typing import Any, List, Union
 class KeyNotFound(Exception):
     pass
 
+
 def _tokenize(s):
     token_specification = [
         ("NUMBER", r"\d+(\.\d*)?|\.\d+"),  # Integer or decimal number
