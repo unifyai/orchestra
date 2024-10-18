@@ -300,7 +300,7 @@ def get_log(
     log_entries = log_dao.filter(log_event_id=id)
     entries = {
         l[0].key
-        + (l[0].value if l[0].value is not None else ""): json.loads(l[0].value)
+        + (l[0].version if l[0].version is not None else ""): json.loads(l[0].value)
         for l in log_entries
     }
     return {"id": id, "ts": ts, "entries": entries}

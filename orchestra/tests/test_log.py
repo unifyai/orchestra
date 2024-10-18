@@ -340,6 +340,7 @@ async def test_get_log(client: AsyncClient):
     assert response.status_code == 200, response.json()
     assert "entries" in response.json()  # Log entries are returned
     assert isinstance(response.json()["ts"], str)
+    breakpoint()
     assert isinstance(response.json()["entries"]["boolean_input"], bool)
     assert isinstance(response.json()["entries"]["numeric_input"], float)
 

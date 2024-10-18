@@ -326,7 +326,7 @@ def format_logs(all_logs):
         log_event_id = log[0].log_event_id
         if log_event_id not in formatted_entries:
             formatted_entries[log_event_id] = {"entries": {}}
-        key = log[0].key + (log[0].value if log[0].value is not None else "")
+        key = log[0].key + (log[0].version if log[0].version is not None else "")
         assert (
             key not in formatted_entries[log_event_id]
         ), f"found duplicates for key {key} with log_id {log_event_id}"
