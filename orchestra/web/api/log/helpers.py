@@ -16,7 +16,7 @@ def _tokenize(s):
         ("OP", r"==|<=|>=|<|>|(?<!\w)(?:not in|in|not|and|or|is)(?!\w)"),
         ("FUNCTION", r"len"),  # Functions
         ("BOOLEAN", r"(?<!\w)(?:True|False)(?!\w)"),  # Booleans
-        ("IDENTIFIER", r"[A-Za-z_][A-Za-z0-9_]*"),  # Identifiers
+        ("IDENTIFIER", r"[A-Za-z_/][A-Za-z0-9_/]*"),  # Identifiers
         ("LPAREN", r"\("),
         ("RPAREN", r"\)"),
         ("SKIP", r"[ \t]+"),  # Skip over spaces and tabs
