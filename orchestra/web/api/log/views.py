@@ -244,10 +244,18 @@ def delete_log_entry(
     """
     Deletes a entry from a log.
     """
+    # "/" is replaced with "-" on client side, such that url is parsable
+    entry = entry.replace("-", "/")
+    if "/" in entry:
+        clean_key = entry.split("/")[0]
+        version = entry.split("/")[1]
+    else:
+        clean_key = entry
+        version = None
     if log_event_dao.get_user_id(id=id) != request_fastapi.state.user_id:
         raise not_found(f"Log with id {id}")
     # TODO: Deal with organisation IDs
-    log = log_dao.filter(log_event_id=id, key=entry)
+    log = log_dao.filter(log_event_id=id, key=clean_key, version=version)
     if not log:
         raise not_found(f"Log entry {entry}")
     log_dao.delete(id=log[0][0].id)
