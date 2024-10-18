@@ -396,6 +396,12 @@ async def test_get_log_not_found(client: AsyncClient):
                 "lorry": "big",
             },
         ),
+        (
+            "not exists(car)",
+            {
+                "lorry": "big",
+            },
+        ),
     ],
 )
 def test_log_filter_helper(expression, values):
@@ -408,7 +414,9 @@ def test_log_filter_helper(expression, values):
             + "="
             + ('"{}"'.format(value) if isinstance(value, str) else str(value)),
         )
-    if "exists" in expression:
+    if "not exists" in expression:
+        expected = expression.split("exists(")[-1].split(")")[0] not in values
+    elif "exists" in expression:
         expected = expression.split("exists(")[-1].split(")")[0] in values
     else:
         expected = eval(expression)

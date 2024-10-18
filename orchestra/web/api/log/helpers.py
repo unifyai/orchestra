@@ -134,6 +134,10 @@ class _Parser:
         return result
 
     def expr(self):
+        node = self.or_expr()
+        return node
+
+    def or_expr(self):
         node = self.and_expr()
         while self.current_token[0] == "OP" and self.current_token[1] == "or":
             op = self.current_token[1]
@@ -143,13 +147,23 @@ class _Parser:
         return node
 
     def and_expr(self):
-        node = self.comp_expr()
+        node = self.not_expr()
         while self.current_token[0] == "OP" and self.current_token[1] == "and":
             op = self.current_token[1]
             self.advance()
-            right = self.comp_expr()
+            right = self.not_expr()
             node = {"lhs": node, "operand": op, "rhs": right}
         return node
+
+    def not_expr(self):
+        if self.current_token[0] == "OP" and self.current_token[1] == "not":
+            op = self.current_token[1]
+            self.advance()
+            rhs = self.not_expr()
+            node = {"operand": op, "rhs": rhs}
+            return node
+        else:
+            return self.comp_expr()
 
     def comp_expr(self):
         node = self.primary()
@@ -162,18 +176,9 @@ class _Parser:
             "in",
             "not in",
             "is",
-            "not",
         ):
             op = self.current_token[1]
             self.advance()
-            # Handle 'not in' operator
-            if (
-                op == "not"
-                and self.current_token[0] == "OP"
-                and self.current_token[1] == "in"
-            ):
-                op = "not in"
-                self.advance()
             right = self.primary()
             node = {"lhs": node, "operand": op, "rhs": right}
         return node
@@ -254,6 +259,9 @@ def evaluate_filter_expression(expr, **variables):
                     return True
                 rhs = evaluate_filter_expression(expr["rhs"], **variables)
                 return lhs or rhs
+            elif operand == "not":
+                rhs = evaluate_filter_expression(expr["rhs"], **variables)
+                return not rhs
             elif operand in ("==", "<", ">", "<=", ">="):
                 lhs = evaluate_filter_expression(expr["lhs"], **variables)
                 rhs = evaluate_filter_expression(expr["rhs"], **variables)
