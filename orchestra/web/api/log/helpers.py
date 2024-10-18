@@ -57,7 +57,8 @@ def _tokenize(s):
         ),  # String
         # Operators, note the order to match 'not in' before 'not' and 'in'
         ("OP", r"==|<=|>=|<|>|(?<!\w)(?:not in|in|not|and|or|is)(?!\w)"),
-        ("FUNCTION", r"len"),  # Functions
+        ("LEN", r"len"),  # length
+        ("EXISTS", r"exists"),  # length
         ("BOOLEAN", r"(?<!\w)(?:True|False)(?!\w)"),  # Booleans
         ("IDENTIFIER", r"[A-Za-z_/][A-Za-z0-9_/]*"),  # Identifiers
         ("LPAREN", r"\("),
@@ -87,8 +88,10 @@ def _tokenize(s):
             tokens.append(("BOOLEAN", value))
         elif kind == "IDENTIFIER":
             tokens.append(("IDENTIFIER", value))
-        elif kind == "FUNCTION":
-            tokens.append(("FUNCTION", value))
+        elif kind == "LEN":
+            tokens.append(("LEN", value))
+        elif kind == "EXISTS":
+            tokens.append(("EXISTS", value))
         elif kind == "OP":
             tokens.append(("OP", value))
         elif kind == "LPAREN":
@@ -176,7 +179,11 @@ class _Parser:
         return node
 
     def primary(self):
-        if self.current_token[0] == "FUNCTION" and self.current_token[1] == "len":
+        if self.current_token[0] in ("LEN", "EXISTS") and self.current_token[1] in (
+            "len",
+            "exists",
+        ):
+            fn = self.current_token[1]
             self.advance()
             if self.current_token[0] == "LPAREN":
                 self.advance()
@@ -184,10 +191,10 @@ class _Parser:
                 if self.current_token[0] == "RPAREN":
                     self.advance()
                 else:
-                    raise RuntimeError('Expected ")" after len function')
-                return {"operand": "len", "rhs": expr}
+                    raise RuntimeError('Expected ")" after len or exists function')
+                return {"operand": fn, "rhs": expr}
             else:
-                raise RuntimeError('Expected "(" after len')
+                raise RuntimeError('Expected "(" after len or exists function')
         elif self.current_token[0] == "LPAREN":
             self.advance()
             node = self.expr()
@@ -263,6 +270,12 @@ def evaluate_filter_expression(expr, **variables):
             elif operand == "len":
                 rhs = evaluate_filter_expression(expr["rhs"], **variables)
                 return len(rhs)
+            elif operand == "exists":
+                try:
+                    evaluate_filter_expression(expr["rhs"], **variables)
+                    return True
+                except KeyNotFound:
+                    return False
             elif operand == "in":
                 lhs = evaluate_filter_expression(expr["lhs"], **variables)
                 rhs = evaluate_filter_expression(expr["rhs"], **variables)
