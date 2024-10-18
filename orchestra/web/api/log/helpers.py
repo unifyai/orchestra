@@ -7,11 +7,54 @@ class KeyNotFound(Exception):
     pass
 
 
+def parse_nested(s, pos):
+    start_pos = pos
+    stack = []
+    while pos < len(s):
+        c = s[pos]
+        if c in "([{":
+            stack.append(c)
+        elif c in ")]}":
+            if not stack:
+                raise RuntimeError(f"Unmatched closing bracket {c!r} at position {pos}")
+            open_bracket = stack.pop()
+            if (
+                (open_bracket == "(" and c != ")")
+                or (open_bracket == "[" and c != "]")
+                or (open_bracket == "{" and c != "}")
+            ):
+                raise RuntimeError(
+                    f"Mismatched brackets {open_bracket!r} and {c!r} at positions {start_pos} and {pos}",
+                )
+            if not stack:
+                pos += 1  # Include the closing bracket
+                break
+        elif c in ("'", '"'):
+            # Skip over string literals
+            quote_char = c
+            pos += 1
+            while pos < len(s):
+                if s[pos] == "\\":
+                    pos += 2  # Skip escaped characters
+                elif s[pos] == quote_char:
+                    pos += 1
+                    break
+                else:
+                    pos += 1
+            continue
+        pos += 1
+    else:
+        raise RuntimeError(f"Unmatched brackets starting at position {start_pos}")
+    return s[start_pos:pos], pos
+
+
 def _tokenize(s):
     token_specification = [
         ("NUMBER", r"\d+(\.\d*)?|\.\d+"),  # Integer or decimal number
-        ("STRING", r"'([^'\\]*(?:\\.[^'\\]*)*)'|\"([^\"\\]*(?:\\.[^\"\\]*)*)\""),
-        # String
+        (
+            "STRING",
+            r"'([^'\\]*(?:\\.[^'\\]*)*)'|\"([^\"\\]*(?:\\.[^\"\\]*)*)\"",
+        ),  # String
         # Operators, note the order to match 'not in' before 'not' and 'in'
         ("OP", r"==|<=|>=|<|>|(?<!\w)(?:not in|in|not|and|or|is)(?!\w)"),
         ("FUNCTION", r"len"),  # Functions
@@ -19,6 +62,7 @@ def _tokenize(s):
         ("IDENTIFIER", r"[A-Za-z_/][A-Za-z0-9_/]*"),  # Identifiers
         ("LPAREN", r"\("),
         ("RPAREN", r"\)"),
+        ("BRACKET_OPEN", r"[\[\{]"),
         ("SKIP", r"[ \t]+"),  # Skip over spaces and tabs
         ("MISMATCH", r"."),  # Any other character
     ]
@@ -35,7 +79,7 @@ def _tokenize(s):
             value = float(value) if "." in value else int(value)
             tokens.append(("NUMBER", value))
         elif kind == "STRING":
-            if value[0] == "'" or value[0] == '"':
+            if value[0] in ("'", '"'):
                 value = value[1:-1].encode("utf-8").decode("unicode_escape")
             tokens.append(("STRING", value))
         elif kind == "BOOLEAN":
@@ -51,8 +95,14 @@ def _tokenize(s):
             tokens.append(("LPAREN", value))
         elif kind == "RPAREN":
             tokens.append(("RPAREN", value))
+        elif kind == "BRACKET_OPEN":
+            nested_content, new_pos = parse_nested(line, mo.start())
+            tokens.append(("OTHER", nested_content))
+            pos = new_pos
+            mo = get_token(line, pos)
+            continue
         elif kind == "SKIP":
-            pass
+            pass  # Ignore whitespace
         elif kind == "MISMATCH":
             raise RuntimeError(f"Unexpected character {value!r} at position {pos}")
         pos = mo.end()
@@ -162,6 +212,10 @@ class _Parser:
             node = {"type": "string", "value": self.current_token[1]}
             self.advance()
             return node
+        elif self.current_token[0] == "OTHER":
+            node = {"type": "other", "value": self.current_token[1]}
+            self.advance()
+            return node
         else:
             raise RuntimeError(f"Unexpected token {self.current_token}")
 
@@ -232,6 +286,8 @@ def evaluate_filter_expression(expr, **variables):
                     raise KeyNotFound(f"Variable '{var_name}' not provided")
             elif expr["type"] == "string":
                 return expr["value"]
+            elif expr["type"] == "other":
+                return json.loads(expr["value"].replace("'", '"'))
             else:
                 raise ValueError(f"Unknown leaf node type: {expr['type']}")
         else:

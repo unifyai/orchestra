@@ -372,6 +372,18 @@ async def test_get_log_not_found(client: AsyncClient):
             "coffee == 'hot' or ice_cream == 'cold' and temperature == 1.23",
             {"coffee": "hot", "ice_cream": "cold", "temperature": 1.23},
         ),
+        (
+            "(messages == [{'role': 'assistant', "
+            "'context': 'you are a helpful assistant'}])",
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "context": "you are a helpful assistant",
+                    },
+                ],
+            },
+        ),
     ],
 )
 def test_log_filter_helper(expression, values):
