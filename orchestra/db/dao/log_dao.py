@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends
@@ -29,6 +30,7 @@ class LogDAO:
             value=value,
             version=version,
             inferred_type=inferred_type,
+            created_at=datetime.now(timezone.utc),
         )
 
         self.session.add(new_log)
@@ -109,6 +111,8 @@ class LogDAO:
             query = query.where(Log.version.in_(version))
         if inferred_type:
             query = query.where(Log.inferred_type.in_(inferred_type))
+
+        query = query.order_by(Log.created_at)
         rows = self.session.execute(query)
 
         return rows.fetchall()
