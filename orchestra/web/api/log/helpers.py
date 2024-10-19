@@ -51,14 +51,15 @@ def parse_nested(s, pos):
 def _tokenize(s):
     token_specification = [
         ("NUMBER", r"\d+(\.\d*)?|\.\d+"),  # Integer or decimal number
+        # Updated STRING regex to handle nested quotation marks and escaped quotes correctly
         (
             "STRING",
-            r"'([^'\\]*(?:\\.[^'\\]*)*)'|\"([^\"\\]*(?:\\.[^\"\\]*)*)\"",
-        ),  # String
+            r'"(?:[^"\\]|\\.)*?"|\'(?:[^\'\\]|\\.)*?\'',
+        ),  # String with non-greedy quantifier
         # Operators, note the order to match 'not in' before 'not' and 'in'
         ("OP", r"==|<=|>=|<|>|(?<!\w)(?:not in|in|not|and|or|is)(?!\w)"),
         ("LEN", r"len"),  # length
-        ("EXISTS", r"exists"),  # length
+        ("EXISTS", r"exists"),  # exists
         ("BOOLEAN", r"(?<!\w)(?:True|False)(?!\w)"),  # Booleans
         ("IDENTIFIER", r"[A-Za-z_/][A-Za-z0-9_/]*"),  # Identifiers
         ("LPAREN", r"\("),
@@ -72,7 +73,7 @@ def _tokenize(s):
     line = s
     pos = 0
     tokens = []
-    mo = get_token(line)
+    mo = get_token(line, pos)
     while mo is not None:
         kind = mo.lastgroup
         value = mo.group()
@@ -80,8 +81,9 @@ def _tokenize(s):
             value = float(value) if "." in value else int(value)
             tokens.append(("NUMBER", value))
         elif kind == "STRING":
-            if value[0] in ("'", '"'):
-                value = value[1:-1].encode("utf-8").decode("unicode_escape")
+            # Remove the surrounding quotes and unescape
+            value = value[1:-1]
+            value = bytes(value, "utf-8").decode("unicode_escape")
             tokens.append(("STRING", value))
         elif kind == "BOOLEAN":
             value = True if value == "True" else False
