@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -402,6 +403,11 @@ async def test_get_log_not_found(client: AsyncClient):
                 "lorry": "big",
             },
         ),
+        ('a == "\'"', {"a": "'"}),
+        ("a == '\\\"'", {"a": '"'}),
+        ("a == '\\\\'", {"a": "\\"}),
+        ('a == "He said, \\"Hello\\""', {"a": 'He said, "Hello"'}),
+        ("a == 'It\\'s a test'", {"a": "It's a test"}),
     ],
 )
 def test_log_filter_helper(expression, values):
@@ -409,11 +415,7 @@ def test_log_filter_helper(expression, values):
     assert isinstance(express_dict, dict)
     result = evaluate_filter_expression(express_dict, **values)
     for key, value in values.items():
-        exec(
-            key
-            + "="
-            + ('"{}"'.format(value) if isinstance(value, str) else str(value)),
-        )
+        exec(key + "=" + (str(value) if isinstance(value, bool) else json.dumps(value)))
     if "not exists" in expression:
         expected = expression.split("exists(")[-1].split(")")[0] not in values
     elif "exists" in expression:
