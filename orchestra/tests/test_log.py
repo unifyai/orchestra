@@ -164,6 +164,36 @@ async def test_create_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_create_logs_non_matching_versions(client: AsyncClient):
+    project_name = "non-matching-versions"
+    _ = await _create_project(client, project_name)
+
+    # This should work fine
+    response = await client.post(
+        "/v0/log",
+        json={"project": project_name, "entries": {"e1/v0": "test"}},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # same version and value
+    response = await client.post(
+        "/v0/log",
+        json={"project": project_name, "entries": {"e1/v0": "test"}},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # same version and different value -> fail
+    response = await client.post(
+        "/v0/log",
+        json={"project": project_name, "entries": {"e1/v0": "test_v1"}},
+        headers=HEADERS,
+    )
+    assert response.status_code == 400, response.json()
+
+
+@pytest.mark.anyio
 async def test_create_logs_project_not_found(client: AsyncClient):
     project_name = "non_existent_project"
 
