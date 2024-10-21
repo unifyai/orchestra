@@ -14,15 +14,18 @@ class LogDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    # TODO: Add suffix and ensure that keys with the same suffix have the same value
     def create(
         self,
+        project_id: int,
         log_event_id: int,
         key: str,
         value: Optional[str] = None,  # JSON serialised
         version: Optional[str] = None,
         inferred_type: Optional[str] = None,
     ) -> Optional[str]:
+
+        if version and not self.correct_key_version(project_id, key, version, value):
+            raise ValueError
 
         new_log = Log(
             log_event_id=log_event_id,
@@ -39,6 +42,7 @@ class LogDAO:
 
     def create_from_raw_k_v(
         self,
+        project_id: int,
         log_event_id: int,
         raw_k: str,
         raw_v: Optional[Any] = None,
@@ -57,6 +61,7 @@ class LogDAO:
                 inferred_type = explicit_types[raw_k]
 
         return self.create(
+            project_id=project_id,
             log_event_id=log_event_id,
             key=clean_key[0],
             value=json_v,
@@ -150,3 +155,19 @@ class LogDAO:
         except:
             self.session.rollback()
             raise ValueError
+
+    def correct_key_version(self, project_id: int, key: str, version: str, value: str):
+        query = (
+            select(Log.value)
+            .join(LogEvent, Log.log_event_id == LogEvent.id)
+            .where(
+                LogEvent.project_id == project_id,
+                Log.key == key,
+                Log.version == version,
+            )
+            .limit(1)  # We only need one entry since we assume consistency
+        )
+
+        result = self.session.execute(query).fetchone()
+
+        return result is None or result[0] == value
