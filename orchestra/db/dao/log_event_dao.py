@@ -96,4 +96,4 @@ class LogEventDAO:
             .where(LogEvent.id == id)
         )
         rows = self.session.execute(query).fetchone()
-        return rows[0] if rows is not None else None
+        return rows if rows is not None else (None, None)
