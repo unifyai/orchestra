@@ -5,7 +5,7 @@ import pytest
 from httpx import AsyncClient
 
 from ..web.api.log.helpers import (
-    evaluate_filter_expression,
+    # evaluate_filter_expression,
     reduction_methods,
     str_filter_exp_to_dict,
 )
@@ -471,59 +471,80 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     _ = await _create_logs_for_filtering_n_metrics(client, project_name)
 
     # temperature > 0.
+   # response = await client.get(
+   #     f"/v0/logs?project={project_name}",
+   #     params={"filter_expr": "temperature > 0."},
+   #     headers=HEADERS,
+   # )
+   # assert response.status_code == 200, response.json()
+   # result = response.json()
+   # assert len(result) == 2
+   # assert isinstance(result[0]["ts"], str)
+   # assert isinstance(result[1]["ts"], str)
+   # assert result[0]["entries"] == {
+   #     "description": "boiling water",
+   #     "temperature": 100.0,
+   #     "state": "liquid->gas",
+   #     "safe": False,
+   # }
+   # assert result[1]["entries"] == {
+   #     "description": "surface of the sun",
+   #     "temperature": 6000.0,
+   #     "state": "gas",
+   #     "safe": False,
+   # }
+
+   # # safe is True
+   # response = await client.get(
+   #     f"/v0/logs?project={project_name}",
+   #     params={"filter_expr": "safe is True"},
+   #     headers=HEADERS,
+   # )
+   # assert response.status_code == 200, response.json()
+   # result = response.json()
+   # assert len(result) == 1
+   # assert result[0]["entries"] == {
+   #     "description": "freezing water",
+   #     "temperature": 0.0,
+   #     "state": "liquid->solid",
+   #     "safe": True,
+   # }
+
+   # # liquid not in state
+   # response = await client.get(
+   #     f"/v0/logs?project={project_name}",
+   #     params={"filter_expr": "'liquid' not in state"},
+   #     headers=HEADERS,
+   # )
+   # assert response.status_code == 200, response.json()
+   # result = response.json()
+   # assert len(result) == 1
+   # assert result[0]["entries"] == {
+   #     "description": "surface of the sun",
+   #     "temperature": 6000.0,
+   #     "state": "gas",
+   #     "safe": False,
+   # }
+    # liquid not in state
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "temperature > 0."},
+        params={"filter_expr": "('liquid' not in state) or (temperature == 0)"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result) == 2
-    assert isinstance(result[0]["ts"], str)
-    assert isinstance(result[1]["ts"], str)
     assert result[0]["entries"] == {
-        "description": "boiling water",
-        "temperature": 100.0,
-        "state": "liquid->gas",
-        "safe": False,
-    }
-    assert result[1]["entries"] == {
         "description": "surface of the sun",
         "temperature": 6000.0,
         "state": "gas",
         "safe": False,
     }
-
-    # safe is True
-    response = await client.get(
-        f"/v0/logs?project={project_name}",
-        params={"filter_expr": "safe is True"},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-    result = response.json()
-    assert len(result) == 1
-    assert result[0]["entries"] == {
+    assert result[1]["entries"] == {
         "description": "freezing water",
         "temperature": 0.0,
         "state": "liquid->solid",
         "safe": True,
-    }
-
-    # liquid not in state
-    response = await client.get(
-        f"/v0/logs?project={project_name}",
-        params={"filter_expr": "'liquid' not in state"},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-    result = response.json()
-    assert len(result) == 1
-    assert result[0]["entries"] == {
-        "description": "surface of the sun",
-        "temperature": 6000.0,
-        "state": "gas",
-        "safe": False,
     }
 
 

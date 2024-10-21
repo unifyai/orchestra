@@ -12,13 +12,14 @@ from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.web.api.log.schema import CreateLogConfig, UpdateLogConfig
 from orchestra.web.api.utils.http_responses import not_found
+from orchestra.db.dependencies import get_db_session
 
 from .helpers import (
     KeyNotFound,
-    evaluate_filter_expression,
     format_logs,
     reduction_methods,
     str_filter_exp_to_dict,
+    build_filter,
 )
 
 router = APIRouter()
@@ -372,6 +373,7 @@ def get_logs(
     log_event_dao: LogEventDAO = Depends(),
     project_dao: ProjectDAO = Depends(),
     log_dao: LogDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Returns a list of filtered entries from a project.
@@ -392,6 +394,29 @@ def get_logs(
     # TODO: Add pagination
     logs = list()
     filter_dict = str_filter_exp_to_dict(filter_expr) if filter_expr is not None else {}
+
+    from orchestra.db.models.orchestra_models import Log, LogEvent
+    from sqlalchemy.orm import aliased
+
+    log_event_alias = aliased(LogEvent, name="log_event")
+    condition = build_filter(filter_dict, LogEvent, session)
+    query = session.query(LogEvent).filter(condition)
+    results = query.all()
+
+    res1 = session.query(Log).all()
+
+    breakpoint()
+    for log_event in results:
+        log_event_id = log_event.id
+        log_dict = formatted_logs[log_event_id]
+        logs.append(
+            {
+                "id": log_event_id,
+                "ts": log_dict["ts"],
+                "entries": log_dict["entries"],
+            },
+        )
+    return logs
     for log_event_id, log_dict in formatted_logs.items():
         if filter_dict:
             try:

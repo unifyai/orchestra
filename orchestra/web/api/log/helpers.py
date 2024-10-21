@@ -1,6 +1,7 @@
 import json
 import re
 from typing import Any, List, Union
+from sqlalchemy import select
 
 
 class KeyNotFound(Exception):
@@ -245,81 +246,156 @@ def str_filter_exp_to_dict(s):
     return result
 
 
-def evaluate_filter_expression(expr, **variables):
-    if isinstance(expr, dict):
-        if "operand" in expr:
-            operand = expr["operand"]
-            if operand == "and":
-                lhs = evaluate_filter_expression(expr["lhs"], **variables)
-                if not lhs:
-                    return False
-                rhs = evaluate_filter_expression(expr["rhs"], **variables)
-                return lhs and rhs
-            elif operand == "or":
-                lhs = evaluate_filter_expression(expr["lhs"], **variables)
-                if lhs:
-                    return True
-                rhs = evaluate_filter_expression(expr["rhs"], **variables)
-                return lhs or rhs
-            elif operand == "not":
-                rhs = evaluate_filter_expression(expr["rhs"], **variables)
-                return not rhs
-            elif operand in ("==", "<", ">", "<=", ">="):
-                lhs = evaluate_filter_expression(expr["lhs"], **variables)
-                rhs = evaluate_filter_expression(expr["rhs"], **variables)
-                if operand == "==":
-                    return lhs == rhs
-                elif operand == "<":
-                    return lhs < rhs
-                elif operand == ">":
-                    return lhs > rhs
-                elif operand == "<=":
-                    return lhs <= rhs
-                elif operand == ">=":
-                    return lhs >= rhs
-            elif operand == "len":
-                rhs = evaluate_filter_expression(expr["rhs"], **variables)
-                return len(rhs)
-            elif operand == "exists":
+from orchestra.db.models.orchestra_models import Log
+
+import re
+from sqlalchemy import (
+    func,
+    cast,
+)
+from sqlalchemy.orm import aliased
+from sqlalchemy.sql import and_, or_, not_
+from sqlalchemy import Float
+
+
+def build_filter(filter_dict, log_event_alias, session):
+    """
+    Recursively build SQLAlchemy filter from filter_dict.
+
+    Args:
+        filter_dict (dict): The filter dictionary.
+        log_event_alias: Alias for LogEvent to correlate subqueries.
+
+    Returns:
+        SQLAlchemy condition
+    """
+    if not isinstance(filter_dict, dict):
+        # Base case: direct value
+        return filter_dict
+
+    operand = filter_dict.get("operand")
+
+    if operand in ("and", "or"):
+        lhs = build_filter(filter_dict["lhs"], log_event_alias, session)
+        rhs = build_filter(filter_dict["rhs"], log_event_alias, session)
+        if operand == "and":
+            return and_(lhs, rhs)
+        else:
+            return or_(lhs, rhs)
+
+    elif operand == "not":
+        rhs = build_filter(filter_dict["rhs"], log_event_alias, session)
+        return not_(rhs)
+
+    elif operand in ("==", "!=", "<", ">", "<=", ">=", "in", "not in", "is"):
+        lhs = filter_dict["lhs"]
+        rhs = filter_dict["rhs"]
+
+        if isinstance(lhs, dict) and lhs.get("type") == "identifier":
+            key = lhs["value"]
+            # Create a correlated subquery for the Log entry
+            log_alias = aliased(Log)
+            subq = select(log_alias.id).filter(
+                log_alias.log_event_id == log_event_alias.id,
+                log_alias.key == key,
+            )
+
+            # Apply the appropriate comparison
+            if operand in ("==", "!=", "is"):
+                condition = log_alias.value
+                compare_value = json.dumps(rhs)
+                if operand == "==" or operand == "is":
+                    subq = subq.filter(condition == compare_value)
+                elif operand == "!=":
+                    subq = subq.filter(condition != compare_value)
+            elif operand in ("<", ">", "<=", ">="):
+                # Attempt to cast to float for numeric comparison
                 try:
-                    evaluate_filter_expression(expr["rhs"], **variables)
-                    return True
-                except KeyNotFound:
-                    return False
+                    compare_value = float(rhs)
+                    condition = cast(log_alias.value, Float)
+                    if operand == "<":
+                        subq = subq.filter(condition < compare_value)
+                    elif operand == ">":
+                        subq = subq.filter(condition > compare_value)
+                    elif operand == "<=":
+                        subq = subq.filter(condition <= compare_value)
+                    elif operand == ">=":
+                        subq = subq.filter(condition >= compare_value)
+                except ValueError:
+                    raise ValueError(
+                        f"Cannot cast value '{rhs}' to float for comparison."
+                    )
             elif operand == "in":
-                lhs = evaluate_filter_expression(expr["lhs"], **variables)
-                rhs = evaluate_filter_expression(expr["rhs"], **variables)
-                return lhs in rhs
+                subq = subq.filter(log_alias.value.contains(rhs))
             elif operand == "not in":
-                lhs = evaluate_filter_expression(expr["lhs"], **variables)
-                rhs = evaluate_filter_expression(expr["rhs"], **variables)
-                return lhs not in rhs
-            elif operand == "is":
-                lhs = evaluate_filter_expression(expr["lhs"], **variables)
-                rhs = evaluate_filter_expression(expr["rhs"], **variables)
-                return lhs is rhs
-            else:
-                raise ValueError(f"Unknown operand: {operand}")
-        elif "type" in expr:
-            if expr["type"] == "identifier":
-                var_name = expr["value"]
-                if var_name in variables:
-                    return variables[var_name]
-                else:
-                    raise KeyNotFound(f"Variable '{var_name}' not provided")
-            elif expr["type"] == "string":
-                return expr["value"]
-            elif expr["type"] == "other":
-                return json.loads(expr["value"].replace("'", '"'))
-            else:
-                raise ValueError(f"Unknown leaf node type: {expr['type']}")
-        else:
-            raise ValueError(f"Malformed expression node: {expr}")
+                subq = subq.filter(~log_alias.value.contains(rhs))
+
+
+            return subq.exists()
+
+        if operand in ["in", "not in"]:
+            if isinstance(rhs, dict) and rhs.get("type") == "identifier":
+                key = rhs["value"]
+                compare_value = json.dumps(lhs["value"])
+                log_alias = aliased(Log)
+                subq = select(log_alias.id).filter(
+                    log_alias.log_event_id == log_event_alias.id,
+                    log_alias.key == key,
+                )
+                if operand == "in":
+                    subq = subq.filter(log_alias.value.contains(lhs["value"]))
+                elif operand == "not in":
+                    subq = subq.filter(~log_alias.value.contains(lhs["value"]))
+
+                return subq.exists()
+
+    elif operand in ("len", "exists"):
+        func_name = operand
+        rhs = filter_dict["rhs"]
+
+        if func_name == "len":
+            # Assuming the next level is a comparison
+            if isinstance(rhs, dict):
+                length = rhs.get("rhs")  # The value to compare with
+                comparison = rhs.get("operand")  # e.g., '<', '>', etc.
+                identifier = rhs.get("lhs", {}).get("value")
+                if identifier:
+                    log_alias = aliased(Log)
+                    subq = (
+                        session.query(log_alias.id)
+                        .filter(
+                            log_alias.log_event_id == log_event_alias.id,
+                            log_alias.key == identifier,
+                        )
+                        .with_entities(func.length(log_alias.value))
+                    )
+                    if comparison == "<":
+                        return subq.as_scalar() < length
+                    elif comparison == ">":
+                        return subq.as_scalar() > length
+                    elif comparison == "<=":
+                        return subq.as_scalar() <= length
+                    elif comparison == ">=":
+                        return subq.as_scalar() >= length
+                    elif comparison == "==":
+                        return subq.as_scalar() == length
+                    elif comparison == "!=":
+                        return subq.as_scalar() != length
+        elif func_name == "exists":
+            # Custom handling for 'exists' if needed
+            pass
+
     else:
-        if isinstance(expr, (int, float, bool)):
-            return expr
-        else:
-            raise TypeError(f"Unexpected expression type: {expr}")
+        # Handle literals or unexpected structures
+        if "type" in filter_dict:
+            if filter_dict["type"] == "boolean":
+                return filter_dict["value"]
+            elif filter_dict["type"] == "string":
+                return filter_dict["value"]
+            elif filter_dict["type"] == "number":
+                return filter_dict["value"]
+
+    raise ValueError(f"Unsupported filter structure: {filter_dict}")
 
 
 # Reduction #
