@@ -45,7 +45,7 @@ supported_models = {
     },
     "mistral-small": {
         "endpoint": "mistral/mistral-small-latest",
-        "context_window": 32768,
+        "context_window": 128000,
         "cost": {"prompt": 0.2, "completion": 0.6},
     },
     "mistral-large": {
@@ -57,5 +57,15 @@ supported_models = {
         "endpoint": "mistral/open-mistral-nemo-2407",
         "context_window": 128000,
         "cost": {"prompt": 0.15, "completion": 0.15},
+    },
+    "ministral-3b": {
+        "endpoint": "mistral/ministral-3b-latest",
+        "context_window": 128000,
+        "cost": {"prompt": 0.04, "completion": 0.04},
+    },
+    "ministral-8b": {
+        "endpoint": "mistral/ministral-3b-latest",
+        "context_window": 128000,
+        "cost": {"prompt": 0.1, "completion": 0.1},
     },
 }
