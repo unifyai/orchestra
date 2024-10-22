@@ -579,6 +579,18 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     assert len(result) == 1
     assert result[0]["entries"]["description"] == "lava"
 
+    # check in
+
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "'lava' in description"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result) == 1
+    assert result[0]["entries"]["description"] == "lava"
+
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("key", ["description", "temperature", "state", "safe"])

@@ -317,7 +317,6 @@ def build_filter(filter_dict, log_event_alias, session):
                 else:
                     raise TypeError(f"Unsupported type: {py_type}")
 
-            # Apply the appropriate comparison
             if operand in ("==", "!=", "is"):
                 condition = cast(log_alias.value, get_sqlalchemy_type(rhs))
                 compare_value = rhs
@@ -327,7 +326,6 @@ def build_filter(filter_dict, log_event_alias, session):
                 elif operand == "!=":
                     subq = subq.filter(condition != compare_value)
             elif operand in ("<", ">", "<=", ">="):
-                # Attempt to cast to float for numeric comparison
                 try:
                     compare_value = float(rhs)
                     condition = cast(log_alias.value, Float)
@@ -349,6 +347,7 @@ def build_filter(filter_dict, log_event_alias, session):
                 subq = subq.filter(~log_alias.value.contains(rhs))
 
             return subq.exists()
+
         if isinstance(lhs, dict) and lhs.get("operand") == "len":
             length = rhs
             identifier = lhs.get("rhs", {}).get("value")
@@ -378,7 +377,6 @@ def build_filter(filter_dict, log_event_alias, session):
         if operand in ["in", "not in"]:
             if isinstance(rhs, dict) and rhs.get("type") == "identifier":
                 key = rhs["value"]
-                # compare_value = json.dumps(lhs["value"])
                 log_alias = aliased(Log)
                 subq = select(log_alias.id).filter(
                     log_alias.log_event_id == log_event_alias.id,
