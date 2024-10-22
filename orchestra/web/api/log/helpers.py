@@ -411,5 +411,5 @@ def format_logs(all_logs):
         ), f"found duplicates for key {key} with log_id {log_event_id}"
         formatted_entries[log_event_id]["ts"] = log[1].strftime("%Y-%m-%d %H:%M:%S")
         formatted_entries[log_event_id]["entries"][key] = json.loads(log[0].value)
-        formatted_entries[log_event_id]["version"][key] = log[0].version
+        formatted_entries[log_event_id]["version"] = {key: log[0].version}
     return formatted_entries

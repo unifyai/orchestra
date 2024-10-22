@@ -425,7 +425,9 @@ def get_logs(
                 "entries": {
                     k
                     + (
-                        f"/{log_dict['version'][k]}" if k in log_dict["version"] else ""
+                        f"/{log_dict['version'][k]}"
+                        if log_dict["version"][k] is not None
+                        else ""
                     ): v
                     for k, v in log_dict["entries"].items()
                 },
