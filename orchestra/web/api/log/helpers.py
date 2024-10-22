@@ -3,6 +3,8 @@ import re
 from typing import Any, List, Union
 from sqlalchemy import select
 
+from sqlalchemy import cast, Integer, Boolean, Float, String, JSON, select
+
 
 class KeyNotFound(Exception):
     pass
@@ -300,10 +302,26 @@ def build_filter(filter_dict, log_event_alias, session):
                 log_alias.key == key,
             )
 
+            def get_sqlalchemy_type(py_object):
+                """Maps Python object types to SQLAlchemy column types."""
+                py_type = type(py_object)
+
+                if py_type is bool:
+                    return Boolean
+                elif py_type in (int, float):
+                    return Float
+                elif py_type is str:
+                    return String
+                elif py_type is dict:
+                    return JSON
+                else:
+                    raise TypeError(f"Unsupported type: {py_type}")
+
             # Apply the appropriate comparison
             if operand in ("==", "!=", "is"):
-                condition = log_alias.value
-                compare_value = json.dumps(rhs)
+                condition = cast(log_alias.value, get_sqlalchemy_type(rhs))
+                compare_value = rhs
+                # compare_value = json.dumps(rhs)
                 if operand == "==" or operand == "is":
                     subq = subq.filter(condition == compare_value)
                 elif operand == "!=":
@@ -330,13 +348,37 @@ def build_filter(filter_dict, log_event_alias, session):
             elif operand == "not in":
                 subq = subq.filter(~log_alias.value.contains(rhs))
 
-
             return subq.exists()
+        if isinstance(lhs, dict) and lhs.get("operand") == "len":
+            length = rhs
+            identifier = lhs.get("rhs", {}).get("value")
+            if identifier:
+                log_alias = aliased(Log)
+                subq = (
+                    session.query(log_alias.id)
+                    .filter(
+                        log_alias.log_event_id == log_event_alias.id,
+                        log_alias.key == identifier,
+                    )
+                    .with_entities(func.length(log_alias.value))
+                )
+                if operand == "<":
+                    return subq.as_scalar() < length
+                elif operand == ">":
+                    return subq.as_scalar() > length
+                elif operand == "<=":
+                    return subq.as_scalar() <= length
+                elif operand == ">=":
+                    return subq.as_scalar() >= length
+                elif operand == "==":
+                    return subq.as_scalar() == length
+                elif operand == "!=":
+                    return subq.as_scalar() != length
 
         if operand in ["in", "not in"]:
             if isinstance(rhs, dict) and rhs.get("type") == "identifier":
                 key = rhs["value"]
-                compare_value = json.dumps(lhs["value"])
+                # compare_value = json.dumps(lhs["value"])
                 log_alias = aliased(Log)
                 subq = select(log_alias.id).filter(
                     log_alias.log_event_id == log_event_alias.id,
@@ -354,9 +396,8 @@ def build_filter(filter_dict, log_event_alias, session):
         rhs = filter_dict["rhs"]
 
         if func_name == "len":
-            # Assuming the next level is a comparison
             if isinstance(rhs, dict):
-                length = rhs.get("rhs")  # The value to compare with
+                length = rhs.get("rhs")
                 comparison = rhs.get("operand")  # e.g., '<', '>', etc.
                 identifier = rhs.get("lhs", {}).get("value")
                 if identifier:
@@ -381,9 +422,18 @@ def build_filter(filter_dict, log_event_alias, session):
                         return subq.as_scalar() == length
                     elif comparison == "!=":
                         return subq.as_scalar() != length
+
         elif func_name == "exists":
-            # Custom handling for 'exists' if needed
-            pass
+            rhs = filter_dict["rhs"]
+            if isinstance(rhs, dict) and rhs.get("type") == "identifier":
+                identifier = rhs["value"]
+
+                log_alias = aliased(Log)
+                subq = select(log_alias.id).filter(
+                    log_alias.log_event_id == log_event_alias.id,
+                    log_alias.key == identifier,
+                )
+                return subq.exists()
 
     else:
         # Handle literals or unexpected structures
