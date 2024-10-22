@@ -7,18 +7,64 @@ class KeyNotFound(Exception):
     pass
 
 
+def parse_nested(s, pos):
+    start_pos = pos
+    stack = []
+    while pos < len(s):
+        c = s[pos]
+        if c in "([{":
+            stack.append(c)
+        elif c in ")]}":
+            if not stack:
+                raise RuntimeError(f"Unmatched closing bracket {c!r} at position {pos}")
+            open_bracket = stack.pop()
+            if (
+                (open_bracket == "(" and c != ")")
+                or (open_bracket == "[" and c != "]")
+                or (open_bracket == "{" and c != "}")
+            ):
+                raise RuntimeError(
+                    f"Mismatched brackets {open_bracket!r} and {c!r} at positions {start_pos} and {pos}",
+                )
+            if not stack:
+                pos += 1  # Include the closing bracket
+                break
+        elif c in ("'", '"'):
+            # Skip over string literals
+            quote_char = c
+            pos += 1
+            while pos < len(s):
+                if s[pos] == "\\":
+                    pos += 2  # Skip escaped characters
+                elif s[pos] == quote_char:
+                    pos += 1
+                    break
+                else:
+                    pos += 1
+            continue
+        pos += 1
+    else:
+        raise RuntimeError(f"Unmatched brackets starting at position {start_pos}")
+    return s[start_pos:pos], pos
+
+
 def _tokenize(s):
     token_specification = [
         ("NUMBER", r"\d+(\.\d*)?|\.\d+"),  # Integer or decimal number
-        ("STRING", r"'([^'\\]*(?:\\.[^'\\]*)*)'|\"([^\"\\]*(?:\\.[^\"\\]*)*)\""),
-        # String
+        # Updated STRING regex to handle nested quotation marks and escaped quotes correctly
+        (
+            "STRING",
+            r'"(?:[^"\\]|\\.)*?"|\'(?:[^\'\\]|\\.)*?\'',
+        ),  # String with non-greedy quantifier
         # Operators, note the order to match 'not in' before 'not' and 'in'
         ("OP", r"==|<=|>=|<|>|(?<!\w)(?:not in|in|not|and|or|is)(?!\w)"),
-        ("FUNCTION", r"len"),  # Functions
+        ("LEN", r"len"),  # length
+        ("EXISTS", r"exists"),  # exists
         ("BOOLEAN", r"(?<!\w)(?:True|False)(?!\w)"),  # Booleans
-        ("IDENTIFIER", r"[A-Za-z_][A-Za-z0-9_]*"),  # Identifiers
+        ("IDENTIFIER", r"[A-Za-z_/][A-Za-z0-9_/]*"),  # Identifiers
         ("LPAREN", r"\("),
         ("RPAREN", r"\)"),
+        ("BRACKET_OPEN", r"[\[\{]"),
         ("SKIP", r"[ \t]+"),  # Skip over spaces and tabs
         ("MISMATCH", r"."),  # Any other character
     ]
@@ -27,7 +73,7 @@ def _tokenize(s):
     line = s
     pos = 0
     tokens = []
-    mo = get_token(line)
+    mo = get_token(line, pos)
     while mo is not None:
         kind = mo.lastgroup
         value = mo.group()
@@ -35,24 +81,33 @@ def _tokenize(s):
             value = float(value) if "." in value else int(value)
             tokens.append(("NUMBER", value))
         elif kind == "STRING":
-            if value[0] == "'" or value[0] == '"':
-                value = value[1:-1].encode("utf-8").decode("unicode_escape")
+            # Remove the surrounding quotes and unescape
+            value = value[1:-1]
+            value = bytes(value, "utf-8").decode("unicode_escape")
             tokens.append(("STRING", value))
         elif kind == "BOOLEAN":
             value = True if value == "True" else False
             tokens.append(("BOOLEAN", value))
         elif kind == "IDENTIFIER":
             tokens.append(("IDENTIFIER", value))
-        elif kind == "FUNCTION":
-            tokens.append(("FUNCTION", value))
+        elif kind == "LEN":
+            tokens.append(("LEN", value))
+        elif kind == "EXISTS":
+            tokens.append(("EXISTS", value))
         elif kind == "OP":
             tokens.append(("OP", value))
         elif kind == "LPAREN":
             tokens.append(("LPAREN", value))
         elif kind == "RPAREN":
             tokens.append(("RPAREN", value))
+        elif kind == "BRACKET_OPEN":
+            nested_content, new_pos = parse_nested(line, mo.start())
+            tokens.append(("OTHER", nested_content))
+            pos = new_pos
+            mo = get_token(line, pos)
+            continue
         elif kind == "SKIP":
-            pass
+            pass  # Ignore whitespace
         elif kind == "MISMATCH":
             raise RuntimeError(f"Unexpected character {value!r} at position {pos}")
         pos = mo.end()
@@ -81,6 +136,10 @@ class _Parser:
         return result
 
     def expr(self):
+        node = self.or_expr()
+        return node
+
+    def or_expr(self):
         node = self.and_expr()
         while self.current_token[0] == "OP" and self.current_token[1] == "or":
             op = self.current_token[1]
@@ -90,13 +149,23 @@ class _Parser:
         return node
 
     def and_expr(self):
-        node = self.comp_expr()
+        node = self.not_expr()
         while self.current_token[0] == "OP" and self.current_token[1] == "and":
             op = self.current_token[1]
             self.advance()
-            right = self.comp_expr()
+            right = self.not_expr()
             node = {"lhs": node, "operand": op, "rhs": right}
         return node
+
+    def not_expr(self):
+        if self.current_token[0] == "OP" and self.current_token[1] == "not":
+            op = self.current_token[1]
+            self.advance()
+            rhs = self.not_expr()
+            node = {"operand": op, "rhs": rhs}
+            return node
+        else:
+            return self.comp_expr()
 
     def comp_expr(self):
         node = self.primary()
@@ -109,24 +178,19 @@ class _Parser:
             "in",
             "not in",
             "is",
-            "not",
         ):
             op = self.current_token[1]
             self.advance()
-            # Handle 'not in' operator
-            if (
-                op == "not"
-                and self.current_token[0] == "OP"
-                and self.current_token[1] == "in"
-            ):
-                op = "not in"
-                self.advance()
             right = self.primary()
             node = {"lhs": node, "operand": op, "rhs": right}
         return node
 
     def primary(self):
-        if self.current_token[0] == "FUNCTION" and self.current_token[1] == "len":
+        if self.current_token[0] in ("LEN", "EXISTS") and self.current_token[1] in (
+            "len",
+            "exists",
+        ):
+            fn = self.current_token[1]
             self.advance()
             if self.current_token[0] == "LPAREN":
                 self.advance()
@@ -134,10 +198,10 @@ class _Parser:
                 if self.current_token[0] == "RPAREN":
                     self.advance()
                 else:
-                    raise RuntimeError('Expected ")" after len function')
-                return {"operand": "len", "rhs": expr}
+                    raise RuntimeError('Expected ")" after len or exists function')
+                return {"operand": fn, "rhs": expr}
             else:
-                raise RuntimeError('Expected "(" after len')
+                raise RuntimeError('Expected "(" after len or exists function')
         elif self.current_token[0] == "LPAREN":
             self.advance()
             node = self.expr()
@@ -160,6 +224,10 @@ class _Parser:
             return node
         elif self.current_token[0] == "STRING":
             node = {"type": "string", "value": self.current_token[1]}
+            self.advance()
+            return node
+        elif self.current_token[0] == "OTHER":
+            node = {"type": "other", "value": self.current_token[1]}
             self.advance()
             return node
         else:
@@ -193,6 +261,9 @@ def evaluate_filter_expression(expr, **variables):
                     return True
                 rhs = evaluate_filter_expression(expr["rhs"], **variables)
                 return lhs or rhs
+            elif operand == "not":
+                rhs = evaluate_filter_expression(expr["rhs"], **variables)
+                return not rhs
             elif operand in ("==", "<", ">", "<=", ">="):
                 lhs = evaluate_filter_expression(expr["lhs"], **variables)
                 rhs = evaluate_filter_expression(expr["rhs"], **variables)
@@ -209,6 +280,12 @@ def evaluate_filter_expression(expr, **variables):
             elif operand == "len":
                 rhs = evaluate_filter_expression(expr["rhs"], **variables)
                 return len(rhs)
+            elif operand == "exists":
+                try:
+                    evaluate_filter_expression(expr["rhs"], **variables)
+                    return True
+                except KeyNotFound:
+                    return False
             elif operand == "in":
                 lhs = evaluate_filter_expression(expr["lhs"], **variables)
                 rhs = evaluate_filter_expression(expr["rhs"], **variables)
@@ -232,6 +309,8 @@ def evaluate_filter_expression(expr, **variables):
                     raise KeyNotFound(f"Variable '{var_name}' not provided")
             elif expr["type"] == "string":
                 return expr["value"]
+            elif expr["type"] == "other":
+                return json.loads(expr["value"].replace("'", '"'))
             else:
                 raise ValueError(f"Unknown leaf node type: {expr['type']}")
         else:

@@ -88,3 +88,12 @@ class LogEventDAO:
         )
         rows = self.session.execute(query).fetchone()
         return rows[0] if rows is not None else None
+
+    def get_user_and_project_id(self, id: int) -> Optional[str]:
+        query = (
+            select(Project.user_id, Project.id)
+            .join(LogEvent, Project.id == LogEvent.project_id)
+            .where(LogEvent.id == id)
+        )
+        rows = self.session.execute(query).fetchone()
+        return rows if rows is not None else (None, None)

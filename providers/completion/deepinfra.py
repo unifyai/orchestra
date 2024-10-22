@@ -28,6 +28,11 @@ class Deepinfra(BaseCompletionProvider):
 
 
 supported_models = {
+    "llama-3.1-nemotron-70b-chat": {
+        "endpoint": "deepinfra/nvidia/Llama-3.1-Nemotron-70B-Instruct",
+        "context_window": 128000,
+        "cost": {"prompt": 0.35, "completion": 0.40},
+    },
     "llama-3.2-1b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-1B-Instruct",
         "context_window": 128000,

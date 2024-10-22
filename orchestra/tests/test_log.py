@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -160,6 +161,36 @@ async def test_create_logs(client: AsyncClient):
     assert isinstance(response.json(), int)
 
     # TODO: Get log and see if it matches
+
+
+@pytest.mark.anyio
+async def test_create_logs_non_matching_versions(client: AsyncClient):
+    project_name = "non-matching-versions"
+    _ = await _create_project(client, project_name)
+
+    # This should work fine
+    response = await client.post(
+        "/v0/log",
+        json={"project": project_name, "entries": {"e1/v0": "test"}},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # same version and value
+    response = await client.post(
+        "/v0/log",
+        json={"project": project_name, "entries": {"e1/v0": "test"}},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # same version and different value -> fail
+    response = await client.post(
+        "/v0/log",
+        json={"project": project_name, "entries": {"e1/v0": "test_v1"}},
+        headers=HEADERS,
+    )
+    assert response.status_code == 400, response.json()
 
 
 @pytest.mark.anyio
@@ -372,6 +403,41 @@ async def test_get_log_not_found(client: AsyncClient):
             "coffee == 'hot' or ice_cream == 'cold' and temperature == 1.23",
             {"coffee": "hot", "ice_cream": "cold", "temperature": 1.23},
         ),
+        (
+            "(messages == [{'role': 'assistant', "
+            "'context': 'you are a helpful assistant'}])",
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "context": "you are a helpful assistant",
+                    },
+                ],
+            },
+        ),
+        (
+            "exists(lorry)",
+            {
+                "lorry": "big",
+            },
+        ),
+        (
+            "exists(car)",
+            {
+                "lorry": "big",
+            },
+        ),
+        (
+            "not exists(car)",
+            {
+                "lorry": "big",
+            },
+        ),
+        ('a == "\'"', {"a": "'"}),
+        ("a == '\\\"'", {"a": '"'}),
+        ("a == '\\\\'", {"a": "\\"}),
+        ('a == "He said, \\"Hello\\""', {"a": 'He said, "Hello"'}),
+        ("a == 'It\\'s a test'", {"a": "It's a test"}),
     ],
 )
 def test_log_filter_helper(expression, values):
@@ -379,12 +445,13 @@ def test_log_filter_helper(expression, values):
     assert isinstance(express_dict, dict)
     result = evaluate_filter_expression(express_dict, **values)
     for key, value in values.items():
-        exec(
-            key
-            + "="
-            + ('"{}"'.format(value) if isinstance(value, str) else str(value)),
-        )
-    expected = eval(expression)
+        exec(key + "=" + (str(value) if isinstance(value, bool) else json.dumps(value)))
+    if "not exists" in expression:
+        expected = expression.split("exists(")[-1].split(")")[0] not in values
+    elif "exists" in expression:
+        expected = expression.split("exists(")[-1].split(")")[0] in values
+    else:
+        expected = eval(expression)
     assert result == expected
 
 

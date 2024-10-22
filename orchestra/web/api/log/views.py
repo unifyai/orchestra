@@ -5,7 +5,7 @@ Includes endpoints related to entries.
 import json
 from typing import Any, Dict, Optional, Union
 
-from fastapi import APIRouter, Depends, Path, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
@@ -85,12 +85,19 @@ def create_log(
 
     # Store each key, value pair for the log
     for k, v in request.entries.items():
-        log_dao.create_from_raw_k_v(
-            log_event_id=log_event_id,
-            raw_k=k,
-            raw_v=v,
-            explicit_types=explicit_types,
-        )
+        try:
+            log_dao.create_from_raw_k_v(
+                project_id=project_id,
+                log_event_id=log_event_id,
+                raw_k=k,
+                raw_v=v,
+                explicit_types=explicit_types,
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Found different value for log entries with same version.",
+            )
     return log_event_id
 
 
@@ -179,19 +186,29 @@ def update_log(
     inferred type of that particular entry.
 
     """
-    if log_event_dao.get_user_id(id=id) != request_fastapi.state.user_id:
+
+    project_user_id, project_id = log_event_dao.get_user_and_project_id(id=id)
+
+    if project_user_id != request_fastapi.state.user_id:
         raise not_found(f"Log with id {id}")
 
     explicit_types = request.entries.pop("explicit_types", None)
 
     # Store each key, value pair for the log
     for k, v in request.entries.items():
-        log_dao.create_from_raw_k_v(
-            log_event_id=id,
-            raw_k=k,
-            raw_v=v,
-            explicit_types=explicit_types,
-        )
+        try:
+            log_dao.create_from_raw_k_v(
+                project_id=project_id,
+                log_event_id=id,
+                raw_k=k,
+                raw_v=v,
+                explicit_types=explicit_types,
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Found different value for log entries with same version.",
+            )
     return id
 
 
@@ -244,10 +261,18 @@ def delete_log_entry(
     """
     Deletes a entry from a log.
     """
+    # "/" is replaced with "-" on client side, such that url is parsable
+    entry = entry.replace("-", "/")
+    if "/" in entry:
+        clean_key = entry.split("/")[0]
+        version = entry.split("/")[1]
+    else:
+        clean_key = entry
+        version = None
     if log_event_dao.get_user_id(id=id) != request_fastapi.state.user_id:
         raise not_found(f"Log with id {id}")
     # TODO: Deal with organisation IDs
-    log = log_dao.filter(log_event_id=id, key=entry)
+    log = log_dao.filter(log_event_id=id, key=clean_key, version=version)
     if not log:
         raise not_found(f"Log entry {entry}")
     log_dao.delete(id=log[0][0].id)
