@@ -8,8 +8,6 @@ import redis
 import requests
 from fastapi import HTTPException
 
-from orchestra.web.api.utils.http_responses import evaluation_does_not_exist
-
 shared_volume = os.environ.get("SHARED_VOLUME")
 
 
@@ -151,23 +149,6 @@ def send_pubsub_msg(topic: str, msg: Dict[str, str]) -> None:
 def file_exists(bucket_name: str, file_name: str) -> bool:
     file_path = os.path.join(shared_volume, bucket_name, file_name)
     return os.path.exists(file_path)
-
-
-def get_scores(user_id: str, dataset: str):
-    bucket_name = "uploaded_datasets"
-    file_path = os.path.join(
-        shared_volume,
-        bucket_name,
-        user_id,
-        dataset,
-        "0",
-        "scores.json",
-    )
-    if os.path.exists(file_path):
-        with open(file_path, "rb") as f:
-            json_data = f.read()
-        return json.loads(json_data.decode("utf-8"))
-    return evaluation_does_not_exist(dataset)
 
 
 def get_input_tokens(user_id: str, dataset: str):

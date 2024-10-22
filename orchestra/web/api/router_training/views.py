@@ -9,13 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.dataset_dao import DatasetDAO
-from orchestra.db.dao.evaluation_dao import EvaluationDAO
-from orchestra.db.dao.evaluator_dao import EvaluatorDAO
 from orchestra.db.dao.router_dao import RouterDAO
-from orchestra.db.dao.stored_prompt_dao import StoredPromptDAO
-from orchestra.web.api.evaluations.views import get_datum_ids
 from orchestra.web.api.utils.gcp import read_from_bucket, send_pubsub_msg
-from orchestra.web.api.utils.http_responses import invalid_training_endpoints
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
@@ -134,15 +129,7 @@ def train_router(
             "llama-3.1-405b-chat@fireworks-ai",
         ],
     ),
-    evaluator: str = Query(
-        default="default_evaluator",
-        description="Name of the evaluator to use to train the router. If not specified, 'default_evaluator' will be used.",
-        example="eval1",
-    ),
     dataset_dao: DatasetDAO = Depends(),
-    evaluator_dao: EvaluatorDAO = Depends(),
-    evaluations_dao: EvaluationDAO = Depends(),
-    stored_prompt_dao: StoredPromptDAO = Depends(),
     router_dao: RouterDAO = Depends(),
 ) -> Dict[str, str]:
     """
@@ -161,6 +148,7 @@ def train_router(
             detail=f"You already have a router named {name}",
         )
 
+    """
     datum_ids = get_datum_ids(
         dataset=dataset,
         prompts=prompts,
@@ -211,6 +199,7 @@ def train_router(
         evaluator=evaluator,
     )
     return {"info": "Router training started! You will receive an email soon!"}
+    """
 
 
 @router.delete(
