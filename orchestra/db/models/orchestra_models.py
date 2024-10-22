@@ -770,3 +770,4 @@ class Log(Base):
     inferred_type = Column(String)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
+    __table_args__ = (UniqueConstraint("log_event_id", "key"),)
