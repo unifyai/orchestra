@@ -130,30 +130,6 @@ def not_found(item):
     )
 
 
-# CLEANUP: Delete
-def dataset_does_not_exist(dataset=""):
-    return HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"The dataset {dataset} does not exist.",
-    )
-
-
-# CLEANUP: Delete
-def evaluation_does_not_exist(dataset=""):
-    return HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"The evaluation for {dataset} does not exist.",
-    )
-
-
-# CLEANUP: Delete
-def evaluator_not_found(evaluator):
-    return HTTPException(
-        status.HTTP_404_NOT_FOUND,
-        detail=f"The evaluator {evaluator} does not exist in your account",
-    )
-
-
 provider_not_found_under_conditions = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
     detail="No providers found within the specified thresholds.",
