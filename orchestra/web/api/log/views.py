@@ -422,7 +422,13 @@ def get_logs(
             {
                 "id": log_event_id,
                 "ts": log_dict["ts"],
-                "entries": log_dict["entries"],
+                "entries": {
+                    k
+                    + (
+                        f"/{log_dict['version'][k]}" if k in log_dict["version"] else ""
+                    ): v
+                    for k, v in log_dict["entries"].items()
+                },
             },
         )
     return logs
