@@ -147,6 +147,39 @@ class LogDAO:
             if log_event_id:
                 setattr(entry, "log_event_id", log_event_id)
 
+    def update_value(
+        self,
+        log_event_id: int,
+        raw_k: str,
+        raw_v: Optional[Any] = None,
+        explicit_types: Optional[Dict] = None,
+    ):
+
+        inferred_type = type(raw_v).__name__
+        clean_key = raw_k.split("/", 1)
+        json_v = json.dumps(raw_v)
+
+        if explicit_types and isinstance(explicit_types, Dict):
+            if clean_key[0] in explicit_types:
+                inferred_type = explicit_types[clean_key[0]]
+            if raw_k in explicit_types:
+                inferred_type = explicit_types[raw_k]
+
+        query = select(Log)
+        query = query.where(Log.log_event_id == log_event_id)
+        query = query.where(Log.key == clean_key[0])
+        raw = self.session.execute(query)
+        entry = raw.scalars().first()
+        if entry is not None:
+            setattr(entry, "value", json_v)
+            setattr(
+                entry,
+                "inferred_type",
+                inferred_type,
+            )
+        else:
+            raise IndexError
+
     def delete(self, id: int):
         try:
             log = self.session.query(Log).filter_by(id=id).one()

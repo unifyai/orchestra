@@ -197,6 +197,13 @@ def update_log(
     # Store each key, value pair for the log
     for k, v in request.entries.items():
         try:
+            log_dao.update_value(
+                log_event_id=id,
+                raw_k=k,
+                raw_v=v,
+                explicit_types=explicit_types,
+            )
+        except IndexError:
             log_dao.create_from_raw_k_v(
                 project_id=project_id,
                 log_event_id=id,
