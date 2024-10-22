@@ -45,12 +45,6 @@ api_router.include_router(
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )
-api_router.include_router(  # CLEANUP: Delete this
-    evaluations.admin_router,
-    tags=["Evaluations"],
-    include_in_schema=False,
-    dependencies=ADMIN_AUTH,
-)
 api_router.include_router(  # CLEANUP: Delete this? Check if it's being used
     provider.router,
     prefix="/admin",
@@ -130,11 +124,6 @@ api_router.include_router(
 
 # Benchmarking
 
-api_router.include_router(  # CLEANUP: Delete this
-    datasets.router,
-    tags=["Datasets"],
-    dependencies=API_KEY_AUTH,
-)
 api_router.include_router(
     dataset_artifact.router,
     tags=["Dataset Artifacts"],
@@ -158,21 +147,6 @@ api_router.include_router(
 api_router.include_router(
     log.router,
     tags=["Evals"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(  # CLEANUP: Delete this
-    evaluators.router,
-    tags=["Evaluators"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(  # CLEANUP: Delete this
-    default_prompt.router,
-    tags=["Default Prompts"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(  # CLEANUP: Delete this
-    evaluations.router,
-    tags=["Evaluations"],
     dependencies=API_KEY_AUTH,
 )
 
