@@ -47,7 +47,8 @@ class LogDAO:
 
         inferred_type = type(raw_v).__name__
         clean_key = raw_k.split("/", 1)
-        json_v = json.dumps(raw_v)
+        # json_v = json.dumps(raw_v)
+        json_v = raw_v
 
         # TODO: Narrow down the types that can be passed?
         if explicit_types and isinstance(explicit_types, Dict):

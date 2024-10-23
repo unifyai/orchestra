@@ -1,9 +1,12 @@
 import json
 import re
 from typing import Any, List, Union
-from sqlalchemy import select
 
-from sqlalchemy import cast, Integer, Boolean, Float, String, JSON, select
+from sqlalchemy import func, cast, Boolean, Float, String, JSON, select
+from sqlalchemy.orm import aliased
+from sqlalchemy.sql import and_, or_, not_
+
+from orchestra.db.models.orchestra_models import Log
 
 
 class KeyNotFound(Exception):
@@ -248,16 +251,20 @@ def str_filter_exp_to_dict(s):
     return result
 
 
-from orchestra.db.models.orchestra_models import Log
+def get_sqlalchemy_type(py_object):
+    """Maps Python object types to SQLAlchemy column types."""
+    py_type = type(py_object)
 
-import re
-from sqlalchemy import (
-    func,
-    cast,
-)
-from sqlalchemy.orm import aliased
-from sqlalchemy.sql import and_, or_, not_
-from sqlalchemy import Float
+    if py_type is bool:
+        return Boolean
+    elif py_type in (int, float):
+        return Float
+    elif py_type is str:
+        return String
+    elif py_type is dict:
+        return JSON
+    else:
+        raise TypeError(f"Unsupported type: {py_type}")
 
 
 def build_filter(filter_dict, log_event_alias, session):
@@ -271,6 +278,8 @@ def build_filter(filter_dict, log_event_alias, session):
     Returns:
         SQLAlchemy condition
     """
+    if filter_dict == {}:
+        return None
     if not isinstance(filter_dict, dict):
         # Base case: direct value
         return filter_dict
@@ -295,41 +304,22 @@ def build_filter(filter_dict, log_event_alias, session):
 
         if isinstance(lhs, dict) and lhs.get("type") == "identifier":
             key = lhs["value"]
-            # Create a correlated subquery for the Log entry
             log_alias = aliased(Log)
             subq = select(log_alias.id).filter(
                 log_alias.log_event_id == log_event_alias.id,
                 log_alias.key == key,
             )
 
-            def get_sqlalchemy_type(py_object):
-                """Maps Python object types to SQLAlchemy column types."""
-                py_type = type(py_object)
-
-                if py_type is bool:
-                    return Boolean
-                elif py_type in (int, float):
-                    return Float
-                elif py_type is str:
-                    return String
-                elif py_type is dict:
-                    return JSON
-                else:
-                    raise TypeError(f"Unsupported type: {py_type}")
-
-            if operand in ("==", "!=", "is"):
-                condition = cast(log_alias.value, get_sqlalchemy_type(rhs))
-                compare_value = rhs
-                # compare_value = json.dumps(rhs)
-                if operand == "==" or operand == "is":
-                    subq = subq.filter(condition == compare_value)
-                elif operand == "!=":
-                    subq = subq.filter(condition != compare_value)
-            elif operand in ("<", ">", "<=", ">="):
+            if operand in ("==", "!=", "is", "<", ">", "<=", ">="):
                 try:
-                    compare_value = float(rhs)
-                    condition = cast(log_alias.value, Float)
-                    if operand == "<":
+                    condition = cast(log_alias.value, get_sqlalchemy_type(rhs))
+                    compare_value = rhs
+                    # compare_value = json.dumps(rhs)
+                    if operand == "==" or operand == "is":
+                        subq = subq.filter(condition == compare_value)
+                    elif operand == "!=":
+                        subq = subq.filter(condition != compare_value)
+                    elif operand == "<":
                         subq = subq.filter(condition < compare_value)
                     elif operand == ">":
                         subq = subq.filter(condition > compare_value)
@@ -389,49 +379,18 @@ def build_filter(filter_dict, log_event_alias, session):
 
                 return subq.exists()
 
-    elif operand in ("len", "exists"):
-        func_name = operand
+    elif operand == "exists":
         rhs = filter_dict["rhs"]
 
-        if func_name == "len":
-            if isinstance(rhs, dict):
-                length = rhs.get("rhs")
-                comparison = rhs.get("operand")  # e.g., '<', '>', etc.
-                identifier = rhs.get("lhs", {}).get("value")
-                if identifier:
-                    log_alias = aliased(Log)
-                    subq = (
-                        session.query(log_alias.id)
-                        .filter(
-                            log_alias.log_event_id == log_event_alias.id,
-                            log_alias.key == identifier,
-                        )
-                        .with_entities(func.length(log_alias.value))
-                    )
-                    if comparison == "<":
-                        return subq.as_scalar() < length
-                    elif comparison == ">":
-                        return subq.as_scalar() > length
-                    elif comparison == "<=":
-                        return subq.as_scalar() <= length
-                    elif comparison == ">=":
-                        return subq.as_scalar() >= length
-                    elif comparison == "==":
-                        return subq.as_scalar() == length
-                    elif comparison == "!=":
-                        return subq.as_scalar() != length
+        if isinstance(rhs, dict) and rhs.get("type") == "identifier":
+            identifier = rhs["value"]
 
-        elif func_name == "exists":
-            rhs = filter_dict["rhs"]
-            if isinstance(rhs, dict) and rhs.get("type") == "identifier":
-                identifier = rhs["value"]
-
-                log_alias = aliased(Log)
-                subq = select(log_alias.id).filter(
-                    log_alias.log_event_id == log_event_alias.id,
-                    log_alias.key == identifier,
-                )
-                return subq.exists()
+            log_alias = aliased(Log)
+            subq = select(log_alias.id).filter(
+                log_alias.log_event_id == log_event_alias.id,
+                log_alias.key == identifier,
+            )
+            return subq.exists()
 
     else:
         # Handle literals or unexpected structures
@@ -499,15 +458,18 @@ def _max(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
     return max(_preprocess(values))
 
 
+import statistics
+
+
 def _median(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
     values = _preprocess(values)
-    num_values = len(values)
-    return sorted(values)[int(num_values / 2)]
+    return statistics.median(values)
 
 
 def _mode(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
-    values = _preprocess(values)
-    return max(set(values), key=values.count)
+    values = _preprocess(values)[::-1]
+    # silly hack to make consistent with sql
+    return statistics.mode(values)
 
 
 reduction_methods = {
@@ -522,6 +484,35 @@ reduction_methods = {
     "mode": _mode,
 }
 
+def type_coerce(inferred_type, x):
+    assert isinstance(x, str)
+    if inferred_type == "str":
+        return str(x)
+    elif inferred_type == "list":
+        breakpoint()
+        return json.loads(x)
+        # Handle list-like strings: "['a', 'b']" or "a,b,c"
+        x = x.strip("[]")
+        if not x:
+            return []
+        return [item.strip().strip("'\"") for item in x.split(",")]
+    elif inferred_type == "dict":
+        # Handle dict-like strings: "{'a': 1}" or "a:1,b:2"
+        x = x.strip("{}")
+        if not x:
+            return {}
+        pairs = [pair.strip() for pair in x.split(",")]
+        return {k.strip().strip("'\""):v.strip() for k, v in
+                (pair.split(":") for pair in pairs if pair)}
+    elif inferred_type == "bool":
+        return x.lower() in ("true", "1", "yes", "y", "t")
+    elif inferred_type == "int":
+        return int(float(x))  # Handle both "5" and "5.0"
+    elif inferred_type == "float":
+        return float(x)
+    else:
+        raise ValueError(f"Unsupported type: {inferred_type}")
+
 
 def format_logs(all_logs):
     formatted_entries = dict()
@@ -534,5 +525,7 @@ def format_logs(all_logs):
             key not in formatted_entries[log_event_id]
         ), f"found duplicates for key {key} with log_id {log_event_id}"
         formatted_entries[log_event_id]["ts"] = log[1].strftime("%Y-%m-%d %H:%M:%S")
-        formatted_entries[log_event_id]["entries"][key] = json.loads(log[0].value)
+        value = log[0].value
+        inferred_type = log[0].inferred_type
+        formatted_entries[log_event_id]["entries"][key] = type_coerce(inferred_type, value)
     return formatted_entries

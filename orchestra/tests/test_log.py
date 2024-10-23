@@ -60,7 +60,7 @@ log_data = {
             "description": "boiling water",
             "temperature": 100.0,
             "state": "liquid->gas",
-            "safe": False,
+            "safe": [True, False],
         },
         {
             "description": "freezing water",
