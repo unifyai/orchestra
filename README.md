@@ -99,12 +99,17 @@ Now, connect to the PSQL database (password=`orchestra`):
 psql -h localhost -U orchestra -d orchestra
 ```
 
-Now you will need to download a dump from the real Db to populate the data. You can get it from [here](https://console.cloud.google.com/storage/browser/_details/temp_file_holder/orchestra.dump.sql;tab=live_object?authuser=2&project=saas-368716).
+Now you will need to download a dump from the real DB to populate the data. You can get it from [here](https://console.cloud.google.com/storage/browser/_details/temp_file_holder/orchestra.dump.latest.sql).
+
+To develop locally with this dump, you will need to use the following:
+
+- `API_KEY`: `dev-api-key`
+- `user_id`: `dev-user-id`
 
 In the PSQL console, run:
 
 ```bash
-\i orchestra.dump.sql
+\i orchestra.dump.latest.sql
 ```
 
 This will populate your local database with the entries from the dump. however, the database might not be completely up to date, so you will most likely need to run (in the poetry environment):
