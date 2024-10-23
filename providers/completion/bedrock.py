@@ -36,6 +36,7 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
         if (
             "anthropic" in self.provider_endpoint
             and not "opus" in self.provider_endpoint
+            and not "sonnet-20240620" not in self.provider_endpoint
         ):
             return "us-east-1"
         return "us-west-2"
