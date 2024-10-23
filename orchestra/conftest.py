@@ -46,8 +46,9 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
     meta.create_all(engine)
     with engine.begin() as conn:
         user_id = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
+        api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
         with open("orchestra/tests/seeding.sql") as file:
-            conn.execute(text(file.read()), {"user_id": user_id})
+            conn.execute(text(file.read()), {"user_id": user_id, "api_key": api_key})
 
     try:
         yield engine
