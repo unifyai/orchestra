@@ -13,7 +13,6 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from orchestra.db.base import Base
@@ -132,23 +131,6 @@ class Metric(Base):
     tooltip = Column(String())
     priority = Column(Integer(), nullable=False)
     plottable = Column(Boolean(), nullable=False)  # type: ignore
-
-
-# CLEANUP: Delete this
-class QueryOld(Base):
-    """Model class for the old query table."""
-
-    __tablename__ = "query_old"
-
-    id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), nullable=False)
-    at = Column(TIMESTAMP, nullable=False)
-    endpoint_id = Column(Integer(), ForeignKey("endpoint.id"), nullable=False)
-    credits = Column(Numeric(), nullable=False)
-    prompt = Column(String())
-    signature = Column(String())
-    used_router = Column(Boolean())
-    router = Column(String)
 
 
 class Users(Base):
@@ -356,9 +338,6 @@ class Query(Base):
     __table_args__ = (Index("ix_user_endpoint", "user_id", "endpoint_id"),)
 
 
-# TODO: CASCADE DELETE FOR PROMPTS -> EVALUATIONS
-
-
 class Dataset(Base):
     """Model class for the dataset table."""
 
@@ -394,191 +373,6 @@ class DatasetEntry(Base):
     )
 
 
-# CLEANUP: Delete this
-class StoredPrompt(Base):
-    """Model class for the stored prompt table."""
-
-    __tablename__ = "stored_prompt"
-
-    id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), index=True)
-    system_msg = Column(String(), index=True)
-    messages = Column(String(), nullable=False)
-    prompt_kwargs = Column(String(), nullable=False)
-    extra_fields = Column(JSONB, default={}, nullable=False)
-    num_tokens = Column(Integer(), nullable=False)
-    timestamp = Column(TIMESTAMP, nullable=False)
-    __table_args__ = (
-        Index(
-            "uq_userid_prompt",
-            func.hash_record_extended(
-                func.row(user_id, system_msg, messages, prompt_kwargs, extra_fields),
-                0,
-            ),
-            unique=True,
-        ),
-    )
-
-
-# CLEANUP: Delete this
-class DefaultPrompt(Base):
-    """Model class for the default prompt table."""
-
-    __tablename__ = "default_prompt"
-
-    id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), index=True)
-    name = Column(String(), nullable=False)
-    prompt = Column(String())
-
-
-# CLEANUP: Delete this
-class StoredPromptVariation(Base):
-    """Model class for variations of stored prompts table."""
-
-    __tablename__ = "stored_prompt_variation"
-
-    id = Column(Integer(), primary_key=True)
-    datum_id = Column(
-        Integer(),
-        ForeignKey("stored_prompt.id"),
-        index=True,
-        nullable=False,
-    )
-    default_prompt_id = Column(
-        Integer(),
-        ForeignKey("default_prompt.id"),
-        index=True,
-        nullable=False,
-    )
-
-
-# CLEANUP: Delete this
-class StoredPromptResponse(Base):
-    """Model class for the stored prompt response table."""
-
-    __tablename__ = "stored_prompt_response"
-
-    id = Column(Integer(), primary_key=True)
-    datum_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
-    prompt_variation_id = Column(
-        Integer(),
-        ForeignKey("stored_prompt_variation.id"),
-        index=True,
-    )
-    endpoint_str = Column(String(), nullable=False)
-    response = Column(String(), nullable=False)
-    num_tokens = Column(Integer(), nullable=False)
-    __table_args__ = (
-        UniqueConstraint(
-            "datum_id",
-            "prompt_variation_id",
-            "endpoint_str",
-            name="uq_prompt_response",
-            postgresql_nulls_not_distinct=True,
-        ),
-    )
-
-
-# CLEANUP: Delete this
-class Judgement(Base):
-    """Model class for the judgement table."""
-
-    __tablename__ = "judgement"
-
-    id = Column(Integer(), primary_key=True)
-    response_id = Column(Integer(), ForeignKey("stored_prompt_response.id"), index=True)
-    judge_endpoint_str = Column(String(), nullable=False)
-    evaluator_id = Column(Integer(), ForeignKey("evaluator.id"), nullable=False)
-    judgement = Column(String(), nullable=False)
-    judgement_score = Column(Numeric())
-
-    __table_args__ = (
-        UniqueConstraint(
-            "response_id",
-            "judge_endpoint_str",
-            "evaluator_id",
-            name="uq_judgement",
-        ),
-    )
-
-
-# CLEANUP: Delete this
-class DatasetPrompt(Base):
-    """Model class for the dataset prompt table."""
-
-    __tablename__ = "dataset_prompt"
-
-    id = Column(Integer(), primary_key=True)
-    dataset_id = Column(Integer(), ForeignKey("dataset.id"), index=True)
-    datum_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
-    __table_args__ = (
-        UniqueConstraint(
-            "dataset_id",
-            "datum_id",
-            name="uq_dataset_prompt",
-        ),
-    )
-
-
-# CLEANUP: Delete this
-class Evaluator(Base):
-    """Model class for the evaluator table."""
-
-    __tablename__ = "evaluator"
-
-    id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), index=True)
-    name = Column(String(), nullable=False)
-    description = Column(String())
-    judge_prompt = Column(String(), nullable=False)
-    prompt_parser = Column(
-        String(),
-        nullable=False,
-        default="{\"user_message\": \"['messages'][-1]['content']\"}",
-    )
-    response_parser = Column(
-        String(),
-        nullable=False,
-        default="{\"assistant_message\": \"['message']['content']\"}",
-    )
-    extra_parser = Column(String())
-    class_config = Column(String(), nullable=False)
-    judge_models = Column(String(), nullable=False)
-    client_side = Column(Boolean(), nullable=False)
-    __table_args__ = (
-        sa.UniqueConstraint("user_id", "name", name="uq_userid_evaluator"),
-    )
-
-
-# CLEANUP: Delete this
-class Evaluation(Base):
-    """Model class for the evaluation table."""
-
-    __tablename__ = "evaluation"
-
-    id = Column(Integer(), primary_key=True)
-    datum_id = Column(Integer(), ForeignKey("stored_prompt.id"), index=True)
-    prompt_variation_id = Column(
-        Integer(),
-        ForeignKey("stored_prompt_variation.id"),
-        index=True,
-    )
-    evaluator_id = Column(Integer(), ForeignKey("evaluator.id"), index=True)
-    endpoint_str = Column(String(), nullable=False)
-    score = Column(Numeric(), nullable=False)
-    __table_args__ = (
-        UniqueConstraint(
-            "datum_id",
-            "prompt_variation_id",
-            "evaluator_id",
-            "endpoint_str",
-            name="uq_evaluation",
-            postgresql_nulls_not_distinct=True,
-        ),
-    )
-
-
 class Router(Base):
     """Model class for the router table."""
 
@@ -588,11 +382,6 @@ class Router(Base):
     user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=True)
     name = sa.Column(sa.String(), nullable=False)
     endpoints = sa.Column(sa.String(), nullable=False)
-    evaluator_id = sa.Column(
-        sa.Integer(),
-        sa.ForeignKey("evaluator.id"),
-        nullable=False,
-    )
     trained = sa.Column(sa.Boolean(), default=False, nullable=False)
     gcp_router_id = sa.Column(sa.String(), nullable=True)
     deployed = sa.Column(sa.Boolean(), default=False, nullable=False)
