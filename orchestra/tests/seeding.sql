@@ -9,6 +9,7 @@ INSERT INTO users VALUES ('recharge_not_needed_b', 20, null, False, -1, 0);
 INSERT INTO auth_user("id", "email") VALUES (:user_id, 'test@debug.com');
 INSERT INTO auth_user("id", "email") VALUES ('seconday_user', '2nd@user.com');
 
+INSERT INTO api_key("user_id", "key") VALUES (:user_id, :api_key);
 INSERT INTO api_key("user_id", "key") VALUES ('seconday_user', '2nd_api_key');
 
 -- Recharge

@@ -3,15 +3,9 @@ import os
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from requests import request  # type: ignore
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
-from orchestra.settings import settings
-from orchestra.web.api.utils.http_responses import (
-    admin_not_authorized,
-    invalid_api_key,
-    server_error_with_digest,
-)
+from orchestra.web.api.utils.http_responses import admin_not_authorized, invalid_api_key
 
 security = HTTPBearer()
 logger = logging.getLogger(__name__)
@@ -30,26 +24,13 @@ def auth_api_key(
     :raises HTTPException: when api key is invalid.
     """
     apikey = credentials.credentials
-    auth_ret = request(
-        "GET",
-        f"{settings.cloud_db_gateway}/hubapikey/{apikey}",
-        headers={},
-    )
 
-    # TODO: Fully remove db connector
-    if auth_ret.status_code == 404:
-        db_api_key = api_key_dao.filter(key=apikey)
-        if db_api_key is not None:
-            request_fastapi.state.user_id = db_api_key[0][0].user_id
-            request_fastapi.state.user_email = ""  # TODO
-            return
-        raise invalid_api_key
-    elif auth_ret.status_code != 200:  # noqa: WPS432
-        error, digest = server_error_with_digest(auth_ret.text)
-        logger.error(f"Digest {digest}: {auth_ret.text}")
-        raise error
-    request_fastapi.state.user_id = auth_ret.json()["user_id"]
-    request_fastapi.state.user_email = auth_ret.json()["email"]
+    db_response = api_key_dao.get_user_id_and_mail(apikey)
+    if db_response:
+        request_fastapi.state.user_id = db_response[0][0]
+        request_fastapi.state.user_email = db_response[0][0]
+        return
+    raise invalid_api_key
 
 
 def auth_admin_key(
