@@ -391,7 +391,7 @@ def get_logs(
         description="Boolean string to filter entries. TODO: Detailed page.",
         example="len(output) > 200 and temperature == 0.5",
     ),
-    limit: int = Query(100, ge=1, le=200),
+    limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
     log_event_dao: LogEventDAO = Depends(),
     project_dao: ProjectDAO = Depends(),
