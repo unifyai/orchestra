@@ -441,9 +441,9 @@ async def test_get_log_not_found(client: AsyncClient):
             "coffee == 'hot' or ice_cream == 'cold' and temperature == 1.23",
             {"coffee": "hot", "ice_cream": "cold", "temperature": 1.23},
         ),
-        (
-            "(messages == [{'role': 'assistant', "
-            "'context': 'you are a helpful assistant'}])",
+        (  # This needs to be a json dumps of a python object
+            '(messages == [{"role": "assistant", '
+            '"context": "you are a helpful assistant"}])',
             {
                 "messages": [
                     {
@@ -479,9 +479,6 @@ async def test_get_log_not_found(client: AsyncClient):
     ],
 )
 async def test_log_filter_helper(client: AsyncClient, expression, values):
-    # express_dict = str_filter_exp_to_dict(expression)
-    # assert isinstance(express_dict, dict)
-    #    result = evaluate_filter_expression(express_dict, **values)
 
     project_name = "test_filter_helper"
     _ = await _create_project(client, project_name, user=1)
@@ -492,8 +489,9 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
     )
     assert response.status_code == 200, response.text
     response = await client.get(
-        "/v0/logs", params={"project": project_name, "filter_expr": expression},
-        headers=HEADERS
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": expression},
+        headers=HEADERS,
     )
     assert response.status_code == 200, response.text
     result = len(response.json()) == 1
@@ -608,6 +606,16 @@ async def test_get_logs_w_filtering(client: AsyncClient):
         "state": "gas",
         "safe": False,
     }
+
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "description == 'boiling water'"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result) == 1
+    assert result[0]["entries"]["description"] == "boiling water"
 
     # check multiple conditions
     response = await client.get(

@@ -322,7 +322,17 @@ def build_filter(filter_dict, log_event_alias, session):
             if operand in ("==", "!=", "is", "<", ">", "<=", ">="):
                 try:
                     compare_value = rhs
-                    condition = cast(log_alias.value, get_sqlalchemy_type(compare_value))
+                    if isinstance(compare_value, dict):
+                        compare_value = compare_value["value"]
+                        if rhs["type"] == "string":
+                            compare_value = json.dumps(compare_value)
+                        condition = log_alias.value
+                    elif isinstance(compare_value, bool):
+                        compare_value = bool(compare_value)
+                        condition = cast(log_alias.value, Boolean)
+                    else:
+                        compare_value = float(compare_value)
+                        condition = cast(log_alias.value, Float)
                     if operand == "==" or operand == "is":
                         subq = subq.filter(condition == compare_value)
                     elif operand == "!=":
@@ -535,13 +545,11 @@ def format_logs(all_logs):
     for log in all_logs:
         log_event_id = log[0].log_event_id
         if log_event_id not in formatted_entries:
-            formatted_entries[log_event_id] = {"entries": {}, "version": {}}
-        key = log[0].key
+            formatted_entries[log_event_id] = {"entries": {}}
+        key = log[0].key + (f"/{log[0].version}" if log[0].version is not None else "")
         assert (
             key not in formatted_entries[log_event_id]
         ), f"found duplicates for key {key} with log_id {log_event_id}"
         formatted_entries[log_event_id]["ts"] = log[1].strftime("%Y-%m-%d %H:%M:%S")
         formatted_entries[log_event_id]["entries"][key] = json.loads(log[0].value)
-        if log[0].version is not None:
-            formatted_entries[log_event_id]["version"][key] = log[0].version
     return formatted_entries

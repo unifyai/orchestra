@@ -690,7 +690,9 @@ def get_logs(
                 "entries": {
                     k
                     + (
-                        f"/{log_dict['version'][k]}" if k in log_dict["version"] else ""
+                        f"/{log_dict['version'][k]}"
+                        if k in log_dict.get("version", "")
+                        else ""
                     ): v
                     for k, v in log_dict["entries"].items()
                 },
