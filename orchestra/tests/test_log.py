@@ -441,7 +441,7 @@ async def test_get_log_not_found(client: AsyncClient):
             "coffee == 'hot' or ice_cream == 'cold' and temperature == 1.23",
             {"coffee": "hot", "ice_cream": "cold", "temperature": 1.23},
         ),
-        (  # This needs to be a json dumps of a python object
+        (  # This needs to be the string from a json.dumps of a python object
             '(messages == [{"role": "assistant", '
             '"context": "you are a helpful assistant"}])',
             {
@@ -706,8 +706,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "key",
-    # ["description", "temperature", "state", "safe", "metadata", "_data"],
-    ["_data"],
+    ["description", "temperature", "state", "safe", "metadata", "_data"],
 )
 @pytest.mark.parametrize(
     "metric",
