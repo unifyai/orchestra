@@ -81,7 +81,11 @@ log_data = {
             "safe": False,
         },
         {"description": "lava", "metadata": [1, 5, 6], "_data/1": {1: 2, 3: 4}},
-        {"description": "air", "metadata": [3, 8, 5], "_data/2": {5: 6, "cat": "mouse"}},
+        {
+            "description": "air",
+            "metadata": [3, 8, 5],
+            "_data/2": {5: 6, "cat": "mouse", 7: 8},
+        },
     ],
 }
 
@@ -578,6 +582,16 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     assert len(result) == 2
     assert result[0]["entries"]["description"] == "lava"
 
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "len(_data) > 2"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result) == 1
+    assert result[0]["entries"]["description"] == "air"
+
     # check in
 
     response = await client.get(
@@ -599,6 +613,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     result = response.json()
     assert len(result) == 1
     assert result[0]["entries"]["description"] == "air"
+
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(

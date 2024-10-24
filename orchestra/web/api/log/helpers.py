@@ -3,7 +3,9 @@ import re
 import statistics
 from typing import Any, List, Union
 
-from sqlalchemy import func, cast, Boolean, Float, String, JSON, select
+from sqlalchemy import func, case, cast, Boolean, Float, String, JSON, select
+from sqlalchemy.dialects.postgresql import JSONB
+
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql import and_, or_, not_
 
@@ -63,7 +65,7 @@ def _tokenize(s):
         ("OP", r"==|<=|>=|<|>|(?<!\w)(?:not in|in|not|and|or|is)(?!\w)"),
         ("LEN", r"len"),  # length
         ("EXISTS", r"exists"),  # exists
-        ("VERSION", r"version"), # version
+        ("VERSION", r"version"),  # version
         ("BOOLEAN", r"(?<!\w)(?:True|False)(?!\w)"),  # Booleans
         ("IDENTIFIER", r"[A-Za-z_/][A-Za-z0-9_/]*"),  # Identifiers
         ("LPAREN", r"\("),
@@ -192,7 +194,9 @@ class _Parser:
         return node
 
     def primary(self):
-        if self.current_token[0] in ("LEN", "EXISTS", "VERSION") and self.current_token[1] in (
+        if self.current_token[0] in ("LEN", "EXISTS", "VERSION") and self.current_token[
+            1
+        ] in (
             "len",
             "exists",
             "version",
@@ -205,10 +209,14 @@ class _Parser:
                 if self.current_token[0] == "RPAREN":
                     self.advance()
                 else:
-                    raise RuntimeError('Expected ")" after len, exists or version function')
+                    raise RuntimeError(
+                        'Expected ")" after len, exists or version function'
+                    )
                 return {"operand": fn, "rhs": expr}
             else:
-                raise RuntimeError('Expected "(" after len, exists, or version function')
+                raise RuntimeError(
+                    'Expected "(" after len, exists, or version function'
+                )
         elif self.current_token[0] == "LPAREN":
             self.advance()
             node = self.expr()
@@ -349,7 +357,32 @@ def build_filter(filter_dict, log_event_alias, session):
                         log_alias.log_event_id == log_event_alias.id,
                         log_alias.key == identifier,
                     )
-                    .with_entities(func.length(log_alias.value))
+                    .with_entities(
+                        case(
+                            (
+                                log_alias.inferred_type == "list",
+                                func.jsonb_array_length(
+                                    cast(log_alias.value, JSONB)
+                                ).cast(Float),
+                            ),
+                            (
+                                log_alias.inferred_type == "dict",
+                                select(func.count())
+                                .select_from(
+                                    func.jsonb_object_keys(cast(log_alias.value, JSONB))
+                                )
+                                .scalar_subquery()
+                                .cast(Float),
+                            ),
+                            (
+                                log_alias.inferred_type == "str",
+                                func.length(
+                                    cast(log_alias.value, JSONB)[0].astext
+                                ).cast(Float),
+                            ),
+                            else_=0,
+                        )
+                    )
                 )
                 if operand == "<":
                     return subq.as_scalar() < length
