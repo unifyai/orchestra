@@ -60,7 +60,7 @@ log_data = {
             "description": "boiling water",
             "temperature": 100.0,
             "state": "liquid->gas",
-            "safe": [True, False],
+            "safe": False,
         },
         {
             "description": "freezing water",
@@ -80,9 +80,8 @@ log_data = {
             "state": "liquid->solid",
             "safe": False,
         },
-        {
-            "description": "lava",
-        },
+        {"description": "lava", "metadata": [1, 5, 6], "_data/1": {1: 2, 3: 4}},
+        {"description": "air", "metadata": [3, 8, 5], "_data/2": {5: 6, "cat": "mouse"}},
     ],
 }
 
@@ -566,7 +565,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert len(result) == 1
+    assert len(result) == 2
 
     # check len
     response = await client.get(
@@ -576,7 +575,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert len(result) == 1
+    assert len(result) == 2
     assert result[0]["entries"]["description"] == "lava"
 
     # check in
@@ -591,9 +590,21 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     assert len(result) == 1
     assert result[0]["entries"]["description"] == "lava"
 
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "version('_data') == '2'"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result) == 1
+    assert result[0]["entries"]["description"] == "air"
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("key", ["description", "temperature", "state", "safe"])
+@pytest.mark.parametrize(
+    "key",
+    ["description", "temperature", "state", "safe", "metadata", "_data"],
+)
 @pytest.mark.parametrize(
     "metric",
     ["sum", "mean", "var", "std", "min", "max", "median", "mode"],

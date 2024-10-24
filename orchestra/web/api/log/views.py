@@ -6,8 +6,8 @@ import json
 from typing import Any, Dict, Optional, Union
 
 from fastapi import APIRouter, Depends, Path, Query, Request
-from sqlalchemy import case, cast, func, Float, INTEGER, JSON, select
-from sqlalchemy.dialects.postgresql import BOOLEAN
+from sqlalchemy import case, cast, func, Float, INTEGER, select
+from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
@@ -371,9 +371,7 @@ def get_logs(
     ),
     limit: int = Query(100, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    log_event_dao: LogEventDAO = Depends(),
     project_dao: ProjectDAO = Depends(),
-    log_dao: LogDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -386,7 +384,7 @@ def get_logs(
         raise not_found(f"Project {project}")
     # TODO: Deal with organisation IDs
 
-    query = session.query(LogEvent.id).where(LogEvent.project_id==project_obj.id)
+    query = session.query(LogEvent.id).where(LogEvent.project_id == project_obj.id)
     query = query.order_by(LogEvent.created_at)
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
@@ -401,10 +399,14 @@ def get_logs(
 
     relevant_logs = query.subquery()
 
-    query = session.query(Log, LogEvent.created_at.label("log_event_ts")).join(
+    query = (
+        session.query(Log, LogEvent.created_at.label("log_event_ts"))
+        .join(
             LogEvent,
             LogEvent.id == Log.log_event_id,
-        ).where(Log.log_event_id.in_(select(relevant_logs)))
+        )
+        .where(Log.log_event_id.in_(select(relevant_logs)))
+    )
 
     all_logs = query.all()
     formatted_logs = format_logs(all_logs)
@@ -477,7 +479,7 @@ def get_logs_metric(
         raise not_found(f"Project {project}")
     # TODO: Deal with organisation IDs
 
-    query = session.query(LogEvent.id).filter(project_id=project_obj.id)
+    query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
 
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
@@ -498,20 +500,32 @@ def get_logs_metric(
         "median": func.percentile_cont(0.5).within_group,
         "mode": func.mode().within_group,
     }
+
     reduced_query = (
         session.query(
             reduction_methods[metric](
                 case(
                     (
-                        Log.inferred_type == "list" or Log.inferred_type == "dict",
-                        func.json_array_length(cast(Log.value, JSON)),
+                        Log.inferred_type == "list",
+                        func.jsonb_array_length(cast(Log.value, JSONB)).cast(Float),
+                    ),
+                    (
+                        Log.inferred_type == "dict",
+                        select(func.count())
+                        .select_from(func.jsonb_object_keys(cast(Log.value, JSONB)))
+                        .scalar_subquery()
+                        .cast(Float),
                     ),
                     (
                         Log.inferred_type == "bool",
-                        Log.value.cast(BOOLEAN).cast(INTEGER),
+                        Log.value.cast(BOOLEAN).cast(INTEGER).cast(Float),
                     ),
-                    (Log.inferred_type == "str", func.length(Log.value).cast(Float)),
-                    (Log.value.cast(Float) != None, Log.value.cast(Float)),
+                    (
+                        Log.inferred_type == "str",
+                        func.length(cast(Log.value, JSONB)[0].astext).cast(Float),
+                    ),
+                    (Log.inferred_type == "float", Log.value.cast(Float)),
+                    (Log.inferred_type == "int", Log.value.cast(Float)),
                     else_=0,
                 )
             )

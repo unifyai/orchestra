@@ -1,5 +1,6 @@
 import json
 import re
+import statistics
 from typing import Any, List, Union
 
 from sqlalchemy import func, cast, Boolean, Float, String, JSON, select
@@ -7,10 +8,6 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.sql import and_, or_, not_
 
 from orchestra.db.models.orchestra_models import Log
-
-
-class KeyNotFound(Exception):
-    pass
 
 
 def parse_nested(s, pos):
@@ -66,6 +63,7 @@ def _tokenize(s):
         ("OP", r"==|<=|>=|<|>|(?<!\w)(?:not in|in|not|and|or|is)(?!\w)"),
         ("LEN", r"len"),  # length
         ("EXISTS", r"exists"),  # exists
+        ("VERSION", r"version"), # version
         ("BOOLEAN", r"(?<!\w)(?:True|False)(?!\w)"),  # Booleans
         ("IDENTIFIER", r"[A-Za-z_/][A-Za-z0-9_/]*"),  # Identifiers
         ("LPAREN", r"\("),
@@ -100,6 +98,8 @@ def _tokenize(s):
             tokens.append(("LEN", value))
         elif kind == "EXISTS":
             tokens.append(("EXISTS", value))
+        elif kind == "VERSION":
+            tokens.append(("VERSION", value))
         elif kind == "OP":
             tokens.append(("OP", value))
         elif kind == "LPAREN":
@@ -192,9 +192,10 @@ class _Parser:
         return node
 
     def primary(self):
-        if self.current_token[0] in ("LEN", "EXISTS") and self.current_token[1] in (
+        if self.current_token[0] in ("LEN", "EXISTS", "VERSION") and self.current_token[1] in (
             "len",
             "exists",
+            "version",
         ):
             fn = self.current_token[1]
             self.advance()
@@ -204,10 +205,10 @@ class _Parser:
                 if self.current_token[0] == "RPAREN":
                     self.advance()
                 else:
-                    raise RuntimeError('Expected ")" after len or exists function')
+                    raise RuntimeError('Expected ")" after len, exists or version function')
                 return {"operand": fn, "rhs": expr}
             else:
-                raise RuntimeError('Expected "(" after len or exists function')
+                raise RuntimeError('Expected "(" after len, exists, or version function')
         elif self.current_token[0] == "LPAREN":
             self.advance()
             node = self.expr()
@@ -314,7 +315,6 @@ def build_filter(filter_dict, log_event_alias, session):
                 try:
                     condition = cast(log_alias.value, get_sqlalchemy_type(rhs))
                     compare_value = rhs
-                    # compare_value = json.dumps(rhs)
                     if operand == "==" or operand == "is":
                         subq = subq.filter(condition == compare_value)
                     elif operand == "!=":
@@ -364,6 +364,22 @@ def build_filter(filter_dict, log_event_alias, session):
                 elif operand == "!=":
                     return subq.as_scalar() != length
 
+        if isinstance(lhs, dict) and lhs.get("operand") == "version":
+            version = rhs["value"]
+            identifier = lhs.get("rhs", {}).get("value")
+            if identifier:
+                log_alias = aliased(Log)
+                subq = (
+                    session.query(log_alias.id)
+                    .filter(
+                        log_alias.log_event_id == log_event_alias.id,
+                        log_alias.key == identifier,
+                    )
+                    .with_entities(log_alias.version)
+                )
+                if operand == "==":
+                    return subq.as_scalar() == version
+
         if operand in ["in", "not in"]:
             if isinstance(rhs, dict) and rhs.get("type") == "identifier":
                 key = rhs["value"]
@@ -391,7 +407,6 @@ def build_filter(filter_dict, log_event_alias, session):
                 log_alias.key == identifier,
             )
             return subq.exists()
-
     else:
         # Handle literals or unexpected structures
         if "type" in filter_dict:
@@ -458,9 +473,6 @@ def _max(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
     return max(_preprocess(values))
 
 
-import statistics
-
-
 def _median(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
     values = _preprocess(values)
     return statistics.median(values)
@@ -468,7 +480,7 @@ def _median(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
 
 def _mode(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
     values = _preprocess(values)[::-1]
-    # silly hack to make consistent with sql
+    # reverse to make consistent with sql mode
     return statistics.mode(values)
 
 
@@ -484,35 +496,6 @@ reduction_methods = {
     "mode": _mode,
 }
 
-def type_coerce(inferred_type, x):
-    assert isinstance(x, str)
-    if inferred_type == "str":
-        return str(x)
-    elif inferred_type == "list":
-        breakpoint()
-        return json.loads(x)
-        # Handle list-like strings: "['a', 'b']" or "a,b,c"
-        x = x.strip("[]")
-        if not x:
-            return []
-        return [item.strip().strip("'\"") for item in x.split(",")]
-    elif inferred_type == "dict":
-        # Handle dict-like strings: "{'a': 1}" or "a:1,b:2"
-        x = x.strip("{}")
-        if not x:
-            return {}
-        pairs = [pair.strip() for pair in x.split(",")]
-        return {k.strip().strip("'\""):v.strip() for k, v in
-                (pair.split(":") for pair in pairs if pair)}
-    elif inferred_type == "bool":
-        return x.lower() in ("true", "1", "yes", "y", "t")
-    elif inferred_type == "int":
-        return int(float(x))  # Handle both "5" and "5.0"
-    elif inferred_type == "float":
-        return float(x)
-    else:
-        raise ValueError(f"Unsupported type: {inferred_type}")
-
 
 def format_logs(all_logs):
     formatted_entries = dict()
@@ -525,7 +508,5 @@ def format_logs(all_logs):
             key not in formatted_entries[log_event_id]
         ), f"found duplicates for key {key} with log_id {log_event_id}"
         formatted_entries[log_event_id]["ts"] = log[1].strftime("%Y-%m-%d %H:%M:%S")
-        value = log[0].value
-        inferred_type = log[0].inferred_type
-        formatted_entries[log_event_id]["entries"][key] = type_coerce(inferred_type, value)
+        formatted_entries[log_event_id]["entries"][key] = json.loads(log[0].value)
     return formatted_entries
