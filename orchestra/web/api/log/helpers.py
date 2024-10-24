@@ -321,8 +321,8 @@ def build_filter(filter_dict, log_event_alias, session):
 
             if operand in ("==", "!=", "is", "<", ">", "<=", ">="):
                 try:
-                    condition = cast(log_alias.value, get_sqlalchemy_type(rhs))
                     compare_value = rhs
+                    condition = cast(log_alias.value, get_sqlalchemy_type(compare_value))
                     if operand == "==" or operand == "is":
                         subq = subq.filter(condition == compare_value)
                     elif operand == "!=":

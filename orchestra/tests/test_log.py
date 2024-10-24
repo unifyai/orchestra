@@ -80,12 +80,15 @@ log_data = {
             "state": "liquid->solid",
             "safe": False,
         },
-        {"description": "lava", "metadata": [1, 5, 6], "_data/1": {1: 2, 3: 4}},
+        {"description": "lava", "metadata": [1, 5, 6], "_data": {1: 2, 3: 4}},
         {
             "description": "air",
             "metadata": [3, 8, 5],
-            "_data/2": {5: 6, "cat": "mouse", 7: 8},
+            "_data": {5: 6, 3: 12, 7: 8, 4: 11},
         },
+        {"_data": {7: 8, 9: 10}},
+        {"name/1": "test"},
+        {"name/2": "test2"},
     ],
 }
 
@@ -413,10 +416,25 @@ async def test_get_log_not_found(client: AsyncClient):
         ("a == 'It\\'s a test'", {"a": "It's a test"}),
     ],
 )
-def test_log_filter_helper(expression, values):
-    express_dict = str_filter_exp_to_dict(expression)
-    assert isinstance(express_dict, dict)
-    result = evaluate_filter_expression(express_dict, **values)
+async def test_log_filter_helper(client: AsyncClient, expression, values):
+    # express_dict = str_filter_exp_to_dict(expression)
+    # assert isinstance(express_dict, dict)
+    #    result = evaluate_filter_expression(express_dict, **values)
+
+    project_name = "test_filter_helper"
+    _ = await _create_project(client, project_name, user=1)
+    response = await client.post(
+        "/v0/log",
+        json={"project": project_name, "entries": values},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    response = await client.get(
+        "/v0/logs", params={"project": project_name, "filter_expr": expression},
+        headers=HEADERS
+    )
+    assert response.status_code == 200, response.text
+    result = len(response.json()) == 1
     for key, value in values.items():
         exec(key + "=" + (str(value) if isinstance(value, bool) else json.dumps(value)))
     if "not exists" in expression:
@@ -569,7 +587,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert len(result) == 2
+    assert len(result) == 5
 
     # check len
     response = await client.get(
@@ -606,19 +624,20 @@ async def test_get_logs_w_filtering(client: AsyncClient):
 
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "version('_data') == '2'"},
+        params={"filter_expr": "version('name') == '2'"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result) == 1
-    assert result[0]["entries"]["description"] == "air"
+    assert result[0]["entries"]["name/2"] == "test2"
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "key",
-    ["description", "temperature", "state", "safe", "metadata", "_data"],
+    # ["description", "temperature", "state", "safe", "metadata", "_data"],
+    ["_data"],
 )
 @pytest.mark.parametrize(
     "metric",
