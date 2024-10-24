@@ -5,9 +5,7 @@ import pytest
 from httpx import AsyncClient, Request
 
 from ..web.api.log.helpers import (
-    # evaluate_filter_expression,
     reduction_methods,
-    str_filter_exp_to_dict,
 )
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
