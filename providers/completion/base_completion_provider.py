@@ -4,6 +4,8 @@ import os
 from typing import Any, Dict, List
 
 import litellm
+
+litellm.modify_params = True
 import tiktoken
 from fastapi import HTTPException
 from openai import AsyncStream, OpenAI, Stream
