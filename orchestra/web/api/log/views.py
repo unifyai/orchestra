@@ -10,7 +10,13 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.web.api.log.schema import CreateLogConfig, UpdateLogConfig
+from orchestra.web.api.log.schema import (
+    CreateLogConfig,
+    DeleteLogEntryRequest,
+    DeleteLogsRequest,
+    UpdateLogConfig,
+    UpdateLogRequest,
+)
 from orchestra.web.api.utils.http_responses import not_found
 
 from .helpers import (
@@ -145,6 +151,57 @@ def delete_log(
     return {"info": "Log deleted successfully!"}
 
 
+@router.delete(
+    "/logs",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Logs deleted successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Logs Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "One or more logs with the specified IDs were not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def delete_logs(
+    request_fastapi: Request,
+    body: DeleteLogsRequest,
+    log_event_dao: LogEventDAO = Depends(),
+):
+    """
+    Deletes multiple logs from a project.
+    """
+    not_found_ids = []
+    for log_id in body.ids:
+        try:
+            if log_event_dao.get_user_id(id=log_id) != request_fastapi.state.user_id:
+                raise IndexError
+        except IndexError:
+            not_found_ids.append(log_id)
+            continue
+        # TODO: Deal with organisation IDs
+        log_event_dao.delete(id=log_id)
+
+    if not_found_ids:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Logs with ids {not_found_ids} not found or you don't have permission to delete them.",
+        )
+
+    return {"info": "Logs deleted successfully!"}
+
+
 @router.put(
     "/log/{id}",
     responses={
@@ -219,6 +276,100 @@ def update_log(
     return id
 
 
+@router.put(
+    "/logs",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Logs updated successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Log Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "One or more logs with the specified IDs were not found.",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Bad Request",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid request format or data.",
+                    },
+                },
+            },
+        },
+    },
+)
+def update_logs(
+    request_fastapi: Request,
+    body: UpdateLogRequest,
+    log_dao: LogDAO = Depends(),
+    log_event_dao: LogEventDAO = Depends(),
+):
+    """
+    Updates multiple logs with the provided entries. Each entry will be either added
+    or overridden in the specified logs.
+
+    A dictionary of "explicit_types" can be passed as part of the `entries`.
+    If present, it will override the inferred type of any matching key in all logs.
+    """
+    explicit_types = body.entries.pop("explicit_types", None)
+    not_found_logs = []
+
+    for log_id in body.ids:
+        try:
+            # Get user and project ID for the log
+            project_user_id, project_id = log_event_dao.get_user_and_project_id(
+                id=log_id,
+            )
+
+            # Check if the log belongs to the requesting user
+            if project_user_id != request_fastapi.state.user_id:
+                raise IndexError
+
+            # Store each key, value pair for the log
+            for k, v in body.entries.items():
+                try:
+                    log_dao.update_value(
+                        log_event_id=log_id,
+                        raw_k=k,
+                        raw_v=v,
+                        explicit_types=explicit_types,
+                    )
+                except IndexError:
+                    log_dao.create_from_raw_k_v(
+                        project_id=project_id,
+                        log_event_id=log_id,
+                        raw_k=k,
+                        raw_v=v,
+                        explicit_types=explicit_types,
+                    )
+                except ValueError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Found different value for log entries with the same key '{k}' but a different version.",
+                    )
+        except IndexError:
+            not_found_logs.append(log_id)
+
+    if not_found_logs:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Logs with ids {not_found_logs} not found or you don't have permission to update them.",
+        )
+
+    return {"info": "Logs updated successfully!"}
+
+
 @router.delete(
     "/log/{id}/entry/{entry}",
     responses={
@@ -284,6 +435,100 @@ def delete_log_entry(
         raise not_found(f"Log entry {entry}")
     log_dao.delete(id=log[0][0].id)
     return {"info": "Log entry deleted successfully!"}
+
+
+@router.delete(
+    "/logs/entry/{entry}",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Log entry deleted successfully from all logs!",
+                    },
+                },
+            },
+        },
+        404_1: {
+            "description": "Log Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "One or more logs with the specified IDs were not found.",
+                    },
+                },
+            },
+        },
+        404_2: {
+            "description": "Log Entry Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Log entry <entry> not found in one or more logs.",
+                    },
+                },
+            },
+        },
+    },
+)
+def delete_log_entry_from_multiple_logs(
+    request_fastapi: Request,
+    body: DeleteLogEntryRequest,
+    entry: str = Path(
+        description="Name of the entry to delete from the given logs.",
+        example="entry-v0",
+    ),
+    log_event_dao: LogEventDAO = Depends(),
+    log_dao: LogDAO = Depends(),
+):
+    """
+    Deletes a specific entry from multiple logs.
+    """
+    # Replace "-" with "/" in the entry to handle the client-side encoding
+    entry = entry.replace("-", "/")
+    if "/" in entry:
+        clean_key = entry.split("/")[0]
+        version = entry.split("/")[1]
+    else:
+        clean_key = entry
+        version = None
+
+    not_found_logs = []
+    not_found_entries = []
+
+    for log_id in body.ids:
+        # Verify if the log belongs to the user
+        try:
+            if log_event_dao.get_user_id(id=log_id) != request_fastapi.state.user_id:
+                raise IndexError
+        except IndexError:
+            not_found_logs.append(log_id)
+            continue
+
+        # Check for the existence of the log entry
+        log = log_dao.filter(log_event_id=log_id, key=clean_key, version=version)
+        if not log:
+            not_found_entries.append(log_id)
+            continue
+
+        # Delete the log entry
+        log_dao.delete(id=log[0][0].id)
+
+    # Handle cases where some logs or entries were not found
+    if not_found_logs:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Logs with ids {not_found_logs} not found or you don't have permission to delete from them.",
+        )
+
+    if not_found_entries:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Log entry '{entry}' not found in logs with ids {not_found_entries}.",
+        )
+
+    return {"info": "Log entry deleted successfully from all logs!"}
 
 
 @router.get(

@@ -2,7 +2,7 @@ import json
 import os
 
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, Request
 
 from ..web.api.log.helpers import (
     evaluate_filter_expression,
@@ -117,6 +117,38 @@ def _update_log_w_overwrite(client, log_id, user=1):
         json={"entries": log_data["log_update_w_overwrite"]},
         headers=_headers,
     )
+
+
+# Helper function to delete multiple logs
+def _delete_logs(client, log_ids, user=1):
+    _headers = HEADERS if user == 1 else HEADERS_2
+    request = Request(
+        "DELETE",
+        str(client.base_url) + "/v0/logs",
+        json={"ids": log_ids},
+        headers=_headers,
+    )
+    return client.send(request)
+
+
+def _update_logs(client, log_ids, entries, user=1):
+    _headers = HEADERS if user == 1 else HEADERS_2
+    return client.put(
+        "/v0/logs",
+        json={"ids": log_ids, "entries": entries},
+        headers=_headers,
+    )
+
+
+def _delete_log_entry_from_logs(client, entry, log_ids, user=1):
+    _headers = HEADERS if user == 1 else HEADERS_2
+    request = Request(
+        "DELETE",
+        str(client.base_url) + f"/v0/logs/entry/{entry}",
+        json={"ids": log_ids},
+        headers=_headers,
+    )
+    return client.send(request)
 
 
 async def _create_logs_for_grouping(client, project_name, user=1):
@@ -626,3 +658,96 @@ async def test_get_logs_groups_project_not_found(client: AsyncClient):
     assert response.json() == {
         "detail": f"Project {project_name} not found.",
     }
+
+
+@pytest.mark.anyio
+async def test_delete_logs(client: AsyncClient):
+    project_name = "multi-log-project"
+    _ = await _create_project(client, project_name)
+
+    # Create multiple logs
+    response1 = await _create_log(client, project_name)
+    response2 = await _create_log(client, project_name)
+    assert response1.status_code == 200, response1.json()
+    assert response2.status_code == 200, response2.json()
+
+    log_id1 = response1.json()
+    log_id2 = response2.json()
+    log_ids = [log_id1, log_id2]
+
+    # Delete the logs
+    response = await _delete_logs(client, log_ids)
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs deleted successfully!"
+
+    # Verify logs were deleted
+    response = await _get_log(client, log_id1)
+    assert response.status_code == 404, response.json()
+
+    response = await _get_log(client, log_id2)
+    assert response.status_code == 404, response.json()
+
+
+@pytest.mark.anyio
+async def test_update_logs(client: AsyncClient):
+    project_name = "multi-log-project"
+    _ = await _create_project(client, project_name)
+
+    # Create multiple logs
+    response1 = await _create_log(client, project_name)
+    response2 = await _create_log(client, project_name)
+    assert response1.status_code == 200, response1.json()
+    assert response2.status_code == 200, response2.json()
+
+    log_id1 = response1.json()
+    log_id2 = response2.json()
+    log_ids = [log_id1, log_id2]
+
+    # Update both logs
+    entries = {
+        "new_entry": "Updated value",
+        "explicit_types": {"new_entry": "string"},
+    }
+    response = await _update_logs(client, log_ids, entries)
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs updated successfully!"
+
+    # Verify updates
+    response = await _get_log(client, log_id1)
+    assert response.status_code == 200, response.json()
+    assert response.json()["entries"]["new_entry"] == "Updated value"
+
+    response = await _get_log(client, log_id2)
+    assert response.status_code == 200, response.json()
+    assert response.json()["entries"]["new_entry"] == "Updated value"
+
+
+@pytest.mark.anyio
+async def test_delete_log_entry_from_logs(client: AsyncClient):
+    project_name = "multi-log-project"
+    _ = await _create_project(client, project_name)
+
+    # Create multiple logs
+    response1 = await _create_log(client, project_name)
+    response2 = await _create_log(client, project_name)
+    assert response1.status_code == 200, response1.json()
+    assert response2.status_code == 200, response2.json()
+
+    log_id1 = response1.json()
+    log_id2 = response2.json()
+    log_ids = [log_id1, log_id2]
+
+    # Delete an entry from both logs
+    entry_to_delete = "input"
+    response = await _delete_log_entry_from_logs(client, entry_to_delete, log_ids)
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Log entry deleted successfully from all logs!"
+
+    # Verify deletion of entry
+    response = await _get_log(client, log_id1)
+    assert response.status_code == 200, response.json()
+    assert entry_to_delete not in response.json()["entries"]
+
+    response = await _get_log(client, log_id2)
+    assert response.status_code == 200, response.json()
+    assert entry_to_delete not in response.json()["entries"]
