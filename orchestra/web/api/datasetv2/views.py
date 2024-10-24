@@ -76,7 +76,7 @@ def get_dataset_entries(
         description="Dataset name (can include forward slashes)",
         example="my_dataset",
     ),
-    limit: int = Query(10, ge=1, le=200),
+    limit: int = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
     dataset_dao: DatasetDAO = Depends(),
     dataset_entry_dao: DatasetEntryDAO = Depends(),
@@ -268,7 +268,8 @@ def add_dataset_entries(
     for entry in request.entries:
         # check if the entry already exists
         existing_id = dataset_entry_dao.filter(
-            dataset_id=dataset_id, entry=json.dumps(entry)
+            dataset_id=dataset_id,
+            entry=json.dumps(entry),
         )
         if existing_id:
             existing_ids.append(existing_id[0].id)
