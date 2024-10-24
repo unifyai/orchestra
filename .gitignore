@@ -151,6 +151,7 @@ application_default_credentials.json
 
 # SQL Dump files
 *.dump.sql
+*.dump.latest.sql
 
 # tmp test files
 save_files

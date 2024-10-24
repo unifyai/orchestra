@@ -4,8 +4,6 @@ from typing import Dict, List, Union
 from google.cloud import aiplatform, aiplatform_v1, pubsub_v1, storage
 from google.cloud.exceptions import NotFound
 
-from orchestra.web.api.utils.http_responses import evaluation_does_not_exist
-
 # Pub/Sub
 
 
@@ -36,18 +34,6 @@ def blob_exists(bucket_name: str, blob_name: str) -> bool:
     except NotFound:
         return False
     return True
-
-
-def get_scores(user_id: str, dataset: str):
-    bucket_name = "uploaded_datasets"
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(f"{user_id}/{dataset}/0/scores.json")
-    try:
-        content = blob.download_as_bytes().decode("utf-8")
-        return json.loads(content)
-    except:
-        raise evaluation_does_not_exist(dataset)
 
 
 def get_input_tokens(user_id: str, dataset: str):

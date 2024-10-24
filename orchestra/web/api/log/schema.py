@@ -45,3 +45,37 @@ class UpdateLogConfig(BaseModel):
             },
         },
     )
+
+
+class UpdateLogRequest(BaseModel):
+    ids: list[int] = Field(
+        description="List of log IDs to update with new or overriding entries.",
+        example=[123, 456, 789],
+        min_items=1,
+    )
+    entries: dict = Field(
+        description="Dictionary of key-value pairs to add or update in the logs.",
+        json_schema_extra={
+            "example": {
+                "input": "...",
+                "score-test-1": "...",
+                "explicit_types": {"input": "Image"},
+            },
+        },
+    )
+
+
+class DeleteLogsRequest(BaseModel):
+    ids: list[int] = Field(
+        description="List of log IDs to delete.",
+        example=[123, 456, 789],
+        min_items=1,
+    )
+
+
+class DeleteLogEntryRequest(BaseModel):
+    ids: list[int] = Field(
+        description="List of log IDs to delete the entry from.",
+        example=[123, 456, 789],
+        min_items=1,
+    )

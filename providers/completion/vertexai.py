@@ -51,14 +51,15 @@ class VertexAI(BaseCompletionProvider):
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:
+        kwargs_region = kwargs.pop("region", None)
+        region = kwargs_region
         if self.hub_model in self.supported_models:
-            kwargs_region = kwargs.pop("region", None)
             region = (
                 kwargs_region
                 if kwargs_region
                 else self.supported_models[self.hub_model]["region"]
             )
-            kwargs["vertex_location"] = region
+        kwargs["vertex_location"] = region
         return super().__call__(messages, stream, **kwargs)
 
 
@@ -135,7 +136,14 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 15, "completion": 75},
     },
-    "claude-3.5-sonnet": {
+    # Doesn't seem to work
+    # "claude-3.5-sonnet": {
+    #     "endpoint": "vertex_ai/claude-3-5-sonnet-v2@20241022",
+    #     "region": "us-east5",
+    #     "context_window": 200000,
+    #     "cost": {"prompt": 3, "completion": 15},
+    # },
+    "claude-3.5-sonnet-20240620": {
         "endpoint": "vertex_ai/claude-3-5-sonnet@20240620",
         "region": "us-east5",
         "context_window": 200000,

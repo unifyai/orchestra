@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import ApiKey
+from orchestra.db.models.orchestra_models import ApiKey, AuthUser
 
 
 class ApiKeyDAO:
@@ -48,6 +48,13 @@ class ApiKeyDAO:
             query = query.where(ApiKey.organization_id == organization_id)
         if key:
             query = query.where(ApiKey.key == key)
+        rows = self.session.execute(query)
+        return rows.fetchall()
+
+    def get_user_id_and_mail(self, key):
+        query = select(ApiKey.user_id, AuthUser.email)
+        query = query.join(AuthUser, ApiKey.user_id == AuthUser.id)
+        query = query.where(ApiKey.key == key)
         rows = self.session.execute(query)
         return rows.fetchall()
 

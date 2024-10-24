@@ -36,6 +36,7 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
         if (
             "anthropic" in self.provider_endpoint
             and not "opus" in self.provider_endpoint
+            and not "sonnet-20240620" not in self.provider_endpoint
         ):
             return "us-east-1"
         return "us-west-2"
@@ -135,6 +136,11 @@ supported_models = {
         "cost": {"prompt": 15, "completion": 75},
     },
     "claude-3.5-sonnet": {
+        "endpoint": "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "context_window": 200000,
+        "cost": {"prompt": 3, "completion": 15},
+    },
+    "claude-3.5-sonnet-20240620": {
         "endpoint": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
         "context_window": 200000,
         "cost": {"prompt": 3, "completion": 15},

@@ -14,15 +14,18 @@ class LogDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    # TODO: Add suffix and ensure that keys with the same suffix have the same value
     def create(
         self,
+        project_id: int,
         log_event_id: int,
         key: str,
         value: Optional[str] = None,  # JSON serialised
         version: Optional[str] = None,
         inferred_type: Optional[str] = None,
     ) -> Optional[str]:
+
+        if version and not self.correct_key_version(project_id, key, version, value):
+            raise ValueError
 
         new_log = Log(
             log_event_id=log_event_id,
@@ -39,6 +42,7 @@ class LogDAO:
 
     def create_from_raw_k_v(
         self,
+        project_id: int,
         log_event_id: int,
         raw_k: str,
         raw_v: Optional[Any] = None,
@@ -57,6 +61,7 @@ class LogDAO:
                 inferred_type = explicit_types[raw_k]
 
         return self.create(
+            project_id=project_id,
             log_event_id=log_event_id,
             key=clean_key[0],
             value=json_v,
@@ -142,6 +147,39 @@ class LogDAO:
             if log_event_id:
                 setattr(entry, "log_event_id", log_event_id)
 
+    def update_value(
+        self,
+        log_event_id: int,
+        raw_k: str,
+        raw_v: Optional[Any] = None,
+        explicit_types: Optional[Dict] = None,
+    ):
+
+        inferred_type = type(raw_v).__name__
+        clean_key = raw_k.split("/", 1)
+        json_v = json.dumps(raw_v)
+
+        if explicit_types and isinstance(explicit_types, Dict):
+            if clean_key[0] in explicit_types:
+                inferred_type = explicit_types[clean_key[0]]
+            if raw_k in explicit_types:
+                inferred_type = explicit_types[raw_k]
+
+        query = select(Log)
+        query = query.where(Log.log_event_id == log_event_id)
+        query = query.where(Log.key == clean_key[0])
+        raw = self.session.execute(query)
+        entry = raw.scalars().first()
+        if entry is not None:
+            setattr(entry, "value", json_v)
+            setattr(
+                entry,
+                "inferred_type",
+                inferred_type,
+            )
+        else:
+            raise IndexError
+
     def delete(self, id: int):
         try:
             log = self.session.query(Log).filter_by(id=id).one()
@@ -150,3 +188,19 @@ class LogDAO:
         except:
             self.session.rollback()
             raise ValueError
+
+    def correct_key_version(self, project_id: int, key: str, version: str, value: str):
+        query = (
+            select(Log.value)
+            .join(LogEvent, Log.log_event_id == LogEvent.id)
+            .where(
+                LogEvent.project_id == project_id,
+                Log.key == key,
+                Log.version == version,
+            )
+            .limit(1)  # We only need one entry since we assume consistency
+        )
+
+        result = self.session.execute(query).fetchone()
+
+        return result is None or result[0] == value
