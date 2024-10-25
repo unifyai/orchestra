@@ -10,6 +10,10 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Log, LogEvent
 
 
+class OverwriteError(Exception):
+    pass
+
+
 class LogDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
@@ -153,6 +157,7 @@ class LogDAO:
         raw_k: str,
         raw_v: Optional[Any] = None,
         explicit_types: Optional[Dict] = None,
+        overwrite: bool = False,
     ):
 
         inferred_type = type(raw_v).__name__
@@ -171,6 +176,8 @@ class LogDAO:
         raw = self.session.execute(query)
         entry = raw.scalars().first()
         if entry is not None:
+            if not overwrite and hasattr(entry, "value"):
+                raise OverwriteError
             setattr(entry, "value", json_v)
             setattr(
                 entry,
