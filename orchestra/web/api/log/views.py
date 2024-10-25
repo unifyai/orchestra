@@ -9,7 +9,7 @@ from sqlalchemy import case, cast, func, Float, INTEGER, select
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
-from orchestra.db.dao.log_dao import LogDAO
+from orchestra.db.dao.log_dao import LogDAO, OverwriteError
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.web.api.log.schema import (
@@ -30,7 +30,6 @@ from .helpers import (
 )
 
 router = APIRouter()
-
 
 ###########################
 # endpoints
@@ -261,6 +260,7 @@ def update_log(
                 raw_k=k,
                 raw_v=v,
                 explicit_types=explicit_types,
+                overwrite=request.overwrite,
             )
         except IndexError:
             log_dao.create_from_raw_k_v(
@@ -274,6 +274,11 @@ def update_log(
             raise HTTPException(
                 status_code=400,
                 detail="Found different value for log entries with same version.",
+            )
+        except OverwriteError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Found existing value for log entry with key {k} but overwrite is set to False.",
             )
     return id
 
@@ -346,6 +351,7 @@ def update_logs(
                         raw_k=k,
                         raw_v=v,
                         explicit_types=explicit_types,
+                        overwrite=body.overwrite,
                     )
                 except IndexError:
                     log_dao.create_from_raw_k_v(
@@ -360,6 +366,12 @@ def update_logs(
                         status_code=400,
                         detail=f"Found different value for log entries with the same key '{k}' but a different version.",
                     )
+                except OverwriteError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Found existing value for log entry with key {k} but overwrite is set to False.",
+                    )
+
         except IndexError:
             not_found_logs.append(log_id)
 
