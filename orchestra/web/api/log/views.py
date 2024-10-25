@@ -5,6 +5,8 @@ Includes endpoints related to entries.
 import json
 from typing import Any, Dict, Optional, Union
 
+from sqlalchemy import case, cast, func, Float, INTEGER, select
+from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
 from orchestra.db.dao.log_dao import LogDAO
@@ -18,13 +20,13 @@ from orchestra.web.api.log.schema import (
     UpdateLogRequest,
 )
 from orchestra.web.api.utils.http_responses import not_found
+from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.orchestra_models import LogEvent, Log
 
 from .helpers import (
-    KeyNotFound,
-    evaluate_filter_expression,
     format_logs,
-    reduction_methods,
     str_filter_exp_to_dict,
+    build_filter,
 )
 
 router = APIRouter()
@@ -638,9 +640,8 @@ def get_logs(
     ),
     limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    log_event_dao: LogEventDAO = Depends(),
     project_dao: ProjectDAO = Depends(),
-    log_dao: LogDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Returns a list of filtered entries from a project.
@@ -651,25 +652,37 @@ def get_logs(
     except IndexError:
         raise not_found(f"Project {project}")
     # TODO: Deal with organisation IDs
-    log_events = log_event_dao.filter(
-        project_id=project_obj.id,
-        limit=limit,
-        offset=offset,
-    )
-    all_logs = log_dao.filter(log_event_id=[le[0].id for le in log_events])
-    formatted_logs = format_logs(all_logs)
-    # TODO: Add pagination
-    logs = list()
-    filter_dict = str_filter_exp_to_dict(filter_expr) if filter_expr is not None else {}
-    for log_event_id, log_dict in formatted_logs.items():
-        if filter_dict:
-            try:
-                match = evaluate_filter_expression(filter_dict, **log_dict["entries"])
-                if match == False:
-                    continue
-            except KeyNotFound:
-                continue
 
+    query = session.query(LogEvent.id).where(LogEvent.project_id == project_obj.id)
+    query = query.order_by(LogEvent.created_at)
+    if filter_expr:
+        filter_dict = str_filter_exp_to_dict(filter_expr)
+        if filter_dict:
+            condition = build_filter(filter_dict, LogEvent, session)
+            query = query.filter(condition)
+
+    if limit:
+        query = query.limit(limit)
+    if offset:
+        query = query.offset(offset)
+
+    relevant_logs = query.subquery()
+
+    query = (
+        session.query(Log, LogEvent.created_at.label("log_event_ts"))
+        .join(
+            LogEvent,
+            LogEvent.id == Log.log_event_id,
+        )
+        .where(Log.log_event_id.in_(select(relevant_logs)))
+    )
+
+    all_logs = query.all()
+    formatted_logs = format_logs(all_logs)
+
+    logs = []
+    for log_event_id, log_dict in formatted_logs.items():
+        log_dict = formatted_logs[log_event_id]
         logs.append(
             {
                 "id": log_event_id,
@@ -677,7 +690,9 @@ def get_logs(
                 "entries": {
                     k
                     + (
-                        f"/{log_dict['version'][k]}" if k in log_dict["version"] else ""
+                        f"/{log_dict['version'][k]}"
+                        if k in log_dict.get("version", "")
+                        else ""
                     ): v
                     for k, v in log_dict["entries"].items()
                 },
@@ -728,9 +743,8 @@ def get_logs_metric(
         description="Boolean string to filter entries. TODO: Detailed page.",
         example="len(output) > 200 and temperature == 0.5",
     ),
-    log_event_dao: LogEventDAO = Depends(),
     project_dao: ProjectDAO = Depends(),
-    log_dao: LogDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> Union[float, int, bool]:
     """
     Returns the reduction metric for filtered values for a specific key from a project.
@@ -741,31 +755,62 @@ def get_logs_metric(
     except IndexError:
         raise not_found(f"Project {project}")
     # TODO: Deal with organisation IDs
-    log_events = log_event_dao.filter(project_id=project_obj.id)
-    filter_dict = (
-        (str_filter_exp_to_dict(filter_expr)) if filter_expr is not None else {}
-    )
-    # format
-    all_logs = log_dao.filter(log_event_id=[e[0].id for e in log_events])
-    formatted_logs = format_logs(all_logs)
-    # filter
-    filtered_logs = dict()
-    for log_event_id, log_dict in formatted_logs.items():
-        if key not in log_dict["entries"]:
-            continue
-        if filter_dict == {} or evaluate_filter_expression(
-            filter_dict, **log_dict["entries"]
-        ):
-            filtered_logs[log_event_id] = log_dict["entries"]
-    # TODO: Add pagination
-    if not filtered_logs:
-        raise Exception(
-            "No values remaining after applying filtering, "
-            "cannot compute reduction metric",
+
+    query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
+
+    if filter_expr:
+        filter_dict = str_filter_exp_to_dict(filter_expr)
+        if filter_dict:
+            condition = build_filter(filter_dict, LogEvent, session)
+            query = query.filter(condition)
+
+    subquery = query.subquery()
+
+    reduction_methods = {
+        "count": func.count,
+        "sum": func.sum,
+        "mean": func.avg,
+        "var": func.var_pop,
+        "std": func.stddev_pop,
+        "min": func.min,
+        "max": func.max,
+        "median": func.percentile_cont(0.5).within_group,
+        "mode": func.mode().within_group,
+    }
+
+    reduced_query = (
+        session.query(
+            reduction_methods[metric](
+                case(
+                    (
+                        Log.inferred_type == "list",
+                        func.jsonb_array_length(cast(Log.value, JSONB)).cast(Float),
+                    ),
+                    (
+                        Log.inferred_type == "dict",
+                        select(func.count())
+                        .select_from(func.jsonb_object_keys(cast(Log.value, JSONB)))
+                        .scalar_subquery()
+                        .cast(Float),
+                    ),
+                    (
+                        Log.inferred_type == "bool",
+                        Log.value.cast(BOOLEAN).cast(INTEGER).cast(Float),
+                    ),
+                    (
+                        Log.inferred_type == "str",
+                        func.length(cast(Log.value, JSONB)[0].astext).cast(Float),
+                    ),
+                    (Log.inferred_type == "float", Log.value.cast(Float)),
+                    (Log.inferred_type == "int", Log.value.cast(Float)),
+                    else_=0,
+                )
+            )
         )
-    return reduction_methods[metric](
-        [dct[key] for log_id, dct in filtered_logs.items()],
-    )
+        .where(Log.key == key)
+        .filter(Log.log_event_id.in_(select(subquery)))
+    ).scalar()
+    return reduced_query
 
 
 @router.get(
