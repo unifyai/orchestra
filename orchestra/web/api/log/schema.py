@@ -45,6 +45,9 @@ class UpdateLogConfig(BaseModel):
             },
         },
     )
+    overwrite: bool = Field(
+        default=False, description="Whether to overwrite existing logs", example=False
+    )
 
 
 class UpdateLogRequest(BaseModel):
@@ -62,6 +65,9 @@ class UpdateLogRequest(BaseModel):
                 "explicit_types": {"input": "Image"},
             },
         },
+    )
+    overwrite: bool = Field(
+        default=False, description="Whether to overwrite existing logs", example=False
     )
 
 

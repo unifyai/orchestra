@@ -114,11 +114,24 @@ def _update_log(client, log_id, user=1):
     )
 
 
-def _update_log_w_overwrite(client, log_id, user=1):
+def _update_log_w_overwrite(client, log_id, overwrite, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     return client.put(
         f"/v0/log/{log_id}",
-        json={"entries": log_data["log_update_w_overwrite"]},
+        json={"entries": log_data["log_update_w_overwrite"], "overwrite": overwrite},
+        headers=_headers,
+    )
+
+
+def _update_multiple_logs_w_overwrite(client, log_ids, overwrite, user=1):
+    _headers = HEADERS if user == 1 else HEADERS_2
+    return client.put(
+        f"/v0/logs",
+        json={
+            "ids": log_ids,
+            "entries": log_data["log_update_w_overwrite"],
+            "overwrite": overwrite,
+        },
         headers=_headers,
     )
 
@@ -278,7 +291,10 @@ async def test_update_log_overwrites(client: AsyncClient):
     orig_entries = response.json()["entries"]
     assert len(orig_entries) == 3
 
-    response = await _update_log_w_overwrite(client, log_id)
+    response = await _update_log_w_overwrite(client, log_id, overwrite=False)
+    assert response.status_code == 400, response.json()
+
+    response = await _update_log_w_overwrite(client, log_id, overwrite=True)
     assert response.status_code == 200, response.json()
 
     response = await _get_log(client, log_id)
@@ -288,6 +304,54 @@ async def test_update_log_overwrites(client: AsyncClient):
     assert new_entries["input"] == orig_entries["input"]
     assert new_entries["boolean_input"] != orig_entries["boolean_input"]
     assert new_entries["numeric_input"] != orig_entries["numeric_input"]
+
+
+@pytest.mark.anyio
+async def test_update_logs_overwrites(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+
+    response = await client.post(
+        "/v0/log",
+        json={"project": project_name, "entries": log_data["log"]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()
+
+    response = await _get_log(client, log_id)
+    assert response.status_code == 200, response.json()
+    orig_entries = response.json()["entries"]
+    assert len(orig_entries) == 3
+
+    response = await client.post(
+        "/v0/log",
+        json={"project": project_name, "entries": log_data["log_update"]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    log_id_2 = response.json()
+
+    log_ids = [log_id, log_id_2]
+
+    response = await _update_multiple_logs_w_overwrite(client, log_ids, overwrite=False)
+    assert response.status_code == 400, response.json()
+
+    response = await _update_multiple_logs_w_overwrite(client, log_ids, overwrite=True)
+    assert response.status_code == 200, response.json()
+
+    response = await _get_log(client, log_id)
+    assert response.status_code == 200, response.json()
+    new_entries = response.json()["entries"]
+    assert len(new_entries) == 3
+    assert new_entries["input"] == orig_entries["input"]
+    assert new_entries["boolean_input"] != orig_entries["boolean_input"]
+    assert new_entries["numeric_input"] != orig_entries["numeric_input"]
+
+    response = await _get_log(client, log_id_2)
+    assert response.status_code == 200, response.json()
+    new_entries = response.json()["entries"]
+    assert len(new_entries) == 4
 
 
 @pytest.mark.anyio
