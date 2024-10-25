@@ -675,6 +675,7 @@ def get_logs(
             LogEvent.id == Log.log_event_id,
         )
         .where(Log.log_event_id.in_(select(relevant_logs)))
+        .order_by(LogEvent.created_at)
     )
 
     all_logs = query.all()
