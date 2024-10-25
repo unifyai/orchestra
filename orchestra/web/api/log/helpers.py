@@ -1,10 +1,15 @@
 import json
 import re
+import statistics
 from typing import Any, List, Union
 
+from sqlalchemy import func, case, cast, Boolean, Float, String, JSON, select
+from sqlalchemy.dialects.postgresql import JSONB
 
-class KeyNotFound(Exception):
-    pass
+from sqlalchemy.orm import aliased
+from sqlalchemy.sql import and_, or_, not_
+
+from orchestra.db.models.orchestra_models import Log
 
 
 def parse_nested(s, pos):
@@ -60,6 +65,7 @@ def _tokenize(s):
         ("OP", r"==|<=|>=|<|>|(?<!\w)(?:not in|in|not|and|or|is)(?!\w)"),
         ("LEN", r"len"),  # length
         ("EXISTS", r"exists"),  # exists
+        ("VERSION", r"version"),  # version
         ("BOOLEAN", r"(?<!\w)(?:True|False)(?!\w)"),  # Booleans
         ("IDENTIFIER", r"[A-Za-z_/][A-Za-z0-9_/]*"),  # Identifiers
         ("LPAREN", r"\("),
@@ -94,6 +100,8 @@ def _tokenize(s):
             tokens.append(("LEN", value))
         elif kind == "EXISTS":
             tokens.append(("EXISTS", value))
+        elif kind == "VERSION":
+            tokens.append(("VERSION", value))
         elif kind == "OP":
             tokens.append(("OP", value))
         elif kind == "LPAREN":
@@ -186,9 +194,12 @@ class _Parser:
         return node
 
     def primary(self):
-        if self.current_token[0] in ("LEN", "EXISTS") and self.current_token[1] in (
+        if self.current_token[0] in ("LEN", "EXISTS", "VERSION") and self.current_token[
+            1
+        ] in (
             "len",
             "exists",
+            "version",
         ):
             fn = self.current_token[1]
             self.advance()
@@ -198,10 +209,14 @@ class _Parser:
                 if self.current_token[0] == "RPAREN":
                     self.advance()
                 else:
-                    raise RuntimeError('Expected ")" after len or exists function')
+                    raise RuntimeError(
+                        'Expected ")" after len, exists or version function'
+                    )
                 return {"operand": fn, "rhs": expr}
             else:
-                raise RuntimeError('Expected "(" after len or exists function')
+                raise RuntimeError(
+                    'Expected "(" after len, exists, or version function'
+                )
         elif self.current_token[0] == "LPAREN":
             self.advance()
             node = self.expr()
@@ -245,81 +260,207 @@ def str_filter_exp_to_dict(s):
     return result
 
 
-def evaluate_filter_expression(expr, **variables):
-    if isinstance(expr, dict):
-        if "operand" in expr:
-            operand = expr["operand"]
-            if operand == "and":
-                lhs = evaluate_filter_expression(expr["lhs"], **variables)
-                if not lhs:
-                    return False
-                rhs = evaluate_filter_expression(expr["rhs"], **variables)
-                return lhs and rhs
-            elif operand == "or":
-                lhs = evaluate_filter_expression(expr["lhs"], **variables)
-                if lhs:
-                    return True
-                rhs = evaluate_filter_expression(expr["rhs"], **variables)
-                return lhs or rhs
-            elif operand == "not":
-                rhs = evaluate_filter_expression(expr["rhs"], **variables)
-                return not rhs
-            elif operand in ("==", "<", ">", "<=", ">="):
-                lhs = evaluate_filter_expression(expr["lhs"], **variables)
-                rhs = evaluate_filter_expression(expr["rhs"], **variables)
-                if operand == "==":
-                    return lhs == rhs
-                elif operand == "<":
-                    return lhs < rhs
-                elif operand == ">":
-                    return lhs > rhs
-                elif operand == "<=":
-                    return lhs <= rhs
-                elif operand == ">=":
-                    return lhs >= rhs
-            elif operand == "len":
-                rhs = evaluate_filter_expression(expr["rhs"], **variables)
-                return len(rhs)
-            elif operand == "exists":
-                try:
-                    evaluate_filter_expression(expr["rhs"], **variables)
-                    return True
-                except KeyNotFound:
-                    return False
-            elif operand == "in":
-                lhs = evaluate_filter_expression(expr["lhs"], **variables)
-                rhs = evaluate_filter_expression(expr["rhs"], **variables)
-                return lhs in rhs
-            elif operand == "not in":
-                lhs = evaluate_filter_expression(expr["lhs"], **variables)
-                rhs = evaluate_filter_expression(expr["rhs"], **variables)
-                return lhs not in rhs
-            elif operand == "is":
-                lhs = evaluate_filter_expression(expr["lhs"], **variables)
-                rhs = evaluate_filter_expression(expr["rhs"], **variables)
-                return lhs is rhs
-            else:
-                raise ValueError(f"Unknown operand: {operand}")
-        elif "type" in expr:
-            if expr["type"] == "identifier":
-                var_name = expr["value"]
-                if var_name in variables:
-                    return variables[var_name]
-                else:
-                    raise KeyNotFound(f"Variable '{var_name}' not provided")
-            elif expr["type"] == "string":
-                return expr["value"]
-            elif expr["type"] == "other":
-                return json.loads(expr["value"].replace("'", '"'))
-            else:
-                raise ValueError(f"Unknown leaf node type: {expr['type']}")
-        else:
-            raise ValueError(f"Malformed expression node: {expr}")
+def get_sqlalchemy_type(py_object):
+    """Maps Python object types to SQLAlchemy column types."""
+    py_type = type(py_object)
+
+    if py_type is bool:
+        return Boolean
+    elif py_type in (int, float):
+        return Float
+    elif py_type is str:
+        return String
+    elif py_type is dict:
+        return JSON
     else:
-        if isinstance(expr, (int, float, bool)):
-            return expr
+        raise TypeError(f"Unsupported type: {py_type}")
+
+
+def build_filter(filter_dict, log_event_alias, session):
+    """
+    Recursively build SQLAlchemy filter from filter_dict.
+
+    Args:
+        filter_dict (dict): The filter dictionary.
+        log_event_alias: Alias for LogEvent to correlate subqueries.
+
+    Returns:
+        SQLAlchemy condition
+    """
+    if filter_dict == {}:
+        return None
+    if not isinstance(filter_dict, dict):
+        # Base case: direct value
+        return filter_dict
+
+    operand = filter_dict.get("operand")
+
+    if operand in ("and", "or"):
+        lhs = build_filter(filter_dict["lhs"], log_event_alias, session)
+        rhs = build_filter(filter_dict["rhs"], log_event_alias, session)
+        if operand == "and":
+            return and_(lhs, rhs)
         else:
-            raise TypeError(f"Unexpected expression type: {expr}")
+            return or_(lhs, rhs)
+
+    elif operand == "not":
+        rhs = build_filter(filter_dict["rhs"], log_event_alias, session)
+        return not_(rhs)
+
+    elif operand in ("==", "!=", "<", ">", "<=", ">=", "in", "not in", "is"):
+        lhs = filter_dict["lhs"]
+        rhs = filter_dict["rhs"]
+
+        if isinstance(lhs, dict) and lhs.get("type") == "identifier":
+            key = lhs["value"]
+            log_alias = aliased(Log)
+            subq = select(log_alias.id).filter(
+                log_alias.log_event_id == log_event_alias.id,
+                log_alias.key == key,
+            )
+
+            if operand in ("==", "!=", "is", "<", ">", "<=", ">="):
+                try:
+                    compare_value = rhs
+                    if isinstance(compare_value, dict):
+                        compare_value = compare_value["value"]
+                        if rhs["type"] == "string":
+                            compare_value = json.dumps(compare_value)
+                        condition = log_alias.value
+                    elif isinstance(compare_value, bool):
+                        compare_value = bool(compare_value)
+                        condition = cast(log_alias.value, Boolean)
+                    else:
+                        compare_value = float(compare_value)
+                        condition = cast(log_alias.value, Float)
+                    if operand == "==" or operand == "is":
+                        subq = subq.filter(condition == compare_value)
+                    elif operand == "!=":
+                        subq = subq.filter(condition != compare_value)
+                    elif operand == "<":
+                        subq = subq.filter(condition < compare_value)
+                    elif operand == ">":
+                        subq = subq.filter(condition > compare_value)
+                    elif operand == "<=":
+                        subq = subq.filter(condition <= compare_value)
+                    elif operand == ">=":
+                        subq = subq.filter(condition >= compare_value)
+                except ValueError:
+                    raise ValueError(
+                        f"Cannot cast value '{rhs}' to float for comparison."
+                    )
+            elif operand == "in":
+                subq = subq.filter(log_alias.value.contains(rhs))
+            elif operand == "not in":
+                subq = subq.filter(~log_alias.value.contains(rhs))
+
+            return subq.exists()
+
+        if isinstance(lhs, dict) and lhs.get("operand") == "len":
+            length = rhs
+            identifier = lhs.get("rhs", {}).get("value")
+            if identifier:
+                log_alias = aliased(Log)
+                subq = (
+                    session.query(log_alias.id)
+                    .filter(
+                        log_alias.log_event_id == log_event_alias.id,
+                        log_alias.key == identifier,
+                    )
+                    .with_entities(
+                        case(
+                            (
+                                log_alias.inferred_type == "list",
+                                func.jsonb_array_length(
+                                    cast(log_alias.value, JSONB)
+                                ).cast(Float),
+                            ),
+                            (
+                                log_alias.inferred_type == "dict",
+                                select(func.count())
+                                .select_from(
+                                    func.jsonb_object_keys(cast(log_alias.value, JSONB))
+                                )
+                                .scalar_subquery()
+                                .cast(Float),
+                            ),
+                            (
+                                log_alias.inferred_type == "str",
+                                func.length(
+                                    cast(log_alias.value, JSONB)[0].astext
+                                ).cast(Float),
+                            ),
+                            else_=0,
+                        )
+                    )
+                )
+                if operand == "<":
+                    return subq.as_scalar() < length
+                elif operand == ">":
+                    return subq.as_scalar() > length
+                elif operand == "<=":
+                    return subq.as_scalar() <= length
+                elif operand == ">=":
+                    return subq.as_scalar() >= length
+                elif operand == "==":
+                    return subq.as_scalar() == length
+                elif operand == "!=":
+                    return subq.as_scalar() != length
+
+        if isinstance(lhs, dict) and lhs.get("operand") == "version":
+            version = rhs["value"]
+            identifier = lhs.get("rhs", {}).get("value")
+            if identifier:
+                log_alias = aliased(Log)
+                subq = (
+                    session.query(log_alias.id)
+                    .filter(
+                        log_alias.log_event_id == log_event_alias.id,
+                        log_alias.key == identifier,
+                    )
+                    .with_entities(log_alias.version)
+                )
+                if operand == "==":
+                    return subq.as_scalar() == version
+
+        if operand in ["in", "not in"]:
+            if isinstance(rhs, dict) and rhs.get("type") == "identifier":
+                key = rhs["value"]
+                log_alias = aliased(Log)
+                subq = select(log_alias.id).filter(
+                    log_alias.log_event_id == log_event_alias.id,
+                    log_alias.key == key,
+                )
+                if operand == "in":
+                    subq = subq.filter(log_alias.value.contains(lhs["value"]))
+                elif operand == "not in":
+                    subq = subq.filter(~log_alias.value.contains(lhs["value"]))
+
+                return subq.exists()
+
+    elif operand == "exists":
+        rhs = filter_dict["rhs"]
+
+        if isinstance(rhs, dict) and rhs.get("type") == "identifier":
+            identifier = rhs["value"]
+
+            log_alias = aliased(Log)
+            subq = select(log_alias.id).filter(
+                log_alias.log_event_id == log_event_alias.id,
+                log_alias.key == identifier,
+            )
+            return subq.exists()
+    else:
+        # Handle literals or unexpected structures
+        if "type" in filter_dict:
+            if filter_dict["type"] == "boolean":
+                return filter_dict["value"]
+            elif filter_dict["type"] == "string":
+                return filter_dict["value"]
+            elif filter_dict["type"] == "number":
+                return filter_dict["value"]
+
+    raise ValueError(f"Unsupported filter structure: {filter_dict}")
 
 
 # Reduction #
@@ -377,13 +518,13 @@ def _max(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
 
 def _median(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
     values = _preprocess(values)
-    num_values = len(values)
-    return sorted(values)[int(num_values / 2)]
+    return statistics.median(values)
 
 
 def _mode(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
-    values = _preprocess(values)
-    return max(set(values), key=values.count)
+    values = _preprocess(values)[::-1]
+    # reverse to make consistent with sql mode
+    return statistics.mode(values)
 
 
 reduction_methods = {
@@ -404,13 +545,11 @@ def format_logs(all_logs):
     for log in all_logs:
         log_event_id = log[0].log_event_id
         if log_event_id not in formatted_entries:
-            formatted_entries[log_event_id] = {"entries": {}, "version": {}}
-        key = log[0].key
+            formatted_entries[log_event_id] = {"entries": {}}
+        key = log[0].key + (f"/{log[0].version}" if log[0].version is not None else "")
         assert (
             key not in formatted_entries[log_event_id]
         ), f"found duplicates for key {key} with log_id {log_event_id}"
         formatted_entries[log_event_id]["ts"] = log[1].strftime("%Y-%m-%d %H:%M:%S")
         formatted_entries[log_event_id]["entries"][key] = json.loads(log[0].value)
-        if log[0].version is not None:
-            formatted_entries[log_event_id]["version"][key] = log[0].version
     return formatted_entries
