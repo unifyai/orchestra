@@ -74,6 +74,11 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 2.8, "completion": 2.8},
     },
+    "llama-3.2-3b-chat": {
+        "endpoint": "llama3-2-3b",
+        "context_window": 128000,
+        "cost": {"prompt": 0.03, "completion": 0.03},
+    },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "mixtral-8x7b",
         "context_window": 32768,
