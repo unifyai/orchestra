@@ -9,8 +9,8 @@ from orchestra.web.api import (  # noqa: WPS235
     credits,
     custom_api_keys,
     custom_endpoints,
+    dataset,
     dataset_artifact,
-    datasetv2,
     docs,
     endpoint_metrics,
     llm_queries,
@@ -68,7 +68,7 @@ groupings = {
         "Endpoint Metrics",
     ],
     "Benchmarking": [
-        "DatasetsV2",
+        "Datasets",
         "Dataset Artifacts",
         "Projects",
         "Project Artifacts",
@@ -126,8 +126,8 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(  # TODO: Change this to dataset
-    datasetv2.router,
-    tags=["DatasetsV2"],
+    dataset.router,
+    tags=["Datasets"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
