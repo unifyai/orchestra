@@ -22,14 +22,14 @@ artifact_data = {
 
 def _create_artifacts(client, dataset_name):
     return client.post(
-        f"/v0/datasetv2/{dataset_name}/artifacts",
+        f"/v0/dataset/{dataset_name}/artifacts",
         json=artifact_data,
         headers=HEADERS,
     )
 
 
 def _create_dataset(client, dataset_name):
-    url = "/v0/datasetv2"
+    url = "/v0/dataset"
     dataset_data = {"name": dataset_name}
     return client.post(url, json=dataset_data, headers=HEADERS)
 
@@ -65,7 +65,7 @@ async def test_delete_artifact(client: AsyncClient):
 
     # delete artifacts
     response = await client.delete(
-        f"/v0/datasetv2/{dataset_name}/artifacts/{artifact_key}",
+        f"/v0/dataset/{dataset_name}/artifacts/{artifact_key}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -79,7 +79,7 @@ async def test_delete_artifact_dataset_not_found(client: AsyncClient):
 
     # This should return 404 as the dataset does not exist
     response = await client.delete(
-        f"/v0/datasetv2/{dataset_name}/artifacts/{artifact_key}",
+        f"/v0/dataset/{dataset_name}/artifacts/{artifact_key}",
         headers=HEADERS,
     )
     assert response.status_code == 404, response.json()
@@ -96,7 +96,7 @@ async def test_delete_artifact_not_found(client: AsyncClient):
 
     # This should return 404 as the artifact does not exist
     response = await client.delete(
-        f"/v0/datasetv2/{dataset_name}/artifacts/{artifact_key}",
+        f"/v0/dataset/{dataset_name}/artifacts/{artifact_key}",
         headers=HEADERS,
     )
     assert response.status_code == 404, response.json()
@@ -113,7 +113,7 @@ async def test_list_artifacts(client: AsyncClient):
 
     # This should return the list of artifacts
     response = await client.get(
-        f"/v0/datasetv2/{dataset_name}/artifacts",
+        f"/v0/dataset/{dataset_name}/artifacts",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -126,7 +126,7 @@ async def test_list_artifacts_dataset_not_found(client: AsyncClient):
 
     # This should return 404 as the dataset does not exist
     response = await client.get(
-        f"/v0/datasetv2/{dataset_name}/artifacts",
+        f"/v0/dataset/{dataset_name}/artifacts",
         headers=HEADERS,
     )
     assert response.status_code == 404, response.json()

@@ -10,18 +10,14 @@ from starlette import status
 
 from orchestra.db.dao.dataset_dao import DatasetDAO
 from orchestra.db.dao.dataset_entry_dao import DatasetEntryDAO
-from orchestra.web.api.datasetv2.schema import (
-    DatasetInfo,
-    DatasetNewName,
-    EntriesConfig,
-)
+from orchestra.web.api.dataset.schema import DatasetInfo, DatasetNewName, EntriesConfig
 from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
 
 
 @router.get(
-    "/datasetsv2/",
+    "/datasets/",
     responses={
         200: {
             "description": "Successful Response",
@@ -48,7 +44,7 @@ def list_datasets(
 
 
 @router.get(
-    "/datasetv2/{name:path}",
+    "/dataset/{name:path}",
     responses={
         200: {
             "description": "Successful Response",
@@ -108,7 +104,7 @@ def get_dataset_entries(
     return entries
 
 
-# @router.get("/datasetv2/{name}/url")
+# @router.get("/dataset/{name}/url")
 # def get_dataset_url(
 #     request: Request,
 #     name: str = Path(..., description="Dataset name (can include forward slashes)"),
@@ -121,7 +117,7 @@ def get_dataset_entries(
 
 
 @router.get(
-    "/datasetv2/{name:path}/entry/{id}",
+    "/dataset/{name:path}/entry/{id}",
     responses={
         200: {
             "description": "Successful Response",
@@ -181,7 +177,7 @@ def get_dataset_entry(
 
 
 @router.post(
-    "/datasetv2",
+    "/dataset",
     responses={
         201: {
             "description": "Dataset Created",
@@ -220,7 +216,7 @@ def create_dataset(
 
 
 @router.post(
-    "/datasetv2/{name:path}/entries",
+    "/dataset/{name:path}/entries",
     status_code=201,
     responses={
         201: {
@@ -284,7 +280,7 @@ def add_dataset_entries(
 
 
 @router.patch(
-    "/datasetv2/{name:path}",
+    "/dataset/{name:path}",
     responses={
         200: {
             "description": "Dataset Renamed",
@@ -321,7 +317,7 @@ def rename_dataset(
 
 
 @router.delete(
-    "/datasetv2/{name:path}/entry/{id}",
+    "/dataset/{name:path}/entry/{id}",
     responses={
         200: {
             "description": "Successful Response",
@@ -370,7 +366,7 @@ def delete_dataset_entry(
 
 
 @router.delete(
-    "/datasetv2/{name:path}",
+    "/dataset/{name:path}",
     responses={
         200: {
             "description": "Successful Response",

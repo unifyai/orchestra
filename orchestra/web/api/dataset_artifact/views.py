@@ -20,7 +20,7 @@ router = APIRouter()
 
 
 @router.post(
-    "/datasetv2/{dataset:path}/artifacts",
+    "/dataset/{dataset:path}/artifacts",
     responses={
         200: {
             "description": "Successful Response",
@@ -76,7 +76,7 @@ def create_artifacts(
 
 
 @router.delete(
-    "/datasetv2/{dataset:path}/artifacts/{key}",
+    "/dataset/{dataset:path}/artifacts/{key}",
     responses={
         200: {
             "description": "Successful Response",
@@ -147,7 +147,7 @@ def delete_artifact(
 
 
 @router.get(
-    "/datasetv2/{dataset:path}/artifacts",
+    "/dataset/{dataset:path}/artifacts",
     responses={
         200: {
             "description": "Successful Response",

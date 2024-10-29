@@ -13,12 +13,12 @@ HEADERS = {
 
 # Helper functions
 def _create_dataset(client, dataset_name):
-    return client.post("/v0/datasetv2", json={"name": dataset_name}, headers=HEADERS)
+    return client.post("/v0/dataset", json={"name": dataset_name}, headers=HEADERS)
 
 
 def _populate_dataset(client, dataset_name):
     return client.post(
-        f"/v0/datasetv2/{dataset_name}/entries",
+        f"/v0/dataset/{dataset_name}/entries",
         json={
             "entries": ["string entry", 123, True],
         },
@@ -31,7 +31,7 @@ async def test_list_datasets(client: AsyncClient):
     dataset_name = "dir/subdir/dataset1"
     await _create_dataset(client, dataset_name)
 
-    response = await client.get("/v0/datasetsv2/", headers=HEADERS)
+    response = await client.get("/v0/datasets/", headers=HEADERS)
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), list)
     assert any(dataset["name"] == dataset_name for dataset in response.json())
@@ -44,7 +44,7 @@ async def test_get_dataset_entries(client: AsyncClient):
     await _populate_dataset(client, dataset_name)
 
     response = await client.get(
-        f"/v0/datasetv2/{dataset_name}",
+        f"/v0/dataset/{dataset_name}",
         headers=HEADERS,
         params={"limit": 10, "offset": 0},
     )
@@ -69,7 +69,7 @@ async def test_create_duplicate_date_entries(client: AsyncClient):
 async def test_get_dataset_entries_not_found(client: AsyncClient):
     dataset_name = "dir/subdir/nonexistent_dataset"
     response = await client.get(
-        f"/v0/datasetv2/{dataset_name}",
+        f"/v0/dataset/{dataset_name}",
         headers=HEADERS,
         params={"limit": 10, "offset": 0},
     )
@@ -102,7 +102,7 @@ async def test_delete_dataset(client: AsyncClient):
     await _create_dataset(client, dataset_name)
 
     response = await client.delete(
-        f"/v0/datasetv2/{dataset_name}",
+        f"/v0/dataset/{dataset_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -113,7 +113,7 @@ async def test_delete_dataset(client: AsyncClient):
 async def test_delete_dataset_not_found(client: AsyncClient):
     dataset_name = "dir/subdir/nonexistent_dataset"
     response = await client.delete(
-        f"/v0/datasetv2/{dataset_name}",
+        f"/v0/dataset/{dataset_name}",
         headers=HEADERS,
     )
     assert response.status_code == 404, response.json()
@@ -128,21 +128,21 @@ async def test_delete_dataset_entry(client: AsyncClient):
 
     # check 3 entries
     response = await client.get(
-        f"/v0/datasetv2/{dataset_name}",
+        f"/v0/dataset/{dataset_name}",
         headers=HEADERS,
     )
     assert len(response.json()) == 3
 
     _id = ids.json()["added"][0]
     response = await client.delete(
-        f"/v0/datasetv2/{dataset_name}/entry/{_id}",
+        f"/v0/dataset/{dataset_name}/entry/{_id}",
         headers=HEADERS,
     )
     assert response.status_code == 200
 
     # check 2 entries
     response = await client.get(
-        f"/v0/datasetv2/{dataset_name}",
+        f"/v0/dataset/{dataset_name}",
         headers=HEADERS,
     )
     assert len(response.json()) == 2
@@ -155,7 +155,7 @@ async def test_delete_dataset_entry_not_found(client: AsyncClient):
     await _create_dataset(client, dataset_name)
 
     response = await client.delete(
-        f"/v0/datasetv2/{dataset_name}/entry/{entry_id}",
+        f"/v0/dataset/{dataset_name}/entry/{entry_id}",
         headers=HEADERS,
     )
     assert response.status_code == 404, response.json()
