@@ -342,7 +342,7 @@ async def test_update_logs_overwrites(client: AsyncClient):
     assert response.status_code == 200, response.json()
     new_entries = response.json()["entries"]
     assert len(new_entries) == 3
-    assert new_entries["input"] == orig_entries["input"]
+    assert new_entries["input/v0"] == orig_entries["input/v0"]
     assert new_entries["boolean_input"] != orig_entries["boolean_input"]
     assert new_entries["numeric_input"] != orig_entries["numeric_input"]
 
@@ -554,7 +554,7 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
-    result = len(response.json()) == 1
+    result = len(response.json()["logs"]) == 1
     for key, value in values.items():
         exec(key + "=" + (str(value) if isinstance(value, bool) else json.dumps(value)))
     if "not exists" in expression:
@@ -605,8 +605,8 @@ async def test_get_empty_logs(client: AsyncClient):
     response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
 
     assert response.status_code == 200, response.json()
-    assert isinstance(response.json(), list)  # List of logs is returned
-    assert len(response.json()) == 0  # Logs are empty
+    assert isinstance(response.json()["logs"], list)  # List of logs is returned
+    assert len(response.json()["logs"]) == 0  # Logs are empty
 
 
 @pytest.mark.anyio
@@ -623,16 +623,16 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert len(result) == 2
-    assert isinstance(result[0]["ts"], str)
-    assert isinstance(result[1]["ts"], str)
-    assert result[0]["entries"] == {
+    assert len(result["logs"]) == 2
+    assert isinstance(result["logs"][0]["ts"], str)
+    assert isinstance(result["logs"][1]["ts"], str)
+    assert result["logs"][0]["entries"] == {
         "description": "boiling water",
         "temperature": 100.0,
         "state": "liquid->gas",
         "safe": False,
     }
-    assert result[1]["entries"] == {
+    assert result["logs"][1]["entries"] == {
         "description": "surface of the sun",
         "temperature": 6000.0,
         "state": "gas",
@@ -647,8 +647,8 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert len(result) == 1
-    assert result[0]["entries"] == {
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"] == {
         "description": "freezing water",
         "temperature": 0.0,
         "state": "liquid->solid",
@@ -663,8 +663,8 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert len(result) == 1
-    assert result[0]["entries"] == {
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"] == {
         "description": "surface of the sun",
         "temperature": 6000.0,
         "state": "gas",
@@ -678,8 +678,8 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert len(result) == 1
-    assert result[0]["entries"]["description"] == "boiling water"
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["description"] == "boiling water"
 
     # check multiple conditions
     response = await client.get(
@@ -689,14 +689,14 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert len(result) == 2
-    assert result[0]["entries"] == {
+    assert len(result["logs"]) == 2
+    assert result["logs"][0]["entries"] == {
         "description": "freezing water",
         "temperature": 0.0,
         "state": "liquid->solid",
         "safe": True,
     }
-    assert result[1]["entries"] == {
+    assert result["logs"][1]["entries"] == {
         "description": "surface of the sun",
         "temperature": 6000.0,
         "state": "gas",
@@ -711,7 +711,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert len(result) == 4
+    assert len(result["logs"]) == 4
 
     # check not exists
     response = await client.get(
@@ -721,7 +721,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert len(result) == 5
+    assert len(result["logs"]) == 5
 
     # check len
     response = await client.get(
@@ -731,8 +731,8 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert len(result) == 2
-    assert result[0]["entries"]["description"] == "lava"
+    assert len(result["logs"]) == 2
+    assert result["logs"][0]["entries"]["description"] == "lava"
 
     response = await client.get(
         f"/v0/logs?project={project_name}",
@@ -741,8 +741,8 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert len(result) == 1
-    assert result[0]["entries"]["description"] == "air"
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["description"] == "air"
 
     # check in
 
@@ -753,8 +753,8 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert len(result) == 1
-    assert result[0]["entries"]["description"] == "lava"
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["description"] == "lava"
 
     response = await client.get(
         f"/v0/logs?project={project_name}",
@@ -763,8 +763,8 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert len(result) == 1
-    assert result[0]["entries"]["name/2"] == "test2"
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["params"]["name"] == "2"
 
 
 @pytest.mark.anyio
