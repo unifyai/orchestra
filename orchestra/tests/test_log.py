@@ -4,9 +4,7 @@ import os
 import pytest
 from httpx import AsyncClient, Request
 
-from ..web.api.log.helpers import (
-    reduction_methods,
-)
+from ..web.api.log.helpers import reduction_methods
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 api_key_second_user = "2nd_api_key"
@@ -23,7 +21,7 @@ HEADERS_2 = {
 
 log_data = {
     "log": {
-        "input": "Some input data",
+        "input/v0": "Some input data",
         "boolean_input": True,
         "numeric_input": 4.5,
     },
@@ -581,17 +579,21 @@ async def test_get_logs(client: AsyncClient):
     response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
 
     assert response.status_code == 200, response.json()
-    assert isinstance(response.json(), list)  # List of logs is returned
-    assert isinstance(response.json()[0]["ts"], str)
-    assert isinstance(response.json()[0]["entries"]["boolean_input"], bool)
-    assert isinstance(response.json()[0]["entries"]["numeric_input"], float)
+    assert isinstance(response.json(), dict)
+    assert isinstance(response.json()["params"], dict)
+    assert isinstance(response.json()["params"]["input"]["v0"], str)
+    assert isinstance(response.json()["logs"], list)
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert isinstance(response.json()["logs"][0]["entries"]["boolean_input"], bool)
+    assert isinstance(response.json()["logs"][0]["entries"]["numeric_input"], float)
+    assert isinstance(response.json()["logs"][0]["params"]["input"], str)
 
     # fetch entries for the empty project
     response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS_2)
 
     assert response.status_code == 200, response.json()
-    assert isinstance(response.json(), list)  # List of logs is returned
-    assert len(response.json()) == 0
+    assert isinstance(response.json()["logs"], list)
+    assert len(response.json()["logs"]) == 0
 
 
 @pytest.mark.anyio
