@@ -5,13 +5,15 @@ Includes endpoints related to entries.
 import json
 from typing import Any, Dict, Optional, Union
 
-from sqlalchemy import case, cast, func, Float, INTEGER, select
-from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from sqlalchemy import INTEGER, Float, case, cast, func, select
+from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 
 from orchestra.db.dao.log_dao import LogDAO, OverwriteError
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.orchestra_models import Log, LogEvent
 from orchestra.web.api.log.schema import (
     CreateLogConfig,
     DeleteLogEntryRequest,
@@ -20,14 +22,8 @@ from orchestra.web.api.log.schema import (
     UpdateLogRequest,
 )
 from orchestra.web.api.utils.http_responses import not_found
-from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import LogEvent, Log
 
-from .helpers import (
-    format_logs,
-    str_filter_exp_to_dict,
-    build_filter,
-)
+from .helpers import build_filter, format_logs, str_filter_exp_to_dict
 
 router = APIRouter()
 
@@ -584,6 +580,7 @@ def get_log(
     """
     Returns the log associated with a given id.
     """
+    # TODO: Change this one to return the params as well
     if log_event_dao.get_user_id(id=id) != request_fastapi.state.user_id:
         raise not_found(f"Log with id {id}")
     # TODO: Deal with organisation IDs
@@ -693,25 +690,37 @@ def get_logs(
     all_logs = query.all()
     formatted_logs = format_logs(all_logs)
 
+    params = dict()
     logs = []
     for log_event_id, log_dict in formatted_logs.items():
         log_dict = formatted_logs[log_event_id]
+
+        for k, v in log_dict["entries"].items():
+            if "/" in k:
+                _key, _version = k.split("/")
+                if _key not in params:
+                    params[_key] = dict()
+                params[_key][_version] = v
+
         logs.append(
             {
                 "id": log_event_id,
                 "ts": log_dict["ts"],
                 "entries": {
-                    k
-                    + (
-                        f"/{log_dict['version'][k]}"
-                        if k in log_dict.get("version", "")
-                        else ""
-                    ): v
+                    k: v for k, v in log_dict["entries"].items() if "/" not in k
+                },
+                "params": {
+                    k.split("/")[0]: k.split("/")[1]
                     for k, v in log_dict["entries"].items()
+                    if "/" in k
                 },
             },
         )
-    return logs
+
+    return {
+        "params": params,
+        "logs": logs,
+    }
 
 
 @router.get(
@@ -817,8 +826,8 @@ def get_logs_metric(
                     (Log.inferred_type == "float", Log.value.cast(Float)),
                     (Log.inferred_type == "int", Log.value.cast(Float)),
                     else_=0,
-                )
-            )
+                ),
+            ),
         )
         .where(Log.key == key)
         .filter(Log.log_event_id.in_(select(subquery)))
