@@ -28,7 +28,7 @@ def auth_api_key(
     db_response = api_key_dao.get_user_id_and_mail(apikey)
     if db_response:
         request_fastapi.state.user_id = db_response[0][0]
-        request_fastapi.state.user_email = db_response[0][0]
+        request_fastapi.state.user_email = db_response[0][1]
         return
     raise invalid_api_key
 
