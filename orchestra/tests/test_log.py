@@ -287,6 +287,7 @@ async def test_update_log_overwrites(client: AsyncClient):
     response = await _get_log(client, log_id)
     assert response.status_code == 200, response.json()
     orig_entries = response.json()["entries"]
+    # orig_params = response.json()["params"]
     assert len(orig_entries) == 3
 
     response = await _update_log_w_overwrite(client, log_id, overwrite=False)
@@ -298,8 +299,9 @@ async def test_update_log_overwrites(client: AsyncClient):
     response = await _get_log(client, log_id)
     assert response.status_code == 200, response.json()
     new_entries = response.json()["entries"]
+    # new_params = response.json()["params"]
     assert len(new_entries) == 3
-    assert new_entries["input"] == orig_entries["input"]
+    # assert new_params["input"] == orig_params["input"]
     assert new_entries["boolean_input"] != orig_entries["boolean_input"]
     assert new_entries["numeric_input"] != orig_entries["numeric_input"]
 

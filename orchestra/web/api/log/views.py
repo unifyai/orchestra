@@ -580,6 +580,7 @@ def get_log(
     """
     Returns the log associated with a given id.
     """
+    # TODO: Change this one to return the params as well
     if log_event_dao.get_user_id(id=id) != request_fastapi.state.user_id:
         raise not_found(f"Log with id {id}")
     # TODO: Deal with organisation IDs
