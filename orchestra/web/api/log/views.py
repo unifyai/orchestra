@@ -83,23 +83,50 @@ def create_log(
     # Create log_event and get its id
     log_event_id = log_event_dao.create(project_id=project_id)
 
-    explicit_types = request.entries.pop("explicit_types", None)
+    entries_explicit_types = request.entries.pop("explicit_types", None)
+    params_explicit_types = request.parameters.pop("explicit_types", None)
+    entries = request.entries
+    params = request.parameters
 
-    # Store each key, value pair for the log
-    for k, v in request.entries.items():
+    for k, v in params.items():
+        # see if there is any param with the same value
+        existing_param = log_dao.filter(
+            key=k,
+            value=json.dumps(v),
+            project_id=project_id,
+        )
+        if existing_param:
+            version = existing_param[0][0].version
+        else:
+            # fetch the highest version for that param
+            existing_params = log_dao.filter(key=k, project_id=project_id)
+            highest_version = max([-1] + [e[0].version for e in existing_params])
+            version = highest_version + 1
         try:
             log_dao.create_from_raw_k_v(
                 project_id=project_id,
                 log_event_id=log_event_id,
                 raw_k=k,
                 raw_v=v,
-                explicit_types=explicit_types,
+                version=version,
+                explicit_types=params_explicit_types,
             )
         except ValueError:
             raise HTTPException(
                 status_code=400,
-                detail="Found different value for log entries with same version.",
+                detail="Found different value for log params with same version.",
             )
+
+    # Store each key, value entry pair for the log
+    for k, v in entries.items():
+        log_dao.create_from_raw_k_v(
+            project_id=project_id,
+            log_event_id=log_event_id,
+            raw_k=k,
+            raw_v=v,
+            explicit_types=entries_explicit_types,
+        )
+
     return log_event_id
 
 
@@ -200,10 +227,12 @@ def update_logs(
     A dictionary of "explicit_types" can be passed as part of the `entries`.
     If present, it will override the inferred type of any matching key in all logs.
     """
-    explicit_types = body.entries.pop("explicit_types", None)
+    entries_explicit_types = body.entries.pop("explicit_types", None)
+    params_explicit_types = body.parameters.pop("explicit_types", None)
     not_found_logs = []
 
     for log_id in body.ids:
+
         try:
             # Get user and project ID for the log
             project_user_id, project_id = log_event_dao.get_user_and_project_id(
@@ -214,37 +243,82 @@ def update_logs(
             if project_user_id != request_fastapi.state.user_id:
                 raise IndexError
 
-            # Store each key, value pair for the log
-            for k, v in body.entries.items():
-                try:
-                    log_dao.update_value(
-                        log_event_id=log_id,
-                        raw_k=k,
-                        raw_v=v,
-                        explicit_types=explicit_types,
-                        overwrite=body.overwrite,
-                    )
-                except IndexError:
-                    log_dao.create_from_raw_k_v(
-                        project_id=project_id,
-                        log_event_id=log_id,
-                        raw_k=k,
-                        raw_v=v,
-                        explicit_types=explicit_types,
-                    )
-                except ValueError:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Found different value for log entries with the same key '{k}' but a different version.",
-                    )
-                except OverwriteError:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Found existing value for log entry with key {k} but overwrite is set to False.",
-                    )
-
         except IndexError:
             not_found_logs.append(log_id)
+            continue
+
+        for k, v in body.parameters.items():
+            # see if there is any param with the same value
+            existing_param = log_dao.filter(
+                key=k,
+                value=json.dumps(v),
+                project_id=project_id,
+            )
+            if existing_param:
+                version = existing_param[0][0].version
+            else:
+                # fetch the highest version for that param
+                existing_params = log_dao.filter(key=k, project_id=project_id)
+                highest_version = max([-1] + [e[0].version for e in existing_params])
+                version = highest_version + 1
+            try:
+                log_dao.update_value(
+                    log_event_id=log_id,
+                    raw_k=k,
+                    raw_v=v,
+                    version=version,
+                    explicit_types=params_explicit_types,
+                    overwrite=body.overwrite,
+                )
+            except IndexError:
+                log_dao.create_from_raw_k_v(
+                    project_id=project_id,
+                    log_event_id=log_id,
+                    raw_k=k,
+                    raw_v=v,
+                    version=version,
+                    explicit_types=entries_explicit_types,
+                )
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Found different value for log params with same version.",
+                )
+            except OverwriteError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Found existing value for log entry with key {k} but overwrite is set to False.",
+                )
+
+        # Store each key, value entry pair for the log
+        # Store each key, value pair for the log
+        for k, v in body.entries.items():
+            try:
+                log_dao.update_value(
+                    log_event_id=log_id,
+                    raw_k=k,
+                    raw_v=v,
+                    explicit_types=entries_explicit_types,
+                    overwrite=body.overwrite,
+                )
+            except IndexError:
+                log_dao.create_from_raw_k_v(
+                    project_id=project_id,
+                    log_event_id=log_id,
+                    raw_k=k,
+                    raw_v=v,
+                    explicit_types=entries_explicit_types,
+                )
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Found different value for log entries with the same key '{k}' but a different version.",
+                )
+            except OverwriteError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Found existing value for log entry with key {k} but overwrite is set to False.",
+                )
 
     if not_found_logs:
         raise HTTPException(
@@ -256,7 +330,7 @@ def update_logs(
 
 
 @router.delete(
-    "/logs/entry/{entry}",
+    "/logs/field/{field}",
     responses={
         200: {
             "description": "Successful Response",
@@ -290,11 +364,12 @@ def update_logs(
         },
     },
 )
-def delete_log_entries(
+def delete_log_fields(
     request_fastapi: Request,
     body: DeleteLogEntryRequest,
-    entry: str = Path(
-        description="Name of the entry to delete from the given logs.",
+    field: str = Path(
+        description="Name of the field to delete from the given logs. "
+        "This can be a param or an entry",
         example="entry-v0",
     ),
     log_event_dao: LogEventDAO = Depends(),
@@ -303,14 +378,6 @@ def delete_log_entries(
     """
     Deletes a specific entry from multiple logs.
     """
-    # Replace "-" with "/" in the entry to handle the client-side encoding
-    entry = entry.replace("-", "/")
-    if "/" in entry:
-        clean_key = entry.split("/")[0]
-        version = entry.split("/")[1]
-    else:
-        clean_key = entry
-        version = None
 
     not_found_logs = []
     not_found_entries = []
@@ -325,7 +392,7 @@ def delete_log_entries(
             continue
 
         # Check for the existence of the log entry
-        log = log_dao.filter(log_event_id=log_id, key=clean_key, version=version)
+        log = log_dao.filter(log_event_id=log_id, key=field)
         if not log:
             not_found_entries.append(log_id)
             continue
@@ -343,10 +410,10 @@ def delete_log_entries(
     if not_found_entries:
         raise HTTPException(
             status_code=404,
-            detail=f"Log entry '{entry}' not found in logs with ids {not_found_entries}.",
+            detail=f"Log field '{field}' not found in logs with ids {not_found_entries}.",
         )
 
-    return {"info": "Log entry deleted successfully from all logs!"}
+    return {"info": "Log field deleted successfully from all logs!"}
 
 
 @router.get(

@@ -24,7 +24,7 @@ class LogDAO:
         log_event_id: int,
         key: str,
         value: Optional[str] = None,  # JSON serialised
-        version: Optional[str] = None,
+        version: Optional[int] = None,
         inferred_type: Optional[str] = None,
     ) -> Optional[str]:
 
@@ -49,28 +49,21 @@ class LogDAO:
         project_id: int,
         log_event_id: int,
         raw_k: str,
+        version: Optional[int] = None,
         raw_v: Optional[Any] = None,
         explicit_types: Optional[Dict] = None,
     ) -> Optional[str]:
 
-        inferred_type = type(raw_v).__name__
-        clean_key = raw_k.split("/", 1)
         json_v = json.dumps(raw_v)
-
-        # TODO: Narrow down the types that can be passed?
-        if explicit_types and isinstance(explicit_types, Dict):
-            if clean_key[0] in explicit_types:
-                inferred_type = explicit_types[clean_key[0]]
-            if raw_k in explicit_types:
-                inferred_type = explicit_types[raw_k]
+        explicit_types = explicit_types if isinstance(explicit_types, dict) else {}
 
         return self.create(
             project_id=project_id,
             log_event_id=log_event_id,
-            key=clean_key[0],
+            key=raw_k,
             value=json_v,
-            version=clean_key[1] if len(clean_key) > 1 else None,
-            inferred_type=inferred_type,
+            version=version,
+            inferred_type=explicit_types.get(raw_k, type(raw_v).__name__),
         )
 
     def filter(
@@ -79,8 +72,9 @@ class LogDAO:
         log_event_id: Optional[Union[int, List[int]]] = None,
         key: Optional[Union[str, List[str]]] = None,
         value: Optional[Union[str, List[str]]] = None,
-        version: Optional[Union[str, List[str]]] = None,
+        version: Optional[Union[int, List[int]]] = None,
         inferred_type: Optional[Union[str, List[str]]] = None,
+        project_id: Optional[int] = None,
     ) -> List[Log]:
         def normalize_input(value):
             if value is None or isinstance(value, list):
@@ -120,6 +114,8 @@ class LogDAO:
             query = query.where(Log.version.in_(version))
         if inferred_type:
             query = query.where(Log.inferred_type.in_(inferred_type))
+        if project_id:
+            query = query.where(LogEvent.project_id == project_id)
 
         query = query.order_by(Log.created_at)
         rows = self.session.execute(query)
@@ -131,7 +127,7 @@ class LogDAO:
         id: int,
         key: Optional[str] = None,
         value: Optional[str] = None,
-        version: Optional[str] = None,
+        version: Optional[int] = None,
         inferred_type: Optional[str] = None,
         log_event_id: Optional[int] = None,
     ) -> None:
@@ -156,29 +152,28 @@ class LogDAO:
         log_event_id: int,
         raw_k: str,
         raw_v: Optional[Any] = None,
+        version: Optional[int] = None,
         explicit_types: Optional[Dict] = None,
         overwrite: bool = False,
     ):
 
         inferred_type = type(raw_v).__name__
-        clean_key = raw_k.split("/", 1)
         json_v = json.dumps(raw_v)
 
         if explicit_types and isinstance(explicit_types, Dict):
-            if clean_key[0] in explicit_types:
-                inferred_type = explicit_types[clean_key[0]]
             if raw_k in explicit_types:
                 inferred_type = explicit_types[raw_k]
 
         query = select(Log)
         query = query.where(Log.log_event_id == log_event_id)
-        query = query.where(Log.key == clean_key[0])
+        query = query.where(Log.key == raw_k)
         raw = self.session.execute(query)
         entry = raw.scalars().first()
         if entry is not None:
             if not overwrite and hasattr(entry, "value"):
                 raise OverwriteError
             setattr(entry, "value", json_v)
+            setattr(entry, "version", version)
             setattr(
                 entry,
                 "inferred_type",
