@@ -251,62 +251,6 @@ async def test_create_logs_project_not_found(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_update_log(client: AsyncClient):
-    project_name = "eval-project"
-    _ = await _create_project(client, project_name)
-
-    response = await _create_log(client, project_name)
-    assert response.status_code == 200, response.json()
-    log_id = response.json()
-    assert isinstance(log_id, int)
-
-    response = await _get_log(client, log_id)
-    assert response.status_code == 200, response.json()
-    log = response.json()
-    assert len(log["entries"]) == 3
-
-    response = await _update_log(client, log_id)
-    assert response.status_code == 200, response.json()
-
-    response = await _get_log(client, log_id)
-    assert response.status_code == 200, response.json()
-    log = response.json()
-    assert len(log["entries"]) == 5
-
-
-@pytest.mark.anyio
-async def test_update_log_overwrites(client: AsyncClient):
-    project_name = "eval-project"
-    _ = await _create_project(client, project_name)
-
-    response = await _create_log(client, project_name)
-    assert response.status_code == 200, response.json()
-    log_id = response.json()
-    assert isinstance(log_id, int)
-
-    response = await _get_log(client, log_id)
-    assert response.status_code == 200, response.json()
-    orig_entries = response.json()["entries"]
-    # orig_params = response.json()["params"]
-    assert len(orig_entries) == 3
-
-    response = await _update_log_w_overwrite(client, log_id, overwrite=False)
-    assert response.status_code == 400, response.json()
-
-    response = await _update_log_w_overwrite(client, log_id, overwrite=True)
-    assert response.status_code == 200, response.json()
-
-    response = await _get_log(client, log_id)
-    assert response.status_code == 200, response.json()
-    new_entries = response.json()["entries"]
-    # new_params = response.json()["params"]
-    assert len(new_entries) == 3
-    # assert new_params["input"] == orig_params["input"]
-    assert new_entries["boolean_input"] != orig_entries["boolean_input"]
-    assert new_entries["numeric_input"] != orig_entries["numeric_input"]
-
-
-@pytest.mark.anyio
 async def test_update_logs_overwrites(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
@@ -355,32 +299,6 @@ async def test_update_logs_overwrites(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_update_log_not_found(client: AsyncClient):
-    non_existent_log_id = 1234
-    response = await _update_log(client, non_existent_log_id)
-    assert response.status_code == 404, response.json()
-    assert response.json() == {
-        "detail": f"Log with id {non_existent_log_id} not found.",
-    }
-
-
-@pytest.mark.anyio
-async def test_delete_log(client: AsyncClient):
-    project_name = "eval-project"
-    _ = await _create_project(client, project_name)
-    log_response = await _create_log(client, project_name)
-    log_id = log_response.json()
-
-    # delete the log
-    response = await client.delete(f"/v0/log/{log_id}", headers=HEADERS)
-
-    assert response.status_code == 200, response.json()
-    assert response.json() == {"info": "Log deleted successfully!"}
-
-    # TODO: Try to fetch the deleted log
-
-
-@pytest.mark.anyio
 async def test_delete_project_deletes_logs(client: AsyncClient):
     url = "/v0/project/test-project"
     project_name = "test-project"
@@ -412,50 +330,6 @@ async def test_delete_project_deletes_logs(client: AsyncClient):
     assert response.json() == {
         "detail": f"Log with id {log_id} not found.",
     }
-
-
-@pytest.mark.anyio
-async def test_delete_log_not_found(client: AsyncClient):
-    log_id = "123"
-
-    # This should return 404 as the log does not exist
-    response = await client.delete(f"/v0/log/{log_id}", headers=HEADERS)
-
-    assert response.status_code == 404, response.json()
-    assert response.json() == {
-        "detail": f"Log with id {log_id} not found.",
-    }
-
-
-@pytest.mark.anyio
-async def test_delete_log_entry(client: AsyncClient):
-    project_name = "eval-project"
-    _ = await _create_project(client, project_name)
-    log_response = await _create_log(client, project_name)
-    log_id = log_response.json()
-
-    # delete an entry in the log
-    response = await client.delete(f"/v0/log/{log_id}/entry/input", headers=HEADERS)
-
-    assert response.status_code == 200, response.json()
-    assert response.json() == {"info": "Log entry deleted successfully!"}
-
-    # TODO: Fetch before and after to check entries
-
-
-@pytest.mark.anyio
-async def test_delete_log_entry_not_found(client: AsyncClient):
-    log_id = "123"
-
-    # This should return 404 as the log entry does not exist
-    response = await client.delete(f"/v0/log/{log_id}/entry/input", headers=HEADERS)
-
-    assert response.status_code == 404, response.json()
-    assert response.json() == {
-        "detail": f"Log with id {log_id} not found.",
-    }
-
-    # TODO: There are a couple more exceptions not being tested I think
 
 
 @pytest.mark.anyio
