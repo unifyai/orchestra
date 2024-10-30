@@ -49,28 +49,21 @@ class LogDAO:
         project_id: int,
         log_event_id: int,
         raw_k: str,
+        version: Optional[str] = None,
         raw_v: Optional[Any] = None,
         explicit_types: Optional[Dict] = None,
     ) -> Optional[str]:
 
-        inferred_type = type(raw_v).__name__
-        clean_key = raw_k.split("/", 1)
         json_v = json.dumps(raw_v)
-
-        # TODO: Narrow down the types that can be passed?
-        if explicit_types and isinstance(explicit_types, Dict):
-            if clean_key[0] in explicit_types:
-                inferred_type = explicit_types[clean_key[0]]
-            if raw_k in explicit_types:
-                inferred_type = explicit_types[raw_k]
+        explicit_types = explicit_types if isinstance(explicit_types, dict) else {}
 
         return self.create(
             project_id=project_id,
             log_event_id=log_event_id,
-            key=clean_key[0],
+            key=raw_k,
             value=json_v,
-            version=clean_key[1] if len(clean_key) > 1 else None,
-            inferred_type=inferred_type,
+            version=version,
+            inferred_type=explicit_types.get(raw_k, type(raw_v).__name__),
         )
 
     def filter(
@@ -81,6 +74,7 @@ class LogDAO:
         value: Optional[Union[str, List[str]]] = None,
         version: Optional[Union[str, List[str]]] = None,
         inferred_type: Optional[Union[str, List[str]]] = None,
+        project_id: Optional[int] = None,
     ) -> List[Log]:
         def normalize_input(value):
             if value is None or isinstance(value, list):
@@ -120,6 +114,8 @@ class LogDAO:
             query = query.where(Log.version.in_(version))
         if inferred_type:
             query = query.where(Log.inferred_type.in_(inferred_type))
+        if project_id:
+            query = query.where(LogEvent.project_id == project_id)
 
         query = query.order_by(Log.created_at)
         rows = self.session.execute(query)

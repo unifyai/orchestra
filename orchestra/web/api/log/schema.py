@@ -10,12 +10,25 @@ class CreateLogConfig(BaseModel):
             "example": "eval-project",
         },
     )
-    entries: Dict[str, Any] = Field(
+    parameters: Dict[str, Any] = Field(
+        default=dict(),
         description="Dictionary containing one or more key:value pairs that "
-        "will be logged into the platform. Keys can have an optional "
-        "version defined after a forward slash. E.g. `system_msg/v1`. "
-        "If defined, these versions will be used when grouping results on "
-        "a per-key basis. Values must be JSON serializable. "
+        "will be logged into the platform. Parameters will be automatically "
+        "versioned based on their values. Values must be JSON serializable. "
+        "If a `explicit_types` dictionary is present, its values "
+        "will override the inferred types of the entries.",
+        json_schema_extra={
+            "example": {
+                "system-prompt": "...",
+                "function_definition": "...",
+                "explicit_types": {"system-prompt": "str"},
+            },
+        },
+    )
+    entries: Dict[str, Any] = Field(
+        default=dict(),
+        description="Dictionary containing one or more key:value pairs that "
+        "will be logged into the platform. Values must be JSON serializable. "
         "If a `explicit_types` dictionary is present, its values "
         "will override the inferred types of the entries.",
         json_schema_extra={
@@ -34,8 +47,20 @@ class UpdateLogRequest(BaseModel):
         example=[123, 456, 789],
         min_items=1,
     )
+    parameters: Dict[str, Any] = Field(
+        default=dict(),
+        description="Dictionary of key-value parameter pairs to add or update in the logs.",
+        json_schema_extra={
+            "example": {
+                "system-prompt": "...",
+                "function_definition": "...",
+                "explicit_types": {"system-prompt": "str"},
+            },
+        },
+    )
     entries: dict = Field(
-        description="Dictionary of key-value pairs to add or update in the logs.",
+        default=dict(),
+        description="Dictionary of key-value entry pairs to add or update in the logs.",
         json_schema_extra={
             "example": {
                 "input": "...",
