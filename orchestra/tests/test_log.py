@@ -21,7 +21,7 @@ HEADERS_2 = {
 
 log_data = {
     "log": {
-        "input/v0": "Some input data",
+        "input": "Some input data",
         "boolean_input": True,
         "numeric_input": 4.5,
     },
@@ -83,8 +83,6 @@ log_data = {
             "_data": {5: 6, 3: 12, 7: 8, 4: 11},
         },
         {"_data": {7: 8, 9: 10}},
-        {"name/1": "test"},
-        {"name/2": "test2"},
     ],
 }
 
@@ -93,7 +91,11 @@ def _create_log(client, project_name, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     return client.post(
         "/v0/log",
-        json={"project": project_name, "entries": log_data["log"]},
+        json={
+            "project": project_name,
+            "parameters": {"param1": "test"},
+            "entries": log_data["log"],
+        },
         headers=_headers,
     )
 
@@ -155,11 +157,11 @@ def _update_logs(client, log_ids, entries, user=1):
     )
 
 
-def _delete_log_entry_from_logs(client, entry, log_ids, user=1):
+def _delete_log_field_from_logs(client, field, log_ids, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     request = Request(
         "DELETE",
-        str(client.base_url) + f"/v0/logs/entry/{entry}",
+        str(client.base_url) + f"/v0/logs/field/{field}",
         json={"ids": log_ids},
         headers=_headers,
     )
@@ -184,7 +186,11 @@ async def _create_logs_for_filtering_n_metrics(client, project_name, user=1):
     for i in range(len(data)):
         response = await client.post(
             "/v0/log",
-            json={"project": project_name, "entries": data[i]},
+            json={
+                "project": project_name,
+                "parameters": {"param1": f"test_{i}"},
+                "entries": data[i],
+            },
             headers=_headers,
         )
         assert response.status_code == 200, response.json()
@@ -218,7 +224,7 @@ async def test_create_logs_autoincrement_version(client: AsyncClient):
     # This should work fine
     response = await client.post(
         "/v0/log",
-        json={"project": project_name, "entries": {}, "parameters": {"p1": "test"}},
+        json={"project": project_name, "parameters": {"p1": "test"}},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -457,12 +463,12 @@ async def test_get_logs(client: AsyncClient):
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), dict)
     assert isinstance(response.json()["params"], dict)
-    assert isinstance(response.json()["params"]["input"]["v0"], str)
+    assert isinstance(response.json()["params"]["param1"]["0"], str)
     assert isinstance(response.json()["logs"], list)
     assert isinstance(response.json()["logs"][0]["ts"], str)
     assert isinstance(response.json()["logs"][0]["entries"]["boolean_input"], bool)
     assert isinstance(response.json()["logs"][0]["entries"]["numeric_input"], float)
-    assert isinstance(response.json()["logs"][0]["params"]["input"], str)
+    assert isinstance(response.json()["logs"][0]["params"]["param1"], str)
 
     # fetch entries for the empty project
     response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS_2)
@@ -597,7 +603,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert len(result["logs"]) == 5
+    assert len(result["logs"]) == 3
 
     # check len
     response = await client.get(
@@ -634,13 +640,13 @@ async def test_get_logs_w_filtering(client: AsyncClient):
 
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "version('name') == '2'"},
+        params={"filter_expr": "version('param1') == '1'"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result["logs"]) == 1
-    assert result["logs"][0]["params"]["name"] == "2"
+    assert result["logs"][0]["params"]["param1"] == "1"
 
 
 @pytest.mark.anyio
@@ -780,7 +786,7 @@ async def test_update_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_log_entry_from_logs(client: AsyncClient):
+async def test_delete_log_field_from_logs(client: AsyncClient):
     project_name = "multi-log-project"
     _ = await _create_project(client, project_name)
 
@@ -796,9 +802,9 @@ async def test_delete_log_entry_from_logs(client: AsyncClient):
 
     # Delete an entry from both logs
     entry_to_delete = "input"
-    response = await _delete_log_entry_from_logs(client, entry_to_delete, log_ids)
+    response = await _delete_log_field_from_logs(client, entry_to_delete, log_ids)
     assert response.status_code == 200, response.json()
-    assert response.json()["info"] == "Log entry deleted successfully from all logs!"
+    assert response.json()["info"] == "Log field deleted successfully from all logs!"
 
     # Verify deletion of entry
     response = await _get_log(client, log_id1)

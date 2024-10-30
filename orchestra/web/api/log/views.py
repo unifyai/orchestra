@@ -89,7 +89,6 @@ def create_log(
     params = request.parameters
 
     for k, v in params.items():
-        pass
         # see if there is any param with the same value
         existing_param = log_dao.filter(
             key=k,
@@ -284,7 +283,7 @@ def update_logs(
 
 
 @router.delete(
-    "/logs/entry/{entry}",
+    "/logs/field/{field}",
     responses={
         200: {
             "description": "Successful Response",
