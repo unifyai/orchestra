@@ -555,7 +555,7 @@ class Log(Base):
     )
     key = Column(String, nullable=False)
     value = Column(String)
-    version = Column(String)
+    version = Column(Integer)
     inferred_type = Column(String)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
