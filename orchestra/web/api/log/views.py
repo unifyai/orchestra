@@ -18,7 +18,6 @@ from orchestra.web.api.log.schema import (
     CreateLogConfig,
     DeleteLogEntryRequest,
     DeleteLogsRequest,
-    UpdateLogConfig,
     UpdateLogRequest,
 )
 from orchestra.web.api.utils.http_responses import not_found
@@ -105,50 +104,6 @@ def create_log(
 
 
 @router.delete(
-    "/log/{id}",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {"info": "Log deleted successfully!"},
-                },
-            },
-        },
-        404: {
-            "description": "Log Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Log with id <id> not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def delete_log(
-    request_fastapi: Request,
-    id: int = Path(
-        description="ID of the log to delete from a project.",
-        example="123",
-    ),
-    log_event_dao: LogEventDAO = Depends(),
-):
-    """
-    Deletes a log from a project.
-    """
-    try:
-        if log_event_dao.get_user_id(id=id) != request_fastapi.state.user_id:
-            raise IndexError
-    except IndexError:
-        raise not_found(f"Log with id {id}")
-    # TODO: Deal with organisation IDs
-    log_event_dao.delete(id=id)
-    return {"info": "Log deleted successfully!"}
-
-
-@router.delete(
     "/logs",
     responses={
         200: {
@@ -197,86 +152,6 @@ def delete_logs(
         )
 
     return {"info": "Logs deleted successfully!"}
-
-
-@router.put(
-    "/log/{id}",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {"info": "Log updated successfully!"},
-                },
-            },
-        },
-        404: {
-            "description": "Log Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Log with id <id> not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def update_log(
-    request_fastapi: Request,
-    request: UpdateLogConfig,
-    id: int = Path(
-        description="ID of the log to update.",
-        example="123",
-    ),
-    log_dao: LogDAO = Depends(),
-    log_event_dao: LogEventDAO = Depends(),
-):
-    """
-    Updates the given log with more data.
-
-    A "explicit_types" dictionary can be passed as part of the `entries`.
-    If present, any matching key inside this dictionary will override the
-    inferred type of that particular entry.
-
-    """
-
-    project_user_id, project_id = log_event_dao.get_user_and_project_id(id=id)
-
-    if project_user_id != request_fastapi.state.user_id:
-        raise not_found(f"Log with id {id}")
-
-    explicit_types = request.entries.pop("explicit_types", None)
-
-    # Store each key, value pair for the log
-    for k, v in request.entries.items():
-        try:
-            log_dao.update_value(
-                log_event_id=id,
-                raw_k=k,
-                raw_v=v,
-                explicit_types=explicit_types,
-                overwrite=request.overwrite,
-            )
-        except IndexError:
-            log_dao.create_from_raw_k_v(
-                project_id=project_id,
-                log_event_id=id,
-                raw_k=k,
-                raw_v=v,
-                explicit_types=explicit_types,
-            )
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail="Found different value for log entries with same version.",
-            )
-        except OverwriteError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Found existing value for log entry with key {k} but overwrite is set to False.",
-            )
-    return id
 
 
 @router.put(
@@ -381,73 +256,6 @@ def update_logs(
 
 
 @router.delete(
-    "/log/{id}/entry/{entry}",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {"info": "Log entry deleted successfully!"},
-                },
-            },
-        },
-        404_1: {
-            "description": "Log Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Log with <id> not found.",
-                    },
-                },
-            },
-        },
-        404_2: {
-            "description": "Log Entry Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Log entry <entry> not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def delete_log_entry(
-    request_fastapi: Request,
-    id: int = Path(
-        description="ID of the log to delete an entry from.",
-        example="123",
-    ),
-    entry: str = Path(
-        description="Name of the entry to delete from a given log.",
-        example="input-str",
-    ),
-    log_event_dao: LogEventDAO = Depends(),
-    log_dao: LogDAO = Depends(),
-):
-    """
-    Deletes a entry from a log.
-    """
-    # "/" is replaced with "-" on client side, such that url is parsable
-    entry = entry.replace("-", "/")
-    if "/" in entry:
-        clean_key = entry.split("/")[0]
-        version = entry.split("/")[1]
-    else:
-        clean_key = entry
-        version = None
-    if log_event_dao.get_user_id(id=id) != request_fastapi.state.user_id:
-        raise not_found(f"Log with id {id}")
-    # TODO: Deal with organisation IDs
-    log = log_dao.filter(log_event_id=id, key=clean_key, version=version)
-    if not log:
-        raise not_found(f"Log entry {entry}")
-    log_dao.delete(id=log[0][0].id)
-    return {"info": "Log entry deleted successfully!"}
-
-
-@router.delete(
     "/logs/entry/{entry}",
     responses={
         200: {
@@ -482,7 +290,7 @@ def delete_log_entry(
         },
     },
 )
-def delete_log_entry_from_multiple_logs(
+def delete_log_entries(
     request_fastapi: Request,
     body: DeleteLogEntryRequest,
     entry: str = Path(

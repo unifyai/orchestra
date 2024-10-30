@@ -28,28 +28,6 @@ class CreateLogConfig(BaseModel):
     )
 
 
-class UpdateLogConfig(BaseModel):
-    entries: Dict[str, Any] = Field(
-        description="Dictionary containing one or more key:value pairs that "
-        "will be logged into the platform. Keys can have an optional "
-        "version defined after a forward slash. E.g. `system_msg/v1`. "
-        "If defined, these versions will be used when grouping results on "
-        "a per-key basis. Values must be JSON serializable. "
-        "If a `explicit_types` dictionary is present, its values "
-        "will override the inferred types of the entries.",
-        json_schema_extra={
-            "example": {
-                "input": "...",
-                "score-test-1": "...",
-                "explicit_types": {"input": "Image"},
-            },
-        },
-    )
-    overwrite: bool = Field(
-        default=False, description="Whether to overwrite existing logs", example=False
-    )
-
-
 class UpdateLogRequest(BaseModel):
     ids: list[int] = Field(
         description="List of log IDs to update with new or overriding entries.",
@@ -67,7 +45,9 @@ class UpdateLogRequest(BaseModel):
         },
     )
     overwrite: bool = Field(
-        default=False, description="Whether to overwrite existing logs", example=False
+        default=False,
+        description="Whether to overwrite existing logs",
+        example=False,
     )
 
 
