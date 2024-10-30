@@ -227,10 +227,12 @@ def update_logs(
     A dictionary of "explicit_types" can be passed as part of the `entries`.
     If present, it will override the inferred type of any matching key in all logs.
     """
-    explicit_types = body.entries.pop("explicit_types", None)
+    entries_explicit_types = body.entries.pop("explicit_types", None)
+    params_explicit_types = body.parameters.pop("explicit_types", None)
     not_found_logs = []
 
     for log_id in body.ids:
+
         try:
             # Get user and project ID for the log
             project_user_id, project_id = log_event_dao.get_user_and_project_id(
@@ -241,37 +243,82 @@ def update_logs(
             if project_user_id != request_fastapi.state.user_id:
                 raise IndexError
 
-            # Store each key, value pair for the log
-            for k, v in body.entries.items():
-                try:
-                    log_dao.update_value(
-                        log_event_id=log_id,
-                        raw_k=k,
-                        raw_v=v,
-                        explicit_types=explicit_types,
-                        overwrite=body.overwrite,
-                    )
-                except IndexError:
-                    log_dao.create_from_raw_k_v(
-                        project_id=project_id,
-                        log_event_id=log_id,
-                        raw_k=k,
-                        raw_v=v,
-                        explicit_types=explicit_types,
-                    )
-                except ValueError:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Found different value for log entries with the same key '{k}' but a different version.",
-                    )
-                except OverwriteError:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Found existing value for log entry with key {k} but overwrite is set to False.",
-                    )
-
         except IndexError:
             not_found_logs.append(log_id)
+            continue
+
+        for k, v in body.parameters.items():
+            # see if there is any param with the same value
+            existing_param = log_dao.filter(
+                key=k,
+                value=json.dumps(v),
+                project_id=project_id,
+            )
+            if existing_param:
+                version = existing_param[0][0].version
+            else:
+                # fetch the highest version for that param
+                existing_params = log_dao.filter(key=k, project_id=project_id)
+                highest_version = max([-1] + [e[0].version for e in existing_params])
+                version = highest_version + 1
+            try:
+                log_dao.update_value(
+                    log_event_id=log_id,
+                    raw_k=k,
+                    raw_v=v,
+                    version=version,
+                    explicit_types=params_explicit_types,
+                    overwrite=body.overwrite,
+                )
+            except IndexError:
+                log_dao.create_from_raw_k_v(
+                    project_id=project_id,
+                    log_event_id=log_id,
+                    raw_k=k,
+                    raw_v=v,
+                    version=version,
+                    explicit_types=entries_explicit_types,
+                )
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Found different value for log params with same version.",
+                )
+            except OverwriteError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Found existing value for log entry with key {k} but overwrite is set to False.",
+                )
+
+        # Store each key, value entry pair for the log
+        # Store each key, value pair for the log
+        for k, v in body.entries.items():
+            try:
+                log_dao.update_value(
+                    log_event_id=log_id,
+                    raw_k=k,
+                    raw_v=v,
+                    explicit_types=entries_explicit_types,
+                    overwrite=body.overwrite,
+                )
+            except IndexError:
+                log_dao.create_from_raw_k_v(
+                    project_id=project_id,
+                    log_event_id=log_id,
+                    raw_k=k,
+                    raw_v=v,
+                    explicit_types=entries_explicit_types,
+                )
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Found different value for log entries with the same key '{k}' but a different version.",
+                )
+            except OverwriteError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Found existing value for log entry with key {k} but overwrite is set to False.",
+                )
 
     if not_found_logs:
         raise HTTPException(

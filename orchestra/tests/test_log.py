@@ -294,7 +294,7 @@ async def test_update_logs_overwrites(client: AsyncClient):
     assert response.status_code == 200, response.json()
     new_entries = response.json()["entries"]
     assert len(new_entries) == 3
-    assert new_entries["input/v0"] == orig_entries["input/v0"]
+    assert new_entries["input"] == orig_entries["input"]
     assert new_entries["boolean_input"] != orig_entries["boolean_input"]
     assert new_entries["numeric_input"] != orig_entries["numeric_input"]
 
