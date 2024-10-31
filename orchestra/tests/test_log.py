@@ -93,7 +93,7 @@ def _create_log(client, project_name, user=1):
         "/v0/log",
         json={
             "project": project_name,
-            "parameters": {"a/b/param1": "test"},
+            "params": {"a/b/param1": "test"},
             "entries": log_data["log"],
         },
         headers=_headers,
@@ -188,7 +188,7 @@ async def _create_logs_for_filtering_n_metrics(client, project_name, user=1):
             "/v0/log",
             json={
                 "project": project_name,
-                "parameters": {"a/b/param1": f"test_{i}"},
+                "params": {"a/b/param1": f"test_{i}"},
                 "entries": data[i],
             },
             headers=_headers,
@@ -224,7 +224,7 @@ async def test_create_logs_autoincrement_version(client: AsyncClient):
     # This should work fine
     response = await client.post(
         "/v0/log",
-        json={"project": project_name, "parameters": {"p1": "test"}},
+        json={"project": project_name, "params": {"p1": "test"}},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -232,7 +232,7 @@ async def test_create_logs_autoincrement_version(client: AsyncClient):
     # same version and value
     response = await client.post(
         "/v0/log",
-        json={"project": project_name, "parameters": {"p1": "test"}},
+        json={"project": project_name, "params": {"p1": "test"}},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -240,7 +240,7 @@ async def test_create_logs_autoincrement_version(client: AsyncClient):
     # same version and different value -> autoincrement
     response = await client.post(
         "/v0/log",
-        json={"project": project_name, "parameters": {"p1": "test_v1"}},
+        json={"project": project_name, "params": {"p1": "test_v1"}},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
