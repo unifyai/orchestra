@@ -71,3 +71,7 @@ async def test_extra_headers_anthropic(client: AsyncClient):
 
     assert hasattr(res, "choices")
     assert len(res.choices) > 0
+
+
+if __name__ == "__main__":
+    pass

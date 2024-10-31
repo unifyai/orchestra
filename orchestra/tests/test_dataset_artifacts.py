@@ -133,3 +133,7 @@ async def test_list_artifacts_dataset_not_found(client: AsyncClient):
     assert response.json() == {
         "detail": f"Dataset {dataset_name} not found.",
     }
+
+
+if __name__ == "__main__":
+    pass

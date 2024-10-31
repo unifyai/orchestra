@@ -325,3 +325,7 @@ async def test_add_organization_member_org_not_found(client: AsyncClient):
     params = {"name": "Not an org", "new_member_email": email}
     response = await client.post(url, params=params, headers=HEADERS)
     assert response.status_code == 404, response.json()
+
+
+if __name__ == "__main__":
+    pass
