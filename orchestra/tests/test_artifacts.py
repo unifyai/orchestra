@@ -133,3 +133,7 @@ async def test_list_artifacts_project_not_found(client: AsyncClient):
     assert response.json() == {
         "detail": f"Project {project_name} not found.",
     }
+
+
+if __name__ == "__main__":
+    pass

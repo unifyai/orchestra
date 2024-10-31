@@ -201,3 +201,7 @@ async def test_repeated_external_logging(client: AsyncClient):
     response = await client.get(endpoint, headers=HEADERS, params=data)
     assert response.status_code == 200, response.json()
     assert len(response.json()) == 2, response.json()
+
+
+if __name__ == "__main__":
+    pass

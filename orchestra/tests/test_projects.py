@@ -104,3 +104,7 @@ async def test_list_projects(client: AsyncClient):
     projects = response.json()
     assert "project_a" in projects
     assert "project_b" in projects
+
+
+if __name__ == "__main__":
+    pass
