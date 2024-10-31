@@ -166,3 +166,7 @@ def test_invalid_provider(dbsession) -> str:  # type: ignore[return]
         )()
     assert err.value.status_code == invalid_provider_str.status_code
     assert err.value.detail == invalid_provider_str.detail
+
+
+if __name__ == "__main__":
+    pass

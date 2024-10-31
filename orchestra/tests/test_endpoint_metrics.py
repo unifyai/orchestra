@@ -157,3 +157,7 @@ async def test_custom_endpoint_metrics_get_latest(  # noqa: WPS218, E501
     assert response.status_code == 200, response.json()
     assert response.json()[0]["time_to_first_token"] == 133
     assert response.json()[0]["inter_token_latency"] == 500
+
+
+if __name__ == "__main__":
+    pass

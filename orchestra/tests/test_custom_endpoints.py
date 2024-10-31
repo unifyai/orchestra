@@ -62,3 +62,7 @@ async def test_custom_api_keys(  # noqa: WPS218, E501
     url = "v0/custom_api_key/list"
     response = await client.get(url, headers=HEADERS)
     assert not _custom_key_in_list("renamed_test", json.loads(response.text))
+
+
+if __name__ == "__main__":
+    pass

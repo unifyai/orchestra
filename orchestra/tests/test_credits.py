@@ -153,3 +153,7 @@ async def test_autorecharge_qty(  # noqa: WPS218, E501
     assert response.status_code == status.HTTP_200_OK
     post = dbsession.execute(query).all()[0][5]
     assert post == 10
+
+
+if __name__ == "__main__":
+    pass

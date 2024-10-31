@@ -823,3 +823,7 @@ async def test_delete_log_field_from_logs(client: AsyncClient):
     response = await _get_log(client, log_id2)
     assert response.status_code == 200, response.json()
     assert entry_to_delete not in response.json()["logs"]["entries"]
+
+
+if __name__ == "__main__":
+    pass

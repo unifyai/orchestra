@@ -254,3 +254,7 @@ async def test_deploy_list_router(client: AsyncClient, dbsession):
 #     assert response.status_code == 200, response.json()
 
 """
+
+
+if __name__ == "__main__":
+    pass

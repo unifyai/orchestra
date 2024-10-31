@@ -167,3 +167,7 @@ async def test_n_1(model, client: AsyncClient):
     data["n"] = 1
     response = await client.post(endpoint, headers=HEADERS, json=data)
     assert response.status_code == status.HTTP_200_OK
+
+
+if __name__ == "__main__":
+    pass
