@@ -271,7 +271,7 @@ async def test_update_logs_overwrites(client: AsyncClient):
 
     response = await _get_log(client, log_id)
     assert response.status_code == 200, response.json()
-    orig_entries = response.json()["entries"]
+    orig_entries = response.json()["logs"]["entries"]
     assert len(orig_entries) == 3
 
     response = await client.post(
@@ -292,7 +292,7 @@ async def test_update_logs_overwrites(client: AsyncClient):
 
     response = await _get_log(client, log_id)
     assert response.status_code == 200, response.json()
-    new_entries = response.json()["entries"]
+    new_entries = response.json()["logs"]["entries"]
     assert len(new_entries) == 3
     assert new_entries["input"] == orig_entries["input"]
     assert new_entries["boolean_input"] != orig_entries["boolean_input"]
@@ -300,7 +300,7 @@ async def test_update_logs_overwrites(client: AsyncClient):
 
     response = await _get_log(client, log_id_2)
     assert response.status_code == 200, response.json()
-    new_entries = response.json()["entries"]
+    new_entries = response.json()["logs"]["entries"]
     assert len(new_entries) == 4
 
 
@@ -349,10 +349,13 @@ async def test_get_log(client: AsyncClient):
     response = await client.get(f"/v0/log/{log_id}", headers=HEADERS)
 
     assert response.status_code == 200, response.json()
-    assert "entries" in response.json()  # Log entries are returned
-    assert isinstance(response.json()["ts"], str)
-    assert isinstance(response.json()["entries"]["boolean_input"], bool)
-    assert isinstance(response.json()["entries"]["numeric_input"], float)
+    assert "logs" in response.json()
+    assert "params" in response.json()
+    assert isinstance(response.json()["params"]["param1"]["0"], str)
+    assert isinstance(response.json()["logs"]["ts"], str)
+    assert isinstance(response.json()["logs"]["params"]["param1"], str)
+    assert isinstance(response.json()["logs"]["entries"]["boolean_input"], bool)
+    assert isinstance(response.json()["logs"]["entries"]["numeric_input"], float)
 
 
 @pytest.mark.anyio
@@ -778,11 +781,11 @@ async def test_update_logs(client: AsyncClient):
     # Verify updates
     response = await _get_log(client, log_id1)
     assert response.status_code == 200, response.json()
-    assert response.json()["entries"]["new_entry"] == "Updated value"
+    assert response.json()["logs"]["entries"]["new_entry"] == "Updated value"
 
     response = await _get_log(client, log_id2)
     assert response.status_code == 200, response.json()
-    assert response.json()["entries"]["new_entry"] == "Updated value"
+    assert response.json()["logs"]["entries"]["new_entry"] == "Updated value"
 
 
 @pytest.mark.anyio
@@ -809,8 +812,8 @@ async def test_delete_log_field_from_logs(client: AsyncClient):
     # Verify deletion of entry
     response = await _get_log(client, log_id1)
     assert response.status_code == 200, response.json()
-    assert entry_to_delete not in response.json()["entries"]
+    assert entry_to_delete not in response.json()["logs"]["entries"]
 
     response = await _get_log(client, log_id2)
     assert response.status_code == 200, response.json()
-    assert entry_to_delete not in response.json()["entries"]
+    assert entry_to_delete not in response.json()["logs"]["entries"]
