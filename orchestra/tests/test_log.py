@@ -21,29 +21,29 @@ HEADERS_2 = {
 
 log_data = {
     "log": {
-        "input": "Some input data",
-        "boolean_input": True,
-        "numeric_input": 4.5,
+        "a/b/c/input": "Some input data",
+        "a/b/c/boolean_input": True,
+        "a/b/c/numeric_input": 4.5,
     },
     "log_update": {
         "my_list": ["a", "b", "c"],
         "my_dict": {"a": 1, "b": 2, "c": 3},
     },
     "log_update_w_overwrite": {
-        "boolean_input": False,
-        "numeric_input": 5.4,
+        "a/b/c/boolean_input": False,
+        "a/b/c/numeric_input": 5.4,
     },
     "logs_for_grouping": [
         {
-            "input": "What is 1 + 1?",
+            "a/input": "What is 1 + 1?",
             "system_prompt": "You are an expert mathematician.",
         },
         {
-            "input": "What is 2 + 2?",
+            "a/input": "What is 2 + 2?",
             "system_prompt": "You are an expert mathematician.",
         },
         {
-            "input": "What is 1 + 1?",
+            "a/input": "What is 1 + 1?",
             "system_prompt": "Respond only with a single digit.",
         },
         {
@@ -93,7 +93,7 @@ def _create_log(client, project_name, user=1):
         "/v0/log",
         json={
             "project": project_name,
-            "parameters": {"param1": "test"},
+            "parameters": {"a/b/param1": "test"},
             "entries": log_data["log"],
         },
         headers=_headers,
@@ -188,7 +188,7 @@ async def _create_logs_for_filtering_n_metrics(client, project_name, user=1):
             "/v0/log",
             json={
                 "project": project_name,
-                "parameters": {"param1": f"test_{i}"},
+                "parameters": {"a/b/param1": f"test_{i}"},
                 "entries": data[i],
             },
             headers=_headers,
@@ -294,9 +294,9 @@ async def test_update_logs_overwrites(client: AsyncClient):
     assert response.status_code == 200, response.json()
     new_entries = response.json()["logs"]["entries"]
     assert len(new_entries) == 3
-    assert new_entries["input"] == orig_entries["input"]
-    assert new_entries["boolean_input"] != orig_entries["boolean_input"]
-    assert new_entries["numeric_input"] != orig_entries["numeric_input"]
+    assert new_entries["a/b/c/input"] == orig_entries["a/b/c/input"]
+    assert new_entries["a/b/c/boolean_input"] != orig_entries["a/b/c/boolean_input"]
+    assert new_entries["a/b/c/numeric_input"] != orig_entries["a/b/c/numeric_input"]
 
     response = await _get_log(client, log_id_2)
     assert response.status_code == 200, response.json()
@@ -351,11 +351,11 @@ async def test_get_log(client: AsyncClient):
     assert response.status_code == 200, response.json()
     assert "logs" in response.json()
     assert "params" in response.json()
-    assert isinstance(response.json()["params"]["param1"]["0"], str)
+    assert isinstance(response.json()["params"]["a/b/param1"]["0"], str)
     assert isinstance(response.json()["logs"]["ts"], str)
-    assert isinstance(response.json()["logs"]["params"]["param1"], str)
-    assert isinstance(response.json()["logs"]["entries"]["boolean_input"], bool)
-    assert isinstance(response.json()["logs"]["entries"]["numeric_input"], float)
+    assert isinstance(response.json()["logs"]["params"]["a/b/param1"], str)
+    assert isinstance(response.json()["logs"]["entries"]["a/b/c/boolean_input"], bool)
+    assert isinstance(response.json()["logs"]["entries"]["a/b/c/numeric_input"], float)
 
 
 @pytest.mark.anyio
@@ -466,12 +466,18 @@ async def test_get_logs(client: AsyncClient):
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), dict)
     assert isinstance(response.json()["params"], dict)
-    assert isinstance(response.json()["params"]["param1"]["0"], str)
+    assert isinstance(response.json()["params"]["a/b/param1"]["0"], str)
     assert isinstance(response.json()["logs"], list)
     assert isinstance(response.json()["logs"][0]["ts"], str)
-    assert isinstance(response.json()["logs"][0]["entries"]["boolean_input"], bool)
-    assert isinstance(response.json()["logs"][0]["entries"]["numeric_input"], float)
-    assert isinstance(response.json()["logs"][0]["params"]["param1"], str)
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["a/b/c/boolean_input"],
+        bool,
+    )
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["a/b/c/numeric_input"],
+        float,
+    )
+    assert isinstance(response.json()["logs"][0]["params"]["a/b/param1"], str)
 
     # fetch entries for the empty project
     response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS_2)
@@ -643,13 +649,13 @@ async def test_get_logs_w_filtering(client: AsyncClient):
 
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "version('param1') == '1'"},
+        params={"filter_expr": "version('a/b/param1') == '1'"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result["logs"]) == 1
-    assert result["logs"][0]["params"]["param1"] == "1"
+    assert result["logs"][0]["params"]["a/b/param1"] == "1"
 
 
 @pytest.mark.anyio
@@ -804,7 +810,7 @@ async def test_delete_log_field_from_logs(client: AsyncClient):
     log_ids = [log_id1, log_id2]
 
     # Delete an entry from both logs
-    entry_to_delete = "input"
+    entry_to_delete = "a/b/c/input"
     response = await _delete_log_field_from_logs(client, entry_to_delete, log_ids)
     assert response.status_code == 200, response.json()
     assert response.json()["info"] == "Log field deleted successfully from all logs!"

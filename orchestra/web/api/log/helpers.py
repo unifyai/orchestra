@@ -3,11 +3,10 @@ import re
 import statistics
 from typing import Any, List, Union
 
-from sqlalchemy import func, case, cast, Boolean, Float, String, JSON, select
+from sqlalchemy import JSON, Boolean, Float, String, case, cast, func, select
 from sqlalchemy.dialects.postgresql import JSONB
-
 from sqlalchemy.orm import aliased
-from sqlalchemy.sql import and_, or_, not_
+from sqlalchemy.sql import and_, not_, or_
 
 from orchestra.db.models.orchestra_models import Log
 
@@ -210,12 +209,12 @@ class _Parser:
                     self.advance()
                 else:
                     raise RuntimeError(
-                        'Expected ")" after len, exists or version function'
+                        'Expected ")" after len, exists or version function',
                     )
                 return {"operand": fn, "rhs": expr}
             else:
                 raise RuntimeError(
-                    'Expected "(" after len, exists, or version function'
+                    'Expected "(" after len, exists, or version function',
                 )
         elif self.current_token[0] == "LPAREN":
             self.advance()
@@ -347,7 +346,7 @@ def build_filter(filter_dict, log_event_alias, session):
                         subq = subq.filter(condition >= compare_value)
                 except ValueError:
                     raise ValueError(
-                        f"Cannot cast value '{rhs}' to float for comparison."
+                        f"Cannot cast value '{rhs}' to float for comparison.",
                     )
             elif operand == "in":
                 subq = subq.filter(log_alias.value.contains(rhs))
@@ -372,14 +371,16 @@ def build_filter(filter_dict, log_event_alias, session):
                             (
                                 log_alias.inferred_type == "list",
                                 func.jsonb_array_length(
-                                    cast(log_alias.value, JSONB)
+                                    cast(log_alias.value, JSONB),
                                 ).cast(Float),
                             ),
                             (
                                 log_alias.inferred_type == "dict",
                                 select(func.count())
                                 .select_from(
-                                    func.jsonb_object_keys(cast(log_alias.value, JSONB))
+                                    func.jsonb_object_keys(
+                                        cast(log_alias.value, JSONB),
+                                    ),
                                 )
                                 .scalar_subquery()
                                 .cast(Float),
@@ -387,11 +388,11 @@ def build_filter(filter_dict, log_event_alias, session):
                             (
                                 log_alias.inferred_type == "str",
                                 func.length(
-                                    cast(log_alias.value, JSONB)[0].astext
+                                    cast(log_alias.value, JSONB)[0].astext,
                                 ).cast(Float),
                             ),
                             else_=0,
-                        )
+                        ),
                     )
                 )
                 if operand == "<":
@@ -545,11 +546,13 @@ def format_logs(all_logs):
     for log in all_logs:
         log_event_id = log[0].log_event_id
         if log_event_id not in formatted_entries:
-            formatted_entries[log_event_id] = {"entries": {}}
-        key = log[0].key + (f"/{log[0].version}" if log[0].version is not None else "")
+            formatted_entries[log_event_id] = {"entries": {}, "versions": {}}
         assert (
-            key not in formatted_entries[log_event_id]
-        ), f"found duplicates for key {key} with log_id {log_event_id}"
+            log[0].key not in formatted_entries[log_event_id]
+        ), f"found duplicates for key {log[0].key} with log_id {log_event_id}"
         formatted_entries[log_event_id]["ts"] = log[1].strftime("%Y-%m-%d %H:%M:%S")
-        formatted_entries[log_event_id]["entries"][key] = json.loads(log[0].value)
+        formatted_entries[log_event_id]["entries"][log[0].key] = json.loads(
+            log[0].value,
+        )
+        formatted_entries[log_event_id]["versions"][log[0].key] = log[0].version
     return formatted_entries

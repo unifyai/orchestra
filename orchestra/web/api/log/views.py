@@ -330,7 +330,7 @@ def update_logs(
 
 
 @router.delete(
-    "/logs/field/{field}",
+    "/logs/field/{field:path}",
     responses={
         200: {
             "description": "Successful Response",
@@ -579,26 +579,26 @@ def get_logs(
     params = dict()
     logs = []
     for log_event_id, log_dict in formatted_logs.items():
-        log_dict = formatted_logs[log_event_id]
 
         for k, v in log_dict["entries"].items():
-            if "/" in k:
-                _key, _version = k.split("/")
-                if _key not in params:
-                    params[_key] = dict()
-                params[_key][_version] = v
+            if log_dict["versions"][k] is not None:
+                if k not in params:
+                    params[k] = dict()
+                params[k][log_dict["versions"][k]] = v
 
         logs.append(
             {
                 "id": log_event_id,
                 "ts": log_dict["ts"],
                 "entries": {
-                    k: v for k, v in log_dict["entries"].items() if "/" not in k
+                    k: v
+                    for k, v in log_dict["entries"].items()
+                    if log_dict["versions"][k] is None
                 },
                 "params": {
-                    k.split("/")[0]: k.split("/")[1]
-                    for k, v in log_dict["entries"].items()
-                    if "/" in k
+                    k: str(log_dict["versions"][k])
+                    for k, _ in log_dict["entries"].items()
+                    if log_dict["versions"][k] is not None
                 },
             },
         )
