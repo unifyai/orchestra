@@ -10,7 +10,7 @@ class CreateLogConfig(BaseModel):
             "example": "eval-project",
         },
     )
-    parameters: Dict[str, Any] = Field(
+    params: Dict[str, Any] = Field(
         default=dict(),
         description="Dictionary containing one or more key:value pairs that "
         "will be logged into the platform. Parameters will be automatically "
@@ -47,7 +47,7 @@ class UpdateLogRequest(BaseModel):
         example=[123, 456, 789],
         min_items=1,
     )
-    parameters: Dict[str, Any] = Field(
+    params: Dict[str, Any] = Field(
         default=dict(),
         description="Dictionary of key-value parameter pairs to add or update in the logs.",
         json_schema_extra={
