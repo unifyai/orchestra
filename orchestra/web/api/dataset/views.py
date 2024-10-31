@@ -200,6 +200,7 @@ def create_dataset(
 ):
     """
     Create a new dataset.
+    To create a dataset for a specific project, prefix it's name with \<project_name\>/.
     """
     dataset_id = dataset_dao.get_id(
         user_id=request.state.user_id,
