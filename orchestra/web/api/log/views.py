@@ -459,16 +459,27 @@ def get_log(
     if log_event_dao.get_user_id(id=id) != request_fastapi.state.user_id:
         raise not_found(f"Log with id {id}")
     # TODO: Deal with organisation IDs
+
     ts = log_event_dao.get_ts(id=id)
     log_entries = log_dao.filter(log_event_id=id)
-    entries = {
-        l[0].key
-        + (f"/{l[0].version}" if l[0].version is not None else ""): json.loads(
-            l[0].value,
-        )
-        for l in log_entries
+    params_map = {}
+    log_params = {}
+    entries = {}
+
+    for l in log_entries:
+        if l[0].version is not None:
+            if l[0].key not in params_map:
+                params_map[l[0].key] = dict()
+            params_map[l[0].key][l[0].version] = json.loads(l[0].value)
+            # json keys can't be int so leaving the value as str as well
+            log_params[l[0].key] = str(l[0].version)
+        else:
+            entries[l[0].key] = json.loads(l[0].value)
+
+    return {
+        "params": params_map,
+        "logs": {"id": id, "ts": ts, "entries": entries, "params": log_params},
     }
-    return {"id": id, "ts": ts, "entries": entries}
 
 
 @router.get(
