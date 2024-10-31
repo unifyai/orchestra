@@ -84,9 +84,9 @@ def create_log(
     log_event_id = log_event_dao.create(project_id=project_id)
 
     entries_explicit_types = request.entries.pop("explicit_types", None)
-    params_explicit_types = request.parameters.pop("explicit_types", None)
+    params_explicit_types = request.params.pop("explicit_types", None)
     entries = request.entries
-    params = request.parameters
+    params = request.params
 
     for k, v in params.items():
         # see if there is any param with the same value
@@ -228,7 +228,7 @@ def update_logs(
     If present, it will override the inferred type of any matching key in all logs.
     """
     entries_explicit_types = body.entries.pop("explicit_types", None)
-    params_explicit_types = body.parameters.pop("explicit_types", None)
+    params_explicit_types = body.params.pop("explicit_types", None)
     not_found_logs = []
 
     for log_id in body.ids:
@@ -247,7 +247,7 @@ def update_logs(
             not_found_logs.append(log_id)
             continue
 
-        for k, v in body.parameters.items():
+        for k, v in body.params.items():
             # see if there is any param with the same value
             existing_param = log_dao.filter(
                 key=k,

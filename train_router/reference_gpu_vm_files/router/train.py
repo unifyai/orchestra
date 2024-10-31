@@ -79,7 +79,7 @@ def train(model, optimizer, train_dataloader, val_dataloader, config):
                 )
             # print(loss.shape, loss)
             scaler.scale(loss).backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(model.params(), 1.0)
             if (i + 1) % config["train"]["gradient_acc_steps"] == 0:
                 scaler.step(optimizer)
                 scaler.update()
