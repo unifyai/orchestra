@@ -1,3 +1,6 @@
 [submodule "unify"]
 	path = submodules/unify
 	url = https://github.com/unifyai/unify
+[submodule "submodules/assistant"]
+	path = submodules/assistant
+	url = git@github.com:unifyai/assistant.git
