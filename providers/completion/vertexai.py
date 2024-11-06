@@ -148,6 +148,12 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 3, "completion": 15},
     },
+    "claude-3.5-haiku": {
+        "endpoint": "vertex_ai/claude-3-5-haiku@20241022",
+        "region": "us-east5",
+        "context_window": 200000,
+        "cost": {"prompt": 1, "completion": 5},
+    },
     "llama-3.1-8b-chat": {
         "endpoint": "vertex_ai/meta/llama3-8b-instruct-maas",
         "region": "us-central1",
