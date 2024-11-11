@@ -9,7 +9,6 @@ from providers.completion.fireworksai import FireworksAI
 from providers.completion.groq import Groq
 from providers.completion.leptonai import LeptonAI
 from providers.completion.mistral import Mistral
-from providers.completion.octoai import OctoAI
 from providers.completion.openai import OpenAI
 from providers.completion.perplexity import Perplexity
 from providers.completion.replicate import Replicate
@@ -23,7 +22,6 @@ PROVIDER_CLASSES = {
     "replicate": Replicate,
     "openai": OpenAI,
     "mistral-ai": Mistral,
-    "octoai": OctoAI,
     "groq": Groq,
     "lepton-ai": LeptonAI,
     "fireworks-ai": FireworksAI,

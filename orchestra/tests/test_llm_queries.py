@@ -26,7 +26,6 @@ MODELS = [
     "llama-3-8b-chat@together-ai",
     "llama-3-8b-chat@aws-bedrock",
     "mistral-7b-instruct-v0.3@mistral-ai",
-    "llama-3.1-8b-chat@octoai",
     "gemini-1.5-flash@vertex-ai",
     "llama-3.1-8b-chat@perplexity-ai",
     "llama-3-8b-chat@groq",
@@ -84,7 +83,7 @@ async def test_text_generation(  # noqa: WPS218, E501
 async def test_fallback_parse(
     client: AsyncClient,
 ) -> None:
-    models = ["claude-3-haiku@anthropic", "llama-3.1-8b-chat@octoai"]
+    models = ["claude-3-haiku@anthropic", "llama-3.1-8b-chat@deepinfra"]
     endpoint = "/v0/chat/completions"
     data = get_chat_completions_payload_fallback(models, stream=False)
     response = await client.post(endpoint, headers=HEADERS, json=data)
@@ -99,13 +98,13 @@ async def test_fallback_parse(
 async def test_fallback_after_fail(
     client: AsyncClient,
 ) -> None:
-    models = ["FAKE_MODEL@anthropic", "llama-3.1-8b-chat@octoai"]
+    models = ["FAKE_MODEL@anthropic", "llama-3.1-8b-chat@deepinfra"]
     endpoint = "/v0/chat/completions"
     data = get_chat_completions_payload_fallback(models, stream=False)
     response = await client.post(endpoint, headers=HEADERS, json=data)
     assert response.status_code == status.HTTP_200_OK
     response_json = json.loads(response.text)
-    assert response_json["model"] == "llama-3.1-8b-chat@octoai"
+    assert response_json["model"] == "llama-3.1-8b-chat@deepinfra"
     check_text_gen_response(response_json, "chat.completion")
     check_text_gen_choice(response_json.get("choices")[0], "message")
     check_text_gen_usage(response_json.get("usage"))
@@ -116,7 +115,7 @@ async def test_arrow_fallback_parse(
     client: AsyncClient,
 ) -> None:
     model_str = (
-        "claude-3-haiku->claude-3-sonnet@anthropic->llama-3.1-8b-chat@openai->octoai"
+        "claude-3-haiku->claude-3-sonnet@anthropic->llama-3.1-8b-chat@openai->deepinfra"
     )
     endpoint = "/v0/chat/completions"
     data = get_chat_completions_arrow_payload_fallback(model_str, stream=False)
@@ -132,13 +131,13 @@ async def test_arrow_fallback_parse(
 async def test_arrow_fallback_after_fail(
     client: AsyncClient,
 ) -> None:
-    model_str = "FAKE_MODEL@anthropic->llama-3.1-8b-chat@octoai"
+    model_str = "FAKE_MODEL@anthropic->llama-3.1-8b-chat@deepinfra"
     endpoint = "/v0/chat/completions"
     data = get_chat_completions_arrow_payload_fallback(model_str, stream=False)
     response = await client.post(endpoint, headers=HEADERS, json=data)
     assert response.status_code == status.HTTP_200_OK
     response_json = json.loads(response.text)
-    assert response_json["model"] == "llama-3.1-8b-chat@octoai"
+    assert response_json["model"] == "llama-3.1-8b-chat@deepinfra"
     check_text_gen_response(response_json, "chat.completion")
     check_text_gen_choice(response_json.get("choices")[0], "message")
     check_text_gen_usage(response_json.get("usage"))
