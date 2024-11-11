@@ -580,13 +580,6 @@ metrics = {
         "input_cost": 0.6,
         "output_cost": 0.6,
     },
-    "mixtral-8x7b-instruct-v0.1@octoai": {
-        "cost": 0.5,
-        "ttft": 1164.472783000008,
-        "itl": 24.274311994623353,
-        "input_cost": 0.3,
-        "output_cost": 0.5,
-    },
     "mixtral-8x7b-instruct-v0.1@replicate": {
         "cost": 1,
         "ttft": 887.903352999956,
@@ -713,13 +706,6 @@ metrics = {
         "input_cost": 0.9,
         "output_cost": 0.9,
     },
-    "codellama-34b-instruct@octoai": {
-        "cost": 0.65,  #
-        "ttft": 628.3,
-        "itl": 8.03,
-        "input_cost": 0.5,
-        "output_cost": 1,
-    },
     "codellama-34b-instruct@together-ai": {
         "cost": 0.8,  #
         "ttft": 1178.87,
@@ -734,26 +720,12 @@ metrics = {
         "input_cost": 0.35,
         "output_cost": 1.4,
     },
-    "codellama-13b-instruct@octoai": {
-        "cost": 0.65,  #
-        "ttft": 630.77,
-        "itl": 7.89,
-        "input_cost": 0.2,
-        "output_cost": 0.5,
-    },
     "codellama-13b-instruct@together-ai": {
         "cost": 0.23,
         "ttft": 507.27,
         "itl": 14.39,
         "input_cost": 0.23,
         "output_cost": 0.23,
-    },
-    "codellama-7b-instruct@octoai": {
-        "cost": 0.65,  #
-        "ttft": 635.72,
-        "itl": 7.69,
-        "input_cost": 0.1,
-        "output_cost": 0.25,
     },
     "codellama-7b-instruct@together-ai": {
         "cost": 0.2,
@@ -795,13 +767,6 @@ metrics = {
         "ttft": 889.15,
         "itl": 6.7,
         "input_cost": 0.05,
-        "output_cost": 0.25,
-    },
-    "mistral-7b-instruct-v0.2@octoai": {
-        "cost": 0.2,
-        "ttft": 804.27,
-        "itl": 12.48,
-        "input_cost": 0.1,
         "output_cost": 0.25,
     },
     "mistral-7b-instruct-v0.2@fireworks-ai": {

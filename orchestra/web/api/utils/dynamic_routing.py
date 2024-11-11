@@ -593,11 +593,6 @@ metrics = {
         "ttft": 405.11531099997455,
         "itl": 4.174361656626742,
     },
-    "mixtral-8x7b-instruct-v0.1@octoai": {
-        "cost": 0.5,
-        "ttft": 1164.472783000008,
-        "itl": 24.274311994623353,
-    },
     "mixtral-8x7b-instruct-v0.1@replicate": {
         "cost": 1,
         "ttft": 887.903352999956,
@@ -658,13 +653,6 @@ baked_router_endpoints = [
         model_id=29,
         provider="together-ai",
         provider_id=8,
-    ),
-    Endpoint(
-        id=1300,
-        model="mixtral-8x7b-instruct-v0.1",
-        model_id=29,
-        provider="octoai",
-        provider_id=4,
     ),
     Endpoint(
         id=1416,
