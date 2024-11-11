@@ -57,7 +57,6 @@ When running the command above, the following endpoints are run:
     {"provider": "replicate", "model": "llama-2-7b-chat"},
     {"provider": "together-ai", "model": "llama-2-7b-chat"},
     {"provider": "mistral-ai", "model": "mistral-7b-instruct-v0.2"},
-    {"provider": "octoai", "model": "mistral-7b-instruct-v0.1"},
     {"provider": "perplexity-ai", "model": "mistral-7b-instruct-v0.2"},
     {"provider": "aws-bedrock", "model": "mistral-7b-instruct-v0.2"},
 ]

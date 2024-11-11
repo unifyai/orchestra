@@ -443,7 +443,6 @@ async def main(endpoints=None):  # noqa: WPS210
         {"id": 1251, "provider": "perplexity-ai", "model": "llama-2-70b-chat"},
         {"id": 1252, "provider": "together-ai", "model": "llama-2-70b-chat"},
         {"id": 1253, "provider": "replicate", "model": "llama-2-70b-chat"},
-        {"id": 1254, "provider": "octoai", "model": "llama-2-70b-chat"},
         {"id": 1383, "provider": "fireworks-ai", "model": "llama-2-70b-chat"},
         {"id": 1395, "provider": "lepton-ai", "model": "llama-2-70b-chat"},
         {"id": 1398, "provider": "deepinfra", "model": "llama-2-70b-chat"},
@@ -526,7 +525,6 @@ if __name__ == "__main__":
             {"provider": "replicate", "model": "llama-2-7b-chat"},
             {"provider": "together-ai", "model": "llama-2-7b-chat"},
             {"provider": "mistral-ai", "model": "mistral-7b-instruct-v0.2"},
-            {"provider": "octoai", "model": "mistral-7b-instruct-v0.1"},
             {"provider": "perplexity-ai", "model": "mistral-7b-instruct-v0.2"},
             {"provider": "aws-bedrock", "model": "mistral-7b-instruct-v0.2"},
         ]
