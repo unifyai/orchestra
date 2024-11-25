@@ -6,7 +6,6 @@ For local, create `keys.sh` with following snippet to setup:
 #!/bin/bash
 
 export ORCHESTRA_ANYSCALE_API_KEY=""
-export ORCHESTRA_PERPLEXITY_AI_API_KEY=""
 export ORCHESTRA_TOGETHER_AI_API_KEY=""
 export ORCHESTRA_ANTHROPIC_API_KEY=""
 export ORCHESTRA_REPLICATE_API_KEY=""
@@ -57,7 +56,6 @@ When running the command above, the following endpoints are run:
     {"provider": "replicate", "model": "llama-2-7b-chat"},
     {"provider": "together-ai", "model": "llama-2-7b-chat"},
     {"provider": "mistral-ai", "model": "mistral-7b-instruct-v0.2"},
-    {"provider": "perplexity-ai", "model": "mistral-7b-instruct-v0.2"},
     {"provider": "aws-bedrock", "model": "mistral-7b-instruct-v0.2"},
 ]
 ```

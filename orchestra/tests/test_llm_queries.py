@@ -27,7 +27,6 @@ MODELS = [
     "llama-3-8b-chat@aws-bedrock",
     "mistral-7b-instruct-v0.3@mistral-ai",
     "gemini-1.5-flash@vertex-ai",
-    "llama-3.1-8b-chat@perplexity-ai",
     "llama-3-8b-chat@groq",
     "llama-3.1-8b-chat@azure-ai",
 ]
