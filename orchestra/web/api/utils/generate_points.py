@@ -643,20 +643,6 @@ metrics = {
         "input_cost": 1.2,
         "output_cost": 1.2,
     },
-    "pplx-70b-chat@perplexity-ai": {
-        "cost": 1.225,
-        "ttft": 982,
-        "itl": 24.68,
-        "input_cost": 0.7,
-        "output_cost": 2.8,
-    },
-    "pplx-7b-chat@perplexity-ai": {
-        "cost": 0.1225,
-        "ttft": 959.25,
-        "itl": 7.78,
-        "input_cost": 0.07,
-        "output_cost": 0.28,
-    },
     "mistral-medium@mistral-ai": {
         "cost": 0.7,  #
         "ttft": 532.12,
@@ -712,13 +698,6 @@ metrics = {
         "itl": 23.67,
         "input_cost": 0.8,
         "output_cost": 0.8,
-    },
-    "codellama-34b-instruct@perplexity-ai": {
-        "cost": 0.5,  #
-        "ttft": 1005.11,
-        "itl": 13.94,
-        "input_cost": 0.35,
-        "output_cost": 1.4,
     },
     "codellama-13b-instruct@together-ai": {
         "cost": 0.23,
