@@ -98,6 +98,16 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
+    "qwen-2.5-coder-32b-instruct": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b-instruct",
+        "context_window": 32768,
+        "cost": {"prompt": 0.9, "completion": 0.9},
+    },
+    "qwen-qwq-32b-preview": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/qwen-qwq-32b-preview",
+        "context_window": 32768,
+        "cost": {"prompt": 0.9, "completion": 0.9},
+    },
     "qwen-2.5-72b-instruct": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/qwen-v2p5-72b-instruct",
         "context_window": 32768,
