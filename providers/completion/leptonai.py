@@ -94,6 +94,11 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.18, "completion": 0.18},
     },
+    "qwen-qwq-32b-preview": {
+        "endpoint": "qwen-qwq-32b",
+        "context_window": 32768,
+        "cost": {"prompt": 0.8, "completion": 0.8},
+    },
     "qwen-2-72b-instruct": {
         "endpoint": "qwen2-72b",
         "context_window": 128000,

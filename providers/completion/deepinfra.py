@@ -103,6 +103,16 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.13, "completion": 0.13},
     },
+    "qwen-2.5-coder-32b-instruct": {
+        "endpoint": "deepinfra/Qwen/Qwen2.5-Coder-32B-Instruct",
+        "context_window": 32768,
+        "cost": {"prompt": 0.18, "completion": 0.18},
+    },
+    "qwen-qwq-32b-preview": {
+        "endpoint": "deepinfra/Qwen/QwQ-32B-Preview",
+        "context_window": 32768,
+        "cost": {"prompt": 0.15, "completion": 0.6},
+    },
     "qwen-2.5-72b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-72B-Instruct",
         "context_window": 32000,
