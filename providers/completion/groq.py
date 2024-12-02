@@ -73,15 +73,14 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.06, "completion": 0.06},
     },
-    # no pricing available yet
-    # "llama-3.2-11b-chat": {
-    #     "endpoint": "groq/llama-3.2-11b-vision-preview",
-    #     "context_window": 128000,
-    #     "cost": {"prompt": 0.2, "completion": 0.2}
-    # },
-    # "llama-3.2-90b-chat": {
-    #     "endpoint": "groq/llama-3.2-90b-vision-preview",
-    #     "context_window": 8000,
-    #     "cost": {"prompt": 0.9, "completion": 0.9}
-    # }
+    "llama-3.2-11b-chat": {
+        "endpoint": "groq/llama-3.2-11b-vision-preview",
+        "context_window": 128000,
+        "cost": {"prompt": 0.18, "completion": 0.18},
+    },
+    "llama-3.2-90b-chat": {
+        "endpoint": "groq/llama-3.2-90b-vision-preview",
+        "context_window": 128000,
+        "cost": {"prompt": 0.9, "completion": 0.9},
+    },
 }
