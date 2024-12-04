@@ -19,12 +19,15 @@ from orchestra.db.dao.tag_dao import TagDAO
 from orchestra.web.api.utils.http_responses import not_found
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
-client = clickhouse_connect.get_client(
-    host=os.environ.get("CLICKHOUSE_HOST"),
-    port=8443,
-    username="default",
-    password=os.environ.get("CLICKHOUSE_PASS"),
-)
+try:
+    client = clickhouse_connect.get_client(
+        host=os.environ.get("CLICKHOUSE_HOST"),
+        port=8443,
+        username="default",
+        password=os.environ.get("CLICKHOUSE_PASS"),
+    )
+except:
+    client = None
 router = APIRouter()
 
 
