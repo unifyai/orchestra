@@ -55,6 +55,7 @@ redis = "^5.0.7"
 litellm = "^1.53.3"
 shortuuid = "^1.0.13"
 unifyai = "^0.9.8"
+clickhouse-connect = "^0.8.9"
 
 [tool.poetry.dev-dependencies]
 pytest = "^7.2.1"
