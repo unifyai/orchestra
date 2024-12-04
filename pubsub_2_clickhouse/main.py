@@ -3,18 +3,10 @@ import json
 import logging
 import signal
 import sys
-from datetime import datetime
 
-import clickhouse_connect
+import requests
 import sdnotify
 from google.cloud import pubsub_v1
-
-client = clickhouse_connect.get_client(
-    host="r0wrmu8oz5.us-east1.gcp.clickhouse.cloud",
-    port=8443,
-    username="default",
-    password="SO5TP1zWWe.Gd",
-)
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -45,21 +37,16 @@ def pub_sub_callback(message):
     if not shutdown_flag:
         try:
             # parse message data
-            message_data = json.loads(message.data)
-            message_data = {
-                **message_data,
-                "timestamp": datetime.strptime(
-                    message_data["timestamp"],
-                    "%Y-%m-%d %H:%M:%S",
-                ),
-            }
-
-            # add to the clickhouse db
-            entries = list(message_data.items())
-            data = [entry[1] for entry in entries]
-            column_names = [entry[0] for entry in entries]
-            client.insert("telemetry", [data], column_names=column_names)
-
+            data = [json.loads(message.data)]
+            # do whatever with the data
+            requests.post(
+                "https://api.airfold.co/v1/events/queries",
+                headers={
+                    "Authorization": "Bearer aft_mpbZHI19EHe8CsRnUGsQ4f2ALIJ.KW4wY9z6u21Lbdnm8FS58Lqh6U3rTpsmo3FFeAsubCY",
+                    "Content-Type": "application/json",
+                },
+                json=data,
+            )
             logging.info(f"entry: {data['prompt']}")
         except json.decoder.JSONDecodeError:
             logging.error(f"Error parsing message: {message.data}")
