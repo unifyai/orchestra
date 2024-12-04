@@ -41,9 +41,9 @@ def telemetry_to_pub_sub(
         "provider": provider,
         "router": router,
         "group_id": 0,
-        "processing_time": int(processing_time),
-        "req_tokens": req_tokens,
-        "resp_tokens": resp_tokens,
+        "processing_time": str(int(processing_time)),
+        "req_tokens": str(req_tokens),
+        "resp_tokens": str(resp_tokens),
         "signature": signature,
         "prompt": prompt,
     }
