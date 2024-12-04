@@ -52,7 +52,7 @@ google-cloud-pubsub = "^2.21.5"
 google-cloud-secret-manager = "^2.20.1"
 pytest-xdist = {extras = ["psutils"], version = "^3.6.1"}
 redis = "^5.0.7"
-litellm = "^1.53.3"
+litellm = "^1.53.5"
 shortuuid = "^1.0.13"
 unifyai = "^0.9.8"
 clickhouse-connect = "^0.8.9"
