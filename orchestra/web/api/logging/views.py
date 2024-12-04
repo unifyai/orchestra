@@ -5,9 +5,8 @@ Includes endpoints related to logging.
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union
 
-import clickhouse_connect
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
@@ -19,12 +18,6 @@ from orchestra.db.dao.tag_dao import TagDAO
 from orchestra.web.api.utils.http_responses import not_found
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
-client = clickhouse_connect.get_client(
-    host=os.environ.get("CLICKHOUSE_HOST"),
-    port=8443,
-    username="default",
-    password=os.environ.get("CLICKHOUSE_PASS"),
-)
 router = APIRouter()
 
 
@@ -269,51 +262,38 @@ def get_query_metrics(
         ),
         example="sample_user_id",
     ),
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
     Returns aggregated telemetry data from previous queries to the `/chat/completions`
     endpoint, specifically the p50 and p95 for generation time and tokens per second,
     and also the total prompt and completion tokens processed within the interval. The
     user id and total request count within the interval are also returned.
     """
-    # fallback for the secondary user id
+    import requests
+
     if secondary_user_id is None:
         secondary_user_id = ""
 
-    # base query
-    query = (
-        f"SELECT toStartOfInterval(timestamp, INTERVAL {interval} SECOND) AS time_bin, "
-        "quantile(0.5)(processing_time) AS p50_generation_time, "
-        "quantile(0.95)(processing_time) AS p95_generation_time, "
-        "quantile(0.5)(processing_time / resp_tokens) AS p50_tokens_per_second, "
-        "quantile(0.95)(processing_time / resp_tokens) AS p95_tokens_per_second, "
-        "SUM(req_tokens) AS prompt_tokens, "
-        "SUM(resp_tokens) AS completion_tokens "
-        "FROM telemetry WHERE "
-        f"user_id = '{request_fastapi.state.user_id}' "
-        f"AND secondary_user_id = '{secondary_user_id}' "
+    response = requests.get(
+        "https://api.airfold.co/v1/pipes/queries_metrics.json",
+        # TODO: mb will rotate this tomorrow
+        headers={
+            "Authorization": f"Bearer {os.environ.get('AIRFOLD_KEY')}",
+        },
+        params={
+            "user_id": request_fastapi.state.user_id,
+            "secondary_user_id": secondary_user_id,
+            "start_time": start_time,
+            "end_time": end_time,
+            "models": models,
+            "providers": providers,
+            "interval": interval,
+        },
     )
 
-    # add time filters
-    if start_time and end_time:
-        query += f"AND timestamp BETWEEN '{start_time}' AND '{end_time}' "
-    if start_time:
-        query += f"AND timestamp >= '{start_time}' "
-    elif end_time:
-        query += f"AND timestamp <= '{end_time}' "
-
-    # add models and providers filter
-    if models:
-        query += f"AND model in ({models.split(',')}) "
-    if providers:
-        query += f"AND provider in ({providers.split(',')}) "
-
-    # group by bins
-    query += "GROUP BY time_bin ORDER BY time_bin"
-
-    # run query
-    output = client.query(query)
-    columns = output.column_names
-    rows = output.result_rows
-
-    return [dict(zip(columns, row)) for row in rows]
+    if response.status_code == 200:
+        data = response.json()
+        return data
+    else:
+        # TODO: meaningful errors
+        print("Error:", response.status_code, response.text)
