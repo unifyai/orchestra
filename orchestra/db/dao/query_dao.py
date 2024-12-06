@@ -124,6 +124,7 @@ class QueryDAO:
             query = query.filter(Query.at > start_time)
         if end_time:
             query = query.filter(Query.at < end_time)
+        query.order_by(Query.at.desc())
 
         endpoint_filters = []
         if endpoint_ids:
