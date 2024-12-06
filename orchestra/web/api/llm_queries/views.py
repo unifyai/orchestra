@@ -383,11 +383,15 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     if stream:
 
         def stream_and_update_db():  # noqa: WPS430 # TODO: Should this be async?
+            msg = ""
             for part_dict in response.generator():
                 part_dict["model"] = f"{model}@{provider}"
                 chat_response = ChatCompletionResponse(**part_dict)
+                content = chat_response.choices[0]["delta"]["content"]
+                msg += content if content else ""
                 yield f"data: {json.dumps(chat_response.model_dump())}\n\n"  # noqa: WPS237, E501
             processing_time = (time.time() - t0) * 1000
+            chat_response.choices[0]["delta"]["content"] = msg
             background_tasks.add_task(
                 db_operations,
                 cost=response.total_cost if not use_custom_keys else 0,
