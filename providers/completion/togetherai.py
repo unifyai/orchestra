@@ -28,6 +28,11 @@ class TogetherAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "llama-3.3-70b-chat": {
+        "endpoint": "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        "context_window": 131072,
+        "cost": {"prompt": 0.88, "completion": 0.88},
+    },
     "llama-3.2-3b-chat": {
         "endpoint": "together_ai/meta-llama/Llama-3.2-3B-Instruct-Turbo",
         "context_window": 131072,

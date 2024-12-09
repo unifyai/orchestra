@@ -49,15 +49,15 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 0.07, "completion": 0.07},
     },
-    "llama-3-8b-chat": {
-        "endpoint": "llama3-8b",
-        "context_window": 8192,
-        "cost": {"prompt": 0.07, "completion": 0.07},
-    },
-    "llama-3-70b-chat": {
-        "endpoint": "llama3-70b",
-        "context_window": 8192,
+    "llama-3.3-70b-chat": {
+        "endpoint": "llama3-3-70b",
+        "context_window": 128000,
         "cost": {"prompt": 0.8, "completion": 0.8},
+    },
+    "llama-3.2-3b-chat": {
+        "endpoint": "llama3-2-3b",
+        "context_window": 128000,
+        "cost": {"prompt": 0.03, "completion": 0.03},
     },
     "llama-3.1-8b-chat": {
         "endpoint": "llama3-1-8b",
@@ -74,10 +74,15 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 2.8, "completion": 2.8},
     },
-    "llama-3.2-3b-chat": {
-        "endpoint": "llama3-2-3b",
-        "context_window": 128000,
-        "cost": {"prompt": 0.03, "completion": 0.03},
+    "llama-3-8b-chat": {
+        "endpoint": "llama3-8b",
+        "context_window": 8192,
+        "cost": {"prompt": 0.07, "completion": 0.07},
+    },
+    "llama-3-70b-chat": {
+        "endpoint": "llama3-70b",
+        "context_window": 8192,
+        "cost": {"prompt": 0.8, "completion": 0.8},
     },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "mixtral-8x7b",

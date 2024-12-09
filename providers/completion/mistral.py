@@ -64,7 +64,7 @@ supported_models = {
         "cost": {"prompt": 0.04, "completion": 0.04},
     },
     "ministral-8b": {
-        "endpoint": "mistral/ministral-3b-latest",
+        "endpoint": "mistral/ministral-8b-latest",
         "context_window": 128000,
         "cost": {"prompt": 0.1, "completion": 0.1},
     },

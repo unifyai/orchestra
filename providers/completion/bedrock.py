@@ -84,12 +84,12 @@ supported_models = {
     "llama-3.1-70b-chat": {
         "endpoint": "bedrock/meta.llama3-1-70b-instruct-v1:0",
         "context_window": 128000,
-        "cost": {"prompt": 0.99, "completion": 0.99},
+        "cost": {"prompt": 0.72, "completion": 0.72},
     },
     "llama-3.1-405b-chat": {
         "endpoint": "bedrock/meta.llama3-1-405b-instruct-v1:0",
         "context_window": 128000,
-        "cost": {"prompt": 5.32, "completion": 16},
+        "cost": {"prompt": 2.4, "completion": 2.4},
     },
     "llama-3-8b-chat": {
         "endpoint": "bedrock/meta.llama3-8b-instruct-v1:0",
@@ -149,6 +149,6 @@ supported_models = {
     "claude-3.5-haiku": {
         "endpoint": "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0",
         "context_window": 200000,
-        "cost": {"prompt": 1, "completion": 5},
+        "cost": {"prompt": 0.8, "completion": 4},
     },
 }
