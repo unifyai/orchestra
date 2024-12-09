@@ -60,6 +60,6 @@ supported_models = {
     "claude-3.5-haiku": {
         "endpoint": "anthropic/claude-3-5-haiku-20241022",
         "context_window": 200000,
-        "cost": {"prompt": 1, "completion": 5},
+        "cost": {"prompt": 0.8, "completion": 4},
     },
 }
