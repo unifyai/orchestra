@@ -101,7 +101,7 @@ class QueryDAO:
 
     def get_num_queries(self, user_id) -> int:
         return self.session.execute(
-            func.count(Query.id).where(Query.user_id == user_id),
+            select(func.count()).select_from(Query).where(Query.user_id == user_id),
         ).scalar()
 
     def filter(
