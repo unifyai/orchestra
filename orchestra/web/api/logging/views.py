@@ -3,6 +3,7 @@ Includes endpoints related to logging.
 """
 
 import json
+import math
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Union
@@ -67,7 +68,7 @@ def get_queries(
     ),
     page_number: Optional[int] = Query(
         1,
-        description="The query history is returned in pages, with up to 100 prompts per page. Increase the page number to see older prompts.",
+        description="The query history is returned in pages, with up to 20 prompts per page. Increase the page number to see older prompts.",
         example="1",
     ),
     failures: Union[bool, Literal["only"]] = Query(
@@ -117,7 +118,7 @@ def get_queries(
                 print(e)
                 raise not_found(f"Endpoint")
 
-    LIMIT = 100
+    LIMIT = 20
     if page_number < 1:
         raise HTTPException(
             status_code=400,
@@ -136,7 +137,8 @@ def get_queries(
         offset=offset,
         status_code=200 if failures == False else (400 if failures == "only" else None),
     )
-    return ret
+    count = query_dao.get_num_queries()
+    return {"queries": ret, "total_pages": math.ceil(count / 20)} if ret else ret
 
 
 @router.post("/queries")
