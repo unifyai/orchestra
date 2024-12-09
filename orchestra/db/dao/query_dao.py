@@ -2,7 +2,7 @@ import datetime
 from typing import List, Optional
 
 from fastapi import Depends
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
@@ -99,8 +99,10 @@ class QueryDAO:
 
         return list(raw_queries.scalars().fetchall())
 
-    def get_num_queries(self) -> int:
-        return self.session.query(Query).count()
+    def get_num_queries(self, user_id) -> int:
+        return self.session.execute(
+            func.count(Query.id).where(Query.user_id == user_id),
+        ).scalar()
 
     def filter(
         self,

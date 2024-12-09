@@ -137,7 +137,7 @@ def get_queries(
         offset=offset,
         status_code=200 if failures == False else (400 if failures == "only" else None),
     )
-    count = query_dao.get_num_queries()
+    count = query_dao.get_num_queries(user_id=request_fastapi.state.user_id)
     return {"queries": ret, "total_pages": math.ceil(count / 20)} if ret else ret
 
 
