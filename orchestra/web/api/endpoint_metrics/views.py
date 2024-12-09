@@ -388,8 +388,8 @@ def get_endpoint_metrics(
             ]
             results = [
                 {
-                    "ttft": result["benchmark"][0].ttft,
-                    "itl": result["benchmark"][0].itl,
+                    "ttft": result["benchmark"][0].time_to_first_token,
+                    "itl": result["benchmark"][0].inter_token_latency,
                     "input_cost": result["benchmark"][0].input_cost,
                     "output_cost": result["benchmark"][0].output_cost,
                     "measured_at": result["benchmark"][0].measured_at,
