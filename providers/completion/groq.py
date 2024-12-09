@@ -83,4 +83,9 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.9, "completion": 0.9},
     },
+    "llama-3.3-70b-chat": {
+        "endpoint": "groq/llama-3.3-70b-versatile",
+        "context_window": 128000,
+        "cost": {"prompt": 0.59, "completion": 0.79},
+    },
 }
