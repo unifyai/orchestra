@@ -165,13 +165,13 @@ class QueryDAO:
         if limit:
             query = query.limit(limit)
         if offset:
-            query = query.limit(offset)
+            query = query.offset(offset)
 
         raw_queries = self.session.execute(query)
 
         results = list(raw_queries.scalars().fetchall())
         ret = []
-        for q in results[len(results) - 20 :]:
+        for q in results:
             ret.append(
                 {
                     "endpoint": q.model_provider_str,
