@@ -99,6 +99,9 @@ class QueryDAO:
 
         return list(raw_queries.scalars().fetchall())
 
+    def get_num_queries(self) -> int:
+        return self.session.query(Query).count()
+
     def filter(
         self,
         user_id: Optional[str] = None,
