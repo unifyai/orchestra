@@ -429,7 +429,8 @@ def get_endpoint_metrics(
         )
         assert len(results) > 0
         return results
-    except:
+    except Exception as e:
+        raise e
         raise not_found(f"Benchmarks for {model}@{provider}")
 
 
