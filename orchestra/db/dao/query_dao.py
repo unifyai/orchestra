@@ -171,7 +171,7 @@ class QueryDAO:
 
         results = list(raw_queries.scalars().fetchall())
         ret = []
-        for q in results:
+        for q in results[len(results) - 20 :]:
             ret.append(
                 {
                     "endpoint": q.model_provider_str,
