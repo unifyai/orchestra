@@ -820,7 +820,7 @@ def create_credit_card_fingerprint(
 
 
 @router.get("/duplicated_credit_card_fingerprint")
-def create_credit_card_fingerprint(
+def duplicated_credit_card_fingerprint(
     user_id: str,
     fingerprint: str,
     credit_card_fingerprint_dao: CreditCardFingerprintDAO = Depends(),
@@ -839,7 +839,7 @@ def create_credit_card_fingerprint(
     "/credit_card_fingerprint",
     response_model=List[CreditCardFingerprintModelResponse],
 )
-def create_credit_card_fingerprint(
+def get_credit_card_fingerprint(
     user_id: str,
     credit_card_fingerprint_dao: CreditCardFingerprintDAO = Depends(),
 ) -> List[CreditCardFingerprint]:
