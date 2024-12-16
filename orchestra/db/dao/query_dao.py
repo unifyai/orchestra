@@ -121,7 +121,7 @@ class QueryDAO:
         offset: Optional[int] = None,
         status_code: Optional[int] = None,
     ) -> List[Query]:
-        query = select(Query)
+        query = select(Query, func.count(Query.id).over().label("count"))
         if user_id:
             query = query.where(Query.user_id == user_id)
 
@@ -169,17 +169,18 @@ class QueryDAO:
 
         raw_queries = self.session.execute(query)
 
-        results = list(raw_queries.scalars().fetchall())
         ret = []
-        for q in results:
+        count = 0
+        for row in raw_queries:
+            query, count = row
             ret.append(
                 {
-                    "endpoint": q.model_provider_str,
-                    "query_body": q.query_body,
-                    "response_body": q.response_body,
-                    "at": q.at,
-                    "credits": q.credits,
-                    "status_code": q.status_code,
+                    "endpoint": query.model_provider_str,
+                    "query_body": query.query_body,
+                    "response_body": query.response_body,
+                    "at": query.at,
+                    "credits": query.credits,
+                    "status_code": query.status_code,
                 },
             )
-        return ret
+        return ret, count

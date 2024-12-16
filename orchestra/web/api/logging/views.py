@@ -125,7 +125,7 @@ def get_queries(
             detail=f"Page number: {page_number} must be at least 1.",
         )
     offset = (page_number - 1) * LIMIT
-    ret = query_dao.filter(
+    ret, count = query_dao.filter(
         user_id=request_fastapi.state.user_id,
         tags=tags,
         endpoint_ids=global_endpoint_ids,
@@ -137,8 +137,7 @@ def get_queries(
         offset=offset,
         status_code=200 if failures == False else (400 if failures == "only" else None),
     )
-    count = query_dao.get_num_queries(user_id=request_fastapi.state.user_id)
-    return {"queries": ret, "total_pages": math.ceil(count / 20)} if ret else ret
+    return {"queries": ret, "total_pages": math.ceil(count / LIMIT)} if ret else ret
 
 
 @router.post("/queries")
