@@ -81,7 +81,7 @@ supported_models = {
     "mixtral-8x22b-instruct-v0.1": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct",
         "context_window": 65536,
-        "cost": {"prompt": 0.9, "completion": 0.9},
+        "cost": {"prompt": 1.2, "completion": 1.2},
     },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct",
