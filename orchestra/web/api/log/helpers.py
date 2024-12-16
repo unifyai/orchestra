@@ -427,15 +427,17 @@ def build_filter(filter_dict, log_event_alias, session):
         if operand in ["in", "not in"]:
             if isinstance(rhs, dict) and rhs.get("type") == "identifier":
                 key = rhs["value"]
+                lhs_dict = isinstance(lhs, dict)
+                lhs_value = lhs["value"] if lhs_dict else lhs
                 log_alias = aliased(Log)
                 subq = select(log_alias.id).filter(
                     log_alias.log_event_id == log_event_alias.id,
                     log_alias.key == key,
                 )
                 if operand == "in":
-                    subq = subq.filter(log_alias.value.contains(lhs["value"]))
+                    subq = subq.filter(log_alias.value.contains(lhs_value))
                 elif operand == "not in":
-                    subq = subq.filter(~log_alias.value.contains(lhs["value"]))
+                    subq = subq.filter(~log_alias.value.contains(lhs_value))
 
                 return subq.exists()
 
