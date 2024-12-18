@@ -1,44 +1,38 @@
 import json
-import os
+import sys
+from datetime import datetime
 
 import requests
-from sqlalchemy import create_engine, delete, insert, select
+from sqlalchemy import create_engine, delete, insert
 
 from orchestra.db.models.orchestra_models import (
-    Dataset,
-    DatasetPrompt,
+    ApiKey,
+    AuthUser,
     Endpoint,
-    Evaluator,
     Modality,
     Model,
     Provider,
-    StoredPrompt,
     Task,
     Users,
 )
 
-tables = [
+data_tables = [
     ("modality", Modality),
     ("task", Task),
     ("model", Model),
     ("provider", Provider),
     ("endpoint", Endpoint),
 ]
-hermes_tables = [
+user_tables = [
+    ("auth_user", AuthUser),
+    ("api_key", ApiKey),
     ("users", Users),
-    ("dataset", Dataset),
-    ("stored_prompt", StoredPrompt),
-    ("dataset_prompt", DatasetPrompt),
-    # ("stored_prompt_response", StoredPromptResponse),
-    ("evaluator", Evaluator),
-    # ("judgement", Judgement),
-    # ("evaluation", Evaluation),
 ]
 
 
 def get_cloud_sql_data():
     data = {}
-    for table in tables + hermes_tables:
+    for table in data_tables:
         table_name = table[0]
         if table_name == "users":
             continue
@@ -48,40 +42,45 @@ def get_cloud_sql_data():
     return data
 
 
-def write_data_to_db(data, engine):
-    # add current and default users
-    user_id = os.environ.get("USER_ID")
+def write_data_to_db(data, engine, user_id, email_id, api_key):
+    data["auth_user"] = [
+        {
+            "id": user_id,
+            "email": email_id,
+            "name": "",
+            "last_name": "",
+            "job_title": "",
+            "tier": "developer",
+            "queries_enabled": True,
+            "evaluations_enabled": True,
+            "created_at": datetime.now(),
+            "image": "",
+        },
+    ]
+    data["api_key"] = [
+        {
+            "id": 1,
+            "name": "",
+            "user_id": user_id,
+            "key": api_key,
+            "created_at": datetime.now(),
+        },
+    ]
     data["users"] = [
         {
             "id": user_id,
-            "credits": 0,
+            "credits": 10,
             "stripe_customer_id": "",
             "autorecharge": False,
-            "autorecharge_threshold": 0,
-            "autorecharge_qty": 0,
-            "store_prompts": True,
-        },
-        {
-            "id": "clummoqze00002hdndizy7339",
-            "credits": 0,
-            "stripe_customer_id": "",
-            "autorecharge": False,
-            "autorecharge_threshold": 0,
+            "autorecharge_threshold": -1,
             "autorecharge_qty": 0,
             "store_prompts": True,
         },
     ]
-    data = {
-        table[0]: {"model": table[1], "rows": data[table[0]]}
-        for table in tables + hermes_tables
-    }
+    tables = data_tables + user_tables
+    data = {table[0]: {"model": table[1], "rows": data[table[0]]} for table in tables}
 
     with engine.connect() as conn:
-        # check if hermes already exists in the database
-        hermes = conn.execute(
-            select(Dataset).where(Dataset.name == "Open Hermes"),
-        ).fetchall()
-
         # delete the rows from the other tables
         for table in tables[::-1]:
             model = data[table[0]]["model"]
@@ -90,7 +89,7 @@ def write_data_to_db(data, engine):
             conn.commit()
 
         # add the data to the other tables
-        for table in tables + (hermes_tables if len(hermes) == 0 else []):
+        for table in tables:
             table_name = table[0]
             print(f"table_name {table_name}")
             model = data[table_name]["model"]
@@ -101,8 +100,9 @@ def write_data_to_db(data, engine):
 
 
 if __name__ == "__main__":
-    orchestra_db_host = os.environ.get("ORCHESTRA_DB_HOST")
+    user_id, email_id, api_key = sys.argv[1:]
+    orchestra_db_host = "localhost"
     database_url = f"postgresql://orchestra:orchestra@{orchestra_db_host}/orchestra"
     engine = create_engine(database_url)
     data = get_cloud_sql_data()
-    write_data_to_db(data, engine)
+    write_data_to_db(data, engine, user_id, email_id, api_key)
