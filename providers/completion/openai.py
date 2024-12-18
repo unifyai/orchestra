@@ -88,4 +88,9 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 3, "completion": 12},
     },
+    "o1": {
+        "endpoint": "o1",
+        "context_window": 200000,
+        "cost": {"prompt": 15, "completion": 60},
+    },
 }
