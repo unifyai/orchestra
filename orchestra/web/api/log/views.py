@@ -869,9 +869,21 @@ def get_log_columns(
 
     columns = dict()
     for log_dict in formatted_logs.values():
+        log = {
+            "entries": {
+                k: v
+                for k, v in log_dict["entries"].items()
+                if log_dict["versions"][k] is None
+            },
+            "params": {
+                k: str(log_dict["versions"][k])
+                for k, _ in log_dict["entries"].items()
+                if log_dict["versions"][k] is not None
+            },
+        }
         items = {
-            "entries": list(log_dict["entries"].items()),
-            "params": list(log_dict.get("params", {}).items()),
+            "entries": list(log["entries"].items()),
+            "params": list(log.get("params", {}).items()),
         }
         columns = {
             key: {item[0]: type(item[1]).__name__ for item in items[key]}
