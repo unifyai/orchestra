@@ -831,14 +831,14 @@ def get_log_groups(
 def get_log_columns(
     request_fastapi: Request,
     project: str = Query(
-        description="Name of the project to get entries from.",
+        description="Name of the project to get columns for.",
         example="eval-project",
     ),
     project_dao: ProjectDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
-    Returns a list of filtered entries from a project.
+    Returns a mapping of columns and their datatypes from a project.
     """
     try:
         user_id = request_fastapi.state.user_id
