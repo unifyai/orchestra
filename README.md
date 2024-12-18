@@ -100,9 +100,9 @@ alembic upgrade "head"
 ```
 
 In order to add your user information to the db, you need
-1. user_id: you can get your user id by making a request to the [/credits](https://docs.unify.ai/api-reference/credits/get_credits) endpoint (the "id" key in the response contains your user_id)
-2. api_key: you can get your api key through the console
-3. email_id: your email id used for logging in to this account
+1. `user_id`: you can get your user id by making a request to the [/credits](https://docs.unify.ai/api-reference/credits/get_credits) endpoint (the "id" key in the response contains your user_id)
+2. `api_key`: you can get your api key through the console
+3. `email_id`: your email id used for logging in to this account
 
 The basic data containing the models, providers and endpoints is stored in a GCP bucket that will be used by the script.
 Now, you should run the script:
