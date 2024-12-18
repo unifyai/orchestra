@@ -810,8 +810,10 @@ def get_log_groups(
             "content": {
                 "application/json": {
                     "example": {
-                        "col1": "string",
-                        "col2": "float",
+                        "entries": {
+                            "col1": "string",
+                            "col2": "float",
+                        },
                     },
                 },
             },
@@ -867,8 +869,12 @@ def get_log_columns(
 
     columns = dict()
     for log_dict in formatted_logs.values():
-        items = list(log_dict["entries"].items()) + list(
-            log_dict.get("params", {}).items(),
-        )
-        columns = {item[0]: type(item[1]).__name__ for item in items}
+        items = {
+            "entries": list(log_dict["entries"].items()),
+            "params": list(log_dict.get("params", {}).items()),
+        }
+        columns = {
+            key: {item[0]: type(item[1]).__name__ for item in items[key]}
+            for key in items
+        }
     return columns
