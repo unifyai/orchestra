@@ -93,32 +93,33 @@ If you already have a docker container running PSQL you won't need to create a n
 docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:15.2-bullseye
 ```
 
+Everytime you create a new container, you should run migrations:
+
+```bash
+alembic upgrade "head"
+```
+
+In order to add your user information to the db, you need
+1. user_id: you can get your user id by making a request to the [/credits](https://docs.unify.ai/api-reference/credits/get_credits) endpoint (the "id" key in the response contains your user_id)
+2. api_key: you can get your api key through the console
+3. email_id: your email id used for logging in to this account
+
+The basic data containing the models, providers and endpoints is stored in a GCP bucket that will be used by the script.
+Now, you should run the script:
+
+```bash
+python add_latest_endpoint_data.py <user_id> <email_id> <api_key>
+```
+
+which should populate the tables with the necessary data to get started.
+
 Now, connect to the PSQL database (password=`orchestra`):
 
 ```bash
 psql -h localhost -U orchestra -d orchestra
 ```
 
-Now you will need to download a dump from the real DB to populate the data. You can get it from [here](https://console.cloud.google.com/storage/browser/_details/temp_file_holder/orchestra.dump.latest.sql).
-
-To develop locally with this dump, you will need to use the following:
-
-- `API_KEY`: `dev-api-key`
-- `user_id`: `dev-user-id`
-
-In the PSQL console, run:
-
-```bash
-\i orchestra.dump.latest.sql
-```
-
-This will populate your local database with the entries from the dump. however, the database might not be completely up to date, so you will most likely need to run (in the poetry environment):
-
-```bash
-alembic upgrade "head"
-```
-
-Your DB should now be fully functional! The psql console has most likely kicked you out when loading the dump, so to connect to the database again, run `\c orchestra`. Now, you should be able to see all the tables (e.g. `\dt`).
+Your DB should now be fully functional! Now, you should be able to see all the tables (e.g. `\dt`).
 
 To run the service, you can do `poetry run python -m orchestra` but you won't be able to debug the service.
 
