@@ -1,4 +1,4 @@
-name: Upload Data for On-Prem
+name: Upload Latest Endpoint Data
 
 on:
   schedule:
@@ -9,7 +9,7 @@ on:
     - main
 
 jobs:
-  upload_data_for_on_prem:
+  upload_latest_endpoint_data:
     name: Upload Data for On-Prem
     runs-on: ubuntu-latest
 
