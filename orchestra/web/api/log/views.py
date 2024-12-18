@@ -6,7 +6,7 @@ import json
 from typing import Any, Dict, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from sqlalchemy import INTEGER, Float, case, cast, func, select
+from sqlalchemy import INTEGER, Float, case, cast, desc, func, select
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 
 from orchestra.db.dao.log_dao import LogDAO, OverwriteError
@@ -800,3 +800,75 @@ def get_log_groups(
         len(v) == 1 for v in groups.values()
     ), "All sets should contain a single unique value"
     return {k: json.loads(next(iter(v))) for k, v in groups.items()}
+
+
+@router.get(
+    "/logs/columns",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "col1": "string",
+                        "col2": "float",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <project> not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def get_log_columns(
+    request_fastapi: Request,
+    project: str = Query(
+        description="Name of the project to get entries from.",
+        example="eval-project",
+    ),
+    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
+):
+    """
+    Returns a list of filtered entries from a project.
+    """
+    try:
+        user_id = request_fastapi.state.user_id
+        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
+    except IndexError:
+        raise not_found(f"Project {project}")
+
+    query = session.query(LogEvent.id).where(LogEvent.project_id == project_obj.id)
+    query = query.order_by(desc(LogEvent.created_at))
+    query = query.limit(1)
+
+    relevant_logs = query.subquery()
+
+    query = (
+        session.query(Log, LogEvent.created_at.label("log_event_ts"))
+        .join(
+            LogEvent,
+            LogEvent.id == Log.log_event_id,
+        )
+        .where(Log.log_event_id.in_(select(relevant_logs)))
+        .order_by(Log.created_at)
+    )
+
+    all_logs = query.all()
+    formatted_logs = format_logs(all_logs)
+
+    columns = dict()
+    for log_dict in formatted_logs.values():
+        items = list(log_dict["entries"].items()) + list(
+            log_dict.get("params", {}).items(),
+        )
+        columns = {item[0]: type(item[1]).__name__ for item in items}
+    return columns
