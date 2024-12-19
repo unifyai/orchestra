@@ -545,7 +545,9 @@ reduction_methods = {
 
 def format_logs(all_logs):
     formatted_entries = dict()
+    count = 0
     for log in all_logs:
+        count = log[-1]
         log_event_id = log[0].log_event_id
         if log_event_id not in formatted_entries:
             formatted_entries[log_event_id] = {"entries": {}, "versions": {}}
@@ -557,4 +559,4 @@ def format_logs(all_logs):
             log[0].value,
         )
         formatted_entries[log_event_id]["versions"][log[0].key] = log[0].version
-    return formatted_entries
+    return formatted_entries, count

@@ -489,24 +489,30 @@ def get_log(
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": [
-                        {
-                            "id": "0",
-                            "ts": "2024-10-30 12:20:03",
-                            "entries": {
-                                "key1": "a",
-                                "key2": 1.0,
+                    "example": {
+                        "params": {},
+                        "logs": [
+                            {
+                                "id": "0",
+                                "ts": "2024-10-30 12:20:03",
+                                "entries": {
+                                    "key1": "a",
+                                    "key2": 1.0,
+                                },
+                                "params": {},
                             },
-                        },
-                        {
-                            "id": "1",
-                            "ts": "2024-10-30 12:22:14",
-                            "entries": {
-                                "key1": "b",
-                                "key2": 2.0,
+                            {
+                                "id": "1",
+                                "ts": "2024-10-30 12:22:14",
+                                "entries": {
+                                    "key1": "b",
+                                    "key2": 2.0,
+                                },
+                                "params": {},
                             },
-                        },
-                    ],
+                        ],
+                        "count": 2,
+                    },
                 },
             },
         },
@@ -548,7 +554,10 @@ def get_logs(
         raise not_found(f"Project {project}")
     # TODO: Deal with organisation IDs
 
-    query = session.query(LogEvent.id).where(LogEvent.project_id == project_obj.id)
+    query = session.query(
+        LogEvent.id,
+        func.count(LogEvent.id).over().label("count"),
+    ).where(LogEvent.project_id == project_obj.id)
     query = query.order_by(LogEvent.created_at)
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
@@ -564,17 +573,25 @@ def get_logs(
     relevant_logs = query.subquery()
 
     query = (
-        session.query(Log, LogEvent.created_at.label("log_event_ts"))
+        session.query(
+            Log,
+            LogEvent.created_at.label("log_event_ts"),
+            relevant_logs.c.count,
+        )
         .join(
             LogEvent,
             LogEvent.id == Log.log_event_id,
         )
-        .where(Log.log_event_id.in_(select(relevant_logs)))
+        .join(
+            relevant_logs,
+            relevant_logs.c.id == LogEvent.id,
+        )
+        .where(Log.log_event_id.in_(select(relevant_logs.c.id)))
         .order_by(Log.created_at)
     )
 
     all_logs = query.all()
-    formatted_logs = format_logs(all_logs)
+    formatted_logs, count = format_logs(all_logs)
 
     params = dict()
     logs = []
@@ -606,6 +623,7 @@ def get_logs(
     return {
         "params": params,
         "logs": logs,
+        "count": count,
     }
 
 
