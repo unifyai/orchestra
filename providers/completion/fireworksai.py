@@ -33,15 +33,10 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.9, "completion": 0.9},
     },
-    "llama-3.2-1b-chat": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3p2-1b-instruct",
-        "context_window": 131072,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
     "llama-3.2-3b-chat": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3p2-3b-instruct",
         "context_window": 131072,
-        "cost": {"prompt": 0.2, "completion": 0.2},
+        "cost": {"prompt": 0.1, "completion": 0.1},
     },
     "llama-3.2-11b-chat": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct",

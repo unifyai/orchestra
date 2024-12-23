@@ -66,7 +66,7 @@ supported_models = {
     "llama-3.1-nemotron-70b-chat": {
         "endpoint": "deepinfra/nvidia/Llama-3.1-Nemotron-70B-Instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.35, "completion": 0.40},
+        "cost": {"prompt": 0.23, "completion": 0.40},
     },
     "llama-3.1-405b-chat": {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3.1-405B-Instruct",
@@ -116,7 +116,7 @@ supported_models = {
     "qwen-qwq-32b-preview": {
         "endpoint": "deepinfra/Qwen/QwQ-32B-Preview",
         "context_window": 32768,
-        "cost": {"prompt": 0.15, "completion": 0.6},
+        "cost": {"prompt": 0.12, "completion": 0.18},
     },
     "qwen-2.5-72b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-72B-Instruct",
