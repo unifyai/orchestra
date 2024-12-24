@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import pytest
@@ -59,32 +59,45 @@ log_data = {
             "temperature": 100.0,
             "state": "liquid->gas",
             "safe": False,
+            "timestamp": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
         },
         {
             "description": "freezing water",
             "temperature": 0.0,
             "state": "liquid->solid",
             "safe": True,
+            "timestamp": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
         },
         {
             "description": "surface of the sun",
             "temperature": 6000.0,
             "state": "gas",
             "safe": False,
+            "timestamp": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
         },
         {
             "description": "freezing nitrogen",
             "temperature": -210.0,
             "state": "liquid->solid",
             "safe": False,
+            "timestamp": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
         },
-        {"description": "lava", "metadata": [1, 5, 6], "_data": {1: 2, 3: 4}},
+        {
+            "description": "lava",
+            "metadata": [1, 5, 6],
+            "_data": {1: 2, 3: 4},
+            "timestamp": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+        },
         {
             "description": "air",
             "metadata": [3, 8, 5],
             "_data": {5: 6, 3: 12, 7: 8, 4: 11},
+            "timestamp": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
         },
-        {"_data": {7: 8, 9: 10}},
+        {
+            "_data": {7: 8, 9: 10},
+            "timestamp": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+        },
     ],
 }
 
@@ -506,7 +519,7 @@ async def test_get_logs_latest_timestamp(client: AsyncClient):
     assert response.status_code == 200, response.json()
     response = response.json()
     assert isinstance(response, str)
-    t1 = datetime.fromisoformat(response)
+    t1 = datetime.fromisoformat(response).astimezone(timezone.utc)
     assert t1 > t0
 
     # add new entries
@@ -526,7 +539,7 @@ async def test_get_logs_latest_timestamp(client: AsyncClient):
     assert response.status_code == 200, response.json()
     response = response.json()
     assert isinstance(response, str)
-    t2 = datetime.fromisoformat(response)
+    t2 = datetime.fromisoformat(response).astimezone(timezone.utc)
     assert t2 > t1
 
 
