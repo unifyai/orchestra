@@ -88,10 +88,10 @@ INSERT INTO benchmark_region VALUES('Belgium');
 INSERT INTO benchmark_seq_len VALUES('short');
 
 INSERT INTO benchmark_run VALUES(3, 7, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(4, 8, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(5, 9, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(8, 10, 'concurrent-1', 'Belgium', 'short', now());
-INSERT INTO benchmark_run VALUES(9, 11, 'concurrent-1', 'Belgium', 'short', now());
+INSERT INTO benchmark_run VALUES(4, 10, 'concurrent-1', 'Belgium', 'short', now());
+INSERT INTO benchmark_run VALUES(5, 11, 'concurrent-1', 'Belgium', 'short', now());
+INSERT INTO benchmark_run VALUES(8, 15, 'concurrent-1', 'Belgium', 'short', now());
+INSERT INTO benchmark_run VALUES(9, 16, 'concurrent-1', 'Belgium', 'short', now());
 
 
 -- Metrics
