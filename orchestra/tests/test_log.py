@@ -488,6 +488,29 @@ async def test_get_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_log_ids(client: AsyncClient):
+    project_name = "eval-project"
+    # create the same project with another user to ensure the correct one
+    # is fetched
+    _ = await _create_project(client, project_name, user=2)
+    _ = await _create_project(client, project_name, user=1)
+    _ = await _create_logs_for_filtering_n_metrics(client, project_name, user=1)
+
+    # fetch entries for the project
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"return_ids_only": True},
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    assert isinstance(response, list)
+    assert len(response) == 7
+    assert response == list(range(1, 8))
+
+
+@pytest.mark.anyio
 async def test_get_empty_logs(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
