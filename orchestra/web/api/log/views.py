@@ -532,6 +532,7 @@ def get_logs(
     ),
     limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    return_ids_only: bool = False,
     project_dao: ProjectDAO = Depends(),
     session=Depends(get_db_session),
 ):
@@ -582,6 +583,9 @@ def get_logs(
     )
 
     all_logs = query.all()
+    if return_ids_only:
+        return list(set([log[0].log_event_id for log in all_logs]))
+
     formatted_logs, count = format_logs(all_logs)
 
     params = dict()
