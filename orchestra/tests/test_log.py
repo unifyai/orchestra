@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime, timezone
 from typing import List, Optional
 
 import pytest
@@ -486,6 +487,47 @@ async def test_get_logs(client: AsyncClient):
     assert response.status_code == 200, response.json()
     assert isinstance(response.json()["logs"], list)
     assert len(response.json()["logs"]) == 0
+
+
+@pytest.mark.anyio
+async def test_get_logs_latest_timestamp(client: AsyncClient):
+
+    # create logs
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name, user=1)
+    t0 = datetime.now(timezone.utc)
+    _ = await _create_logs_for_filtering_n_metrics(client, project_name, user=1)
+
+    # assert the latest timestamp t1 is more recent than t0
+    response = await client.get(
+        f"/v0/logs/latest_timestamp?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    assert isinstance(response, str)
+    t1 = datetime.fromisoformat(response)
+    assert t1 > t0
+
+    # add new entries
+    entries = {
+        "new_entry": "Updated value",
+        "explicit_types": {"new_entry": "string"},
+    }
+    response = await _update_logs(client, [1, 2], entries)
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs updated successfully!"
+
+    # assert the latest timestamp t2 is more recent than t1
+    response = await client.get(
+        f"/v0/logs/latest_timestamp?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    assert isinstance(response, str)
+    t2 = datetime.fromisoformat(response)
+    assert t2 > t1
 
 
 @pytest.mark.anyio

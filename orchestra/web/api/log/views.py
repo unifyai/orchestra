@@ -632,6 +632,118 @@ def get_logs(
 
 
 @router.get(
+    "/logs/latest_timestamp",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "params": {},
+                        "logs": [
+                            {
+                                "id": "0",
+                                "ts": "2024-10-30 12:20:03",
+                                "entries": {
+                                    "key1": "a",
+                                    "key2": 1.0,
+                                },
+                                "params": {},
+                            },
+                            {
+                                "id": "1",
+                                "ts": "2024-10-30 12:22:14",
+                                "entries": {
+                                    "key1": "b",
+                                    "key2": 2.0,
+                                },
+                                "params": {},
+                            },
+                        ],
+                        "count": 2,
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <project> not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def get_logs_latest_timestamp(
+    request_fastapi: Request,
+    project: str = Query(
+        description="Name of the project to get entries from.",
+        example="eval-project",
+    ),
+    filter_expr: Optional[str] = Query(
+        None,
+        description="Boolean string to filter entries. TODO: Detailed page.",
+        example="len(output) > 200 and temperature == 0.5",
+    ),
+    limit: Optional[int] = Query(None, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
+):
+    """
+    Returns the update timestamp of the most recently updated log within the specified
+    page and filter bounds.
+    """
+    try:
+        user_id = request_fastapi.state.user_id
+        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
+    except IndexError:
+        raise not_found(f"Project {project}")
+    # TODO: Deal with organisation IDs
+
+    query = session.query(
+        LogEvent.id,
+        func.count(LogEvent.id).over().label("count"),
+    ).where(LogEvent.project_id == project_obj.id)
+    query = query.order_by(LogEvent.created_at)
+    if filter_expr:
+        filter_dict = str_filter_exp_to_dict(filter_expr)
+        if filter_dict:
+            condition = build_filter(filter_dict, LogEvent, session)
+            query = query.filter(condition)
+
+    if limit:
+        query = query.limit(limit)
+    if offset:
+        query = query.offset(offset)
+
+    relevant_logs = query.subquery()
+
+    query = (
+        session.query(
+            Log,
+            LogEvent.created_at.label("log_event_ts"),
+            relevant_logs.c.count,
+        )
+        .join(
+            LogEvent,
+            LogEvent.id == Log.log_event_id,
+        )
+        .join(
+            relevant_logs,
+            relevant_logs.c.id == LogEvent.id,
+        )
+        .where(Log.log_event_id.in_(select(relevant_logs.c.id)))
+        .order_by(Log.updated_at)
+    )
+    all_logs = query.all()
+    return all_logs[-1][0].updated_at.isoformat()
+
+
+@router.get(
     "/logs/metric/{metric}/{key}",
     responses={
         200: {
