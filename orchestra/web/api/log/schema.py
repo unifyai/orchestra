@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, List, Union
 
 from pydantic import BaseModel, Field
 
@@ -47,9 +47,9 @@ class UpdateLogRequest(BaseModel):
         example=[123, 456, 789],
         min_items=1,
     )
-    params: Dict[str, Any] = Field(
+    params: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(
         default=dict(),
-        description="Dictionary of key-value parameter pairs to add or update in the logs.",
+        description="Dictionary or list of dictionaries of key-value parameter pairs to add or update in the logs.",
         json_schema_extra={
             "example": {
                 "system-prompt": "...",
@@ -58,9 +58,9 @@ class UpdateLogRequest(BaseModel):
             },
         },
     )
-    entries: dict = Field(
+    entries: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(
         default=dict(),
-        description="Dictionary of key-value entry pairs to add or update in the logs.",
+        description="Dictionary or list of dictionaries of key-value entry pairs to add or update in the logs.",
         json_schema_extra={
             "example": {
                 "input": "...",
