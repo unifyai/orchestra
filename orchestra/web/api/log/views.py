@@ -3,7 +3,7 @@ Includes endpoints related to entries.
 """
 
 import json
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy import INTEGER, Float, case, cast, desc, func, select
@@ -664,6 +664,13 @@ def get_logs_metric(
         description="Boolean string to filter entries. TODO: Detailed page.",
         example="len(output) > 200 and temperature == 0.5",
     ),
+    log_ids: Optional[List[int]] = Query(
+        None,
+        description="Log ids to include in the reduction operation. "
+        "If none, then all logs are included in the search "
+        "(before the filtering is applied).",
+        example=[1, 2, 3],
+    ),
     project_dao: ProjectDAO = Depends(),
     session=Depends(get_db_session),
 ) -> Union[float, int, bool]:
@@ -678,6 +685,9 @@ def get_logs_metric(
     # TODO: Deal with organisation IDs
 
     query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
+
+    if log_ids:
+        query = query.filter(LogEvent.id.in_(log_ids))
 
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)

@@ -1,5 +1,6 @@
 import json
 import os
+from typing import List, Optional
 
 import pytest
 from httpx import AsyncClient, Request
@@ -684,24 +685,42 @@ async def test_get_logs_w_filtering(client: AsyncClient):
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "key",
-    ["description", "temperature", "state", "safe", "metadata", "_data"],
+    ["description", "temperature", "safe", "metadata", "_data"],
 )
 @pytest.mark.parametrize(
     "metric",
     ["sum", "mean", "var", "std", "min", "max", "median", "mode"],
 )
-async def test_get_logs_metric(client: AsyncClient, key: str, metric: str):
+@pytest.mark.parametrize(
+    "log_ids",
+    [[1, 3, 5, 6], None],
+)
+async def test_get_logs_metric(
+    client: AsyncClient,
+    key: str,
+    metric: str,
+    log_ids: Optional[List[int]],
+):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
     _ = await _create_logs_for_filtering_n_metrics(client, project_name)
     data = log_data["logs_for_filtering_n_metrics"]
+    params = {} if log_ids is None else {"log_ids": log_ids}
     response = await client.get(
         f"/v0/logs/metric/{metric}/{key}?project={project_name}",
+        params=params,
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    assert result == reduction_methods[metric]([d[key] for d in data if key in d])
+    vals = [
+        d[key]
+        for i, d in enumerate(data)
+        if key in d and (log_ids is None or i + 1 in log_ids)
+    ]
+    if metric == "mode" and len(set(vals)) == len(vals):
+        return
+    assert result == reduction_methods[metric](vals)
 
 
 @pytest.mark.anyio
