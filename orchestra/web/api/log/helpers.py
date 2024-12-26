@@ -1,9 +1,9 @@
 import json
 import re
 import statistics
+from datetime import datetime
 from typing import Any, List, Union
 
-from clickhouse_connect.driverc.dataconv import datetime
 from sqlalchemy import JSON, Boolean, Float, String, case, cast, func, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
