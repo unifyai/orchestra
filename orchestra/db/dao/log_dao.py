@@ -14,6 +14,7 @@ class OverwriteError(Exception):
     pass
 
 
+# noinspection PyBroadException
 class LogDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
@@ -47,6 +48,16 @@ class LogDAO:
         self.session.commit()
         return new_log.id
 
+    @staticmethod
+    def infer_type(raw_v):
+        if isinstance(raw_v, str):
+            try:
+                datetime.fromisoformat(raw_v)
+                return "timestamp"
+            except:
+                return "str"
+        return type(raw_v).__name__
+
     def create_from_raw_k_v(
         self,
         project_id: int,
@@ -66,7 +77,7 @@ class LogDAO:
             key=raw_k,
             value=json_v,
             version=version,
-            inferred_type=explicit_types.get(raw_k, type(raw_v).__name__),
+            inferred_type=explicit_types.get(raw_k, self.infer_type(raw_v)),
         )
 
     def filter(
