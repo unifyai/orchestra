@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime, timezone
 from typing import List, Optional
 
 import pytest
@@ -58,32 +59,45 @@ log_data = {
             "temperature": 100.0,
             "state": "liquid->gas",
             "safe": False,
+            "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
         },
         {
             "description": "freezing water",
             "temperature": 0.0,
             "state": "liquid->solid",
             "safe": True,
+            "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
         },
         {
             "description": "surface of the sun",
             "temperature": 6000.0,
             "state": "gas",
             "safe": False,
+            "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
         },
         {
             "description": "freezing nitrogen",
             "temperature": -210.0,
             "state": "liquid->solid",
             "safe": False,
+            "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
         },
-        {"description": "lava", "metadata": [1, 5, 6], "_data": {1: 2, 3: 4}},
+        {
+            "description": "lava",
+            "metadata": [1, 5, 6],
+            "_data": {"a": 2, "b": 4},
+            "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+        },
         {
             "description": "air",
             "metadata": [3, 8, 5],
-            "_data": {5: 6, 3: 12, 7: 8, 4: 11},
+            "_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+            "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
         },
-        {"_data": {7: 8, 9: 10}},
+        {
+            "_data": {"a": 8, "b": 10},
+            "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+        },
     ],
 }
 
@@ -489,6 +503,47 @@ async def test_get_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_logs_latest_timestamp(client: AsyncClient):
+
+    # create logs
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name, user=1)
+    t0 = datetime.now(timezone.utc)
+    _ = await _create_logs_for_filtering_n_metrics(client, project_name, user=1)
+
+    # assert the latest timestamp t1 is more recent than t0
+    response = await client.get(
+        f"/v0/logs/latest_timestamp?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    assert isinstance(response, str)
+    t1 = datetime.fromisoformat(response).astimezone(timezone.utc)
+    assert t1 > t0
+
+    # add new entries
+    entries = {
+        "new_entry": "Updated value",
+        "explicit_types": {"new_entry": "string"},
+    }
+    response = await _update_logs(client, [1, 2], entries)
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs updated successfully!"
+
+    # assert the latest timestamp t2 is more recent than t1
+    response = await client.get(
+        f"/v0/logs/latest_timestamp?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    assert isinstance(response, str)
+    t2 = datetime.fromisoformat(response).astimezone(timezone.utc)
+    assert t2 > t1
+
+
+@pytest.mark.anyio
 async def test_get_log_ids(client: AsyncClient):
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
@@ -546,13 +601,99 @@ async def test_get_logs_w_filtering(client: AsyncClient):
         "temperature": 100.0,
         "state": "liquid->gas",
         "safe": False,
+        "timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
     }
     assert result["logs"][1]["entries"] == {
         "description": "surface of the sun",
         "temperature": 6000.0,
         "state": "gas",
         "safe": False,
+        "timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
     }
+
+    # timestamp later than 23/03/1993
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": 'timestamp > "1993-03-23"'},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 3
+    assert result["logs"][0]["entries"] == {
+        "description": "lava",
+        "metadata": [1, 5, 6],
+        "_data": {"a": 2, "b": 4},
+        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][1]["entries"] == {
+        "description": "air",
+        "metadata": [3, 8, 5],
+        "_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][2]["entries"] == {
+        "_data": {"a": 8, "b": 10},
+        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+
+    # timestamp earlier than 23/03/1993
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": 'timestamp < "1993-03-23"'},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 4
+    assert result["logs"][0]["entries"] == {
+        "description": "boiling water",
+        "temperature": 100.0,
+        "state": "liquid->gas",
+        "safe": False,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][1]["entries"] == {
+        "description": "freezing water",
+        "temperature": 0.0,
+        "state": "liquid->solid",
+        "safe": True,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][2]["entries"] == {
+        "description": "surface of the sun",
+        "temperature": 6000.0,
+        "state": "gas",
+        "safe": False,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][3]["entries"] == {
+        "description": "freezing nitrogen",
+        "temperature": -210.0,
+        "state": "liquid->solid",
+        "safe": False,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+
+    # timestamp is 23/03/1993
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": 'timestamp == "1993-03-23"'},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 0
+
+    # is earlier than or later than 23/03/1993
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": 'timestamp < "1993-03-23" or timestamp > "1993-03-23"'},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 7
 
     # safe is True
     response = await client.get(
@@ -568,6 +709,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
         "temperature": 0.0,
         "state": "liquid->solid",
         "safe": True,
+        "timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
     }
 
     # liquid not in state
@@ -584,6 +726,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
         "temperature": 6000.0,
         "state": "gas",
         "safe": False,
+        "timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
     }
 
     response = await client.get(
@@ -610,12 +753,14 @@ async def test_get_logs_w_filtering(client: AsyncClient):
         "temperature": 0.0,
         "state": "liquid->solid",
         "safe": True,
+        "timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
     }
     assert result["logs"][1]["entries"] == {
         "description": "surface of the sun",
         "temperature": 6000.0,
         "state": "gas",
         "safe": False,
+        "timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
     }
 
     # check exists
@@ -660,7 +805,6 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     assert result["logs"][0]["entries"]["description"] == "air"
 
     # check in
-
     response = await client.get(
         f"/v0/logs?project={project_name}",
         params={"filter_expr": "'lava' in description"},
