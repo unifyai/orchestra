@@ -3,6 +3,7 @@ import re
 import statistics
 from typing import Any, List, Union
 
+from clickhouse_connect.driverc.dataconv import datetime
 from sqlalchemy import JSON, Boolean, Float, String, case, cast, func, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
@@ -86,10 +87,15 @@ def _tokenize(s):
             value = float(value) if "." in value else int(value)
             tokens.append(("NUMBER", value))
         elif kind == "STRING":
-            # Remove the surrounding quotes and unescape
-            value = value[1:-1]
-            value = bytes(value, "utf-8").decode("unicode_escape")
-            tokens.append(("STRING", value))
+            # check if is datetime
+            try:
+                timestamp = datetime.fromisoformat(value).timestamp()
+                tokens.append(("NUMBER", timestamp))
+            except:
+                # Remove the surrounding quotes and unescape
+                value = value[1:-1]
+                value = bytes(value, "utf-8").decode("unicode_escape")
+                tokens.append(("STRING", value))
         elif kind == "BOOLEAN":
             value = True if value == "True" else False
             tokens.append(("BOOLEAN", value))

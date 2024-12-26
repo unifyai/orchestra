@@ -26,10 +26,12 @@ class LogDAO:
         value: Optional[str] = None,  # JSON serialised
         version: Optional[int] = None,
         inferred_type: Optional[str] = None,
-    ) -> Optional[str]:
+    ) -> int:
 
         if version and not self.correct_key_version(project_id, key, version, value):
             raise ValueError
+
+        ts = datetime.now(timezone.utc)
 
         new_log = Log(
             log_event_id=log_event_id,
@@ -37,7 +39,8 @@ class LogDAO:
             value=value,
             version=version,
             inferred_type=inferred_type,
-            created_at=datetime.now(timezone.utc),
+            created_at=ts,
+            updated_at=ts,
         )
 
         self.session.add(new_log)
