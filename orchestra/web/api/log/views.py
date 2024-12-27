@@ -530,6 +530,14 @@ def get_logs(
         description="Boolean string to filter entries. TODO: Detailed page.",
         example="len(output) > 200 and temperature == 0.5",
     ),
+    sorting: Optional[str] = Query(
+        None,
+        description="Dict with fields as keys and either 'ascending' or 'descending' "
+        "as values. The first entry in the dict is the last field to be "
+        "sorted by, which takes ultimate precedent, with other keys only "
+        "remaining in order when the first key values are equal.",
+        example={"score": "ascending", "timestamp": "descending"},
+    ),
     limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
     return_ids_only: bool = False,
@@ -556,6 +564,11 @@ def get_logs(
         if filter_dict:
             condition = build_filter(filter_dict, LogEvent, session)
             query = query.filter(condition)
+
+    if sorting:
+        for k, sort_mode in reversed(json.loads(sorting).items()):
+            breakpoint()
+            query = query.order_by(Log.value)
 
     if limit:
         query = query.limit(limit)
