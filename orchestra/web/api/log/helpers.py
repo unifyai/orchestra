@@ -55,7 +55,7 @@ def parse_nested(s, pos):
 
 def _tokenize(s):
     token_specification = [
-        ("NUMBER", r"-?(\d+(\.\d*)?|\.\d+)"),  # Integer or decimal number
+        ("NUMBER", r"-?(\d+(\.\d*)?|\.\d+)"),  # Integer or decimal number, +ve or -ve
         # Updated STRING regex to handle nested quotation marks and escaped quotes correctly
         (
             "STRING",
