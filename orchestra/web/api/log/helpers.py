@@ -55,7 +55,7 @@ def parse_nested(s, pos):
 
 def _tokenize(s):
     token_specification = [
-        ("NUMBER", r"\d+(\.\d*)?|\.\d+"),  # Integer or decimal number
+        ("NUMBER", r"-?(\d+(\.\d*)?|\.\d+)"),  # Integer or decimal number
         # Updated STRING regex to handle nested quotation marks and escaped quotes correctly
         (
             "STRING",
@@ -122,6 +122,7 @@ def _tokenize(s):
         elif kind == "SKIP":
             pass  # Ignore whitespace
         elif kind == "MISMATCH":
+            breakpoint()
             raise RuntimeError(f"Unexpected character {value!r} at position {pos}")
         pos = mo.end()
         mo = get_token(line, pos)
