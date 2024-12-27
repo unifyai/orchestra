@@ -122,7 +122,6 @@ def _tokenize(s):
         elif kind == "SKIP":
             pass  # Ignore whitespace
         elif kind == "MISMATCH":
-            breakpoint()
             raise RuntimeError(f"Unexpected character {value!r} at position {pos}")
         pos = mo.end()
         mo = get_token(line, pos)
