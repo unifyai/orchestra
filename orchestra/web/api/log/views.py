@@ -358,6 +358,12 @@ def update_logs(
 def delete_log_fields(
     request_fastapi: Request,
     body: DeleteLogEntryRequest,
+    delete_empty_logs: bool = Query(
+        default=False,
+        description="Whether to delete logs which end up being empty as a result of "
+                    "the field deletion.",
+        example=True,
+    ),
     log_event_dao: LogEventDAO = Depends(),
     log_dao: LogDAO = Depends(),
 ):
@@ -388,6 +394,9 @@ def delete_log_fields(
 
             # Delete the log entry
             log_dao.delete(id=log[0][0].id)
+
+        if delete_empty_logs and not log_dao.filter(log_event_id=log_id):
+            log_event_dao.delete(id=log_id)
 
     # Handle cases where some logs or entries were not found
     if not_found_logs:
