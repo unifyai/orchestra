@@ -937,8 +937,9 @@ def get_log_groups(
     return {k: json.loads(next(iter(v))) for k, v in groups.items()}
 
 
+
 @router.get(
-    "/logs/columns",
+    "/logs/fields",
     responses={
         200: {
             "description": "Successful Response",
@@ -965,17 +966,17 @@ def get_log_groups(
         },
     },
 )
-def get_log_columns(
+def get_log_fields(
     request_fastapi: Request,
     project: str = Query(
-        description="Name of the project to get columns for.",
+        description="Name of the project to get fields for.",
         example="eval-project",
     ),
     project_dao: ProjectDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
-    Returns a mapping of columns and their datatypes from a project.
+    Returns a mapping of fields and their datatypes from a project.
     """
     try:
         user_id = request_fastapi.state.user_id
@@ -1002,7 +1003,7 @@ def get_log_columns(
     all_logs = query.all()
     formatted_logs, _ = format_logs(all_logs)
 
-    columns = dict()
+    fields = dict()
     for log_dict in formatted_logs.values():
         log = {
             "entries": {
@@ -1020,8 +1021,8 @@ def get_log_columns(
             "entries": list(log["entries"].items()),
             "params": list(log.get("params", {}).items()),
         }
-        columns = {
+        fields = {
             key: {item[0]: type(item[1]).__name__ for item in items[key]}
             for key in items
         }
-    return columns
+    return fields
