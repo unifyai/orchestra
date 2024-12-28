@@ -3,10 +3,11 @@ import os
 from datetime import datetime, timezone
 from typing import List, Optional
 
+import numpy as np
 import pytest
 from httpx import AsyncClient, Request
 
-from ..web.api.log.helpers import reduction_methods
+from ..web.api.log.helpers import _is_all_unique, reduction_methods
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 api_key_second_user = "2nd_api_key"
@@ -880,9 +881,11 @@ async def test_get_logs_metric(
         for i, d in enumerate(data)
         if key in d and (log_ids is None or i + 1 in log_ids)
     ]
-    if metric == "mode" and len(set(vals)) == len(vals):
+    if metric == "mode" and _is_all_unique(vals):
+        # early return to avoid computing 'mode' which is order-dependent
+        # in case of unique entries.
         return
-    assert result == reduction_methods[metric](vals)
+    assert np.isclose(result, reduction_methods[metric](vals), atol=1e-6)
 
 
 @pytest.mark.anyio
