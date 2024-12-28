@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -85,8 +85,13 @@ class DeleteLogsRequest(BaseModel):
 
 
 class DeleteLogEntryRequest(BaseModel):
-    ids: list[int] = Field(
-        description="List of log IDs to delete the entry from.",
-        example=[123, 456, 789],
+    fields: List[Tuple[Union[int, List[int]], Union[str, List[str]]]] = Field(
+        description="List of lists of log ID(s) and field(s) to delete, "
+                    "either as an individual item or a list of items.",
+        example=[
+            (123, "score"),
+            ([456, 457], ["score", "response"]),
+            ([458, 459, 460], "response")
+        ],
         min_items=1,
     )
