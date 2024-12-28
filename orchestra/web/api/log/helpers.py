@@ -486,6 +486,18 @@ def _is_type_for_len(v: Any) -> bool:
     )
 
 
+def _is_all_unique(vals):
+    """
+    Check if all entries in vals are unique. Works even for unhashable types like lists or dicts.
+    """
+    seen = []
+    for val in vals:
+        if val in seen:
+            return False
+        seen.append(val)
+    return True
+
+
 def _preprocess(
     values: List[Union[int, float, bool, str]],
 ) -> List[Union[int, float, bool]]:
@@ -531,8 +543,7 @@ def _median(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
 
 
 def _mode(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
-    values = _preprocess(values)[::-1]
-    # reverse to make consistent with sql mode
+    values = _preprocess(values)
     return statistics.mode(values)
 
 
