@@ -19,7 +19,7 @@ async def test_logging_queries(client: AsyncClient):
     endpoint = "/v0/queries"
     response = await client.get(endpoint, headers=HEADERS)
     assert response.status_code == 200, response.json()
-    assert len(response.json()) == 1, response.json()
+    assert len(response.json()) == 2, response.json()
 
 
 async def test_logging_failed_queries(client: AsyncClient):
@@ -32,7 +32,7 @@ async def test_logging_failed_queries(client: AsyncClient):
     endpoint = "/v0/queries"
     response = await client.get(endpoint, headers=HEADERS, params={"failures": "only"})
     assert response.status_code == 200, response.json()
-    assert len(response.json()) == 1, response.json()
+    assert len(response.json()) == 2, response.json()
 
 
 async def test_logging_queries_NO_LOG(client: AsyncClient):
@@ -48,9 +48,9 @@ async def test_logging_queries_NO_LOG(client: AsyncClient):
     response = await client.get(endpoint, headers=HEADERS)
     assert response.status_code == 200, response.json()
     resp_json = response.json()
-    assert len(resp_json) == 1
-    assert resp_json[0]["query_body"] == ""
-    assert resp_json[0]["response_body"] == ""
+    assert len(resp_json) == 2
+    assert resp_json["queries"][0]["query_body"] == ""
+    assert resp_json["queries"][0]["response_body"] == ""
 
 
 async def test_queries_filter_endpoint(client: AsyncClient):
@@ -63,7 +63,7 @@ async def test_queries_filter_endpoint(client: AsyncClient):
     data = {"endpoints": ["llama-3-8b-chat@aws-bedrock"]}
     response = await client.get(endpoint, headers=HEADERS, params=data)
     assert response.status_code == 200, response.json()
-    assert len(response.json()) == 1, response.json()
+    assert len(response.json()) == 2, response.json()
 
 
 async def test_query_timestamped(client: AsyncClient):
@@ -79,7 +79,7 @@ async def test_query_timestamped(client: AsyncClient):
     data = {"start_time": st}
     response = await client.get(endpoint, headers=HEADERS, params=data)
     assert response.status_code == 200, response.json()
-    assert len(response.json()) == 1, response.json()
+    assert len(response.json()) == 2, response.json()
 
     endpoint = "/v0/queries"
     data = {"start_time": str(datetime.now(timezone.utc))}
@@ -100,7 +100,7 @@ async def test_tags(client: AsyncClient):
     data = {"tags": ["dummy_tag"]}
     response = await client.get(endpoint, headers=HEADERS, params=data)
     assert response.status_code == 200, response.json()
-    assert len(response.json()) == 1, response.json()
+    assert len(response.json()) == 2, response.json()
 
     endpoint = "/v0/tags"
     response = await client.get(endpoint, headers=HEADERS)
@@ -123,7 +123,7 @@ async def test_tags_str_only(client: AsyncClient):
     data = {"tags": ["dummy_tag_str"]}
     response = await client.get(endpoint, headers=HEADERS, params=data)
     assert response.status_code == 200, response.json()
-    assert len(response.json()) == 1, response.json()
+    assert len(response.json()) == 2, response.json()
 
 
 @pytest.mark.anyio
@@ -186,7 +186,7 @@ async def test_external_logging(client: AsyncClient):
     data = {"endpoints": ["local_model_test@external"]}
     response = await client.get(endpoint, headers=HEADERS, params=data)
     assert response.status_code == 200, response.json()
-    assert len(response.json()) == 1, response.json()
+    assert len(response.json()) == 2, response.json()
 
 
 @pytest.mark.anyio
