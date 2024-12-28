@@ -78,6 +78,7 @@ INSERT INTO endpoint VALUES (16, 8, 12, NOW(), true);
 INSERT INTO endpoint VALUES (34, 9, 35, NOW(), true);
 INSERT INTO endpoint VALUES (36, 12, 12, NOW(), true);
 INSERT INTO endpoint VALUES (37, 10, 36, NOW(), true);
+INSERT INTO endpoint VALUES (38, 13, 3, NOW(), true);
 
 -- Runtime Dynamic routing
 INSERT INTO model VALUES (4, 'pbr-model', NOW(), 'dummy_task', true);
