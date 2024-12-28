@@ -173,11 +173,12 @@ def _update_logs(client, log_ids, entries, user=1):
     )
 
 
-def _delete_log_field_from_logs(client, fields, user=1):
+def _delete_log_fields_from_logs(client, fields, delete_empty_logs=False, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     request = Request(
         "DELETE",
         str(client.base_url) + f"/v0/logs/fields",
+        params={"delete_empty_logs": delete_empty_logs},
         json={"fields": fields},
         headers=_headers,
     )
@@ -1082,8 +1083,8 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
     entry_to_delete = "a/b/c/input"
     fields = [(log_id1, entry_to_delete), (log_id2, entry_to_delete)]
 
-    # Delete an entry from both logs
-    response = await _delete_log_field_from_logs(client, fields)
+    # Delete entries from the logs
+    response = await _delete_log_fields_from_logs(client, fields)
     assert response.status_code == 200, response.json()
     assert response.json()["info"] == "Log field deleted successfully from all logs!"
 
@@ -1095,6 +1096,32 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
     response = await _get_log(client, log_id2)
     assert response.status_code == 200, response.json()
     assert entry_to_delete not in response.json()["logs"]["entries"]
+
+    fields = [
+        (log_id1, ["a/b/c/boolean_input", "a/b/c/numeric_input", "a/b/param1"]),
+        ([log_id1, log_id2], ["a/b/c/boolean_input", "a/b/param1"])
+    ]
+    # Delete entries from the logs
+    response = await _delete_log_fields_from_logs(
+        client, fields, delete_empty_logs=True
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Log field deleted successfully from all logs!"
+
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 1
+    del result["logs"][0]["ts"]
+    assert result["logs"] == [
+        {
+            'id': 2,
+            'entries': {
+                'a/b/c/numeric_input': 4.5
+            },
+            'params': {}
+        }
+    ]
 
 
 if __name__ == "__main__":
