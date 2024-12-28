@@ -2,7 +2,7 @@ import json
 import re
 import statistics
 from datetime import datetime
-from typing import Any, List, Union
+from typing import Any, List, Union, Tuple
 
 from sqlalchemy import JSON, Boolean, Float, String, case, cast, func, select
 from sqlalchemy.dialects.postgresql import JSONB
@@ -577,3 +577,19 @@ def format_logs(all_logs):
         )
         formatted_entries[log_event_id]["versions"][log[0].key] = log[0].version
     return formatted_entries, count
+
+
+def _flatten_fields(
+    log_fields: List[Tuple[Union[int, List[int]], Union[str, List[str]]]]
+):
+    flattened = dict()
+    for log_ids, fields in log_fields:
+        log_ids = log_ids if isinstance(log_ids, list) else [log_ids]
+        fields = fields if isinstance(fields, list) else [fields]
+        for log_id in log_ids:
+            if log_id not in flattened:
+                flattened[log_id] = list()
+            for field in fields:
+                if field not in flattened[log_id]:
+                    flattened[log_id].append(field)
+    return flattened

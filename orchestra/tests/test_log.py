@@ -173,12 +173,12 @@ def _update_logs(client, log_ids, entries, user=1):
     )
 
 
-def _delete_log_field_from_logs(client, field, log_ids, user=1):
+def _delete_log_field_from_logs(client, fields, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     request = Request(
         "DELETE",
-        str(client.base_url) + f"/v0/logs/field/{field}",
-        json={"ids": log_ids},
+        str(client.base_url) + f"/v0/logs/fields",
+        json={"fields": fields},
         headers=_headers,
     )
     return client.send(request)
@@ -1067,7 +1067,7 @@ async def test_update_logs_multi_values(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_log_field_from_logs(client: AsyncClient):
+async def test_delete_log_fields_from_logs(client: AsyncClient):
     project_name = "multi-log-project"
     _ = await _create_project(client, project_name)
 
@@ -1079,11 +1079,11 @@ async def test_delete_log_field_from_logs(client: AsyncClient):
 
     log_id1 = response1.json()
     log_id2 = response2.json()
-    log_ids = [log_id1, log_id2]
+    entry_to_delete = "a/b/c/input"
+    fields = [(log_id1, entry_to_delete), (log_id2, entry_to_delete)]
 
     # Delete an entry from both logs
-    entry_to_delete = "a/b/c/input"
-    response = await _delete_log_field_from_logs(client, entry_to_delete, log_ids)
+    response = await _delete_log_field_from_logs(client, fields)
     assert response.status_code == 200, response.json()
     assert response.json()["info"] == "Log field deleted successfully from all logs!"
 
