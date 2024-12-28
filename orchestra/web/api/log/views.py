@@ -22,7 +22,7 @@ from orchestra.web.api.log.schema import (
 )
 from orchestra.web.api.utils.http_responses import not_found
 
-from .helpers import build_filter, format_logs, str_filter_exp_to_dict
+from .helpers import build_filter, format_logs, str_filter_exp_to_dict, _flatten_fields
 
 router = APIRouter()
 
@@ -321,7 +321,7 @@ def update_logs(
 
 
 @router.delete(
-    "/logs/field/{field:path}",
+    "/logs/fields",
     responses={
         200: {
             "description": "Successful Response",
@@ -358,11 +358,6 @@ def update_logs(
 def delete_log_fields(
     request_fastapi: Request,
     body: DeleteLogEntryRequest,
-    field: str = Path(
-        description="Name of the field to delete from the given logs. "
-        "This can be a param or an entry",
-        example="entry-v0",
-    ),
     log_event_dao: LogEventDAO = Depends(),
     log_dao: LogDAO = Depends(),
 ):
@@ -373,7 +368,9 @@ def delete_log_fields(
     not_found_logs = []
     not_found_entries = []
 
-    for log_id in body.ids:
+    log_fields = _flatten_fields(body.fields)
+
+    for log_id, fields in log_fields.items():
         # Verify if the log belongs to the user
         try:
             if log_event_dao.get_user_id(id=log_id) != request_fastapi.state.user_id:
@@ -382,14 +379,15 @@ def delete_log_fields(
             not_found_logs.append(log_id)
             continue
 
-        # Check for the existence of the log entry
-        log = log_dao.filter(log_event_id=log_id, key=field)
-        if not log:
-            not_found_entries.append(log_id)
-            continue
+        for field in fields:
+            # Check for the existence of the log entry
+            log = log_dao.filter(log_event_id=log_id, key=field)
+            if not log:
+                not_found_entries.append(log_id)
+                continue
 
-        # Delete the log entry
-        log_dao.delete(id=log[0][0].id)
+            # Delete the log entry
+            log_dao.delete(id=log[0][0].id)
 
     # Handle cases where some logs or entries were not found
     if not_found_logs:
@@ -401,7 +399,7 @@ def delete_log_fields(
     if not_found_entries:
         raise HTTPException(
             status_code=404,
-            detail=f"Log field '{field}' not found in logs with ids {not_found_entries}.",
+            detail=f"Specified fields not found in logs with ids {not_found_entries}.",
         )
 
     return {"info": "Log field deleted successfully from all logs!"}
@@ -935,7 +933,6 @@ def get_log_groups(
         len(v) == 1 for v in groups.values()
     ), "All sets should contain a single unique value"
     return {k: json.loads(next(iter(v))) for k, v in groups.items()}
-
 
 
 @router.get(
