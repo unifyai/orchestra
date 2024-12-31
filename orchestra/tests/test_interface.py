@@ -1,4 +1,3 @@
-import json
 import os
 
 import pytest
@@ -45,7 +44,7 @@ async def test_update_interface(client: AsyncClient):
         "/v0/interface",
         headers=HEADERS,
         json={
-            "items": json.dumps(items),
+            "items": items,
             "new_counter": new_counter,
         },
     )
