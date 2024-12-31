@@ -40,6 +40,7 @@ async def test_update_interface(client: AsyncClient):
         {"i": "n1", "x": 0, "y": 1, "w": 2, "h": 3, "tab": "Plot_1"},
     ]
     new_counter = 2
+    await _create_interface(client, items[:1], new_counter - 1)
     response = await client.put(
         "/v0/interface",
         headers=HEADERS,
