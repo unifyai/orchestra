@@ -17,7 +17,7 @@ def _create_interface(client: AsyncClient, items, new_counter):
         "/v0/interface",
         headers=HEADERS,
         json={
-            "items": json.dumps(items),
+            "items": items,
             "new_counter": new_counter,
         },
     )
