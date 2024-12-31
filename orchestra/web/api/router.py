@@ -157,7 +157,7 @@ api_router.include_router(
 )
 api_router.include_router(
     interface.router,
-    tags=["Interfaces"],
+    tags=["Interface"],
     dependencies=API_KEY_AUTH,
 )
 
