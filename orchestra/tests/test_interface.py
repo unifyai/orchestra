@@ -12,7 +12,7 @@ HEADERS = {
 }
 
 
-async def _create_interface(client: AsyncClient, items, new_counter):
+def _create_interface(client: AsyncClient, items, new_counter):
     return client.post(
         "/v0/interface/",
         headers=HEADERS,
