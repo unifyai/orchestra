@@ -1,8 +1,6 @@
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
-from starlette import status
 
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.web.api.interface.schema import InterfaceConfig
@@ -13,7 +11,7 @@ router = APIRouter()
 @router.post(
     "/interface",
     responses={
-        201: {
+        200: {
             "description": "Interface created.",
             "content": {
                 "application/json": {
@@ -49,10 +47,7 @@ def create_interface(
         items=json.dumps([item.model_dump() for item in request.items]),
         new_counter=request.new_counter,
     )
-    return JSONResponse(
-        status_code=status.HTTP_201_CREATED,
-        content={"info": "Interface created successfully!"},
-    )
+    return {"info": "Interface created successfully!"}
 
 
 @router.put(
@@ -90,10 +85,7 @@ def update_interface(
         items=json.dumps([item.model_dump() for item in request.items]),
         new_counter=request.new_counter,
     )
-    return JSONResponse(
-        status_code=status.HTTP_200_OK,
-        content={"info": "Interface updated successfully!"},
-    )
+    return {"info": "Interface updated successfully!"}
 
 
 @router.get(
@@ -140,4 +132,7 @@ def get_interface(
             status_code=404,
             detail="Interface not added yet. Create it first.",
         )
-    return interface
+    return {
+        "items": json.loads(interface.items),
+        "new_counter": interface.new_counter,
+    }

@@ -30,8 +30,8 @@ async def test_create_interface(client: AsyncClient):
     ]
     new_counter = 1
     response = await _create_interface(client, items, new_counter)
-    assert response.status_code == 201, response.json()
-    assert response.json() == ("Interface created successfully!")
+    assert response.status_code == 200
+    assert response.json()["info"] == "Interface created successfully!"
 
 
 @pytest.mark.anyio
@@ -49,8 +49,8 @@ async def test_update_interface(client: AsyncClient):
             "new_counter": new_counter,
         },
     )
-    assert response.status_code == 200, response.json()
-    assert response.json() == ("Interface updated successfully!")
+    assert response.status_code == 200
+    assert response.json()["info"] == "Interface updated successfully!"
 
 
 @pytest.mark.anyio
@@ -59,7 +59,7 @@ async def test_get_interface(client: AsyncClient):
         {"i": "n0", "x": 0, "y": 0, "w": 3, "h": 3, "tab": None},
     ]
     new_counter = 1
-    _create_interface(client, items, new_counter)
+    await _create_interface(client, items, new_counter)
     response = await client.get("/v0/interface/", headers=HEADERS)
-    assert response.status_code == 200, response.json()
-    assert isinstance(response.json(), list)
+    assert response.status_code == 200
+    assert isinstance(response.json(), dict)
