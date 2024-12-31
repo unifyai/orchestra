@@ -14,6 +14,7 @@ from orchestra.web.api import (  # noqa: WPS235
     dataset_artifact,
     docs,
     endpoint_metrics,
+    interface,
     llm_queries,
     log,
     logging,
@@ -81,6 +82,7 @@ groupings = {
         "Projects",
         "Project Artifacts",
         "Evals",
+        "Interface",
     ],
     "Routing": [
         "Router Training",
@@ -151,6 +153,11 @@ api_router.include_router(
 api_router.include_router(
     log.router,
     tags=["Evals"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    interface.router,
+    tags=["Interface"],
     dependencies=API_KEY_AUTH,
 )
 
