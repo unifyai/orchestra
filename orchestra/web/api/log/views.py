@@ -22,7 +22,7 @@ from orchestra.web.api.log.schema import (
 )
 from orchestra.web.api.utils.http_responses import not_found
 
-from .helpers import build_filter, format_logs, str_filter_exp_to_dict, _flatten_fields
+from .helpers import _flatten_fields, build_filter, format_logs, str_filter_exp_to_dict
 
 router = APIRouter()
 
@@ -361,7 +361,7 @@ def delete_log_fields(
     delete_empty_logs: bool = Query(
         default=False,
         description="Whether to delete logs which end up being empty as a result of "
-                    "the field deletion.",
+        "the field deletion.",
         example=True,
     ),
     log_event_dao: LogEventDAO = Depends(),

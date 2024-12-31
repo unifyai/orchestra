@@ -575,3 +575,21 @@ class DashboardView(Base):
     name = Column(String)
     view = Column(String)
     created_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class Interface(Base):
+    __tablename__ = "interface"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        index=True,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        index=True,
+    )
+    new_counter = Column(Integer)
+    items = Column(String(), nullable=False)
