@@ -14,7 +14,7 @@ HEADERS = {
 
 def _create_interface(client: AsyncClient, items, new_counter):
     return client.post(
-        "/v0/interface/",
+        "/v0/interface",
         headers=HEADERS,
         json={
             "items": json.dumps(items),
@@ -42,7 +42,7 @@ async def test_update_interface(client: AsyncClient):
     ]
     new_counter = 2
     response = await client.put(
-        "/v0/interface/",
+        "/v0/interface",
         headers=HEADERS,
         json={
             "items": json.dumps(items),
@@ -60,6 +60,6 @@ async def test_get_interface(client: AsyncClient):
     ]
     new_counter = 1
     await _create_interface(client, items, new_counter)
-    response = await client.get("/v0/interface/", headers=HEADERS)
+    response = await client.get("/v0/interface", headers=HEADERS)
     assert response.status_code == 200
     assert isinstance(response.json(), dict)
