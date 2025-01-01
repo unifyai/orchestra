@@ -25,7 +25,16 @@ def _create_interface(client: AsyncClient, items, new_counter):
 @pytest.mark.anyio
 async def test_create_interface(client: AsyncClient):
     items = [
-        {"i": "n0", "x": 0, "y": 0, "w": 3, "h": 3, "tab": None},
+        {
+            "i": "n0",
+            "x": 0,
+            "y": 0,
+            "w": 3,
+            "h": 3,
+            "tab": None,
+            "moved": False,
+            "static": False,
+        },
     ]
     new_counter = 1
     response = await _create_interface(client, items, new_counter)
@@ -36,8 +45,26 @@ async def test_create_interface(client: AsyncClient):
 @pytest.mark.anyio
 async def test_update_interface(client: AsyncClient):
     items = [
-        {"i": "n0", "x": 0, "y": 0, "w": 3, "h": 3, "tab": None},
-        {"i": "n1", "x": 0, "y": 1, "w": 2, "h": 3, "tab": "Plot_1"},
+        {
+            "i": "n0",
+            "x": 0,
+            "y": 0,
+            "w": 3,
+            "h": 3,
+            "tab": None,
+            "moved": False,
+            "static": False,
+        },
+        {
+            "i": "n1",
+            "x": 0,
+            "y": 1,
+            "w": 2,
+            "h": 3,
+            "tab": "Plot_1",
+            "moved": False,
+            "static": False,
+        },
     ]
     new_counter = 2
     await _create_interface(client, items[:1], new_counter - 1)
@@ -56,7 +83,16 @@ async def test_update_interface(client: AsyncClient):
 @pytest.mark.anyio
 async def test_get_interface(client: AsyncClient):
     items = [
-        {"i": "n0", "x": 0, "y": 0, "w": 3, "h": 3, "tab": None},
+        {
+            "i": "n0",
+            "x": 0,
+            "y": 0,
+            "w": 3,
+            "h": 3,
+            "tab": None,
+            "moved": False,
+            "static": False,
+        },
     ]
     new_counter = 1
     await _create_interface(client, items, new_counter)
