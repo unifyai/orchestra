@@ -7,9 +7,9 @@ class Item(BaseModel):
     y: int
     w: int
     h: int
-    tab: str | None
     moved: bool
     static: bool
+    tab: str | None = None
 
 
 class InterfaceConfig(BaseModel):
