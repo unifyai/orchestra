@@ -8,6 +8,8 @@ class Item(BaseModel):
     w: int
     h: int
     tab: str | None
+    moved: bool
+    static: bool
 
 
 class InterfaceConfig(BaseModel):
