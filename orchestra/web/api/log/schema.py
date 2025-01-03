@@ -39,6 +39,10 @@ class CreateLogConfig(BaseModel):
             },
         },
     )
+    strongly_typed: Union[bool, List[str]] = Field(
+        default=True,
+        description="Enforce strong typing for fields.",
+    )
 
 
 class UpdateLogRequest(BaseModel):
@@ -73,6 +77,10 @@ class UpdateLogRequest(BaseModel):
         default=False,
         description="Whether to overwrite existing logs",
         example=False,
+    )
+    strongly_typed: Union[bool, List[str]] = Field(
+        default=True,
+        description="Enforce strong typing for fields.",
     )
 
 
