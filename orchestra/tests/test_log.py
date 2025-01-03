@@ -3,10 +3,11 @@ import os
 from datetime import datetime, timezone
 from typing import List, Optional
 
+import numpy as np
 import pytest
 from httpx import AsyncClient, Request
 
-from ..web.api.log.helpers import reduction_methods
+from ..web.api.log.helpers import _is_all_unique, reduction_methods
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 api_key_second_user = "2nd_api_key"
@@ -172,12 +173,13 @@ def _update_logs(client, log_ids, entries, user=1):
     )
 
 
-def _delete_log_field_from_logs(client, field, log_ids, user=1):
+def _delete_log_fields_from_logs(client, fields, delete_empty_logs=False, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     request = Request(
         "DELETE",
-        str(client.base_url) + f"/v0/logs/field/{field}",
-        json={"ids": log_ids},
+        str(client.base_url) + f"/v0/logs/fields",
+        params={"delete_empty_logs": delete_empty_logs},
+        json={"fields": fields},
         headers=_headers,
     )
     return client.send(request)
@@ -503,6 +505,166 @@ async def test_get_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_logs_w_context(client: AsyncClient):
+    project_name = "eval-project"
+    # create project and log
+    _ = await _create_project(client, project_name, user=1)
+    _ = await _create_log(client, project_name, user=1)
+
+    # get full context log
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS
+    )
+
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    del response["logs"][0]["ts"]
+    assert response == {
+        'params':
+            {
+                'a/b/param1':
+                    {
+                        '0': 'test'
+                    }
+            },
+        'logs': [
+            {
+                'id': 1,
+                'entries': {
+                    'a/b/c/input': 'Some input data',
+                    'a/b/c/boolean_input': True,
+                    'a/b/c/numeric_input': 4.5
+                },
+                'params': {
+                'a/b/param1': '0'
+                }
+            }
+        ],
+        'count': 1
+    }
+
+    # get log with "a" context
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"context": "a"},
+        headers=HEADERS
+    )
+
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    del response["logs"][0]["ts"]
+    assert response == {
+        'params':
+            {
+                'b/param1':
+                    {
+                        '0': 'test'
+                    }
+            },
+        'logs': [
+            {
+                'id': 1,
+                'entries': {
+                    'b/c/input': 'Some input data',
+                    'b/c/boolean_input': True,
+                    'b/c/numeric_input': 4.5
+                },
+                'params': {
+                'b/param1': '0'
+                }
+            }
+        ],
+        'count': 1
+    }
+
+    # get log with "a/b" context
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"context": "a/b"},
+        headers=HEADERS
+    )
+
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    del response["logs"][0]["ts"]
+    assert response == {
+        'params':
+            {
+                'param1':
+                    {
+                        '0': 'test'
+                    }
+            },
+        'logs': [
+            {
+                'id': 1,
+                'entries': {
+                    'c/input': 'Some input data',
+                    'c/boolean_input': True,
+                    'c/numeric_input': 4.5
+                },
+                'params': {
+                'param1': '0'
+                }
+            }
+        ],
+        'count': 1
+    }
+
+    # get log with "a/b/c" context
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"context": "a/b/c"},
+        headers=HEADERS
+    )
+
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    del response["logs"][0]["ts"]
+    assert response == {
+        'params':
+            {},
+        'logs': [
+            {
+                'id': 1,
+                'entries': {
+                    'input': 'Some input data',
+                    'boolean_input': True,
+                    'numeric_input': 4.5
+                },
+                'params': {}
+            }
+        ],
+        'count': 1
+    }
+
+
+@pytest.mark.anyio
+async def test_get_log_fields(client: AsyncClient):
+    project_name = "eval-project"
+    # create the same project with another user to ensure the correct one
+    # is fetched
+    _ = await _create_project(client, project_name, user=1)
+    _ = await _create_log(client, project_name, user=1)
+
+    # fetch fields for the project
+    response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json() == {
+        "entries": {
+            "a/b/c/input": "str",
+            "a/b/c/boolean_input": "bool",
+            "a/b/c/numeric_input": "float",
+        },
+        "params": {"a/b/param1": "str"},
+    }
+
+
+@pytest.mark.anyio
 async def test_get_logs_latest_timestamp(client: AsyncClient):
 
     # create logs
@@ -584,6 +746,24 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
     _ = await _create_logs_for_filtering_metrics_n_sorting(client, project_name)
+
+    # temperature == -210.0
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "temperature == -210.0"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert isinstance(result["logs"][0]["ts"], str)
+    assert result["logs"][0]["entries"] == {
+        "description": "freezing nitrogen",
+        "temperature": -210.0,
+        "state": "liquid->solid",
+        "safe": False,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
 
     # temperature > 0.
     response = await client.get(
@@ -982,9 +1162,11 @@ async def test_get_logs_metric(
         for i, d in enumerate(data)
         if key in d and (log_ids is None or i + 1 in log_ids)
     ]
-    if metric == "mode" and len(set(vals)) == len(vals):
+    if metric == "mode" and _is_all_unique(vals):
+        # early return to avoid computing 'mode' which is order-dependent
+        # in case of unique entries.
         return
-    assert result == reduction_methods[metric](vals)
+    assert np.isclose(result, reduction_methods[metric](vals), atol=1e-6)
 
 
 @pytest.mark.anyio
@@ -1141,7 +1323,7 @@ async def test_update_logs_multi_values(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_log_field_from_logs(client: AsyncClient):
+async def test_delete_log_fields_from_logs(client: AsyncClient):
     project_name = "multi-log-project"
     _ = await _create_project(client, project_name)
 
@@ -1153,11 +1335,11 @@ async def test_delete_log_field_from_logs(client: AsyncClient):
 
     log_id1 = response1.json()
     log_id2 = response2.json()
-    log_ids = [log_id1, log_id2]
-
-    # Delete an entry from both logs
     entry_to_delete = "a/b/c/input"
-    response = await _delete_log_field_from_logs(client, entry_to_delete, log_ids)
+    fields = [(log_id1, entry_to_delete), (log_id2, entry_to_delete)]
+
+    # Delete entries from the logs
+    response = await _delete_log_fields_from_logs(client, fields)
     assert response.status_code == 200, response.json()
     assert response.json()["info"] == "Log field deleted successfully from all logs!"
 
@@ -1169,6 +1351,28 @@ async def test_delete_log_field_from_logs(client: AsyncClient):
     response = await _get_log(client, log_id2)
     assert response.status_code == 200, response.json()
     assert entry_to_delete not in response.json()["logs"]["entries"]
+
+    fields = [
+        (log_id1, ["a/b/c/boolean_input", "a/b/c/numeric_input", "a/b/param1"]),
+        ([log_id1, log_id2], ["a/b/c/boolean_input", "a/b/param1"]),
+    ]
+    # Delete entries from the logs
+    response = await _delete_log_fields_from_logs(
+        client,
+        fields,
+        delete_empty_logs=True,
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Log field deleted successfully from all logs!"
+
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 1
+    del result["logs"][0]["ts"]
+    assert result["logs"] == [
+        {"id": 2, "entries": {"a/b/c/numeric_input": 4.5}, "params": {}},
+    ]
 
 
 if __name__ == "__main__":

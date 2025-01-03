@@ -78,6 +78,7 @@ INSERT INTO endpoint VALUES (16, 8, 12, NOW(), true);
 INSERT INTO endpoint VALUES (34, 9, 35, NOW(), true);
 INSERT INTO endpoint VALUES (36, 12, 12, NOW(), true);
 INSERT INTO endpoint VALUES (37, 10, 36, NOW(), true);
+INSERT INTO endpoint VALUES (38, 13, 3, NOW(), true);
 
 -- Runtime Dynamic routing
 INSERT INTO model VALUES (4, 'pbr-model', NOW(), 'dummy_task', true);
@@ -93,7 +94,7 @@ INSERT INTO benchmark_run VALUES(4, 10, 'concurrent-1', 'Belgium', 'short', now(
 INSERT INTO benchmark_run VALUES(5, 11, 'concurrent-1', 'Belgium', 'short', now());
 INSERT INTO benchmark_run VALUES(8, 15, 'concurrent-1', 'Belgium', 'short', now());
 INSERT INTO benchmark_run VALUES(9, 16, 'concurrent-1', 'Belgium', 'short', now());
-
+INSERT INTO benchmark_run VALUES(10, 38, 'concurrent-1', 'Belgium', 'short', now());
 
 -- Metrics
 INSERT INTO metric VALUES ('input_cost_per_token', '$/1M tks', 'Input Cost', 'Input cost per token', 1, 'f');
@@ -132,3 +133,9 @@ INSERT INTO datapoint VALUES (48, 9, 'input_cost_per_token', 0.09, NULL, NOW());
 INSERT INTO datapoint VALUES (49, 9, 'output_cost_per_token', 35, NULL, NOW());
 INSERT INTO datapoint VALUES (50, 9, 'ttft', 450, NULL, NOW());
 INSERT INTO datapoint VALUES (51, 9, 'itl', 10, NULL, NOW());
+
+---- lowest-output-cost-per-token-provider<0.1ic
+INSERT INTO datapoint VALUES (52, 10, 'input_cost_per_token', 0.09, NULL, NOW());
+INSERT INTO datapoint VALUES (53, 10, 'output_cost_per_token', 0.02, NULL, NOW());
+INSERT INTO datapoint VALUES (54, 10, 'ttft', 450, NULL, NOW());
+INSERT INTO datapoint VALUES (55, 10, 'itl', 10, NULL, NOW());

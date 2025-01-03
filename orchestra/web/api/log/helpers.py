@@ -2,7 +2,7 @@ import json
 import re
 import statistics
 from datetime import datetime
-from typing import Any, List, Union
+from typing import Any, List, Union, Tuple
 
 from sqlalchemy import JSON, Boolean, Float, String, case, cast, func, select
 from sqlalchemy.dialects.postgresql import JSONB
@@ -55,7 +55,7 @@ def parse_nested(s, pos):
 
 def _tokenize(s):
     token_specification = [
-        ("NUMBER", r"\d+(\.\d*)?|\.\d+"),  # Integer or decimal number
+        ("NUMBER", r"-?(\d+(\.\d*)?|\.\d+)"),  # Integer or decimal number, +ve or -ve
         # Updated STRING regex to handle nested quotation marks and escaped quotes correctly
         (
             "STRING",
@@ -486,6 +486,18 @@ def _is_type_for_len(v: Any) -> bool:
     )
 
 
+def _is_all_unique(vals):
+    """
+    Check if all entries in vals are unique. Works even for unhashable types like lists or dicts.
+    """
+    seen = []
+    for val in vals:
+        if val in seen:
+            return False
+        seen.append(val)
+    return True
+
+
 def _preprocess(
     values: List[Union[int, float, bool, str]],
 ) -> List[Union[int, float, bool]]:
@@ -531,8 +543,7 @@ def _median(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
 
 
 def _mode(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
-    values = _preprocess(values)[::-1]
-    # reverse to make consistent with sql mode
+    values = _preprocess(values)
     return statistics.mode(values)
 
 
@@ -549,18 +560,37 @@ reduction_methods = {
 }
 
 
-def format_logs(all_logs):
+def format_logs(all_logs, context_len=0):
     formatted_entries = dict()
-    for log in all_logs:
-        log_event_id = log[0].log_event_id
+    for log_data in all_logs:
+        log = log_data[0]
+        ts = log_data[1]
+        key = log.key[context_len:]
+        log_event_id = log.log_event_id
         if log_event_id not in formatted_entries:
             formatted_entries[log_event_id] = {"entries": {}, "versions": {}}
         assert (
-            log[0].key not in formatted_entries[log_event_id]
-        ), f"found duplicates for key {log[0].key} with log_id {log_event_id}"
-        formatted_entries[log_event_id]["ts"] = log[1].strftime("%Y-%m-%d %H:%M:%S")
-        formatted_entries[log_event_id]["entries"][log[0].key] = json.loads(
-            log[0].value,
+            key not in formatted_entries[log_event_id]
+        ), f"found duplicates for key {key} with log_id {log_event_id}"
+        formatted_entries[log_event_id]["ts"] = ts.strftime("%Y-%m-%d %H:%M:%S")
+        formatted_entries[log_event_id]["entries"][key] = json.loads(
+            log.value,
         )
-        formatted_entries[log_event_id]["versions"][log[0].key] = log[0].version
+        formatted_entries[log_event_id]["versions"][key] = log.version
     return formatted_entries
+
+
+def _flatten_fields(
+    log_fields: List[Tuple[Union[int, List[int]], Union[str, List[str]]]]
+):
+    flattened = dict()
+    for log_ids, fields in log_fields:
+        log_ids = log_ids if isinstance(log_ids, list) else [log_ids]
+        fields = fields if isinstance(fields, list) else [fields]
+        for log_id in log_ids:
+            if log_id not in flattened:
+                flattened[log_id] = list()
+            for field in fields:
+                if field not in flattened[log_id]:
+                    flattened[log_id].append(field)
+    return flattened

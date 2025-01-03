@@ -41,7 +41,7 @@ supported_models = {
     "llama-3.2-3b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-3B-Instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.018, "completion": 0.03},
+        "cost": {"prompt": 0.015, "completion": 0.025},
     },
     "llama-3.2-11b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-11B-Vision-Instruct",
@@ -71,7 +71,7 @@ supported_models = {
     "llama-3.1-405b-chat": {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3.1-405B-Instruct",
         "context_window": 32000,
-        "cost": {"prompt": 0.9, "completion": 0.9},
+        "cost": {"prompt": 0.8, "completion": 0.8},
     },
     "llama-3-8b-chat": {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3-8B-Instruct",
@@ -106,7 +106,7 @@ supported_models = {
     "mistral-nemo": {
         "endpoint": "deepinfra/mistralai/Mistral-Nemo-Instruct-2407",
         "context_window": 128000,
-        "cost": {"prompt": 0.04, "completion": 0.1},
+        "cost": {"prompt": 0.035, "completion": 0.08},
     },
     "qwen-2.5-coder-32b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-Coder-32B-Instruct",

@@ -22,7 +22,7 @@ from orchestra.web.api.log.schema import (
 )
 from orchestra.web.api.utils.http_responses import not_found
 
-from .helpers import build_filter, format_logs, str_filter_exp_to_dict
+from .helpers import _flatten_fields, build_filter, format_logs, str_filter_exp_to_dict
 
 router = APIRouter()
 
@@ -321,7 +321,7 @@ def update_logs(
 
 
 @router.delete(
-    "/logs/field/{field:path}",
+    "/logs/fields",
     responses={
         200: {
             "description": "Successful Response",
@@ -358,10 +358,11 @@ def update_logs(
 def delete_log_fields(
     request_fastapi: Request,
     body: DeleteLogEntryRequest,
-    field: str = Path(
-        description="Name of the field to delete from the given logs. "
-        "This can be a param or an entry",
-        example="entry-v0",
+    delete_empty_logs: bool = Query(
+        default=False,
+        description="Whether to delete logs which end up being empty as a result of "
+        "the field deletion.",
+        example=True,
     ),
     log_event_dao: LogEventDAO = Depends(),
     log_dao: LogDAO = Depends(),
@@ -373,7 +374,9 @@ def delete_log_fields(
     not_found_logs = []
     not_found_entries = []
 
-    for log_id in body.ids:
+    log_fields = _flatten_fields(body.fields)
+
+    for log_id, fields in log_fields.items():
         # Verify if the log belongs to the user
         try:
             if log_event_dao.get_user_id(id=log_id) != request_fastapi.state.user_id:
@@ -382,14 +385,18 @@ def delete_log_fields(
             not_found_logs.append(log_id)
             continue
 
-        # Check for the existence of the log entry
-        log = log_dao.filter(log_event_id=log_id, key=field)
-        if not log:
-            not_found_entries.append(log_id)
-            continue
+        for field in fields:
+            # Check for the existence of the log entry
+            log = log_dao.filter(log_event_id=log_id, key=field)
+            if not log:
+                not_found_entries.append(log_id)
+                continue
 
-        # Delete the log entry
-        log_dao.delete(id=log[0][0].id)
+            # Delete the log entry
+            log_dao.delete(id=log[0][0].id)
+
+        if delete_empty_logs and not log_dao.filter(log_event_id=log_id):
+            log_event_dao.delete(id=log_id)
 
     # Handle cases where some logs or entries were not found
     if not_found_logs:
@@ -401,7 +408,7 @@ def delete_log_fields(
     if not_found_entries:
         raise HTTPException(
             status_code=404,
-            detail=f"Log field '{field}' not found in logs with ids {not_found_entries}.",
+            detail=f"Specified fields not found in logs with ids {not_found_entries}.",
         )
 
     return {"info": "Log field deleted successfully from all logs!"}
@@ -525,6 +532,12 @@ def get_logs(
         description="Name of the project to get entries from.",
         example="eval-project",
     ),
+    context: str = Query(
+        None,
+        description="The context (prepending '/' seperated field names) from which to "
+                    "retrieve the logs.",
+        example="subjects/science/physics"
+    ),
     filter_expr: Optional[str] = Query(
         None,
         description="Boolean string to filter entries. TODO: Detailed page.",
@@ -636,11 +649,17 @@ def get_logs(
         .order_by(relevant_log_events.c.row_num)
     )
 
+    context_len = 0
+    if context:
+        context = context if context[-1] == "/" else context + "/"
+        context_len = len(context)
+        query = query.where(Log.key.startswith(context))
+
     all_logs = query.all()
     if return_ids_only:
         return list(set([log[0].log_event_id for log in all_logs]))
 
-    formatted_logs = format_logs(all_logs)
+    formatted_logs = format_logs(all_logs, context_len)
 
     params = dict()
     logs = []
@@ -994,7 +1013,7 @@ def get_log_groups(
 
 
 @router.get(
-    "/logs/columns",
+    "/logs/fields",
     responses={
         200: {
             "description": "Successful Response",
@@ -1021,17 +1040,17 @@ def get_log_groups(
         },
     },
 )
-def get_log_columns(
+def get_log_fields(
     request_fastapi: Request,
     project: str = Query(
-        description="Name of the project to get columns for.",
+        description="Name of the project to get fields for.",
         example="eval-project",
     ),
     project_dao: ProjectDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
-    Returns a mapping of columns and their datatypes from a project.
+    Returns a mapping of fields and their datatypes from a project.
     """
     try:
         user_id = request_fastapi.state.user_id
@@ -1058,7 +1077,7 @@ def get_log_columns(
     all_logs = query.all()
     formatted_logs, _ = format_logs(all_logs)
 
-    columns = dict()
+    fields = dict()
     for log_dict in formatted_logs.values():
         log = {
             "entries": {
@@ -1076,8 +1095,8 @@ def get_log_columns(
             "entries": list(log["entries"].items()),
             "params": list(log.get("params", {}).items()),
         }
-        columns = {
+        fields = {
             key: {item[0]: type(item[1]).__name__ for item in items[key]}
             for key in items
         }
-    return columns
+    return fields
