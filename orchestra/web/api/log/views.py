@@ -532,6 +532,12 @@ def get_logs(
         description="Name of the project to get entries from.",
         example="eval-project",
     ),
+    context: str = Query(
+        None,
+        description="The context (prepending '/' seperated field names) from which to "
+                    "retrieve the logs.",
+        example="subjects/science/physics"
+    ),
     filter_expr: Optional[str] = Query(
         None,
         description="Boolean string to filter entries. TODO: Detailed page.",
@@ -589,11 +595,17 @@ def get_logs(
         .order_by(Log.created_at)
     )
 
+    context_len = 0
+    if context:
+        context = context if context[-1] == "/" else context + "/"
+        context_len = len(context)
+        query = query.where(Log.key.startswith(context))
+
     all_logs = query.all()
     if return_ids_only:
         return list(set([log[0].log_event_id for log in all_logs]))
 
-    formatted_logs, count = format_logs(all_logs)
+    formatted_logs, count = format_logs(all_logs, context_len)
 
     params = dict()
     logs = []

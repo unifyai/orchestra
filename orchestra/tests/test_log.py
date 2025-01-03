@@ -505,6 +505,142 @@ async def test_get_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_logs_w_context(client: AsyncClient):
+    project_name = "eval-project"
+    # create project and log
+    _ = await _create_project(client, project_name, user=1)
+    _ = await _create_log(client, project_name, user=1)
+
+    # get full context log
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS
+    )
+
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    del response["logs"][0]["ts"]
+    assert response == {
+        'params':
+            {
+                'a/b/param1':
+                    {
+                        '0': 'test'
+                    }
+            },
+        'logs': [
+            {
+                'id': 1,
+                'entries': {
+                    'a/b/c/input': 'Some input data',
+                    'a/b/c/boolean_input': True,
+                    'a/b/c/numeric_input': 4.5
+                },
+                'params': {
+                'a/b/param1': '0'
+                }
+            }
+        ],
+        'count': 1
+    }
+
+    # get log with "a" context
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"context": "a"},
+        headers=HEADERS
+    )
+
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    del response["logs"][0]["ts"]
+    assert response == {
+        'params':
+            {
+                'b/param1':
+                    {
+                        '0': 'test'
+                    }
+            },
+        'logs': [
+            {
+                'id': 1,
+                'entries': {
+                    'b/c/input': 'Some input data',
+                    'b/c/boolean_input': True,
+                    'b/c/numeric_input': 4.5
+                },
+                'params': {
+                'b/param1': '0'
+                }
+            }
+        ],
+        'count': 1
+    }
+
+    # get log with "a/b" context
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"context": "a/b"},
+        headers=HEADERS
+    )
+
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    del response["logs"][0]["ts"]
+    assert response == {
+        'params':
+            {
+                'param1':
+                    {
+                        '0': 'test'
+                    }
+            },
+        'logs': [
+            {
+                'id': 1,
+                'entries': {
+                    'c/input': 'Some input data',
+                    'c/boolean_input': True,
+                    'c/numeric_input': 4.5
+                },
+                'params': {
+                'param1': '0'
+                }
+            }
+        ],
+        'count': 1
+    }
+
+    # get log with "a/b/c" context
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"context": "a/b/c"},
+        headers=HEADERS
+    )
+
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    del response["logs"][0]["ts"]
+    assert response == {
+        'params':
+            {},
+        'logs': [
+            {
+                'id': 1,
+                'entries': {
+                    'input': 'Some input data',
+                    'boolean_input': True,
+                    'numeric_input': 4.5
+                },
+                'params': {}
+            }
+        ],
+        'count': 1
+    }
+
+
+@pytest.mark.anyio
 async def test_get_log_fields(client: AsyncClient):
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
