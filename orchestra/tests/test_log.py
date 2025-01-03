@@ -1371,6 +1371,41 @@ async def test_update_logs_type_mismatch(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_field_typing(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    await _create_log(client, project_name)
+
+    # Set field typing for the log entries
+    response = await client.post(
+        f"/v0/logs/field_typing",
+        params={"project": project_name},
+        json={
+            "types": {
+                "a/b/c/input": True,
+                "a/b/c/boolean_input": True,
+                "a/b/c/numeric_input": False,
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["info"] == "Field typing updated successfully!"
+
+    field_types_response = await client.get(
+        f"/v0/logs/field_typing?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+
+    field_types = field_types_response.json()
+    assert field_types["a/b/c/input"] == "str"
+    assert field_types["a/b/c/boolean_input"] == "bool"
+    assert field_types["a/b/c/numeric_input"] is None  # This field should return None
+
+
+@pytest.mark.anyio
 async def test_set_field_typing_homogeneous(client: AsyncClient):
     project_name = "test_project"
     _ = await _create_project(client, project_name)
@@ -1392,7 +1427,7 @@ async def test_set_field_typing_homogeneous(client: AsyncClient):
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
-    assert "a/b/c/input" not in field_types_response.json()
+    assert field_types_response.json()["a/b/c/input"] is None
 
 
 @pytest.mark.anyio
