@@ -2,7 +2,7 @@ import json
 import re
 import statistics
 from datetime import datetime
-from typing import Any, List, Union, Tuple
+from typing import Any, List, Tuple, Union
 
 from sqlalchemy import JSON, Boolean, Float, String, case, cast, func, select
 from sqlalchemy.dialects.postgresql import JSONB
@@ -62,7 +62,7 @@ def _tokenize(s):
             r'"(?:[^"\\]|\\.)*?"|\'(?:[^\'\\]|\\.)*?\'',
         ),  # String with non-greedy quantifier
         # Operators, note the order to match 'not in' before 'not' and 'in'
-        ("OP", r"==|<=|>=|<|>|(?<!\w)(?:not in|in|not|and|or|is)(?!\w)"),
+        ("OP", r"==|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)"),
         ("LEN", r"len"),  # length
         ("EXISTS", r"exists"),  # exists
         ("VERSION", r"version"),  # version
@@ -191,6 +191,7 @@ class _Parser:
             "in",
             "not in",
             "is",
+            "is not",
         ):
             op = self.current_token[1]
             self.advance()
@@ -312,7 +313,7 @@ def build_filter(filter_dict, log_event_alias, session):
         rhs = build_filter(filter_dict["rhs"], log_event_alias, session)
         return not_(rhs)
 
-    elif operand in ("==", "!=", "<", ">", "<=", ">=", "in", "not in", "is"):
+    elif operand in ("==", "!=", "<", ">", "<=", ">=", "in", "not in", "is", "is not"):
         lhs = filter_dict["lhs"]
         rhs = filter_dict["rhs"]
 
@@ -324,7 +325,7 @@ def build_filter(filter_dict, log_event_alias, session):
                 log_alias.key == key,
             )
 
-            if operand in ("==", "!=", "is", "<", ">", "<=", ">="):
+            if operand in ("==", "!=", "is", "is not", "<", ">", "<=", ">="):
                 try:
                     compare_value = rhs
                     if isinstance(compare_value, dict):
@@ -340,7 +341,7 @@ def build_filter(filter_dict, log_event_alias, session):
                         condition = cast(log_alias.value, Float)
                     if operand == "==" or operand == "is":
                         subq = subq.filter(condition == compare_value)
-                    elif operand == "!=":
+                    elif operand == "!=" or operand == "is not":
                         subq = subq.filter(condition != compare_value)
                     elif operand == "<":
                         subq = subq.filter(condition < compare_value)
@@ -584,7 +585,7 @@ def format_logs(all_logs, context_len=0):
 
 
 def _flatten_fields(
-    log_fields: List[Tuple[Union[int, List[int]], Union[str, List[str]]]]
+    log_fields: List[Tuple[Union[int, List[int]], Union[str, List[str]]]],
 ):
     flattened = dict()
     for log_ids, fields in log_fields:
