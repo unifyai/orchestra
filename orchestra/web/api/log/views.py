@@ -1075,7 +1075,7 @@ def get_log_fields(
     )
 
     all_logs = query.all()
-    formatted_logs, _ = format_logs(all_logs)
+    formatted_logs = format_logs(all_logs)
 
     fields = dict()
     for log_dict in formatted_logs.values():
