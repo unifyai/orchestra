@@ -593,3 +593,22 @@ class Interface(Base):
     )
     new_counter = Column(Integer)
     items = Column(String(), nullable=False)
+
+
+class FieldType(Base):
+    """Model class for the field_type table."""
+
+    __tablename__ = "field_type"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    field_name = Column(String, nullable=False)
+    field_type = Column(String, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "field_name", name="uq_project_field_name"),
+    )
