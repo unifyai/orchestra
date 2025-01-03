@@ -19,6 +19,7 @@ from orchestra.web.api.log.schema import (
     CreateLogConfig,
     DeleteLogEntryRequest,
     DeleteLogsRequest,
+    SetFieldTypingRequest,
     UpdateLogRequest,
 )
 from orchestra.web.api.utils.http_responses import not_found
@@ -1106,3 +1107,62 @@ def get_field_typing(
         raise not_found(f"Project {project}")
 
     return field_type_dao.get_field_types(project_obj.id)
+
+
+@router.post("/logs/field_typing")
+def set_field_typing(
+    request_fastapi: Request,
+    request: SetFieldTypingRequest,
+    project: str = Query(
+        description="Name of the project to get field types for.",
+        example="eval-project",
+    ),
+    project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    log_dao: LogDAO = Depends(),
+):
+    """
+    Sets the typing for specified fields in the project.
+    """
+    try:
+        user_id = request_fastapi.state.user_id
+        project_id = project_dao.filter(name=project, user_id=user_id)[0][0].id
+    except IndexError:
+        raise not_found(f"Project {project}")
+
+    # Check existing logs for each field
+    for field_name, should_type in request.types.items():
+        if should_type:  # If we want to turn typing on
+            existing_logs = log_dao.filter(
+                key=field_name,
+            )
+
+            # Check if all existing logs for this field are of the same type
+            existing_types = {type(json.loads(log[0].value)) for log in existing_logs}
+            if len(existing_types) > 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot enable typing for field '{field_name}' as existing logs have different types.",
+                )
+
+            # If all existing logs are of the same type, set the field type
+            existing_field_types = field_type_dao.get_field_types(project_id)
+            if field_name in existing_field_types:
+                # Update the field type if it exists
+                field_type_dao.update_field_type(
+                    project_id,
+                    field_name,
+                    json.loads(existing_logs[0][0].value),
+                )
+            else:
+                # Create a new field type if it does not exist
+                field_type_dao.create_field_type(
+                    project_id,
+                    field_name,
+                    json.loads(existing_logs[0][0].value),
+                )
+
+        else:  # If we want to turn typing off
+            field_type_dao.delete_field_type(project_id, field_name)
+
+    return {"info": "Field typing updated successfully!"}
