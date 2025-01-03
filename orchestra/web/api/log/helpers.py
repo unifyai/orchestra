@@ -563,7 +563,11 @@ reduction_methods = {
 def format_logs(all_logs, context_len=0):
     formatted_entries = dict()
     count = 0
-    for log, ts, count in all_logs:
+    for log_data in all_logs:
+        log = log_data[0]
+        ts = log_data[1]
+        if len(log_data) == 3:
+            count = log_data[2]
         key = log.key[context_len:]
         log_event_id = log.log_event_id
         if log_event_id not in formatted_entries:
