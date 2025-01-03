@@ -1248,5 +1248,127 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
     ]
 
 
+@pytest.mark.anyio
+async def test_create_log_strongly_typed(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    # Create a log with strongly typed fields
+    response = await client.post(
+        "/v0/log",
+        json={
+            "project": project_name,
+            "params": {"a/b/param1": "test"},
+            "entries": {
+                "score": 10,
+                "response": "hello",
+            },
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+
+    # Verify that field types are set correctly
+    field_types_response = await client.get(
+        f"/v0/logs/field_typing?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    assert field_types_response.json() == {
+        "a/b/param1": "str",
+        "score": "int",
+        "response": "str",
+    }
+
+
+@pytest.mark.anyio
+async def test_create_log_type_mismatch(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    response = await client.post(
+        "/v0/log",
+        json={
+            "project": project_name,
+            "params": {"a/b/param1": "test"},
+            "entries": {
+                "score": 10,
+                "response": "hello",
+            },
+        },
+        headers=HEADERS,
+    )
+    # Create a log with a type mismatch
+    response = await client.post(
+        "/v0/log",
+        json={
+            "project": project_name,
+            "params": {"a/b/param1": True},  # This should cause a type mismatch
+            "entries": {
+                "score": "not_an_int",
+                "response": "hello",
+            },
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert "Type mismatch for field" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_update_logs_strongly_typed(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    # Create a log first
+    response1 = await _create_log(client, project_name)
+    log_id1 = response1.json()
+
+    # Update the log with strongly typed fields
+    response = await client.put(
+        f"/v0/logs",
+        json={
+            "ids": [log_id1],
+            "entries": {
+                "a/b/c/input": "new data",
+                "a/b/c/numeric_input": -12.0,
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs updated successfully!"
+
+
+@pytest.mark.anyio
+async def test_update_logs_type_mismatch(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    # Create a log first
+    response1 = await _create_log(client, project_name)
+    log_id1 = response1.json()
+
+    # Update the log with a type mismatch
+    response = await client.put(
+        f"/v0/logs",
+        json={
+            "ids": [log_id1],
+            "entries": {
+                "a/b/c/numeric_input": "not_an_int",  # This should cause a type mismatch
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert "Type mismatch for field" in response.json()["detail"]
+
+
 if __name__ == "__main__":
     pass
