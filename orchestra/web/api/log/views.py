@@ -1087,7 +1087,32 @@ def get_log_fields(
     return fields
 
 
-@router.get("/logs/field_typing")
+@router.get(
+    "/logs/field_typing",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "field1": "string",
+                        "field2": "int",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <project> not found.",
+                    },
+                },
+            },
+        },
+    },
+)
 def get_field_typing(
     request_fastapi: Request,
     project: str = Query(
@@ -1109,7 +1134,41 @@ def get_field_typing(
     return field_type_dao.get_field_types(project_obj.id)
 
 
-@router.post("/logs/field_typing")
+@router.post(
+    "/logs/field_typing",
+    responses={
+        200: {
+            "description": "Field typing updated successfully.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Field typing updated successfully!",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Bad Request - Type mismatch or other validation errors.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Cannot enable typing for field '<field_name>' as existing logs have different types.",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <project> not found.",
+                    },
+                },
+            },
+        },
+    },
+)
 def set_field_typing(
     request_fastapi: Request,
     request: SetFieldTypingRequest,
