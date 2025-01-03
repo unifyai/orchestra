@@ -674,7 +674,7 @@ async def test_get_logs_latest_timestamp(client: AsyncClient):
     assert response.status_code == 200, response.json()
     response = response.json()
     assert isinstance(response, str)
-    t1 = datetime.fromisoformat(response).astimezone(timezone.utc)
+    t1 = datetime.fromisoformat(response).replace(tzinfo=timezone.utc)
     assert t1 > t0
 
     # add new entries
@@ -694,7 +694,7 @@ async def test_get_logs_latest_timestamp(client: AsyncClient):
     assert response.status_code == 200, response.json()
     response = response.json()
     assert isinstance(response, str)
-    t2 = datetime.fromisoformat(response).astimezone(timezone.utc)
+    t2 = datetime.fromisoformat(response).replace(tzinfo=timezone.utc)
     assert t2 > t1
 
 
