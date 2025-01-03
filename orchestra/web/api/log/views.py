@@ -109,6 +109,7 @@ def create_log(
                 field_type_dao.create_field_type(project_id, field_name, value)
 
     for k, v in params.items():
+        enforce_types(k, v)
         # see if there is any param with the same value
         existing_param = log_dao.filter(
             key=k,
@@ -1083,3 +1084,25 @@ def get_log_fields(
             for key in items
         }
     return fields
+
+
+@router.get("/logs/field_typing")
+def get_field_typing(
+    request_fastapi: Request,
+    project: str = Query(
+        description="Name of the project to get field types for.",
+        example="eval-project",
+    ),
+    project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+):
+    """
+    Returns the current typing for each field in the project.
+    """
+    try:
+        user_id = request_fastapi.state.user_id
+        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
+    except IndexError:
+        raise not_found(f"Project {project}")
+
+    return field_type_dao.get_field_types(project_obj.id)
