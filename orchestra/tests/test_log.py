@@ -1370,5 +1370,74 @@ async def test_update_logs_type_mismatch(client: AsyncClient):
     assert "Type mismatch for field" in response.json()["detail"]
 
 
+@pytest.mark.anyio
+async def test_set_field_typing_homogeneous(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    await _create_log(client, project_name)
+
+    response = await client.post(
+        f"/v0/logs/field_typing",
+        params={"project": project_name},
+        json={"types": {"a/b/param1": True, "a/b/c/input": False}},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["info"] == "Field typing updated successfully!"
+
+    # Verify that the field type is set correctly
+    field_types_response = await client.get(
+        f"/v0/logs/field_typing?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    assert "a/b/c/input" not in field_types_response.json()
+
+
+@pytest.mark.anyio
+async def test_set_field_typing_non_homogeneous(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    # create a log entry (with strongly_typed=True)
+    await _create_log(client, project_name)
+
+    # set strongly_typed as False for the field 'a/b/c/numeric_input'
+    response = await client.post(
+        f"/v0/logs/field_typing",
+        params={"project": project_name},
+        json={"types": {"a/b/c/numeric_input": False}},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["info"] == "Field typing updated successfully!"
+
+    # now add a non-homogenous entry
+    response = await client.post(
+        "/v0/log",
+        json={
+            "project": project_name,
+            "entries": {
+                "a/b/c/numeric_input": True,
+            },
+        },
+        headers=HEADERS,
+    )
+
+    # setting strongly_typed as True for 'a/b/c/numeric_input' should fail!
+    response = await client.post(
+        f"/v0/logs/field_typing",
+        params={"project": project_name},
+        json={"types": {"a/b/c/numeric_input": True}},
+        headers=HEADERS,
+    )
+    assert response.status_code == 400
+    assert (
+        "Cannot enable typing for field 'a/b/c/numeric_input' as existing logs have different types."
+        in response.json()["detail"]
+    )
+
+
 if __name__ == "__main__":
     pass
