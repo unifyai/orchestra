@@ -63,6 +63,7 @@ def _tokenize(s):
         ),  # String with non-greedy quantifier
         # Operators, note the order to match 'not in' before 'not' and 'in'
         ("OP", r"==|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)"),
+        ("TYPE_CHECK", r"type"),  # Type check expression
         ("LEN", r"len"),  # length
         ("EXISTS", r"exists"),  # exists
         ("VERSION", r"version"),  # version
@@ -103,6 +104,8 @@ def _tokenize(s):
             tokens.append(("IDENTIFIER", value))
         elif kind == "LEN":
             tokens.append(("LEN", value))
+        elif kind == "TYPE_CHECK":
+            tokens.append(("TYPE_CHECK", value))
         elif kind == "EXISTS":
             tokens.append(("EXISTS", value))
         elif kind == "VERSION":
@@ -200,12 +203,16 @@ class _Parser:
         return node
 
     def primary(self):
-        if self.current_token[0] in ("LEN", "EXISTS", "VERSION") and self.current_token[
-            1
-        ] in (
+        if self.current_token[0] in (
+            "LEN",
+            "EXISTS",
+            "VERSION",
+            "TYPE_CHECK",
+        ) and self.current_token[1] in (
             "len",
             "exists",
             "version",
+            "type",
         ):
             fn = self.current_token[1]
             self.advance()
@@ -430,6 +437,25 @@ def build_filter(filter_dict, log_event_alias, session):
                 )
                 if operand == "==":
                     return subq.as_scalar() == version
+
+        if isinstance(lhs, dict) and lhs.get("operand") == "type":
+            field_name = lhs["rhs"]["value"]
+            expected_type = rhs["value"]
+
+            log_alias = aliased(Log)
+            subq = select(log_alias.id).filter(
+                log_alias.log_event_id == log_event_alias.id,
+                log_alias.key == field_name,
+            )
+
+            if operand == "is":
+                return subq.filter(
+                    log_alias.inferred_type == expected_type,
+                ).exists()
+            elif operand == "is not":
+                return subq.filter(
+                    log_alias.inferred_type != expected_type,
+                ).exists()
 
         if operand in ["in", "not in"]:
             if isinstance(rhs, dict) and rhs.get("type") == "identifier":
