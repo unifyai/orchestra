@@ -197,7 +197,7 @@ async def _create_logs_for_grouping(client, project_name, user=1):
         assert response.status_code == 200, response.json()
 
 
-async def _create_logs_for_filtering_n_metrics(client, project_name, user=1):
+async def _create_logs_for_filtering_metrics_n_sorting(client, project_name, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     data = log_data["logs_for_filtering_n_metrics"]
     for i in range(len(data)):
@@ -671,7 +671,7 @@ async def test_get_logs_latest_timestamp(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name, user=1)
     t0 = datetime.now(timezone.utc)
-    _ = await _create_logs_for_filtering_n_metrics(client, project_name, user=1)
+    _ = await _create_logs_for_filtering_metrics_n_sorting(client, project_name, user=1)
 
     # assert the latest timestamp t1 is more recent than t0
     response = await client.get(
@@ -712,7 +712,7 @@ async def test_get_log_ids(client: AsyncClient):
     # is fetched
     _ = await _create_project(client, project_name, user=2)
     _ = await _create_project(client, project_name, user=1)
-    _ = await _create_logs_for_filtering_n_metrics(client, project_name, user=1)
+    _ = await _create_logs_for_filtering_metrics_n_sorting(client, project_name, user=1)
 
     # fetch entries for the project
     response = await client.get(
@@ -745,7 +745,7 @@ async def test_get_empty_logs(client: AsyncClient):
 async def test_get_logs_w_filtering(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
-    _ = await _create_logs_for_filtering_n_metrics(client, project_name)
+    _ = await _create_logs_for_filtering_metrics_n_sorting(client, project_name)
 
     # temperature == -210.0
     response = await client.get(
@@ -1007,6 +1007,126 @@ async def test_get_logs_w_filtering(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_logs_w_sorting(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+    _ = await _create_logs_for_filtering_metrics_n_sorting(client, project_name)
+
+    # ascending temperature
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"sorting": json.dumps({"temperature": "ascending"})},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 7
+    assert result["logs"][0]["entries"] == {
+        "description": "freezing nitrogen",
+        "temperature": -210.0,
+        "state": "liquid->solid",
+        "safe": False,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][1]["entries"] == {
+        "description": "freezing water",
+        "temperature": 0.0,
+        "state": "liquid->solid",
+        "safe": True,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][2]["entries"] == {
+        "description": "boiling water",
+        "temperature": 100.0,
+        "state": "liquid->gas",
+        "safe": False,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][3]["entries"] == {
+        "description": "surface of the sun",
+        "temperature": 6000.0,
+        "state": "gas",
+        "safe": False,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][4]["entries"] == {
+        "description": "lava",
+        "metadata": [1, 5, 6],
+        "_data": {"a": 2, "b": 4},
+        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][5]["entries"] == {
+        "description": "air",
+        "metadata": [3, 8, 5],
+        "_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][6]["entries"] == {
+        "_data": {"a": 8, "b": 10},
+        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+
+    # descending safety, then ascending temperature
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={
+            "sorting": json.dumps({
+                "safe": "descending",
+                "temperature": "ascending"
+            })
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 7
+    assert result["logs"][0]["entries"] == {
+        "description": "freezing water",
+        "temperature": 0.0,
+        "state": "liquid->solid",
+        "safe": True,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][1]["entries"] == {
+        "description": "freezing nitrogen",
+        "temperature": -210.0,
+        "state": "liquid->solid",
+        "safe": False,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][2]["entries"] == {
+        "description": "boiling water",
+        "temperature": 100.0,
+        "state": "liquid->gas",
+        "safe": False,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][3]["entries"] == {
+        "description": "surface of the sun",
+        "temperature": 6000.0,
+        "state": "gas",
+        "safe": False,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][4]["entries"] == {
+        "description": "lava",
+        "metadata": [1, 5, 6],
+        "_data": {"a": 2, "b": 4},
+        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][5]["entries"] == {
+        "description": "air",
+        "metadata": [3, 8, 5],
+        "_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][6]["entries"] == {
+        "_data": {"a": 8, "b": 10},
+        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "key",
     ["description", "temperature", "safe", "metadata", "_data"],
@@ -1027,7 +1147,7 @@ async def test_get_logs_metric(
 ):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
-    _ = await _create_logs_for_filtering_n_metrics(client, project_name)
+    _ = await _create_logs_for_filtering_metrics_n_sorting(client, project_name)
     data = log_data["logs_for_filtering_n_metrics"]
     params = {} if log_ids is None else {"log_ids": log_ids}
     response = await client.get(
