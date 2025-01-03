@@ -514,129 +514,122 @@ async def test_get_logs_w_context(client: AsyncClient):
     # get full context log
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        headers=HEADERS
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
     response = response.json()
     del response["logs"][0]["ts"]
     assert response == {
-        'params':
-            {
-                'a/b/param1':
-                    {
-                        '0': 'test'
-                    }
+        "params": {
+            "a/b/param1": {
+                "0": "test",
             },
-        'logs': [
+        },
+        "logs": [
             {
-                'id': 1,
-                'entries': {
-                    'a/b/c/input': 'Some input data',
-                    'a/b/c/boolean_input': True,
-                    'a/b/c/numeric_input': 4.5
+                "id": 1,
+                "entries": {
+                    "a/b/c/input": "Some input data",
+                    "a/b/c/boolean_input": True,
+                    "a/b/c/numeric_input": 4.5,
                 },
-                'params': {
-                'a/b/param1': '0'
-                }
-            }
+                "params": {
+                    "a/b/param1": "0",
+                },
+            },
         ],
-        'count': 1
+        "count": 1,
     }
 
     # get log with "a" context
     response = await client.get(
         f"/v0/logs?project={project_name}",
         params={"context": "a"},
-        headers=HEADERS
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
     response = response.json()
     del response["logs"][0]["ts"]
     assert response == {
-        'params':
-            {
-                'b/param1':
-                    {
-                        '0': 'test'
-                    }
+        "params": {
+            "b/param1": {
+                "0": "test",
             },
-        'logs': [
+        },
+        "logs": [
             {
-                'id': 1,
-                'entries': {
-                    'b/c/input': 'Some input data',
-                    'b/c/boolean_input': True,
-                    'b/c/numeric_input': 4.5
+                "id": 1,
+                "entries": {
+                    "b/c/input": "Some input data",
+                    "b/c/boolean_input": True,
+                    "b/c/numeric_input": 4.5,
                 },
-                'params': {
-                'b/param1': '0'
-                }
-            }
+                "params": {
+                    "b/param1": "0",
+                },
+            },
         ],
-        'count': 1
+        "count": 1,
     }
 
     # get log with "a/b" context
     response = await client.get(
         f"/v0/logs?project={project_name}",
         params={"context": "a/b"},
-        headers=HEADERS
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
     response = response.json()
     del response["logs"][0]["ts"]
     assert response == {
-        'params':
-            {
-                'param1':
-                    {
-                        '0': 'test'
-                    }
+        "params": {
+            "param1": {
+                "0": "test",
             },
-        'logs': [
+        },
+        "logs": [
             {
-                'id': 1,
-                'entries': {
-                    'c/input': 'Some input data',
-                    'c/boolean_input': True,
-                    'c/numeric_input': 4.5
+                "id": 1,
+                "entries": {
+                    "c/input": "Some input data",
+                    "c/boolean_input": True,
+                    "c/numeric_input": 4.5,
                 },
-                'params': {
-                'param1': '0'
-                }
-            }
+                "params": {
+                    "param1": "0",
+                },
+            },
         ],
-        'count': 1
+        "count": 1,
     }
 
     # get log with "a/b/c" context
     response = await client.get(
         f"/v0/logs?project={project_name}",
         params={"context": "a/b/c"},
-        headers=HEADERS
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
     response = response.json()
     del response["logs"][0]["ts"]
     assert response == {
-        'params':
-            {},
-        'logs': [
+        "params": {},
+        "logs": [
             {
-                'id': 1,
-                'entries': {
-                    'input': 'Some input data',
-                    'boolean_input': True,
-                    'numeric_input': 4.5
+                "id": 1,
+                "entries": {
+                    "input": "Some input data",
+                    "boolean_input": True,
+                    "numeric_input": 4.5,
                 },
-                'params': {}
-            }
+                "params": {},
+            },
         ],
-        'count': 1
+        "count": 1,
     }
 
 
