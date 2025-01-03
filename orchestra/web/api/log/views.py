@@ -6,7 +6,7 @@ import json
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from sqlalchemy import INTEGER, Float, case, cast, desc, func, select
+from sqlalchemy import INTEGER, Float, Boolean, case, cast, desc, func, select
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 
 from orchestra.db.dao.log_dao import LogDAO, OverwriteError
@@ -556,8 +556,8 @@ def get_logs(
 
     query = session.query(
         LogEvent.id,
-        func.count(LogEvent.id).over().label("count"),
     ).where(LogEvent.project_id == project_obj.id)
+
     query = query.order_by(LogEvent.created_at)
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
@@ -566,40 +566,81 @@ def get_logs(
             query = query.filter(condition)
 
     if sorting:
-        for k, sort_mode in reversed(json.loads(sorting).items()):
-            breakpoint()
-            query = query.order_by(Log.value)
+        # Create sub-queries for each key
+        subqs = {}
+        for key in json.loads(sorting):
+            subqs[key] = (
+                session.query(
+                    LogEvent.id,
+                    Log.value,
+                    Log.inferred_type
+                )
+                .join(Log, LogEvent.id == Log.log_event_id)
+                .where(Log.key == key)
+                .subquery()
+            )
+
+        # Outer-join them and build ORDER BY
+        sort_criteria = list()
+        for key, sort_mode in json.loads(sorting).items():
+            subq = subqs[key]
+            # Join
+            query = query.outerjoin(subq, subq.c.id == LogEvent.id)
+            # Order
+            criterion = case(
+                (subq.c.inferred_type == "bool",
+                 case(
+                     (subq.c.value.in_(["true", "True", "1"]), 1),
+                     else_=0
+                 )),
+                else_=cast(subq.c.value, Float)
+            )
+            if sort_mode == "ascending":
+                sort_criteria.append(criterion.asc())
+            elif sort_mode == "descending":
+                sort_criteria.append(criterion.desc())
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="sort_mode must be 'ascending' or 'descending', "
+                           f"but found {sort_mode}."
+                )
+
+        query = query.order_by(*sort_criteria)
+        query = query.add_column(
+            func.row_number().over(order_by=sort_criteria).label("row_num")
+        )
+    else:
+        query = query.add_column(func.row_number().over().label("row_num"))
 
     if limit:
         query = query.limit(limit)
     if offset:
         query = query.offset(offset)
 
-    relevant_logs = query.subquery()
+    relevant_log_events = query.subquery()
 
     query = (
         session.query(
             Log,
             LogEvent.created_at.label("log_event_ts"),
-            relevant_logs.c.count,
         )
         .join(
             LogEvent,
             LogEvent.id == Log.log_event_id,
         )
         .join(
-            relevant_logs,
-            relevant_logs.c.id == LogEvent.id,
+            relevant_log_events,
+            relevant_log_events.c.id == LogEvent.id,
         )
-        .where(Log.log_event_id.in_(select(relevant_logs.c.id)))
-        .order_by(Log.created_at)
+        .order_by(relevant_log_events.c.row_num)
     )
 
     all_logs = query.all()
     if return_ids_only:
         return list(set([log[0].log_event_id for log in all_logs]))
 
-    formatted_logs, count = format_logs(all_logs)
+    formatted_logs = format_logs(all_logs)
 
     params = dict()
     logs = []
@@ -627,6 +668,8 @@ def get_logs(
                 },
             },
         )
+
+    count = session.query(func.count(LogEvent.id)).first()[0]
 
     return {
         "params": params,

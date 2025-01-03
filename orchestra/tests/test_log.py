@@ -869,6 +869,82 @@ async def test_get_logs_w_sorting(client: AsyncClient):
         "safe": False,
         "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
     }
+    assert result["logs"][4]["entries"] == {
+        "description": "lava",
+        "metadata": [1, 5, 6],
+        "_data": {"a": 2, "b": 4},
+        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][5]["entries"] == {
+        "description": "air",
+        "metadata": [3, 8, 5],
+        "_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][6]["entries"] == {
+        "_data": {"a": 8, "b": 10},
+        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+
+    # descending safety, then ascending temperature
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={
+            "sorting": json.dumps({
+                "safe": "descending",
+                "temperature": "ascending"
+            })
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 7
+    breakpoint()
+    assert result["logs"][0]["entries"] == {
+        "description": "freezing water",
+        "temperature": 0.0,
+        "state": "liquid->solid",
+        "safe": True,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][1]["entries"] == {
+        "description": "freezing nitrogen",
+        "temperature": -210.0,
+        "state": "liquid->solid",
+        "safe": False,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][2]["entries"] == {
+        "description": "boiling water",
+        "temperature": 100.0,
+        "state": "liquid->gas",
+        "safe": False,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][3]["entries"] == {
+        "description": "surface of the sun",
+        "temperature": 6000.0,
+        "state": "gas",
+        "safe": False,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][4]["entries"] == {
+        "description": "lava",
+        "metadata": [1, 5, 6],
+        "_data": {"a": 2, "b": 4},
+        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][5]["entries"] == {
+        "description": "air",
+        "metadata": [3, 8, 5],
+        "_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][6]["entries"] == {
+        "_data": {"a": 8, "b": 10},
+        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
 
 
 @pytest.mark.anyio
