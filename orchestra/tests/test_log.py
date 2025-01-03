@@ -1439,5 +1439,62 @@ async def test_set_field_typing_non_homogeneous(client: AsyncClient):
     )
 
 
+@pytest.mark.anyio
+async def test_get_logs_with_type_check(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    # Create log entries with different types
+    _ = await _create_logs_for_filtering_n_metrics(client, project_name)
+
+    # Test filtering for float type
+    response = await client.get(
+        f"/v0/logs?project={project_name}&filter_expr=type(temperature) is float",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 4
+
+    # Test filtering for str type
+    response = await client.get(
+        f"/v0/logs?project={project_name}&filter_expr=type(state) is str",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 4
+
+    # Test filtering for a bool type
+    response = await client.get(
+        f"/v0/logs?project={project_name}&filter_expr=type(safe) is bool",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 4
+
+    # Test filtering for a timestamp type
+    response = await client.get(
+        f"/v0/logs?project={project_name}&filter_expr=type(timestamp) is timestamp",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 7
+
+    # Test filtering for a non-existent type
+    response = await client.get(
+        f"/v0/logs?project={project_name}&filter_expr=type(timestamp) is str",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 0
+
+    # Test filtering using `is not`
+    response = await client.get(
+        f"/v0/logs?project={project_name}&filter_expr=type(timestamp) is not str",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 7
+
+
 if __name__ == "__main__":
     pass
