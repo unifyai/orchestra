@@ -900,7 +900,6 @@ async def test_get_logs_w_sorting(client: AsyncClient):
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result["logs"]) == 7
-    breakpoint()
     assert result["logs"][0]["entries"] == {
         "description": "freezing water",
         "temperature": 0.0,

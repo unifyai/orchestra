@@ -596,9 +596,9 @@ def get_logs(
                 else_=cast(subq.c.value, Float)
             )
             if sort_mode == "ascending":
-                sort_criteria.append(criterion.asc())
+                sort_criteria.append(criterion.asc().nulls_last())
             elif sort_mode == "descending":
-                sort_criteria.append(criterion.desc())
+                sort_criteria.append(criterion.desc().nulls_last())
             else:
                 raise HTTPException(
                     status_code=400,
