@@ -34,7 +34,7 @@ class FieldTypeDAO:
 
     def update_field_type(self, project_id: int, field_name: str, value) -> None:
         """Update the type for a specific field in a project."""
-        field_type = self._serialize_type(value)
+        field_type = LogDAO.infer_type(value)
         query = select(FieldType).where(
             FieldType.project_id == project_id,
             FieldType.field_name == field_name,
