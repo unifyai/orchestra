@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy import INTEGER, Float, case, cast, desc, func, select
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import LogDAO, OverwriteError
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
@@ -58,6 +59,7 @@ def create_log(
     request_fastapi: Request,
     request: CreateLogConfig,
     project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
     log_dao: LogDAO = Depends(),
 ):
@@ -85,8 +87,26 @@ def create_log(
 
     entries_explicit_types = request.entries.pop("explicit_types", None)
     params_explicit_types = request.params.pop("explicit_types", None)
+    field_types = field_type_dao.get_field_types(project_id)
+    strongly_typed = request.strongly_typed
     entries = request.entries
     params = request.params
+
+    def enforce_types(field_name, value):
+        if field_name in field_types:
+            expected_type = field_types[field_name]
+            original_type = LogDAO.infer_type(value)
+            if original_type != expected_type:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Type mismatch for field '{field_name}': expected {expected_type}, got {original_type}",
+                )
+        else:
+            # If strongly_typed is True, set the type for the first entry
+            if strongly_typed is True or (
+                isinstance(strongly_typed, list) and field_name in strongly_typed
+            ):
+                field_type_dao.create_field_type(project_id, field_name, value)
 
     for k, v in params.items():
         # see if there is any param with the same value
@@ -119,6 +139,7 @@ def create_log(
 
     # Store each key, value entry pair for the log
     for k, v in entries.items():
+        enforce_types(k, v)
         log_dao.create_from_raw_k_v(
             project_id=project_id,
             log_event_id=log_event_id,
@@ -219,6 +240,7 @@ def update_logs(
     body: UpdateLogRequest,
     log_dao: LogDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
 ):
     """
     Updates multiple logs with the provided entries. Each entry will be either added
@@ -257,8 +279,25 @@ def update_logs(
                 )
 
             explicit_types = this_data.pop("explicit_types", None)
-
+            field_types = field_type_dao.get_field_types(project_id)
+            strongly_typed = body.strongly_typed
             for k, v in this_data.items():
+                # Check and enforce types
+                if k in field_types:
+                    expected_type = field_types[k]
+                    original_type = LogDAO.infer_type(v)
+                    if original_type != expected_type:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Type mismatch for field '{k}': expected {expected_type}, got {original_type}",
+                        )
+                else:
+                    # If strongly_typed is True, set the type for the first entry
+                    if strongly_typed is True or (
+                        isinstance(strongly_typed, list) and k in strongly_typed
+                    ):
+                        field_type_dao.create_field_type(project_id, k, v)
+
                 # see if there is any param with the same value
                 existing = log_dao.filter(
                     key=k,
@@ -535,8 +574,8 @@ def get_logs(
     context: str = Query(
         None,
         description="The context (prepending '/' seperated field names) from which to "
-                    "retrieve the logs.",
-        example="subjects/science/physics"
+        "retrieve the logs.",
+        example="subjects/science/physics",
     ),
     filter_expr: Optional[str] = Query(
         None,
