@@ -560,22 +560,22 @@ reduction_methods = {
 }
 
 
-def format_logs(all_logs):
+def format_logs(all_logs, context_len=0):
     formatted_entries = dict()
     count = 0
-    for log in all_logs:
-        count = log[-1]
-        log_event_id = log[0].log_event_id
+    for log, ts, count in all_logs:
+        key = log.key[context_len:]
+        log_event_id = log.log_event_id
         if log_event_id not in formatted_entries:
             formatted_entries[log_event_id] = {"entries": {}, "versions": {}}
         assert (
-            log[0].key not in formatted_entries[log_event_id]
-        ), f"found duplicates for key {log[0].key} with log_id {log_event_id}"
-        formatted_entries[log_event_id]["ts"] = log[1].strftime("%Y-%m-%d %H:%M:%S")
-        formatted_entries[log_event_id]["entries"][log[0].key] = json.loads(
-            log[0].value,
+            key not in formatted_entries[log_event_id]
+        ), f"found duplicates for key {key} with log_id {log_event_id}"
+        formatted_entries[log_event_id]["ts"] = ts.strftime("%Y-%m-%d %H:%M:%S")
+        formatted_entries[log_event_id]["entries"][key] = json.loads(
+            log.value,
         )
-        formatted_entries[log_event_id]["versions"][log[0].key] = log[0].version
+        formatted_entries[log_event_id]["versions"][key] = log.version
     return formatted_entries, count
 
 
