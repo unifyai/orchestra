@@ -1121,9 +1121,11 @@ def get_field_typing(
     ),
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
-    Returns the current typing for each field in the project.
+    Returns a dictionary of field names and their types for the specified project.
+    Strongly typed fields return their type, while others return None.
     """
     try:
         user_id = request_fastapi.state.user_id
@@ -1131,7 +1133,24 @@ def get_field_typing(
     except IndexError:
         raise not_found(f"Project {project}")
 
-    return field_type_dao.get_field_types(project_obj.id)
+    field_types = field_type_dao.get_field_types(project_obj.id)
+    query = (
+        session.query(Log.key)
+        .join(LogEvent, LogEvent.id == Log.log_event_id)
+        .filter(LogEvent.project_id == project_obj.id)
+        .distinct()
+    )
+
+    all_field_names = [field.key for field in query.all()]
+    result = {}
+
+    for field_name in all_field_names:
+        if field_name in field_types:
+            result[field_name] = field_types[field_name]
+        else:
+            result[field_name] = None
+
+    return result
 
 
 @router.post(
