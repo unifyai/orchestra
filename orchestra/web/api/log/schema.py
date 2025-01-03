@@ -103,3 +103,10 @@ class DeleteLogEntryRequest(BaseModel):
         ],
         min_items=1,
     )
+
+
+class SetFieldTypingRequest(BaseModel):
+    types: Dict[str, bool] = Field(
+        ...,
+        description="Dict of field names and booleans as to whether the field should be typed.",
+    )
