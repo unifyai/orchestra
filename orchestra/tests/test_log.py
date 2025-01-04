@@ -1588,7 +1588,7 @@ async def test_get_logs_with_type_check(client: AsyncClient):
     _ = await _create_project(client, project_name)
 
     # Create log entries with different types
-    _ = await _create_logs_for_filtering_n_metrics(client, project_name)
+    _ = await _create_logs_for_filtering_metrics_n_sorting(client, project_name)
 
     # Test filtering for float type
     response = await client.get(
