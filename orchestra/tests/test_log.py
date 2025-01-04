@@ -525,7 +525,7 @@ async def test_get_logs_from_ids(client: AsyncClient):
     response = await client.get(
         f"/v0/logs?project={project_name}",
         params={"from_ids": from_ids},
-        headers=HEADERS
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -556,7 +556,7 @@ async def test_get_logs_excluding_ids(client: AsyncClient):
     response = await client.get(
         f"/v0/logs?project={project_name}",
         params={"exclude_ids": exclude_ids},
-        headers=HEADERS
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
