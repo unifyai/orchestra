@@ -13,6 +13,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from orchestra.db.base import Base
@@ -556,6 +557,25 @@ class Log(Base):
     key = Column(String, nullable=False)
     value = Column(String)
     version = Column(Integer)
+    inferred_type = Column(String)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+    __table_args__ = (UniqueConstraint("log_event_id", "key"),)
+
+
+class DerivedLog(Base):
+    __tablename__ = "derived_log"
+
+    id = Column(Integer, primary_key=True)
+    log_event_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    equation = Column(String)
+    referenced_logs = Column(JSONB)
+    value = Column(String)
     inferred_type = Column(String)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())

@@ -153,6 +153,126 @@ def create_log(
     return log_event_id
 
 
+@router.post(
+    "/log",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Log created successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def create_derived_log(
+    request_fastapi: Request,
+    request: CreateLogConfig,
+    project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    log_event_dao: LogEventDAO = Depends(),
+    log_dao: LogDAO = Depends(),
+):
+    """
+    Creates a log associated to a project. Logs are
+    LLM-call-level data that might depend on other variables.
+
+    A "explicit_types" dictionary can be passed as part of the `entries`.
+    If present, any matching key inside this dictionary will override the
+    inferred type of that particular entry.
+
+    This method returns the id of the new stored log.
+    """
+    # check if the project exists
+    try:
+        # TODO: Add organization id
+        user_id = request_fastapi.state.user_id
+        project = project_dao.filter(user_id=user_id, name=request.project)
+        project_id = project[0][0].id
+    except IndexError:
+        raise not_found("Project")
+
+    # Create log_event and get its id
+    log_event_id = log_event_dao.create(project_id=project_id)
+
+    entries_explicit_types = request.entries.pop("explicit_types", None)
+    params_explicit_types = request.params.pop("explicit_types", None)
+    field_types = field_type_dao.get_field_types(project_id)
+    strongly_typed = request.strongly_typed
+    entries = request.entries
+    params = request.params
+
+    def enforce_types(field_name, value):
+        if field_name in field_types:
+            expected_type = field_types[field_name]
+            original_type = LogDAO.infer_type(value)
+            if original_type != expected_type:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Type mismatch for field '{field_name}': expected {expected_type}, got {original_type}",
+                )
+        else:
+            # If strongly_typed is True, set the type for the first entry
+            if strongly_typed is True or (
+                isinstance(strongly_typed, list) and field_name in strongly_typed
+            ):
+                field_type_dao.create_field_type(project_id, field_name, value)
+
+    for k, v in params.items():
+        enforce_types(k, v)
+        # see if there is any param with the same value
+        existing_param = log_dao.filter(
+            key=k,
+            value=json.dumps(v),
+            project_id=project_id,
+        )
+        if existing_param:
+            version = existing_param[0][0].version
+        else:
+            # fetch the highest version for that param
+            existing_params = log_dao.filter(key=k, project_id=project_id)
+            highest_version = max([-1] + [e[0].version for e in existing_params])
+            version = highest_version + 1
+        try:
+            log_dao.create_from_raw_k_v(
+                project_id=project_id,
+                log_event_id=log_event_id,
+                raw_k=k,
+                raw_v=v,
+                version=version,
+                explicit_types=params_explicit_types,
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Found different value for log params with same version.",
+            )
+
+    # Store each key, value entry pair for the log
+    for k, v in entries.items():
+        enforce_types(k, v)
+        log_dao.create_from_raw_k_v(
+            project_id=project_id,
+            log_event_id=log_event_id,
+            raw_k=k,
+            raw_v=v,
+            explicit_types=entries_explicit_types,
+        )
+
+    return log_event_id
+
+
 @router.delete(
     "/logs",
     responses={
