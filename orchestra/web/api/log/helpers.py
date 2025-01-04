@@ -62,7 +62,7 @@ def _tokenize(s):
             r'"(?:[^"\\]|\\.)*?"|\'(?:[^\'\\]|\\.)*?\'',
         ),  # String with non-greedy quantifier
         # Operators, note the order to match 'not in' before 'not' and 'in'
-        ("OP", r"==|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)"),
+        ("OP", r"==|!=|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)"),
         ("TYPE_CHECK", r"type"),  # Type check expression
         ("LEN", r"len"),  # length
         ("EXISTS", r"exists"),  # exists
@@ -187,6 +187,7 @@ class _Parser:
         node = self.primary()
         while self.current_token[0] == "OP" and self.current_token[1] in (
             "==",
+            "!=",
             "<",
             ">",
             "<=",
