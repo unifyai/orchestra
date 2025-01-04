@@ -1383,7 +1383,7 @@ async def test_create_log_strongly_typed(client: AsyncClient):
             "params": {"a/b/param1": "test"},
             "entries": {
                 "score": 10,
-                "response": "hello",
+                "logged_at": datetime.now(timezone.utc).isoformat(),
             },
         },
         headers=HEADERS,
@@ -1400,7 +1400,7 @@ async def test_create_log_strongly_typed(client: AsyncClient):
     assert field_types_response.json() == {
         "a/b/param1": "str",
         "score": "int",
-        "response": "str",
+        "logged_at": "timestamp",
     }
 
 
