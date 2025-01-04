@@ -514,129 +514,122 @@ async def test_get_logs_w_context(client: AsyncClient):
     # get full context log
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        headers=HEADERS
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
     response = response.json()
     del response["logs"][0]["ts"]
     assert response == {
-        'params':
-            {
-                'a/b/param1':
-                    {
-                        '0': 'test'
-                    }
+        "params": {
+            "a/b/param1": {
+                "0": "test",
             },
-        'logs': [
+        },
+        "logs": [
             {
-                'id': 1,
-                'entries': {
-                    'a/b/c/input': 'Some input data',
-                    'a/b/c/boolean_input': True,
-                    'a/b/c/numeric_input': 4.5
+                "id": 1,
+                "entries": {
+                    "a/b/c/input": "Some input data",
+                    "a/b/c/boolean_input": True,
+                    "a/b/c/numeric_input": 4.5,
                 },
-                'params': {
-                'a/b/param1': '0'
-                }
-            }
+                "params": {
+                    "a/b/param1": "0",
+                },
+            },
         ],
-        'count': 1
+        "count": 1,
     }
 
     # get log with "a" context
     response = await client.get(
         f"/v0/logs?project={project_name}",
         params={"context": "a"},
-        headers=HEADERS
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
     response = response.json()
     del response["logs"][0]["ts"]
     assert response == {
-        'params':
-            {
-                'b/param1':
-                    {
-                        '0': 'test'
-                    }
+        "params": {
+            "b/param1": {
+                "0": "test",
             },
-        'logs': [
+        },
+        "logs": [
             {
-                'id': 1,
-                'entries': {
-                    'b/c/input': 'Some input data',
-                    'b/c/boolean_input': True,
-                    'b/c/numeric_input': 4.5
+                "id": 1,
+                "entries": {
+                    "b/c/input": "Some input data",
+                    "b/c/boolean_input": True,
+                    "b/c/numeric_input": 4.5,
                 },
-                'params': {
-                'b/param1': '0'
-                }
-            }
+                "params": {
+                    "b/param1": "0",
+                },
+            },
         ],
-        'count': 1
+        "count": 1,
     }
 
     # get log with "a/b" context
     response = await client.get(
         f"/v0/logs?project={project_name}",
         params={"context": "a/b"},
-        headers=HEADERS
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
     response = response.json()
     del response["logs"][0]["ts"]
     assert response == {
-        'params':
-            {
-                'param1':
-                    {
-                        '0': 'test'
-                    }
+        "params": {
+            "param1": {
+                "0": "test",
             },
-        'logs': [
+        },
+        "logs": [
             {
-                'id': 1,
-                'entries': {
-                    'c/input': 'Some input data',
-                    'c/boolean_input': True,
-                    'c/numeric_input': 4.5
+                "id": 1,
+                "entries": {
+                    "c/input": "Some input data",
+                    "c/boolean_input": True,
+                    "c/numeric_input": 4.5,
                 },
-                'params': {
-                'param1': '0'
-                }
-            }
+                "params": {
+                    "param1": "0",
+                },
+            },
         ],
-        'count': 1
+        "count": 1,
     }
 
     # get log with "a/b/c" context
     response = await client.get(
         f"/v0/logs?project={project_name}",
         params={"context": "a/b/c"},
-        headers=HEADERS
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
     response = response.json()
     del response["logs"][0]["ts"]
     assert response == {
-        'params':
-            {},
-        'logs': [
+        "params": {},
+        "logs": [
             {
-                'id': 1,
-                'entries': {
-                    'input': 'Some input data',
-                    'boolean_input': True,
-                    'numeric_input': 4.5
+                "id": 1,
+                "entries": {
+                    "input": "Some input data",
+                    "boolean_input": True,
+                    "numeric_input": 4.5,
                 },
-                'params': {}
-            }
+                "params": {},
+            },
         ],
-        'count': 1
+        "count": 1,
     }
 
 
@@ -681,7 +674,7 @@ async def test_get_logs_latest_timestamp(client: AsyncClient):
     assert response.status_code == 200, response.json()
     response = response.json()
     assert isinstance(response, str)
-    t1 = datetime.fromisoformat(response).astimezone(timezone.utc)
+    t1 = datetime.fromisoformat(response).replace(tzinfo=timezone.utc)
     assert t1 > t0
 
     # add new entries
@@ -701,7 +694,7 @@ async def test_get_logs_latest_timestamp(client: AsyncClient):
     assert response.status_code == 200, response.json()
     response = response.json()
     assert isinstance(response, str)
-    t2 = datetime.fromisoformat(response).astimezone(timezone.utc)
+    t2 = datetime.fromisoformat(response).replace(tzinfo=timezone.utc)
     assert t2 > t1
 
 
@@ -1373,6 +1366,289 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
     assert result["logs"] == [
         {"id": 2, "entries": {"a/b/c/numeric_input": 4.5}, "params": {}},
     ]
+
+
+@pytest.mark.anyio
+async def test_create_log_strongly_typed(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    # Create a log with strongly typed fields
+    response = await client.post(
+        "/v0/log",
+        json={
+            "project": project_name,
+            "params": {"a/b/param1": "test"},
+            "entries": {
+                "score": 10,
+                "response": "hello",
+            },
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+
+    # Verify that field types are set correctly
+    field_types_response = await client.get(
+        f"/v0/logs/field_typing?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    assert field_types_response.json() == {
+        "a/b/param1": "str",
+        "score": "int",
+        "response": "str",
+    }
+
+
+@pytest.mark.anyio
+async def test_create_log_type_mismatch(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    response = await client.post(
+        "/v0/log",
+        json={
+            "project": project_name,
+            "params": {"a/b/param1": "test"},
+            "entries": {
+                "score": 10,
+                "response": "hello",
+            },
+        },
+        headers=HEADERS,
+    )
+    # Create a log with a type mismatch
+    response = await client.post(
+        "/v0/log",
+        json={
+            "project": project_name,
+            "params": {"a/b/param1": True},  # This should cause a type mismatch
+            "entries": {
+                "score": "not_an_int",
+                "response": "hello",
+            },
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert "Type mismatch for field" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_update_logs_strongly_typed(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    # Create a log first
+    response1 = await _create_log(client, project_name)
+    log_id1 = response1.json()
+
+    # Update the log with strongly typed fields
+    response = await client.put(
+        f"/v0/logs",
+        json={
+            "ids": [log_id1],
+            "entries": {
+                "a/b/c/input": "new data",
+                "a/b/c/numeric_input": -12.0,
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs updated successfully!"
+
+
+@pytest.mark.anyio
+async def test_update_logs_type_mismatch(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    # Create a log first
+    response1 = await _create_log(client, project_name)
+    log_id1 = response1.json()
+
+    # Update the log with a type mismatch
+    response = await client.put(
+        f"/v0/logs",
+        json={
+            "ids": [log_id1],
+            "entries": {
+                "a/b/c/numeric_input": "not_an_int",  # This should cause a type mismatch
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert "Type mismatch for field" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_get_field_typing(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    await _create_log(client, project_name)
+
+    # Set field typing for the log entries
+    response = await client.post(
+        f"/v0/logs/field_typing",
+        params={"project": project_name},
+        json={
+            "types": {
+                "a/b/c/input": True,
+                "a/b/c/boolean_input": True,
+                "a/b/c/numeric_input": False,
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["info"] == "Field typing updated successfully!"
+
+    field_types_response = await client.get(
+        f"/v0/logs/field_typing?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+
+    field_types = field_types_response.json()
+    assert field_types["a/b/c/input"] == "str"
+    assert field_types["a/b/c/boolean_input"] == "bool"
+    assert field_types["a/b/c/numeric_input"] is None  # This field should return None
+
+
+@pytest.mark.anyio
+async def test_set_field_typing_homogeneous(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    await _create_log(client, project_name)
+
+    response = await client.post(
+        f"/v0/logs/field_typing",
+        params={"project": project_name},
+        json={"types": {"a/b/param1": True, "a/b/c/input": False}},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["info"] == "Field typing updated successfully!"
+
+    # Verify that the field type is set correctly
+    field_types_response = await client.get(
+        f"/v0/logs/field_typing?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    assert field_types_response.json()["a/b/c/input"] is None
+
+
+@pytest.mark.anyio
+async def test_set_field_typing_non_homogeneous(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    # create a log entry (with strongly_typed=True)
+    await _create_log(client, project_name)
+
+    # set strongly_typed as False for the field 'a/b/c/numeric_input'
+    response = await client.post(
+        f"/v0/logs/field_typing",
+        params={"project": project_name},
+        json={"types": {"a/b/c/numeric_input": False}},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["info"] == "Field typing updated successfully!"
+
+    # now add a non-homogenous entry
+    response = await client.post(
+        "/v0/log",
+        json={
+            "project": project_name,
+            "entries": {
+                "a/b/c/numeric_input": True,
+            },
+        },
+        headers=HEADERS,
+    )
+
+    # setting strongly_typed as True for 'a/b/c/numeric_input' should fail!
+    response = await client.post(
+        f"/v0/logs/field_typing",
+        params={"project": project_name},
+        json={"types": {"a/b/c/numeric_input": True}},
+        headers=HEADERS,
+    )
+    assert response.status_code == 400
+    assert (
+        "Cannot enable typing for field 'a/b/c/numeric_input' as existing logs have different types."
+        in response.json()["detail"]
+    )
+
+
+@pytest.mark.anyio
+async def test_get_logs_with_type_check(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    # Create log entries with different types
+    _ = await _create_logs_for_filtering_n_metrics(client, project_name)
+
+    # Test filtering for float type
+    response = await client.get(
+        f"/v0/logs?project={project_name}&filter_expr=type(temperature) is float",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 4
+
+    # Test filtering for str type
+    response = await client.get(
+        f"/v0/logs?project={project_name}&filter_expr=type(state) is str",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 4
+
+    # Test filtering for a bool type
+    response = await client.get(
+        f"/v0/logs?project={project_name}&filter_expr=type(safe) is bool",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 4
+
+    # Test filtering for a timestamp type
+    response = await client.get(
+        f"/v0/logs?project={project_name}&filter_expr=type(timestamp) is timestamp",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 7
+
+    # Test filtering for a non-existent type
+    response = await client.get(
+        f"/v0/logs?project={project_name}&filter_expr=type(timestamp) is str",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 0
+
+    # Test filtering using `is not`
+    response = await client.get(
+        f"/v0/logs?project={project_name}&filter_expr=type(timestamp) is not str",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 7
 
 
 if __name__ == "__main__":
