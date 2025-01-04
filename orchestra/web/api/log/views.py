@@ -527,6 +527,8 @@ def _get_logs_query(
     context: Optional[str],
     filter_expr: Optional[str],
     sorting: Optional[str],
+    from_ids: Optional[List[int]],
+    exclude_ids: Optional[List[int]],
     limit: Optional[int],
     offset: int,
     project_dao: ProjectDAO,
@@ -541,8 +543,17 @@ def _get_logs_query(
     # TODO: Deal with organisation IDs
 
     query = session.query(
-        LogEvent.id,
+        LogEvent.id
     ).where(LogEvent.project_id == project_obj.id)
+
+    assert not (from_ids and exclude_ids), \
+        (f"Only one of from_ids or exclude_ids can be set, "
+         f"but found values {from_ids} and {exclude_ids}.")
+
+    if from_ids:
+        query = query.where(LogEvent.id.in_(from_ids))
+    elif exclude_ids:
+        query = query.where(LogEvent.id.notin_(exclude_ids))
 
     query = query.order_by(LogEvent.created_at)
     if filter_expr:
@@ -724,6 +735,22 @@ def get_logs(
         "remaining in order when the first key values are equal.",
         example={"score": "ascending", "timestamp": "descending"},
     ),
+    from_ids: Optional[List[int]] = Query(
+        None,
+        description="The log ids which are permitted to be included in the search. "
+                    "Each log id listed does not need to be returned, but no logs "
+                    "which are not included in this list can be returned. This "
+                    "argument *cannot* be set if `exclude_ids` is set.",
+        example=[0, 1, 2]
+    ),
+    exclude_ids: Optional[List[int]] = Query(
+        None,
+        description="The log ids which cannot be returned from the search. "
+                    "None of the listed ids will be returned, even if the logs are "
+                    "valid as per the filtering expression etc. This argument *cannot* "
+                    "be set if `from_ids` is set.",
+        example=[0, 1, 2]
+    ),
     limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
     return_ids_only: bool = False,
@@ -739,6 +766,8 @@ def get_logs(
         context,
         filter_expr,
         sorting,
+        from_ids,
+        exclude_ids,
         limit,
         offset,
         project_dao,
@@ -856,6 +885,22 @@ def get_logs_latest_timestamp(
                     "remaining in order when the first key values are equal.",
         example={"score": "ascending", "timestamp": "descending"},
     ),
+    from_ids: Optional[List[int]] = Query(
+        None,
+        description="The log ids which are permitted to be included in the search. "
+                    "Each log id listed does not need to be returned, but no logs "
+                    "which are not included in this list can be returned. This "
+                    "argument *cannot* be set if `exclude_ids` is set.",
+        example=[0, 1, 2]
+    ),
+    exclude_ids: Optional[List[int]] = Query(
+        None,
+        description="The log ids which cannot be returned from the search. "
+                    "None of the listed ids will be returned, even if the logs are "
+                    "valid as per the filtering expression etc. This argument *cannot* "
+                    "be set if `from_ids` is set.",
+        example=[0, 1, 2]
+    ),
     limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
     project_dao: ProjectDAO = Depends(),
@@ -871,6 +916,8 @@ def get_logs_latest_timestamp(
         context,
         filter_expr,
         sorting,
+        from_ids,
+        exclude_ids,
         limit,
         offset,
         project_dao,
