@@ -1080,6 +1080,31 @@ async def test_get_logs_w_filtering(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_logs_w_str_filtering(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+    _ = await _create_several_logs(client, project_name)
+
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "'2' in str(_data)"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 2
+
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": """'{"a": 2' in str(_data)"""},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 1
+
+
+@pytest.mark.anyio
 async def test_get_logs_w_sorting(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)

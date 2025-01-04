@@ -65,6 +65,7 @@ def _tokenize(s):
         ("OP", r"==|!=|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)"),
         ("TYPE_CHECK", r"type"),  # Type check expression
         ("LEN", r"len"),  # length
+        ("STR", r"str"),  # str function
         ("EXISTS", r"exists"),  # exists
         ("VERSION", r"version"),  # version
         ("BOOLEAN", r"(?<!\w)(?:True|False)(?!\w)"),  # Booleans
@@ -104,6 +105,8 @@ def _tokenize(s):
             tokens.append(("IDENTIFIER", value))
         elif kind == "LEN":
             tokens.append(("LEN", value))
+        elif kind == "STR":
+            tokens.append(("STR", value))
         elif kind == "TYPE_CHECK":
             tokens.append(("TYPE_CHECK", value))
         elif kind == "EXISTS":
@@ -206,11 +209,13 @@ class _Parser:
     def primary(self):
         if self.current_token[0] in (
             "LEN",
+            "STR",
             "EXISTS",
             "VERSION",
             "TYPE_CHECK",
         ) and self.current_token[1] in (
             "len",
+            "str",
             "exists",
             "version",
             "type",
@@ -224,12 +229,12 @@ class _Parser:
                     self.advance()
                 else:
                     raise RuntimeError(
-                        'Expected ")" after len, exists or version function',
+                        'Expected ")" after len, str, exists or version function',
                     )
                 return {"operand": fn, "rhs": expr}
             else:
                 raise RuntimeError(
-                    'Expected "(" after len, exists, or version function',
+                    'Expected "(" after len, str, exists, or version function',
                 )
         elif self.current_token[0] == "LPAREN":
             self.advance()
@@ -422,6 +427,36 @@ def build_filter(filter_dict, log_event_alias, session):
                     return subq.as_scalar() == length
                 elif operand == "!=":
                     return subq.as_scalar() != length
+
+        if isinstance(lhs, dict) and rhs.get("operand") == "str":
+            identifier = rhs.get("rhs", {}).get("value")
+            lhs_value = lhs["value"]
+            if identifier:
+                log_alias = aliased(Log)
+                subq = (
+                    session.query(log_alias.id)
+                    .filter(
+                        log_alias.log_event_id == log_event_alias.id,
+                        log_alias.key == identifier,
+                    )
+                    .with_entities(cast(log_alias.value, String))
+                )
+                if operand == "in":
+                    return subq.filter(log_alias.value.contains(lhs_value)).exists()
+                elif operand == "not in":
+                    return subq.filter(~log_alias.value.contains(lhs_value)).exists()
+                elif operand == "<":
+                    return lhs_value < subq.as_scalar()
+                elif operand == ">":
+                    return lhs_value > subq.as_scalar()
+                elif operand == "<=":
+                    return lhs_value <= subq.as_scalar()
+                elif operand == ">=":
+                    return lhs_value >= subq.as_scalar()
+                elif operand == "==":
+                    return lhs_value == subq.as_scalar()
+                elif operand == "!=":
+                    return lhs_value != subq.as_scalar()
 
         if isinstance(lhs, dict) and lhs.get("operand") == "version":
             version = rhs["value"]
