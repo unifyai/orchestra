@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy import INTEGER, Float, Boolean, case, cast, desc, func, select
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import LogDAO, OverwriteError
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
@@ -18,6 +19,7 @@ from orchestra.web.api.log.schema import (
     CreateLogConfig,
     DeleteLogEntryRequest,
     DeleteLogsRequest,
+    SetFieldTypingRequest,
     UpdateLogRequest,
 )
 from orchestra.web.api.utils.http_responses import not_found
@@ -58,6 +60,7 @@ def create_log(
     request_fastapi: Request,
     request: CreateLogConfig,
     project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
     log_dao: LogDAO = Depends(),
 ):
@@ -85,10 +88,29 @@ def create_log(
 
     entries_explicit_types = request.entries.pop("explicit_types", None)
     params_explicit_types = request.params.pop("explicit_types", None)
+    field_types = field_type_dao.get_field_types(project_id)
+    strongly_typed = request.strongly_typed
     entries = request.entries
     params = request.params
 
+    def enforce_types(field_name, value):
+        if field_name in field_types:
+            expected_type = field_types[field_name]
+            original_type = LogDAO.infer_type(value)
+            if original_type != expected_type:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Type mismatch for field '{field_name}': expected {expected_type}, got {original_type}",
+                )
+        else:
+            # If strongly_typed is True, set the type for the first entry
+            if strongly_typed is True or (
+                isinstance(strongly_typed, list) and field_name in strongly_typed
+            ):
+                field_type_dao.create_field_type(project_id, field_name, value)
+
     for k, v in params.items():
+        enforce_types(k, v)
         # see if there is any param with the same value
         existing_param = log_dao.filter(
             key=k,
@@ -119,6 +141,7 @@ def create_log(
 
     # Store each key, value entry pair for the log
     for k, v in entries.items():
+        enforce_types(k, v)
         log_dao.create_from_raw_k_v(
             project_id=project_id,
             log_event_id=log_event_id,
@@ -219,6 +242,7 @@ def update_logs(
     body: UpdateLogRequest,
     log_dao: LogDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
 ):
     """
     Updates multiple logs with the provided entries. Each entry will be either added
@@ -257,8 +281,25 @@ def update_logs(
                 )
 
             explicit_types = this_data.pop("explicit_types", None)
-
+            field_types = field_type_dao.get_field_types(project_id)
+            strongly_typed = body.strongly_typed
             for k, v in this_data.items():
+                # Check and enforce types
+                if k in field_types:
+                    expected_type = field_types[k]
+                    original_type = LogDAO.infer_type(v)
+                    if original_type != expected_type:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Type mismatch for field '{k}': expected {expected_type}, got {original_type}",
+                        )
+                else:
+                    # If strongly_typed is True, set the type for the first entry
+                    if strongly_typed is True or (
+                        isinstance(strongly_typed, list) and k in strongly_typed
+                    ):
+                        field_type_dao.create_field_type(project_id, k, v)
+
                 # see if there is any param with the same value
                 existing = log_dao.filter(
                     key=k,
@@ -535,8 +576,8 @@ def get_logs(
     context: str = Query(
         None,
         description="The context (prepending '/' seperated field names) from which to "
-                    "retrieve the logs.",
-        example="subjects/science/physics"
+        "retrieve the logs.",
+        example="subjects/science/physics",
     ),
     filter_expr: Optional[str] = Query(
         None,
@@ -1100,3 +1141,162 @@ def get_log_fields(
             for key in items
         }
     return fields
+
+
+@router.get(
+    "/logs/field_typing",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "field1": "string",
+                        "field2": "int",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <project> not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def get_field_typing(
+    request_fastapi: Request,
+    project: str = Query(
+        description="Name of the project to get field types for.",
+        example="eval-project",
+    ),
+    project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    session=Depends(get_db_session),
+):
+    """
+    Returns a dictionary of field names and their types for the specified project.
+    Strongly typed fields return their type, while others return None.
+    """
+    try:
+        user_id = request_fastapi.state.user_id
+        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
+    except IndexError:
+        raise not_found(f"Project {project}")
+
+    field_types = field_type_dao.get_field_types(project_obj.id)
+    query = (
+        session.query(Log.key)
+        .join(LogEvent, LogEvent.id == Log.log_event_id)
+        .filter(LogEvent.project_id == project_obj.id)
+        .distinct()
+    )
+
+    all_field_names = [field.key for field in query.all()]
+    result = {}
+
+    for field_name in all_field_names:
+        if field_name in field_types:
+            result[field_name] = field_types[field_name]
+        else:
+            result[field_name] = None
+
+    return result
+
+
+@router.post(
+    "/logs/field_typing",
+    responses={
+        200: {
+            "description": "Field typing updated successfully.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Field typing updated successfully!",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Bad Request - Type mismatch or other validation errors.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Cannot enable typing for field '<field_name>' as existing logs have different types.",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <project> not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def set_field_typing(
+    request_fastapi: Request,
+    request: SetFieldTypingRequest,
+    project: str = Query(
+        description="Name of the project to get field types for.",
+        example="eval-project",
+    ),
+    project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    log_dao: LogDAO = Depends(),
+):
+    """
+    Sets the typing for specified fields in the project.
+    """
+    try:
+        user_id = request_fastapi.state.user_id
+        project_id = project_dao.filter(name=project, user_id=user_id)[0][0].id
+    except IndexError:
+        raise not_found(f"Project {project}")
+
+    # Check existing logs for each field
+    for field_name, should_type in request.types.items():
+        if should_type:  # If we want to turn typing on
+            existing_logs = log_dao.filter(
+                key=field_name,
+            )
+
+            # Check if all existing logs for this field are of the same type
+            existing_types = {type(json.loads(log[0].value)) for log in existing_logs}
+            if len(existing_types) > 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot enable typing for field '{field_name}' as existing logs have different types.",
+                )
+
+            # If all existing logs are of the same type, set the field type
+            existing_field_types = field_type_dao.get_field_types(project_id)
+            if field_name in existing_field_types:
+                # Update the field type if it exists
+                field_type_dao.update_field_type(
+                    project_id,
+                    field_name,
+                    json.loads(existing_logs[0][0].value),
+                )
+            else:
+                # Create a new field type if it does not exist
+                field_type_dao.create_field_type(
+                    project_id,
+                    field_name,
+                    json.loads(existing_logs[0][0].value),
+                )
+
+        else:  # If we want to turn typing off
+            field_type_dao.delete_field_type(project_id, field_name)
+
+    return {"info": "Field typing updated successfully!"}
