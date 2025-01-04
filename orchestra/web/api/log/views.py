@@ -533,7 +533,7 @@ def _get_logs_query(
     offset: int,
     project_dao: ProjectDAO,
     session,
-    latest_timestamp=False
+    latest_timestamp=False,
 ):
     try:
         user_id = request_fastapi.state.user_id
@@ -543,12 +543,13 @@ def _get_logs_query(
     # TODO: Deal with organisation IDs
 
     query = session.query(
-        LogEvent.id
+        LogEvent.id,
     ).where(LogEvent.project_id == project_obj.id)
 
-    assert not (from_ids and exclude_ids), \
-        (f"Only one of from_ids or exclude_ids can be set, "
-         f"but found values {from_ids} and {exclude_ids}.")
+    assert not (from_ids and exclude_ids), (
+        f"Only one of from_ids or exclude_ids can be set, "
+        f"but found values {from_ids} and {exclude_ids}."
+    )
 
     if from_ids:
         query = query.where(LogEvent.id.in_(from_ids))
@@ -602,7 +603,7 @@ def _get_logs_query(
                 raise HTTPException(
                     status_code=400,
                     detail="sort_mode must be 'ascending' or 'descending', "
-                           f"but found {sort_mode}.",
+                    f"but found {sort_mode}.",
                 )
 
         query = query.order_by(*sort_criteria)
@@ -738,18 +739,18 @@ def get_logs(
     from_ids: Optional[List[int]] = Query(
         None,
         description="The log ids which are permitted to be included in the search. "
-                    "Each log id listed does not need to be returned, but no logs "
-                    "which are not included in this list can be returned. This "
-                    "argument *cannot* be set if `exclude_ids` is set.",
-        example=[0, 1, 2]
+        "Each log id listed does not need to be returned, but no logs "
+        "which are not included in this list can be returned. This "
+        "argument *cannot* be set if `exclude_ids` is set.",
+        example=[0, 1, 2],
     ),
     exclude_ids: Optional[List[int]] = Query(
         None,
         description="The log ids which cannot be returned from the search. "
-                    "None of the listed ids will be returned, even if the logs are "
-                    "valid as per the filtering expression etc. This argument *cannot* "
-                    "be set if `from_ids` is set.",
-        example=[0, 1, 2]
+        "None of the listed ids will be returned, even if the logs are "
+        "valid as per the filtering expression etc. This argument *cannot* "
+        "be set if `from_ids` is set.",
+        example=[0, 1, 2],
     ),
     limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -771,7 +772,7 @@ def get_logs(
         limit,
         offset,
         project_dao,
-        session
+        session,
     )
     if return_ids_only:
         return list(set([log[0].log_event_id for log in all_logs]))
@@ -869,7 +870,7 @@ def get_logs_latest_timestamp(
     context: Optional[str] = Query(
         None,
         description="The context (prepending '/' seperated field names) from which to "
-                    "retrieve the logs.",
+        "retrieve the logs.",
         example="subjects/science/physics",
     ),
     filter_expr: Optional[str] = Query(
@@ -880,26 +881,26 @@ def get_logs_latest_timestamp(
     sorting: Optional[str] = Query(
         None,
         description="Dict with fields as keys and either 'ascending' or 'descending' "
-                    "as values. The first entry in the dict is the last field to be "
-                    "sorted by, which takes ultimate precedent, with other keys only "
-                    "remaining in order when the first key values are equal.",
+        "as values. The first entry in the dict is the last field to be "
+        "sorted by, which takes ultimate precedent, with other keys only "
+        "remaining in order when the first key values are equal.",
         example={"score": "ascending", "timestamp": "descending"},
     ),
     from_ids: Optional[List[int]] = Query(
         None,
         description="The log ids which are permitted to be included in the search. "
-                    "Each log id listed does not need to be returned, but no logs "
-                    "which are not included in this list can be returned. This "
-                    "argument *cannot* be set if `exclude_ids` is set.",
-        example=[0, 1, 2]
+        "Each log id listed does not need to be returned, but no logs "
+        "which are not included in this list can be returned. This "
+        "argument *cannot* be set if `exclude_ids` is set.",
+        example=[0, 1, 2],
     ),
     exclude_ids: Optional[List[int]] = Query(
         None,
         description="The log ids which cannot be returned from the search. "
-                    "None of the listed ids will be returned, even if the logs are "
-                    "valid as per the filtering expression etc. This argument *cannot* "
-                    "be set if `from_ids` is set.",
-        example=[0, 1, 2]
+        "None of the listed ids will be returned, even if the logs are "
+        "valid as per the filtering expression etc. This argument *cannot* "
+        "be set if `from_ids` is set.",
+        example=[0, 1, 2],
     ),
     limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -922,7 +923,7 @@ def get_logs_latest_timestamp(
         offset,
         project_dao,
         session,
-        latest_timestamp=True
+        latest_timestamp=True,
     )
 
 
