@@ -39,6 +39,10 @@ class CreateLogConfig(BaseModel):
             },
         },
     )
+    strongly_typed: Union[bool, List[str]] = Field(
+        default=True,
+        description="Enforce strong typing for fields.",
+    )
 
 
 class UpdateLogRequest(BaseModel):
@@ -74,6 +78,10 @@ class UpdateLogRequest(BaseModel):
         description="Whether to overwrite existing logs",
         example=False,
     )
+    strongly_typed: Union[bool, List[str]] = Field(
+        default=True,
+        description="Enforce strong typing for fields.",
+    )
 
 
 class DeleteLogsRequest(BaseModel):
@@ -94,4 +102,11 @@ class DeleteLogEntryRequest(BaseModel):
             ([458, 459, 460], "response"),
         ],
         min_items=1,
+    )
+
+
+class SetFieldTypingRequest(BaseModel):
+    types: Dict[str, bool] = Field(
+        ...,
+        description="Dict of field names and booleans as to whether the field should be typed.",
     )
