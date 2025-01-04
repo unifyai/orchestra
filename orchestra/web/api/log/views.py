@@ -6,7 +6,7 @@ import json
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from sqlalchemy import INTEGER, Float, Boolean, case, cast, desc, func, select
+from sqlalchemy import INTEGER, Float, case, cast, desc, func, select
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
@@ -627,7 +627,7 @@ def get_logs(
                 session.query(
                     LogEvent.id,
                     Log.value,
-                    Log.inferred_type
+                    Log.inferred_type,
                 )
                 .join(Log, LogEvent.id == Log.log_event_id)
                 .where(Log.key == key)
@@ -642,12 +642,14 @@ def get_logs(
             query = query.outerjoin(subq, subq.c.id == LogEvent.id)
             # Order
             criterion = case(
-                (subq.c.inferred_type == "bool",
-                 case(
-                     (subq.c.value.in_(["true", "True", "1"]), 1),
-                     else_=0
-                 )),
-                else_=cast(subq.c.value, Float)
+                (
+                    subq.c.inferred_type == "bool",
+                    case(
+                        (subq.c.value.in_(["true", "True", "1"]), 1),
+                        else_=0,
+                    ),
+                ),
+                else_=cast(subq.c.value, Float),
             )
             if sort_mode == "ascending":
                 sort_criteria.append(criterion.asc().nulls_last())
@@ -657,12 +659,12 @@ def get_logs(
                 raise HTTPException(
                     status_code=400,
                     detail="sort_mode must be 'ascending' or 'descending', "
-                           f"but found {sort_mode}."
+                    f"but found {sort_mode}.",
                 )
 
         query = query.order_by(*sort_criteria)
         query = query.add_column(
-            func.row_number().over(order_by=sort_criteria).label("row_num")
+            func.row_number().over(order_by=sort_criteria).label("row_num"),
         )
     else:
         query = query.add_column(func.row_number().over().label("row_num"))

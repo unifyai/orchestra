@@ -1063,10 +1063,12 @@ async def test_get_logs_w_sorting(client: AsyncClient):
     response = await client.get(
         f"/v0/logs?project={project_name}",
         params={
-            "sorting": json.dumps({
-                "safe": "descending",
-                "temperature": "ascending"
-            })
+            "sorting": json.dumps(
+                {
+                    "safe": "descending",
+                    "temperature": "ascending",
+                },
+            ),
         },
         headers=HEADERS,
     )
