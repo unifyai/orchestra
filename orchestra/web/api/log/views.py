@@ -521,86 +521,18 @@ def get_log(
     }
 
 
-@router.get(
-    "/logs",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "params": {},
-                        "logs": [
-                            {
-                                "id": "0",
-                                "ts": "2024-10-30 12:20:03",
-                                "entries": {
-                                    "key1": "a",
-                                    "key2": 1.0,
-                                },
-                                "params": {},
-                            },
-                            {
-                                "id": "1",
-                                "ts": "2024-10-30 12:22:14",
-                                "entries": {
-                                    "key1": "b",
-                                    "key2": 2.0,
-                                },
-                                "params": {},
-                            },
-                        ],
-                        "count": 2,
-                    },
-                },
-            },
-        },
-        404: {
-            "description": "Project Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project <project> not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def get_logs(
+def _get_logs_query(
     request_fastapi: Request,
-    project: str = Query(
-        description="Name of the project to get entries from.",
-        example="eval-project",
-    ),
-    context: str = Query(
-        None,
-        description="The context (prepending '/' seperated field names) from which to "
-        "retrieve the logs.",
-        example="subjects/science/physics",
-    ),
-    filter_expr: Optional[str] = Query(
-        None,
-        description="Boolean string to filter entries. TODO: Detailed page.",
-        example="len(output) > 200 and temperature == 0.5",
-    ),
-    sorting: Optional[str] = Query(
-        None,
-        description="Dict with fields as keys and either 'ascending' or 'descending' "
-        "as values. The first entry in the dict is the last field to be "
-        "sorted by, which takes ultimate precedent, with other keys only "
-        "remaining in order when the first key values are equal.",
-        example={"score": "ascending", "timestamp": "descending"},
-    ),
-    limit: Optional[int] = Query(None, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    return_ids_only: bool = False,
-    project_dao: ProjectDAO = Depends(),
-    session=Depends(get_db_session),
+    project: str,
+    context: Optional[str],
+    filter_expr: Optional[str],
+    sorting: Optional[str],
+    limit: Optional[int],
+    offset: int,
+    project_dao: ProjectDAO,
+    session,
+    latest_timestamp=False
 ):
-    """
-    Returns a list of filtered entries from a project.
-    """
     try:
         user_id = request_fastapi.state.user_id
         project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
@@ -659,7 +591,7 @@ def get_logs(
                 raise HTTPException(
                     status_code=400,
                     detail="sort_mode must be 'ascending' or 'descending', "
-                    f"but found {sort_mode}.",
+                           f"but found {sort_mode}.",
                 )
 
         query = query.order_by(*sort_criteria)
@@ -676,10 +608,31 @@ def get_logs(
 
     relevant_log_events = query.subquery()
 
+    if latest_timestamp:
+        # Replace the existing 'return query.order_by(Log.updated_at).last()'
+        # with a separate query that does SELECT MAX(updated_at).
+        max_query = (
+            session.query(func.max(Log.updated_at))
+            .join(
+                LogEvent,
+                LogEvent.id == Log.log_event_id,
+            )
+            .join(
+                relevant_log_events,
+                relevant_log_events.c.id == LogEvent.id,
+            )
+        )
+
+        if context:
+            context = context if context[-1] == "/" else context + "/"
+            max_query = max_query.where(Log.key.startswith(context))
+
+        return max_query.scalar().isoformat()
+
     query = (
         session.query(
             Log,
-            LogEvent.created_at.label("log_event_ts"),
+            LogEvent.created_at,
         )
         .join(
             LogEvent,
@@ -689,7 +642,6 @@ def get_logs(
             relevant_log_events,
             relevant_log_events.c.id == LogEvent.id,
         )
-        .order_by(relevant_log_events.c.row_num)
     )
 
     context_len = 0
@@ -698,7 +650,100 @@ def get_logs(
         context_len = len(context)
         query = query.where(Log.key.startswith(context))
 
-    all_logs = query.all()
+    return query.order_by(relevant_log_events.c.row_num).all(), context_len
+
+
+@router.get(
+    "/logs",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "params": {},
+                        "logs": [
+                            {
+                                "id": "0",
+                                "ts": "2024-10-30 12:20:03",
+                                "entries": {
+                                    "key1": "a",
+                                    "key2": 1.0,
+                                },
+                                "params": {},
+                            },
+                            {
+                                "id": "1",
+                                "ts": "2024-10-30 12:22:14",
+                                "entries": {
+                                    "key1": "b",
+                                    "key2": 2.0,
+                                },
+                                "params": {},
+                            },
+                        ],
+                        "count": 2,
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <project> not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def get_logs(
+    request_fastapi: Request,
+    project: str = Query(
+        description="Name of the project to get entries from.",
+        example="eval-project",
+    ),
+    context: Optional[str] = Query(
+        None,
+        description="The context (prepending '/' seperated field names) from which to "
+        "retrieve the logs.",
+        example="subjects/science/physics",
+    ),
+    filter_expr: Optional[str] = Query(
+        None,
+        description="Boolean string to filter entries. TODO: Detailed page.",
+        example="len(output) > 200 and temperature == 0.5",
+    ),
+    sorting: Optional[str] = Query(
+        None,
+        description="Dict with fields as keys and either 'ascending' or 'descending' "
+        "as values. The first entry in the dict is the last field to be "
+        "sorted by, which takes ultimate precedent, with other keys only "
+        "remaining in order when the first key values are equal.",
+        example={"score": "ascending", "timestamp": "descending"},
+    ),
+    limit: Optional[int] = Query(None, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    return_ids_only: bool = False,
+    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
+):
+    """
+    Returns a list of filtered entries from a project.
+    """
+    all_logs, context_len = _get_logs_query(
+        request_fastapi,
+        project,
+        context,
+        filter_expr,
+        sorting,
+        limit,
+        offset,
+        project_dao,
+        session
+    )
     if return_ids_only:
         return list(set([log[0].log_event_id for log in all_logs]))
 
@@ -792,10 +837,24 @@ def get_logs_latest_timestamp(
         description="Name of the project to get entries from.",
         example="eval-project",
     ),
+    context: Optional[str] = Query(
+        None,
+        description="The context (prepending '/' seperated field names) from which to "
+                    "retrieve the logs.",
+        example="subjects/science/physics",
+    ),
     filter_expr: Optional[str] = Query(
         None,
         description="Boolean string to filter entries. TODO: Detailed page.",
         example="len(output) > 200 and temperature == 0.5",
+    ),
+    sorting: Optional[str] = Query(
+        None,
+        description="Dict with fields as keys and either 'ascending' or 'descending' "
+                    "as values. The first entry in the dict is the last field to be "
+                    "sorted by, which takes ultimate precedent, with other keys only "
+                    "remaining in order when the first key values are equal.",
+        example={"score": "ascending", "timestamp": "descending"},
     ),
     limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -806,50 +865,18 @@ def get_logs_latest_timestamp(
     Returns the update timestamp of the most recently updated log within the specified
     page and filter bounds.
     """
-    try:
-        user_id = request_fastapi.state.user_id
-        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
-    except IndexError:
-        raise not_found(f"Project {project}")
-    # TODO: Deal with organisation IDs
-
-    query = session.query(
-        LogEvent.id,
-        func.count(LogEvent.id).over().label("count"),
-    ).where(LogEvent.project_id == project_obj.id)
-    query = query.order_by(LogEvent.created_at)
-    if filter_expr:
-        filter_dict = str_filter_exp_to_dict(filter_expr)
-        if filter_dict:
-            condition = build_filter(filter_dict, LogEvent, session)
-            query = query.filter(condition)
-
-    if limit:
-        query = query.limit(limit)
-    if offset:
-        query = query.offset(offset)
-
-    relevant_logs = query.subquery()
-
-    query = (
-        session.query(
-            Log,
-            LogEvent.created_at.label("log_event_ts"),
-            relevant_logs.c.count,
-        )
-        .join(
-            LogEvent,
-            LogEvent.id == Log.log_event_id,
-        )
-        .join(
-            relevant_logs,
-            relevant_logs.c.id == LogEvent.id,
-        )
-        .where(Log.log_event_id.in_(select(relevant_logs.c.id)))
-        .order_by(Log.updated_at)
+    return _get_logs_query(
+        request_fastapi,
+        project,
+        context,
+        filter_expr,
+        sorting,
+        limit,
+        offset,
+        project_dao,
+        session,
+        latest_timestamp=True
     )
-    all_logs = query.all()
-    return all_logs[-1][0].updated_at.isoformat()
 
 
 @router.get(
