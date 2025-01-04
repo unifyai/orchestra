@@ -197,7 +197,7 @@ async def _create_logs_for_grouping(client, project_name, user=1):
         assert response.status_code == 200, response.json()
 
 
-async def _create_logs_for_filtering_metrics_n_sorting(client, project_name, user=1):
+async def _create_several_logs(client, project_name, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     data = log_data["logs_for_filtering_n_metrics"]
     for i in range(len(data)):
@@ -505,6 +505,68 @@ async def test_get_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_logs_from_ids(client: AsyncClient):
+    project_name = "eval-project"
+    # create the same project with another user to ensure the correct one
+    # is fetched
+    _ = await _create_project(client, project_name)
+    _ = await _create_several_logs(client, project_name)
+
+    # fetch entries for the project
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"return_ids_only": True},
+        headers=HEADERS,
+    )
+    ids = response.json()
+    from_ids = ids[0:4]
+
+    # fetch entries for the project
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"from_ids": from_ids},
+        headers=HEADERS
+    )
+
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    logs = response["logs"]
+    assert len(logs) == 4
+    assert [log["id"] for log in logs] == [i for i in ids if i in from_ids]
+
+
+@pytest.mark.anyio
+async def test_get_logs_excluding_ids(client: AsyncClient):
+    project_name = "eval-project"
+    # create the same project with another user to ensure the correct one
+    # is fetched
+    _ = await _create_project(client, project_name)
+    _ = await _create_several_logs(client, project_name)
+
+    # fetch entries for the project
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"return_ids_only": True},
+        headers=HEADERS,
+    )
+    ids = response.json()
+    exclude_ids = ids[0:4]
+
+    # fetch entries for the project
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"exclude_ids": exclude_ids},
+        headers=HEADERS
+    )
+
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    logs = response["logs"]
+    assert len(logs) == 3
+    assert [log["id"] for log in logs] == [i for i in ids if i not in exclude_ids]
+
+
+@pytest.mark.anyio
 async def test_get_logs_w_context(client: AsyncClient):
     project_name = "eval-project"
     # create project and log
@@ -664,7 +726,7 @@ async def test_get_logs_latest_timestamp(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name, user=1)
     t0 = datetime.now(timezone.utc)
-    _ = await _create_logs_for_filtering_metrics_n_sorting(client, project_name, user=1)
+    _ = await _create_several_logs(client, project_name, user=1)
 
     # assert the latest timestamp t1 is more recent than t0
     response = await client.get(
@@ -705,7 +767,7 @@ async def test_get_log_ids(client: AsyncClient):
     # is fetched
     _ = await _create_project(client, project_name, user=2)
     _ = await _create_project(client, project_name, user=1)
-    _ = await _create_logs_for_filtering_metrics_n_sorting(client, project_name, user=1)
+    _ = await _create_several_logs(client, project_name, user=1)
 
     # fetch entries for the project
     response = await client.get(
@@ -738,7 +800,7 @@ async def test_get_empty_logs(client: AsyncClient):
 async def test_get_logs_w_filtering(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
-    _ = await _create_logs_for_filtering_metrics_n_sorting(client, project_name)
+    _ = await _create_several_logs(client, project_name)
 
     # temperature == -210.0
     response = await client.get(
@@ -1021,7 +1083,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
 async def test_get_logs_w_sorting(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
-    _ = await _create_logs_for_filtering_metrics_n_sorting(client, project_name)
+    _ = await _create_several_logs(client, project_name)
 
     # ascending temperature
     response = await client.get(
@@ -1160,7 +1222,7 @@ async def test_get_logs_metric(
 ):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
-    _ = await _create_logs_for_filtering_metrics_n_sorting(client, project_name)
+    _ = await _create_several_logs(client, project_name)
     data = log_data["logs_for_filtering_n_metrics"]
     params = {} if log_ids is None else {"log_ids": log_ids}
     response = await client.get(
@@ -1606,7 +1668,7 @@ async def test_get_logs_with_type_check(client: AsyncClient):
     _ = await _create_project(client, project_name)
 
     # Create log entries with different types
-    _ = await _create_logs_for_filtering_metrics_n_sorting(client, project_name)
+    _ = await _create_several_logs(client, project_name)
 
     # Test filtering for float type
     response = await client.get(
