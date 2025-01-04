@@ -758,6 +758,24 @@ async def test_get_logs_w_filtering(client: AsyncClient):
         "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
     }
 
+    # temperature != -210.0
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "temperature != -210.0"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 3
+    assert isinstance(result["logs"][0]["ts"], str)
+    assert {
+        "description": "freezing nitrogen",
+        "temperature": -210.0,
+        "state": "liquid->solid",
+        "safe": False,
+        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    } not in [log["entries"] for log in result["logs"]]
+
     # temperature > 0.
     response = await client.get(
         f"/v0/logs?project={project_name}",
