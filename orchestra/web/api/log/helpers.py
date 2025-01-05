@@ -4,7 +4,7 @@ import statistics
 from datetime import datetime
 from typing import Any, List, Tuple, Union
 
-from sqlalchemy import JSON, Boolean, Float, String, case, cast, func, select
+from sqlalchemy import Boolean, Float, String, case, cast, func, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql import and_, not_, or_
@@ -196,6 +196,10 @@ class _Parser:
             "not in",
             "is",
             "is not",
+            "+",
+            "-",
+            "*",
+            "/",
         ):
             op = self.current_token[1]
             self.advance()
@@ -274,22 +278,6 @@ def str_filter_exp_to_dict(s):
     parser = _Parser(tokens)
     result = parser.parse()
     return result
-
-
-def get_sqlalchemy_type(py_object):
-    """Maps Python object types to SQLAlchemy column types."""
-    py_type = type(py_object)
-
-    if py_type is bool:
-        return Boolean
-    elif py_type in (int, float):
-        return Float
-    elif py_type is str:
-        return String
-    elif py_type is dict:
-        return JSON
-    else:
-        raise TypeError(f"Unsupported type: {py_type}")
 
 
 def build_filter(filter_dict, log_event_alias, session):
