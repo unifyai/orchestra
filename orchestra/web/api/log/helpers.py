@@ -62,7 +62,10 @@ def _tokenize(s):
             r'"(?:[^"\\]|\\.)*?"|\'(?:[^\'\\]|\\.)*?\'',
         ),  # String with non-greedy quantifier
         # Operators, note the order to match 'not in' before 'not' and 'in'
-        ("OP", r"==|!=|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)"),
+        (
+            "OP",
+            r"==|!=|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)|\+|\-|\*|/",
+        ),
         ("TYPE_CHECK", r"type"),  # Type check expression
         ("LEN", r"len"),  # length
         ("STR", r"str"),  # str function
@@ -101,24 +104,18 @@ def _tokenize(s):
         elif kind == "BOOLEAN":
             value = True if value == "True" else False
             tokens.append(("BOOLEAN", value))
-        elif kind == "IDENTIFIER":
-            tokens.append(("IDENTIFIER", value))
-        elif kind == "LEN":
-            tokens.append(("LEN", value))
-        elif kind == "STR":
-            tokens.append(("STR", value))
-        elif kind == "TYPE_CHECK":
-            tokens.append(("TYPE_CHECK", value))
-        elif kind == "EXISTS":
-            tokens.append(("EXISTS", value))
-        elif kind == "VERSION":
-            tokens.append(("VERSION", value))
-        elif kind == "OP":
-            tokens.append(("OP", value))
-        elif kind == "LPAREN":
-            tokens.append(("LPAREN", value))
-        elif kind == "RPAREN":
-            tokens.append(("RPAREN", value))
+        elif kind in (
+            "IDENTIFIER",
+            "LEN",
+            "STR",
+            "TYPE_CHECK",
+            "EXISTS",
+            "VERSION",
+            "OP",
+            "LPAREN",
+            "RPAREN",
+        ):
+            tokens.append((kind, value))
         elif kind == "BRACKET_OPEN":
             nested_content, new_pos = parse_nested(line, mo.start())
             tokens.append(("OTHER", nested_content))
