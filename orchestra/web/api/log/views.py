@@ -16,6 +16,7 @@ from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Log, LogEvent
 from orchestra.web.api.log.schema import (
+    CreateDerivedEntriesConfig,
     CreateLogConfig,
     DeleteLogEntryRequest,
     DeleteLogsRequest,
@@ -153,8 +154,8 @@ def create_log(
     return log_event_id
 
 
-@router.post(
-    "/log",
+@router.put(
+    "/log/derived",
     responses={
         200: {
             "description": "Successful Response",
@@ -176,101 +177,130 @@ def create_log(
         },
     },
 )
-def create_derived_log(
+def create_derived_entry(
     request_fastapi: Request,
-    request: CreateLogConfig,
+    body: CreateDerivedEntriesConfig,
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
     log_dao: LogDAO = Depends(),
 ):
     """
-    Creates a log associated to a project. Logs are
-    LLM-call-level data that might depend on other variables.
+    Updates multiple logs with the provided entries. Each entry will be either added
+    or overridden in the specified logs.
 
-    A "explicit_types" dictionary can be passed as part of the `entries`.
-    If present, any matching key inside this dictionary will override the
-    inferred type of that particular entry.
-
-    This method returns the id of the new stored log.
+    A dictionary of "explicit_types" can be passed as part of the `entries`.
+    If present, it will override the inferred type of any matching key in all logs.
     """
-    # check if the project exists
-    try:
-        # TODO: Add organization id
-        user_id = request_fastapi.state.user_id
-        project = project_dao.filter(user_id=user_id, name=request.project)
-        project_id = project[0][0].id
-    except IndexError:
-        raise not_found("Project")
+    breakpoint()
 
-    # Create log_event and get its id
-    log_event_id = log_event_dao.create(project_id=project_id)
+    data_type = "entries"
+    data = getattr(body, data_type)
+    not_found_logs = []
 
-    entries_explicit_types = request.entries.pop("explicit_types", None)
-    params_explicit_types = request.params.pop("explicit_types", None)
-    field_types = field_type_dao.get_field_types(project_id)
-    strongly_typed = request.strongly_typed
-    entries = request.entries
-    params = request.params
+    for i, log_id in enumerate(body.ids):
 
-    def enforce_types(field_name, value):
-        if field_name in field_types:
-            expected_type = field_types[field_name]
-            original_type = LogDAO.infer_type(value)
-            if original_type != expected_type:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Type mismatch for field '{field_name}': expected {expected_type}, got {original_type}",
-                )
-        else:
-            # If strongly_typed is True, set the type for the first entry
-            if strongly_typed is True or (
-                isinstance(strongly_typed, list) and field_name in strongly_typed
-            ):
-                field_type_dao.create_field_type(project_id, field_name, value)
-
-    for k, v in params.items():
-        enforce_types(k, v)
-        # see if there is any param with the same value
-        existing_param = log_dao.filter(
-            key=k,
-            value=json.dumps(v),
-            project_id=project_id,
-        )
-        if existing_param:
-            version = existing_param[0][0].version
-        else:
-            # fetch the highest version for that param
-            existing_params = log_dao.filter(key=k, project_id=project_id)
-            highest_version = max([-1] + [e[0].version for e in existing_params])
-            version = highest_version + 1
         try:
-            log_dao.create_from_raw_k_v(
-                project_id=project_id,
-                log_event_id=log_event_id,
-                raw_k=k,
-                raw_v=v,
-                version=version,
-                explicit_types=params_explicit_types,
+            # Get user and project ID for the log
+            project_user_id, project_id = log_event_dao.get_user_and_project_id(
+                id=log_id,
             )
-        except ValueError:
+
+            # Check if the log belongs to the requesting user
+            if project_user_id != request_fastapi.state.user_id:
+                raise IndexError
+
+        except IndexError:
+            not_found_logs.append(log_id)
+            continue
+
+        try:
+            this_data = data if isinstance(data, dict) else data[i]
+        except IndexError:
             raise HTTPException(
                 status_code=400,
-                detail="Found different value for log params with same version.",
+                detail=f"entries and params must be of the same length as log ids ({len(body.ids)}) if passed as a list, but found {data_type} list of length {len(data)}",
             )
 
-    # Store each key, value entry pair for the log
-    for k, v in entries.items():
-        enforce_types(k, v)
-        log_dao.create_from_raw_k_v(
-            project_id=project_id,
-            log_event_id=log_event_id,
-            raw_k=k,
-            raw_v=v,
-            explicit_types=entries_explicit_types,
-        )
+        explicit_types = this_data.pop("explicit_types", None)
+        field_types = field_type_dao.get_field_types(project_id)
+        strongly_typed = body.strongly_typed
+        for k, v in this_data.items():
+            # Check and enforce types
+            if k in field_types:
+                expected_type = field_types[k]
+                original_type = LogDAO.infer_type(v)
+                if original_type != expected_type:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Type mismatch for field '{k}': expected {expected_type}, got {original_type}",
+                    )
+            else:
+                # If strongly_typed is True, set the type for the first entry
+                if strongly_typed is True or (
+                    isinstance(strongly_typed, list) and k in strongly_typed
+                ):
+                    field_type_dao.create_field_type(project_id, k, v)
 
-    return log_event_id
+            # see if there is any param with the same value
+            existing = log_dao.filter(
+                key=k,
+                value=json.dumps(v),
+                project_id=project_id,
+            )
+            if data_type == "params":
+                if existing:
+                    version = existing[0][0].version
+                else:
+                    # fetch the highest version for that param
+                    existing_params = log_dao.filter(key=k, project_id=project_id)
+                    highest_version = max(
+                        [-1] + [e[0].version for e in existing_params],
+                    )
+                    version = highest_version + 1
+            elif data_type == "entries":
+                version = None
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="data_type must either be 'params' or 'entries', "
+                    f"but found {data_type}",
+                )
+            try:
+                log_dao.update_value(
+                    log_event_id=log_id,
+                    raw_k=k,
+                    raw_v=v,
+                    version=version,
+                    explicit_types=explicit_types,
+                    overwrite=body.overwrite,
+                )
+            except IndexError:
+                log_dao.create_from_raw_k_v(
+                    project_id=project_id,
+                    log_event_id=log_id,
+                    raw_k=k,
+                    raw_v=v,
+                    version=version,
+                    explicit_types=explicit_types,
+                )
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Found different value for log params with same version.",
+                )
+            except OverwriteError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Found existing value for log entry with key {k} but overwrite is set to False.",
+                )
+
+    if not_found_logs:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Logs with ids {not_found_logs} not found or you don't have permission to update them.",
+        )
+    return {"info": "Logs updated successfully!"}
 
 
 @router.delete(

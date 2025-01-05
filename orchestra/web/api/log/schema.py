@@ -45,6 +45,29 @@ class CreateLogConfig(BaseModel):
     )
 
 
+class CreateDerivedEntriesConfig(BaseModel):
+    project: str = Field(
+        description="Name of the project the stored entries will be associated to.",
+        json_schema_extra={
+            "example": "eval-project",
+        },
+    )
+    key: str = Field(
+        description="The name of the entry.",
+        example="score_diff",
+    )
+    equation: str = Field(
+        description="The equation for computing the value of each derived entry.",
+        example="{log0:score} - {log1:score}",
+    )
+    referenced_logs: Dict[str, Union[List[int], Dict[str, Any]]] = Field(
+        description="The logs to use for each newly created derived entry, either as "
+        "a list of log ids or as a set of arguments for the get_logs "
+        "endpoint.",
+        example={"log0": [0, 1, 2], "log1": {"filter_expr": "score > 0.5"}},
+    )
+
+
 class UpdateLogRequest(BaseModel):
     ids: list[int] = Field(
         description="List of log IDs to update with new or overriding entries.",

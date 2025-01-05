@@ -116,14 +116,15 @@ def _create_log(client, project_name, user=1):
     )
 
 
-def _create_derived_log(client, project_name, log_id, user=1):
+def _create_derived_entry(client, project_name, log_id, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
-    return client.post(
+    return client.put(
         "/v0/log/derived",
         json={
             "project": project_name,
+            "key": "doubled",
             "equation": "{log1:a/b/c/numeric_input}*2",
-            "referenced_logs": {"log1": log_id},
+            "referenced_logs": {"log1": [log_id]},
         },
         headers=_headers,
     )
@@ -245,13 +246,13 @@ async def test_create_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_create_derived_logs(client: AsyncClient):
+async def test_create_derived_entries(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
 
     response = await _create_log(client, project_name)
     assert response.status_code == 200, response.json()
-    response = await _create_derived_log(client, project_name, response.json())
+    response = await _create_derived_entry(client, project_name, response.json())
     assert response.status_code == 200, response.json()
 
 

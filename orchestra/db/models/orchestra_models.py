@@ -573,6 +573,7 @@ class DerivedLog(Base):
         nullable=False,
         index=True,
     )
+    key = Column(String, nullable=False)
     equation = Column(String)
     referenced_logs = Column(JSONB)
     value = Column(String)
