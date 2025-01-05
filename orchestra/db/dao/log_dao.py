@@ -89,6 +89,7 @@ class LogDAO:
         version: Optional[Union[int, List[int]]] = None,
         inferred_type: Optional[Union[str, List[str]]] = None,
         project_id: Optional[int] = None,
+        defer: bool = False,
     ) -> List[Log]:
         def normalize_input(value):
             if value is None or isinstance(value, list):
@@ -133,7 +134,8 @@ class LogDAO:
 
         query = query.order_by(Log.created_at)
         rows = self.session.execute(query)
-
+        if defer:
+            return rows
         return rows.fetchall()
 
     def update(
