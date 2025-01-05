@@ -26,7 +26,12 @@ from orchestra.web.api.log.schema import (
 )
 from orchestra.web.api.utils.http_responses import not_found
 
-from .helpers import _flatten_fields, build_filter, format_logs, str_filter_exp_to_dict
+from .helpers import (
+    _flatten_fields,
+    build_sql_query,
+    format_logs,
+    str_filter_exp_to_dict,
+)
 
 router = APIRouter()
 
@@ -621,8 +626,11 @@ def _get_logs_query(
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
         if filter_dict:
-            condition = build_filter(filter_dict, LogEvent, session)
-            query = query.filter(condition)
+            subq = build_sql_query(filter_dict, LogEvent, session)
+            query = select(subq.c.value).select_from(subq)
+            breakpoint()
+            ret = session.execute(query)
+            query = query.filter(subq)
 
     if sorting:
         # Create sub-queries for each key
@@ -1058,7 +1066,7 @@ def get_logs_metric(
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
         if filter_dict:
-            condition = build_filter(filter_dict, LogEvent, session)
+            condition = build_sql_query(filter_dict, LogEvent, session)
             query = query.filter(condition)
 
     subquery = query.subquery()

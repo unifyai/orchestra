@@ -491,6 +491,43 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
     assert result == expected
 
 
+@pytest.mark.parametrize(
+    "expression, values",
+    [
+        (
+            "(a + b) > 10",
+            {"a": 5, "b": 8},
+        ),
+    ],
+)
+async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, values):
+
+    project_name = "test_filter_helper"
+    _ = await _create_project(client, project_name, user=1)
+    response = await client.post(
+        "/v0/log",
+        json={"project": project_name, "entries": values},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": expression},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = len(response.json()["logs"]) == 1
+    for key, value in values.items():
+        exec(key + "=" + (str(value) if isinstance(value, bool) else json.dumps(value)))
+    if "not exists" in expression:
+        expected = expression.split("exists(")[-1].split(")")[0] not in values
+    elif "exists" in expression:
+        expected = expression.split("exists(")[-1].split(")")[0] in values
+    else:
+        expected = eval(expression)
+    assert result == expected
+
+
 @pytest.mark.anyio
 async def test_get_logs(client: AsyncClient):
     project_name = "eval-project"

@@ -4,10 +4,11 @@ import statistics
 from datetime import datetime
 from typing import Any, List, Tuple, Union
 
-from sqlalchemy import Boolean, Float, String, case, cast, func, select
+from sqlalchemy import Boolean, Float, Integer, String, case, cast, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql import and_, not_, or_
+from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.models.orchestra_models import Log
 
@@ -280,7 +281,15 @@ def str_filter_exp_to_dict(s):
     return result
 
 
-def build_filter(filter_dict, log_event_alias, session):
+def _select_value():
+    breakpoint()
+    return case(
+        [(my_table.c.some_column.is_(None), literal("Value is NULL"))],
+        else_=literal("Value is NOT NULL"),
+    ).label("null_check")
+
+
+def build_sql_query(filter_dict, log_event_alias, session):
     """
     Recursively build SQLAlchemy filter from filter_dict.
 
@@ -291,233 +300,115 @@ def build_filter(filter_dict, log_event_alias, session):
     Returns:
         SQLAlchemy condition
     """
+    log_alias = aliased(Log)
     if filter_dict == {}:
         return None
-    if not isinstance(filter_dict, dict):
+    elif not isinstance(filter_dict, dict):
         # Base case: direct value
         return filter_dict
+    elif filter_dict.get("type") == "identifier":
+        key = filter_dict.get("value")
+        subq = select(
+            log_alias.id,
+            case(
+                (log_alias.inferred_type == "list", cast(log_alias.value, JSONB)),
+                (log_alias.inferred_type == "dict", cast(log_alias.value, JSONB)),
+                else_=None,
+            ).label("jsonb_value"),
+            case(
+                (log_alias.inferred_type == "str", cast(log_alias.value, String)),
+                else_=None,
+            ).label("str_value"),
+            case(
+                (log_alias.inferred_type == "int", cast(log_alias.value, Integer)),
+                else_=None,
+            ).label("int_value"),
+            case(
+                (log_alias.inferred_type == "float", cast(log_alias.value, Float)),
+                else_=None,
+            ).label("float_value"),
+            case(
+                (log_alias.inferred_type == "bool", cast(log_alias.value, Boolean)),
+                else_=None,
+            ).label("bool_value"),
+        ).where(
+            log_alias.log_event_id == log_event_alias.id,
+            log_alias.key == key,
+        )
+        print(session.execute(subq).all())
+        breakpoint()
+        return subq
 
     operand = filter_dict.get("operand")
 
-    if operand in ("and", "or"):
-        lhs = build_filter(filter_dict["lhs"], log_event_alias, session)
-        rhs = build_filter(filter_dict["rhs"], log_event_alias, session)
-        if operand == "and":
-            return and_(lhs, rhs)
-        else:
-            return or_(lhs, rhs)
-
+    lhs = build_sql_query(filter_dict["lhs"], log_event_alias, session)
+    left_is_query = isinstance(lhs, Subquery)
+    rhs = build_sql_query(filter_dict["rhs"], log_event_alias, session)
+    right_is_query = isinstance(rhs, Subquery)
+    if operand == "and":
+        return and_(lhs, rhs)
+    elif operand == "or":
+        return or_(lhs, rhs)
     elif operand == "not":
-        rhs = build_filter(filter_dict["rhs"], log_event_alias, session)
         return not_(rhs)
-
-    elif operand in ("==", "!=", "<", ">", "<=", ">=", "in", "not in", "is", "is not"):
-        lhs = filter_dict["lhs"]
-        rhs = filter_dict["rhs"]
-
-        if isinstance(lhs, dict) and lhs.get("type") == "identifier":
-            key = lhs["value"]
-            log_alias = aliased(Log)
-            subq = select(log_alias.id).filter(
-                log_alias.log_event_id == log_event_alias.id,
-                log_alias.key == key,
+    elif operand == "+":
+        if left_is_query and right_is_query:
+            return (
+                select(
+                    lhs.c.id.label("id"),
+                    (_select_value(lhs.c) + _select_value(rhs.c)).label("value"),
+                )
+                .select_from(lhs)
+                .join(rhs, lhs.c.id == rhs.c.id)
+                .subquery()
             )
-
-            if operand in ("==", "!=", "is", "is not", "<", ">", "<=", ">="):
-                try:
-                    compare_value = rhs
-                    if isinstance(compare_value, dict):
-                        compare_value = compare_value["value"]
-                        if rhs["type"] == "string":
-                            compare_value = json.dumps(compare_value)
-                        condition = log_alias.value
-                    elif isinstance(compare_value, bool):
-                        compare_value = bool(compare_value)
-                        condition = cast(log_alias.value, Boolean)
-                    else:
-                        compare_value = float(compare_value)
-                        condition = cast(log_alias.value, Float)
-                    if operand == "==" or operand == "is":
-                        subq = subq.filter(condition == compare_value)
-                    elif operand == "!=" or operand == "is not":
-                        subq = subq.filter(condition != compare_value)
-                    elif operand == "<":
-                        subq = subq.filter(condition < compare_value)
-                    elif operand == ">":
-                        subq = subq.filter(condition > compare_value)
-                    elif operand == "<=":
-                        subq = subq.filter(condition <= compare_value)
-                    elif operand == ">=":
-                        subq = subq.filter(condition >= compare_value)
-                except ValueError:
-                    raise ValueError(
-                        f"Cannot cast value '{rhs}' to float for comparison.",
-                    )
-            elif operand == "in":
-                subq = subq.filter(log_alias.value.contains(rhs))
-            elif operand == "not in":
-                subq = subq.filter(~log_alias.value.contains(rhs))
-
-            return subq.exists()
-
-        if isinstance(lhs, dict) and lhs.get("operand") == "len":
-            length = rhs
-            identifier = lhs.get("rhs", {}).get("value")
-            if identifier:
-                log_alias = aliased(Log)
-                subq = (
-                    session.query(log_alias.id)
-                    .filter(
-                        log_alias.log_event_id == log_event_alias.id,
-                        log_alias.key == identifier,
-                    )
-                    .with_entities(
-                        case(
-                            (
-                                log_alias.inferred_type == "list",
-                                func.jsonb_array_length(
-                                    cast(log_alias.value, JSONB),
-                                ).cast(Float),
-                            ),
-                            (
-                                log_alias.inferred_type == "dict",
-                                select(func.count())
-                                .select_from(
-                                    func.jsonb_object_keys(
-                                        cast(log_alias.value, JSONB),
-                                    ),
-                                )
-                                .scalar_subquery()
-                                .cast(Float),
-                            ),
-                            (
-                                log_alias.inferred_type == "str",
-                                func.length(
-                                    cast(log_alias.value, JSONB)[0].astext,
-                                ).cast(Float),
-                            ),
-                            else_=0,
-                        ),
-                    )
+        elif right_is_query:
+            return select(
+                rhs.c.id.label("id"),
+                (lhs + _select_value(rhs.c)).label(
+                    "value",
+                ),
+            ).subquery()
+        elif left_is_query:
+            return select(
+                lhs.c.id.label("id"),
+                (_select_value(lhs.c) + rhs).label(
+                    "value",
+                ),
+            ).subquery()
+        else:
+            return lhs + rhs
+    elif operand == ">":
+        if left_is_query and right_is_query:
+            return (
+                select(
+                    lhs.c.id.label("id"),
+                    (_select_value(lhs.c) > _select_value(rhs.c)).label(
+                        "value",
+                    ),
                 )
-                if operand == "<":
-                    return subq.as_scalar() < length
-                elif operand == ">":
-                    return subq.as_scalar() > length
-                elif operand == "<=":
-                    return subq.as_scalar() <= length
-                elif operand == ">=":
-                    return subq.as_scalar() >= length
-                elif operand == "==":
-                    return subq.as_scalar() == length
-                elif operand == "!=":
-                    return subq.as_scalar() != length
-
-        if isinstance(lhs, dict) and rhs.get("operand") == "str":
-            identifier = rhs.get("rhs", {}).get("value")
-            lhs_value = lhs["value"]
-            if identifier:
-                log_alias = aliased(Log)
-                subq = (
-                    session.query(log_alias.id)
-                    .filter(
-                        log_alias.log_event_id == log_event_alias.id,
-                        log_alias.key == identifier,
-                    )
-                    .with_entities(cast(log_alias.value, String))
-                )
-                if operand == "in":
-                    return subq.filter(log_alias.value.contains(lhs_value)).exists()
-                elif operand == "not in":
-                    return subq.filter(~log_alias.value.contains(lhs_value)).exists()
-                elif operand == "<":
-                    return lhs_value < subq.as_scalar()
-                elif operand == ">":
-                    return lhs_value > subq.as_scalar()
-                elif operand == "<=":
-                    return lhs_value <= subq.as_scalar()
-                elif operand == ">=":
-                    return lhs_value >= subq.as_scalar()
-                elif operand == "==":
-                    return lhs_value == subq.as_scalar()
-                elif operand == "!=":
-                    return lhs_value != subq.as_scalar()
-
-        if isinstance(lhs, dict) and lhs.get("operand") == "version":
-            version = rhs["value"]
-            identifier = lhs.get("rhs", {}).get("value")
-            if identifier:
-                log_alias = aliased(Log)
-                subq = (
-                    session.query(log_alias.id)
-                    .filter(
-                        log_alias.log_event_id == log_event_alias.id,
-                        log_alias.key == identifier,
-                    )
-                    .with_entities(log_alias.version)
-                )
-                if operand == "==":
-                    return subq.as_scalar() == version
-
-        if isinstance(lhs, dict) and lhs.get("operand") == "type":
-            field_name = lhs["rhs"]["value"]
-            expected_type = rhs["value"]
-
-            log_alias = aliased(Log)
-            subq = select(log_alias.id).filter(
-                log_alias.log_event_id == log_event_alias.id,
-                log_alias.key == field_name,
+                .select_from(lhs)
+                .join(rhs, lhs.c.id == rhs.c.id)
+                .subquery()
             )
-
-            if operand == "is":
-                return subq.filter(
-                    log_alias.inferred_type == expected_type,
-                ).exists()
-            elif operand == "is not":
-                return subq.filter(
-                    log_alias.inferred_type != expected_type,
-                ).exists()
-
-        if operand in ["in", "not in"]:
-            if isinstance(rhs, dict) and rhs.get("type") == "identifier":
-                key = rhs["value"]
-                lhs_dict = isinstance(lhs, dict)
-                lhs_value = lhs["value"] if lhs_dict else lhs
-                log_alias = aliased(Log)
-                subq = select(log_alias.id).filter(
-                    log_alias.log_event_id == log_event_alias.id,
-                    log_alias.key == key,
-                )
-                if operand == "in":
-                    subq = subq.filter(log_alias.value.contains(lhs_value))
-                elif operand == "not in":
-                    subq = subq.filter(~log_alias.value.contains(lhs_value))
-
-                return subq.exists()
-
-    elif operand == "exists":
-        rhs = filter_dict["rhs"]
-
-        if isinstance(rhs, dict) and rhs.get("type") == "identifier":
-            identifier = rhs["value"]
-
-            log_alias = aliased(Log)
-            subq = select(log_alias.id).filter(
-                log_alias.log_event_id == log_event_alias.id,
-                log_alias.key == identifier,
-            )
-            return subq.exists()
+        elif right_is_query:
+            return select(
+                rhs.c.id.label("id"),
+                (lhs > _select_value(rhs.c)).label(
+                    "value",
+                ),
+            ).subquery()
+        elif left_is_query:
+            return select(
+                lhs.c.id.label("id"),
+                (_select_value(lhs.c) > rhs).label(
+                    "value",
+                ),
+            ).subquery()
+        else:
+            return lhs > rhs
     else:
-        # Handle literals or unexpected structures
-        if "type" in filter_dict:
-            if filter_dict["type"] == "boolean":
-                return filter_dict["value"]
-            elif filter_dict["type"] == "string":
-                return filter_dict["value"]
-            elif filter_dict["type"] == "number":
-                return filter_dict["value"]
-
-    raise ValueError(f"Unsupported filter structure: {filter_dict}")
+        raise Exception("Unknown operand")
 
 
 # Reduction #
