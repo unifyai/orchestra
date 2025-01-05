@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Dict
 
 from fastapi import Depends
 from sqlalchemy.orm import Session
@@ -22,9 +22,10 @@ class DerivedLogDAO:
         log_event_id: int,
         equation: str,
         referenced_logs: Dict[str, int],
-        value: Optional[str] = None,  # JSON serialised
-        inferred_type: Optional[str] = None,
     ) -> int:
+
+        value = 0
+        inferred_type = str
 
         ts = datetime.now(timezone.utc)
 
