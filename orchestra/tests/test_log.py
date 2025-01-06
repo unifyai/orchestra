@@ -1207,15 +1207,18 @@ async def test_get_logs_w_timestamp_sorting(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
     data = log_data["logs_for_filtering_n_metrics"]
+    timestamps = list()
     for i in range(len(data)):
-        d = data[i]
-        d["timestamp"] = datetime.now(timezone.utc).isoformat()
+        ts = datetime.now(timezone.utc).isoformat()
+        timestamps.append(ts)
+        entries = data[i]
+        entries["timestamp"] = ts
         response = await client.post(
             "/v0/log",
             json={
                 "project": project_name,
                 "params": {"a/b/param1": f"test_{i}"},
-                "entries": d,
+                "entries": entries,
             },
             headers=HEADERS,
         )
@@ -1230,6 +1233,127 @@ async def test_get_logs_w_timestamp_sorting(client: AsyncClient):
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result["logs"]) == 7
+    assert result["logs"][0]["entries"] == {
+        "_data": {"a": 8, "b": 10},
+        "timestamp": timestamps[-1],
+    }
+    assert result["logs"][1]["entries"] == {
+        "description": "air",
+        "metadata": [3, 8, 5],
+        "_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+        "timestamp": timestamps[-2],
+    }
+    assert result["logs"][2]["entries"] == {
+        "description": "lava",
+        "metadata": [1, 5, 6],
+        "_data": {"a": 2, "b": 4},
+        "timestamp": timestamps[-3],
+    }
+    assert result["logs"][3]["entries"] == {
+        "description": "freezing nitrogen",
+        "temperature": -210.0,
+        "state": "liquid->solid",
+        "safe": False,
+        "timestamp": timestamps[-4],
+    }
+    assert result["logs"][4]["entries"] == {
+        "description": "surface of the sun",
+        "temperature": 6000.0,
+        "state": "gas",
+        "safe": False,
+        "timestamp": timestamps[-5],
+    }
+    assert result["logs"][5]["entries"] == {
+        "description": "freezing water",
+        "temperature": 0.0,
+        "state": "liquid->solid",
+        "safe": True,
+        "timestamp": timestamps[-6],
+    }
+    assert result["logs"][6]["entries"] == {
+        "description": "boiling water",
+        "temperature": 100.0,
+        "state": "liquid->gas",
+        "safe": False,
+        "timestamp": timestamps[-7],
+    }
+
+
+@pytest.mark.anyio
+async def test_get_logs_w_date_sorting(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+    data = log_data["logs_for_filtering_n_metrics"]
+    dates = list()
+    for i in range(len(data)):
+        date = datetime(1993, 3, i + 1, tzinfo=timezone.utc).strftime("%Y-%m-%d")
+        dates.append(date)
+        entries = data[i]
+        entries["timestamp"] = date
+        response = await client.post(
+            "/v0/log",
+            json={
+                "project": project_name,
+                "params": {"a/b/param1": f"test_{i}"},
+                "entries": entries,
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+    # descending timestamp
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"sorting": json.dumps({"timestamp": "descending"})},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 7
+    assert result["logs"][0]["entries"] == {
+        "_data": {"a": 8, "b": 10},
+        "timestamp": dates[-1],
+    }
+    assert result["logs"][1]["entries"] == {
+        "description": "air",
+        "metadata": [3, 8, 5],
+        "_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+        "timestamp": dates[-2],
+    }
+    assert result["logs"][2]["entries"] == {
+        "description": "lava",
+        "metadata": [1, 5, 6],
+        "_data": {"a": 2, "b": 4},
+        "timestamp": dates[-3],
+    }
+    assert result["logs"][3]["entries"] == {
+        "description": "freezing nitrogen",
+        "temperature": -210.0,
+        "state": "liquid->solid",
+        "safe": False,
+        "timestamp": dates[-4],
+    }
+    assert result["logs"][4]["entries"] == {
+        "description": "surface of the sun",
+        "temperature": 6000.0,
+        "state": "gas",
+        "safe": False,
+        "timestamp": dates[-5],
+    }
+    assert result["logs"][5]["entries"] == {
+        "description": "freezing water",
+        "temperature": 0.0,
+        "state": "liquid->solid",
+        "safe": True,
+        "timestamp": dates[-6],
+    }
+    assert result["logs"][6]["entries"] == {
+        "description": "boiling water",
+        "temperature": 100.0,
+        "state": "liquid->gas",
+        "safe": False,
+        "timestamp": dates[-7],
+    }
 
 
 @pytest.mark.anyio
