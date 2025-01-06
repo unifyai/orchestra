@@ -24,7 +24,13 @@ from orchestra.web.api.log.schema import (
 )
 from orchestra.web.api.utils.http_responses import not_found
 
-from .helpers import _flatten_fields, build_filter, format_logs, str_filter_exp_to_dict
+from .helpers import (
+    STR_TO_SQL_TYPES,
+    _flatten_fields,
+    build_filter,
+    format_logs,
+    str_filter_exp_to_dict,
+)
 
 router = APIRouter()
 
@@ -532,6 +538,7 @@ def _get_logs_query(
     limit: Optional[int],
     offset: int,
     project_dao: ProjectDAO,
+    field_type_dao: FieldTypeDAO,
     session,
     latest_timestamp=False,
 ):
@@ -579,22 +586,18 @@ def _get_logs_query(
             )
 
         # Outer-join them and build ORDER BY
+        field_types = field_type_dao.get_field_types(project_obj.id)
         sort_criteria = list()
         for key, sort_mode in json.loads(sorting).items():
             subq = subqs[key]
+            if key in field_types:
+                criterion = cast(subq.c.value, STR_TO_SQL_TYPES[field_types[key]])
+            else:
+                criterion = subq.c.value
+
             # Join
             query = query.outerjoin(subq, subq.c.id == LogEvent.id)
             # Order
-            criterion = case(
-                (
-                    subq.c.inferred_type == "bool",
-                    case(
-                        (subq.c.value.in_(["true", "True", "1"]), 1),
-                        else_=0,
-                    ),
-                ),
-                else_=cast(subq.c.value, Float),
-            )
             if sort_mode == "ascending":
                 sort_criteria.append(criterion.asc().nulls_last())
             elif sort_mode == "descending":
@@ -756,6 +759,7 @@ def get_logs(
     offset: int = Query(0, ge=0),
     return_ids_only: bool = False,
     project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -772,6 +776,7 @@ def get_logs(
         limit,
         offset,
         project_dao,
+        field_type_dao,
         session,
     )
     if return_ids_only:
@@ -905,6 +910,7 @@ def get_logs_latest_timestamp(
     limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
     project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -922,6 +928,7 @@ def get_logs_latest_timestamp(
         limit,
         offset,
         project_dao,
+        field_type_dao,
         session,
         latest_timestamp=True,
     )

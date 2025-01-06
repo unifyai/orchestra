@@ -4,12 +4,31 @@ import statistics
 from datetime import datetime
 from typing import Any, List, Tuple, Union
 
-from sqlalchemy import JSON, Boolean, Float, String, case, cast, func, select
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    Integer,
+    String,
+    case,
+    cast,
+    func,
+    select,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql import and_, not_, or_
 
 from orchestra.db.models.orchestra_models import Log
+
+STR_TO_SQL_TYPES = {
+    "bool": Boolean,
+    "int": Integer,
+    "float": Float,
+    "str": String,
+    "timestamp": DateTime,
+}
 
 
 def parse_nested(s, pos):
