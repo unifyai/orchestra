@@ -1203,6 +1203,36 @@ async def test_get_logs_w_sorting(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_logs_w_timestamp_sorting(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+    data = log_data["logs_for_filtering_n_metrics"]
+    for i in range(len(data)):
+        d = data[i]
+        d["timestamp"] = datetime.now(timezone.utc).isoformat()
+        response = await client.post(
+            "/v0/log",
+            json={
+                "project": project_name,
+                "params": {"a/b/param1": f"test_{i}"},
+                "entries": d,
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+    # descending timestamp
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"sorting": json.dumps({"timestamp": "descending"})},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 7
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "key",
     ["description", "temperature", "safe", "metadata", "_data"],
