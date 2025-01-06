@@ -6,7 +6,7 @@ import json
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from sqlalchemy import INTEGER, Float, case, cast, desc, func, select
+from sqlalchemy import INTEGER, Float, case, cast, func, select
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
@@ -1138,96 +1138,6 @@ def get_log_groups(
             "content": {
                 "application/json": {
                     "example": {
-                        "entries": {
-                            "col1": "string",
-                            "col2": "float",
-                        },
-                    },
-                },
-            },
-        },
-        404: {
-            "description": "Project Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project <project> not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def get_log_fields(
-    request_fastapi: Request,
-    project: str = Query(
-        description="Name of the project to get fields for.",
-        example="eval-project",
-    ),
-    project_dao: ProjectDAO = Depends(),
-    session=Depends(get_db_session),
-):
-    """
-    Returns a mapping of fields and their datatypes from a project.
-    """
-    try:
-        user_id = request_fastapi.state.user_id
-        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
-    except IndexError:
-        raise not_found(f"Project {project}")
-
-    query = session.query(LogEvent.id).where(LogEvent.project_id == project_obj.id)
-    query = query.order_by(desc(LogEvent.created_at))
-    query = query.limit(1)
-
-    relevant_logs = query.subquery()
-
-    query = (
-        session.query(Log, LogEvent.created_at.label("log_event_ts"))
-        .join(
-            LogEvent,
-            LogEvent.id == Log.log_event_id,
-        )
-        .where(Log.log_event_id.in_(select(relevant_logs)))
-        .order_by(Log.created_at)
-    )
-
-    all_logs = query.all()
-    formatted_logs = format_logs(all_logs)
-
-    fields = dict()
-    for log_dict in formatted_logs.values():
-        log = {
-            "entries": {
-                k: v
-                for k, v in log_dict["entries"].items()
-                if log_dict["versions"][k] is None
-            },
-            "params": {
-                k: str(log_dict["versions"][k])
-                for k, _ in log_dict["entries"].items()
-                if log_dict["versions"][k] is not None
-            },
-        }
-        items = {
-            "entries": list(log["entries"].items()),
-            "params": list(log.get("params", {}).items()),
-        }
-        fields = {
-            key: {item[0]: type(item[1]).__name__ for item in items[key]}
-            for key in items
-        }
-    return fields
-
-
-@router.get(
-    "/logs/field_typing",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {
                         "field1": "string",
                         "field2": "int",
                     },
@@ -1246,10 +1156,10 @@ def get_log_fields(
         },
     },
 )
-def get_field_typing(
+def get_fields(
     request_fastapi: Request,
     project: str = Query(
-        description="Name of the project to get field types for.",
+        description="Name of the project to get fields and their types for.",
         example="eval-project",
     ),
     project_dao: ProjectDAO = Depends(),
@@ -1287,7 +1197,7 @@ def get_field_typing(
 
 
 @router.post(
-    "/logs/field_typing",
+    "/logs/fields/types",
     responses={
         200: {
             "description": "Field typing updated successfully.",
@@ -1321,7 +1231,7 @@ def get_field_typing(
         },
     },
 )
-def set_field_typing(
+def set_field_types(
     request_fastapi: Request,
     request: SetFieldTypingRequest,
     project: str = Query(
@@ -1376,4 +1286,4 @@ def set_field_typing(
         else:  # If we want to turn typing off
             field_type_dao.delete_field_type(project_id, field_name)
 
-    return {"info": "Field typing updated successfully!"}
+    return {"info": "Field types updated successfully!"}
