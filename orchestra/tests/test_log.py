@@ -696,30 +696,6 @@ async def test_get_logs_w_context(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_get_log_fields(client: AsyncClient):
-    project_name = "eval-project"
-    # create the same project with another user to ensure the correct one
-    # is fetched
-    _ = await _create_project(client, project_name, user=1)
-    _ = await _create_log(client, project_name, user=1)
-
-    # fetch fields for the project
-    response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-    assert response.json() == {
-        "entries": {
-            "a/b/c/input": "str",
-            "a/b/c/boolean_input": "bool",
-            "a/b/c/numeric_input": "float",
-        },
-        "params": {"a/b/param1": "str"},
-    }
-
-
-@pytest.mark.anyio
 async def test_get_logs_latest_timestamp(client: AsyncClient):
 
     # create logs
@@ -1498,7 +1474,7 @@ async def test_create_log_strongly_typed(client: AsyncClient):
 
     # Verify that field types are set correctly
     field_types_response = await client.get(
-        f"/v0/logs/field_typing?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -1605,7 +1581,7 @@ async def test_get_set_field_typing(client: AsyncClient):
     await _create_log(client, project_name)
 
     field_types_response = await client.get(
-        f"/v0/logs/field_typing?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -1617,7 +1593,7 @@ async def test_get_set_field_typing(client: AsyncClient):
 
     # Set field typing for the log entries
     response = await client.post(
-        f"/v0/logs/field_typing",
+        f"/v0/logs/fields/types",
         params={"project": project_name},
         json={
             "types": {
@@ -1629,10 +1605,10 @@ async def test_get_set_field_typing(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 200
-    assert response.json()["info"] == "Field typing updated successfully!"
+    assert response.json()["info"] == "Field types updated successfully!"
 
     field_types_response = await client.get(
-        f"/v0/logs/field_typing?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -1653,13 +1629,13 @@ async def test_set_field_typing_non_homogeneous(client: AsyncClient):
 
     # set strongly_typed as False for the field 'a/b/c/numeric_input'
     response = await client.post(
-        f"/v0/logs/field_typing",
+        f"/v0/logs/fields/types",
         params={"project": project_name},
         json={"types": {"a/b/c/numeric_input": False}},
         headers=HEADERS,
     )
     assert response.status_code == 200
-    assert response.json()["info"] == "Field typing updated successfully!"
+    assert response.json()["info"] == "Field types updated successfully!"
 
     # now add a non-homogenous entry
     response = await client.post(
@@ -1675,7 +1651,7 @@ async def test_set_field_typing_non_homogeneous(client: AsyncClient):
 
     # setting strongly_typed as True for 'a/b/c/numeric_input' should fail!
     response = await client.post(
-        f"/v0/logs/field_typing",
+        f"/v0/logs/fields/types",
         params={"project": project_name},
         json={"types": {"a/b/c/numeric_input": True}},
         headers=HEADERS,
