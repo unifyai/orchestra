@@ -344,7 +344,7 @@ def build_filter(filter_dict, log_event_alias, session):
                     if isinstance(compare_value, dict):
                         compare_value = compare_value["value"]
                         if rhs["type"] == "string":
-                            compare_value = str(compare_value)
+                            compare_value = json.dumps(compare_value)
                         condition = log_alias.value
                     elif isinstance(compare_value, bool):
                         compare_value = bool(compare_value)
