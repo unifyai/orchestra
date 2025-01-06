@@ -792,7 +792,7 @@ def get_logs(
         logs.append(
             {
                 "id": log_event_id,
-                "ts": log_dict["ts"].isoformat(),
+                "ts": log_dict["ts"],
                 "entries": {
                     k: v
                     for k, v in log_dict["entries"].items()

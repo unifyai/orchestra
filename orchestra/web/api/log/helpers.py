@@ -635,7 +635,7 @@ def format_logs(all_logs, context_len=0):
         assert (
             key not in formatted_entries[log_event_id]
         ), f"found duplicates for key {key} with log_id {log_event_id}"
-        formatted_entries[log_event_id]["ts"] = ts.strftime("%Y-%m-%d %H:%M:%S")
+        formatted_entries[log_event_id]["ts"] = ts.isoformat()
         formatted_entries[log_event_id]["entries"][key] = json.loads(
             log.value,
         )
