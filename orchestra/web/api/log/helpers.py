@@ -65,7 +65,7 @@ def _tokenize(s):
         ("OP", r"==|!=|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)"),
         ("TYPE_CHECK", r"type"),  # Type check expression
         ("LEN", r"len"),  # length
-        ("STR", r"str"),  # str function
+        ("TO_STR", r"to_str"),  # str function
         ("EXISTS", r"exists"),  # exists
         ("VERSION", r"version"),  # version
         ("BOOLEAN", r"(?<!\w)(?:True|False)(?!\w)"),  # Booleans
@@ -209,13 +209,13 @@ class _Parser:
     def primary(self):
         if self.current_token[0] in (
             "LEN",
-            "STR",
+            "TO_STR",
             "EXISTS",
             "VERSION",
             "TYPE_CHECK",
         ) and self.current_token[1] in (
             "len",
-            "str",
+            "to_str",
             "exists",
             "version",
             "type",
@@ -229,12 +229,12 @@ class _Parser:
                     self.advance()
                 else:
                     raise RuntimeError(
-                        'Expected ")" after len, str, exists or version function',
+                        'Expected ")" after len, to_str, exists or version ' "function",
                     )
                 return {"operand": fn, "rhs": expr}
             else:
                 raise RuntimeError(
-                    'Expected "(" after len, str, exists, or version function',
+                    'Expected "(" after len, to_str, exists, or version function',
                 )
         elif self.current_token[0] == "LPAREN":
             self.advance()
@@ -344,7 +344,7 @@ def build_filter(filter_dict, log_event_alias, session):
                     if isinstance(compare_value, dict):
                         compare_value = compare_value["value"]
                         if rhs["type"] == "string":
-                            compare_value = json.dumps(compare_value)
+                            compare_value = to_str(compare_value)
                         condition = log_alias.value
                     elif isinstance(compare_value, bool):
                         compare_value = bool(compare_value)
@@ -428,7 +428,7 @@ def build_filter(filter_dict, log_event_alias, session):
                 elif operand == "!=":
                     return subq.as_scalar() != length
 
-        if isinstance(lhs, dict) and rhs.get("operand") == "str":
+        if isinstance(lhs, dict) and rhs.get("operand") == "to_str":
             identifier = rhs.get("rhs", {}).get("value")
             lhs_value = lhs["value"]
             if identifier:
