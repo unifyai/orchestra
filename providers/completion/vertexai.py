@@ -64,7 +64,7 @@ class VertexAI(BaseCompletionProvider):
 
 
 supported_models = {
-    "gemini-2.0-flash-exp": {
+    "gemini-2.0-flash": {
         "endpoint": "vertex_ai/gemini-2.0-flash-exp",
         "region": "us-central1",
         "context_window": 128000,
