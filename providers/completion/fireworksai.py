@@ -28,6 +28,11 @@ class FireworksAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "deepseek-v3": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-v3",
+        "context_window": 128000,
+        "cost": {"prompt": 0.9, "completion": 0.9},
+    },
     "llama-3.3-70b-chat": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
         "context_window": 128000,
