@@ -27,6 +27,7 @@ class DeepSeek(BaseCompletionProvider):
 
 
 supported_models = {
+    # add test after uncommenting
     # "deepseek-v3": {
     #     "endpoint": "deepseek/deepseek-chat",
     #     "context_window": 64000,
