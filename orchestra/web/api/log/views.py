@@ -499,7 +499,7 @@ def get_log(
         raise not_found(f"Log with id {id}")
     # TODO: Deal with organisation IDs
 
-    ts = log_event_dao.get_ts(id=id)
+    ts = log_event_dao.get_ts(id=id).isoformat()
     log_entries = log_dao.filter(log_event_id=id)
     params_map = {}
     log_params = {}
@@ -792,7 +792,7 @@ def get_logs(
         logs.append(
             {
                 "id": log_event_id,
-                "ts": log_dict["ts"],
+                "ts": log_dict["ts"].isoformat(),
                 "entries": {
                     k: v
                     for k, v in log_dict["entries"].items()
