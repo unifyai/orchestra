@@ -27,6 +27,8 @@ INSERT INTO provider VALUES (11, 'aws-bedrock', '', '');
 INSERT INTO provider VALUES (12, 'anthropic', '', '');
 INSERT INTO provider VALUES (35, 'groq', '', '');
 INSERT INTO provider VALUES (36, 'vertex-ai', '', '');
+INSERT INTO provider VALUES (37, 'deepseek', '', '');
+INSERT INTO provider VALUES (38, 'xai', '', '');
 
 INSERT INTO provider VALUES (13, 'lowest-input-cost-per-token-provider', '', '');
 INSERT INTO provider VALUES (14, 'lowest-output-cost-per-token-provider', '', '');
@@ -64,6 +66,8 @@ INSERT INTO model VALUES (10, 'gemini-1.5-flash', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (11, 'mistral-7b-instruct-v0.3', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (12, 'claude-3.5-sonnet', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (13, 'llama-3.1-8b-chat', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (14, 'deepseek-v3', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (15, 'grok-2', NOW(), 'dummy_task', true);
 
 INSERT INTO endpoint VALUES (1, 9, 3, NOW(), true);
 INSERT INTO endpoint VALUES (3, 9, 4, NOW(), true);
@@ -79,6 +83,8 @@ INSERT INTO endpoint VALUES (34, 9, 35, NOW(), true);
 INSERT INTO endpoint VALUES (36, 12, 12, NOW(), true);
 INSERT INTO endpoint VALUES (37, 10, 36, NOW(), true);
 INSERT INTO endpoint VALUES (38, 13, 3, NOW(), true);
+INSERT INTO endpoint VALUES (39, 14, 37, NOW(), true);
+INSERT INTO endpoint VALUES (40, 15, 38, NOW(), true);
 
 -- Runtime Dynamic routing
 INSERT INTO model VALUES (4, 'pbr-model', NOW(), 'dummy_task', true);

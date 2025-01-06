@@ -27,10 +27,9 @@ class DeepSeek(BaseCompletionProvider):
 
 
 supported_models = {
-    # add test after uncommenting
-    # "deepseek-v3": {
-    #     "endpoint": "deepseek/deepseek-chat",
-    #     "context_window": 64000,
-    #     "cost": {"prompt": 0.27, "completion": 1.1},
-    # },
+    "deepseek-v3": {
+        "endpoint": "deepseek/deepseek-chat",
+        "context_window": 64000,
+        "cost": {"prompt": 0.27, "completion": 1.1},
+    },
 }
