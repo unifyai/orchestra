@@ -28,6 +28,11 @@ class Deepinfra(BaseCompletionProvider):
 
 
 supported_models = {
+    "deepseek-v3": {
+        "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3",
+        "context_window": 32000,
+        "cost": {"prompt": 1, "completion": 2},
+    },
     "llama-3.3-70b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.3-70B-Instruct",
         "context_window": 128000,
@@ -66,7 +71,7 @@ supported_models = {
     "llama-3.1-nemotron-70b-chat": {
         "endpoint": "deepinfra/nvidia/Llama-3.1-Nemotron-70B-Instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.23, "completion": 0.40},
+        "cost": {"prompt": 0.12, "completion": 0.30},
     },
     "llama-3.1-405b-chat": {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3.1-405B-Instruct",
@@ -111,7 +116,7 @@ supported_models = {
     "qwen-2.5-coder-32b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-Coder-32B-Instruct",
         "context_window": 32768,
-        "cost": {"prompt": 0.08, "completion": 0.18},
+        "cost": {"prompt": 0.07, "completion": 0.16},
     },
     "qwen-qwq-32b-preview": {
         "endpoint": "deepinfra/Qwen/QwQ-32B-Preview",
