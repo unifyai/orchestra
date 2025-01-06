@@ -1366,20 +1366,20 @@ async def test_get_logs_w_date_sorting(client: AsyncClient):
     ["sum", "mean", "var", "std", "min", "max", "median", "mode"],
 )
 @pytest.mark.parametrize(
-    "log_ids",
+    "from_ids",
     [[1, 3, 5, 6], None],
 )
 async def test_get_logs_metric(
     client: AsyncClient,
     key: str,
     metric: str,
-    log_ids: Optional[List[int]],
+    from_ids: Optional[List[int]],
 ):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
     _ = await _create_several_logs(client, project_name)
     data = log_data["logs_for_filtering_n_metrics"]
-    params = {} if log_ids is None else {"log_ids": log_ids}
+    params = {} if from_ids is None else {"from_ids": from_ids}
     response = await client.get(
         f"/v0/logs/metric/{metric}/{key}?project={project_name}",
         params=params,
@@ -1390,7 +1390,7 @@ async def test_get_logs_metric(
     vals = [
         d[key]
         for i, d in enumerate(data)
-        if key in d and (log_ids is None or i + 1 in log_ids)
+        if key in d and (from_ids is None or i + 1 in from_ids)
     ]
     if metric == "mode" and _is_all_unique(vals):
         # early return to avoid computing 'mode' which is order-dependent
