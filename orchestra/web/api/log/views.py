@@ -976,12 +976,21 @@ def get_logs_metric(
         description="Boolean string to filter entries. TODO: Detailed page.",
         example="len(output) > 200 and temperature == 0.5",
     ),
-    log_ids: Optional[List[int]] = Query(
+    from_ids: Optional[List[int]] = Query(
         None,
-        description="Log ids to include in the reduction operation. "
-        "If none, then all logs are included in the search "
-        "(before the filtering is applied).",
-        example=[1, 2, 3],
+        description="The log ids which are permitted to be included in the search. "
+        "Each log id listed does not need to be returned, but no logs "
+        "which are not included in this list can be returned. This "
+        "argument *cannot* be set if `exclude_ids` is set.",
+        example=[0, 1, 2],
+    ),
+    exclude_ids: Optional[List[int]] = Query(
+        None,
+        description="The log ids which cannot be returned from the search. "
+        "None of the listed ids will be returned, even if the logs are "
+        "valid as per the filtering expression etc. This argument *cannot* "
+        "be set if `from_ids` is set.",
+        example=[0, 1, 2],
     ),
     project_dao: ProjectDAO = Depends(),
     session=Depends(get_db_session),
@@ -998,8 +1007,15 @@ def get_logs_metric(
 
     query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
 
-    if log_ids:
-        query = query.filter(LogEvent.id.in_(log_ids))
+    assert not (from_ids and exclude_ids), (
+        f"Only one of from_ids or exclude_ids can be set, "
+        f"but found values {from_ids} and {exclude_ids}."
+    )
+
+    if from_ids:
+        query = query.where(LogEvent.id.in_(from_ids))
+    elif exclude_ids:
+        query = query.where(LogEvent.id.notin_(exclude_ids))
 
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
