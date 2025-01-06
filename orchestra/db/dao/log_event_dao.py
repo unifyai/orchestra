@@ -1,3 +1,4 @@
+import datetime
 from typing import List, Optional, Union
 
 from fastapi import Depends
@@ -71,7 +72,7 @@ class LogEventDAO:
             self.session.rollback()
             raise ValueError
 
-    def get_ts(self, id: int) -> Optional[str]:
+    def get_ts(self, id: int) -> Optional[datetime.datetime]:
         query = (
             select(Project.created_at)
             .join(LogEvent, Project.id == LogEvent.project_id)
