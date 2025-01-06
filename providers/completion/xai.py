@@ -28,12 +28,12 @@ class XAI(BaseCompletionProvider):
 
 supported_models = {
     # add test after uncommenting
-    # "grok-2-vision-latest": {
+    # "grok-2-vision": {
     #     "endpoint": "xai/grok-2-vision-latest",
     #     "context_window": 8192,
     #     "cost": {"prompt": 2, "completion": 10},
     # },
-    # "grok-2-latest": {
+    # "grok-2": {
     #     "endpoint": "xai/grok-2-latest",
     #     "context_window": 131072,
     #     "cost": {"prompt": 2, "completion": 10},
