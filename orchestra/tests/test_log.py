@@ -567,6 +567,71 @@ async def test_get_logs_excluding_ids(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_logs_from_fields(client: AsyncClient):
+    project_name = "eval-project"
+    # create the same project with another user to ensure the correct one
+    # is fetched
+    _ = await _create_project(client, project_name)
+    _ = await _create_several_logs(client, project_name)
+
+    # fetch entries for the project
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"from_fields": ["_/temperature", "_/state", "_/metadata"]},
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    logs = response["logs"]
+    assert len(logs) == 6
+    assert logs[0]["entries"] == {"_/temperature": 100.0, "_/state": "liquid->gas"}
+    assert logs[1]["entries"] == {"_/temperature": 0.0, "_/state": "liquid->solid"}
+    assert logs[2]["entries"] == {"_/temperature": 6000.0, "_/state": "gas"}
+    assert logs[3]["entries"] == {"_/temperature": -210.0, "_/state": "liquid->solid"}
+    assert logs[4]["entries"] == {"_/metadata": [1, 5, 6]}
+    assert logs[5]["entries"] == {"_/metadata": [3, 8, 5]}
+
+
+@pytest.mark.anyio
+async def test_get_logs_excluding_fields(client: AsyncClient):
+    project_name = "eval-project"
+    # create the same project with another user to ensure the correct one
+    # is fetched
+    _ = await _create_project(client, project_name)
+    _ = await _create_several_logs(client, project_name)
+
+    # fetch entries for the project
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={
+            "exclude_fields": [
+                "_/temperature",
+                "_/state",
+                "_/_data",
+                "_/timestamp",
+                "a/b/param1",
+            ],
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    logs = response["logs"]
+    assert len(logs) == 6
+    assert logs[0]["entries"] == {"_/description": "boiling water", "_/safe": False}
+    assert logs[1]["entries"] == {"_/description": "freezing water", "_/safe": True}
+    assert logs[2]["entries"] == {
+        "_/description": "surface of the sun",
+        "_/safe": False,
+    }
+    assert logs[3]["entries"] == {"_/description": "freezing nitrogen", "_/safe": False}
+    assert logs[4]["entries"] == {"_/description": "lava", "_/metadata": [1, 5, 6]}
+    assert logs[5]["entries"] == {"_/description": "air", "_/metadata": [3, 8, 5]}
+
+
+@pytest.mark.anyio
 async def test_get_logs_w_context(client: AsyncClient):
     project_name = "eval-project"
     # create project and log

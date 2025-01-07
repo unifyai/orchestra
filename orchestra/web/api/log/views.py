@@ -535,6 +535,8 @@ def _get_logs_query(
     sorting: Optional[str],
     from_ids: Optional[List[int]],
     exclude_ids: Optional[List[int]],
+    from_fields: Optional[List[str]],
+    exclude_fields: Optional[List[str]],
     limit: Optional[int],
     offset: int,
     project_dao: ProjectDAO,
@@ -665,6 +667,16 @@ def _get_logs_query(
         context_len = len(context)
         query = query.where(Log.key.startswith(context))
 
+    assert not (from_fields and exclude_fields), (
+        f"Only one of from_fields or exclude_fields can be set, "
+        f"but found values {from_fields} and {exclude_fields}."
+    )
+
+    if from_fields:
+        query = query.where(Log.key.in_(from_fields))
+    elif exclude_fields:
+        query = query.where(Log.key.notin_(exclude_fields))
+
     return query.order_by(relevant_log_events.c.row_num).all(), context_len
 
 
@@ -755,6 +767,22 @@ def get_logs(
         "be set if `from_ids` is set.",
         example=[0, 1, 2],
     ),
+    from_fields: Optional[List[str]] = Query(
+        None,
+        description="The fields which are permitted to be included in the search. "
+        "Each field listed does not need to be returned, but no fields "
+        "which are not included in this list can be returned. This "
+        "argument *cannot* be set if `exclude_fields` is set.",
+        example=["score", "response"],
+    ),
+    exclude_fields: Optional[List[str]] = Query(
+        None,
+        description="The fields which cannot be returned from the search. "
+        "None of the listed fields will be returned, even if the fields "
+        "are valid as per the filtering expression etc. This argument "
+        "*cannot* be set if `from_fields` is set.",
+        example=["score", "response"],
+    ),
     limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
     return_ids_only: bool = False,
@@ -773,6 +801,8 @@ def get_logs(
         sorting,
         from_ids,
         exclude_ids,
+        from_fields,
+        exclude_fields,
         limit,
         offset,
         project_dao,
@@ -907,6 +937,22 @@ def get_logs_latest_timestamp(
         "be set if `from_ids` is set.",
         example=[0, 1, 2],
     ),
+    from_fields: Optional[List[str]] = Query(
+        None,
+        description="The fields which are permitted to be included in the search. "
+        "Each field listed does not need to be returned, but no fields "
+        "which are not included in this list can be returned. This "
+        "argument *cannot* be set if `exclude_fields` is set.",
+        example=["score", "response"],
+    ),
+    exclude_fields: Optional[List[str]] = Query(
+        None,
+        description="The fields which cannot be returned from the search. "
+        "None of the listed fields will be returned, even if the fields "
+        "are valid as per the filtering expression etc. This argument "
+        "*cannot* be set if `from_fields` is set.",
+        example=["score", "response"],
+    ),
     limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
     project_dao: ProjectDAO = Depends(),
@@ -925,6 +971,8 @@ def get_logs_latest_timestamp(
         sorting,
         from_ids,
         exclude_ids,
+        from_fields,
+        exclude_fields,
         limit,
         offset,
         project_dao,
