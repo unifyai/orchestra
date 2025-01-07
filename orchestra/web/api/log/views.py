@@ -625,6 +625,17 @@ def _get_logs_query(
 
     relevant_log_events = query.subquery()
 
+    if context is None:
+        context_stripped = None
+    else:
+        context_stripped = "".join(
+            [
+                substr
+                for substr in context.split("/")
+                if substr not in ("params", "entries")
+            ],
+        )
+
     if latest_timestamp:
         # Replace the existing 'return query.order_by(Log.updated_at).last()'
         # with a separate query that does SELECT MAX(updated_at).
@@ -640,7 +651,7 @@ def _get_logs_query(
             )
         )
 
-        if context:
+        if context_stripped:
             context = context if context[-1] == "/" else context + "/"
             max_query = max_query.where(Log.key.startswith(context))
 
@@ -662,7 +673,7 @@ def _get_logs_query(
     )
 
     context_len = 0
-    if context:
+    if context_stripped:
         context = context if context[-1] == "/" else context + "/"
         context_len = len(context)
         query = query.where(Log.key.startswith(context))
@@ -814,26 +825,42 @@ def get_logs(
 
     formatted_logs = format_logs(all_logs, context_len)
 
+    if context is None:
+        exclude_entries = False
+        exclude_params = False
+    else:
+        split_context = context.split("/")
+        assert not (
+            "params" in split_context and "entries" in split_context
+        ), "params and entries cannot both be in the context, only one is permitted."
+        exclude_params = "entries" in split_context
+        exclude_entries = "params" in split_context
+
     params = dict()
     logs = []
     for log_event_id, log_dict in formatted_logs.items():
 
-        for k, v in log_dict["entries"].items():
-            if log_dict["versions"][k] is not None:
-                if k not in params:
-                    params[k] = dict()
-                params[k][log_dict["versions"][k]] = v
+        if not exclude_params:
+            for k, v in log_dict["entries"].items():
+                if log_dict["versions"][k] is not None:
+                    if k not in params:
+                        params[k] = dict()
+                    params[k][log_dict["versions"][k]] = v
 
         logs.append(
             {
                 "id": log_event_id,
                 "ts": log_dict["ts"],
-                "entries": {
+                "entries": {}
+                if exclude_entries
+                else {
                     k: v
                     for k, v in log_dict["entries"].items()
                     if log_dict["versions"][k] is None
                 },
-                "params": {
+                "params": {}
+                if exclude_params
+                else {
                     k: str(log_dict["versions"][k])
                     for k, _ in log_dict["entries"].items()
                     if log_dict["versions"][k] is not None

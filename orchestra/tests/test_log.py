@@ -505,6 +505,63 @@ async def test_get_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_params(client: AsyncClient):
+    project_name = "eval-project"
+    # create the same project with another user to ensure the correct one
+    # is fetched
+    _ = await _create_project(client, project_name)
+    _ = await _create_log(client, project_name)
+
+    # fetch entries for the project
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+        params={"context": "params"},
+    )
+
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), dict)
+    assert isinstance(response.json()["params"], dict)
+    assert isinstance(response.json()["params"]["a/b/param1"]["0"], str)
+    assert isinstance(response.json()["logs"], list)
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert response.json()["logs"][0]["entries"] == {}
+    assert isinstance(response.json()["logs"][0]["params"]["a/b/param1"], str)
+
+
+@pytest.mark.anyio
+async def test_get_entries(client: AsyncClient):
+    project_name = "eval-project"
+    # create the same project with another user to ensure the correct one
+    # is fetched
+    _ = await _create_project(client, project_name)
+    _ = await _create_log(client, project_name)
+
+    # fetch entries for the project
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+        params={"context": "entries"},
+    )
+
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), dict)
+    assert isinstance(response.json()["params"], dict)
+    assert response.json()["params"] == {}
+    assert isinstance(response.json()["logs"], list)
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["a/b/c/boolean_input"],
+        bool,
+    )
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["a/b/c/numeric_input"],
+        float,
+    )
+    assert response.json()["logs"][0]["params"] == {}
+
+
+@pytest.mark.anyio
 async def test_get_logs_from_ids(client: AsyncClient):
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
