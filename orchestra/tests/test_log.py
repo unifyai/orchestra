@@ -1379,9 +1379,9 @@ async def test_get_logs_metric(
     _ = await _create_project(client, project_name)
     _ = await _create_several_logs(client, project_name)
     data = log_data["logs_for_filtering_n_metrics"]
-    params = {} if from_ids is None else {"from_ids": from_ids}
+    params = {"key": key} if from_ids is None else {"key": key, "from_ids": from_ids}
     response = await client.get(
-        f"/v0/logs/metric/{metric}/{key}?project={project_name}",
+        f"/v0/logs/metric/{metric}?project={project_name}",
         params=params,
         headers=HEADERS,
     )
