@@ -24,8 +24,8 @@ router = APIRouter()
 ALLOWED_METRICS = [
     "input_cost",
     "output_cost",
-    "time_to_first_token",
-    "inter_token_latency",
+    "ttft",
+    "itl",
 ]
 ALLOWED_METRICS_STR = ""
 for metric in ALLOWED_METRICS:
@@ -388,8 +388,8 @@ def get_endpoint_metrics(
             ]
             results = [
                 {
-                    "ttft": result["benchmark"][0].time_to_first_token,
-                    "itl": result["benchmark"][0].inter_token_latency,
+                    "ttft": result["benchmark"][0].ttft,
+                    "itl": result["benchmark"][0].itl,
                     "input_cost": result["benchmark"][0].input_cost,
                     "output_cost": result["benchmark"][0].output_cost,
                     "measured_at": result["benchmark"][0].measured_at,
