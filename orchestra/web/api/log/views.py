@@ -627,13 +627,17 @@ def _get_logs_query(
 
     if context is None:
         context_stripped = None
+        exclude_params = False
+        exclude_entries = False
     else:
+        split_context = context.split("/")
+        exclude_params = "entries" in split_context
+        exclude_entries = "params" in split_context
+        assert not (
+            exclude_params and exclude_entries
+        ), "'entries' and 'params' cannot both be specified in the context argument."
         context_stripped = "/".join(
-            [
-                substr
-                for substr in context.split("/")
-                if substr not in ("params", "entries")
-            ],
+            [substr for substr in split_context if substr not in ("params", "entries")],
         )
 
     if latest_timestamp:
@@ -654,6 +658,10 @@ def _get_logs_query(
         if context_stripped:
             context = context if context[-1] == "/" else context + "/"
             max_query = max_query.where(Log.key.startswith(context))
+        if exclude_params:
+            max_query = max_query.where(Log.version.is_(None))
+        elif exclude_entries:
+            max_query = max_query.where(Log.version.isnot(None))
 
         return max_query.scalar().isoformat()
 
@@ -677,6 +685,10 @@ def _get_logs_query(
         context = context if context[-1] == "/" else context + "/"
         context_len = len(context)
         query = query.where(Log.key.startswith(context))
+    if exclude_params:
+        query = query.where(Log.version.is_(None))
+    elif exclude_entries:
+        query = query.where(Log.version.isnot(None))
 
     assert not (from_fields and exclude_fields), (
         f"Only one of from_fields or exclude_fields can be set, "
@@ -804,6 +816,7 @@ def get_logs(
     """
     Returns a list of filtered entries from a project.
     """
+
     all_logs, context_len = _get_logs_query(
         request_fastapi,
         project,
@@ -825,42 +838,26 @@ def get_logs(
 
     formatted_logs = format_logs(all_logs, context_len)
 
-    if context is None:
-        exclude_entries = False
-        exclude_params = False
-    else:
-        split_context = context.split("/")
-        assert not (
-            "params" in split_context and "entries" in split_context
-        ), "params and entries cannot both be in the context, only one is permitted."
-        exclude_params = "entries" in split_context
-        exclude_entries = "params" in split_context
-
     params = dict()
     logs = []
     for log_event_id, log_dict in formatted_logs.items():
 
-        if not exclude_params:
-            for k, v in log_dict["entries"].items():
-                if log_dict["versions"][k] is not None:
-                    if k not in params:
-                        params[k] = dict()
-                    params[k][log_dict["versions"][k]] = v
+        for k, v in log_dict["entries"].items():
+            if log_dict["versions"][k] is not None:
+                if k not in params:
+                    params[k] = dict()
+                params[k][log_dict["versions"][k]] = v
 
         logs.append(
             {
                 "id": log_event_id,
                 "ts": log_dict["ts"],
-                "entries": {}
-                if exclude_entries
-                else {
+                "entries": {
                     k: v
                     for k, v in log_dict["entries"].items()
                     if log_dict["versions"][k] is None
                 },
-                "params": {}
-                if exclude_params
-                else {
+                "params": {
                     k: str(log_dict["versions"][k])
                     for k, _ in log_dict["entries"].items()
                     if log_dict["versions"][k] is not None
