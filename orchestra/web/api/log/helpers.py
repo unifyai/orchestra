@@ -28,6 +28,8 @@ STR_TO_SQL_TYPES = {
     "float": Float,
     "str": String,
     "timestamp": DateTime,
+    "dict": JSONB,
+    "list": JSONB,
 }
 
 
