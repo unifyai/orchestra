@@ -628,7 +628,7 @@ def _get_logs_query(
     if context is None:
         context_stripped = None
     else:
-        context_stripped = "".join(
+        context_stripped = "/".join(
             [
                 substr
                 for substr in context.split("/")
