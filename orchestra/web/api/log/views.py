@@ -935,7 +935,7 @@ def get_logs_latest_timestamp(
 
 
 @router.get(
-    "/logs/metric/{metric}/{key}",
+    "/logs/metric/{metric}",
     responses={
         200: {
             "description": "Successful Response",
@@ -963,7 +963,7 @@ def get_logs_metric(
         description="The name of the metric you would like to compute.",
         example="mean",
     ),
-    key: str = Path(
+    key: str = Query(
         description="The key you would like to extract the reduction metric for.",
         example="score",
     ),
