@@ -708,6 +708,14 @@ def _get_logs_query(
         relevant_log_events,
         relevant_log_events.c.id == LogEvent.id,
     )
+
+    if latest_timestamp:
+        relevant_logs = log_query.subquery()
+        max_query = session.query(func.max(Log.updated_at)).join(
+            relevant_logs,
+            relevant_logs.c.id == Log.id,
+        )
+        return max_query.scalar().isoformat()
     return log_query.order_by(relevant_log_events.c.row_num).all(), context_len, count
 
 
