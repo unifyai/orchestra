@@ -412,72 +412,6 @@ def delete_logs(
     return {"info": "Logs and fields deleted successfully!"}
 
 
-@router.get(
-    "/log/{id}",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "id": "123",
-                        "ts": "2024-10-30 12:20:03",
-                        "entries": {"input": "...", "output": "..."},
-                    },
-                },
-            },
-        },
-        404: {
-            "description": "Log Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Log with id <id> not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def get_log(
-    request_fastapi: Request,
-    id: int = Path(
-        description="ID of the log to fetch.",
-        example="123",
-    ),
-    log_event_dao: LogEventDAO = Depends(),
-    log_dao: LogDAO = Depends(),
-):
-    """
-    Returns the log associated with a given id.
-    """
-    # TODO: Change this one to return the params as well
-    if log_event_dao.get_user_id(id=id) != request_fastapi.state.user_id:
-        raise not_found(f"Log with id {id}")
-    # TODO: Deal with organisation IDs
-
-    ts = log_event_dao.get_ts(id=id).isoformat()
-    log_entries = log_dao.filter(log_event_id=id)
-    params_map = {}
-    log_params = {}
-    entries = {}
-
-    for l in log_entries:
-        if l[0].version is not None:
-            if l[0].key not in params_map:
-                params_map[l[0].key] = dict()
-            params_map[l[0].key][l[0].version] = json.loads(l[0].value)
-            # json keys can't be int so leaving the value as str as well
-            log_params[l[0].key] = str(l[0].version)
-        else:
-            entries[l[0].key] = json.loads(l[0].value)
-
-    return {
-        "params": params_map,
-        "logs": {"id": id, "ts": ts, "entries": entries, "params": log_params},
-    }
-
-
 def _get_logs_query(
     request_fastapi: Request,
     project: str,
@@ -777,7 +711,6 @@ def get_logs(
     """
     Returns a list of filtered entries from a project.
     """
-
     all_logs, context_len, count = _get_logs_query(
         request_fastapi,
         project,
