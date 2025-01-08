@@ -629,52 +629,43 @@ def _get_logs_query(
 
     # create a second set of relevant log event ids, removing all log events which did
     # not contain any relevant fields as per the context and field pruning
-    log_event_query = (
-        session.query(
-            LogEvent.id,
-        )
-        .join(
-            Log,
-            Log.log_event_id == LogEvent.id,
-        )
-        .join(
-            relevant_logs,
-            relevant_logs.c.id == Log.id,
-        )
-    )
 
-    # get the total count, which is the number of log events that would be returned
-    # without any pagination applied
-    count = log_event_query.distinct().count()
+    # query for the distinct log event ids
+    distinct_ids_subq = (
+        session.query(LogEvent.id)
+        .join(Log, Log.log_event_id == LogEvent.id)
+        .join(relevant_logs, relevant_logs.c.id == Log.id)
+        .distinct()
+        .subquery()
+    )
 
     # sort the log ids based on the sorting criteria provided by the user,
     # and dynamically add a post-sorting row number to keep the order info preserved
+    sort_criteria = list()
+    sorted_query = session.query(distinct_ids_subq.c.id)
     if sorting:
         subqs = {}
         for key in json.loads(sorting):
             subqs[key] = (
-                session.query(
-                    LogEvent.id,
-                    Log.value,
-                    Log.inferred_type,
-                )
+                session.query(LogEvent.id, Log.value, Log.inferred_type)
                 .join(Log, LogEvent.id == Log.log_event_id)
                 .where(Log.key == key)
                 .subquery()
             )
-
-        field_types = field_type_dao.get_field_types(project_obj.id)
-        sort_criteria = list()
+            field_types = field_type_dao.get_field_types(project_obj.id)
         for key, sort_mode in json.loads(sorting).items():
             subq = subqs[key]
+            # Outer join to bring in the needed columns for sorting
+            sorted_query = sorted_query.outerjoin(
+                subq,
+                subq.c.id == distinct_ids_subq.c.id,
+            )
+
             if key in field_types:
                 criterion = cast(subq.c.value, STR_TO_SQL_TYPES[field_types[key]])
             else:
                 criterion = subq.c.value
 
-            # Join
-            log_event_query = log_event_query.outerjoin(subq, subq.c.id == LogEvent.id)
-            # Order
             if sort_mode == "ascending":
                 sort_criteria.append(criterion.asc().nulls_last())
             elif sort_mode == "descending":
@@ -685,16 +676,16 @@ def _get_logs_query(
                     detail="sort_mode must be 'ascending' or 'descending', "
                     f"but found {sort_mode}.",
                 )
+    sort_criteria.append(LogEvent.created_at)
 
-        sort_criteria.append(LogEvent.created_at)
-        log_event_query = log_event_query.add_column(
-            func.row_number().over(order_by=sort_criteria).label("row_num"),
-        )
-    else:
-        log_event_query = log_event_query.add_column(
-            func.row_number().over(order_by=LogEvent.created_at).label("row_num"),
-        )
+    log_event_query = sorted_query.join(
+        LogEvent,
+        LogEvent.id == distinct_ids_subq.c.id,
+    ).add_columns(  # or use another join if needed
+        func.row_number().over(order_by=sort_criteria).label("row_num"),
+    )
 
+    count = log_event_query.count()
     if limit:
         log_event_query = log_event_query.limit(limit)
     if offset:
