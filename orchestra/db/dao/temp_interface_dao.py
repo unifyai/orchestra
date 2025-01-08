@@ -26,7 +26,13 @@ class TempInterfaceDAO:
             ),
         )
 
-    def update_interface(self, user_id: str, items: str, new_counter: int):
+    def update_interface(
+        self,
+        user_id: str,
+        items: str,
+        new_counter: int,
+        project: str | None,
+    ):
         query = select(TempInterface)
         query = query.where(TempInterface.user_id == user_id)
         raw = self.session.execute(query)
@@ -34,6 +40,7 @@ class TempInterfaceDAO:
         if entry is not None:
             setattr(entry, "items", items)  # noqa: B010
             setattr(entry, "new_counter", new_counter)
+            setattr(entry, "project", project)
 
     def get_interface(self, user_id: str):
         query = select(TempInterface).where(TempInterface.user_id == user_id)
