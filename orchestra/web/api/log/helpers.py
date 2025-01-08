@@ -4,10 +4,22 @@ import statistics
 from datetime import datetime
 from typing import Any, List, Tuple, Union
 
-from sqlalchemy import Boolean, Float, Integer, String, case, cast, select
+from sqlalchemy import (
+    Boolean,
+    Float,
+    Integer,
+    String,
+    and_,
+    case,
+    cast,
+    literal,
+    not_,
+    or_,
+    select,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
-from sqlalchemy.sql import and_, not_, or_
+from sqlalchemy.sql import Subquery, and_, not_, or_
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.models.orchestra_models import Log
@@ -65,13 +77,14 @@ def _tokenize(s):
         # Operators, note the order to match 'not in' before 'not' and 'in'
         (
             "OP",
-            r"==|!=|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)|\+|\-|\*|/",
+            r"==|!=|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)|\+|\-|\*|/|%",
         ),
-        ("TYPE_CHECK", r"type"),  # Type check expression
-        ("LEN", r"len"),  # length
-        ("STR", r"str"),  # str function
-        ("EXISTS", r"exists"),  # exists
-        ("VERSION", r"version"),  # version
+        ("FUNC", r"round|len|str|type|exists|version"),  # Functions
+        # ("TYPE_CHECK", r"type"),  # Type check expression
+        # ("LEN", r"len"),  # length
+        # ("STR", r"str"),  # str function
+        # ("EXISTS", r"exists"),  # exists
+        # ("VERSION", r"version"),  # version
         ("BOOLEAN", r"(?<!\w)(?:True|False)(?!\w)"),  # Booleans
         ("IDENTIFIER", r"[A-Za-z_/][A-Za-z0-9_/]*"),  # Identifiers
         ("LPAREN", r"\("),
@@ -115,6 +128,7 @@ def _tokenize(s):
             "OP",
             "LPAREN",
             "RPAREN",
+            "FUNC",
         ):
             tokens.append((kind, value))
         elif kind == "BRACKET_OPEN":
@@ -185,7 +199,7 @@ class _Parser:
             return self.comp_expr()
 
     def comp_expr(self):
-        node = self.primary()
+        node = self.add_sub_expr()
         while self.current_token[0] == "OP" and self.current_token[1] in (
             "==",
             "!=",
@@ -197,10 +211,34 @@ class _Parser:
             "not in",
             "is",
             "is not",
+        ):
+            op = self.current_token[1]
+            self.advance()
+            right = self.add_sub_expr()
+            node = {"lhs": node, "operand": op, "rhs": right}
+        return node
+
+    def add_sub_expr(self):
+        node = self.mul_div_expr()
+        while self.current_token[0] == "OP" and self.current_token[1] in (
             "+",
             "-",
             "*",
             "/",
+            "%",
+        ):
+            op = self.current_token[1]
+            self.advance()
+            right = self.mul_div_expr()
+            node = {"lhs": node, "operand": op, "rhs": right}
+        return node
+
+    def mul_div_expr(self):
+        node = self.primary()
+        while self.current_token[0] == "OP" and self.current_token[1] in (
+            "*",
+            "/",
+            "%",
         ):
             op = self.current_token[1]
             self.advance()
@@ -209,19 +247,7 @@ class _Parser:
         return node
 
     def primary(self):
-        if self.current_token[0] in (
-            "LEN",
-            "STR",
-            "EXISTS",
-            "VERSION",
-            "TYPE_CHECK",
-        ) and self.current_token[1] in (
-            "len",
-            "str",
-            "exists",
-            "version",
-            "type",
-        ):
+        if self.current_token[0] == "FUNC":
             fn = self.current_token[1]
             self.advance()
             if self.current_token[0] == "LPAREN":
@@ -231,12 +257,12 @@ class _Parser:
                     self.advance()
                 else:
                     raise RuntimeError(
-                        'Expected ")" after len, str, exists or version function',
+                        'Expected ")" after function call',
                     )
                 return {"operand": fn, "rhs": expr}
             else:
                 raise RuntimeError(
-                    'Expected "(" after len, str, exists, or version function',
+                    'Expected "(" after function call',
                 )
         elif self.current_token[0] == "LPAREN":
             self.advance()
