@@ -116,25 +116,11 @@ def _create_log(client, project_name, user=1):
     )
 
 
-def _get_log(client, log_id, user=1):
+def _get_log(client, project_name, log_id, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
-    return client.get(f"/v0/log/{log_id}", headers=_headers)
-
-
-def _update_log(client, log_id, user=1):
-    _headers = HEADERS if user == 1 else HEADERS_2
-    return client.put(
-        f"/v0/log/{log_id}",
-        json={"entries": log_data["log_update"]},
-        headers=_headers,
-    )
-
-
-def _update_log_w_overwrite(client, log_id, overwrite, user=1):
-    _headers = HEADERS if user == 1 else HEADERS_2
-    return client.put(
-        f"/v0/log/{log_id}",
-        json={"entries": log_data["log_update_w_overwrite"], "overwrite": overwrite},
+    return client.get(
+        f"/v0/logs?project={project_name}",
+        params={"from_ids": [log_id]},
         headers=_headers,
     )
 
@@ -286,9 +272,9 @@ async def test_update_logs_overwrites(client: AsyncClient):
     assert response.status_code == 200, response.json()
     log_id = response.json()
 
-    response = await _get_log(client, log_id)
+    response = await _get_log(client, project_name, log_id)
     assert response.status_code == 200, response.json()
-    orig_entries = response.json()["logs"]["entries"]
+    orig_entries = response.json()["logs"][0]["entries"]
     assert len(orig_entries) == 3
 
     response = await client.post(
@@ -307,17 +293,17 @@ async def test_update_logs_overwrites(client: AsyncClient):
     response = await _update_multiple_logs_w_overwrite(client, log_ids, overwrite=True)
     assert response.status_code == 200, response.json()
 
-    response = await _get_log(client, log_id)
+    response = await _get_log(client, project_name, log_id)
     assert response.status_code == 200, response.json()
-    new_entries = response.json()["logs"]["entries"]
+    new_entries = response.json()["logs"][0]["entries"]
     assert len(new_entries) == 3
     assert new_entries["a/b/c/input"] == orig_entries["a/b/c/input"]
     assert new_entries["a/b/c/boolean_input"] != orig_entries["a/b/c/boolean_input"]
     assert new_entries["a/b/c/numeric_input"] != orig_entries["a/b/c/numeric_input"]
 
-    response = await _get_log(client, log_id_2)
+    response = await _get_log(client, project_name, log_id_2)
     assert response.status_code == 200, response.json()
-    new_entries = response.json()["logs"]["entries"]
+    new_entries = response.json()["logs"][0]["entries"]
     assert len(new_entries) == 4
 
 
@@ -339,7 +325,7 @@ async def test_delete_project_deletes_logs(client: AsyncClient):
     assert isinstance(log_id, int)
 
     # verify it exists
-    response = await _get_log(client, log_id)
+    response = await _get_log(client, project_name, log_id)
     assert response.status_code == 200, response.json()
 
     # Now delete the project
@@ -348,10 +334,10 @@ async def test_delete_project_deletes_logs(client: AsyncClient):
     assert response.json()["info"] == "Project deleted successfully"
 
     # Verify the log has gone
-    response = await _get_log(client, log_id)
+    response = await _get_log(client, project_name, log_id)
     assert response.status_code == 404, response.json()
     assert response.json() == {
-        "detail": f"Log with id {log_id} not found.",
+        "detail": f"Project {project_name} not found.",
     }
 
 
@@ -363,29 +349,23 @@ async def test_get_log(client: AsyncClient):
     log_id = log_response.json()
 
     # fetch the log
-    response = await client.get(f"/v0/log/{log_id}", headers=HEADERS)
+    response = await _get_log(client, project_name, log_id)
 
     assert response.status_code == 200, response.json()
     assert "logs" in response.json()
     assert "params" in response.json()
     assert isinstance(response.json()["params"]["a/b/param1"]["0"], str)
-    assert isinstance(response.json()["logs"]["ts"], str)
-    assert isinstance(response.json()["logs"]["params"]["a/b/param1"], str)
-    assert isinstance(response.json()["logs"]["entries"]["a/b/c/boolean_input"], bool)
-    assert isinstance(response.json()["logs"]["entries"]["a/b/c/numeric_input"], float)
-
-
-@pytest.mark.anyio
-async def test_get_log_not_found(client: AsyncClient):
-    log_id = "123"
-
-    # This should return 404 as the log does not exist
-    response = await client.get(f"/v0/log/{log_id}", headers=HEADERS)
-
-    assert response.status_code == 404, response.json()
-    assert response.json() == {
-        "detail": f"Log with id {log_id} not found.",
-    }
+    assert len(response.json()["logs"]) == 1
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert isinstance(response.json()["logs"][0]["params"]["a/b/param1"], str)
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["a/b/c/boolean_input"],
+        bool,
+    )
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["a/b/c/numeric_input"],
+        float,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1970,11 +1950,13 @@ async def test_delete_logs(client: AsyncClient):
     assert response.json()["info"] == "Logs and fields deleted successfully!"
 
     # Verify logs were deleted
-    response = await _get_log(client, log_id1)
-    assert response.status_code == 404, response.json()
+    response = await _get_log(client, project_name, log_id1)
+    assert response.status_code == 200, response.json()
+    assert response.json() == {"params": {}, "logs": [], "count": 0}
 
-    response = await _get_log(client, log_id2)
-    assert response.status_code == 404, response.json()
+    response = await _get_log(client, project_name, log_id2)
+    assert response.status_code == 200, response.json()
+    assert response.json() == {"params": {}, "logs": [], "count": 0}
 
 
 @pytest.mark.anyio
@@ -2002,13 +1984,13 @@ async def test_update_logs(client: AsyncClient):
     assert response.json()["info"] == "Logs updated successfully!"
 
     # Verify updates
-    response = await _get_log(client, log_id1)
+    response = await _get_log(client, project_name, log_id1)
     assert response.status_code == 200, response.json()
-    assert response.json()["logs"]["entries"]["new_entry"] == "Updated value"
+    assert response.json()["logs"][0]["entries"]["new_entry"] == "Updated value"
 
-    response = await _get_log(client, log_id2)
+    response = await _get_log(client, project_name, log_id2)
     assert response.status_code == 200, response.json()
-    assert response.json()["logs"]["entries"]["new_entry"] == "Updated value"
+    assert response.json()["logs"][0]["entries"]["new_entry"] == "Updated value"
 
 
 @pytest.mark.anyio
@@ -2042,13 +2024,13 @@ async def test_update_logs_multi_values(client: AsyncClient):
     assert response.json()["info"] == "Logs updated successfully!"
 
     # Verify updates
-    response = await _get_log(client, log_id1)
+    response = await _get_log(client, project_name, log_id1)
     assert response.status_code == 200, response.json()
-    assert response.json()["logs"]["entries"]["new_entry"] == "First updated value"
+    assert response.json()["logs"][0]["entries"]["new_entry"] == "First updated value"
 
-    response = await _get_log(client, log_id2)
+    response = await _get_log(client, project_name, log_id2)
     assert response.status_code == 200, response.json()
-    assert response.json()["logs"]["entries"]["new_entry"] == "Second updated value"
+    assert response.json()["logs"][0]["entries"]["new_entry"] == "Second updated value"
 
 
 @pytest.mark.anyio
@@ -2073,13 +2055,13 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
     assert response.json()["info"] == "Logs and fields deleted successfully!"
 
     # Verify deletion of entry
-    response = await _get_log(client, log_id1)
+    response = await _get_log(client, project_name, log_id1)
     assert response.status_code == 200, response.json()
-    assert entry_to_delete not in response.json()["logs"]["entries"]
+    assert entry_to_delete not in response.json()["logs"][0]["entries"]
 
-    response = await _get_log(client, log_id2)
+    response = await _get_log(client, project_name, log_id2)
     assert response.status_code == 200, response.json()
-    assert entry_to_delete not in response.json()["logs"]["entries"]
+    assert entry_to_delete not in response.json()["logs"][0]["entries"]
 
     ids_and_fields = [
         (log_id1, ["a/b/c/boolean_input", "a/b/c/numeric_input", "a/b/param1"]),
