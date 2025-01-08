@@ -512,13 +512,12 @@ async def test_get_params(client: AsyncClient):
     _ = await _create_project(client, project_name)
     _ = await _create_log(client, project_name)
 
-    # fetch entries for the project
+    # fetch all params for the project
     response = await client.get(
         f"/v0/logs?project={project_name}",
         headers=HEADERS,
         params={"context": "params"},
     )
-
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), dict)
     assert isinstance(response.json()["params"], dict)
@@ -527,6 +526,51 @@ async def test_get_params(client: AsyncClient):
     assert isinstance(response.json()["logs"][0]["ts"], str)
     assert response.json()["logs"][0]["entries"] == {}
     assert isinstance(response.json()["logs"][0]["params"]["a/b/param1"], str)
+
+    # fetch params for the project with the full context, prepended by "params"
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+        params={"context": "params/a/b"},
+    )
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), dict)
+    assert isinstance(response.json()["params"], dict)
+    assert isinstance(response.json()["params"]["param1"]["0"], str)
+    assert isinstance(response.json()["logs"], list)
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert response.json()["logs"][0]["entries"] == {}
+    assert isinstance(response.json()["logs"][0]["params"]["param1"], str)
+
+    # fetch params for the project with the full context, with "params" inside
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+        params={"context": "a/params/b"},
+    )
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), dict)
+    assert isinstance(response.json()["params"], dict)
+    assert isinstance(response.json()["params"]["param1"]["0"], str)
+    assert isinstance(response.json()["logs"], list)
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert response.json()["logs"][0]["entries"] == {}
+    assert isinstance(response.json()["logs"][0]["params"]["param1"], str)
+
+    # fetch params for the project with the full context, appended by "params"
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+        params={"context": "a/b/params"},
+    )
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), dict)
+    assert isinstance(response.json()["params"], dict)
+    assert isinstance(response.json()["params"]["param1"]["0"], str)
+    assert isinstance(response.json()["logs"], list)
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert response.json()["logs"][0]["entries"] == {}
+    assert isinstance(response.json()["logs"][0]["params"]["param1"], str)
 
 
 @pytest.mark.anyio
@@ -537,7 +581,7 @@ async def test_get_entries(client: AsyncClient):
     _ = await _create_project(client, project_name)
     _ = await _create_log(client, project_name)
 
-    # fetch entries for the project
+    # fetch all entries for the project
     response = await client.get(
         f"/v0/logs?project={project_name}",
         headers=HEADERS,
@@ -556,6 +600,75 @@ async def test_get_entries(client: AsyncClient):
     )
     assert isinstance(
         response.json()["logs"][0]["entries"]["a/b/c/numeric_input"],
+        float,
+    )
+    assert response.json()["logs"][0]["params"] == {}
+
+    # fetch entries for the project with the full context, prepended by "entries"
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+        params={"context": "entries/a/b"},
+    )
+
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), dict)
+    assert isinstance(response.json()["params"], dict)
+    assert response.json()["params"] == {}
+    assert isinstance(response.json()["logs"], list)
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["c/boolean_input"],
+        bool,
+    )
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["c/numeric_input"],
+        float,
+    )
+    assert response.json()["logs"][0]["params"] == {}
+
+    # fetch entries for the project with the full context, with "entries" inside
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+        params={"context": "a/entries/b"},
+    )
+
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), dict)
+    assert isinstance(response.json()["params"], dict)
+    assert response.json()["params"] == {}
+    assert isinstance(response.json()["logs"], list)
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["c/boolean_input"],
+        bool,
+    )
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["c/numeric_input"],
+        float,
+    )
+    assert response.json()["logs"][0]["params"] == {}
+
+    # fetch entries for the project with the full context, appended by "entries"
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+        params={"context": "a/b/entries"},
+    )
+
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), dict)
+    assert isinstance(response.json()["params"], dict)
+    assert response.json()["params"] == {}
+    assert isinstance(response.json()["logs"], list)
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["c/boolean_input"],
+        bool,
+    )
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["c/numeric_input"],
         float,
     )
     assert response.json()["logs"][0]["params"] == {}
