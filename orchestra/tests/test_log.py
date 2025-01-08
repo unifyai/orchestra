@@ -158,7 +158,7 @@ def _delete_logs(client, log_ids, user=1):
     request = Request(
         "DELETE",
         str(client.base_url) + "/v0/logs",
-        json={"ids": log_ids},
+        json={"ids_and_fields": log_ids},
         headers=_headers,
     )
     return client.send(request)
@@ -177,9 +177,9 @@ def _delete_log_fields_from_logs(client, fields, delete_empty_logs=False, user=1
     _headers = HEADERS if user == 1 else HEADERS_2
     request = Request(
         "DELETE",
-        str(client.base_url) + f"/v0/logs/fields",
+        str(client.base_url) + f"/v0/logs",
         params={"delete_empty_logs": delete_empty_logs},
-        json={"fields": fields},
+        json={"ids_and_fields": fields},
         headers=_headers,
     )
     return client.send(request)
@@ -1962,12 +1962,12 @@ async def test_delete_logs(client: AsyncClient):
 
     log_id1 = response1.json()
     log_id2 = response2.json()
-    log_ids = [log_id1, log_id2]
+    ids_and_fields = [([log_id1, log_id2], None)]
 
     # Delete the logs
-    response = await _delete_logs(client, log_ids)
+    response = await _delete_logs(client, ids_and_fields)
     assert response.status_code == 200, response.json()
-    assert response.json()["info"] == "Logs deleted successfully!"
+    assert response.json()["info"] == "Logs and fields deleted successfully!"
 
     # Verify logs were deleted
     response = await _get_log(client, log_id1)
@@ -2065,12 +2065,12 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
     log_id1 = response1.json()
     log_id2 = response2.json()
     entry_to_delete = "a/b/c/input"
-    fields = [(log_id1, entry_to_delete), (log_id2, entry_to_delete)]
+    ids_and_fields = [(log_id1, entry_to_delete), (log_id2, entry_to_delete)]
 
     # Delete entries from the logs
-    response = await _delete_log_fields_from_logs(client, fields)
+    response = await _delete_log_fields_from_logs(client, ids_and_fields)
     assert response.status_code == 200, response.json()
-    assert response.json()["info"] == "Log field deleted successfully from all logs!"
+    assert response.json()["info"] == "Logs and fields deleted successfully!"
 
     # Verify deletion of entry
     response = await _get_log(client, log_id1)
@@ -2081,18 +2081,18 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
     assert response.status_code == 200, response.json()
     assert entry_to_delete not in response.json()["logs"]["entries"]
 
-    fields = [
+    ids_and_fields = [
         (log_id1, ["a/b/c/boolean_input", "a/b/c/numeric_input", "a/b/param1"]),
         ([log_id1, log_id2], ["a/b/c/boolean_input", "a/b/param1"]),
     ]
     # Delete entries from the logs
     response = await _delete_log_fields_from_logs(
         client,
-        fields,
+        ids_and_fields,
         delete_empty_logs=True,
     )
     assert response.status_code == 200, response.json()
-    assert response.json()["info"] == "Log field deleted successfully from all logs!"
+    assert response.json()["info"] == "Logs and fields deleted successfully!"
 
     response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
     assert response.status_code == 200, response.json()

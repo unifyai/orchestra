@@ -93,7 +93,9 @@ class DeleteLogsRequest(BaseModel):
 
 
 class DeleteLogEntryRequest(BaseModel):
-    fields: List[Tuple[Union[int, List[int]], Union[str, List[str]]]] = Field(
+    ids_and_fields: List[
+        Tuple[Union[int, List[int]], Union[None, str, List[str]]]
+    ] = Field(
         description="List of tuples of log ID(s) and field(s) to delete, "
         "either as an individual item or a list of items.",
         example=[

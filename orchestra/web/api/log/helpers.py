@@ -675,6 +675,6 @@ def _flatten_fields(
             if log_id not in flattened:
                 flattened[log_id] = list()
             for field in fields:
-                if field not in flattened[log_id]:
+                if field is not None and field not in flattened[log_id]:
                     flattened[log_id].append(field)
     return flattened
