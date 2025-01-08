@@ -580,7 +580,7 @@ class DashboardView(Base):
 class Interface(Base):
     __tablename__ = "interface"
 
-    id = Column(Integer, primary_key=True)
+    id = Column(String, primary_key=True, default=uuid.uuid4)
     user_id = Column(
         String,
         ForeignKey("auth_user.id", ondelete="CASCADE"),
@@ -593,6 +593,7 @@ class Interface(Base):
     )
     new_counter = Column(Integer)
     items = Column(String(), nullable=False)
+    project = Column(String())
 
 
 class FieldType(Base):
@@ -612,3 +613,22 @@ class FieldType(Base):
     __table_args__ = (
         UniqueConstraint("project_id", "field_name", name="uq_project_field_name"),
     )
+
+
+class TempInterface(Base):
+    __tablename__ = "temp_interface"
+
+    id = Column(String, primary_key=True, default=uuid.uuid4)
+    user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        index=True,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        index=True,
+    )
+    new_counter = Column(Integer)
+    items = Column(String(), nullable=False)
+    project = Column(String())
