@@ -498,8 +498,8 @@ async def test_get_logs(client: AsyncClient):
 
     # assert the field ordering is correct
     assert (
-        json.dumps(response.json())
-        == '{"params": {"a/b/param1": {"0": "test"}}, "logs": [{"id": 1, "ts": "2025-01-08T17:10:03.212192", "entries": {"a/b/c/input": "Some input data", "a/b/c/boolean_input": true, "a/b/c/numeric_input": 4.5}, "params": {"a/b/param1": "0"}}], "count": 1}'
+        json.dumps([list(lg["entries"].keys()) for lg in response.json()["logs"]])
+        == '[["a/b/c/input", "a/b/c/boolean_input", "a/b/c/numeric_input"]]'
     )
 
     # fetch entries for the empty project
