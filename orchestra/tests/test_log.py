@@ -496,6 +496,12 @@ async def test_get_logs(client: AsyncClient):
     )
     assert isinstance(response.json()["logs"][0]["params"]["a/b/param1"], str)
 
+    # assert the field ordering is correct
+    assert (
+        json.dumps(response.json())
+        == '{"params": {"a/b/param1": {"0": "test"}}, "logs": [{"id": 1, "ts": "2025-01-08T17:10:03.212192", "entries": {"a/b/c/input": "Some input data", "a/b/c/boolean_input": true, "a/b/c/numeric_input": 4.5}, "params": {"a/b/param1": "0"}}], "count": 1}'
+    )
+
     # fetch entries for the empty project
     response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS_2)
 
