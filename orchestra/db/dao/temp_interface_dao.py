@@ -3,10 +3,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Interface
+from orchestra.db.models.orchestra_models import TempInterface
 
 
-class InterfaceDAO:
+class TempInterfaceDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
@@ -18,7 +18,7 @@ class InterfaceDAO:
         project: str | None,
     ):
         self.session.add(
-            Interface(
+            TempInterface(
                 user_id=user_id,
                 items=items,
                 new_counter=new_counter,
@@ -27,8 +27,8 @@ class InterfaceDAO:
         )
 
     def update_interface(self, user_id: str, items: str, new_counter: int):
-        query = select(Interface)
-        query = query.where(Interface.user_id == user_id)
+        query = select(TempInterface)
+        query = query.where(TempInterface.user_id == user_id)
         raw = self.session.execute(query)
         entry = raw.scalars().first()
         if entry is not None:
@@ -36,6 +36,6 @@ class InterfaceDAO:
             setattr(entry, "new_counter", new_counter)
 
     def get_interface(self, user_id: str):
-        query = select(Interface).where(Interface.user_id == user_id)
+        query = select(TempInterface).where(TempInterface.user_id == user_id)
         interface = self.session.execute(query).scalars().first()
         return interface
