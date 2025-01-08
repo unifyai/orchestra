@@ -387,6 +387,53 @@ def _build_subquery_for_identifier(key, log_event_alias):
     )
     return subq
 
+
+def _join_subqueries(lhs_subq, rhs_subq, expr):
+    """
+    Given two subqueries lhs_subq and rhs_subq and an expression expr that combines
+    their respective columns, produce a new subquery that merges them (by log_event_id),
+    with 'expr' as the 'value' column.
+
+    This is useful for arithmetic operations and comparisons. The resulting
+    subquery can be used in further operations.
+    """
+    j = (
+        select(
+            lhs_subq.c.log_event_id.label("log_event_id"),
+            expr.label("value"),
+        )
+        .select_from(lhs_subq)
+        .join(rhs_subq, lhs_subq.c.log_event_id == rhs_subq.c.log_event_id)
+        .subquery()
+    )
+    return j
+
+
+def build_sql_query(filter_dict, log_event_alias, session):
+    """
+    Recursively build SQLAlchemy filter or expression from filter_dict.
+
+    Args:
+        filter_dict (dict): The filter dictionary.
+        log_event_alias: Alias for LogEvent to correlate subqueries.
+        session: SQLAlchemy session for executing subqueries.
+
+    Returns:
+        SQLAlchemy condition or expression
+    """
+    log_alias = aliased(Log)
+
+    # Base cases
+    if not isinstance(filter_dict, dict):
+        return literal(filter_dict)
+
+    if "type" in filter_dict:
+        if filter_dict["type"] == "identifier":
+            key = filter_dict["value"]
+            return _build_subquery_for_identifier(key, log_event_alias)
+        elif filter_dict["type"] in ("string", "int", "float", "bool"):
+            return literal(filter_dict["value"])
+
     operand = filter_dict.get("operand")
 
     lhs = build_sql_query(filter_dict["lhs"], log_event_alias, session)
