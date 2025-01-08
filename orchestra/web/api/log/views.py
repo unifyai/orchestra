@@ -686,14 +686,13 @@ def _get_logs_query(
                     f"but found {sort_mode}.",
                 )
 
-        log_event_query = log_event_query.order_by(*sort_criteria)
+        sort_criteria.append(LogEvent.created_at)
         log_event_query = log_event_query.add_column(
             func.row_number().over(order_by=sort_criteria).label("row_num"),
         )
     else:
-        log_event_query = log_event_query.order_by(LogEvent.created_at)
         log_event_query = log_event_query.add_column(
-            func.row_number().over().label("row_num"),
+            func.row_number().over(order_by=LogEvent.created_at).label("row_num"),
         )
 
     if limit:
