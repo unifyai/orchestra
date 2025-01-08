@@ -18,7 +18,6 @@ from orchestra.db.models.orchestra_models import Log, LogEvent
 from orchestra.web.api.log.schema import (
     CreateLogConfig,
     DeleteLogEntryRequest,
-    DeleteLogsRequest,
     SetFieldTypingRequest,
     UpdateLogRequest,
 )
@@ -157,57 +156,6 @@ def create_log(
         )
 
     return log_event_id
-
-
-@router.delete(
-    "/logs",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {"info": "Logs deleted successfully!"},
-                },
-            },
-        },
-        404: {
-            "description": "Logs Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "One or more logs with the specified IDs were not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def delete_logs(
-    request_fastapi: Request,
-    body: DeleteLogsRequest,
-    log_event_dao: LogEventDAO = Depends(),
-):
-    """
-    Deletes multiple logs from a project.
-    """
-    not_found_ids = []
-    for log_id in body.ids:
-        try:
-            if log_event_dao.get_user_id(id=log_id) != request_fastapi.state.user_id:
-                raise IndexError
-        except IndexError:
-            not_found_ids.append(log_id)
-            continue
-        # TODO: Deal with organisation IDs
-        log_event_dao.delete(id=log_id)
-
-    if not_found_ids:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Logs with ids {not_found_ids} not found or you don't have permission to delete them.",
-        )
-
-    return {"info": "Logs deleted successfully!"}
 
 
 @router.put(
@@ -368,7 +316,7 @@ def update_logs(
 
 
 @router.delete(
-    "/logs/fields",
+    "/logs",
     responses={
         200: {
             "description": "Successful Response",
@@ -402,7 +350,7 @@ def update_logs(
         },
     },
 )
-def delete_log_fields(
+def delete_logs(
     request_fastapi: Request,
     body: DeleteLogEntryRequest,
     delete_empty_logs: bool = Query(
@@ -421,9 +369,9 @@ def delete_log_fields(
     not_found_logs = []
     not_found_entries = []
 
-    log_fields = _flatten_fields(body.fields)
+    ids_and_fields = _flatten_fields(body.ids_and_fields)
 
-    for log_id, fields in log_fields.items():
+    for log_id, fields in ids_and_fields.items():
         # Verify if the log belongs to the user
         try:
             if log_event_dao.get_user_id(id=log_id) != request_fastapi.state.user_id:
@@ -432,15 +380,18 @@ def delete_log_fields(
             not_found_logs.append(log_id)
             continue
 
-        for field in fields:
-            # Check for the existence of the log entry
-            log = log_dao.filter(log_event_id=log_id, key=field)
-            if not log:
-                not_found_entries.append(log_id)
-                continue
+        if len(fields) == 0:
+            log_event_dao.delete(log_id)
+        else:
+            for field in fields:
+                # Check for the existence of the log entry
+                log = log_dao.filter(log_event_id=log_id, key=field)
+                if not log:
+                    not_found_entries.append(log_id)
+                    continue
 
-            # Delete the log entry
-            log_dao.delete(id=log[0][0].id)
+                # Delete the log entry
+                log_dao.delete(id=log[0][0].id)
 
         if delete_empty_logs and not log_dao.filter(log_event_id=log_id):
             log_event_dao.delete(id=log_id)
@@ -458,7 +409,7 @@ def delete_log_fields(
             detail=f"Specified fields not found in logs with ids {not_found_entries}.",
         )
 
-    return {"info": "Log field deleted successfully from all logs!"}
+    return {"info": "Logs and fields deleted successfully!"}
 
 
 @router.get(
