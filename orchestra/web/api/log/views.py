@@ -602,10 +602,10 @@ def _get_logs_query(
         assert not (
             exclude_params and exclude_entries
         ), "'entries' and 'params' cannot both be specified in the context argument."
-        context_stripped = "/".join(
+        context = "/".join(
             [substr for substr in split_context if substr not in ("params", "entries")],
         )
-        if context_stripped:
+        if context:
             context = context if context[-1] == "/" else context + "/"
             context_len = len(context)
             log_query = log_query.where(Log.key.startswith(context))
