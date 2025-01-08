@@ -145,4 +145,5 @@ def get_interface(
     return {
         "items": json.loads(interface.items),
         "new_counter": interface.new_counter,
+        "project": interface.project,
     }
