@@ -309,21 +309,41 @@ def str_filter_exp_to_dict(s):
     return result
 
 
-def _select_value():
-    breakpoint()
-    return case(
-        [(my_table.c.some_column.is_(None), literal("Value is NULL"))],
-        else_=literal("Value is NOT NULL"),
-    ).label("null_check")
-
-
-def build_sql_query(filter_dict, log_event_alias, session):
+def _select_value(subq, session):
     """
-    Recursively build SQLAlchemy filter from filter_dict.
+    Helper function to select the appropriate value column from a subquery.
+    Prioritizes 'value' if it exists, otherwise selects based on inferred types.
+    """
+    if hasattr(subq.c, "value"):
+        return subq.c.value
+    # NOTE: this is an inefficiency. Ideally, we should be able to determine the type of the subquery
+    # without an additional read operation from the database.
 
-    Args:
-        filter_dict (dict): The filter dictionary.
-        log_event_alias: Alias for LogEvent to correlate subqueries.
+    dt = session.execute(select(subq)).first()[-1] # execute the subquery to determine the type.
+    d = {
+        "int": subq.c.int_value,
+        "float": subq.c.float_value,
+        "bool": subq.c.bool_value,
+        "str": subq.c.str_value,
+        "list": subq.c.jsonb_value,
+        "dict": subq.c.jsonb_value,
+    }
+    return d[dt]
+
+    # this does not work unfortuantely because sqlalchemy
+    # does not support column selection based on dynamic types. 
+    # return case(
+    #     *[
+    #         (subq.inferred_type == "float", subq.float_value),
+    #         (subq.inferred_type == "int", csubq.int_value),
+    #         (subq.inferred_type == "str", subq.str_value),
+    #         (subq.inferred_type == "bool", subq.bool_value),
+    #         (subq.inferred_type == "list", subq.list_value),
+    #         (subq.inferred_type == "dict", subq.dict_value)
+    #     ],
+    #     else_=None
+    # )
+
 
 def _build_subquery_for_identifier(key, log_event_alias):
     """
