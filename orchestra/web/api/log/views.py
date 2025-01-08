@@ -544,36 +544,112 @@ def _get_logs_query(
     session,
     latest_timestamp=False,
 ):
+    # try to get the project, and fail if not found
     try:
         user_id = request_fastapi.state.user_id
         project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
     except IndexError:
         raise not_found(f"Project {project}")
-    # TODO: Deal with organisation IDs
 
-    query = session.query(
+    # filter for log event ids within the project
+    log_event_query = session.query(
         LogEvent.id,
     ).where(LogEvent.project_id == project_obj.id)
 
+    # remove irrelevant log event ids based on from_ids and exclude_ids
     assert not (from_ids and exclude_ids), (
         f"Only one of from_ids or exclude_ids can be set, "
         f"but found values {from_ids} and {exclude_ids}."
     )
-
     if from_ids:
-        query = query.where(LogEvent.id.in_(from_ids))
+        log_event_query = log_event_query.where(LogEvent.id.in_(from_ids))
     elif exclude_ids:
-        query = query.where(LogEvent.id.notin_(exclude_ids))
+        log_event_query = log_event_query.where(LogEvent.id.notin_(exclude_ids))
 
-    query = query.order_by(LogEvent.created_at)
+    # filter the log event ids based on the values of their fields (filter argument)
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
         if filter_dict:
             condition = build_filter(filter_dict, LogEvent, session)
-            query = query.filter(condition)
+            log_event_query = log_event_query.filter(condition)
 
+    # create sub-query for these relevant log events
+    relevant_log_events = log_event_query.subquery()
+
+    # query the logs themselves, which match the log event ids
+    log_query = (
+        session.query(
+            Log,
+            LogEvent.created_at,
+            LogEvent.id,
+        )
+        .join(
+            LogEvent,
+            LogEvent.id == Log.log_event_id,
+        )
+        .join(
+            relevant_log_events,
+            relevant_log_events.c.id == LogEvent.id,
+        )
+    )
+
+    # filter out all logs which are not within the context
+    context_len = 0
+    if context is not None:
+        split_context = context.split("/")
+        exclude_params = "entries" in split_context
+        exclude_entries = "params" in split_context
+        assert not (
+            exclude_params and exclude_entries
+        ), "'entries' and 'params' cannot both be specified in the context argument."
+        context_stripped = "/".join(
+            [substr for substr in split_context if substr not in ("params", "entries")],
+        )
+        if context_stripped:
+            context = context if context[-1] == "/" else context + "/"
+            context_len = len(context)
+            log_query = log_query.where(Log.key.startswith(context))
+        if exclude_params:
+            log_query = log_query.where(Log.version.is_(None))
+        elif exclude_entries:
+            log_query = log_query.where(Log.version.isnot(None))
+
+    # filter out all irrelevant logs as per from_fields and exclude_fields
+    assert not (from_fields and exclude_fields), (
+        f"Only one of from_fields or exclude_fields can be set, "
+        f"but found values {from_fields} and {exclude_fields}."
+    )
+    if from_fields:
+        log_query = log_query.where(Log.key.in_(from_fields))
+    elif exclude_fields:
+        log_query = log_query.where(Log.key.notin_(exclude_fields))
+
+    # create a sub-query of these relevant logs
+    relevant_logs = log_query.subquery()
+
+    # create a second set of relevant log event ids, removing all log events which did
+    # not contain any relevant fields as per the context and field pruning
+    log_event_query = (
+        session.query(
+            LogEvent.id,
+        )
+        .join(
+            Log,
+            Log.log_event_id == LogEvent.id,
+        )
+        .join(
+            relevant_logs,
+            relevant_logs.c.id == Log.id,
+        )
+    )
+
+    # get the total count, which is the number of log events that would be returned
+    # without any pagination applied
+    count = log_event_query.distinct().count()
+
+    # sort the log ids based on the sorting criteria provided by the user,
+    # and dynamically add a post-sorting row number to keep the order info preserved
     if sorting:
-        # Create sub-queries for each key
         subqs = {}
         for key in json.loads(sorting):
             subqs[key] = (
@@ -587,7 +663,6 @@ def _get_logs_query(
                 .subquery()
             )
 
-        # Outer-join them and build ORDER BY
         field_types = field_type_dao.get_field_types(project_obj.id)
         sort_criteria = list()
         for key, sort_mode in json.loads(sorting).items():
@@ -598,7 +673,7 @@ def _get_logs_query(
                 criterion = subq.c.value
 
             # Join
-            query = query.outerjoin(subq, subq.c.id == LogEvent.id)
+            log_event_query = log_event_query.outerjoin(subq, subq.c.id == LogEvent.id)
             # Order
             if sort_mode == "ascending":
                 sort_criteria.append(criterion.asc().nulls_last())
@@ -611,96 +686,29 @@ def _get_logs_query(
                     f"but found {sort_mode}.",
                 )
 
-        query = query.order_by(*sort_criteria)
-        query = query.add_column(
+        log_event_query = log_event_query.order_by(*sort_criteria)
+        log_event_query = log_event_query.add_column(
             func.row_number().over(order_by=sort_criteria).label("row_num"),
         )
     else:
-        query = query.add_column(func.row_number().over().label("row_num"))
+        log_event_query = log_event_query.order_by(LogEvent.created_at)
+        log_event_query = log_event_query.add_column(
+            func.row_number().over().label("row_num"),
+        )
 
     if limit:
-        query = query.limit(limit)
+        log_event_query = log_event_query.limit(limit)
     if offset:
-        query = query.offset(offset)
+        log_event_query = log_event_query.offset(offset)
+    relevant_log_events = log_event_query.subquery()
 
-    relevant_log_events = query.subquery()
-
-    if context is None:
-        context_stripped = None
-        exclude_params = False
-        exclude_entries = False
-    else:
-        split_context = context.split("/")
-        exclude_params = "entries" in split_context
-        exclude_entries = "params" in split_context
-        assert not (
-            exclude_params and exclude_entries
-        ), "'entries' and 'params' cannot both be specified in the context argument."
-        context_stripped = "/".join(
-            [substr for substr in split_context if substr not in ("params", "entries")],
-        )
-
-    if latest_timestamp:
-        # Replace the existing 'return query.order_by(Log.updated_at).last()'
-        # with a separate query that does SELECT MAX(updated_at).
-        max_query = (
-            session.query(func.max(Log.updated_at))
-            .join(
-                LogEvent,
-                LogEvent.id == Log.log_event_id,
-            )
-            .join(
-                relevant_log_events,
-                relevant_log_events.c.id == LogEvent.id,
-            )
-        )
-
-        if context_stripped:
-            context = context if context[-1] == "/" else context + "/"
-            max_query = max_query.where(Log.key.startswith(context))
-        if exclude_params:
-            max_query = max_query.where(Log.version.is_(None))
-        elif exclude_entries:
-            max_query = max_query.where(Log.version.isnot(None))
-
-        return max_query.scalar().isoformat()
-
-    query = (
-        session.query(
-            Log,
-            LogEvent.created_at,
-        )
-        .join(
-            LogEvent,
-            LogEvent.id == Log.log_event_id,
-        )
-        .join(
-            relevant_log_events,
-            relevant_log_events.c.id == LogEvent.id,
-        )
+    # the final log query, with all of the pruning, filtering, sorting,
+    # and pagination applied
+    log_query = log_query.join(
+        relevant_log_events,
+        relevant_log_events.c.id == LogEvent.id,
     )
-
-    context_len = 0
-    if context_stripped:
-        context = context if context[-1] == "/" else context + "/"
-        context_len = len(context)
-        query = query.where(Log.key.startswith(context))
-    if exclude_params:
-        query = query.where(Log.version.is_(None))
-    elif exclude_entries:
-        query = query.where(Log.version.isnot(None))
-
-    assert not (from_fields and exclude_fields), (
-        f"Only one of from_fields or exclude_fields can be set, "
-        f"but found values {from_fields} and {exclude_fields}."
-    )
-
-    if from_fields:
-        query = query.where(Log.key.in_(from_fields))
-    elif exclude_fields:
-        query = query.where(Log.key.notin_(exclude_fields))
-
-    return query.order_by(relevant_log_events.c.row_num).all(), context_len
+    return log_query.order_by(relevant_log_events.c.row_num).all(), context_len, count
 
 
 @router.get(
@@ -817,7 +825,7 @@ def get_logs(
     Returns a list of filtered entries from a project.
     """
 
-    all_logs, context_len = _get_logs_query(
+    all_logs, context_len, count = _get_logs_query(
         request_fastapi,
         project,
         context,
@@ -864,8 +872,6 @@ def get_logs(
                 },
             },
         )
-
-    count = session.query(func.count(LogEvent.id)).first()[0]
 
     return {
         "params": params,
