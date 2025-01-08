@@ -12,6 +12,8 @@ from sqlalchemy import (
     and_,
     case,
     cast,
+    exists,
+    func,
     literal,
     not_,
     or_,
@@ -323,19 +325,17 @@ def build_sql_query(filter_dict, log_event_alias, session):
         filter_dict (dict): The filter dictionary.
         log_event_alias: Alias for LogEvent to correlate subqueries.
 
-    Returns:
-        SQLAlchemy condition
+def _build_subquery_for_identifier(key, log_event_alias):
+    """
+    Build a subselect that retrieves columns for a given log key.
+    The returned subselect columns typically include:
+      - id (to allow joining)
+      - several casted columns (str_value, int_value, float_value, bool_value, jsonb_value)
     """
     log_alias = aliased(Log)
-    if filter_dict == {}:
-        return None
-    elif not isinstance(filter_dict, dict):
-        # Base case: direct value
-        return filter_dict
-    elif filter_dict.get("type") == "identifier":
-        key = filter_dict.get("value")
-        subq = select(
-            log_alias.id,
+    subq = (
+        select(
+            log_alias.log_event_id.label("log_event_id"),
             case(
                 (log_alias.inferred_type == "list", cast(log_alias.value, JSONB)),
                 (log_alias.inferred_type == "dict", cast(log_alias.value, JSONB)),
@@ -357,13 +357,15 @@ def build_sql_query(filter_dict, log_event_alias, session):
                 (log_alias.inferred_type == "bool", cast(log_alias.value, Boolean)),
                 else_=None,
             ).label("bool_value"),
-        ).where(
+            log_alias.inferred_type.label("inferred_type"),
+        )
+        .where(
             log_alias.log_event_id == log_event_alias.id,
             log_alias.key == key,
         )
-        print(session.execute(subq).all())
-        breakpoint()
-        return subq
+        .subquery()
+    )
+    return subq
 
     operand = filter_dict.get("operand")
 
