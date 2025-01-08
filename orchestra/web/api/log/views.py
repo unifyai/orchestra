@@ -706,7 +706,11 @@ def _get_logs_query(
             relevant_logs.c.id == Log.id,
         )
         return max_query.scalar().isoformat()
-    return log_query.order_by(relevant_log_events.c.row_num).all(), context_len, count
+    return (
+        log_query.order_by(relevant_log_events.c.row_num, Log.created_at).all(),
+        context_len,
+        count,
+    )
 
 
 @router.get(
