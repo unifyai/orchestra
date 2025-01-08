@@ -90,6 +90,7 @@ def update_interface(
         user_id=request_fastapi.state.user_id,
         items=json.dumps([item.model_dump() for item in request.items]),
         new_counter=request.new_counter,
+        project=request.project,
     )
     return {"info": "Interface updated successfully!"}
 
