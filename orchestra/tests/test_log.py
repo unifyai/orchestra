@@ -899,6 +899,97 @@ async def test_get_empty_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_logs_w_pagination(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+    _ = await _create_several_logs(client, project_name)
+
+    # limit = 3
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"limit": 3},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 3
+
+    assert result["logs"][0]["entries"] == {
+        "_/description": "boiling water",
+        "_/temperature": 100.0,
+        "_/state": "liquid->gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][1]["entries"] == {
+        "_/description": "freezing water",
+        "_/temperature": 0.0,
+        "_/state": "liquid->solid",
+        "_/safe": True,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][2]["entries"] == {
+        "_/description": "surface of the sun",
+        "_/temperature": 6000.0,
+        "_/state": "gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+
+    # limit = 3 and offset = 2
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"limit": 3, "offset": 2},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 3
+
+    assert result["logs"][0]["entries"] == {
+        "_/description": "surface of the sun",
+        "_/temperature": 6000.0,
+        "_/state": "gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][1]["entries"] == {
+        "_/description": "freezing nitrogen",
+        "_/temperature": -210.0,
+        "_/state": "liquid->solid",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][2]["entries"] == {
+        "_/description": "lava",
+        "_/metadata": [1, 5, 6],
+        "_/_data": {"a": 2, "b": 4},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+
+    # offset = 5
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"offset": 5},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 2
+
+    assert result["logs"][0]["entries"] == {
+        "_/description": "air",
+        "_/metadata": [3, 8, 5],
+        "_/_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][1]["entries"] == {
+        "_/_data": {"a": 8, "b": 10},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+
+
+@pytest.mark.anyio
 async def test_get_logs_w_filtering(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
