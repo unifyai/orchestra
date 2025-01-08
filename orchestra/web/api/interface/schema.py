@@ -33,5 +33,5 @@ class Item(BaseModel):
 class InterfaceConfig(BaseModel):
     items: list[Item]
     new_counter: int
-    project: str = None
+    project: str | None = None
     temporary: bool = False
