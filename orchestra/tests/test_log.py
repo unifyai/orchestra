@@ -589,6 +589,7 @@ async def test_get_logs_from_ids(client: AsyncClient):
     response = response.json()
     logs = response["logs"]
     assert len(logs) == 4
+    assert len(logs) == response["count"]
     assert [log["id"] for log in logs] == [i for i in ids if i in from_ids]
 
 
@@ -620,6 +621,7 @@ async def test_get_logs_excluding_ids(client: AsyncClient):
     response = response.json()
     logs = response["logs"]
     assert len(logs) == 3
+    assert len(logs) == response["count"]
     assert [log["id"] for log in logs] == [i for i in ids if i not in exclude_ids]
 
 
@@ -642,6 +644,7 @@ async def test_get_logs_from_fields(client: AsyncClient):
     response = response.json()
     logs = response["logs"]
     assert len(logs) == 6
+    assert len(logs) == response["count"]
     assert logs[0]["entries"] == {"_/temperature": 100.0, "_/state": "liquid->gas"}
     assert logs[1]["entries"] == {"_/temperature": 0.0, "_/state": "liquid->solid"}
     assert logs[2]["entries"] == {"_/temperature": 6000.0, "_/state": "gas"}
@@ -677,6 +680,7 @@ async def test_get_logs_excluding_fields(client: AsyncClient):
     response = response.json()
     logs = response["logs"]
     assert len(logs) == 6
+    assert len(logs) == response["count"]
     assert logs[0]["entries"] == {"_/description": "boiling water", "_/safe": False}
     assert logs[1]["entries"] == {"_/description": "freezing water", "_/safe": True}
     assert logs[2]["entries"] == {
