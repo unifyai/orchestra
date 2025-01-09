@@ -696,7 +696,10 @@ def _get_logs_query(
             )
 
             if key in field_types:
-                criterion = cast(subq.c.value, STR_TO_SQL_TYPES[field_types[key]])
+                if key == "_/timestamp":
+                    criterion = cast(cast(subq.c.value, String), STR_TO_SQL_TYPES[field_types[key]])
+                else:
+                    criterion = cast(subq.c.value, STR_TO_SQL_TYPES[field_types[key]])
             else:
                 criterion = subq.c.value
 
@@ -1178,7 +1181,7 @@ def get_logs_metric(
                     ),
                     (
                         Log.inferred_type == "timestamp",
-                        func.extract("epoch", cast(Log.value, TIMESTAMP)).cast(Float),
+                        func.extract("epoch", cast(cast(Log.value, String), TIMESTAMP)).cast(Float),
                     ),
                     (Log.inferred_type == "float", Log.value.cast(Float)),
                     (Log.inferred_type == "int", Log.value.cast(Float)),
