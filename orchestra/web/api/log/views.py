@@ -3,10 +3,11 @@ Includes endpoints related to entries.
 """
 
 import json
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from sqlalchemy import INTEGER, Float, case, cast, func, select
+from sqlalchemy import INTEGER, TIMESTAMP, Float, case, cast, func, select
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
@@ -957,8 +958,9 @@ def get_logs_metric(
         example=[0, 1, 2],
     ),
     project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
     session=Depends(get_db_session),
-) -> Union[float, int, bool]:
+) -> Union[float, int, bool, str]:
     """
     Returns the reduction metric for filtered values for a specific key from a project.
     """
@@ -1024,6 +1026,10 @@ def get_logs_metric(
                         Log.inferred_type == "str",
                         func.length(cast(Log.value, JSONB)[0].astext).cast(Float),
                     ),
+                    (
+                        Log.inferred_type == "timestamp",
+                        func.extract("epoch", cast(Log.value, TIMESTAMP)).cast(Float),
+                    ),
                     (Log.inferred_type == "float", Log.value.cast(Float)),
                     (Log.inferred_type == "int", Log.value.cast(Float)),
                     else_=0,
@@ -1033,6 +1039,23 @@ def get_logs_metric(
         .where(Log.key == key)
         .filter(Log.log_event_id.in_(select(subquery)))
     ).scalar()
+    field_type = field_type_dao.get_field_types(project_obj.id).get(key)
+    if metric == "count":
+        return int(reduced_query)
+    elif not field_type:
+        return reduced_query
+    elif field_type == "timestamp":
+        if metric in ("var", "std"):
+            return timedelta(seconds=reduced_query).__repr__()
+        return datetime.fromtimestamp(reduced_query).isoformat()
+    elif (
+        reduced_query.is_integer()
+        and metric in ("sum", "min", "max", "median", "mode")
+        and field_type in ("int", "bool", "str")
+    ):
+        if field_type == "bool" and metric in ("min", "max", "median", "mode"):
+            return bool(reduced_query)
+        return int(reduced_query)
     return reduced_query
 
 
