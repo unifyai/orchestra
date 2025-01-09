@@ -1838,7 +1838,14 @@ async def test_get_logs_w_date_sorting(client: AsyncClient):
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "key",
-    ["_/description", "_/temperature", "_/safe", "_/metadata", "_/_data"],
+    [
+        "_/description",
+        "_/temperature",
+        "_/safe",
+        "_/metadata",
+        "_/_data",
+        "_/timestamp",
+    ],
 )
 @pytest.mark.parametrize(
     "metric",
@@ -1875,7 +1882,12 @@ async def test_get_logs_metric(
         # early return to avoid computing 'mode' which is order-dependent
         # in case of unique entries.
         return
-    assert np.isclose(result, reduction_methods[metric](vals), atol=1e-6)
+    correct = reduction_methods[metric](vals)
+    if isinstance(correct, str):
+        # ignore milliseconds, as tiny rounding float differences can occur
+        assert result.split(".")[0] == correct.split(".")[0]
+    else:
+        assert np.isclose(result, correct, atol=1e-6)
 
 
 @pytest.mark.anyio

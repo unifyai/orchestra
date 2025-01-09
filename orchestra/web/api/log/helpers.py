@@ -1,7 +1,7 @@
 import json
 import re
 import statistics
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, List, Tuple, Union
 
 from sqlalchemy import (
@@ -559,10 +559,18 @@ def build_filter(filter_dict, log_event_alias, session):
 # Reduction #
 # ----------#
 
+# noinspection PyBroadException
+def _is_timestamp(v: Any):
+    try:
+        datetime.fromisoformat(v)
+        return True
+    except:
+        return False
+
 
 def _is_type_for_len(v: Any) -> bool:
     return (
-        isinstance(v, str)
+        (isinstance(v, str) and not _is_timestamp(v))
         or isinstance(v, list)
         or isinstance(v, dict)
         or isinstance(v, tuple)
@@ -584,51 +592,75 @@ def _is_all_unique(vals):
 
 def _preprocess(
     values: List[Union[int, float, bool, str]],
-) -> List[Union[int, float, bool]]:
-    return [len(v) if _is_type_for_len(v) else v for v in values if v is not None]
+) -> Tuple[List[Union[int, float, bool]], bool]:
+    assert all(
+        isinstance(x, type(values[0])) for x in values
+    ), "Not all elements have the same type"
+    if _is_type_for_len(values[0]):
+        return [len(v) for v in values], False
+    elif _is_timestamp(values[0]):
+        return [datetime.fromisoformat(v).timestamp() for v in values], True
+    else:
+        return values, False
 
 
 def _count(values: List[Union[int, float, bool]]) -> Union[int, float]:
-    return len(_preprocess(values))
+    values, _ = _preprocess(values)
+    return len(values)
 
 
-def _sum(values: List[Union[int, float, bool]]) -> Union[int, float]:
-    return sum(_preprocess(values))
+def _sum(values: List[Union[int, float, bool]]) -> Union[int, float, str]:
+    values, is_timestamp = _preprocess(values)
+    ret = sum(values)
+    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
 
 
-def _mean(values: List[Union[int, float, bool]]) -> float:
-    values = _preprocess(values)
-    return sum(values) / len(values)
+def _mean(values: List[Union[int, float, bool]]) -> Union[float, str]:
+    values, is_timestamp = _preprocess(values)
+    ret = sum(values) / len(values)
+    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
 
 
-def _var(values: List[Union[int, float, bool]]) -> float:
-    values = _preprocess(values)
+def _var(values: List[Union[int, float, bool]]) -> Union[float, str]:
+    values, is_timestamp = _preprocess(values)
     num_values = len(values)
     mean = sum(values) / num_values
     diffs_squared = [(v - mean) ** 2 for v in values]
-    return sum(diffs_squared) / num_values
+    ret = sum(diffs_squared) / num_values
+    return timedelta(seconds=ret).__repr__() if is_timestamp else ret
 
 
-def _std(values: List[Union[int, float, bool]]) -> float:
-    return _var(values) ** 0.5
+def _std(values: List[Union[int, float, bool]]) -> Union[float, str]:
+    values, is_timestamp = _preprocess(values)
+    num_values = len(values)
+    mean = sum(values) / num_values
+    diffs_squared = [(v - mean) ** 2 for v in values]
+    ret = (sum(diffs_squared) / num_values) ** 0.5
+    return timedelta(seconds=ret).__repr__() if is_timestamp else ret
 
 
-def _min(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
-    return min(_preprocess(values))
+def _min(values: List[Union[int, float, bool]]) -> Union[int, float, bool, str]:
+    values, is_timestamp = _preprocess(values)
+    ret = min(values)
+    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
 
 
-def _max(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
-    return max(_preprocess(values))
+def _max(values: List[Union[int, float, bool]]) -> Union[int, float, bool, str]:
+    values, is_timestamp = _preprocess(values)
+    ret = max(values)
+    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
 
 
-def _median(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
-    values = _preprocess(values)
-    return statistics.median(values)
+def _median(values: List[Union[int, float, bool]]) -> Union[int, float, bool, str]:
+    values, is_timestamp = _preprocess(values)
+    ret = statistics.median(values)
+    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
 
 
-def _mode(values: List[Union[int, float, bool]]) -> Union[int, float, bool]:
-    values = _preprocess(values)
-    return statistics.mode(values)
+def _mode(values: List[Union[int, float, bool]]) -> Union[int, float, bool, str]:
+    values, is_timestamp = _preprocess(values)
+    ret = statistics.mode(values)
+    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
 
 
 reduction_methods = {
