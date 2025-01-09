@@ -576,11 +576,11 @@ def get_log(
         if l[0].version is not None:
             if l[0].key not in params_map:
                 params_map[l[0].key] = dict()
-            params_map[l[0].key][l[0].version] = json.loads(l[0].value)
+            params_map[l[0].key][l[0].version] = l[0].value
             # json keys can't be int so leaving the value as str as well
             log_params[l[0].key] = str(l[0].version)
         else:
-            entries[l[0].key] = json.loads(l[0].value)
+            entries[l[0].key] = l[0].value
 
     return {
         "params": params_map,
@@ -631,10 +631,14 @@ def _get_logs_query(
 
             # Check if the result is a SQL expression or a subquery
             if isinstance(filter_condition, Subquery):
-                condition = exists().where(
-                    and_(
-                        LogEvent.id == filter_condition.c.log_event_id,
-                        filter_condition.c.value == True,
+                condition = exists(
+                    select(1)
+                    .select_from(filter_condition)
+                    .where(
+                        and_(
+                            LogEvent.id == filter_condition.c.log_event_id,
+                            filter_condition.c.value.is_(True),
+                        ),
                     ),
                 )
             else:
@@ -645,7 +649,7 @@ def _get_logs_query(
     if sorting:
         # Create sub-queries for each key
         subqs = {}
-        for key in json.loads(sorting):
+        for key in sorting:
             subqs[key] = (
                 session.query(
                     LogEvent.id,
@@ -659,7 +663,7 @@ def _get_logs_query(
 
         # Outer-join them and build ORDER BY
         sort_criteria = list()
-        for key, sort_mode in json.loads(sorting).items():
+        for key, sort_mode in sorting.items():
             subq = subqs[key]
             # Join
             query = query.outerjoin(subq, subq.c.id == LogEvent.id)
@@ -1206,7 +1210,7 @@ def get_log_groups(
     assert all(
         len(v) == 1 for v in groups.values()
     ), "All sets should contain a single unique value"
-    return {k: json.loads(next(iter(v))) for k, v in groups.items()}
+    return {k: next(iter(v)) for k, v in groups.items()}
 
 
 @router.get(
@@ -1428,7 +1432,7 @@ def set_field_typing(
             )
 
             # Check if all existing logs for this field are of the same type
-            existing_types = {type(json.loads(log[0].value)) for log in existing_logs}
+            existing_types = {type(log[0].value) for log in existing_logs}
             if len(existing_types) > 1:
                 raise HTTPException(
                     status_code=400,
@@ -1442,14 +1446,14 @@ def set_field_typing(
                 field_type_dao.update_field_type(
                     project_id,
                     field_name,
-                    json.loads(existing_logs[0][0].value),
+                    existing_logs[0][0].value,
                 )
             else:
                 # Create a new field type if it does not exist
                 field_type_dao.create_field_type(
                     project_id,
                     field_name,
-                    json.loads(existing_logs[0][0].value),
+                    existing_logs[0][0].value,
                 )
 
         else:  # If we want to turn typing off
