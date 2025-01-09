@@ -967,54 +967,32 @@ def build_sql_query(filter_dict, log_event_alias, session):
                 and filter_dict["rhs"].get("type") == "identifier"
             ):
                 identifier = filter_dict["rhs"]["value"]
-                exists_subq = (
-                    select(log_alias.id)
-                    .where(
-                        log_alias.log_event_id == log_event_alias.id,
-                        log_alias.key == identifier,
-                    )
-                    .subquery()
+                subq = select(log_alias.id).filter(
+                    log_alias.log_event_id == log_event_alias.id,
+                    log_alias.key == identifier,
                 )
-                return exists(exists_subq)
+                return subq.exists()
             else:
                 raise ValueError(
                     f"Invalid argument for 'exists' function: {filter_dict}",
                 )
 
         elif operand == "version":
-            if (
-                isinstance(filter_dict.get("lhs"), dict)
-                and filter_dict["lhs"].get("operand") == "version"
-            ):
-                version = filter_dict["rhs"]["value"]
-                identifier = filter_dict["lhs"].get("rhs", {}).get("value")
-                if identifier:
-                    version_subq = (
-                        session.query(log_alias.id)
-                        .filter(
-                            log_alias.log_event_id == log_event_alias.id,
-                            log_alias.key == identifier,
-                        )
-                        .with_entities(log_alias.version)
-                        .subquery()
-                    )
-                    comparison_expr = _select_value(version_subq, session) == version
-                    return (
-                        select(
-                            version_subq.c.log_event_id.label("log_event_id"),
-                            comparison_expr.label("value"),
-                        )
-                        .select_from(version_subq)
-                        .subquery()
-                    )
-                else:
-                    raise ValueError(
-                        f"Invalid identifier for 'version' comparison: {identifier}",
-                    )
-            else:
-                raise ValueError(
-                    f"Invalid structure for 'version' function: {filter_dict}",
+            identifier = filter_dict.get("rhs", {}).get("value")
+            if identifier:
+                version_subq = (
+                select(
+                    log_alias.log_event_id.label("log_event_id"),
+                    log_alias.version.label("value")
                 )
+                .select_from(log_alias)
+                .join(log_event_alias, log_alias.log_event_id == log_event_alias.id)
+                .where(
+                        log_alias.key == identifier
+                    )
+                    .subquery()
+                )
+                return version_subq
 
     # Handle unknown operand
     else:
