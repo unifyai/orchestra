@@ -82,15 +82,13 @@ def _tokenize(s):
             r"==|!=|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)|\+|\-|\*|/|%",
         ),
         (
+            "FUNC",
+            r"(?<!\w)(?:round|len|type|exists|version|str(?=\())",
+        ),  # Functions
+        (
             "TYPE_LITERAL",
             r"(?<!\w)(?:str|int|float|bool|list|dict|tuple|set|timestamp|datetime)(?!\w)",
         ),  # Type literals
-        ("FUNC", r"round|len|type|exists|version"),  # Functions
-        # ("TYPE_CHECK", r"type"),  # Type check expression
-        # ("LEN", r"len"),  # length
-        # ("STR", r"str"),  # str function
-        # ("EXISTS", r"exists"),  # exists
-        # ("VERSION", r"version"),  # version
         ("BOOLEAN", r"(?<!\w)(?:True|False)(?!\w)"),  # Booleans
         ("IDENTIFIER", r"[A-Za-z_/][A-Za-z0-9_/]*"),  # Identifiers
         ("LPAREN", r"\("),
@@ -790,20 +788,20 @@ def build_sql_query(filter_dict, log_event_alias, session):
                 expr = exists().where(
                     and_(
                         log_alias.log_event_id == rhs.c.log_event_id,
-                        log_alias.key == filter_dict['rhs']['value'],
-                        func.replace(cast(log_alias.value, String), '"', '').like(
-                            '%' + func.replace(cast(lhs, String), '"', '') + '%'
-                        )
+                        log_alias.key == filter_dict["rhs"]["value"],
+                        func.replace(cast(log_alias.value, String), '"', "").like(
+                            "%" + func.replace(cast(lhs, String), '"', "") + "%",
+                        ),
                     ),
                 )
             else:
                 expr = ~exists().where(
                     and_(
                         log_alias.log_event_id == rhs.c.log_event_id,
-                        log_alias.key == filter_dict['rhs']['value'],
-                        func.replace(cast(log_alias.value, String), '"', '').like(
-                            '%' + func.replace(cast(lhs, String), '"', '') + '%'
-                        )
+                        log_alias.key == filter_dict["rhs"]["value"],
+                        func.replace(cast(log_alias.value, String), '"', "").like(
+                            "%" + func.replace(cast(lhs, String), '"', "") + "%",
+                        ),
                     ),
                 )
             return (
@@ -841,79 +839,79 @@ def build_sql_query(filter_dict, log_event_alias, session):
             rval = _select_value(rhs_expr, session)
             if isinstance(rhs_expr, Subquery):
                 subq = (
-                select(
-                    log_alias.log_event_id.label("log_event_id"),
-                    case(
-                        (
-                            log_alias.inferred_type == "list",
-                            func.jsonb_array_length(
-                                cast(rval, JSONB)
-                            ).cast(Float),
-                        ),
-                        (
-                            log_alias.inferred_type == "dict",
-                            select(func.count())
-                            .select_from(
-                                func.jsonb_object_keys(
-                                    cast(rval, JSONB)
+                    select(
+                        log_alias.log_event_id.label("log_event_id"),
+                        case(
+                            (
+                                log_alias.inferred_type == "list",
+                                func.jsonb_array_length(
+                                    cast(rval, JSONB),
+                                ).cast(Float),
+                            ),
+                            (
+                                log_alias.inferred_type == "dict",
+                                select(func.count())
+                                .select_from(
+                                    func.jsonb_object_keys(
+                                        cast(rval, JSONB),
+                                    ),
                                 )
-                            )
-                            .scalar_subquery()
-                            .cast(Float),
-                        ),
-                        (
-                            log_alias.inferred_type == "str",
-                            func.length(
-                                cast(rval, String)
-                            ).cast(Float),
-                        ),
-                        else_=0,
-                    ).label("value"),
-                )
-                .select_from(log_alias)
-                .join(log_event_alias, log_alias.log_event_id == log_event_alias.id)
-                .join(rhs_expr, log_alias.log_event_id == rhs_expr.c.log_event_id)
-                .where(
-                    log_alias.key == filter_dict['rhs']['value'],
-                )
-                .subquery()
+                                .scalar_subquery()
+                                .cast(Float),
+                            ),
+                            (
+                                log_alias.inferred_type == "str",
+                                func.length(
+                                    cast(rval, String),
+                                ).cast(Float),
+                            ),
+                            else_=0,
+                        ).label("value"),
+                    )
+                    .select_from(log_alias)
+                    .join(log_event_alias, log_alias.log_event_id == log_event_alias.id)
+                    .join(rhs_expr, log_alias.log_event_id == rhs_expr.c.log_event_id)
+                    .where(
+                        log_alias.key == filter_dict["rhs"]["value"],
+                    )
+                    .subquery()
                 )
                 return subq
-            else: 
+            else:
                 subq = (
-                select(
-                    log_alias.log_event_id.label("log_event_id"),
-                    case(
-                        (
-                            log_alias.inferred_type == "list",
-                            func.jsonb_array_length(
-                                cast(log_alias.value, JSONB)
-                            ).cast(Float),
-                        ),
-                        (
-                            log_alias.inferred_type == "dict",
-                            select(func.count())
-                            .select_from(
-                                func.jsonb_object_keys(
-                                    cast(log_alias.value, JSONB)
+                    select(
+                        log_alias.log_event_id.label("log_event_id"),
+                        case(
+                            (
+                                log_alias.inferred_type == "list",
+                                func.jsonb_array_length(
+                                    cast(log_alias.value, JSONB),
+                                ).cast(Float),
+                            ),
+                            (
+                                log_alias.inferred_type == "dict",
+                                select(func.count())
+                                .select_from(
+                                    func.jsonb_object_keys(
+                                        cast(log_alias.value, JSONB),
+                                    ),
                                 )
-                            )
-                            .scalar_subquery()
-                            .cast(Float),
-                        ),
-                        (
-                            log_alias.inferred_type == "str",
-                            func.length(
-                                cast(log_alias.value, String)
-                            ).cast(Float),
-                        ),
-                        else_=0,
-                    ).label("value"),
-                )
-                .select_from(log_alias)
-                .join(log_event_alias, log_alias.log_event_id == log_event_alias.id)
-                .where(
-                        log_alias.key == filter_dict['rhs']['value'],
+                                .scalar_subquery()
+                                .cast(Float),
+                            ),
+                            (
+                                log_alias.inferred_type == "str",
+                                func.length(
+                                    cast(log_alias.value, String),
+                                ).cast(Float),
+                            ),
+                            else_=0,
+                        ).label("value"),
+                    )
+                    .select_from(log_alias)
+                    .join(log_event_alias, log_alias.log_event_id == log_event_alias.id)
+                    .where(
+                        log_alias.key == filter_dict["rhs"]["value"],
                     )
                     .subquery()
                 )
@@ -981,14 +979,14 @@ def build_sql_query(filter_dict, log_event_alias, session):
             identifier = filter_dict.get("rhs", {}).get("value")
             if identifier:
                 version_subq = (
-                select(
-                    log_alias.log_event_id.label("log_event_id"),
-                    log_alias.version.label("value")
-                )
-                .select_from(log_alias)
-                .join(log_event_alias, log_alias.log_event_id == log_event_alias.id)
-                .where(
-                        log_alias.key == identifier
+                    select(
+                        log_alias.log_event_id.label("log_event_id"),
+                        log_alias.version.label("value"),
+                    )
+                    .select_from(log_alias)
+                    .join(log_event_alias, log_alias.log_event_id == log_event_alias.id)
+                    .where(
+                        log_alias.key == identifier,
                     )
                     .subquery()
                 )
