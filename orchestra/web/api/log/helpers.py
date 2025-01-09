@@ -9,6 +9,7 @@ from sqlalchemy import (
     Float,
     Integer,
     String,
+    DateTime,
     and_,
     case,
     cast,
@@ -26,6 +27,15 @@ from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.models.orchestra_models import Log
 
+STR_TO_SQL_TYPES = {
+    "bool": Boolean,
+    "int": Integer,
+    "float": Float,
+    "str": String,
+    "timestamp": DateTime,
+    "dict": JSONB,
+    "list": JSONB,
+}
 
 def parse_nested(s, pos):
     start_pos = pos

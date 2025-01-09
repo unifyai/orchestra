@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from sqlalchemy import INTEGER, TIMESTAMP, Float, and_, case, cast, exists, func, select
+from sqlalchemy import INTEGER, TIMESTAMP, Float, String, and_, case, cast, exists, func, select
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 from sqlalchemy.sql.selectable import Subquery
 
@@ -28,6 +28,7 @@ from orchestra.web.api.log.schema import (
 from orchestra.web.api.utils.http_responses import not_found
 
 from .helpers import (
+    STR_TO_SQL_TYPES,
     _flatten_fields,
     build_sql_query,
     format_logs,
@@ -471,7 +472,7 @@ def delete_logs(
             detail=f"Specified fields not found in logs with ids {not_found_entries}.",
         )
 
-    return {"info": "Log field deleted successfully from all logs!"}
+    return {"info": "Logs and fields deleted successfully!"}
 
 
 @router.get(
@@ -697,7 +698,9 @@ def _get_logs_query(
 
             if key in field_types:
                 if key == "_/timestamp":
-                    criterion = cast(cast(subq.c.value, String), STR_TO_SQL_TYPES[field_types[key]])
+                    criterion = cast(
+                        cast(subq.c.value, String), STR_TO_SQL_TYPES[field_types[key]]
+                    )
                 else:
                     criterion = cast(subq.c.value, STR_TO_SQL_TYPES[field_types[key]])
             else:
@@ -1181,7 +1184,9 @@ def get_logs_metric(
                     ),
                     (
                         Log.inferred_type == "timestamp",
-                        func.extract("epoch", cast(cast(Log.value, String), TIMESTAMP)).cast(Float),
+                        func.extract(
+                            "epoch", cast(cast(Log.value, String), TIMESTAMP)
+                        ).cast(Float),
                     ),
                     (Log.inferred_type == "float", Log.value.cast(Float)),
                     (Log.inferred_type == "int", Log.value.cast(Float)),
