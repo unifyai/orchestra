@@ -1218,11 +1218,11 @@ def get_fields(
     # end ToDo
 
     return {
-        field_name: {
-            "type": field_types.get(field_name),
-            "param": params.get(field_name),
+        key: {
+            "type": field_types.get(key),
+            "param": is_param,
         }
-        for field_name in all_field_names
+        for key, is_param in params.items()
     }
 
 
