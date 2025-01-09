@@ -347,7 +347,7 @@ def _select_value(subq, session):
     # )
 
 
-def _build_subquery_for_identifier(key, log_event_alias):
+def _build_subquery_for_identifier(key, log_event_alias, alias=None):
     """
     Build a subselect that retrieves columns for a given log key.
     The returned subselect columns typically include:
@@ -385,7 +385,7 @@ def _build_subquery_for_identifier(key, log_event_alias):
             log_alias.log_event_id == log_event_alias.id,
             log_alias.key == key,
         )
-        .subquery()
+        .subquery(name=alias)
     )
     return subq
 
@@ -432,8 +432,8 @@ def build_sql_query(filter_dict, log_event_alias, session):
     if "type" in filter_dict:
         if filter_dict["type"] == "identifier":
             key = filter_dict["value"]
-            return _build_subquery_for_identifier(key, log_event_alias)
-        elif filter_dict["type"] in ("string", "int", "float", "bool"):
+            return _build_subquery_for_identifier(key, log_event_alias, alias=f"select_{key}")
+        elif filter_dict["type"] in ("int", "float", "bool", "other"):
             return literal(filter_dict["value"])
 
     operand = filter_dict.get("operand")
@@ -669,15 +669,15 @@ def build_sql_query(filter_dict, log_event_alias, session):
         rhs_is_sub = isinstance(rhs, Subquery)
 
         if lhs_is_sub and rhs_is_sub:
-            lval = _select_value(lhs)
-            rval = _select_value(rhs)
+            lval = _select_value(lhs, session)
+            rval = _select_value(rhs, session)
             if operand == "in":
                 expr = lval.in_(select(rval))
             else:
                 expr = ~lval.in_(select(rval))
             return _join_subqueries(lhs, rhs, expr)
         elif lhs_is_sub:
-            lval = _select_value(lhs)
+            lval = _select_value(lhs, session)
             if operand == "in":
                 expr = lval.in_(rhs)
             else:
@@ -776,10 +776,6 @@ def build_sql_query(filter_dict, log_event_alias, session):
                 raise ValueError(f"Invalid argument for 'exists' function: {filter_dict}")
 
         elif operand == "version":
-            # Handle version comparison
-            # Expecting filter_dict to have:
-            # lhs: {'operand': 'version', 'rhs': {'type': 'identifier', 'value': 'some_key'}}
-            # rhs: {'type': 'string', 'value': '1.0'}
             if (
                 isinstance(filter_dict.get("lhs"), dict)
                 and filter_dict["lhs"].get("operand") == "version"
