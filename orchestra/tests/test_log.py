@@ -120,7 +120,7 @@ def _get_log(client, project_name, log_id, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     return client.get(
         f"/v0/logs?project={project_name}",
-        params={"from_ids": [log_id]},
+        params={"from_ids": f"{log_id}"},
         headers=_headers,
     )
 
@@ -680,7 +680,7 @@ async def test_get_logs_from_ids(client: AsyncClient):
     # fetch entries for the project
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"from_ids": from_ids},
+        params={"from_ids": "&".join([str(i) for i in from_ids])},
         headers=HEADERS,
     )
 
@@ -712,7 +712,7 @@ async def test_get_logs_excluding_ids(client: AsyncClient):
     # fetch entries for the project
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"exclude_ids": exclude_ids},
+        params={"exclude_ids": "&".join([str(i) for i in exclude_ids])},
         headers=HEADERS,
     )
 
@@ -735,7 +735,7 @@ async def test_get_logs_from_fields(client: AsyncClient):
     # fetch entries for the project
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"from_fields": ["_/temperature", "_/state", "_/metadata"]},
+        params={"from_fields": "&".join(["_/temperature", "_/state", "_/metadata"])},
         headers=HEADERS,
     )
 
@@ -764,13 +764,15 @@ async def test_get_logs_excluding_fields(client: AsyncClient):
     response = await client.get(
         f"/v0/logs?project={project_name}",
         params={
-            "exclude_fields": [
-                "_/temperature",
-                "_/state",
-                "_/_data",
-                "_/timestamp",
-                "a/b/param1",
-            ],
+            "exclude_fields": "&".join(
+                [
+                    "_/temperature",
+                    "_/state",
+                    "_/_data",
+                    "_/timestamp",
+                    "a/b/param1",
+                ],
+            ),
         },
         headers=HEADERS,
     )
@@ -1865,7 +1867,11 @@ async def test_get_logs_metric(
     _ = await _create_project(client, project_name)
     _ = await _create_several_logs(client, project_name)
     data = log_data["logs_for_various"]
-    params = {"key": key} if from_ids is None else {"key": key, "from_ids": from_ids}
+    params = (
+        {"key": key}
+        if from_ids is None
+        else {"key": key, "from_ids": "&".join([str(i) for i in from_ids])}
+    )
     response = await client.get(
         f"/v0/logs/metric/{metric}?project={project_name}",
         params=params,
