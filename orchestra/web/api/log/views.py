@@ -6,8 +6,9 @@ import json
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from sqlalchemy import INTEGER, Float, case, cast, desc, func, select
+from sqlalchemy import INTEGER, Float, and_, case, cast, desc, exists, func, select
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
+from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.derived_log_dao import DerivedLogDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
@@ -626,12 +627,21 @@ def _get_logs_query(
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
         if filter_dict:
-            subq = build_sql_query(filter_dict, LogEvent, session)
-            query = select(subq.c.value).select_from(subq)
-            breakpoint()
-            ret = session.execute(query)
-            query = query.filter(subq)
+            filter_condition = build_sql_query(filter_dict, LogEvent, session)
 
+            # Check if the result is a SQL expression or a subquery
+            if isinstance(filter_condition, Subquery):
+                condition = exists().where(
+                    and_(
+                        LogEvent.id == filter_condition.c.log_event_id,
+                        filter_condition.c.value == True,
+                    ),
+                )
+            else:
+                # Handle general expressions (BinaryExpression, etc.)
+                condition = filter_condition
+
+            query = query.filter(condition)
     if sorting:
         # Create sub-queries for each key
         subqs = {}
