@@ -568,11 +568,15 @@ def _get_logs_query(
                 )
     sort_criteria.append(LogEvent.created_at)
 
-    log_event_query = sorted_query.join(
-        LogEvent,
-        LogEvent.id == distinct_ids_subq.c.id,
-    ).add_columns(  # or use another join if needed
-        func.row_number().over(order_by=sort_criteria).label("row_num"),
+    log_event_query = (
+        sorted_query.join(
+            LogEvent,
+            LogEvent.id == distinct_ids_subq.c.id,
+        )
+        .add_columns(
+            func.row_number().over(order_by=sort_criteria).label("row_num"),
+        )
+        .order_by("row_num")
     )
 
     count = log_event_query.count()
