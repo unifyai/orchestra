@@ -536,11 +536,10 @@ def build_sql_query(filter_dict, log_event_alias, session):
                 expr = lval / rhs
             elif operand == "%":
                 expr = lval % rhs
-            return expr
-            # return select(
-            #     lhs.c.log_event_id.label("log_event_id"),
-            #     expr.label("value"),
-            # ).select_from(lhs).subquery()
+            return select(
+                lhs.c.log_event_id.label("log_event_id"),
+                expr.label("value"),
+            ).select_from(lhs).subquery()
         elif rhs_is_sub:
             rval = _select_value(rhs, session)
             if operand == "+":
@@ -553,11 +552,10 @@ def build_sql_query(filter_dict, log_event_alias, session):
                 expr = lhs / rval
             elif operand == "%":
                 expr = lhs % rval
-            return expr
-            # return select(
-            #     rhs.c.log_event_id.label("log_event_id"),
-            #     expr.label("value"),
-            # ).select_from(rhs).subquery()
+            return select(
+                rhs.c.log_event_id.label("log_event_id"),
+                expr.label("value"),
+            ).select_from(rhs).subquery()
         else:
             # Both are literals
             if operand == "+":
@@ -617,11 +615,10 @@ def build_sql_query(filter_dict, log_event_alias, session):
                 expr = lval.is_(rhs)
             elif operand == "is not":
                 expr = lval.isnot(rhs)
-            return expr
-            # return select(
-            #     lhs.c.log_event_id.label("log_event_id"),
-            #     expr.label("value"),
-            # ).select_from(lhs).subquery()
+            return select(
+                lhs.c.log_event_id.label("log_event_id"),
+                expr.label("value"),
+            ).select_from(lhs).subquery()
         elif rhs_is_sub:
             rval = _select_value(rhs, session)
             if operand == "==":
@@ -640,11 +637,10 @@ def build_sql_query(filter_dict, log_event_alias, session):
                 expr = lhs.is_(rval)
             elif operand == "is not":
                 expr = lhs.isnot(rval)
-            return expr
-            # return select(
-            #     rhs.c.log_event_id.label("log_event_id"),
-            #     expr.label("value"),
-            # ).select_from(rhs).subquery()
+            return select(
+                rhs.c.log_event_id.label("log_event_id"),
+                expr.label("value"),
+            ).select_from(rhs).subquery()
         else:
             # Both are literals
             if operand == "==":
@@ -716,14 +712,15 @@ def build_sql_query(filter_dict, log_event_alias, session):
 
     # Handle functions (len, str, type, round, exists, version)
     elif operand in ("len", "str", "type", "round", "exists", "version"):
-        # Functions typically have only 'rhs'
         rhs_expr = build_sql_query(filter_dict.get("rhs"), log_event_alias, session)
 
         if operand == "len":
             if isinstance(rhs_expr, Subquery):
-                # Determine if it's a string or JSON array
-                # For simplicity, assume string here; extend as needed
-                expr = func.length(_select_value(rhs_expr))
+                expr = func.length(_select_value(rhs_expr, session))
+                return select(
+                    rhs_expr.c.log_event_id.label("log_event_id"),
+                    expr.label("value"),
+                ).select_from(rhs_expr).subquery()
             else:
                 # Literal value, handle appropriately
                 if isinstance(rhs_expr, str):
@@ -736,26 +733,33 @@ def build_sql_query(filter_dict, log_event_alias, session):
 
         elif operand == "str":
             if isinstance(rhs_expr, Subquery):
-                expr = func.cast(_select_value(rhs_expr), String)
+                expr = func.cast(_select_value(rhs_expr, session), String)
+                return select(
+                    rhs_expr.c.log_event_id.label("log_event_id"),
+                    expr.label("value"),
+                ).select_from(rhs_expr).subquery()
             else:
-                expr = str(rhs_expr)
-            return expr
+                return str(rhs_expr)
 
         elif operand == "round":
             if isinstance(rhs_expr, Subquery):
-                expr = func.round(_select_value(rhs_expr))
+                expr = func.round(_select_value(rhs_expr, session))
+                return select(
+                    rhs_expr.c.log_event_id.label("log_event_id"),
+                    expr.label("value"),
+                ).select_from(rhs_expr).subquery()
             else:
-                expr = round(rhs_expr)
-            return expr
+                return round(rhs_expr)
 
         elif operand == "type":
-            # 'type' usually paired with 'is' or 'is not', handled in comparisons
-            # Here, just return the inferred_type
             if isinstance(rhs_expr, Subquery):
                 expr = rhs_expr.c.inferred_type
+                return select(
+                    rhs_expr.c.log_event_id.label("log_event_id"),
+                    expr.label("value"),
+                ).select_from(rhs_expr).subquery()
             else:
-                expr = type(rhs_expr).__name__
-            return expr
+                return type(rhs_expr).__name__
 
         elif operand == "exists":
             if (
@@ -763,13 +767,13 @@ def build_sql_query(filter_dict, log_event_alias, session):
                 and filter_dict["rhs"].get("type") == "identifier"
             ):
                 identifier = filter_dict["rhs"]["value"]
-                exists_subq = select(log_alias.id).filter(
+                exists_subq = select(log_alias.id).where(
                     log_alias.log_event_id == log_event_alias.id,
                     log_alias.key == identifier,
-                )
+                ).subquery()
                 return exists(exists_subq)
             else:
-                raise ValueError("Invalid argument for 'exists' function.")
+                raise ValueError(f"Invalid argument for 'exists' function: {filter_dict}")
 
         elif operand == "version":
             # Handle version comparison
@@ -792,15 +796,19 @@ def build_sql_query(filter_dict, log_event_alias, session):
                         .with_entities(log_alias.version)
                         .subquery()
                     )
-                    return _select_value(version_subq) == version
+                    comparison_expr = _select_value(version_subq, session) == version
+                    return select(
+                    version_subq.c.log_event_id.label("log_event_id"),
+                    comparison_expr.label("value"),
+                ).select_from(version_subq).subquery()
                 else:
-                    raise ValueError("Invalid identifier for 'version' comparison.")
+                    raise ValueError(f"Invalid identifier for 'version' comparison: {identifier}")
             else:
-                raise ValueError("Invalid structure for 'version' function.")
+                raise ValueError(f"Invalid structure for 'version' function: {filter_dict}")
 
     # Handle unknown operand
     else:
-        raise ValueError(f"Unknown operand or structure: {operand}")
+        raise ValueError(f"Unknown operand or structure: {filter_dict}")
 
 
 # Reduction #
