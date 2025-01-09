@@ -54,50 +54,50 @@ log_data = {
             "system_prompt": "Respond only with a single digit.",
         },
     ],
-    "logs_for_filtering_n_metrics": [
+    "logs_for_various": [
         {
-            "description": "boiling water",
-            "temperature": 100.0,
-            "state": "liquid->gas",
-            "safe": False,
-            "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+            "_/description": "boiling water",
+            "_/temperature": 100.0,
+            "_/state": "liquid->gas",
+            "_/safe": False,
+            "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
         },
         {
-            "description": "freezing water",
-            "temperature": 0.0,
-            "state": "liquid->solid",
-            "safe": True,
-            "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+            "_/description": "freezing water",
+            "_/temperature": 0.0,
+            "_/state": "liquid->solid",
+            "_/safe": True,
+            "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
         },
         {
-            "description": "surface of the sun",
-            "temperature": 6000.0,
-            "state": "gas",
-            "safe": False,
-            "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+            "_/description": "surface of the sun",
+            "_/temperature": 6000.0,
+            "_/state": "gas",
+            "_/safe": False,
+            "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
         },
         {
-            "description": "freezing nitrogen",
-            "temperature": -210.0,
-            "state": "liquid->solid",
-            "safe": False,
-            "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+            "_/description": "freezing nitrogen",
+            "_/temperature": -210.0,
+            "_/state": "liquid->solid",
+            "_/safe": False,
+            "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
         },
         {
-            "description": "lava",
-            "metadata": [1, 5, 6],
-            "_data": {"a": 2, "b": 4},
-            "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+            "_/description": "lava",
+            "_/metadata": [1, 5, 6],
+            "_/_data": {"a": 2, "b": 4},
+            "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
         },
         {
-            "description": "air",
-            "metadata": [3, 8, 5],
-            "_data": {"a": 6, "b": 12, "c": 8, "d": 11},
-            "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+            "_/description": "air",
+            "_/metadata": [3, 8, 5],
+            "_/_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+            "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
         },
         {
-            "_data": {"a": 8, "b": 10},
-            "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+            "_/_data": {"a": 8, "b": 10},
+            "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
         },
     ],
 }
@@ -130,25 +130,11 @@ def _create_derived_entry(client, project_name, log_id, user=1):
     )
 
 
-def _get_log(client, log_id, user=1):
+def _get_log(client, project_name, log_id, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
-    return client.get(f"/v0/log/{log_id}", headers=_headers)
-
-
-def _update_log(client, log_id, user=1):
-    _headers = HEADERS if user == 1 else HEADERS_2
-    return client.put(
-        f"/v0/log/{log_id}",
-        json={"entries": log_data["log_update"]},
-        headers=_headers,
-    )
-
-
-def _update_log_w_overwrite(client, log_id, overwrite, user=1):
-    _headers = HEADERS if user == 1 else HEADERS_2
-    return client.put(
-        f"/v0/log/{log_id}",
-        json={"entries": log_data["log_update_w_overwrite"], "overwrite": overwrite},
+    return client.get(
+        f"/v0/logs?project={project_name}",
+        params={"from_ids": f"{log_id}"},
         headers=_headers,
     )
 
@@ -172,7 +158,7 @@ def _delete_logs(client, log_ids, user=1):
     request = Request(
         "DELETE",
         str(client.base_url) + "/v0/logs",
-        json={"ids": log_ids},
+        json={"ids_and_fields": log_ids},
         headers=_headers,
     )
     return client.send(request)
@@ -191,9 +177,9 @@ def _delete_log_fields_from_logs(client, fields, delete_empty_logs=False, user=1
     _headers = HEADERS if user == 1 else HEADERS_2
     request = Request(
         "DELETE",
-        str(client.base_url) + f"/v0/logs/fields",
+        str(client.base_url) + f"/v0/logs",
         params={"delete_empty_logs": delete_empty_logs},
-        json={"fields": fields},
+        json={"ids_and_fields": fields},
         headers=_headers,
     )
     return client.send(request)
@@ -213,7 +199,7 @@ async def _create_logs_for_grouping(client, project_name, user=1):
 
 async def _create_several_logs(client, project_name, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
-    data = log_data["logs_for_filtering_n_metrics"]
+    data = log_data["logs_for_various"]
     for i in range(len(data)):
         response = await client.post(
             "/v0/log",
@@ -309,9 +295,9 @@ async def test_update_logs_overwrites(client: AsyncClient):
     assert response.status_code == 200, response.json()
     log_id = response.json()
 
-    response = await _get_log(client, log_id)
+    response = await _get_log(client, project_name, log_id)
     assert response.status_code == 200, response.json()
-    orig_entries = response.json()["logs"]["entries"]
+    orig_entries = response.json()["logs"][0]["entries"]
     assert len(orig_entries) == 3
 
     response = await client.post(
@@ -330,17 +316,17 @@ async def test_update_logs_overwrites(client: AsyncClient):
     response = await _update_multiple_logs_w_overwrite(client, log_ids, overwrite=True)
     assert response.status_code == 200, response.json()
 
-    response = await _get_log(client, log_id)
+    response = await _get_log(client, project_name, log_id)
     assert response.status_code == 200, response.json()
-    new_entries = response.json()["logs"]["entries"]
+    new_entries = response.json()["logs"][0]["entries"]
     assert len(new_entries) == 3
     assert new_entries["a/b/c/input"] == orig_entries["a/b/c/input"]
     assert new_entries["a/b/c/boolean_input"] != orig_entries["a/b/c/boolean_input"]
     assert new_entries["a/b/c/numeric_input"] != orig_entries["a/b/c/numeric_input"]
 
-    response = await _get_log(client, log_id_2)
+    response = await _get_log(client, project_name, log_id_2)
     assert response.status_code == 200, response.json()
-    new_entries = response.json()["logs"]["entries"]
+    new_entries = response.json()["logs"][0]["entries"]
     assert len(new_entries) == 4
 
 
@@ -362,7 +348,7 @@ async def test_delete_project_deletes_logs(client: AsyncClient):
     assert isinstance(log_id, int)
 
     # verify it exists
-    response = await _get_log(client, log_id)
+    response = await _get_log(client, project_name, log_id)
     assert response.status_code == 200, response.json()
 
     # Now delete the project
@@ -371,10 +357,10 @@ async def test_delete_project_deletes_logs(client: AsyncClient):
     assert response.json()["info"] == "Project deleted successfully"
 
     # Verify the log has gone
-    response = await _get_log(client, log_id)
+    response = await _get_log(client, project_name, log_id)
     assert response.status_code == 404, response.json()
     assert response.json() == {
-        "detail": f"Log with id {log_id} not found.",
+        "detail": f"Project {project_name} not found.",
     }
 
 
@@ -386,29 +372,23 @@ async def test_get_log(client: AsyncClient):
     log_id = log_response.json()
 
     # fetch the log
-    response = await client.get(f"/v0/log/{log_id}", headers=HEADERS)
+    response = await _get_log(client, project_name, log_id)
 
     assert response.status_code == 200, response.json()
     assert "logs" in response.json()
     assert "params" in response.json()
     assert isinstance(response.json()["params"]["a/b/param1"]["0"], str)
-    assert isinstance(response.json()["logs"]["ts"], str)
-    assert isinstance(response.json()["logs"]["params"]["a/b/param1"], str)
-    assert isinstance(response.json()["logs"]["entries"]["a/b/c/boolean_input"], bool)
-    assert isinstance(response.json()["logs"]["entries"]["a/b/c/numeric_input"], float)
-
-
-@pytest.mark.anyio
-async def test_get_log_not_found(client: AsyncClient):
-    log_id = "123"
-
-    # This should return 404 as the log does not exist
-    response = await client.get(f"/v0/log/{log_id}", headers=HEADERS)
-
-    assert response.status_code == 404, response.json()
-    assert response.json() == {
-        "detail": f"Log with id {log_id} not found.",
-    }
+    assert len(response.json()["logs"]) == 1
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert isinstance(response.json()["logs"][0]["params"]["a/b/param1"], str)
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["a/b/c/boolean_input"],
+        bool,
+    )
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["a/b/c/numeric_input"],
+        float,
+    )
 
 
 @pytest.mark.parametrize(
@@ -556,12 +536,188 @@ async def test_get_logs(client: AsyncClient):
     )
     assert isinstance(response.json()["logs"][0]["params"]["a/b/param1"], str)
 
+    # assert the field ordering is correct
+    assert (
+        json.dumps([list(lg["entries"].keys()) for lg in response.json()["logs"]])
+        == '[["a/b/c/input", "a/b/c/boolean_input", "a/b/c/numeric_input"]]'
+    )
+
     # fetch entries for the empty project
     response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS_2)
 
     assert response.status_code == 200, response.json()
     assert isinstance(response.json()["logs"], list)
     assert len(response.json()["logs"]) == 0
+
+
+@pytest.mark.anyio
+async def test_get_params(client: AsyncClient):
+    project_name = "eval-project"
+    # create the same project with another user to ensure the correct one
+    # is fetched
+    _ = await _create_project(client, project_name)
+    _ = await _create_log(client, project_name)
+
+    # fetch all params for the project
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+        params={"context": "params"},
+    )
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), dict)
+    assert isinstance(response.json()["params"], dict)
+    assert isinstance(response.json()["params"]["a/b/param1"]["0"], str)
+    assert isinstance(response.json()["logs"], list)
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert response.json()["logs"][0]["entries"] == {}
+    assert isinstance(response.json()["logs"][0]["params"]["a/b/param1"], str)
+
+    # fetch params for the project with the full context, prepended by "params"
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+        params={"context": "params/a/b"},
+    )
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), dict)
+    assert isinstance(response.json()["params"], dict)
+    assert isinstance(response.json()["params"]["param1"]["0"], str)
+    assert isinstance(response.json()["logs"], list)
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert response.json()["logs"][0]["entries"] == {}
+    assert isinstance(response.json()["logs"][0]["params"]["param1"], str)
+
+    # fetch params for the project with the full context, with "params" inside
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+        params={"context": "a/params/b"},
+    )
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), dict)
+    assert isinstance(response.json()["params"], dict)
+    assert isinstance(response.json()["params"]["param1"]["0"], str)
+    assert isinstance(response.json()["logs"], list)
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert response.json()["logs"][0]["entries"] == {}
+    assert isinstance(response.json()["logs"][0]["params"]["param1"], str)
+
+    # fetch params for the project with the full context, appended by "params"
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+        params={"context": "a/b/params"},
+    )
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), dict)
+    assert isinstance(response.json()["params"], dict)
+    assert isinstance(response.json()["params"]["param1"]["0"], str)
+    assert isinstance(response.json()["logs"], list)
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert response.json()["logs"][0]["entries"] == {}
+    assert isinstance(response.json()["logs"][0]["params"]["param1"], str)
+
+
+@pytest.mark.anyio
+async def test_get_entries(client: AsyncClient):
+    project_name = "eval-project"
+    # create the same project with another user to ensure the correct one
+    # is fetched
+    _ = await _create_project(client, project_name)
+    _ = await _create_log(client, project_name)
+
+    # fetch all entries for the project
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+        params={"context": "entries"},
+    )
+
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), dict)
+    assert isinstance(response.json()["params"], dict)
+    assert response.json()["params"] == {}
+    assert isinstance(response.json()["logs"], list)
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["a/b/c/boolean_input"],
+        bool,
+    )
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["a/b/c/numeric_input"],
+        float,
+    )
+    assert response.json()["logs"][0]["params"] == {}
+
+    # fetch entries for the project with the full context, prepended by "entries"
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+        params={"context": "entries/a/b"},
+    )
+
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), dict)
+    assert isinstance(response.json()["params"], dict)
+    assert response.json()["params"] == {}
+    assert isinstance(response.json()["logs"], list)
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["c/boolean_input"],
+        bool,
+    )
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["c/numeric_input"],
+        float,
+    )
+    assert response.json()["logs"][0]["params"] == {}
+
+    # fetch entries for the project with the full context, with "entries" inside
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+        params={"context": "a/entries/b"},
+    )
+
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), dict)
+    assert isinstance(response.json()["params"], dict)
+    assert response.json()["params"] == {}
+    assert isinstance(response.json()["logs"], list)
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["c/boolean_input"],
+        bool,
+    )
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["c/numeric_input"],
+        float,
+    )
+    assert response.json()["logs"][0]["params"] == {}
+
+    # fetch entries for the project with the full context, appended by "entries"
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+        params={"context": "a/b/entries"},
+    )
+
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), dict)
+    assert isinstance(response.json()["params"], dict)
+    assert response.json()["params"] == {}
+    assert isinstance(response.json()["logs"], list)
+    assert isinstance(response.json()["logs"][0]["ts"], str)
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["c/boolean_input"],
+        bool,
+    )
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["c/numeric_input"],
+        float,
+    )
+    assert response.json()["logs"][0]["params"] == {}
 
 
 @pytest.mark.anyio
@@ -584,7 +740,7 @@ async def test_get_logs_from_ids(client: AsyncClient):
     # fetch entries for the project
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"from_ids": from_ids},
+        params={"from_ids": "&".join([str(i) for i in from_ids])},
         headers=HEADERS,
     )
 
@@ -592,6 +748,7 @@ async def test_get_logs_from_ids(client: AsyncClient):
     response = response.json()
     logs = response["logs"]
     assert len(logs) == 4
+    assert len(logs) == response["count"]
     assert [log["id"] for log in logs] == [i for i in ids if i in from_ids]
 
 
@@ -615,7 +772,7 @@ async def test_get_logs_excluding_ids(client: AsyncClient):
     # fetch entries for the project
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"exclude_ids": exclude_ids},
+        params={"exclude_ids": "&".join([str(i) for i in exclude_ids])},
         headers=HEADERS,
     )
 
@@ -623,7 +780,77 @@ async def test_get_logs_excluding_ids(client: AsyncClient):
     response = response.json()
     logs = response["logs"]
     assert len(logs) == 3
+    assert len(logs) == response["count"]
     assert [log["id"] for log in logs] == [i for i in ids if i not in exclude_ids]
+
+
+@pytest.mark.anyio
+async def test_get_logs_from_fields(client: AsyncClient):
+    project_name = "eval-project"
+    # create the same project with another user to ensure the correct one
+    # is fetched
+    _ = await _create_project(client, project_name)
+    _ = await _create_several_logs(client, project_name)
+
+    # fetch entries for the project
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"from_fields": "&".join(["_/temperature", "_/state", "_/metadata"])},
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    logs = response["logs"]
+    assert len(logs) == 6
+    assert len(logs) == response["count"]
+    assert logs[0]["entries"] == {"_/temperature": 100.0, "_/state": "liquid->gas"}
+    assert logs[1]["entries"] == {"_/temperature": 0.0, "_/state": "liquid->solid"}
+    assert logs[2]["entries"] == {"_/temperature": 6000.0, "_/state": "gas"}
+    assert logs[3]["entries"] == {"_/temperature": -210.0, "_/state": "liquid->solid"}
+    assert logs[4]["entries"] == {"_/metadata": [1, 5, 6]}
+    assert logs[5]["entries"] == {"_/metadata": [3, 8, 5]}
+
+
+@pytest.mark.anyio
+async def test_get_logs_excluding_fields(client: AsyncClient):
+    project_name = "eval-project"
+    # create the same project with another user to ensure the correct one
+    # is fetched
+    _ = await _create_project(client, project_name)
+    _ = await _create_several_logs(client, project_name)
+
+    # fetch entries for the project
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={
+            "exclude_fields": "&".join(
+                [
+                    "_/temperature",
+                    "_/state",
+                    "_/_data",
+                    "_/timestamp",
+                    "a/b/param1",
+                ],
+            ),
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    response = response.json()
+    logs = response["logs"]
+    assert len(logs) == 6
+    assert len(logs) == response["count"]
+    assert logs[0]["entries"] == {"_/description": "boiling water", "_/safe": False}
+    assert logs[1]["entries"] == {"_/description": "freezing water", "_/safe": True}
+    assert logs[2]["entries"] == {
+        "_/description": "surface of the sun",
+        "_/safe": False,
+    }
+    assert logs[3]["entries"] == {"_/description": "freezing nitrogen", "_/safe": False}
+    assert logs[4]["entries"] == {"_/description": "lava", "_/metadata": [1, 5, 6]}
+    assert logs[5]["entries"] == {"_/description": "air", "_/metadata": [3, 8, 5]}
 
 
 @pytest.mark.anyio
@@ -756,30 +983,6 @@ async def test_get_logs_w_context(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_get_log_fields(client: AsyncClient):
-    project_name = "eval-project"
-    # create the same project with another user to ensure the correct one
-    # is fetched
-    _ = await _create_project(client, project_name, user=1)
-    _ = await _create_log(client, project_name, user=1)
-
-    # fetch fields for the project
-    response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-    assert response.json() == {
-        "entries": {
-            "a/b/c/input": "str",
-            "a/b/c/boolean_input": "bool",
-            "a/b/c/numeric_input": "float",
-        },
-        "params": {"a/b/param1": "str"},
-    }
-
-
-@pytest.mark.anyio
 async def test_get_logs_latest_timestamp(client: AsyncClient):
 
     # create logs
@@ -857,6 +1060,97 @@ async def test_get_empty_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_logs_w_pagination(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+    _ = await _create_several_logs(client, project_name)
+
+    # limit = 3
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"limit": 3},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 3
+
+    assert result["logs"][0]["entries"] == {
+        "_/description": "boiling water",
+        "_/temperature": 100.0,
+        "_/state": "liquid->gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][1]["entries"] == {
+        "_/description": "freezing water",
+        "_/temperature": 0.0,
+        "_/state": "liquid->solid",
+        "_/safe": True,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][2]["entries"] == {
+        "_/description": "surface of the sun",
+        "_/temperature": 6000.0,
+        "_/state": "gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+
+    # limit = 3 and offset = 2
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"limit": 3, "offset": 2},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 3
+
+    assert result["logs"][0]["entries"] == {
+        "_/description": "surface of the sun",
+        "_/temperature": 6000.0,
+        "_/state": "gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][1]["entries"] == {
+        "_/description": "freezing nitrogen",
+        "_/temperature": -210.0,
+        "_/state": "liquid->solid",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][2]["entries"] == {
+        "_/description": "lava",
+        "_/metadata": [1, 5, 6],
+        "_/_data": {"a": 2, "b": 4},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+
+    # offset = 5
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"offset": 5},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 2
+
+    assert result["logs"][0]["entries"] == {
+        "_/description": "air",
+        "_/metadata": [3, 8, 5],
+        "_/_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][1]["entries"] == {
+        "_/_data": {"a": 8, "b": 10},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+
+
+@pytest.mark.anyio
 async def test_get_logs_w_filtering(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
@@ -865,7 +1159,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # temperature == -210.0
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "temperature == -210.0"},
+        params={"filter_expr": "_/temperature == -210.0"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -873,17 +1167,17 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     assert len(result["logs"]) == 1
     assert isinstance(result["logs"][0]["ts"], str)
     assert result["logs"][0]["entries"] == {
-        "description": "freezing nitrogen",
-        "temperature": -210.0,
-        "state": "liquid->solid",
-        "safe": False,
-        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "freezing nitrogen",
+        "_/temperature": -210.0,
+        "_/state": "liquid->solid",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
     }
 
     # temperature != -210.0
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "temperature != -210.0"},
+        params={"filter_expr": "_/temperature != -210.0"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -891,17 +1185,17 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     assert len(result["logs"]) == 3
     assert isinstance(result["logs"][0]["ts"], str)
     assert {
-        "description": "freezing nitrogen",
-        "temperature": -210.0,
-        "state": "liquid->solid",
-        "safe": False,
-        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "freezing nitrogen",
+        "_/temperature": -210.0,
+        "_/state": "liquid->solid",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
     } not in [log["entries"] for log in result["logs"]]
 
     # temperature > 0.
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "temperature > 0."},
+        params={"filter_expr": "_/temperature > 0."},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -910,88 +1204,88 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     assert isinstance(result["logs"][0]["ts"], str)
     assert isinstance(result["logs"][1]["ts"], str)
     assert result["logs"][0]["entries"] == {
-        "description": "boiling water",
-        "temperature": 100.0,
-        "state": "liquid->gas",
-        "safe": False,
-        "timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
+        "_/description": "boiling water",
+        "_/temperature": 100.0,
+        "_/state": "liquid->gas",
+        "_/safe": False,
+        "_/timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
     }
     assert result["logs"][1]["entries"] == {
-        "description": "surface of the sun",
-        "temperature": 6000.0,
-        "state": "gas",
-        "safe": False,
-        "timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
+        "_/description": "surface of the sun",
+        "_/temperature": 6000.0,
+        "_/state": "gas",
+        "_/safe": False,
+        "_/timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
     }
 
     # timestamp later than 23/03/1993
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": 'timestamp > "1993-03-23"'},
+        params={"filter_expr": '_/timestamp > "1993-03-23"'},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result["logs"]) == 3
     assert result["logs"][0]["entries"] == {
-        "description": "lava",
-        "metadata": [1, 5, 6],
-        "_data": {"a": 2, "b": 4},
-        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "lava",
+        "_/metadata": [1, 5, 6],
+        "_/_data": {"a": 2, "b": 4},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
     }
     assert result["logs"][1]["entries"] == {
-        "description": "air",
-        "metadata": [3, 8, 5],
-        "_data": {"a": 6, "b": 12, "c": 8, "d": 11},
-        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "air",
+        "_/metadata": [3, 8, 5],
+        "_/_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
     }
     assert result["logs"][2]["entries"] == {
-        "_data": {"a": 8, "b": 10},
-        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+        "_/_data": {"a": 8, "b": 10},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
     }
 
     # timestamp earlier than 23/03/1993
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": 'timestamp < "1993-03-23"'},
+        params={"filter_expr": '_/timestamp < "1993-03-23"'},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result["logs"]) == 4
     assert result["logs"][0]["entries"] == {
-        "description": "boiling water",
-        "temperature": 100.0,
-        "state": "liquid->gas",
-        "safe": False,
-        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "boiling water",
+        "_/temperature": 100.0,
+        "_/state": "liquid->gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
     }
     assert result["logs"][1]["entries"] == {
-        "description": "freezing water",
-        "temperature": 0.0,
-        "state": "liquid->solid",
-        "safe": True,
-        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "freezing water",
+        "_/temperature": 0.0,
+        "_/state": "liquid->solid",
+        "_/safe": True,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
     }
     assert result["logs"][2]["entries"] == {
-        "description": "surface of the sun",
-        "temperature": 6000.0,
-        "state": "gas",
-        "safe": False,
-        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "surface of the sun",
+        "_/temperature": 6000.0,
+        "_/state": "gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
     }
     assert result["logs"][3]["entries"] == {
-        "description": "freezing nitrogen",
-        "temperature": -210.0,
-        "state": "liquid->solid",
-        "safe": False,
-        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "freezing nitrogen",
+        "_/temperature": -210.0,
+        "_/state": "liquid->solid",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
     }
 
     # timestamp is 23/03/1993
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": 'timestamp == "1993-03-23"'},
+        params={"filter_expr": '_/timestamp == "1993-03-23"'},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -1001,7 +1295,9 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # is earlier than or later than 23/03/1993
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": 'timestamp < "1993-03-23" or timestamp > "1993-03-23"'},
+        params={
+            "filter_expr": '_/timestamp < "1993-03-23" or _/timestamp > "1993-03-23"',
+        },
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -1011,75 +1307,75 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # safe is True
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "safe is True"},
+        params={"filter_expr": "_/safe is True"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result["logs"]) == 1
     assert result["logs"][0]["entries"] == {
-        "description": "freezing water",
-        "temperature": 0.0,
-        "state": "liquid->solid",
-        "safe": True,
-        "timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
+        "_/description": "freezing water",
+        "_/temperature": 0.0,
+        "_/state": "liquid->solid",
+        "_/safe": True,
+        "_/timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
     }
 
     # liquid not in state
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "'liquid' not in state"},
+        params={"filter_expr": "'liquid' not in _/state"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result["logs"]) == 1
     assert result["logs"][0]["entries"] == {
-        "description": "surface of the sun",
-        "temperature": 6000.0,
-        "state": "gas",
-        "safe": False,
-        "timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
+        "_/description": "surface of the sun",
+        "_/temperature": 6000.0,
+        "_/state": "gas",
+        "_/safe": False,
+        "_/timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
     }
 
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "description == 'boiling water'"},
+        params={"filter_expr": "_/description == 'boiling water'"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result["logs"]) == 1
-    assert result["logs"][0]["entries"]["description"] == "boiling water"
+    assert result["logs"][0]["entries"]["_/description"] == "boiling water"
 
     # check multiple conditions
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "('liquid' not in state) or (temperature == 0)"},
+        params={"filter_expr": "('liquid' not in _/state) or (_/temperature == 0)"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result["logs"]) == 2
     assert result["logs"][0]["entries"] == {
-        "description": "freezing water",
-        "temperature": 0.0,
-        "state": "liquid->solid",
-        "safe": True,
-        "timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
+        "_/description": "freezing water",
+        "_/temperature": 0.0,
+        "_/state": "liquid->solid",
+        "_/safe": True,
+        "_/timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
     }
     assert result["logs"][1]["entries"] == {
-        "description": "surface of the sun",
-        "temperature": 6000.0,
-        "state": "gas",
-        "safe": False,
-        "timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
+        "_/description": "surface of the sun",
+        "_/temperature": 6000.0,
+        "_/state": "gas",
+        "_/safe": False,
+        "_/timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
     }
 
     # check exists
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "exists(state)"},
+        params={"filter_expr": "exists(_/state)"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -1089,7 +1385,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # check not exists
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "not exists(temperature)"},
+        params={"filter_expr": "not exists(_/temperature)"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -1099,34 +1395,34 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # check len
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "len(description) < 10"},
+        params={"filter_expr": "len(_/description) < 10"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result["logs"]) == 2
-    assert result["logs"][0]["entries"]["description"] == "lava"
+    assert result["logs"][0]["entries"]["_/description"] == "lava"
 
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "len(_data) > 2"},
+        params={"filter_expr": "len(_/_data) > 2"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result["logs"]) == 1
-    assert result["logs"][0]["entries"]["description"] == "air"
+    assert result["logs"][0]["entries"]["_/description"] == "air"
 
     # check in
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "'lava' in description"},
+        params={"filter_expr": "'lava' in _/description"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result["logs"]) == 1
-    assert result["logs"][0]["entries"]["description"] == "lava"
+    assert result["logs"][0]["entries"]["_/description"] == "lava"
 
     response = await client.get(
         f"/v0/logs?project={project_name}",
@@ -1147,7 +1443,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient):
 
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "'2' in str(_data)"},
+        params={"filter_expr": "'2' in to_str(_/_data)"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -1156,7 +1452,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient):
 
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": """'{"a": 2' in str(_data)"""},
+        params={"filter_expr": """'{"a": 2' in to_str(_/_data)"""},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -1170,58 +1466,111 @@ async def test_get_logs_w_sorting(client: AsyncClient):
     _ = await _create_project(client, project_name)
     _ = await _create_several_logs(client, project_name)
 
-    # ascending temperature
+    # ascending created_at (default)
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"sorting": json.dumps({"temperature": "ascending"})},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result["logs"]) == 7
     assert result["logs"][0]["entries"] == {
-        "description": "freezing nitrogen",
-        "temperature": -210.0,
-        "state": "liquid->solid",
-        "safe": False,
-        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "boiling water",
+        "_/temperature": 100.0,
+        "_/state": "liquid->gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
     }
     assert result["logs"][1]["entries"] == {
-        "description": "freezing water",
-        "temperature": 0.0,
-        "state": "liquid->solid",
-        "safe": True,
-        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "freezing water",
+        "_/temperature": 0.0,
+        "_/state": "liquid->solid",
+        "_/safe": True,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
     }
     assert result["logs"][2]["entries"] == {
-        "description": "boiling water",
-        "temperature": 100.0,
-        "state": "liquid->gas",
-        "safe": False,
-        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "surface of the sun",
+        "_/temperature": 6000.0,
+        "_/state": "gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
     }
     assert result["logs"][3]["entries"] == {
-        "description": "surface of the sun",
-        "temperature": 6000.0,
-        "state": "gas",
-        "safe": False,
-        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "freezing nitrogen",
+        "_/temperature": -210.0,
+        "_/state": "liquid->solid",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
     }
     assert result["logs"][4]["entries"] == {
-        "description": "lava",
-        "metadata": [1, 5, 6],
-        "_data": {"a": 2, "b": 4},
-        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "lava",
+        "_/metadata": [1, 5, 6],
+        "_/_data": {"a": 2, "b": 4},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
     }
     assert result["logs"][5]["entries"] == {
-        "description": "air",
-        "metadata": [3, 8, 5],
-        "_data": {"a": 6, "b": 12, "c": 8, "d": 11},
-        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "air",
+        "_/metadata": [3, 8, 5],
+        "_/_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
     }
     assert result["logs"][6]["entries"] == {
-        "_data": {"a": 8, "b": 10},
-        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+        "_/_data": {"a": 8, "b": 10},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+
+    # ascending temperature
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"sorting": json.dumps({"_/temperature": "ascending"})},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 7
+    assert result["logs"][0]["entries"] == {
+        "_/description": "freezing nitrogen",
+        "_/temperature": -210.0,
+        "_/state": "liquid->solid",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][1]["entries"] == {
+        "_/description": "freezing water",
+        "_/temperature": 0.0,
+        "_/state": "liquid->solid",
+        "_/safe": True,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][2]["entries"] == {
+        "_/description": "boiling water",
+        "_/temperature": 100.0,
+        "_/state": "liquid->gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][3]["entries"] == {
+        "_/description": "surface of the sun",
+        "_/temperature": 6000.0,
+        "_/state": "gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][4]["entries"] == {
+        "_/description": "lava",
+        "_/metadata": [1, 5, 6],
+        "_/_data": {"a": 2, "b": 4},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][5]["entries"] == {
+        "_/description": "air",
+        "_/metadata": [3, 8, 5],
+        "_/_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][6]["entries"] == {
+        "_/_data": {"a": 8, "b": 10},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
     }
 
     # descending safety, then ascending temperature
@@ -1230,8 +1579,8 @@ async def test_get_logs_w_sorting(client: AsyncClient):
         params={
             "sorting": json.dumps(
                 {
-                    "safe": "descending",
-                    "temperature": "ascending",
+                    "_/safe": "descending",
+                    "_/temperature": "ascending",
                 },
             ),
         },
@@ -1241,77 +1590,350 @@ async def test_get_logs_w_sorting(client: AsyncClient):
     result = response.json()
     assert len(result["logs"]) == 7
     assert result["logs"][0]["entries"] == {
-        "description": "freezing water",
-        "temperature": 0.0,
-        "state": "liquid->solid",
-        "safe": True,
-        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "freezing water",
+        "_/temperature": 0.0,
+        "_/state": "liquid->solid",
+        "_/safe": True,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
     }
     assert result["logs"][1]["entries"] == {
-        "description": "freezing nitrogen",
-        "temperature": -210.0,
-        "state": "liquid->solid",
-        "safe": False,
-        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "freezing nitrogen",
+        "_/temperature": -210.0,
+        "_/state": "liquid->solid",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
     }
     assert result["logs"][2]["entries"] == {
-        "description": "boiling water",
-        "temperature": 100.0,
-        "state": "liquid->gas",
-        "safe": False,
-        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "boiling water",
+        "_/temperature": 100.0,
+        "_/state": "liquid->gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
     }
     assert result["logs"][3]["entries"] == {
-        "description": "surface of the sun",
-        "temperature": 6000.0,
-        "state": "gas",
-        "safe": False,
-        "timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "surface of the sun",
+        "_/temperature": 6000.0,
+        "_/state": "gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
     }
     assert result["logs"][4]["entries"] == {
-        "description": "lava",
-        "metadata": [1, 5, 6],
-        "_data": {"a": 2, "b": 4},
-        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "lava",
+        "_/metadata": [1, 5, 6],
+        "_/_data": {"a": 2, "b": 4},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
     }
     assert result["logs"][5]["entries"] == {
-        "description": "air",
-        "metadata": [3, 8, 5],
-        "_data": {"a": 6, "b": 12, "c": 8, "d": 11},
-        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+        "_/description": "air",
+        "_/metadata": [3, 8, 5],
+        "_/_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
     }
     assert result["logs"][6]["entries"] == {
-        "_data": {"a": 8, "b": 10},
-        "timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+        "_/_data": {"a": 8, "b": 10},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+
+    # ascending _data
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"sorting": json.dumps({"_/_data": "ascending"})},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 7
+    assert result["logs"][0]["entries"] == {
+        "_/description": "lava",
+        "_/metadata": [1, 5, 6],
+        "_/_data": {"a": 2, "b": 4},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][1]["entries"] == {
+        "_/_data": {"a": 8, "b": 10},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][2]["entries"] == {
+        "_/description": "air",
+        "_/metadata": [3, 8, 5],
+        "_/_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][3]["entries"] == {
+        "_/description": "boiling water",
+        "_/temperature": 100.0,
+        "_/state": "liquid->gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][4]["entries"] == {
+        "_/description": "freezing water",
+        "_/temperature": 0.0,
+        "_/state": "liquid->solid",
+        "_/safe": True,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][5]["entries"] == {
+        "_/description": "surface of the sun",
+        "_/temperature": 6000.0,
+        "_/state": "gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][6]["entries"] == {
+        "_/description": "freezing nitrogen",
+        "_/temperature": -210.0,
+        "_/state": "liquid->solid",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+
+    # descending metadata
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"sorting": json.dumps({"_/metadata": "descending"})},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 7
+    assert result["logs"][0]["entries"] == {
+        "_/description": "air",
+        "_/metadata": [3, 8, 5],
+        "_/_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][1]["entries"] == {
+        "_/description": "lava",
+        "_/metadata": [1, 5, 6],
+        "_/_data": {"a": 2, "b": 4},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][2]["entries"] == {
+        "_/description": "boiling water",
+        "_/temperature": 100.0,
+        "_/state": "liquid->gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][3]["entries"] == {
+        "_/description": "freezing water",
+        "_/temperature": 0.0,
+        "_/state": "liquid->solid",
+        "_/safe": True,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][4]["entries"] == {
+        "_/description": "surface of the sun",
+        "_/temperature": 6000.0,
+        "_/state": "gas",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][5]["entries"] == {
+        "_/description": "freezing nitrogen",
+        "_/temperature": -210.0,
+        "_/state": "liquid->solid",
+        "_/safe": False,
+        "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+    }
+    assert result["logs"][6]["entries"] == {
+        "_/_data": {"a": 8, "b": 10},
+        "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+    }
+
+
+@pytest.mark.anyio
+async def test_get_logs_w_timestamp_sorting(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+    data = log_data["logs_for_various"]
+    timestamps = list()
+    for i in range(len(data)):
+        ts = datetime.now(timezone.utc).isoformat()
+        timestamps.append(ts)
+        entries = data[i]
+        entries["_/timestamp"] = ts
+        response = await client.post(
+            "/v0/log",
+            json={
+                "project": project_name,
+                "params": {"a/b/param1": f"test_{i}"},
+                "entries": entries,
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+    # descending timestamp
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"sorting": json.dumps({"_/timestamp": "descending"})},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 7
+    assert result["logs"][0]["entries"] == {
+        "_/_data": {"a": 8, "b": 10},
+        "_/timestamp": timestamps[-1],
+    }
+    assert result["logs"][1]["entries"] == {
+        "_/description": "air",
+        "_/metadata": [3, 8, 5],
+        "_/_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+        "_/timestamp": timestamps[-2],
+    }
+    assert result["logs"][2]["entries"] == {
+        "_/description": "lava",
+        "_/metadata": [1, 5, 6],
+        "_/_data": {"a": 2, "b": 4},
+        "_/timestamp": timestamps[-3],
+    }
+    assert result["logs"][3]["entries"] == {
+        "_/description": "freezing nitrogen",
+        "_/temperature": -210.0,
+        "_/state": "liquid->solid",
+        "_/safe": False,
+        "_/timestamp": timestamps[-4],
+    }
+    assert result["logs"][4]["entries"] == {
+        "_/description": "surface of the sun",
+        "_/temperature": 6000.0,
+        "_/state": "gas",
+        "_/safe": False,
+        "_/timestamp": timestamps[-5],
+    }
+    assert result["logs"][5]["entries"] == {
+        "_/description": "freezing water",
+        "_/temperature": 0.0,
+        "_/state": "liquid->solid",
+        "_/safe": True,
+        "_/timestamp": timestamps[-6],
+    }
+    assert result["logs"][6]["entries"] == {
+        "_/description": "boiling water",
+        "_/temperature": 100.0,
+        "_/state": "liquid->gas",
+        "_/safe": False,
+        "_/timestamp": timestamps[-7],
+    }
+
+
+@pytest.mark.anyio
+async def test_get_logs_w_date_sorting(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+    data = log_data["logs_for_various"]
+    dates = list()
+    for i in range(len(data)):
+        date = datetime(1993, 3, i + 1, tzinfo=timezone.utc).strftime("%Y-%m-%d")
+        dates.append(date)
+        entries = data[i]
+        entries["_/timestamp"] = date
+        response = await client.post(
+            "/v0/log",
+            json={
+                "project": project_name,
+                "params": {"a/b/param1": f"test_{i}"},
+                "entries": entries,
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+    # descending timestamp
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"sorting": json.dumps({"_/timestamp": "descending"})},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 7
+    assert result["logs"][0]["entries"] == {
+        "_/_data": {"a": 8, "b": 10},
+        "_/timestamp": dates[-1],
+    }
+    assert result["logs"][1]["entries"] == {
+        "_/description": "air",
+        "_/metadata": [3, 8, 5],
+        "_/_data": {"a": 6, "b": 12, "c": 8, "d": 11},
+        "_/timestamp": dates[-2],
+    }
+    assert result["logs"][2]["entries"] == {
+        "_/description": "lava",
+        "_/metadata": [1, 5, 6],
+        "_/_data": {"a": 2, "b": 4},
+        "_/timestamp": dates[-3],
+    }
+    assert result["logs"][3]["entries"] == {
+        "_/description": "freezing nitrogen",
+        "_/temperature": -210.0,
+        "_/state": "liquid->solid",
+        "_/safe": False,
+        "_/timestamp": dates[-4],
+    }
+    assert result["logs"][4]["entries"] == {
+        "_/description": "surface of the sun",
+        "_/temperature": 6000.0,
+        "_/state": "gas",
+        "_/safe": False,
+        "_/timestamp": dates[-5],
+    }
+    assert result["logs"][5]["entries"] == {
+        "_/description": "freezing water",
+        "_/temperature": 0.0,
+        "_/state": "liquid->solid",
+        "_/safe": True,
+        "_/timestamp": dates[-6],
+    }
+    assert result["logs"][6]["entries"] == {
+        "_/description": "boiling water",
+        "_/temperature": 100.0,
+        "_/state": "liquid->gas",
+        "_/safe": False,
+        "_/timestamp": dates[-7],
     }
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "key",
-    ["description", "temperature", "safe", "metadata", "_data"],
+    [
+        "_/description",
+        "_/temperature",
+        "_/safe",
+        "_/metadata",
+        "_/_data",
+        "_/timestamp",
+    ],
 )
 @pytest.mark.parametrize(
     "metric",
     ["sum", "mean", "var", "std", "min", "max", "median", "mode"],
 )
 @pytest.mark.parametrize(
-    "log_ids",
+    "from_ids",
     [[1, 3, 5, 6], None],
 )
 async def test_get_logs_metric(
     client: AsyncClient,
     key: str,
     metric: str,
-    log_ids: Optional[List[int]],
+    from_ids: Optional[List[int]],
 ):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
     _ = await _create_several_logs(client, project_name)
-    data = log_data["logs_for_filtering_n_metrics"]
-    params = {} if log_ids is None else {"log_ids": log_ids}
+    data = log_data["logs_for_various"]
+    params = (
+        {"key": key}
+        if from_ids is None
+        else {"key": key, "from_ids": "&".join([str(i) for i in from_ids])}
+    )
     response = await client.get(
-        f"/v0/logs/metric/{metric}/{key}?project={project_name}",
+        f"/v0/logs/metric/{metric}?project={project_name}",
         params=params,
         headers=HEADERS,
     )
@@ -1320,13 +1942,18 @@ async def test_get_logs_metric(
     vals = [
         d[key]
         for i, d in enumerate(data)
-        if key in d and (log_ids is None or i + 1 in log_ids)
+        if key in d and (from_ids is None or i + 1 in from_ids)
     ]
     if metric == "mode" and _is_all_unique(vals):
         # early return to avoid computing 'mode' which is order-dependent
         # in case of unique entries.
         return
-    assert np.isclose(result, reduction_methods[metric](vals), atol=1e-6)
+    correct = reduction_methods[metric](vals)
+    if isinstance(correct, str):
+        # ignore milliseconds, as tiny rounding float differences can occur
+        assert result.split(".")[0] == correct.split(".")[0]
+    else:
+        assert np.isclose(result, correct, atol=1e-6)
 
 
 @pytest.mark.anyio
@@ -1393,19 +2020,21 @@ async def test_delete_logs(client: AsyncClient):
 
     log_id1 = response1.json()
     log_id2 = response2.json()
-    log_ids = [log_id1, log_id2]
+    ids_and_fields = [([log_id1, log_id2], None)]
 
     # Delete the logs
-    response = await _delete_logs(client, log_ids)
+    response = await _delete_logs(client, ids_and_fields)
     assert response.status_code == 200, response.json()
-    assert response.json()["info"] == "Logs deleted successfully!"
+    assert response.json()["info"] == "Logs and fields deleted successfully!"
 
     # Verify logs were deleted
-    response = await _get_log(client, log_id1)
-    assert response.status_code == 404, response.json()
+    response = await _get_log(client, project_name, log_id1)
+    assert response.status_code == 200, response.json()
+    assert response.json() == {"params": {}, "logs": [], "count": 0}
 
-    response = await _get_log(client, log_id2)
-    assert response.status_code == 404, response.json()
+    response = await _get_log(client, project_name, log_id2)
+    assert response.status_code == 200, response.json()
+    assert response.json() == {"params": {}, "logs": [], "count": 0}
 
 
 @pytest.mark.anyio
@@ -1433,13 +2062,13 @@ async def test_update_logs(client: AsyncClient):
     assert response.json()["info"] == "Logs updated successfully!"
 
     # Verify updates
-    response = await _get_log(client, log_id1)
+    response = await _get_log(client, project_name, log_id1)
     assert response.status_code == 200, response.json()
-    assert response.json()["logs"]["entries"]["new_entry"] == "Updated value"
+    assert response.json()["logs"][0]["entries"]["new_entry"] == "Updated value"
 
-    response = await _get_log(client, log_id2)
+    response = await _get_log(client, project_name, log_id2)
     assert response.status_code == 200, response.json()
-    assert response.json()["logs"]["entries"]["new_entry"] == "Updated value"
+    assert response.json()["logs"][0]["entries"]["new_entry"] == "Updated value"
 
 
 @pytest.mark.anyio
@@ -1473,13 +2102,13 @@ async def test_update_logs_multi_values(client: AsyncClient):
     assert response.json()["info"] == "Logs updated successfully!"
 
     # Verify updates
-    response = await _get_log(client, log_id1)
+    response = await _get_log(client, project_name, log_id1)
     assert response.status_code == 200, response.json()
-    assert response.json()["logs"]["entries"]["new_entry"] == "First updated value"
+    assert response.json()["logs"][0]["entries"]["new_entry"] == "First updated value"
 
-    response = await _get_log(client, log_id2)
+    response = await _get_log(client, project_name, log_id2)
     assert response.status_code == 200, response.json()
-    assert response.json()["logs"]["entries"]["new_entry"] == "Second updated value"
+    assert response.json()["logs"][0]["entries"]["new_entry"] == "Second updated value"
 
 
 @pytest.mark.anyio
@@ -1496,34 +2125,34 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
     log_id1 = response1.json()
     log_id2 = response2.json()
     entry_to_delete = "a/b/c/input"
-    fields = [(log_id1, entry_to_delete), (log_id2, entry_to_delete)]
+    ids_and_fields = [(log_id1, entry_to_delete), (log_id2, entry_to_delete)]
 
     # Delete entries from the logs
-    response = await _delete_log_fields_from_logs(client, fields)
+    response = await _delete_log_fields_from_logs(client, ids_and_fields)
     assert response.status_code == 200, response.json()
-    assert response.json()["info"] == "Log field deleted successfully from all logs!"
+    assert response.json()["info"] == "Logs and fields deleted successfully!"
 
     # Verify deletion of entry
-    response = await _get_log(client, log_id1)
+    response = await _get_log(client, project_name, log_id1)
     assert response.status_code == 200, response.json()
-    assert entry_to_delete not in response.json()["logs"]["entries"]
+    assert entry_to_delete not in response.json()["logs"][0]["entries"]
 
-    response = await _get_log(client, log_id2)
+    response = await _get_log(client, project_name, log_id2)
     assert response.status_code == 200, response.json()
-    assert entry_to_delete not in response.json()["logs"]["entries"]
+    assert entry_to_delete not in response.json()["logs"][0]["entries"]
 
-    fields = [
+    ids_and_fields = [
         (log_id1, ["a/b/c/boolean_input", "a/b/c/numeric_input", "a/b/param1"]),
         ([log_id1, log_id2], ["a/b/c/boolean_input", "a/b/param1"]),
     ]
     # Delete entries from the logs
     response = await _delete_log_fields_from_logs(
         client,
-        fields,
+        ids_and_fields,
         delete_empty_logs=True,
     )
     assert response.status_code == 200, response.json()
-    assert response.json()["info"] == "Log field deleted successfully from all logs!"
+    assert response.json()["info"] == "Logs and fields deleted successfully!"
 
     response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
     assert response.status_code == 200, response.json()
@@ -1558,14 +2187,14 @@ async def test_create_log_strongly_typed(client: AsyncClient):
 
     # Verify that field types are set correctly
     field_types_response = await client.get(
-        f"/v0/logs/field_typing?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
     assert field_types_response.json() == {
-        "a/b/param1": "str",
-        "score": "int",
-        "logged_at": "timestamp",
+        "a/b/param1": {"type": "str", "param": True},
+        "score": {"type": "int", "param": False},
+        "logged_at": {"type": "timestamp", "param": False},
     }
 
 
@@ -1665,19 +2294,34 @@ async def test_get_set_field_typing(client: AsyncClient):
     await _create_log(client, project_name)
 
     field_types_response = await client.get(
-        f"/v0/logs/field_typing?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
 
     field_types = field_types_response.json()
-    assert field_types["a/b/c/input"] == "str"
-    assert field_types["a/b/c/boolean_input"] == "bool"
-    assert field_types["a/b/c/numeric_input"] == "float"
+
+    # ordering
+    assert list(field_types.keys()) == [
+        "a/b/param1",
+        "a/b/c/input",
+        "a/b/c/boolean_input",
+        "a/b/c/numeric_input",
+    ]
+
+    # values
+    assert field_types["a/b/c/input"]["type"] == "str"
+    assert field_types["a/b/c/input"]["param"] is False
+    assert field_types["a/b/c/boolean_input"]["type"] == "bool"
+    assert field_types["a/b/c/boolean_input"]["param"] is False
+    assert field_types["a/b/c/numeric_input"]["type"] == "float"
+    assert field_types["a/b/c/numeric_input"]["param"] is False
+    assert field_types["a/b/param1"]["type"] == "str"
+    assert field_types["a/b/param1"]["param"] is True
 
     # Set field typing for the log entries
     response = await client.post(
-        f"/v0/logs/field_typing",
+        f"/v0/logs/fields/types",
         params={"project": project_name},
         json={
             "types": {
@@ -1689,18 +2333,33 @@ async def test_get_set_field_typing(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 200
-    assert response.json()["info"] == "Field typing updated successfully!"
+    assert response.json()["info"] == "Field types updated successfully!"
 
     field_types_response = await client.get(
-        f"/v0/logs/field_typing?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
 
     field_types = field_types_response.json()
-    assert field_types["a/b/c/input"] == "str"
-    assert field_types["a/b/c/boolean_input"] == "bool"
-    assert field_types["a/b/c/numeric_input"] is None  # This field should return None
+
+    # ordering
+    assert list(field_types.keys()) == [
+        "a/b/param1",
+        "a/b/c/input",
+        "a/b/c/boolean_input",
+        "a/b/c/numeric_input",
+    ]
+
+    # values
+    assert field_types["a/b/c/input"]["type"] == "str"
+    assert field_types["a/b/c/input"]["param"] is False
+    assert field_types["a/b/c/boolean_input"]["type"] == "bool"
+    assert field_types["a/b/c/boolean_input"]["param"] is False
+    assert field_types["a/b/c/numeric_input"]["type"] is None
+    assert field_types["a/b/c/numeric_input"]["param"] is False
+    assert field_types["a/b/param1"]["type"] == "str"
+    assert field_types["a/b/param1"]["param"] is True
 
 
 @pytest.mark.anyio
@@ -1713,13 +2372,13 @@ async def test_set_field_typing_non_homogeneous(client: AsyncClient):
 
     # set strongly_typed as False for the field 'a/b/c/numeric_input'
     response = await client.post(
-        f"/v0/logs/field_typing",
+        f"/v0/logs/fields/types",
         params={"project": project_name},
         json={"types": {"a/b/c/numeric_input": False}},
         headers=HEADERS,
     )
     assert response.status_code == 200
-    assert response.json()["info"] == "Field typing updated successfully!"
+    assert response.json()["info"] == "Field types updated successfully!"
 
     # now add a non-homogenous entry
     response = await client.post(
@@ -1735,7 +2394,7 @@ async def test_set_field_typing_non_homogeneous(client: AsyncClient):
 
     # setting strongly_typed as True for 'a/b/c/numeric_input' should fail!
     response = await client.post(
-        f"/v0/logs/field_typing",
+        f"/v0/logs/fields/types",
         params={"project": project_name},
         json={"types": {"a/b/c/numeric_input": True}},
         headers=HEADERS,
@@ -1757,7 +2416,7 @@ async def test_get_logs_with_type_check(client: AsyncClient):
 
     # Test filtering for float type
     response = await client.get(
-        f"/v0/logs?project={project_name}&filter_expr=type(temperature) is float",
+        f"/v0/logs?project={project_name}&filter_expr=type(_/temperature) is float",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1765,7 +2424,7 @@ async def test_get_logs_with_type_check(client: AsyncClient):
 
     # Test filtering for str type
     response = await client.get(
-        f"/v0/logs?project={project_name}&filter_expr=type(state) is str",
+        f"/v0/logs?project={project_name}&filter_expr=type(_/state) is str",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1773,7 +2432,7 @@ async def test_get_logs_with_type_check(client: AsyncClient):
 
     # Test filtering for a bool type
     response = await client.get(
-        f"/v0/logs?project={project_name}&filter_expr=type(safe) is bool",
+        f"/v0/logs?project={project_name}&filter_expr=type(_/safe) is bool",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1781,7 +2440,7 @@ async def test_get_logs_with_type_check(client: AsyncClient):
 
     # Test filtering for a timestamp type
     response = await client.get(
-        f"/v0/logs?project={project_name}&filter_expr=type(timestamp) is timestamp",
+        f"/v0/logs?project={project_name}&filter_expr=type(_/timestamp) is timestamp",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1789,7 +2448,7 @@ async def test_get_logs_with_type_check(client: AsyncClient):
 
     # Test filtering for a non-existent type
     response = await client.get(
-        f"/v0/logs?project={project_name}&filter_expr=type(timestamp) is str",
+        f"/v0/logs?project={project_name}&filter_expr=type(_/timestamp) is str",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1797,7 +2456,7 @@ async def test_get_logs_with_type_check(client: AsyncClient):
 
     # Test filtering using `is not`
     response = await client.get(
-        f"/v0/logs?project={project_name}&filter_expr=type(timestamp) is not str",
+        f"/v0/logs?project={project_name}&filter_expr=type(_/timestamp) is not str",
         headers=HEADERS,
     )
     assert response.status_code == 200

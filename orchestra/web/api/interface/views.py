@@ -1,8 +1,9 @@
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from orchestra.db.dao.interface_dao import InterfaceDAO
+from orchestra.db.dao.temp_interface_dao import TempInterfaceDAO
 from orchestra.web.api.interface.schema import InterfaceConfig
 
 router = APIRouter()
@@ -35,17 +36,20 @@ def create_interface(
     request_fastapi: Request,
     request: InterfaceConfig,
     interface_dao: InterfaceDAO = Depends(),
+    temp_interface_dao: TempInterfaceDAO = Depends(),
 ):
-    interface = interface_dao.get_interface(request_fastapi.state.user_id)
+    dao = temp_interface_dao if request.temporary else interface_dao
+    interface = dao.get_interface(request_fastapi.state.user_id)
     if interface:
         raise HTTPException(
             status_code=400,
             detail="Interface already exists, update the interface instead.",
         )
-    interface_dao.create_interface(
+    dao.create_interface(
         user_id=request_fastapi.state.user_id,
         items=json.dumps([item.model_dump() for item in request.items]),
         new_counter=request.new_counter,
+        project=request.project,
     )
     return {"info": "Interface created successfully!"}
 
@@ -73,17 +77,20 @@ def update_interface(
     request_fastapi: Request,
     request: InterfaceConfig,
     interface_dao: InterfaceDAO = Depends(),
+    temp_interface_dao: TempInterfaceDAO = Depends(),
 ):
-    interface = interface_dao.get_interface(request_fastapi.state.user_id)
+    dao = temp_interface_dao if request.temporary else interface_dao
+    interface = dao.get_interface(request_fastapi.state.user_id)
     if not interface:
         raise HTTPException(
             status_code=404,
             detail="Interface not added yet. Create it first.",
         )
-    interface_dao.update_interface(
+    dao.update_interface(
         user_id=request_fastapi.state.user_id,
         items=json.dumps([item.model_dump() for item in request.items]),
         new_counter=request.new_counter,
+        project=request.project,
     )
     return {"info": "Interface updated successfully!"}
 
@@ -124,9 +131,12 @@ def update_interface(
 )
 def get_interface(
     request_fastapi: Request,
+    temporary: bool = Query(False),
     interface_dao: InterfaceDAO = Depends(),
+    temp_interface_dao: TempInterfaceDAO = Depends(),
 ):
-    interface = interface_dao.get_interface(request_fastapi.state.user_id)
+    dao = temp_interface_dao if temporary else interface_dao
+    interface = dao.get_interface(request_fastapi.state.user_id)
     if not interface:
         raise HTTPException(
             status_code=404,
@@ -135,4 +145,5 @@ def get_interface(
     return {
         "items": json.loads(interface.items),
         "new_counter": interface.new_counter,
+        "project": interface.project,
     }

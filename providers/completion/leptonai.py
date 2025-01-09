@@ -59,6 +59,11 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.03, "completion": 0.03},
     },
+    "llama-3.2-1b-chat": {
+        "endpoint": "llama-3-2-1b",
+        "context_window": 128000,
+        "cost": {"prompt": 0.01, "completion": 0.01},
+    },
     "llama-3.1-8b-chat": {
         "endpoint": "llama3-1-8b",
         "context_window": 128000,
@@ -68,11 +73,6 @@ supported_models = {
         "endpoint": "llama3-1-70b",
         "context_window": 128000,
         "cost": {"prompt": 0.8, "completion": 0.8},
-    },
-    "llama-3.1-405b-chat": {
-        "endpoint": "llama-3-1-405b",
-        "context_window": 128000,
-        "cost": {"prompt": 2.8, "completion": 2.8},
     },
     "llama-3-8b-chat": {
         "endpoint": "llama3-8b",

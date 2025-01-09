@@ -3,10 +3,11 @@ Includes endpoints related to entries.
 """
 
 import json
-from typing import Any, Dict, List, Optional, Union
+from datetime import datetime, timedelta
+from typing import Any, Dict, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from sqlalchemy import INTEGER, Float, and_, case, cast, desc, exists, func, select
+from sqlalchemy import INTEGER, TIMESTAMP, Float, and_, case, cast, exists, func, select
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 from sqlalchemy.sql.selectable import Subquery
 
@@ -21,7 +22,6 @@ from orchestra.web.api.log.schema import (
     CreateDerivedEntriesConfig,
     CreateLogConfig,
     DeleteLogEntryRequest,
-    DeleteLogsRequest,
     SetFieldTypingRequest,
     UpdateLogRequest,
 )
@@ -220,57 +220,6 @@ def create_derived_entry(
         )
 
 
-@router.delete(
-    "/logs",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {"info": "Logs deleted successfully!"},
-                },
-            },
-        },
-        404: {
-            "description": "Logs Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "One or more logs with the specified IDs were not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def delete_logs(
-    request_fastapi: Request,
-    body: DeleteLogsRequest,
-    log_event_dao: LogEventDAO = Depends(),
-):
-    """
-    Deletes multiple logs from a project.
-    """
-    not_found_ids = []
-    for log_id in body.ids:
-        try:
-            if log_event_dao.get_user_id(id=log_id) != request_fastapi.state.user_id:
-                raise IndexError
-        except IndexError:
-            not_found_ids.append(log_id)
-            continue
-        # TODO: Deal with organisation IDs
-        log_event_dao.delete(id=log_id)
-
-    if not_found_ids:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Logs with ids {not_found_ids} not found or you don't have permission to delete them.",
-        )
-
-    return {"info": "Logs deleted successfully!"}
-
-
 @router.put(
     "/logs",
     responses={
@@ -429,7 +378,7 @@ def update_logs(
 
 
 @router.delete(
-    "/logs/fields",
+    "/logs",
     responses={
         200: {
             "description": "Successful Response",
@@ -463,7 +412,7 @@ def update_logs(
         },
     },
 )
-def delete_log_fields(
+def delete_logs(
     request_fastapi: Request,
     body: DeleteLogEntryRequest,
     delete_empty_logs: bool = Query(
@@ -482,9 +431,9 @@ def delete_log_fields(
     not_found_logs = []
     not_found_entries = []
 
-    log_fields = _flatten_fields(body.fields)
+    ids_and_fields = _flatten_fields(body.ids_and_fields)
 
-    for log_id, fields in log_fields.items():
+    for log_id, fields in ids_and_fields.items():
         # Verify if the log belongs to the user
         try:
             if log_event_dao.get_user_id(id=log_id) != request_fastapi.state.user_id:
@@ -493,15 +442,18 @@ def delete_log_fields(
             not_found_logs.append(log_id)
             continue
 
-        for field in fields:
-            # Check for the existence of the log entry
-            log = log_dao.filter(log_event_id=log_id, key=field)
-            if not log:
-                not_found_entries.append(log_id)
-                continue
+        if len(fields) == 0:
+            log_event_dao.delete(log_id)
+        else:
+            for field in fields:
+                # Check for the existence of the log entry
+                log = log_dao.filter(log_event_id=log_id, key=field)
+                if not log:
+                    not_found_entries.append(log_id)
+                    continue
 
-            # Delete the log entry
-            log_dao.delete(id=log[0][0].id)
+                # Delete the log entry
+                log_dao.delete(id=log[0][0].id)
 
         if delete_empty_logs and not log_dao.filter(log_event_id=log_id):
             log_event_dao.delete(id=log_id)
@@ -594,36 +546,44 @@ def _get_logs_query(
     context: Optional[str],
     filter_expr: Optional[str],
     sorting: Optional[str],
-    from_ids: Optional[List[int]],
-    exclude_ids: Optional[List[int]],
+    from_ids: Optional[str],
+    exclude_ids: Optional[str],
+    from_fields: Optional[str],
+    exclude_fields: Optional[str],
     limit: Optional[int],
     offset: int,
     project_dao: ProjectDAO,
+    field_type_dao: FieldTypeDAO,
     session,
     latest_timestamp=False,
 ):
+    # try to get the project, and fail if not found
     try:
         user_id = request_fastapi.state.user_id
         project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
     except IndexError:
         raise not_found(f"Project {project}")
-    # TODO: Deal with organisation IDs
 
-    query = session.query(
+    # filter for log event ids within the project
+    log_event_query = session.query(
         LogEvent.id,
     ).where(LogEvent.project_id == project_obj.id)
 
+    # remove irrelevant log event ids based on from_ids and exclude_ids
     assert not (from_ids and exclude_ids), (
         f"Only one of from_ids or exclude_ids can be set, "
         f"but found values {from_ids} and {exclude_ids}."
     )
-
     if from_ids:
-        query = query.where(LogEvent.id.in_(from_ids))
+        log_event_query = log_event_query.where(
+            LogEvent.id.in_([int(i) for i in from_ids.split("&")]),
+        )
     elif exclude_ids:
-        query = query.where(LogEvent.id.notin_(exclude_ids))
+        log_event_query = log_event_query.where(
+            LogEvent.id.notin_([int(i) for i in exclude_ids.split("&")]),
+        )
 
-    query = query.order_by(LogEvent.created_at)
+    # filter the log event ids based on the values of their fields (filter argument)
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
         if filter_dict:
@@ -645,91 +605,17 @@ def _get_logs_query(
                 # Handle general expressions (BinaryExpression, etc.)
                 condition = filter_condition
 
-            query = query.filter(condition)
-    if sorting:
-        # Create sub-queries for each key
-        subqs = {}
-        for key in sorting:
-            subqs[key] = (
-                session.query(
-                    LogEvent.id,
-                    Log.value,
-                    Log.inferred_type,
-                )
-                .join(Log, LogEvent.id == Log.log_event_id)
-                .where(Log.key == key)
-                .subquery()
-            )
+            log_event_query = log_event_query.filter(condition)
 
-        # Outer-join them and build ORDER BY
-        sort_criteria = list()
-        for key, sort_mode in sorting.items():
-            subq = subqs[key]
-            # Join
-            query = query.outerjoin(subq, subq.c.id == LogEvent.id)
-            # Order
-            criterion = case(
-                (
-                    subq.c.inferred_type == "bool",
-                    case(
-                        (subq.c.value.in_(["true", "True", "1"]), 1),
-                        else_=0,
-                    ),
-                ),
-                else_=cast(subq.c.value, Float),
-            )
-            if sort_mode == "ascending":
-                sort_criteria.append(criterion.asc().nulls_last())
-            elif sort_mode == "descending":
-                sort_criteria.append(criterion.desc().nulls_last())
-            else:
-                raise HTTPException(
-                    status_code=400,
-                    detail="sort_mode must be 'ascending' or 'descending', "
-                    f"but found {sort_mode}.",
-                )
+    # create sub-query for these relevant log events
+    relevant_log_events = log_event_query.subquery()
 
-        query = query.order_by(*sort_criteria)
-        query = query.add_column(
-            func.row_number().over(order_by=sort_criteria).label("row_num"),
-        )
-    else:
-        query = query.add_column(
-            func.row_number().over(order_by=LogEvent.created_at).label("row_num"),
-        )
-
-    if limit:
-        query = query.limit(limit)
-    if offset:
-        query = query.offset(offset)
-
-    relevant_log_events = query.subquery()
-
-    if latest_timestamp:
-        # Replace the existing 'return query.order_by(Log.updated_at).last()'
-        # with a separate query that does SELECT MAX(updated_at).
-        max_query = (
-            session.query(func.max(Log.updated_at))
-            .join(
-                LogEvent,
-                LogEvent.id == Log.log_event_id,
-            )
-            .join(
-                relevant_log_events,
-                relevant_log_events.c.id == LogEvent.id,
-            )
-        )
-
-        if context:
-            context = context if context[-1] == "/" else context + "/"
-            max_query = max_query.where(Log.key.startswith(context))
-
-        return max_query.scalar().isoformat()
-
-    query = (
+    # query the logs themselves, which match the log event ids
+    log_query = (
         session.query(
             Log,
             LogEvent.created_at,
+            LogEvent.id,
         )
         .join(
             LogEvent,
@@ -741,13 +627,124 @@ def _get_logs_query(
         )
     )
 
+    # filter out all logs which are not within the context
     context_len = 0
-    if context:
-        context = context if context[-1] == "/" else context + "/"
-        context_len = len(context)
-        query = query.where(Log.key.startswith(context))
+    if context is not None:
+        split_context = context.split("/")
+        exclude_params = "entries" in split_context
+        exclude_entries = "params" in split_context
+        assert not (
+            exclude_params and exclude_entries
+        ), "'entries' and 'params' cannot both be specified in the context argument."
+        context = "/".join(
+            [substr for substr in split_context if substr not in ("params", "entries")],
+        )
+        if context:
+            context = context if context[-1] == "/" else context + "/"
+            context_len = len(context)
+            log_query = log_query.where(Log.key.startswith(context))
+        if exclude_params:
+            log_query = log_query.where(Log.version.is_(None))
+        elif exclude_entries:
+            log_query = log_query.where(Log.version.isnot(None))
 
-    return query.order_by(relevant_log_events.c.row_num).all(), context_len
+    # filter out all irrelevant logs as per from_fields and exclude_fields
+    assert not (from_fields and exclude_fields), (
+        f"Only one of from_fields or exclude_fields can be set, "
+        f"but found values {from_fields} and {exclude_fields}."
+    )
+    if from_fields:
+        log_query = log_query.where(Log.key.in_(from_fields.split("&")))
+    elif exclude_fields:
+        log_query = log_query.where(Log.key.notin_(exclude_fields.split("&")))
+
+    # create a sub-query of these relevant logs
+    relevant_logs = log_query.subquery()
+
+    # create a second set of relevant log event ids, removing all log events which did
+    # not contain any relevant fields as per the context and field pruning
+
+    # query for the distinct log event ids
+    distinct_ids_subq = (
+        session.query(LogEvent.id)
+        .join(Log, Log.log_event_id == LogEvent.id)
+        .join(relevant_logs, relevant_logs.c.id == Log.id)
+        .distinct()
+        .subquery()
+    )
+
+    # sort the log ids based on the sorting criteria provided by the user,
+    # and dynamically add a post-sorting row number to keep the order info preserved
+    sort_criteria = list()
+    sorted_query = session.query(distinct_ids_subq.c.id)
+    if sorting:
+        subqs = {}
+        for key in json.loads(sorting):
+            subqs[key] = (
+                session.query(LogEvent.id, Log.value, Log.inferred_type)
+                .join(Log, LogEvent.id == Log.log_event_id)
+                .where(Log.key == key)
+                .subquery()
+            )
+            field_types = field_type_dao.get_field_types(project_obj.id)
+        for key, sort_mode in json.loads(sorting).items():
+            subq = subqs[key]
+            # Outer join to bring in the needed columns for sorting
+            sorted_query = sorted_query.outerjoin(
+                subq,
+                subq.c.id == distinct_ids_subq.c.id,
+            )
+
+            if key in field_types:
+                criterion = cast(subq.c.value, STR_TO_SQL_TYPES[field_types[key]])
+            else:
+                criterion = subq.c.value
+
+            if sort_mode == "ascending":
+                sort_criteria.append(criterion.asc().nulls_last())
+            elif sort_mode == "descending":
+                sort_criteria.append(criterion.desc().nulls_last())
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="sort_mode must be 'ascending' or 'descending', "
+                    f"but found {sort_mode}.",
+                )
+    sort_criteria.append(LogEvent.created_at)
+
+    log_event_query = sorted_query.join(
+        LogEvent,
+        LogEvent.id == distinct_ids_subq.c.id,
+    ).add_columns(  # or use another join if needed
+        func.row_number().over(order_by=sort_criteria).label("row_num"),
+    )
+
+    count = log_event_query.count()
+    if limit:
+        log_event_query = log_event_query.limit(limit)
+    if offset:
+        log_event_query = log_event_query.offset(offset)
+    relevant_log_events = log_event_query.subquery()
+
+    # the final log query, with all of the pruning, filtering, sorting,
+    # and pagination applied
+    log_query = log_query.join(
+        relevant_log_events,
+        relevant_log_events.c.id == LogEvent.id,
+    )
+
+    if latest_timestamp:
+        relevant_logs = log_query.subquery()
+        max_query = session.query(func.max(Log.updated_at)).join(
+            relevant_logs,
+            relevant_logs.c.id == Log.id,
+        )
+        return max_query.scalar().isoformat()
+    return (
+        log_query.order_by(relevant_log_events.c.row_num, Log.created_at).all(),
+        context_len,
+        count,
+    )
 
 
 @router.get(
@@ -821,32 +818,49 @@ def get_logs(
         "remaining in order when the first key values are equal.",
         example={"score": "ascending", "timestamp": "descending"},
     ),
-    from_ids: Optional[List[int]] = Query(
+    from_ids: Optional[str] = Query(
         None,
         description="The log ids which are permitted to be included in the search. "
         "Each log id listed does not need to be returned, but no logs "
         "which are not included in this list can be returned. This "
         "argument *cannot* be set if `exclude_ids` is set.",
-        example=[0, 1, 2],
+        example="0&1&2",
     ),
-    exclude_ids: Optional[List[int]] = Query(
+    exclude_ids: Optional[str] = Query(
         None,
         description="The log ids which cannot be returned from the search. "
         "None of the listed ids will be returned, even if the logs are "
         "valid as per the filtering expression etc. This argument *cannot* "
         "be set if `from_ids` is set.",
-        example=[0, 1, 2],
+        example="0&1&2",
+    ),
+    from_fields: Optional[str] = Query(
+        None,
+        description="The fields which are permitted to be included in the search. "
+        "Each field listed does not need to be returned, but no fields "
+        "which are not included in this list can be returned. This "
+        "argument *cannot* be set if `exclude_fields` is set.",
+        example="score&response",
+    ),
+    exclude_fields: Optional[str] = Query(
+        None,
+        description="The fields which cannot be returned from the search. "
+        "None of the listed fields will be returned, even if the fields "
+        "are valid as per the filtering expression etc. This argument "
+        "*cannot* be set if `from_fields` is set.",
+        example="score&response",
     ),
     limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
     return_ids_only: bool = False,
     project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
     Returns a list of filtered entries from a project.
     """
-    all_logs, context_len = _get_logs_query(
+    all_logs, context_len, count = _get_logs_query(
         request_fastapi,
         project,
         context,
@@ -854,9 +868,12 @@ def get_logs(
         sorting,
         from_ids,
         exclude_ids,
+        from_fields,
+        exclude_fields,
         limit,
         offset,
         project_dao,
+        field_type_dao,
         session,
     )
     if return_ids_only:
@@ -890,8 +907,6 @@ def get_logs(
                 },
             },
         )
-
-    count = session.query(func.count(LogEvent.id)).first()[0]
 
     return {
         "params": params,
@@ -971,25 +986,42 @@ def get_logs_latest_timestamp(
         "remaining in order when the first key values are equal.",
         example={"score": "ascending", "timestamp": "descending"},
     ),
-    from_ids: Optional[List[int]] = Query(
+    from_ids: Optional[str] = Query(
         None,
         description="The log ids which are permitted to be included in the search. "
         "Each log id listed does not need to be returned, but no logs "
         "which are not included in this list can be returned. This "
         "argument *cannot* be set if `exclude_ids` is set.",
-        example=[0, 1, 2],
+        example="0&1&2",
     ),
-    exclude_ids: Optional[List[int]] = Query(
+    exclude_ids: Optional[str] = Query(
         None,
         description="The log ids which cannot be returned from the search. "
         "None of the listed ids will be returned, even if the logs are "
         "valid as per the filtering expression etc. This argument *cannot* "
         "be set if `from_ids` is set.",
-        example=[0, 1, 2],
+        example="0&1&2",
+    ),
+    from_fields: Optional[str] = Query(
+        None,
+        description="The fields which are permitted to be included in the search. "
+        "Each field listed does not need to be returned, but no fields "
+        "which are not included in this list can be returned. This "
+        "argument *cannot* be set if `exclude_fields` is set.",
+        example="score&response",
+    ),
+    exclude_fields: Optional[str] = Query(
+        None,
+        description="The fields which cannot be returned from the search. "
+        "None of the listed fields will be returned, even if the fields "
+        "are valid as per the filtering expression etc. This argument "
+        "*cannot* be set if `from_fields` is set.",
+        example="score&response",
     ),
     limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
     project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -1004,16 +1036,19 @@ def get_logs_latest_timestamp(
         sorting,
         from_ids,
         exclude_ids,
+        from_fields,
+        exclude_fields,
         limit,
         offset,
         project_dao,
+        field_type_dao,
         session,
         latest_timestamp=True,
     )
 
 
 @router.get(
-    "/logs/metric/{metric}/{key}",
+    "/logs/metric/{metric}",
     responses={
         200: {
             "description": "Successful Response",
@@ -1041,7 +1076,7 @@ def get_logs_metric(
         description="The name of the metric you would like to compute.",
         example="mean",
     ),
-    key: str = Path(
+    key: str = Query(
         description="The key you would like to extract the reduction metric for.",
         example="score",
     ),
@@ -1054,16 +1089,26 @@ def get_logs_metric(
         description="Boolean string to filter entries. TODO: Detailed page.",
         example="len(output) > 200 and temperature == 0.5",
     ),
-    log_ids: Optional[List[int]] = Query(
+    from_ids: Optional[str] = Query(
         None,
-        description="Log ids to include in the reduction operation. "
-        "If none, then all logs are included in the search "
-        "(before the filtering is applied).",
-        example=[1, 2, 3],
+        description="The log ids which are permitted to be included in the search. "
+        "Each log id listed does not need to be returned, but no logs "
+        "which are not included in this list can be returned. This "
+        "argument *cannot* be set if `exclude_ids` is set.",
+        example="0&1&2",
+    ),
+    exclude_ids: Optional[str] = Query(
+        None,
+        description="The log ids which cannot be returned from the search. "
+        "None of the listed ids will be returned, even if the logs are "
+        "valid as per the filtering expression etc. This argument *cannot* "
+        "be set if `from_ids` is set.",
+        example="0&1&2",
     ),
     project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
     session=Depends(get_db_session),
-) -> Union[float, int, bool]:
+) -> Union[float, int, bool, str]:
     """
     Returns the reduction metric for filtered values for a specific key from a project.
     """
@@ -1076,8 +1121,17 @@ def get_logs_metric(
 
     query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
 
-    if log_ids:
-        query = query.filter(LogEvent.id.in_(log_ids))
+    assert not (from_ids and exclude_ids), (
+        f"Only one of from_ids or exclude_ids can be set, "
+        f"but found values {from_ids} and {exclude_ids}."
+    )
+
+    if from_ids:
+        query = query.where(LogEvent.id.in_([int(i) for i in from_ids.split("&")]))
+    elif exclude_ids:
+        query = query.where(
+            LogEvent.id.notin_([int(i) for i in exclude_ids.split("&")]),
+        )
 
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
@@ -1122,6 +1176,10 @@ def get_logs_metric(
                         Log.inferred_type == "str",
                         func.length(cast(Log.value, JSONB)[0].astext).cast(Float),
                     ),
+                    (
+                        Log.inferred_type == "timestamp",
+                        func.extract("epoch", cast(Log.value, TIMESTAMP)).cast(Float),
+                    ),
                     (Log.inferred_type == "float", Log.value.cast(Float)),
                     (Log.inferred_type == "int", Log.value.cast(Float)),
                     else_=0,
@@ -1131,6 +1189,23 @@ def get_logs_metric(
         .where(Log.key == key)
         .filter(Log.log_event_id.in_(select(subquery)))
     ).scalar()
+    field_type = field_type_dao.get_field_types(project_obj.id).get(key)
+    if metric == "count":
+        return int(reduced_query)
+    elif not field_type:
+        return reduced_query
+    elif field_type == "timestamp":
+        if metric in ("var", "std"):
+            return timedelta(seconds=reduced_query).__repr__()
+        return datetime.fromtimestamp(reduced_query).isoformat()
+    elif (
+        reduced_query.is_integer()
+        and metric in ("sum", "min", "max", "median", "mode")
+        and field_type in ("int", "bool", "str")
+    ):
+        if field_type == "bool" and metric in ("min", "max", "median", "mode"):
+            return bool(reduced_query)
+        return int(reduced_query)
     return reduced_query
 
 
@@ -1223,96 +1298,6 @@ def get_log_groups(
             "content": {
                 "application/json": {
                     "example": {
-                        "entries": {
-                            "col1": "string",
-                            "col2": "float",
-                        },
-                    },
-                },
-            },
-        },
-        404: {
-            "description": "Project Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project <project> not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def get_log_fields(
-    request_fastapi: Request,
-    project: str = Query(
-        description="Name of the project to get fields for.",
-        example="eval-project",
-    ),
-    project_dao: ProjectDAO = Depends(),
-    session=Depends(get_db_session),
-):
-    """
-    Returns a mapping of fields and their datatypes from a project.
-    """
-    try:
-        user_id = request_fastapi.state.user_id
-        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
-    except IndexError:
-        raise not_found(f"Project {project}")
-
-    query = session.query(LogEvent.id).where(LogEvent.project_id == project_obj.id)
-    query = query.order_by(desc(LogEvent.created_at))
-    query = query.limit(1)
-
-    relevant_logs = query.subquery()
-
-    query = (
-        session.query(Log, LogEvent.created_at.label("log_event_ts"))
-        .join(
-            LogEvent,
-            LogEvent.id == Log.log_event_id,
-        )
-        .where(Log.log_event_id.in_(select(relevant_logs)))
-        .order_by(Log.created_at)
-    )
-
-    all_logs = query.all()
-    formatted_logs = format_logs(all_logs)
-
-    fields = dict()
-    for log_dict in formatted_logs.values():
-        log = {
-            "entries": {
-                k: v
-                for k, v in log_dict["entries"].items()
-                if log_dict["versions"][k] is None
-            },
-            "params": {
-                k: str(log_dict["versions"][k])
-                for k, _ in log_dict["entries"].items()
-                if log_dict["versions"][k] is not None
-            },
-        }
-        items = {
-            "entries": list(log["entries"].items()),
-            "params": list(log.get("params", {}).items()),
-        }
-        fields = {
-            key: {item[0]: type(item[1]).__name__ for item in items[key]}
-            for key in items
-        }
-    return fields
-
-
-@router.get(
-    "/logs/field_typing",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {
                         "field1": "string",
                         "field2": "int",
                     },
@@ -1331,10 +1316,10 @@ def get_log_fields(
         },
     },
 )
-def get_field_typing(
+def get_fields(
     request_fastapi: Request,
     project: str = Query(
-        description="Name of the project to get field types for.",
+        description="Name of the project to get fields and their types for.",
         example="eval-project",
     ),
     project_dao: ProjectDAO = Depends(),
@@ -1360,19 +1345,39 @@ def get_field_typing(
     )
 
     all_field_names = [field.key for field in query.all()]
-    result = {}
 
-    for field_name in all_field_names:
-        if field_name in field_types:
-            result[field_name] = field_types[field_name]
-        else:
-            result[field_name] = None
+    # ToDo: remove this hacky code once this task [https://app.clickup.com/t/86c1jupp2]
+    #  is done
+    all_logs, _, _ = _get_logs_query(
+        request_fastapi,
+        project,
+        None,
+        None,
+        None,
+        None,
+        None,
+        all_field_names,
+        None,
+        1,
+        0,
+        project_dao,
+        field_type_dao,
+        session,
+    )
+    params = dict((lg[0].key, lg[0].version is not None) for lg in all_logs)
+    # end ToDo
 
-    return result
+    return {
+        key: {
+            "type": field_types.get(key),
+            "param": is_param,
+        }
+        for key, is_param in params.items()
+    }
 
 
 @router.post(
-    "/logs/field_typing",
+    "/logs/fields/types",
     responses={
         200: {
             "description": "Field typing updated successfully.",
@@ -1406,7 +1411,7 @@ def get_field_typing(
         },
     },
 )
-def set_field_typing(
+def set_field_types(
     request_fastapi: Request,
     request: SetFieldTypingRequest,
     project: str = Query(
@@ -1461,4 +1466,4 @@ def set_field_typing(
         else:  # If we want to turn typing off
             field_type_dao.delete_field_type(project_id, field_name)
 
-    return {"info": "Field typing updated successfully!"}
+    return {"info": "Field types updated successfully!"}

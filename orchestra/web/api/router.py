@@ -21,9 +21,6 @@ from orchestra.web.api import (  # noqa: WPS235
     monitoring,
     project,
     provider,
-    router_configurations,
-    router_deployment,
-    router_training,
     supported_endpoints,
     users,
 )
@@ -71,23 +68,18 @@ groupings = {
     "Universal API": [
         "Supported Endpoints",
         "LLM Queries",
-        "Logging",
+        "Usage",
         "Custom Endpoints",
         "Custom API keys",
         "Endpoint Metrics",
     ],
-    "Benchmarking": [
+    "Interfaces": [
         "Datasets",
         "Dataset Artifacts",
         "Projects",
         "Project Artifacts",
-        "Evals",
-        "Interface",
-    ],
-    "Routing": [
-        "Router Training",
-        "Router Deployment",
-        "Router Configurations",
+        "Logs",
+        "Configs",
     ],
     "Account": [
         "Credits",
@@ -109,7 +101,7 @@ api_router.include_router(
 )
 api_router.include_router(
     logging.router,
-    tags=["Logging"],
+    tags=["Usage"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
@@ -152,30 +144,12 @@ api_router.include_router(
 )
 api_router.include_router(
     log.router,
-    tags=["Evals"],
+    tags=["Logs"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
     interface.router,
-    tags=["Interface"],
-    dependencies=API_KEY_AUTH,
-)
-
-# Routing
-
-api_router.include_router(
-    router_training.router,
-    tags=["Router Training"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    router_deployment.router,
-    tags=["Router Deployment"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    router_configurations.router,
-    tags=["Router Configurations"],
+    tags=["Configs"],
     dependencies=API_KEY_AUTH,
 )
 
