@@ -81,7 +81,11 @@ def _tokenize(s):
             "OP",
             r"==|!=|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)|\+|\-|\*|/|%",
         ),
-        ("FUNC", r"round|len|str|type|exists|version"),  # Functions
+        (
+            "TYPE_LITERAL",
+            r"(?<!\w)(?:str|int|float|bool|list|dict|tuple|set|timestamp|datetime)(?!\w)",
+        ),  # Type literals
+        ("FUNC", r"round|len|type|exists|version"),  # Functions
         # ("TYPE_CHECK", r"type"),  # Type check expression
         # ("LEN", r"len"),  # length
         # ("STR", r"str"),  # str function
@@ -167,11 +171,9 @@ class _Parser:
         """Check if we're inside a type() function call"""
         prev_token = self.peek_back(1)
         return (
-            prev_token and
-            prev_token[0] == "OP" 
-            and prev_token[1] in ("is", "is not") 
+            prev_token and prev_token[0] == "OP" and prev_token[1] in ("is", "is not")
         )
-    
+
     def advance(self):
         self.pos += 1
         if self.pos < len(self.tokens):
@@ -351,6 +353,7 @@ def _select_value(subq, session):
         "float": subq.c.float_value,
         "bool": subq.c.bool_value,
         "str": subq.c.str_value,
+        "timestamp": subq.c.timestamp_value,
         "list": subq.c.jsonb_value,
         "dict": subq.c.jsonb_value,
     }
@@ -387,6 +390,10 @@ def _build_subquery_for_identifier(key, log_event_alias, alias=None):
                 (log_alias.inferred_type == "dict", cast(log_alias.value, JSONB)),
                 else_=None,
             ).label("jsonb_value"),
+            case(
+                (log_alias.inferred_type == "timestamp", cast(log_alias.value, JSONB)),
+                else_=None,
+            ).label("timestamp_value"),
             case(
                 (log_alias.inferred_type == "str", cast(log_alias.value, String)),
                 else_=None,
