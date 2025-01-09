@@ -133,6 +133,8 @@ def _tokenize(s):
             "FUNC",
         ):
             tokens.append((kind, value))
+        elif kind == "TYPE_LITERAL":
+            tokens.append((kind, value))
         elif kind == "BRACKET_OPEN":
             nested_content, new_pos = parse_nested(line, mo.start())
             tokens.append(("OTHER", nested_content))
@@ -155,6 +157,21 @@ class _Parser:
         self.pos = 0
         self.current_token = tokens[0]
 
+    def peek_back(self, n=1):
+        """Look back n tokens without moving position"""
+        if self.pos - n >= 0:
+            return self.tokens[self.pos - n]
+        return None
+
+    def in_type_check_context(self):
+        """Check if we're inside a type() function call"""
+        prev_token = self.peek_back(1)
+        return (
+            prev_token and
+            prev_token[0] == "OP" 
+            and prev_token[1] in ("is", "is not") 
+        )
+    
     def advance(self):
         self.pos += 1
         if self.pos < len(self.tokens):
@@ -266,6 +283,13 @@ class _Parser:
                 raise RuntimeError(
                     'Expected "(" after function call',
                 )
+        elif self.current_token[0] == "TYPE_LITERAL":
+            if self.in_type_check_context():
+                node = {"type": "type_literal", "value": self.current_token[1]}
+            else:
+                node = {"type": "identifier", "value": self.current_token[1]}
+            self.advance()
+            return node
         elif self.current_token[0] == "LPAREN":
             self.advance()
             node = self.expr()
@@ -437,6 +461,8 @@ def build_sql_query(filter_dict, log_event_alias, session):
                 log_event_alias,
                 alias=f"select_{key}",
             )
+        elif filter_dict["type"] == "type_literal":
+            return literal(filter_dict["value"])
         elif filter_dict["type"] in ("int", "float", "bool", "other"):
             return literal(filter_dict["value"])
         elif filter_dict["type"] == "string":
