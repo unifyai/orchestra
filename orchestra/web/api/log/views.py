@@ -694,7 +694,9 @@ def _get_logs_query(
             func.row_number().over(order_by=sort_criteria).label("row_num"),
         )
     else:
-        query = query.add_column(func.row_number().over().label("row_num"))
+        query = query.add_column(
+            func.row_number().over(order_by=LogEvent.created_at).label("row_num"),
+        )
 
     if limit:
         query = query.limit(limit)
