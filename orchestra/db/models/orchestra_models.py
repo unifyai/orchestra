@@ -555,7 +555,7 @@ class Log(Base):
         index=True,
     )
     key = Column(String, nullable=False)
-    value = Column(String)
+    value = Column(JSONB)
     version = Column(Integer)
     inferred_type = Column(String)
     created_at = Column(TIMESTAMP, server_default=func.now())

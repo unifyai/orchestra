@@ -68,14 +68,13 @@ class LogDAO:
         explicit_types: Optional[Dict] = None,
     ) -> Optional[str]:
 
-        json_v = json.dumps(raw_v)
         explicit_types = explicit_types if isinstance(explicit_types, dict) else {}
 
         return self.create(
             project_id=project_id,
             log_event_id=log_event_id,
             key=raw_k,
-            value=json_v,
+            value=raw_v,
             version=version,
             inferred_type=explicit_types.get(raw_k, self.infer_type(raw_v)),
         )
