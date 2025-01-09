@@ -737,7 +737,7 @@ def get_logs(
         session,
     )
     if return_ids_only:
-        return list(set([log[0].log_event_id for log in all_logs]))
+        return list(dict.fromkeys([log[0].log_event_id for log in all_logs]))
 
     formatted_logs = format_logs(all_logs, context_len)
 
