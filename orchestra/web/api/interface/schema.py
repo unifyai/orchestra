@@ -3,10 +3,10 @@ from pydantic import BaseModel
 
 class Item(BaseModel):
     i: str
-    x: int
-    y: int
-    w: int
-    h: int
+    x: float
+    y: float
+    w: float
+    h: float
     moved: bool
     static: bool
     tab: str | None = None
