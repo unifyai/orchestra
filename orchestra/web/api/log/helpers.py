@@ -679,36 +679,66 @@ def build_sql_query(filter_dict, log_event_alias, session):
         elif lhs_is_sub:
             lval = _select_value(lhs, session)
             if operand == "in":
-                expr = lval.in_(rhs)
-            else:
-                expr = ~lval.in_(rhs)
-            return (
-                select(
-                    lhs.c.log_event_id.label("log_event_id"),
-                    expr.label("value"),
+                expr = exists().where(
+                    and_(
+                        log_alias.log_event_id == log_event_alias.id,
+                        log_alias.key == rhs, 
+                        log_alias.value.contains(cast(lval, JSONB)),
+                    )
                 )
-                .select_from(lhs)
-                .subquery()
-            )
+            else:
+                expr = ~exists().where(
+                    and_(
+                        log_alias.log_event_id == log_event_alias.id,
+                        log_alias.key == rhs,
+                        log_alias.value.contains(cast(lval, JSONB)),
+                    )
+                )
+            return select(
+                lhs.c.log_event_id.label("log_event_id"),
+                expr.label("value"),
+            ).select_from(lhs).subquery()
+        
         elif rhs_is_sub:
-            rval = _select_value(rhs)
+            rval = _select_value(rhs, session)
             if operand == "in":
-                expr = lhs.in_(rval)
-            else:
-                expr = ~lhs.in_(rval)
-            return (
-                select(
-                    rhs.c.log_event_id.label("log_event_id"),
-                    expr.label("value"),
+                expr = exists().where(
+                    and_(
+                        log_alias.log_event_id == log_event_alias.id,
+                        log_alias.key == lhs, 
+                        log_alias.value.contains(cast(rval, JSONB)),
+                    )
                 )
-                .select_from(rhs)
-                .subquery()
-            )
-        else:
-            if operand == "in":
-                return lhs.in_(rhs)
             else:
-                return ~lhs.in_(rhs)
+                expr = ~exists().where(
+                    and_(
+                        log_alias.log_event_id == log_event_alias.id,
+                        log_alias.key == lhs,
+                        log_alias.value.contains(cast(rval, JSONB)),
+                    )
+                )
+            return select(
+                rhs.c.log_event_id.label("log_event_id"),
+                expr.label("value"),
+            ).select_from(rhs).subquery()
+        else:
+            # Neither lhs nor rhs are subqueries
+            if operand == "in":
+                return exists().where(
+                    and_(
+                        Log.log_event_id == log_event_alias.id,
+                        Log.key == rhs,
+                        Log.value.contains(cast(lhs, JSONB))
+                    )
+                )
+            else:
+                return ~exists().where(
+                    and_(
+                        Log.log_event_id == log_event_alias.id,
+                        Log.key == rhs,
+                        Log.value.contains(cast(lhs, JSONB))
+                    )
+                )
 
     # Handle functions (len, str, type, round, exists, version)
     elif operand in ("len", "str", "type", "round", "exists", "version"):
