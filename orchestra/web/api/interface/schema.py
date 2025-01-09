@@ -7,8 +7,8 @@ class Item(BaseModel):
     y: float
     w: float
     h: float
-    moved: bool
-    static: bool
+    moved: bool = False
+    static: bool = False
     tab: str | None = None
     table: str | None = None
     filters: str | None = None
