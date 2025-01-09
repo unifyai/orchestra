@@ -1344,7 +1344,7 @@ def get_fields(
         .distinct()
     )
 
-    all_field_names = [field.key for field in query.all()]
+    all_field_names = "&".join([field.key for field in query.all()])
 
     # ToDo: remove this hacky code once this task [https://app.clickup.com/t/86c1jupp2]
     #  is done
