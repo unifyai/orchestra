@@ -838,25 +838,86 @@ def build_sql_query(filter_dict, log_event_alias, session):
         rhs_expr = build_sql_query(filter_dict.get("rhs"), log_event_alias, session)
 
         if operand == "len":
+            rval = _select_value(rhs_expr, session)
             if isinstance(rhs_expr, Subquery):
-                expr = func.length(_select_value(rhs_expr, session))
-                return (
-                    select(
-                        rhs_expr.c.log_event_id.label("log_event_id"),
-                        expr.label("value"),
+                subq = (
+                select(
+                    log_alias.log_event_id.label("log_event_id"),
+                    case(
+                        (
+                            log_alias.inferred_type == "list",
+                            func.jsonb_array_length(
+                                cast(rval, JSONB)
+                            ).cast(Float),
+                        ),
+                        (
+                            log_alias.inferred_type == "dict",
+                            select(func.count())
+                            .select_from(
+                                func.jsonb_object_keys(
+                                    cast(rval, JSONB)
+                                )
+                            )
+                            .scalar_subquery()
+                            .cast(Float),
+                        ),
+                        (
+                            log_alias.inferred_type == "str",
+                            func.length(
+                                cast(rval, String)
+                            ).cast(Float),
+                        ),
+                        else_=0,
+                    ).label("value"),
+                )
+                .select_from(log_alias)
+                .join(log_event_alias, log_alias.log_event_id == log_event_alias.id)
+                .join(rhs_expr, log_alias.log_event_id == rhs_expr.c.log_event_id)
+                .where(
+                    log_alias.key == filter_dict['rhs']['value'],
+                )
+                .subquery()
+                )
+                return subq
+            else: 
+                subq = (
+                select(
+                    log_alias.log_event_id.label("log_event_id"),
+                    case(
+                        (
+                            log_alias.inferred_type == "list",
+                            func.jsonb_array_length(
+                                cast(log_alias.value, JSONB)
+                            ).cast(Float),
+                        ),
+                        (
+                            log_alias.inferred_type == "dict",
+                            select(func.count())
+                            .select_from(
+                                func.jsonb_object_keys(
+                                    cast(log_alias.value, JSONB)
+                                )
+                            )
+                            .scalar_subquery()
+                            .cast(Float),
+                        ),
+                        (
+                            log_alias.inferred_type == "str",
+                            func.length(
+                                cast(log_alias.value, String)
+                            ).cast(Float),
+                        ),
+                        else_=0,
+                    ).label("value"),
+                )
+                .select_from(log_alias)
+                .join(log_event_alias, log_alias.log_event_id == log_event_alias.id)
+                .where(
+                        log_alias.key == filter_dict['rhs']['value'],
                     )
-                    .select_from(rhs_expr)
                     .subquery()
                 )
-            else:
-                # Literal value, handle appropriately
-                if isinstance(rhs_expr, str):
-                    expr = len(rhs_expr)
-                else:
-                    raise ValueError(
-                        "Cannot apply len() to non-string literal without subquery logic.",
-                    )
-            return expr
+                return subq
 
         elif operand == "str":
             if isinstance(rhs_expr, Subquery):
