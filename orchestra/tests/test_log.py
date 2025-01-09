@@ -2234,6 +2234,16 @@ async def test_get_set_field_typing(client: AsyncClient):
     assert field_types_response.status_code == 200
 
     field_types = field_types_response.json()
+
+    # ordering
+    assert list(field_types.keys()) == [
+        "a/b/param1",
+        "a/b/c/input",
+        "a/b/c/boolean_input",
+        "a/b/c/numeric_input",
+    ]
+
+    # values
     assert field_types["a/b/c/input"]["type"] == "str"
     assert field_types["a/b/c/input"]["param"] is False
     assert field_types["a/b/c/boolean_input"]["type"] == "bool"
@@ -2266,6 +2276,16 @@ async def test_get_set_field_typing(client: AsyncClient):
     assert field_types_response.status_code == 200
 
     field_types = field_types_response.json()
+
+    # ordering
+    assert list(field_types.keys()) == [
+        "a/b/param1",
+        "a/b/c/input",
+        "a/b/c/boolean_input",
+        "a/b/c/numeric_input",
+    ]
+
+    # values
     assert field_types["a/b/c/input"]["type"] == "str"
     assert field_types["a/b/c/input"]["param"] is False
     assert field_types["a/b/c/boolean_input"]["type"] == "bool"
