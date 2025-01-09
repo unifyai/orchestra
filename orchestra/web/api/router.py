@@ -68,18 +68,18 @@ groupings = {
     "Universal API": [
         "Supported Endpoints",
         "LLM Queries",
-        "Logging",
+        "Usage",
         "Custom Endpoints",
         "Custom API keys",
         "Endpoint Metrics",
     ],
-    "Benchmarking": [
+    "Interfaces": [
         "Datasets",
         "Dataset Artifacts",
         "Projects",
         "Project Artifacts",
-        "Evals",
-        "Interface",
+        "Logs",
+        "Configs",
     ],
     "Account": [
         "Credits",
@@ -101,7 +101,7 @@ api_router.include_router(
 )
 api_router.include_router(
     logging.router,
-    tags=["Logging"],
+    tags=["Usage"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
@@ -144,12 +144,12 @@ api_router.include_router(
 )
 api_router.include_router(
     log.router,
-    tags=["Evals"],
+    tags=["Logs"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
     interface.router,
-    tags=["Interface"],
+    tags=["Configs"],
     dependencies=API_KEY_AUTH,
 )
 
