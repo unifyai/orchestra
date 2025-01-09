@@ -4,7 +4,7 @@ Includes endpoints related to entries.
 
 import json
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy import INTEGER, TIMESTAMP, Float, case, cast, func, select
@@ -419,10 +419,10 @@ def _get_logs_query(
     context: Optional[str],
     filter_expr: Optional[str],
     sorting: Optional[str],
-    from_ids: Optional[List[int]],
-    exclude_ids: Optional[List[int]],
-    from_fields: Optional[List[str]],
-    exclude_fields: Optional[List[str]],
+    from_ids: Optional[str],
+    exclude_ids: Optional[str],
+    from_fields: Optional[str],
+    exclude_fields: Optional[str],
     limit: Optional[int],
     offset: int,
     project_dao: ProjectDAO,
@@ -448,9 +448,13 @@ def _get_logs_query(
         f"but found values {from_ids} and {exclude_ids}."
     )
     if from_ids:
-        log_event_query = log_event_query.where(LogEvent.id.in_(from_ids))
+        log_event_query = log_event_query.where(
+            LogEvent.id.in_([int(i) for i in from_ids.split("&")]),
+        )
     elif exclude_ids:
-        log_event_query = log_event_query.where(LogEvent.id.notin_(exclude_ids))
+        log_event_query = log_event_query.where(
+            LogEvent.id.notin_([int(i) for i in exclude_ids.split("&")]),
+        )
 
     # filter the log event ids based on the values of their fields (filter argument)
     if filter_expr:
@@ -506,9 +510,9 @@ def _get_logs_query(
         f"but found values {from_fields} and {exclude_fields}."
     )
     if from_fields:
-        log_query = log_query.where(Log.key.in_(from_fields))
+        log_query = log_query.where(Log.key.in_(from_fields.split("&")))
     elif exclude_fields:
-        log_query = log_query.where(Log.key.notin_(exclude_fields))
+        log_query = log_query.where(Log.key.notin_(exclude_fields.split("&")))
 
     # create a sub-query of these relevant logs
     relevant_logs = log_query.subquery()
@@ -670,37 +674,37 @@ def get_logs(
         "remaining in order when the first key values are equal.",
         example={"score": "ascending", "timestamp": "descending"},
     ),
-    from_ids: Optional[List[int]] = Query(
+    from_ids: Optional[str] = Query(
         None,
         description="The log ids which are permitted to be included in the search. "
         "Each log id listed does not need to be returned, but no logs "
         "which are not included in this list can be returned. This "
         "argument *cannot* be set if `exclude_ids` is set.",
-        example=[0, 1, 2],
+        example="0&1&2",
     ),
-    exclude_ids: Optional[List[int]] = Query(
+    exclude_ids: Optional[str] = Query(
         None,
         description="The log ids which cannot be returned from the search. "
         "None of the listed ids will be returned, even if the logs are "
         "valid as per the filtering expression etc. This argument *cannot* "
         "be set if `from_ids` is set.",
-        example=[0, 1, 2],
+        example="0&1&2",
     ),
-    from_fields: Optional[List[str]] = Query(
+    from_fields: Optional[str] = Query(
         None,
         description="The fields which are permitted to be included in the search. "
         "Each field listed does not need to be returned, but no fields "
         "which are not included in this list can be returned. This "
         "argument *cannot* be set if `exclude_fields` is set.",
-        example=["score", "response"],
+        example="score&response",
     ),
-    exclude_fields: Optional[List[str]] = Query(
+    exclude_fields: Optional[str] = Query(
         None,
         description="The fields which cannot be returned from the search. "
         "None of the listed fields will be returned, even if the fields "
         "are valid as per the filtering expression etc. This argument "
         "*cannot* be set if `from_fields` is set.",
-        example=["score", "response"],
+        example="score&response",
     ),
     limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -838,37 +842,37 @@ def get_logs_latest_timestamp(
         "remaining in order when the first key values are equal.",
         example={"score": "ascending", "timestamp": "descending"},
     ),
-    from_ids: Optional[List[int]] = Query(
+    from_ids: Optional[str] = Query(
         None,
         description="The log ids which are permitted to be included in the search. "
         "Each log id listed does not need to be returned, but no logs "
         "which are not included in this list can be returned. This "
         "argument *cannot* be set if `exclude_ids` is set.",
-        example=[0, 1, 2],
+        example="0&1&2",
     ),
-    exclude_ids: Optional[List[int]] = Query(
+    exclude_ids: Optional[str] = Query(
         None,
         description="The log ids which cannot be returned from the search. "
         "None of the listed ids will be returned, even if the logs are "
         "valid as per the filtering expression etc. This argument *cannot* "
         "be set if `from_ids` is set.",
-        example=[0, 1, 2],
+        example="0&1&2",
     ),
-    from_fields: Optional[List[str]] = Query(
+    from_fields: Optional[str] = Query(
         None,
         description="The fields which are permitted to be included in the search. "
         "Each field listed does not need to be returned, but no fields "
         "which are not included in this list can be returned. This "
         "argument *cannot* be set if `exclude_fields` is set.",
-        example=["score", "response"],
+        example="score&response",
     ),
-    exclude_fields: Optional[List[str]] = Query(
+    exclude_fields: Optional[str] = Query(
         None,
         description="The fields which cannot be returned from the search. "
         "None of the listed fields will be returned, even if the fields "
         "are valid as per the filtering expression etc. This argument "
         "*cannot* be set if `from_fields` is set.",
-        example=["score", "response"],
+        example="score&response",
     ),
     limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -941,21 +945,21 @@ def get_logs_metric(
         description="Boolean string to filter entries. TODO: Detailed page.",
         example="len(output) > 200 and temperature == 0.5",
     ),
-    from_ids: Optional[List[int]] = Query(
+    from_ids: Optional[str] = Query(
         None,
         description="The log ids which are permitted to be included in the search. "
         "Each log id listed does not need to be returned, but no logs "
         "which are not included in this list can be returned. This "
         "argument *cannot* be set if `exclude_ids` is set.",
-        example=[0, 1, 2],
+        example="0&1&2",
     ),
-    exclude_ids: Optional[List[int]] = Query(
+    exclude_ids: Optional[str] = Query(
         None,
         description="The log ids which cannot be returned from the search. "
         "None of the listed ids will be returned, even if the logs are "
         "valid as per the filtering expression etc. This argument *cannot* "
         "be set if `from_ids` is set.",
-        example=[0, 1, 2],
+        example="0&1&2",
     ),
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
@@ -979,9 +983,11 @@ def get_logs_metric(
     )
 
     if from_ids:
-        query = query.where(LogEvent.id.in_(from_ids))
+        query = query.where(LogEvent.id.in_([int(i) for i in from_ids.split("&")]))
     elif exclude_ids:
-        query = query.where(LogEvent.id.notin_(exclude_ids))
+        query = query.where(
+            LogEvent.id.notin_([int(i) for i in exclude_ids.split("&")]),
+        )
 
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
