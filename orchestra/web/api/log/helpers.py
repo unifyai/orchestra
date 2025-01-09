@@ -491,7 +491,15 @@ def build_sql_query(filter_dict, log_event_alias, session):
                     return or_(lhs, rhs)
 
         elif operand == "not":
-            return not_(lhs)
+            if rhs_is_sub:
+                rval = _select_value(rhs, session)
+                not_expr = not_(rval)
+                return select(
+                    rhs.c.log_event_id.label("log_event_id"),
+                    not_expr.label("value"),
+                ).select_from(rhs).subquery()
+            else:
+                return not_(rhs)
 
     # Handle arithmetic operators (+, -, *, /, %)
     elif operand in ("+", "-", "*", "/", "%"):
