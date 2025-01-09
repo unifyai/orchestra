@@ -667,9 +667,15 @@ def build_sql_query(filter_dict, log_event_alias, session):
             elif operand == ">=":
                 expr = lval >= rhs
             elif operand == "is":
-                expr = lval.is_(rhs)
+                if rhs is None:
+                    expr = lval.is_(None)
+                else:
+                    expr = lval == rhs
             elif operand == "is not":
-                expr = lval.isnot(rhs)
+                if rhs is None:
+                    expr = lval.isnot(None)
+                else:
+                    expr = lval != rhs
             return (
                 select(
                     lhs.c.log_event_id.label("log_event_id"),
@@ -693,9 +699,15 @@ def build_sql_query(filter_dict, log_event_alias, session):
             elif operand == ">=":
                 expr = lhs >= rval
             elif operand == "is":
-                expr = lhs.is_(rval)
+                if rhs is None:
+                    expr = lval.is_(None)
+                else:
+                    expr = lval == rhs
             elif operand == "is not":
-                expr = lhs.isnot(rval)
+                if rhs is None:
+                    expr = lval.isnot(None)
+                else:
+                    expr = lval != rhs
             return (
                 select(
                     rhs.c.log_event_id.label("log_event_id"),
