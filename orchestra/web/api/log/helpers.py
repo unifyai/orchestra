@@ -6,10 +6,10 @@ from typing import Any, List, Tuple, Union
 
 from sqlalchemy import (
     Boolean,
+    DateTime,
     Float,
     Integer,
     String,
-    DateTime,
     and_,
     case,
     cast,
@@ -36,6 +36,7 @@ STR_TO_SQL_TYPES = {
     "dict": JSONB,
     "list": JSONB,
 }
+
 
 def parse_nested(s, pos):
     start_pos = pos
@@ -1141,7 +1142,7 @@ def format_logs(all_logs, context_len=0):
             key not in formatted_entries[log_event_id]
         ), f"found duplicates for key {key} with log_id {log_event_id}"
         formatted_entries[log_event_id]["ts"] = ts.isoformat()
-        formatted_entries[log_event_id]["entries"][key] = (log.value,)
+        formatted_entries[log_event_id]["entries"][key] = log.value
 
         formatted_entries[log_event_id]["versions"][key] = log.version
     return formatted_entries
