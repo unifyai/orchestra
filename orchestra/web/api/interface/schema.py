@@ -22,6 +22,7 @@ class Item(BaseModel):
     columns_pin_left: str | None = None
     columns_pin_right: str | None = None
     selected: str | None = None
+    base_index: str | None = None
     plot_type: str | None = None
     plot_scale: str | None = None
     is_aggregated: str | None = None
