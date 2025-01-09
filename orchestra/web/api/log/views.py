@@ -566,7 +566,7 @@ def _get_logs_query(
                     detail="sort_mode must be 'ascending' or 'descending', "
                     f"but found {sort_mode}.",
                 )
-    sort_criteria.append(LogEvent.created_at)
+    sort_criteria.append(LogEvent.id)
 
     log_event_query = (
         sorted_query.join(
