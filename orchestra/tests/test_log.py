@@ -782,15 +782,15 @@ async def test_get_logs_excluding_fields(client: AsyncClient):
     logs = response["logs"]
     assert len(logs) == 6
     assert len(logs) == response["count"]
-    assert logs[0]["entries"] == {"_/description": "boiling water", "_/safe": False}
-    assert logs[1]["entries"] == {"_/description": "freezing water", "_/safe": True}
-    assert logs[2]["entries"] == {
+    assert logs[0]["entries"] == {"_/description": "air", "_/metadata": [3, 8, 5]}
+    assert logs[1]["entries"] == {"_/description": "lava", "_/metadata": [1, 5, 6]}
+    assert logs[2]["entries"] == {"_/description": "freezing nitrogen", "_/safe": False}
+    assert logs[3]["entries"] == {
         "_/description": "surface of the sun",
         "_/safe": False,
     }
-    assert logs[3]["entries"] == {"_/description": "freezing nitrogen", "_/safe": False}
-    assert logs[4]["entries"] == {"_/description": "lava", "_/metadata": [1, 5, 6]}
-    assert logs[5]["entries"] == {"_/description": "air", "_/metadata": [3, 8, 5]}
+    assert logs[4]["entries"] == {"_/description": "freezing water", "_/safe": True}
+    assert logs[5]["entries"] == {"_/description": "boiling water", "_/safe": False}
 
 
 @pytest.mark.anyio
@@ -983,7 +983,9 @@ async def test_get_log_ids(client: AsyncClient):
     response = response.json()
     assert isinstance(response, list)
     assert len(response) == 7
-    assert response == list(range(1, 8))
+    correct = list(range(1, 8))
+    correct.reverse()
+    assert response == correct
 
 
 @pytest.mark.anyio
