@@ -440,17 +440,56 @@ def build_sql_query(filter_dict, log_event_alias, session):
 
     # Handle logical operators (and, or, not)
     if operand in ("and", "or", "not"):
-        lhs = build_sql_query(filter_dict.get("lhs"), log_event_alias, session)
-        rhs = (
-            build_sql_query(filter_dict.get("rhs"), log_event_alias, session)
-            if operand != "not"
-            else None
-        )
+        lhs = build_sql_query(filter_dict.get("lhs"), log_event_alias, session) if operand != "not" else None
+        rhs = build_sql_query(filter_dict.get("rhs"), log_event_alias, session)
 
-        if operand == "and":
-            return and_(lhs, rhs)
-        elif operand == "or":
-            return or_(lhs, rhs)
+        # Check if lhs and rhs are subqueries
+        lhs_is_sub = isinstance(lhs, Subquery)
+        rhs_is_sub = isinstance(rhs, Subquery) 
+
+        if operand in ("and", "or"):
+            if lhs_is_sub and rhs_is_sub:
+                lval = _select_value(lhs, session)
+                rval = _select_value(rhs, session)
+
+                if operand == "and":
+                    combined_expr = and_(lval, rval)
+                else:
+                    combined_expr = or_(lval, rval)
+
+                return _join_subqueries(lhs, rhs, combined_expr)
+
+            elif lhs_is_sub:
+                lval = _select_value(lhs, session)
+                if operand == "and":
+                    combined_expr = and_(lval, rhs)
+                else:
+                    combined_expr = or_(lval, rhs)
+                return select(
+                    lhs.c.log_event_id.label("log_event_id"),
+                    combined_expr.label("value"),
+                ).select_from(lhs).subquery()
+                
+
+            elif rhs_is_sub:
+                # Only rhs is a subquery
+                rval = _select_value(rhs, session)
+                if operand == "and":
+                    combined_expr = and_(lhs, rval)
+                else:
+                    combined_expr = or_(lhs, rval)
+                return select(
+                    rhs.c.log_event_id.label("log_event_id"),
+                    combined_expr.label("value"),
+                ).select_from(rhs).subquery()
+
+            else:
+                # Neither lhs nor rhs are subqueries
+                if operand == "and":
+                    return and_(lhs, rhs)
+                else:
+                    return or_(lhs, rhs)
+
         elif operand == "not":
             return not_(lhs)
 
