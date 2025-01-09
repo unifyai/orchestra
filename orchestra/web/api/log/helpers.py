@@ -786,21 +786,24 @@ def build_sql_query(filter_dict, log_event_alias, session):
             )
 
         elif rhs_is_sub:
-            rval = _select_value(rhs, session)
             if operand == "in":
                 expr = exists().where(
                     and_(
-                        log_alias.log_event_id == log_event_alias.id,
-                        log_alias.key == lhs,
-                        log_alias.value.contains(cast(rval, JSONB)),
+                        log_alias.log_event_id == rhs.c.log_event_id,
+                        log_alias.key == filter_dict['rhs']['value'],
+                        func.replace(cast(log_alias.value, String), '"', '').like(
+                            '%' + func.replace(cast(lhs, String), '"', '') + '%'
+                        )
                     ),
                 )
             else:
                 expr = ~exists().where(
                     and_(
-                        log_alias.log_event_id == log_event_alias.id,
-                        log_alias.key == lhs,
-                        log_alias.value.contains(cast(rval, JSONB)),
+                        log_alias.log_event_id == rhs.c.log_event_id,
+                        log_alias.key == filter_dict['rhs']['value'],
+                        func.replace(cast(log_alias.value, String), '"', '').like(
+                            '%' + func.replace(cast(lhs, String), '"', '') + '%'
+                        )
                     ),
                 )
             return (
