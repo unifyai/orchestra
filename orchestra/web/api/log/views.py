@@ -1195,15 +1195,35 @@ def get_fields(
     )
 
     all_field_names = [field.key for field in query.all()]
-    result = {}
 
-    for field_name in all_field_names:
-        if field_name in field_types:
-            result[field_name] = field_types[field_name]
-        else:
-            result[field_name] = None
+    # ToDo: remove this hacky code once this task [https://app.clickup.com/t/86c1jupp2]
+    #  is done
+    all_logs, _, _ = _get_logs_query(
+        request_fastapi,
+        project,
+        None,
+        None,
+        None,
+        None,
+        None,
+        all_field_names,
+        None,
+        1,
+        0,
+        project_dao,
+        field_type_dao,
+        session,
+    )
+    params = dict((lg[0].key, lg[0].version is not None) for lg in all_logs)
+    # end ToDo
 
-    return result
+    return {
+        field_name: {
+            "type": field_types.get(field_name),
+            "param": params.get(field_name),
+        }
+        for field_name in all_field_names
+    }
 
 
 @router.post(
