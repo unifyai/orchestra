@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any, List, Tuple, Union
 
 from sqlalchemy import (
+    BindParameter,
     Boolean,
     DateTime,
     Float,
@@ -363,7 +364,7 @@ def _select_value(subq, session):
             "timestamp": subq.c.timestamp_value,
             "list": subq.c.jsonb_value,
             "dict": subq.c.jsonb_value,
-            }
+        }
         return d[dt]
     except:
         return None
@@ -738,87 +739,41 @@ def _handle_membership_operator(filter_dict, log_event_alias, session):
         SQLAlchemy condition or expression based on the membership operator.
     """
     operand = filter_dict.get("operand")
+    is_in = operand == "in"
+
     lhs = build_sql_query(filter_dict.get("lhs"), log_event_alias, session)
     rhs = build_sql_query(filter_dict.get("rhs"), log_event_alias, session)
 
     lhs_is_sub = isinstance(lhs, Subquery)
     rhs_is_sub = isinstance(rhs, Subquery)
 
+    # Both sides are subqueries
     if lhs_is_sub and rhs_is_sub:
         lval = _select_value(lhs, session)
         rval = _select_value(rhs, session)
-        if operand == "in":
-            expr = exists().where(
-                and_(
-                    lhs.c.log_event_id == rhs.c.log_event_id,
-                    func.replace(cast(rval, String), '"', "").like(
-                        "%" + func.replace(cast(lval, String), '"', "") + "%",
-                    ),
-                ),
-            )
-        else:
-            expr = exists().where(
-                and_(
-                    lhs.c.log_event_id == rhs.c.log_event_id,
-                    func.replace(cast(rval, String), '"', "").like(
-                        "%" + func.replace(cast(lval, String), '"', "") + "%",
-                    ),
-                ),
-            )
+        condition = _substring_expr(lval, rval)
+        if not is_in:
+            condition = ~condition
+
+        expr = exists().where(
+            and_(
+                lhs.c.log_event_id == rhs.c.log_event_id,
+                condition,
+            ),
+        )
         return _join_subqueries(lhs, rhs, expr)
-    elif lhs_is_sub:
-        rval = _select_value(rhs, session)
+
+    # Only LHS is a subquery
+    elif lhs_is_sub and not rhs_is_sub:
         lval = _select_value(lhs, session)
-        if "lhs" in filter_dict and isinstance(filter_dict["lhs"], dict):
-            if filter_dict["lhs"].get("type") == "identifier":
-                key = filter_dict["lhs"]["value"]
-                comparison_key = key
-            elif filter_dict["lhs"].get("operand") is not None:
-                comparison_key = None
-            else:
-                comparison_key = None
+        rhs_list = _parse_rhs_list_or_dict_if_needed(filter_dict.get("rhs"), rhs)
+
+        if rhs_list and isinstance(rhs_list, list):
+            expr = lval.in_(rhs_list) if is_in else ~lval.in_(rhs_list)
         else:
-            comparison_key = filter_dict.get("lhs")
-        if operand == "in":
-            if comparison_key is not None:
-                expr = exists().where(
-                    and_(
-                        Log.log_event_id == lhs.c.log_event_id,
-                        Log.key == comparison_key,
-                        func.replace(cast(Log.value, String), '"', "").like(
-                            "%" + func.replace(cast(rval, String), '"', "") + "%",
-                        ),
-                    ),
-                )
-            else:
-                expr = exists().where(
-                    and_(
-                        Log.log_event_id == lhs.c.log_event_id,
-                        func.replace(cast(rval, String), '"', "").like(
-                            "%" + func.replace(cast(rval, String), '"', "") + "%",
-                        ),
-                    ),
-                )
-        else:
-            if comparison_key is not None:
-                expr = ~exists().where(
-                    and_(
-                        Log.log_event_id == lhs.c.log_event_id,
-                        Log.key == comparison_key,
-                        func.replace(cast(Log.value, String), '"', "").like(
-                            "%" + func.replace(cast(lhs, String), '"', "") + "%",
-                        ),
-                    ),
-                )
-            else:
-                expr = ~exists().where(
-                    and_(
-                        Log.log_event_id == lhs.c.log_event_id,
-                        func.replace(cast(rval, String), '"', "").like(
-                            "%" + func.replace(cast(lhs, String), '"', "") + "%",
-                        ),
-                    ),
-                )
+            substring_cond = _substring_expr(lval, rhs)
+            expr = substring_cond if is_in else ~substring_cond
+
         return (
             select(
                 lhs.c.log_event_id.label("log_event_id"),
@@ -827,71 +782,79 @@ def _handle_membership_operator(filter_dict, log_event_alias, session):
             .select_from(lhs)
             .subquery()
         )
-    elif rhs_is_sub:
+
+    # Only RHS is a subquery
+    elif rhs_is_sub and not lhs_is_sub:
         rval = _select_value(rhs, session)
-        if "rhs" in filter_dict and isinstance(filter_dict["rhs"], dict):
-            if filter_dict["rhs"].get("type") == "identifier":
-                key = filter_dict["rhs"]["value"]
-                comparison_key = key
-            elif filter_dict["rhs"].get("operand") is not None:
-                comparison_key = None
-            else:
-                comparison_key = None
+        lhs_list = _parse_rhs_list_or_dict_if_needed(filter_dict.get("lhs"), lhs)
+
+        if lhs_list is not None and isinstance(lhs_list, list):
+            cond = rval.in_(lhs_list) if is_in else ~rval.in_(lhs_list)
+
         else:
-            comparison_key = filter_dict.get("rhs")
-        if operand == "in":
-            if comparison_key is not None:
-                expr = exists().where(
-                    and_(
-                        Log.log_event_id == rhs.c.log_event_id,
-                        Log.key == comparison_key,
-                        func.replace(cast(Log.value, String), '"', "").like(
-                            "%" + func.replace(cast(lhs, String), '"', "") + "%",
-                        ),
-                    ),
-                )
-            else:
-                expr = exists().where(
-                    and_(
-                        Log.log_event_id == rhs.c.log_event_id,
-                        func.replace(cast(rval, String), '"', "").like(
-                            "%" + func.replace(cast(lhs, String), '"', "") + "%",
-                        ),
-                    ),
-                )
-        else:
-            if comparison_key is not None:
-                expr = ~exists().where(
-                    and_(
-                        Log.log_event_id == rhs.c.log_event_id,
-                        Log.key == comparison_key,
-                        func.replace(cast(Log.value, String), '"', "").like(
-                            "%" + func.replace(cast(lhs, String), '"', "") + "%",
-                        ),
-                    ),
-                )
-            else:
-                expr = ~exists().where(
-                    and_(
-                        Log.log_event_id == rhs.c.log_event_id,
-                        func.replace(cast(rval, String), '"', "").like(
-                            "%" + func.replace(cast(lhs, String), '"', "") + "%",
-                        ),
-                    ),
-                )
+            # Substring check. We'll check: "lhs in to_str(rval)" => substring.
+            substring_cond = _substring_expr(lhs, rval)
+            cond = substring_cond if is_in else ~substring_cond
+
         return (
             select(
                 rhs.c.log_event_id.label("log_event_id"),
-                expr.label("value"),
+                cond.label("value"),
             )
             .select_from(rhs)
             .subquery()
         )
+
+    # Neither side is a subquery
     else:
-        if operand == "in":
-            return lhs.in_(rhs)
-        else:
-            return ~lhs.in_(rhs)
+        rhs_list = _parse_rhs_list_or_dict_if_needed(filter_dict.get("rhs"), rhs)
+
+        # If we successfully parse a list, do normal membership
+        if rhs_list is not None and isinstance(rhs_list, list):
+            return lhs.in_(rhs_list) if is_in else ~lhs.in_(rhs_list)
+
+        # Otherwise do substring check
+        substring_cond = _substring_expr(lhs, rhs)
+        return substring_cond if is_in else ~substring_cond
+
+
+def _substring_expr(lhs, rhs):
+    """
+    Build a SQLAlchemy expression that checks if `lhs` is a substring of `rhs`,
+    ignoring double-quotes in their JSON string forms.
+    """
+    lhs_str = func.replace(cast(lhs, String), '"', "")
+    rhs_str = func.replace(cast(rhs, String), '"', "")
+    return rhs_str.like("%" + lhs_str + "%")
+
+
+def _parse_rhs_list_or_dict_if_needed(rhs_dict, rhs_val):
+    if not rhs_dict:
+        return None
+
+    possible_str = rhs_dict.get("value")
+    if isinstance(possible_str, str) and possible_str.strip():
+        try:
+            parsed = json.loads(possible_str)
+            if isinstance(parsed, (list, dict)):
+                return parsed
+        except Exception:
+            pass
+
+    if isinstance(rhs_val, BindParameter):
+        val = rhs_val.value
+        if isinstance(val, str):
+            try:
+                parsed = json.loads(val)
+                if isinstance(parsed, (list, dict)):
+                    return parsed
+            except Exception:
+                pass
+
+    if isinstance(rhs_val, (list, dict)):
+        return rhs_val
+
+    return None
 
 
 # Helper function for functions (len, to_str, type, round, exists, version)
