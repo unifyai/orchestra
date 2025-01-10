@@ -94,7 +94,7 @@ def _tokenize(s):
         ),
         (
             "FUNC",
-            r"(?<!\w)(?:round|len|type|exists|version|str(?=\())",
+            r"(?<!\w)(?:round|len|type|exists|version|str(?=\()|to_str)",
         ),  # Functions
         (
             "TYPE_LITERAL",
@@ -843,7 +843,7 @@ def build_sql_query(filter_dict, log_event_alias, session):
                 )
 
     # Handle functions (len, str, type, round, exists, version)
-    elif operand in ("len", "str", "type", "round", "exists", "version"):
+    elif operand in ("len", "to_str", "type", "round", "exists", "version"):
         rhs_expr = build_sql_query(filter_dict.get("rhs"), log_event_alias, session)
 
         if operand == "len":
@@ -928,7 +928,7 @@ def build_sql_query(filter_dict, log_event_alias, session):
                 )
                 return subq
 
-        elif operand == "str":
+        elif operand == "to_str":
             if isinstance(rhs_expr, Subquery):
                 expr = func.cast(_select_value(rhs_expr, session), String)
                 return (
