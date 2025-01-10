@@ -474,10 +474,35 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
 @pytest.mark.parametrize(
     "expression, values",
     [
-        (
-            "(a + b) > 10",
-            {"a": 5, "b": 8},
-        ),
+        # Arithmetic
+        ("(a + b) > 10", {"a": 5, "b": 8}),
+        ("(a - b) == 2", {"a": 5, "b": 3}),
+        ("(a * b) == 15", {"a": 3, "b": 5}),
+        ("(a / b) == 2", {"a": 10, "b": 5}),
+        ("(a % b) == 1", {"a": 10, "b": 3}),
+        # Logical
+        ("(a > 5) and (b < 10)", {"a": 6, "b": 9}),
+        ("(a < 5) or (b > 10)", {"a": 4, "b": 11}),
+        ("not (a == 5)", {"a": 4}),
+        # Comparison
+        ("a == 5", {"a": 5}),
+        ("a != 5", {"a": 4}),
+        ("a < 5", {"a": 4}),
+        ("a > 5", {"a": 6}),
+        ("a <= 5", {"a": 5}),
+        ("a >= 5", {"a": 5}),
+        # Membership
+        ("a in [1, 2, 3]", {"a": 2}),
+        ("a not in [1, 2, 3]", {"a": 4}),
+        # Nested Logical and Arithmetic
+        ("((a + b) > 10) and ((c * d) < 20)", {"a": 5, "b": 8, "c": 2, "d": 3}),
+        ("((a - b) == 2) or ((e / f) == 3)", {"a": 5, "b": 3, "e": 9, "f": 3}),
+        # More Complex Nested Expressions
+        ("(len(a) == 3) and ((b + c) > 10)", {"a": [1, 2, 3], "b": 5, "c": 6}),
+        ("(to_str(a) == 'abc') or (len(b) == 2)", {"a": "abc", "b": [1, 2]}),
+        # Using exists with nested conditions
+        ("exists(a) and (b > 5)", {"a": 5, "b": 6}),
+        ("not exists(c) or (d < 10)", {"d": 9}),
     ],
 )
 async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, values):
@@ -499,12 +524,18 @@ async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, v
     result = len(response.json()["logs"]) == 1
     for key, value in values.items():
         exec(key + "=" + (str(value) if isinstance(value, bool) else json.dumps(value)))
-    if "not exists" in expression:
-        expected = expression.split("exists(")[-1].split(")")[0] not in values
-    elif "exists" in expression:
-        expected = expression.split("exists(")[-1].split(")")[0] in values
+
+    # Replace to_str with str in the expression for evaluation
+    eval_expression = expression.replace("to_str", "str")
+
+    # Handle exists checks
+    if "not exists" in eval_expression:
+        expected = eval_expression.split("exists(")[-1].split(")")[0] not in values
+    elif "exists" in eval_expression:
+        expected = eval_expression.split("exists(")[-1].split(")")[0] in values
     else:
-        expected = eval(expression)
+        expected = eval(eval_expression)
+
     assert result == expected
 
 
@@ -2462,7 +2493,3 @@ async def test_get_logs_with_type_check(client: AsyncClient):
     )
     assert response.status_code == 200
     assert len(response.json()["logs"]) == 7
-
-
-if __name__ == "__main__":
-    pass
