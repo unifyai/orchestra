@@ -763,28 +763,81 @@ def build_sql_query(filter_dict, log_event_alias, session):
             lval = _select_value(lhs, session)
             rval = _select_value(rhs, session)
             if operand == "in":
-                expr = lval.in_(select(rval))
-            else:
-                expr = ~lval.in_(select(rval))
-            return _join_subqueries(lhs, rhs, expr)
-        elif lhs_is_sub:
-            lval = _select_value(lhs, session)
-            if operand == "in":
                 expr = exists().where(
                     and_(
-                        log_alias.log_event_id == log_event_alias.id,
-                        log_alias.key == rhs,
-                        log_alias.value.contains(cast(lval, JSONB)),
+                        lhs.c.log_event_id == rhs.c.log_event_id,
+                        func.replace(cast(rval, String), '"', "").like(
+                            "%" + func.replace(cast(lval, String), '"', "") + "%",
+                        ),
                     ),
                 )
             else:
-                expr = ~exists().where(
+                expr = exists().where(
                     and_(
-                        log_alias.log_event_id == log_event_alias.id,
-                        log_alias.key == rhs,
-                        log_alias.value.contains(cast(lval, JSONB)),
+                        lhs.c.log_event_id == rhs.c.log_event_id,
+                        func.replace(cast(rval, String), '"', "").like(
+                            "%" + func.replace(cast(lval, String), '"', "") + "%",
+                        ),
                     ),
                 )
+            return _join_subqueries(lhs, rhs, expr)
+        elif lhs_is_sub:
+            rval = _select_value(rhs, session)
+            lval = _select_value(lhs, session)
+            if "lhs" in filter_dict and isinstance(filter_dict["lhs"], dict):
+                if filter_dict["lhs"].get("type") == "identifier":
+                    key = filter_dict["lhs"]["value"]
+                    comparison_key = key
+                elif filter_dict["lhs"].get("operand") is not None:
+                    comparison_key = None
+                else:
+                    comparison_key = None
+            else:
+                comparison_key = filter_dict.get("lhs")
+            if operand == "in":
+                if comparison_key is not None:
+                    # Direct column reference case
+                    expr = exists().where(
+                        and_(
+                            log_alias.log_event_id == lhs.c.log_event_id,
+                            log_alias.key == comparison_key,
+                            func.replace(cast(log_alias.value, String), '"', "").like(
+                                "%" + func.replace(cast(rhs, String), '"', "") + "%",
+                            ),
+                        ),
+                    )
+                else:
+                    # Subquery case - use the value directly
+                    expr = exists().where(
+                        and_(
+                            log_alias.log_event_id == lhs.c.log_event_id,
+                            func.replace(cast(rval, String), '"', "").like(
+                                "%" + func.replace(cast(rhs, String), '"', "") + "%",
+                            ),
+                        ),
+                    )
+            else:
+                if comparison_key is not None:
+                    # Direct column reference case
+                    expr = ~exists().where(
+                        and_(
+                            log_alias.log_event_id == lhs.c.log_event_id,
+                            log_alias.key == comparison_key,
+                            func.replace(cast(log_alias.value, String), '"', "").like(
+                                "%" + func.replace(cast(lhs, String), '"', "") + "%",
+                            ),
+                        ),
+                    )
+                else:
+                    # Subquery case - use the value directly
+                    expr = ~exists().where(
+                        and_(
+                            log_alias.log_event_id == lhs.c.log_event_id,
+                            func.replace(cast(rval, String), '"', "").like(
+                                "%" + func.replace(cast(lhs, String), '"', "") + "%",
+                            ),
+                        ),
+                    )
             return (
                 select(
                     lhs.c.log_event_id.label("log_event_id"),
@@ -795,26 +848,62 @@ def build_sql_query(filter_dict, log_event_alias, session):
             )
 
         elif rhs_is_sub:
-            if operand == "in":
-                expr = exists().where(
-                    and_(
-                        log_alias.log_event_id == rhs.c.log_event_id,
-                        log_alias.key == filter_dict["rhs"]["value"],
-                        func.replace(cast(log_alias.value, String), '"', "").like(
-                            "%" + func.replace(cast(lhs, String), '"', "") + "%",
-                        ),
-                    ),
-                )
+            rval = _select_value(rhs, session)
+            if "rhs" in filter_dict and isinstance(filter_dict["rhs"], dict):
+                if filter_dict["rhs"].get("type") == "identifier":
+                    # Direct column reference
+                    key = filter_dict["rhs"]["value"]
+                    comparison_key = key
+                elif filter_dict["rhs"].get("operand") is not None:
+                    comparison_key = None
+                else:
+                    comparison_key = None
             else:
-                expr = ~exists().where(
-                    and_(
-                        log_alias.log_event_id == rhs.c.log_event_id,
-                        log_alias.key == filter_dict["rhs"]["value"],
-                        func.replace(cast(log_alias.value, String), '"', "").like(
-                            "%" + func.replace(cast(lhs, String), '"', "") + "%",
+                comparison_key = filter_dict.get("rhs")
+            if operand == "in":
+                if comparison_key is not None:
+                    # Direct column reference case
+                    expr = exists().where(
+                        and_(
+                            log_alias.log_event_id == rhs.c.log_event_id,
+                            log_alias.key == comparison_key,
+                            func.replace(cast(log_alias.value, String), '"', "").like(
+                                "%" + func.replace(cast(lhs, String), '"', "") + "%",
+                            ),
                         ),
-                    ),
-                )
+                    )
+                else:
+                    # Subquery case - use the value directly
+                    expr = exists().where(
+                        and_(
+                            log_alias.log_event_id == rhs.c.log_event_id,
+                            func.replace(cast(rval, String), '"', "").like(
+                                "%" + func.replace(cast(lhs, String), '"', "") + "%",
+                            ),
+                        ),
+                    )
+            else:
+                if comparison_key is not None:
+                    # Direct column reference case
+                    expr = ~exists().where(
+                        and_(
+                            log_alias.log_event_id == rhs.c.log_event_id,
+                            log_alias.key == comparison_key,
+                            func.replace(cast(log_alias.value, String), '"', "").like(
+                                "%" + func.replace(cast(lhs, String), '"', "") + "%",
+                            ),
+                        ),
+                    )
+                else:
+                    # Subquery case - use the value directly
+                    expr = ~exists().where(
+                        and_(
+                            log_alias.log_event_id == rhs.c.log_event_id,
+                            func.replace(cast(rval, String), '"', "").like(
+                                "%" + func.replace(cast(lhs, String), '"', "") + "%",
+                            ),
+                        ),
+                    )
             return (
                 select(
                     rhs.c.log_event_id.label("log_event_id"),
@@ -826,21 +915,9 @@ def build_sql_query(filter_dict, log_event_alias, session):
         else:
             # Neither lhs nor rhs are subqueries
             if operand == "in":
-                return exists().where(
-                    and_(
-                        Log.log_event_id == log_event_alias.id,
-                        Log.key == rhs,
-                        Log.value.contains(cast(lhs, JSONB)),
-                    ),
-                )
+                return lhs.in_(rhs)
             else:
-                return ~exists().where(
-                    and_(
-                        Log.log_event_id == log_event_alias.id,
-                        Log.key == rhs,
-                        Log.value.contains(cast(lhs, JSONB)),
-                    ),
-                )
+                return ~lhs.in_(rhs)
 
     # Handle functions (len, str, type, round, exists, version)
     elif operand in ("len", "to_str", "type", "round", "exists", "version"):
