@@ -351,20 +351,22 @@ def _select_value(subq, session):
     """
     if hasattr(subq.c, "value"):
         return subq.c.value
-
-    dt = session.execute(select(subq)).first()[
-        -1
-    ]  # execute the subquery to determine the type.
-    d = {
-        "int": subq.c.int_value,
-        "float": subq.c.float_value,
-        "bool": subq.c.bool_value,
-        "str": subq.c.str_value,
-        "timestamp": subq.c.timestamp_value,
-        "list": subq.c.jsonb_value,
-        "dict": subq.c.jsonb_value,
-    }
-    return d[dt]
+    try:
+        dt = session.execute(select(subq)).first()[
+            -1
+        ]  # execute the subquery to determine the type.
+        d = {
+            "int": subq.c.int_value,
+            "float": subq.c.float_value,
+            "bool": subq.c.bool_value,
+            "str": subq.c.str_value,
+            "timestamp": subq.c.timestamp_value,
+            "list": subq.c.jsonb_value,
+            "dict": subq.c.jsonb_value,
+            }
+        return d[dt]
+    except:
+        return None
 
 
 def _build_subquery_for_identifier(key, log_event_alias, alias=None):
