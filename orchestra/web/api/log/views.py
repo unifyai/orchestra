@@ -1196,7 +1196,7 @@ def get_fields(
     except IndexError:
         raise not_found(f"Project {project}")
 
-    field_types = field_type_dao.get_field_types(project_obj.id)
+    types = field_type_dao.get_field_types(project_obj.id)
     query = (
         session.query(Log.key)
         .join(LogEvent, LogEvent.id == Log.log_event_id)
@@ -1224,15 +1224,17 @@ def get_fields(
         field_type_dao,
         session,
     )
-    params = dict((lg[0].key, lg[0].version is not None) for lg in all_logs)
+    field_types = dict(
+        (lg[0].key, "entry" if lg[0].version is None else "param") for lg in all_logs
+    )
     # end ToDo
 
     return {
         key: {
-            "type": field_types.get(key),
-            "param": is_param,
+            "data_type": types.get(key),
+            "field_type": field_type,
         }
-        for key, is_param in params.items()
+        for key, field_type in field_types.items()
     }
 
 
