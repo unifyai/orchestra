@@ -2133,9 +2133,9 @@ async def test_create_log_strongly_typed(client: AsyncClient):
     )
     assert field_types_response.status_code == 200
     assert field_types_response.json() == {
-        "a/b/param1": {"type": "str", "param": True},
-        "score": {"type": "int", "param": False},
-        "logged_at": {"type": "timestamp", "param": False},
+        "a/b/param1": {"data_type": "str", "field_type": "param"},
+        "score": {"data_type": "int", "field_type": "entry"},
+        "logged_at": {"data_type": "timestamp", "field_type": "entry"},
     }
 
 
@@ -2251,14 +2251,14 @@ async def test_get_set_field_typing(client: AsyncClient):
     ]
 
     # values
-    assert field_types["a/b/c/input"]["type"] == "str"
-    assert field_types["a/b/c/input"]["param"] is False
-    assert field_types["a/b/c/boolean_input"]["type"] == "bool"
-    assert field_types["a/b/c/boolean_input"]["param"] is False
-    assert field_types["a/b/c/numeric_input"]["type"] == "float"
-    assert field_types["a/b/c/numeric_input"]["param"] is False
-    assert field_types["a/b/param1"]["type"] == "str"
-    assert field_types["a/b/param1"]["param"] is True
+    assert field_types["a/b/c/input"]["data_type"] == "str"
+    assert field_types["a/b/c/input"]["field_type"] == "entry"
+    assert field_types["a/b/c/boolean_input"]["data_type"] == "bool"
+    assert field_types["a/b/c/boolean_input"]["field_type"] == "entry"
+    assert field_types["a/b/c/numeric_input"]["data_type"] == "float"
+    assert field_types["a/b/c/numeric_input"]["field_type"] == "entry"
+    assert field_types["a/b/param1"]["data_type"] == "str"
+    assert field_types["a/b/param1"]["field_type"] == "param"
 
     # Set field typing for the log entries
     response = await client.post(
@@ -2293,14 +2293,14 @@ async def test_get_set_field_typing(client: AsyncClient):
     ]
 
     # values
-    assert field_types["a/b/c/input"]["type"] == "str"
-    assert field_types["a/b/c/input"]["param"] is False
-    assert field_types["a/b/c/boolean_input"]["type"] == "bool"
-    assert field_types["a/b/c/boolean_input"]["param"] is False
-    assert field_types["a/b/c/numeric_input"]["type"] is None
-    assert field_types["a/b/c/numeric_input"]["param"] is False
-    assert field_types["a/b/param1"]["type"] == "str"
-    assert field_types["a/b/param1"]["param"] is True
+    assert field_types["a/b/c/input"]["data_type"] == "str"
+    assert field_types["a/b/c/input"]["field_type"] == "entry"
+    assert field_types["a/b/c/boolean_input"]["data_type"] == "bool"
+    assert field_types["a/b/c/boolean_input"]["field_type"] == "entry"
+    assert field_types["a/b/c/numeric_input"]["data_type"] is None
+    assert field_types["a/b/c/numeric_input"]["field_type"] == "entry"
+    assert field_types["a/b/param1"]["data_type"] == "str"
+    assert field_types["a/b/param1"]["field_type"] == "param"
 
 
 @pytest.mark.anyio
