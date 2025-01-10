@@ -666,9 +666,9 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session):
         elif operand == ">=":
             expr = lval >= rhs
         elif operand == "is":
-            expr = lval.is_(rhs) if rhs is not None else lval.is_(None)
+            expr = lval.is_(rhs) if rhs is None else lval == rhs
         elif operand == "is not":
-            expr = lval.isnot(rhs) if rhs is not None else lval.isnot(None)
+            expr = lval.isnot(rhs) if rhs is None else lval != rhs
         return (
             select(
                 lhs.c.log_event_id.label("log_event_id"),
@@ -692,9 +692,9 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session):
         elif operand == ">=":
             expr = lhs >= rval
         elif operand == "is":
-            expr = lhs.is_(rval) if rval is not None else lhs.is_(None)
+            expr = lhs.is_(rval) if rval is None else lhs == rval
         elif operand == "is not":
-            expr = lhs.isnot(rval) if rval is not None else lhs.isnot(None)
+            expr = lhs.isnot(rval) if rval is None else lhs != rval
         return (
             select(
                 rhs.c.log_event_id.label("log_event_id"),
