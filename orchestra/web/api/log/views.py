@@ -7,7 +7,18 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from sqlalchemy import INTEGER, TIMESTAMP, Float, String, and_, case, cast, exists, func, select
+from sqlalchemy import (
+    INTEGER,
+    TIMESTAMP,
+    Float,
+    String,
+    and_,
+    case,
+    cast,
+    exists,
+    func,
+    select,
+)
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 from sqlalchemy.sql.selectable import Subquery
 
@@ -699,7 +710,8 @@ def _get_logs_query(
             if key in field_types:
                 if key == "_/timestamp":
                     criterion = cast(
-                        cast(subq.c.value, String), STR_TO_SQL_TYPES[field_types[key]]
+                        cast(subq.c.value, String),
+                        STR_TO_SQL_TYPES[field_types[key]],
                     )
                 else:
                     criterion = cast(subq.c.value, STR_TO_SQL_TYPES[field_types[key]])
@@ -716,13 +728,17 @@ def _get_logs_query(
                     detail="sort_mode must be 'ascending' or 'descending', "
                     f"but found {sort_mode}.",
                 )
-    sort_criteria.append(LogEvent.created_at)
+    sort_criteria.append(LogEvent.id.desc())
 
-    log_event_query = sorted_query.join(
-        LogEvent,
-        LogEvent.id == distinct_ids_subq.c.id,
-    ).add_columns(  # or use another join if needed
-        func.row_number().over(order_by=sort_criteria).label("row_num"),
+    log_event_query = (
+        sorted_query.join(
+            LogEvent,
+            LogEvent.id == distinct_ids_subq.c.id,
+        )
+        .add_columns(
+            func.row_number().over(order_by=sort_criteria).label("row_num"),
+        )
+        .order_by("row_num")
     )
 
     count = log_event_query.count()
@@ -883,7 +899,7 @@ def get_logs(
         session,
     )
     if return_ids_only:
-        return list(set([log[0].log_event_id for log in all_logs]))
+        return list(dict.fromkeys([log[0].log_event_id for log in all_logs]))
 
     formatted_logs = format_logs(all_logs, context_len)
 
@@ -1185,7 +1201,8 @@ def get_logs_metric(
                     (
                         Log.inferred_type == "timestamp",
                         func.extract(
-                            "epoch", cast(cast(Log.value, String), TIMESTAMP)
+                            "epoch",
+                            cast(cast(Log.value, String), TIMESTAMP),
                         ).cast(Float),
                     ),
                     (Log.inferred_type == "float", Log.value.cast(Float)),
