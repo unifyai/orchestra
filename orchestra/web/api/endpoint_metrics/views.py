@@ -518,7 +518,7 @@ def get_endpoint_details(
     """
     Extracts cost and context window data for the provided endpoint .
 
-    The `endpoint` is the endpoint name in the form <model>@<provider>.
+    The `endpoint` is the endpoint name in the form \<model\>@\<provider\>.
     """
     try:
         model, provider = endpoint.split("@")
@@ -526,7 +526,8 @@ def get_endpoint_details(
         details = provider.supported_models[model]
     except:
         raise not_found(
-            f"Endpoint {endpoint} not found. Please make sure you're passing it in the correct format.",
+            f"Endpoint {endpoint} not found. "
+            "Please make sure you're passing it in the correct format.",
         )
     return {
         "input_cost": details["cost"]["prompt"],
