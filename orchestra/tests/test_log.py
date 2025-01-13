@@ -680,7 +680,7 @@ async def test_get_logs_from_ids(client: AsyncClient):
     # fetch entries for the project
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"from_ids": "&".join([str(i) for i in from_ids])},
+        params={"from_ids": "+".join([str(i) for i in from_ids])},
         headers=HEADERS,
     )
 
@@ -712,7 +712,7 @@ async def test_get_logs_excluding_ids(client: AsyncClient):
     # fetch entries for the project
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"exclude_ids": "&".join([str(i) for i in exclude_ids])},
+        params={"exclude_ids": "+".join([str(i) for i in exclude_ids])},
         headers=HEADERS,
     )
 
@@ -735,7 +735,7 @@ async def test_get_logs_from_fields(client: AsyncClient):
     # fetch entries for the project
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"from_fields": "&".join(["_/temperature", "_/state", "_/metadata"])},
+        params={"from_fields": "+".join(["_/temperature", "_/state", "_/metadata"])},
         headers=HEADERS,
     )
 
@@ -764,7 +764,7 @@ async def test_get_logs_excluding_fields(client: AsyncClient):
     response = await client.get(
         f"/v0/logs?project={project_name}",
         params={
-            "exclude_fields": "&".join(
+            "exclude_fields": "+".join(
                 [
                     "_/temperature",
                     "_/state",
@@ -1871,7 +1871,7 @@ async def test_get_logs_metric(
     params = (
         {"key": key}
         if from_ids is None
-        else {"key": key, "from_ids": "&".join([str(i) for i in from_ids])}
+        else {"key": key, "from_ids": "+".join([str(i) for i in from_ids])}
     )
     response = await client.get(
         f"/v0/logs/metric/{metric}?project={project_name}",

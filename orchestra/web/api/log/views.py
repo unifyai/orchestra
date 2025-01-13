@@ -449,11 +449,11 @@ def _get_logs_query(
     )
     if from_ids:
         log_event_query = log_event_query.where(
-            LogEvent.id.in_([int(i) for i in from_ids.split("&")]),
+            LogEvent.id.in_([int(i) for i in from_ids.split("+")]),
         )
     elif exclude_ids:
         log_event_query = log_event_query.where(
-            LogEvent.id.notin_([int(i) for i in exclude_ids.split("&")]),
+            LogEvent.id.notin_([int(i) for i in exclude_ids.split("+")]),
         )
 
     # filter the log event ids based on the values of their fields (filter argument)
@@ -510,9 +510,9 @@ def _get_logs_query(
         f"but found values {from_fields} and {exclude_fields}."
     )
     if from_fields:
-        log_query = log_query.where(Log.key.in_(from_fields.split("&")))
+        log_query = log_query.where(Log.key.in_(from_fields.split("+")))
     elif exclude_fields:
-        log_query = log_query.where(Log.key.notin_(exclude_fields.split("&")))
+        log_query = log_query.where(Log.key.notin_(exclude_fields.split("+")))
 
     # create a sub-query of these relevant logs
     relevant_logs = log_query.subquery()
@@ -987,10 +987,10 @@ def get_logs_metric(
     )
 
     if from_ids:
-        query = query.where(LogEvent.id.in_([int(i) for i in from_ids.split("&")]))
+        query = query.where(LogEvent.id.in_([int(i) for i in from_ids.split("+")]))
     elif exclude_ids:
         query = query.where(
-            LogEvent.id.notin_([int(i) for i in exclude_ids.split("&")]),
+            LogEvent.id.notin_([int(i) for i in exclude_ids.split("+")]),
         )
 
     if filter_expr:
@@ -1204,7 +1204,7 @@ def get_fields(
         .distinct()
     )
 
-    all_field_names = "&".join([field.key for field in query.all()])
+    all_field_names = "+".join([field.key for field in query.all()])
 
     # ToDo: remove this hacky code once this task [https://app.clickup.com/t/86c1jupp2]
     #  is done
