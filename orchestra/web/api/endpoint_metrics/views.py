@@ -508,8 +508,7 @@ def delete_endpoint_metrics(
         },
     },
 )
-def get_endpoint_metrics(
-    request_fastapi: Request,
+def get_endpoint_details(
     endpoint: str = Query(
         default=None,
         description="Name of the endpoint.",
