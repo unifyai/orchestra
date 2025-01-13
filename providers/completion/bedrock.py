@@ -119,7 +119,7 @@ supported_models = {
     "mistral-large": {
         "endpoint": "bedrock/mistral.mistral-large-2407-v1:0",
         "context_window": 128000,
-        "cost": {"prompt": 2, "completion": 6},
+        "cost": {"prompt": 4, "completion": 12},
     },
     "command-r-plus": {
         "endpoint": "bedrock/cohere.command-r-plus-v1:0",
