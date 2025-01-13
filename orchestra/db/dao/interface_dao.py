@@ -44,5 +44,5 @@ class InterfaceDAO:
 
     def get_interface(self, user_id: str):
         query = select(Interface).where(Interface.user_id == user_id)
-        interface = self.session.execute(query).scalars().first()
-        return interface
+        interface = self.session.execute(query).fetchall()
+        return interface[0][0] if len(interface) else None
