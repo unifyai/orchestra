@@ -257,17 +257,30 @@ async def test_create_log_w_image(client: AsyncClient):
     assert success
     img = base64.b64encode(buffer).decode("utf-8")
 
+    # log image
     response = await client.post(
         "/v0/log",
         json={
             "project": project_name,
-            "entries": {"img": img},
+            "entries": {
+                "img_raw": img,
+            },
         },
         headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), int)
+
+    # Verify field type
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    assert field_types_response.json() == {
+        "img_raw": {"data_type": "image", "field_type": "entry"},
+    }
 
 
 @pytest.mark.anyio
