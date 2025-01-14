@@ -120,7 +120,6 @@ def create_log(
             if entered_type != expected_type:
                 if entered_type == "NoneType":
                     return
-                breakpoint()
                 raise HTTPException(
                     status_code=400,
                     detail=f"Type mismatch for field '{field_name}': expected {expected_type}, got {entered_type}",

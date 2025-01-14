@@ -80,7 +80,6 @@ class LogDAO:
                         or lower.endswith(".jpg")
                         or lower.endswith(".jpeg")
                     ):
-                        breakpoint()
                         return "image"
                     return "str"
         return type(raw_v).__name__
