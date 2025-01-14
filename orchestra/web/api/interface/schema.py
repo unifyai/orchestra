@@ -11,6 +11,8 @@ class Item(BaseModel):
     static: bool = False
     tab: str | None = None
     table: str | None = None
+    auto_update: str | None = None
+    context: str | None = None
     filters: str | None = None
     common_filter: str | None = None
     page_number: str | None = None
