@@ -264,6 +264,7 @@ async def test_create_log_w_image(client: AsyncClient):
             "project": project_name,
             "entries": {
                 "img_raw": img,
+                "img_url": "https://upload.wikimedia.org/wikipedia/commons/4/45/Eopsaltria_australis_-_Mogo_Campground.jpg",
             },
         },
         headers=HEADERS,
@@ -280,6 +281,7 @@ async def test_create_log_w_image(client: AsyncClient):
     assert field_types_response.status_code == 200
     assert field_types_response.json() == {
         "img_raw": {"data_type": "image", "field_type": "entry"},
+        "img_url": {"data_type": "image", "field_type": "entry"},
     }
 
 
