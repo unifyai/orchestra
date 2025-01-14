@@ -1,4 +1,5 @@
 import os
+import warnings
 from typing import Any, AsyncGenerator, Generator
 
 import pytest
@@ -6,6 +7,8 @@ from fastapi import FastAPI
 from httpx import AsyncClient
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
+
+warnings.filterwarnings("ignore", category=UserWarning)
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.utils import create_database, drop_database
