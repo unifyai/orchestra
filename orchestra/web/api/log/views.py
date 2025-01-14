@@ -7,9 +7,22 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from sqlalchemy import INTEGER, TIMESTAMP, Float, case, cast, func, select
+from sqlalchemy import (
+    INTEGER,
+    TIMESTAMP,
+    Float,
+    String,
+    and_,
+    case,
+    cast,
+    exists,
+    func,
+    select,
+)
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
+from sqlalchemy.sql.selectable import Subquery
 
+from orchestra.db.dao.derived_log_dao import DerivedLogDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import LogDAO, OverwriteError
 from orchestra.db.dao.log_event_dao import LogEventDAO
@@ -17,6 +30,7 @@ from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Log, LogEvent
 from orchestra.web.api.log.schema import (
+    CreateDerivedEntriesConfig,
     CreateLogConfig,
     DeleteLogEntryRequest,
     SetFieldTypingRequest,
@@ -27,7 +41,7 @@ from orchestra.web.api.utils.http_responses import not_found
 from .helpers import (
     STR_TO_SQL_TYPES,
     _flatten_fields,
-    build_filter,
+    build_sql_query,
     format_logs,
     str_filter_exp_to_dict,
 )
@@ -157,6 +171,65 @@ def create_log(
         )
 
     return log_event_id
+
+
+@router.put(
+    "/log/derived",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Log created successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def create_derived_entry(
+    request_fastapi: Request,
+    body: CreateDerivedEntriesConfig,
+    project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    log_event_dao: LogEventDAO = Depends(),
+    log_dao: LogDAO = Depends(),
+    derived_log_dao: DerivedLogDAO = Depends(),
+):
+    """
+    Updates multiple logs with the provided entries. Each entry will be either added
+    or overridden in the specified logs.
+
+    A dictionary of "explicit_types" can be passed as part of the `entries`.
+    If present, it will override the inferred type of any matching key in all logs.
+    """
+    # ToDo: convert get_logs args to a query to return the log ids
+    # ToDo: prune all of these to the shortest list of ids
+
+    log_variables = list(body.referenced_logs.keys())
+    variables = list()
+    for log_var in log_variables:
+        variables += [
+            log_var + ":" + substr.split("}")[0]
+            for substr in body.equation.split("{" + log_var + ":")[1:]
+        ]
+    subqs = dict()
+    for variable in variables:
+        log_str, key = variable.split(":")
+        subqs[variable] = log_dao.filter(
+            log_event_id=body.referenced_logs[log_str],
+            key=key,
+            defer=True,
+        )
 
 
 @router.put(
@@ -460,7 +533,24 @@ def _get_logs_query(
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
         if filter_dict:
-            condition = build_filter(filter_dict, LogEvent, session)
+            filter_condition = build_sql_query(filter_dict, LogEvent, session)
+
+            # Check if the result is a SQL expression or a subquery
+            if isinstance(filter_condition, Subquery):
+                condition = exists(
+                    select(1)
+                    .select_from(filter_condition)
+                    .where(
+                        and_(
+                            LogEvent.id == filter_condition.c.log_event_id,
+                            filter_condition.c.value.is_(True),
+                        ),
+                    ),
+                )
+            else:
+                # Handle general expressions (BinaryExpression, etc.)
+                condition = filter_condition
+
             log_event_query = log_event_query.filter(condition)
 
     # create sub-query for these relevant log events
@@ -552,7 +642,13 @@ def _get_logs_query(
             )
 
             if key in field_types:
-                criterion = cast(subq.c.value, STR_TO_SQL_TYPES[field_types[key]])
+                if key == "_/timestamp":
+                    criterion = cast(
+                        cast(subq.c.value, String),
+                        STR_TO_SQL_TYPES[field_types[key]],
+                    )
+                else:
+                    criterion = cast(subq.c.value, STR_TO_SQL_TYPES[field_types[key]])
             else:
                 criterion = subq.c.value
 
@@ -996,7 +1092,7 @@ def get_logs_metric(
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
         if filter_dict:
-            condition = build_filter(filter_dict, LogEvent, session)
+            condition = build_sql_query(filter_dict, LogEvent, session)
             query = query.filter(condition)
 
     subquery = query.subquery()
@@ -1038,7 +1134,10 @@ def get_logs_metric(
                     ),
                     (
                         Log.inferred_type == "timestamp",
-                        func.extract("epoch", cast(Log.value, TIMESTAMP)).cast(Float),
+                        func.extract(
+                            "epoch",
+                            cast(cast(Log.value, String), TIMESTAMP),
+                        ).cast(Float),
                     ),
                     (Log.inferred_type == "float", Log.value.cast(Float)),
                     (Log.inferred_type == "int", Log.value.cast(Float)),
@@ -1147,7 +1246,7 @@ def get_log_groups(
     assert all(
         len(v) == 1 for v in groups.values()
     ), "All sets should contain a single unique value"
-    return {k: json.loads(next(iter(v))) for k, v in groups.items()}
+    return {k: next(iter(v)) for k, v in groups.items()}
 
 
 @router.get(
@@ -1301,7 +1400,7 @@ def set_field_types(
             )
 
             # Check if all existing logs for this field are of the same type
-            existing_types = {type(json.loads(log[0].value)) for log in existing_logs}
+            existing_types = {type(log[0].value) for log in existing_logs}
             if len(existing_types) > 1:
                 raise HTTPException(
                     status_code=400,
@@ -1315,14 +1414,14 @@ def set_field_types(
                 field_type_dao.update_field_type(
                     project_id,
                     field_name,
-                    json.loads(existing_logs[0][0].value),
+                    existing_logs[0][0].value,
                 )
             else:
                 # Create a new field type if it does not exist
                 field_type_dao.create_field_type(
                     project_id,
                     field_name,
-                    json.loads(existing_logs[0][0].value),
+                    existing_logs[0][0].value,
                 )
 
         else:  # If we want to turn typing off
