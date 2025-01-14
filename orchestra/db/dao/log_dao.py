@@ -1,3 +1,4 @@
+import base64
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
@@ -55,7 +56,19 @@ class LogDAO:
                 datetime.fromisoformat(raw_v)
                 return "timestamp"
             except:
-                return "str"
+                binary = raw_v.encode("utf-8")
+                try:
+                    assert base64.b64encode(base64.b64decode(binary)) == binary
+                    return "image"
+                except:
+                    lower = raw_v.lower()
+                    if (
+                        lower.endswith(".png")
+                        or lower.endswith(".jpg")
+                        or lower.endswith(".jpeg")
+                    ):
+                        return "image"
+                    return "str"
         return type(raw_v).__name__
 
     def create_from_raw_k_v(
