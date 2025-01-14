@@ -62,7 +62,7 @@ class LogDAO:
                     return "image"
                 except:
                     lower = raw_v.lower()
-                    if (
+                    if lower.startswith("http") and (
                         lower.endswith(".png")
                         or lower.endswith(".jpg")
                         or lower.endswith(".jpeg")
