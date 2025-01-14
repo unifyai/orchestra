@@ -114,7 +114,7 @@ def create_log(
     params = request.params
 
     def enforce_types(field_name, value):
-        entered_type = LogDAO.infer_type(value)
+        entered_type = LogDAO.infer_type(field_name, value)
         expected_type = field_types.get(field_name)
         if expected_type and expected_type != "NoneType":
             if entered_type != expected_type:
@@ -316,7 +316,7 @@ def update_logs(
                 # Check and enforce types
                 if k in field_types:
                     expected_type = field_types[k]
-                    original_type = LogDAO.infer_type(v)
+                    original_type = LogDAO.infer_type(k, v)
                     if original_type != expected_type:
                         raise HTTPException(
                             status_code=400,
