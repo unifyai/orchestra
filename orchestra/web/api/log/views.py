@@ -114,20 +114,22 @@ def create_log(
     params = request.params
 
     def enforce_types(field_name, value):
-        if field_name in field_types:
-            expected_type = field_types[field_name]
-            original_type = LogDAO.infer_type(value)
-            if original_type != expected_type:
+        entered_type = LogDAO.infer_type(value)
+        expected_type = field_types.get(field_name)
+        if expected_type and expected_type != "NoneType":
+            if entered_type != expected_type:
+                if entered_type == "NoneType":
+                    return
+                breakpoint()
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Type mismatch for field '{field_name}': expected {expected_type}, got {original_type}",
+                    detail=f"Type mismatch for field '{field_name}': expected {expected_type}, got {entered_type}",
                 )
-        else:
-            # If strongly_typed is True, set the type for the first entry
-            if strongly_typed is True or (
-                isinstance(strongly_typed, list) and field_name in strongly_typed
-            ):
-                field_type_dao.create_field_type(project_id, field_name, value)
+        elif (entered_type != "NoneType") and (
+            strongly_typed is True
+            or (isinstance(strongly_typed, list) and field_name in strongly_typed)
+        ):
+            field_type_dao.create_field_type(project_id, field_name, value)
 
     for k, v in params.items():
         enforce_types(k, v)
