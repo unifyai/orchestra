@@ -1,8 +1,10 @@
+import base64
 import json
 import os
 from datetime import datetime, timezone
 from typing import List, Optional
 
+import cv2
 import numpy as np
 import pytest
 from httpx import AsyncClient, Request
@@ -240,6 +242,45 @@ async def test_create_derived_entries(client: AsyncClient):
     assert response.status_code == 200, response.json()
     response = await _create_derived_entry(client, project_name, response.json())
     assert response.status_code == 200, response.json()
+
+
+@pytest.mark.anyio
+async def test_create_log_w_image(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+
+    img_path = os.path.join(
+        os.path.dirname(os.path.realpath(__file__)),
+        "sample_datasets/img.png",
+    )
+    success, buffer = cv2.imencode(".png", cv2.imread(img_path))
+    assert success
+    img = base64.b64encode(buffer).decode("utf-8")
+
+    # log image
+    response = await client.post(
+        "/v0/log",
+        json={
+            "project": project_name,
+            "entries": {
+                "img_raw": img,
+            },
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json(), int)
+
+    # Verify field type
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    assert field_types_response.json() == {
+        "img_raw": {"data_type": "image", "field_type": "entry"},
+    }
 
 
 @pytest.mark.anyio
