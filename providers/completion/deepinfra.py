@@ -31,7 +31,7 @@ supported_models = {
     "deepseek-v3": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3",
         "context_window": 32000,
-        "cost": {"prompt": 1, "completion": 2},
+        "cost": {"prompt": 0.85, "completion": 0.9},
     },
     "llama-3.3-70b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.3-70B-Instruct",

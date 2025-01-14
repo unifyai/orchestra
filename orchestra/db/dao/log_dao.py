@@ -68,14 +68,13 @@ class LogDAO:
         explicit_types: Optional[Dict] = None,
     ) -> Optional[str]:
 
-        json_v = json.dumps(raw_v)
         explicit_types = explicit_types if isinstance(explicit_types, dict) else {}
 
         return self.create(
             project_id=project_id,
             log_event_id=log_event_id,
             key=raw_k,
-            value=json_v,
+            value=raw_v,
             version=version,
             inferred_type=explicit_types.get(raw_k, self.infer_type(raw_v)),
         )
@@ -89,6 +88,7 @@ class LogDAO:
         version: Optional[Union[int, List[int]]] = None,
         inferred_type: Optional[Union[str, List[str]]] = None,
         project_id: Optional[int] = None,
+        defer: bool = False,
     ) -> List[Log]:
         def normalize_input(value):
             if value is None or isinstance(value, list):
@@ -133,7 +133,8 @@ class LogDAO:
 
         query = query.order_by(Log.created_at)
         rows = self.session.execute(query)
-
+        if defer:
+            return rows
         return rows.fetchall()
 
     def update(

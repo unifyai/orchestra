@@ -116,6 +116,20 @@ def _create_log(client, project_name, user=1):
     )
 
 
+def _create_derived_entry(client, project_name, log_id, user=1):
+    _headers = HEADERS if user == 1 else HEADERS_2
+    return client.put(
+        "/v0/log/derived",
+        json={
+            "project": project_name,
+            "key": "doubled",
+            "equation": "{log1:a/b/c/numeric_input}*2",
+            "referenced_logs": {"log1": [log_id]},
+        },
+        headers=_headers,
+    )
+
+
 def _get_log(client, project_name, log_id, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     return client.get(
@@ -216,7 +230,16 @@ async def test_create_logs(client: AsyncClient):
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), int)
 
-    # TODO: Get log and see if it matches
+
+@pytest.mark.anyio
+async def test_create_derived_entries(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+
+    response = await _create_log(client, project_name)
+    assert response.status_code == 200, response.json()
+    response = await _create_derived_entry(client, project_name, response.json())
+    assert response.status_code == 200, response.json()
 
 
 @pytest.mark.anyio
@@ -445,6 +468,74 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
         expected = expression.split("exists(")[-1].split(")")[0] in values
     else:
         expected = eval(expression)
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    "expression, values",
+    [
+        # Arithmetic
+        ("(a + b) > 10", {"a": 5, "b": 8}),
+        ("(a - b) == 2", {"a": 5, "b": 3}),
+        ("(a * b) == 15", {"a": 3, "b": 5}),
+        ("(a / b) == 2", {"a": 10, "b": 5}),
+        ("(a % b) == 1", {"a": 10, "b": 3}),
+        # Logical
+        ("(a > 5) and (b < 10)", {"a": 6, "b": 9}),
+        ("(a < 5) or (b > 10)", {"a": 4, "b": 11}),
+        ("not (a == 5)", {"a": 4}),
+        # Comparison
+        ("a == 5", {"a": 5}),
+        ("a != 5", {"a": 4}),
+        ("a < 5", {"a": 4}),
+        ("a > 5", {"a": 6}),
+        ("a <= 5", {"a": 5}),
+        ("a >= 5", {"a": 5}),
+        # Membership
+        ("a in [1, 2, 3]", {"a": 2}),
+        ("a not in [1, 2, 3]", {"a": 4}),
+        # Nested Logical and Arithmetic
+        ("((a + b) > 10) and ((c * d) < 20)", {"a": 5, "b": 8, "c": 2, "d": 3}),
+        ("((a - b) == 2) or ((e / f) == 3)", {"a": 5, "b": 3, "e": 9, "f": 3}),
+        # More Complex Nested Expressions
+        ("(len(a) == 3) and ((b + c) > 10)", {"a": [1, 2, 3], "b": 5, "c": 6}),
+        ("(to_str(a) == 'abc') or (len(b) == 2)", {"a": "abc", "b": [1, 2]}),
+        # Using exists with nested conditions
+        ("exists(a) and (b > 5)", {"a": 5, "b": 6}),
+        ("not exists(c) or (d < 10)", {"d": 9}),
+    ],
+)
+async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, values):
+
+    project_name = "test_filter_helper"
+    _ = await _create_project(client, project_name, user=1)
+    response = await client.post(
+        "/v0/log",
+        json={"project": project_name, "entries": values},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": expression},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = len(response.json()["logs"]) == 1
+    for key, value in values.items():
+        exec(key + "=" + (str(value) if isinstance(value, bool) else json.dumps(value)))
+
+    # Replace to_str with str in the expression for evaluation
+    eval_expression = expression.replace("to_str", "str")
+
+    # Handle exists checks
+    if "not exists" in eval_expression:
+        expected = eval_expression.split("exists(")[-1].split(")")[0] not in values
+    elif "exists" in eval_expression:
+        expected = eval_expression.split("exists(")[-1].split(")")[0] in values
+    else:
+        expected = eval(eval_expression)
+
     assert result == expected
 
 
@@ -1367,7 +1458,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
 
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "version('a/b/param1') == '1'"},
+        params={"filter_expr": "version('a/b/param1') == 1"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2133,9 +2224,9 @@ async def test_create_log_strongly_typed(client: AsyncClient):
     )
     assert field_types_response.status_code == 200
     assert field_types_response.json() == {
-        "a/b/param1": {"type": "str", "param": True},
-        "score": {"type": "int", "param": False},
-        "logged_at": {"type": "timestamp", "param": False},
+        "a/b/param1": {"data_type": "str", "field_type": "param"},
+        "score": {"data_type": "int", "field_type": "entry"},
+        "logged_at": {"data_type": "timestamp", "field_type": "entry"},
     }
 
 
@@ -2251,14 +2342,14 @@ async def test_get_set_field_typing(client: AsyncClient):
     ]
 
     # values
-    assert field_types["a/b/c/input"]["type"] == "str"
-    assert field_types["a/b/c/input"]["param"] is False
-    assert field_types["a/b/c/boolean_input"]["type"] == "bool"
-    assert field_types["a/b/c/boolean_input"]["param"] is False
-    assert field_types["a/b/c/numeric_input"]["type"] == "float"
-    assert field_types["a/b/c/numeric_input"]["param"] is False
-    assert field_types["a/b/param1"]["type"] == "str"
-    assert field_types["a/b/param1"]["param"] is True
+    assert field_types["a/b/c/input"]["data_type"] == "str"
+    assert field_types["a/b/c/input"]["field_type"] == "entry"
+    assert field_types["a/b/c/boolean_input"]["data_type"] == "bool"
+    assert field_types["a/b/c/boolean_input"]["field_type"] == "entry"
+    assert field_types["a/b/c/numeric_input"]["data_type"] == "float"
+    assert field_types["a/b/c/numeric_input"]["field_type"] == "entry"
+    assert field_types["a/b/param1"]["data_type"] == "str"
+    assert field_types["a/b/param1"]["field_type"] == "param"
 
     # Set field typing for the log entries
     response = await client.post(
@@ -2293,14 +2384,14 @@ async def test_get_set_field_typing(client: AsyncClient):
     ]
 
     # values
-    assert field_types["a/b/c/input"]["type"] == "str"
-    assert field_types["a/b/c/input"]["param"] is False
-    assert field_types["a/b/c/boolean_input"]["type"] == "bool"
-    assert field_types["a/b/c/boolean_input"]["param"] is False
-    assert field_types["a/b/c/numeric_input"]["type"] is None
-    assert field_types["a/b/c/numeric_input"]["param"] is False
-    assert field_types["a/b/param1"]["type"] == "str"
-    assert field_types["a/b/param1"]["param"] is True
+    assert field_types["a/b/c/input"]["data_type"] == "str"
+    assert field_types["a/b/c/input"]["field_type"] == "entry"
+    assert field_types["a/b/c/boolean_input"]["data_type"] == "bool"
+    assert field_types["a/b/c/boolean_input"]["field_type"] == "entry"
+    assert field_types["a/b/c/numeric_input"]["data_type"] is None
+    assert field_types["a/b/c/numeric_input"]["field_type"] == "entry"
+    assert field_types["a/b/param1"]["data_type"] == "str"
+    assert field_types["a/b/param1"]["field_type"] == "param"
 
 
 @pytest.mark.anyio
@@ -2402,7 +2493,3 @@ async def test_get_logs_with_type_check(client: AsyncClient):
     )
     assert response.status_code == 200
     assert len(response.json()["logs"]) == 7
-
-
-if __name__ == "__main__":
-    pass
