@@ -17,7 +17,7 @@ handler.setLevel(logging.INFO)
 logger.addHandler(handler)
 
 
-def recharge_credits(worker_id=None):  # noqa: D103, WPS210
+def recharge_credits(worker_id=None, amount=2.5):  # noqa: D103, WPS210
     url = str(settings.db_url)
     if worker_id:
         url = url.replace("orchestra_test", f"orchestra_test_{worker_id}")
@@ -28,17 +28,12 @@ def recharge_credits(worker_id=None):  # noqa: D103, WPS210
         recharge_dao = RechargeDAO(session)
 
         all_users = get_all_users_models(users_dao)
-        recharge_quantity = 2.5  # TODO: add this to the user table
-        max_recharge = 10.0  # TODO: add this to the user table
+        recharge_quantity = amount  # TODO: add this to the user table
         for user in all_users:
-            recharge_qty = min(recharge_quantity, max_recharge - float(user.credits))
-
-            if user.credits >= max_recharge or recharge_qty <= 0:
-                continue
 
             recharge_obj = RechargeModelRequest(
                 user_id=user.id,
-                quantity=recharge_qty,
+                quantity=recharge_quantity,
                 type="free",
             )
             create_recharge_model(
