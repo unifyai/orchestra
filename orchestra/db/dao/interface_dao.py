@@ -46,3 +46,12 @@ class InterfaceDAO:
         query = select(Interface).where(Interface.user_id == user_id)
         interface = self.session.execute(query).fetchall()
         return interface[0][0] if len(interface) else None
+
+    def delete_interface(self, user_id: str):
+        try:
+            interface = self.session.query(Interface).filter_by(user_id=user_id).one()
+            self.session.delete(interface)
+            self.session.commit()
+        except:
+            self.session.rollback()
+            raise ValueError

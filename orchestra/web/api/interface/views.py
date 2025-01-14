@@ -147,3 +147,41 @@ def get_interface(
         "new_counter": interface.new_counter,
         "project": interface.project,
     }
+
+
+@router.delete(
+    "/interface",
+    responses={
+        200: {
+            "description": "Interface deleted.",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Interface deleted successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Interface Not Found",
+            "content": {
+                "application/json": {
+                    "example": "Interface not added yet. Create it first.",
+                },
+            },
+        },
+    },
+)
+async def delete_interface(
+    request_fastapi: Request,
+    temporary: bool = Query(False),
+    interface_dao: InterfaceDAO = Depends(),
+    temp_interface_dao: TempInterfaceDAO = Depends(),
+):
+    dao = temp_interface_dao if temporary else interface_dao
+    interface = dao.get_interface(request_fastapi.state.user_id)
+    if not interface:
+        raise HTTPException(
+            status_code=404,
+            detail="Interface not added yet. Create it first.",
+        )
+    dao.delete_interface(request_fastapi.state.user_id)
+    return {"info": "Interface deleted successfully!"}
