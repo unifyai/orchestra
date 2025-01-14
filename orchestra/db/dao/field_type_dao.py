@@ -15,7 +15,7 @@ class FieldTypeDAO:
 
     def create_field_type(self, project_id: int, field_name: str, value) -> None:
         """Create a new field type for a project."""
-        field_type = LogDAO.infer_type(value)
+        field_type = LogDAO.infer_type(field_name, value)
         new_field_type = FieldType(
             project_id=project_id,
             field_name=field_name,
@@ -34,7 +34,7 @@ class FieldTypeDAO:
 
     def update_field_type(self, project_id: int, field_name: str, value) -> None:
         """Update the type for a specific field in a project."""
-        field_type = LogDAO.infer_type(value)
+        field_type = LogDAO.infer_type(field_name, value)
         query = select(FieldType).where(
             FieldType.project_id == project_id,
             FieldType.field_name == field_name,

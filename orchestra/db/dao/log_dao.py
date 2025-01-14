@@ -61,13 +61,14 @@ class LogDAO:
         )
 
     @staticmethod
-    def infer_type(raw_v, possible_img=False):
+    def infer_type(raw_k, raw_v):
+        maybe_img = LogDAO.possible_img(raw_k)
         if isinstance(raw_v, str):
             try:
                 datetime.fromisoformat(raw_v)
                 return "timestamp"
             except:
-                if not possible_img:
+                if not maybe_img:
                     return "str"
                 binary = raw_v.encode("utf-8")
                 try:
@@ -104,7 +105,7 @@ class LogDAO:
             version=version,
             inferred_type=explicit_types.get(
                 raw_k,
-                self.infer_type(raw_v, self.possible_img(raw_k)),
+                self.infer_type(raw_k, raw_v),
             ),
         )
 
