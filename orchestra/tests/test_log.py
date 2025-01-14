@@ -2336,6 +2336,66 @@ async def test_update_logs_strongly_typed(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_update_logs_previously_none(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    # Create a log first
+    response1 = await client.post(
+        "/v0/log",
+        json={
+            "project": project_name,
+            "params": {"a/b/param1": "test"},
+            "entries": {
+                "a/b/c/input": "Some input data",
+                "a/b/c/boolean_input": True,
+                "a/b/c/numeric_input": None,
+            },
+        },
+        headers=HEADERS,
+    )
+    log_id1 = response1.json()
+
+    # Verify numeric is NoneType
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    assert field_types_response.json()["a/b/c/numeric_input"] == {
+        "data_type": None,
+        "field_type": "entry",
+    }
+
+    # Update the log with strongly typed fields, but previously None
+    response = await client.put(
+        f"/v0/logs",
+        json={
+            "ids": [log_id1],
+            "entries": {
+                "a/b/c/numeric_input": -12.0,
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs updated successfully!"
+
+    # Verify numeric is now float
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    assert field_types_response.json()["a/b/c/numeric_input"] == {
+        "data_type": "float",
+        "field_type": "entry",
+    }
+
+
+@pytest.mark.anyio
 async def test_update_logs_type_mismatch(client: AsyncClient):
     project_name = "test_project"
     _ = await _create_project(client, project_name)
