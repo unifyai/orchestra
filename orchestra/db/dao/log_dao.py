@@ -1,3 +1,4 @@
+import base64
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
@@ -49,26 +50,39 @@ class LogDAO:
         return new_log.id
 
     @staticmethod
-    def infer_type(raw_v):
+    def possible_img(raw_k):
+        lower = raw_k.lower()
+        return (
+            "img" in lower
+            or "image" in lower
+            or "photo" in lower
+            or "diagram" in lower
+            or "pic" in lower
+        )
+
+    @staticmethod
+    def infer_type(raw_v, possible_img=False):
         if isinstance(raw_v, str):
             try:
                 datetime.fromisoformat(raw_v)
                 return "timestamp"
             except:
-                return "str"
-                # binary = raw_v.encode("utf-8")
-                # try:
-                #     assert base64.b64encode(base64.b64decode(binary)) == binary
-                #     return "image"
-                # except:
-                #     lower = raw_v.lower()
-                #     if lower.startswith("http") and (
-                #         lower.endswith(".png")
-                #         or lower.endswith(".jpg")
-                #         or lower.endswith(".jpeg")
-                #     ):
-                #         return "image"
-                #     return "str"
+                if not possible_img:
+                    return "str"
+                binary = raw_v.encode("utf-8")
+                try:
+                    assert base64.b64encode(base64.b64decode(binary)) == binary
+                    return "image"
+                except:
+                    lower = raw_v.lower()
+                    if lower.startswith("http") and (
+                        lower.endswith(".png")
+                        or lower.endswith(".jpg")
+                        or lower.endswith(".jpeg")
+                    ):
+                        breakpoint()
+                        return "image"
+                    return "str"
         return type(raw_v).__name__
 
     def create_from_raw_k_v(
@@ -89,7 +103,10 @@ class LogDAO:
             key=raw_k,
             value=raw_v,
             version=version,
-            inferred_type=explicit_types.get(raw_k, self.infer_type(raw_v)),
+            inferred_type=explicit_types.get(
+                raw_k,
+                self.infer_type(raw_v, self.possible_img(raw_k)),
+            ),
         )
 
     def filter(
