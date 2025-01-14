@@ -12,23 +12,41 @@ from orchestra.tests.utils import ADMIN_HEADERS, HEADERS
 from orchestra.web.api.admin.views import get_user
 
 
-# TODO: Limit + increase has to be stored in the user
-def test_recharge(dbsession, worker_id) -> None:
-    """Tests the recharge routine code."""
+# TODO: amount has to be stored in the user
+def test_positive_recharge(dbsession, worker_id) -> None:
     recharge_credits(worker_id)
     users_dao = UsersDAO(dbsession)
-    # user has (current + recharge ) < limit
-    simple = get_user("recharge_simple", users_dao)[0]
+    # user1
+    simple = get_user("user1", users_dao)[0]
     assert math.isclose(simple.credits, 3.5)
-    # user has (current + recharge ) > limit
-    recharge_limited = get_user("recharge_limited", users_dao)[0]
-    assert math.isclose(recharge_limited.credits, 10)
-    # user has current == limit
-    recharge_not_needed_a = get_user("recharge_not_needed_a", users_dao)[0]
-    assert recharge_not_needed_a.credits == 10
-    # user has current > limit
-    recharge_not_needed_b = get_user("recharge_not_needed_b", users_dao)[0]
-    assert recharge_not_needed_b.credits == 20
+    # user2
+    recharge_limited = get_user("user2", users_dao)[0]
+    assert math.isclose(recharge_limited.credits, 12.49)
+    # user3
+    recharge_not_needed_a = get_user("user3", users_dao)[0]
+    assert recharge_not_needed_a.credits == 12.5
+    # user4
+    recharge_not_needed_b = get_user("user4", users_dao)[0]
+    assert recharge_not_needed_b.credits == 22.5
+
+
+# TODO: amount has to be stored in the user
+def test_negative_recharge(dbsession, worker_id) -> None:
+    # negative recharge
+    recharge_credits(worker_id, amount=-0.5)
+    users_dao = UsersDAO(dbsession)
+    # user1
+    simple = get_user("user1", users_dao)[0]
+    assert math.isclose(simple.credits, 0.5)
+    # user2
+    recharge_limited = get_user("user2", users_dao)[0]
+    assert math.isclose(recharge_limited.credits, 9.49)
+    # user3
+    recharge_not_needed_a = get_user("user3", users_dao)[0]
+    assert recharge_not_needed_a.credits == 9.5
+    # user4
+    recharge_not_needed_b = get_user("user4", users_dao)[0]
+    assert recharge_not_needed_b.credits == 19.5
 
 
 @pytest.mark.anyio
