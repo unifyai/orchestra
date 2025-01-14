@@ -1,10 +1,10 @@
 -- Users
 INSERT INTO users VALUES (:user_id, 10, null, False, -1, 0);
 INSERT INTO users VALUES ('stripe_autorecharge', 10, null, False, -1, 0);
-INSERT INTO users VALUES ('recharge_simple', 1, null, False, -1, 0);
-INSERT INTO users VALUES ('recharge_limited', 9.99, null, False, -1, 0);
-INSERT INTO users VALUES ('recharge_not_needed_a', 10, null, False, -1, 0);
-INSERT INTO users VALUES ('recharge_not_needed_b', 20, null, False, -1, 0);
+INSERT INTO users VALUES ('user1', 1, null, False, -1, 0);
+INSERT INTO users VALUES ('user2', 9.99, null, False, -1, 0);
+INSERT INTO users VALUES ('user3', 10, null, False, -1, 0);
+INSERT INTO users VALUES ('user4', 20, null, False, -1, 0);
 
 INSERT INTO auth_user("id", "email") VALUES (:user_id, 'test@debug.com');
 INSERT INTO auth_user("id", "email") VALUES ('seconday_user', '2nd@user.com');
