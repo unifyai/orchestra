@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     Integer,
+    Numeric,
     String,
     and_,
     case,
@@ -1248,6 +1249,103 @@ def _handle_functions(filter_dict, log_event_alias, session):
         raise ValueError(f"Unknown function operand: {operand}")
 
 
+def _handle_index_operator(filter_dict, log_event_alias, session):
+    """
+    For a parse node like:
+      {"operand": "INDEX", "lhs": <some node>, "rhs": <some node>}
+    we interpret LHS as a JSON object/array, and RHS as either a string key or an integer index.
+    We'll produce a subquery that extracts that sub-value from LHS.
+
+    Return shape: Subquery with (log_event_id, value).
+    """
+    lhs_node = filter_dict.get("lhs")
+    rhs_node = filter_dict.get("rhs")
+
+    lhs_expr = build_sql_query(lhs_node, log_event_alias, session)
+    rhs_expr = build_sql_query(rhs_node, log_event_alias, session)
+
+    # If LHS is a subquery => we pull out its .c.log_event_id plus the "value" column
+    # If RHS is a subquery => that implies the index key is dynamic; in practice, you may or may not want to handle that
+    # For simplicity, let's assume RHS is literal or a direct bind param.
+    if isinstance(lhs_expr, Subquery):
+        lhs_valcol = _select_value(
+            lhs_expr,
+            session,
+        )  # JSONB column with the parent object/array
+        if isinstance(rhs_expr, Subquery):
+            # Potentially advanced scenario: the user wrote x[y], where y is a subquery.
+            # We'll pick the .value from y, interpret it as a string or integer, and then do -> or ->> extraction.
+            rhs_valcol = _select_value(rhs_expr, session)
+            # We must join them on log_event_id as well:
+            subq = (
+                select(
+                    lhs_expr.c.log_event_id.label("log_event_id"),
+                    # We'll do a JSON extraction. If rhs is a string => valcol->rhs.
+                    # If integer => valcol->rhs, but we must cast integer to text for JSON operator in PG.
+                    # The simplest approach is to do:
+                    func.jsonb_extract_path(
+                        lhs_valcol,
+                        func.cast(rhs_valcol, String),
+                    ).label("value"),
+                )
+                .select_from(lhs_expr)
+                .join(rhs_expr, lhs_expr.c.log_event_id == rhs_expr.c.log_event_id)
+                .subquery()
+            )
+            return subq
+        else:
+            # RHS is a literal or direct expression. Could be an int or string:
+            # If it's an int, we do valcol->'<idx>'. If string, we do valcol->'some_key'.
+            if isinstance(rhs_expr, int):
+                # For PG JSONB, array index is valcol -> idx as text
+                idx_str = str(rhs_expr)
+                extracted = lhs_valcol[idx_str]  # Postgres expression
+            elif isinstance(rhs_expr, str):
+                extracted = lhs_valcol[rhs_expr]
+            else:
+                # Possibly a BindParam. You can do .value
+                if isinstance(rhs_expr, BindParameter):
+                    # get the actual python value
+                    key_or_idx = rhs_expr.value
+                    extracted = lhs_valcol[json.loads(key_or_idx)]
+                else:
+                    # fallback
+                    extracted = lhs_valcol[rhs_expr]
+
+            # Build the subquery
+            subq = (
+                select(
+                    lhs_expr.c.log_event_id.label("log_event_id"),
+                    extracted.label("value"),
+                )
+                .select_from(lhs_expr)
+                .subquery()
+            )
+            return subq
+
+    else:
+        # If LHS is not a subquery => e.g. LHS is a python dict or list literal
+        # Then we can do python-level extraction. Or if LHS is a direct SQL expression (rare), do something else.
+        # For simplicity, treat LHS as python literal:
+        if isinstance(lhs_expr, (dict, list)):
+            # Then we do a python-level extraction if the rhs is also python-literal
+            if isinstance(rhs_expr, (int, str)):
+                # Just do dictionary or list indexing:
+                try:
+                    extracted_value = lhs_expr[rhs_expr]
+                except (KeyError, IndexError, TypeError):
+                    extracted_value = None
+                return literal(extracted_value)
+            else:
+                raise ValueError(
+                    "Cannot index a python dict/list with a subquery or complex expr.",
+                )
+        else:
+            raise ValueError(
+                "INDEX operator expects LHS to be a subquery (JSON) or a python list/dict literal.",
+            )
+
+
 def _build_subquery_for_base_call(list_of_ids_expr, key_expr, session):
     """
     Build a subselect that retrieves columns for a given list_of_ids and a key.
@@ -1340,6 +1438,9 @@ def build_sql_query(filter_dict, log_event_alias, session):
     elif operand in ("len", "to_str", "type", "round", "exists", "version", "BASE"):
         return _handle_functions(filter_dict, log_event_alias, session)
 
+    # Handle list/dict indexing
+    elif operand == "INDEX":
+        return _handle_index_operator(filter_dict, log_event_alias, session)
     # Handle unknown operand
     else:
         raise ValueError(f"Unknown operand or structure: {filter_dict}")
