@@ -174,29 +174,7 @@ def create_log(
     return log_event_id
 
 
-@router.put(
-    "/log/derived",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {"info": "Log created successfully!"},
-                },
-            },
-        },
-        404: {
-            "description": "Project Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project not found.",
-                    },
-                },
-            },
-        },
-    },
-)
+@router.put("/log/derived")
 def create_derived_entry(
     request_fastapi: Request,
     body: CreateDerivedEntriesConfig,
@@ -205,32 +183,114 @@ def create_derived_entry(
     log_event_dao: LogEventDAO = Depends(),
     log_dao: LogDAO = Depends(),
     derived_log_dao: DerivedLogDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
-    Updates multiple logs with the provided entries. Each entry will be either added
-    or overridden in the specified logs.
+    Creates one or more derived-log entries based on `body.equation` and `body.referenced_logs`.
+    Eagerly computes each derived value and stores it in DerivedLog.value.
 
-    A dictionary of "explicit_types" can be passed as part of the `entries`.
-    If present, it will override the inferred type of any matching key in all logs.
     """
-    # ToDo: convert get_logs args to a query to return the log ids
-    # ToDo: prune all of these to the shortest list of ids
+    user_id = request_fastapi.state.user_id
 
-    log_variables = list(body.referenced_logs.keys())
-    variables = list()
-    for log_var in log_variables:
-        variables += [
-            log_var + ":" + substr.split("}")[0]
-            for substr in body.equation.split("{" + log_var + ":")[1:]
-        ]
-    subqs = dict()
-    for variable in variables:
-        log_str, key = variable.split(":")
-        subqs[variable] = log_dao.filter(
-            log_event_id=body.referenced_logs[log_str],
-            key=key,
-            defer=True,
+    # 1) Validate the project
+    try:
+        project_obj = project_dao.filter(name=body.project, user_id=user_id)[0][0]
+    except IndexError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{body.project}' not found.",
         )
+
+    # 3) Resolve referenced_logs
+    #    We either get a direct list [101,102], or a dict e.g. {"filter_expr":...}
+    resolved_ids: Dict[str, List[int]] = {}
+    for varname, val in body.referenced_logs.items():
+        if isinstance(val, list):
+            resolved_ids[varname] = val
+        elif isinstance(val, dict):
+            filter_expr = val.get("filter_expr")
+            if not filter_expr:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Dict for '{varname}' must contain 'filter_expr' or be a direct list of IDs.",
+                )
+            # Re-use _get_logs_query to find matching log_event_ids
+            logs, _, _count = _get_logs_query(
+                request_fastapi=request_fastapi,
+                project=body.project,
+                context=val.get("context", None),
+                filter_expr=filter_expr,
+                sorting=val.get("sort"),
+                from_ids=val.get("from_ids", None),
+                exclude_ids=val.get("exclude_ids", None),
+                from_fields=val.get("from_fields", None),
+                exclude_fields=val.get("exclude_fields", None),
+                limit=val.get("limit"),
+                offset=val.get("offset", 0),
+                project_dao=project_dao,
+                field_type_dao=field_type_dao,
+                session=session,
+            )
+            # logs is a list of (Log, created_at, log_event_id) or (DerivedLog,...),
+            # we only want distinct log_event_id
+            le_ids = list({r[2] for r in logs})
+            resolved_ids[varname] = le_ids
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unrecognized reference for '{varname}': {val}",
+            )
+
+    # If we want a 1:1 mapping, ensure all reference arrays have the same length
+    lengths = [len(lst) for lst in resolved_ids.values()]
+    if not lengths:
+        return {"info": "No references found. Nothing to create."}
+    if len(set(lengths)) != 1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"All referenced log lists must have the same length. Found lengths: {lengths}",
+        )
+
+    # 5) Build a filter_dict that references those base logs. Then compute
+    filter_expr, alias_to_key_map = _substitute_placeholders(
+        body.equation,
+        resolved_ids,
+    )
+    filter_dict = str_filter_exp_to_dict(filter_expr)
+    computed_values = _compute_expression(filter_dict, LogEvent, session)
+    inferred_type = LogDAO.infer_type("", computed_values[0][1])
+
+    created_derived_ids = []
+    # Iterate over the computed values and resolved IDs
+    for i, (_, value) in enumerate(computed_values):
+        # Create a dictionary for the current set of referenced logs
+        current_referenced_logs = {
+            alias_to_key_map[key]: ids[i] for key, ids in resolved_ids.items()
+        }
+        # 6) Create a new log_event for each derived
+        new_event = log_event_dao.create(project_id=project_obj.id)
+
+        # Create a new derived log entry for each computed value
+        class DecimalEncoder(json.JSONEncoder):
+            def default(self, obj):
+                if isinstance(obj, Decimal):
+                    return float(obj)
+                return super().default(obj)
+
+        new_derived_id = derived_log_dao.create(
+            log_event_id=new_event,
+            key=body.key,
+            equation=body.equation,
+            referenced_logs=current_referenced_logs,
+            value=json.loads(json.dumps(value, cls=DecimalEncoder)),
+            inferred_type=inferred_type,
+        )
+        created_derived_ids.append(new_derived_id)
+
+    return {
+        "info": f"Created {len(created_derived_ids)} derived logs with key='{body.key}'.",
+        "derived_log_ids": created_derived_ids,
+    }
 
 
 @router.put(
