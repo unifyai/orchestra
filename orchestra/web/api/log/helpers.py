@@ -1112,19 +1112,80 @@ def _handle_functions(filter_dict, log_event_alias, session):
             return str(rhs_expr)
 
     elif operand == "round":
-        if isinstance(rhs_expr, Subquery):
-            expr = func.round(_select_value(rhs_expr, session))
-            return (
-                select(
-                    rhs_expr.c.log_event_id.label("log_event_id"),
-                    expr.label("value"),
+        # 1) Normalize the "rhs_expr" into a list of length 1 or 2
+        if not isinstance(rhs_expr, list):
+            rhs_expr = [rhs_expr]
+        if len(rhs_expr) == 1:
+            # round(val)
+            val_expr = rhs_expr[0]
+            if isinstance(val_expr, Subquery):
+                # subquery => we retrieve the numeric column
+                val_col = _select_value(val_expr, session)
+                # produce a new subquery
+                subq = (
+                    select(
+                        val_expr.c.log_event_id.label("log_event_id"),
+                        func.round(cast(val_col, Numeric)).label("value"),
+                    )
+                    .select_from(val_expr)
+                    .subquery()
                 )
-                .select_from(rhs_expr)
-                .subquery()
-            )
-        else:
-            return round(rhs_expr)
+                return subq
+            else:
+                # val_expr is a literal or a direct SQL expression
+                return func.round(cast(val_col, Numeric))
 
+        elif len(rhs_expr) == 2:
+            # round(val, digits)
+            val_expr, digits_expr = rhs_expr
+            # If digits_expr is not an integer-literal, we might need to cast.
+            # For Postgres, `round(double precision, integer)` is typical.
+            # If digits_expr is a subquery, we’d similarly do _select_value(digits_expr, session).
+            if isinstance(val_expr, Subquery) and isinstance(digits_expr, Subquery):
+                val_col = _select_value(val_expr, session)
+                dig_col = _select_value(digits_expr, session)
+                subq = (
+                    select(
+                        val_expr.c.log_event_id.label("log_event_id"),
+                        func.round(cast(val_col, Numeric), dig_col).label("value"),
+                    )
+                    .select_from(val_expr)
+                    .join(
+                        digits_expr,
+                        val_expr.c.log_event_id == digits_expr.c.log_event_id,
+                    )
+                    .subquery()
+                )
+                return subq
+            elif isinstance(val_expr, Subquery):
+                val_col = _select_value(val_expr, session)
+                # If digits_expr is literal or bind param, we can pass it directly:
+                subq = (
+                    select(
+                        val_expr.c.log_event_id.label("log_event_id"),
+                        func.round(cast(val_col, Numeric), digits_expr).label("value"),
+                    )
+                    .select_from(val_expr)
+                    .subquery()
+                )
+                return subq
+            elif isinstance(digits_expr, Subquery):
+                dig_col = _select_value(digits_expr, session)
+                # In that case, val_expr might be a literal
+                subq = (
+                    select(
+                        digits_expr.c.log_event_id.label("log_event_id"),
+                        func.round(cast(val_expr, Numeric), dig_col).label("value"),
+                    )
+                    .select_from(digits_expr)
+                    .subquery()
+                )
+                return subq
+            else:
+                # both val_expr and digits_expr are non-subquery expressions (literals or direct SQL)
+                return func.round(cast(val_expr, Numeric), digits_expr)
+        else:
+            raise ValueError("round(...) expects 1 or 2 arguments.")
     elif operand == "type":
         if isinstance(rhs_expr, Subquery):
             expr = rhs_expr.c.inferred_type
