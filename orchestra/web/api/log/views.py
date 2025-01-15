@@ -680,7 +680,132 @@ def _get_base_logs_subq(
     return q.subquery(name="base_logs_subq"), context_len
 
 
-    # query for the distinct log event ids
+def _get_derived_logs_subq(
+    base_subq: Subquery,
+    session=Depends(get_db_session),
+) -> Subquery:
+    """
+    Given a subquery of base logs (already filtered), return a subquery of
+    *derived logs* that reference at least one row in base_subq.
+
+    The columns must match base_subq for union_all to work. So we return:
+      id, log_event_id, key, value, inferred_type, version, created_at, referenced_logs, source_type
+    """
+    # We'll join DerivedLog -> LogEvent, and then join base_subq on the
+    # condition that the derived log references base_subq's (key -> log_event_id).
+    q = (
+        session.query(
+            DerivedLog.id.label("id"),
+            DerivedLog.log_event_id.label("log_event_id"),
+            DerivedLog.key.label("key"),
+            DerivedLog.value.label("value"),
+            DerivedLog.inferred_type.label("inferred_type"),
+            # derived logs have no version, so cast(None, Integer)
+            cast(None, Integer).label("version"),
+            DerivedLog.updated_at.label("updated_at"),
+            LogEvent.created_at.label("created_at"),
+            DerivedLog.referenced_logs.label("referenced_logs"),
+            literal("derived").label("source_type"),
+        )
+        .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
+        # Now the crucial join to base_subq
+        .join(
+            base_subq,
+            and_(
+                # Compare JSONB ->> base_subq.c.key to base_subq.c.log_event_id
+                cast(DerivedLog.referenced_logs[base_subq.c.key].astext, Integer)
+                == base_subq.c.log_event_id,
+            ),
+        )
+        # If a derived log references multiple different base logs, it might appear multiple times;
+        # so we can ensure uniqueness with .distinct(DerivedLog.id)
+        .distinct(DerivedLog.id)
+        .subquery(name="derived_logs_subq")
+    )
+    return q
+
+
+def _get_logs_query(
+    request_fastapi: Request,
+    project: str,
+    context: Optional[str],
+    filter_expr: Optional[str],
+    sorting: Optional[str],
+    from_ids: Optional[str],
+    exclude_ids: Optional[str],
+    from_fields: Optional[str],
+    exclude_fields: Optional[str],
+    limit: Optional[int],
+    offset: int,
+    project_dao: ProjectDAO,
+    field_type_dao: FieldTypeDAO,
+    session,
+    latest_timestamp=False,
+):
+    """
+    Returns a combined list of base logs and derived logs that match user filters.
+    Each row is (Log or DerivedLog object, created_at, log_event_id).
+    """
+    user_id = request_fastapi.state.user_id
+
+    # --- 1) Validate the project
+    try:
+        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
+    except IndexError:
+        raise not_found(f"Project {project}")
+    project_id = project_obj.id
+
+    # --- 2) Build subqueries for base logs and derived logs
+    base_subq, context_len = _get_base_logs_subq(
+        project_id=project_id,
+        filter_expr=filter_expr,
+        from_ids=from_ids,
+        exclude_ids=exclude_ids,
+        context=context,
+        from_fields=from_fields,
+        exclude_fields=exclude_fields,
+        session=session,
+    )
+    # 2) Build derived_subq, passing base_subq to filter by references
+    derived_subq = _get_derived_logs_subq(
+        base_subq=base_subq,
+        session=session,
+    )
+
+    # union_q will have columns:
+    # id, log_event_id, key, value, inferred_type, version, created_at, source_type
+    union_q = (
+        session.query(
+            base_subq.c.id.label("id"),
+            base_subq.c.log_event_id.label("log_event_id"),
+            base_subq.c.key.label("key"),
+            base_subq.c.value.label("value"),
+            base_subq.c.inferred_type.label("inferred_type"),
+            base_subq.c.version.label("version"),
+            base_subq.c.created_at.label("created_at"),
+            base_subq.c.updated_at.label("updated_at"),
+            base_subq.c.referenced_logs.label("referenced_logs"),
+            base_subq.c.source_type.label("source_type"),
+        )
+        .union_all(
+            session.query(
+                derived_subq.c.id.label("id"),
+                derived_subq.c.log_event_id.label("log_event_id"),
+                derived_subq.c.key.label("key"),
+                derived_subq.c.value.label("value"),
+                derived_subq.c.inferred_type.label("inferred_type"),
+                derived_subq.c.version.label("version"),
+                derived_subq.c.created_at.label("created_at"),
+                derived_subq.c.updated_at.label("updated_at"),
+                derived_subq.c.referenced_logs.label("referenced_logs"),
+                derived_subq.c.source_type.label("source_type"),
+            ),
+        )
+        .subquery(name="union_q")
+    )
+
+    # --- 3) Build a subquery of distinct log_event_ids that are actually present
+    # in the union (i.e. they matched context, filter_expr, from_fields, etc.).
     distinct_ids_subq = (
         session.query(LogEvent.id)
         .join(Log, Log.log_event_id == LogEvent.id)
