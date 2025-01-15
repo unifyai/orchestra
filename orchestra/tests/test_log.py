@@ -680,6 +680,8 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
         # Membership
         ("a in [1, 2, 3]", {"a": 2}),
         ("a not in [1, 2, 3]", {"a": 4}),
+        # # Indexing
+        ("round(x['some_key'], 2) >= 100.44", {"x": {"some_key": 100.4479}}),
         # Nested Logical and Arithmetic
         ("((a + b) > 10) and ((c * d) < 20)", {"a": 5, "b": 8, "c": 2, "d": 3}),
         ("((a - b) == 2) or ((e / f) == 3)", {"a": 5, "b": 3, "e": 9, "f": 3}),
