@@ -332,6 +332,8 @@ def update_logs(
     log_dao: LogDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
+    derived_log_dao: DerivedLogDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Updates multiple logs with the provided entries. Each entry will be either added
@@ -340,6 +342,7 @@ def update_logs(
     A dictionary of "explicit_types" can be passed as part of the `entries`.
     If present, it will override the inferred type of any matching key in all logs.
     """
+    updated_ids = set()
     for data_type in ("params", "entries"):
 
         data = getattr(body, data_type)
@@ -422,6 +425,7 @@ def update_logs(
                         explicit_types=explicit_types,
                         overwrite=body.overwrite,
                     )
+                    updated_ids.add((k, log_id))
                 except IndexError:
                     log_dao.create_from_raw_k_v(
                         project_id=project_id,
@@ -447,6 +451,31 @@ def update_logs(
                 status_code=404,
                 detail=f"Logs with ids {not_found_logs} not found or you don't have permission to update them.",
             )
+    # Now recompute the derived logs that reference any updated base logs
+    # We'll find derived logs that have `referenced_logs` containing *any* of these updated_log_ids
+    if updated_ids:
+        # Convert updated_ids to a list of JSONB objects for containment check
+        updated_ids_jsonb = [f'{{"{key}": {value}}}' for (key, value) in updated_ids]
+
+        # Find derived logs that need to be recomputed
+        derived_logs_to_recompute = (
+            session.query(DerivedLog)
+            .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
+            .filter(LogEvent.project_id == project_id)
+            .filter(
+                or_(
+                    *[
+                        DerivedLog.referenced_logs.op("@>")(jsonb_obj)
+                        for jsonb_obj in updated_ids_jsonb
+                    ],
+                ),
+            )
+            .all()
+        )
+
+        if derived_logs_to_recompute:
+            derived_log_dao.recompute_derived_logs(derived_logs_to_recompute, session)
+
     return {"info": "Logs updated successfully!"}
 
 
