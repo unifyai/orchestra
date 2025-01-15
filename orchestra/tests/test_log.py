@@ -236,14 +236,155 @@ async def test_create_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_create_derived_entries(client: AsyncClient):
-    project_name = "eval-project"
-    _ = await _create_project(client, project_name)
+async def test_create_derived_entry_with_list(client: AsyncClient):
+    project_name = "test_project_list"
+    await _create_project(client, project_name, user=1)
 
-    response = await _create_log(client, project_name)
-    assert response.status_code == 200, response.json()
-    response = await _create_derived_entry(client, project_name, response.json())
-    assert response.status_code == 200, response.json()
+    # Create base logs
+    log_ids = []
+    for i in range(3):
+        response = await _create_log(client, project_name, entries={"a": i * 10})
+        assert response.status_code == 200
+        log_ids.append(response.json())
+
+    # Create derived logs
+    key = "half_a"
+    equation = "{log1:a}*2"
+    referenced_logs = {"log1": log_ids}
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        equation,
+        referenced_logs,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "derived_log_ids" in data
+    assert (
+        len(data["derived_log_ids"]) == 3
+    )  # Should create one derived log per base log
+
+
+@pytest.mark.anyio
+async def test_create_derived_entry_with_filter_expr(client: AsyncClient):
+    project_name = "test_project_filter"
+    await _create_project(client, project_name, user=1)
+
+    # Create base logs
+    log_ids = []
+    for i in range(5):
+        response = await _create_log(client, project_name, entries={"score": i * 10})
+        assert response.status_code == 200
+        log_ids.append(response.json())
+
+    # Create derived logs using filter_expr to select logs with score > 20
+    referenced_logs = {"log1": {"filter_expr": "score > 20"}}
+    key = "half_score"
+    equation = "{log1:score}/2"
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        equation,
+        referenced_logs,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    # Only logs with score > 20 (i=3,4) should have derived logs
+    assert "derived_log_ids" in data
+    assert len(data["derived_log_ids"]) == 2
+
+
+@pytest.mark.anyio
+async def test_get_logs_including_derived(client: AsyncClient):
+    project_name = "test_project_get_logs"
+    await _create_project(client, project_name, user=1)
+
+    # Create base logs
+    base_log_ids = []
+    for i in range(2):
+        response = await _create_log(client, project_name, entries={"score": i * 2.5})
+        assert response.status_code == 200
+        base_log_ids.append(response.json())
+
+    # Create derived logs
+    key = "doubled"
+    equation = "{log0:score}*2"
+    referenced_logs = {"log0": base_log_ids}
+    derived_response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        equation,
+        referenced_logs,
+    )
+    assert derived_response.status_code == 200
+    derived_ids = derived_response.json()["derived_log_ids"]
+
+    # Retrieve logs
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "sorting": json.dumps(
+                {
+                    "score": "descending",
+                },
+            ),
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "logs" in data
+    assert len(data["logs"]) == 4  # 2 base logs + 2 derived logs
+
+    # TODO: Verify derived logs are present
+
+
+@pytest.mark.anyio
+async def test_update_logs_and_derived_logs_are_updated(client: AsyncClient):
+    project_name = "test_project_update_logs"
+    await _create_project(client, project_name, user=1)
+
+    # Create base logs
+    base_log_ids = []
+    for i in range(2):
+        response = await _create_log(client, project_name, entries={"a": i + 1})
+        assert response.status_code == 200
+        base_log_ids.append(response.json())
+
+    # Create derived logs
+    key = "add_one"
+    equation = "{log0:a}+1"
+    referenced_logs = {"log0": base_log_ids}
+    derived_response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        equation,
+        referenced_logs,
+    )
+    assert derived_response.status_code == 200
+    derived_ids = derived_response.json()["derived_log_ids"]
+
+    # Update base logs
+    update_payload = {
+        "ids": base_log_ids,
+        "entries": [{"a": 10}, {"a": 20}],
+        "overwrite": True,
+    }
+    response = await client.put(
+        "/v0/logs",
+        json=update_payload,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["info"] == "Logs updated successfully!"
+
+    # TODO: Retrieve derived logs and verify updates
 
 
 @pytest.mark.anyio
