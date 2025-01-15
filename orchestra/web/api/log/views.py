@@ -4,19 +4,26 @@ Includes endpoints related to entries.
 
 import json
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional, Union
+from decimal import Decimal
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy import (
     INTEGER,
     TIMESTAMP,
+    DateTime,
     Float,
+    Integer,
     String,
     and_,
+    asc,
     case,
     cast,
+    desc,
     exists,
     func,
+    literal,
+    or_,
     select,
 )
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
@@ -28,7 +35,7 @@ from orchestra.db.dao.log_dao import LogDAO, OverwriteError
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Log, LogEvent
+from orchestra.db.models.orchestra_models import DerivedLog, Log, LogEvent
 from orchestra.web.api.log.schema import (
     CreateDerivedEntriesConfig,
     CreateLogConfig,
@@ -40,9 +47,10 @@ from orchestra.web.api.utils.http_responses import not_found
 
 from .helpers import (
     STR_TO_SQL_TYPES,
+    _compute_expression,
     _flatten_fields,
+    _substitute_placeholders,
     build_sql_query,
-    format_logs,
     str_filter_exp_to_dict,
 )
 
@@ -807,95 +815,208 @@ def _get_logs_query(
     # --- 3) Build a subquery of distinct log_event_ids that are actually present
     # in the union (i.e. they matched context, filter_expr, from_fields, etc.).
     distinct_ids_subq = (
-        session.query(LogEvent.id)
-        .join(Log, Log.log_event_id == LogEvent.id)
-        .join(relevant_logs, relevant_logs.c.id == Log.id)
+        session.query(union_q.c.log_event_id.label("log_event_id"))
         .distinct()
-        .subquery()
+        .subquery(name="distinct_ids_subq")
     )
 
-    # sort the log ids based on the sorting criteria provided by the user,
-    # and dynamically add a post-sorting row number to keep the order info preserved
-    sort_criteria = list()
-    sorted_query = session.query(distinct_ids_subq.c.id)
+    # --- 4) Sorting
+    # for each user-defined key, we create a subquery
+    # that grabs (log_event_id, value) from the union for that particular key.
+    # Then we cast the value to a known type (using the field_type table).
+    sorted_query = session.query(distinct_ids_subq.c.log_event_id)
+    sort_criteria = []
+
+    # We'll store subqueries for each key so we can outerjoin them
+    subqs_for_sort = {}
+    field_types = field_type_dao.get_field_types(
+        project_id,
+    )  # { "score": "float", "timestamp": "datetime", ...}
+
     if sorting:
-        subqs = {}
-        for key in json.loads(sorting):
-            subqs[key] = (
-                session.query(LogEvent.id, Log.value, Log.inferred_type)
-                .join(Log, LogEvent.id == Log.log_event_id)
-                .where(Log.key == key)
-                .subquery()
-            )
-            field_types = field_type_dao.get_field_types(project_obj.id)
-        for key, sort_mode in json.loads(sorting).items():
-            subq = subqs[key]
-            # Outer join to bring in the needed columns for sorting
-            sorted_query = sorted_query.outerjoin(
-                subq,
-                subq.c.id == distinct_ids_subq.c.id,
+        # e.g. sorting='{"score":"ascending","timestamp":"descending"}'
+        sort_dict = json.loads(sorting)
+        #
+        # 4a) For each user-specified sort key, we create a sub-subquery that merges:
+        #     - base logs that have key=<sort_key>
+        #     - derived logs that reference <sort_key> -> base log (join to that base log's value)
+        #
+        for sort_key, _mode in sort_dict.items():
+            # build a subquery of shape (log_event_id, cast(value) AS val_for_key)
+            # Subquery #1: base logs that literally have key=sort_key
+            base_sort_subq = (
+                session.query(
+                    union_q.c.log_event_id.label("log_event_id"),
+                    # We'll store the raw_value in a column
+                    union_q.c.value.label("raw_value"),
+                )
+                .filter(union_q.c.source_type == "base")
+                .filter(union_q.c.key == sort_key)
+                .subquery(f"base_{sort_key}_subq")
             )
 
-            if key in field_types:
-                if key == "_/timestamp":
-                    criterion = cast(
-                        cast(subq.c.value, String),
-                        STR_TO_SQL_TYPES[field_types[key]],
-                    )
-                else:
-                    criterion = cast(subq.c.value, STR_TO_SQL_TYPES[field_types[key]])
-            else:
-                criterion = subq.c.value
+            # Subquery #2: derived logs that reference sort_key -> a base log_event_id
+            # We parse the JSON and get the base log_event_id. Then we join to Log to get the base log's .value
+            derived_ref_subq = (
+                session.query(
+                    union_q.c.log_event_id.label("log_event_id"),
+                    func.cast(
+                        func.jsonb_extract_path_text(
+                            union_q.c.referenced_logs,
+                            sort_key,
+                        ),
+                        Integer,
+                    ).label("base_log_event_id"),
+                )
+                .filter(union_q.c.source_type == "derived")
+                .subquery(f"derived_{sort_key}_ref_subq")
+            )
 
-            if sort_mode == "ascending":
-                sort_criteria.append(criterion.asc().nulls_last())
-            elif sort_mode == "descending":
-                sort_criteria.append(criterion.desc().nulls_last())
-            else:
+            # Adjust the derived_with_base_subq to ensure correct join and filtering
+            derived_with_base_subq = (
+                session.query(
+                    derived_ref_subq.c.log_event_id.label("log_event_id"),
+                    Log.value.label("raw_value"),
+                )
+                .join(
+                    Log,
+                    and_(
+                        Log.log_event_id == derived_ref_subq.c.base_log_event_id,
+                        Log.key == sort_key,
+                    ),
+                    isouter=True,
+                )
+                .subquery(f"derived_{sort_key}_joined_subq")
+            )
+
+            # Merge them (UNION) so that we have one subquery for "sort_key"
+            # that yields (log_event_id, raw_value)
+            union_sort_subq = (
+                session.query(
+                    base_sort_subq.c.log_event_id.label("log_event_id"),
+                    base_sort_subq.c.raw_value.label("raw_value"),
+                )
+                .union_all(
+                    session.query(
+                        derived_with_base_subq.c.log_event_id.label("log_event_id"),
+                        derived_with_base_subq.c.raw_value.label("raw_value"),
+                    ),
+                )
+                .subquery(f"sort_{sort_key}_union_subq")
+            )
+
+            subqs_for_sort[sort_key] = union_sort_subq
+
+        # Now we outerjoin each subq onto sorted_query
+        for key, mode in sort_dict.items():
+            if mode not in ("ascending", "descending"):
                 raise HTTPException(
                     status_code=400,
-                    detail="sort_mode must be 'ascending' or 'descending', "
-                    f"but found {sort_mode}.",
+                    detail=f"Sort mode must be 'ascending' or 'descending', got {mode}.",
                 )
-    sort_criteria.append(LogEvent.id.desc())
+            direction = asc if mode == "ascending" else desc
+            subq = subqs_for_sort[key]
 
-    log_event_query = (
-        sorted_query.join(
-            LogEvent,
-            LogEvent.id == distinct_ids_subq.c.id,
-        )
-        .add_columns(
-            func.row_number().over(order_by=sort_criteria).label("row_num"),
-        )
-        .order_by("row_num")
-    )
+            # Outer join
+            sorted_query = sorted_query.outerjoin(
+                subq,
+                subq.c.log_event_id == distinct_ids_subq.c.log_event_id,
+            )
 
-    count = log_event_query.count()
+            # 4b) Cast the subq.c.raw_value based on the field type (if known)
+            # If you store the type in field_types, do something like:
+            if key in field_types:
+                python_type = field_types[key]
+                cast_type = STR_TO_SQL_TYPES[python_type]
+
+                # Now build an expression for sorting
+                sort_expr = (
+                    cast(
+                        cast(subq.c.raw_value, String),
+                        cast_type,
+                    )
+                    if cast_type == DateTime
+                    else cast(subq.c.raw_value, cast_type)
+                )
+            else:
+                # fallback: treat it as text
+                sort_expr = subq.c.raw_value
+
+            # For null handling:
+            sort_criteria.append(direction(sort_expr).nulls_last())
+
+    # --- 4c) Always fallback to sorting by log_event_id desc
+    sort_criteria.append(distinct_ids_subq.c.log_event_id.desc())
+
+    # --- 4d) row_number() approach
+    sorted_query = sorted_query.add_columns(
+        func.row_number().over(order_by=sort_criteria).label("row_num"),
+    ).order_by("row_num")
+
+    # --- 5) Pagination
+    count = sorted_query.count()  # total number of log_event_ids
     if limit:
-        log_event_query = log_event_query.limit(limit)
+        sorted_query = sorted_query.limit(limit)
     if offset:
-        log_event_query = log_event_query.offset(offset)
-    relevant_log_events = log_event_query.subquery()
+        sorted_query = sorted_query.offset(offset)
 
-    # the final log query, with all of the pruning, filtering, sorting,
-    # and pagination applied
-    log_query = log_query.join(
-        relevant_log_events,
-        relevant_log_events.c.id == LogEvent.id,
-    )
+    # We'll subquery this so we can join back to union_q
+    final_ids_subq = sorted_query.subquery(name="final_ids_subq")
+    # final_ids_subq has columns: log_event_id, row_num
 
+    # --- 6) If user only wants latest_timestamp
     if latest_timestamp:
-        relevant_logs = log_query.subquery()
-        max_query = session.query(func.max(Log.updated_at)).join(
-            relevant_logs,
-            relevant_logs.c.id == Log.id,
+        max_updated_at = (
+            session.query(func.max(union_q.c.updated_at))
+            .join(
+                final_ids_subq,
+                final_ids_subq.c.log_event_id == union_q.c.log_event_id,
+            )
+            .scalar()
         )
-        return max_query.scalar().isoformat()
-    return (
-        log_query.order_by(relevant_log_events.c.row_num, Log.created_at).all(),
-        context_len,
-        count,
+        return max_updated_at.isoformat() if max_updated_at else None
+
+    # --- 7) Now fetch the actual rows by joining union_q to final_ids_subq
+    # so we only get the subset of log_event_ids that survived the pagination.
+    logs_query = (
+        session.query(
+            union_q.c.id,
+            union_q.c.log_event_id,
+            union_q.c.key,
+            union_q.c.value,
+            union_q.c.inferred_type,
+            union_q.c.version,
+            union_q.c.created_at,
+            union_q.c.source_type,
+            final_ids_subq.c.row_num,
+        )
+        .join(final_ids_subq, final_ids_subq.c.log_event_id == union_q.c.log_event_id)
+        .order_by(final_ids_subq.c.row_num, union_q.c.created_at)
     )
+
+    rows = logs_query.all()
+
+    # rows now is a list of:
+    # [
+    #   (
+    #       id, log_event_id, key, value, inferred_type, version,
+    #       created_at, source_type, row_num
+    #   ), ...
+    # ]
+
+    # --- 8) Re-hydrate them into Log or DerivedLog
+    results = []
+    for row in rows:
+        if row.source_type == "base":
+            obj = session.query(Log).get(row.id)
+        else:
+            obj = session.query(DerivedLog).get(row.id)
+
+        if obj:
+            results.append((obj, row.created_at, row.log_event_id))
+
+    # Return the same format: (list_of_rows, context_len, count)
+    return results, context_len, count
 
 
 @router.get(
