@@ -20,17 +20,18 @@ class DerivedLogDAO:
     def create(
         self,
         log_event_id: int,
+        key: str,
         equation: str,
         referenced_logs: Dict[str, int],
+        value: int,
+        inferred_type: str,
     ) -> int:
-
-        value = 0
-        inferred_type = str
 
         ts = datetime.now(timezone.utc)
 
         new_derived_log = DerivedLog(
             log_event_id=log_event_id,
+            key=key,
             equation=equation,
             referenced_logs=referenced_logs,
             value=value,
