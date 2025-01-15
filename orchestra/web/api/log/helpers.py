@@ -87,6 +87,14 @@ def _compute_expression(filter_dict, log_event_alias, session):
 
 
 def parse_nested(s, pos):
+    """
+    Given a string s and a starting position pos, parse_nested()
+    finds the substring (with balanced parentheses/brackets/braces)
+    and returns (the_substring, new_position).
+
+    For example, if s = "x['key'][0]" and pos points to the first bracket,
+    parse_nested might return ("['key']", pos_after_closing_bracket).
+    """
     start_pos = pos
     stack = []
     while pos < len(s):
@@ -109,7 +117,7 @@ def parse_nested(s, pos):
                 pos += 1  # Include the closing bracket
                 break
         elif c in ("'", '"'):
-            # Skip over string literals
+            # Skip over string literals inside the brackets
             quote_char = c
             pos += 1
             while pos < len(s):
@@ -130,7 +138,6 @@ def parse_nested(s, pos):
 def _tokenize(s):
     token_specification = [
         ("NUMBER", r"-?(\d+(\.\d*)?|\.\d+)"),  # Integer or decimal number, +ve or -ve
-        # Updated STRING regex to handle nested quotation marks and escaped quotes correctly
         (
             "STRING",
             r'"(?:[^"\\]|\\.)*?"|\'(?:[^\'\\]|\\.)*?\'',
@@ -140,13 +147,14 @@ def _tokenize(s):
             "OP",
             r"==|!=|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)|\+|\-|\*|/|%",
         ),
+        ("ROUND", r"(?<!\w)round(?!\w)"),
         (
             "FUNC",
-            r"(?<!\w)(?:round|len|type|exists|version|str(?=\()|to_str)",
-        ),  # Functions
+            r"(?<!\w)(?:len|type|exists|version|str(?=\()|to_str)",
+        ),
         (
             "BASEFUNC",
-            r"(?<!\w)BASE(?!\w)",  # new special function
+            r"(?<!\w)BASE(?!\w)",  # special function to handle derived log notation
         ),
         (
             "TYPE_LITERAL",
@@ -157,7 +165,10 @@ def _tokenize(s):
         ("LPAREN", r"\("),
         ("RPAREN", r"\)"),
         ("COMMA", r","),
-        ("BRACKET_OPEN", r"[\[\{]"),
+        (
+            "BRACKET_OPEN",
+            r"[\[\{]",
+        ),  # We detect [ or {, then parse_nested to build an OTHER token
         ("SKIP", r"[ \t]+"),  # Skip over spaces and tabs
         ("MISMATCH", r"."),  # Any other character
     ]
@@ -188,22 +199,20 @@ def _tokenize(s):
             tokens.append(("BOOLEAN", value))
         elif kind in (
             "IDENTIFIER",
-            "LEN",
-            "STR",
-            "TYPE_CHECK",
-            "EXISTS",
-            "VERSION",
+            "FUNC",
+            "BASEFUNC",
+            "ROUND",
             "OP",
             "LPAREN",
             "RPAREN",
-            "FUNC",
-            "BASEFUNC",
             "COMMA",
         ):
             tokens.append((kind, value))
         elif kind == "TYPE_LITERAL":
             tokens.append((kind, value))
         elif kind == "BRACKET_OPEN":
+            # We found a [ or {, so let's parse the entire bracketed substring
+            # with parse_nested, and store it as an "OTHER" token
             nested_content, new_pos = parse_nested(line, mo.start())
             tokens.append(("OTHER", nested_content))
             pos = new_pos
@@ -213,8 +222,10 @@ def _tokenize(s):
             pass  # Ignore whitespace
         elif kind == "MISMATCH":
             raise RuntimeError(f"Unexpected character {value!r} at position {pos}")
+
         pos = mo.end()
         mo = get_token(line, pos)
+
     tokens.append(("EOF", ""))
     return tokens
 
@@ -232,7 +243,7 @@ class _Parser:
         return None
 
     def in_type_check_context(self):
-        """Check if we're inside a type() function call"""
+        """Check if we're inside a type() function call like `type(x) is int`."""
         prev_token = self.peek_back(1)
         return (
             prev_token and prev_token[0] == "OP" and prev_token[1] in ("is", "is not")
@@ -252,8 +263,7 @@ class _Parser:
         return result
 
     def expr(self):
-        node = self.or_expr()
-        return node
+        return self.or_expr()
 
     def or_expr(self):
         node = self.and_expr()
@@ -278,8 +288,7 @@ class _Parser:
             op = self.current_token[1]
             self.advance()
             rhs = self.not_expr()
-            node = {"operand": op, "rhs": rhs}
-            return node
+            return {"operand": op, "rhs": rhs}
         else:
             return self.comp_expr()
 
@@ -320,18 +329,10 @@ class _Parser:
 
     def mul_div_expr(self):
         node = self.primary()
-        while self.current_token[0] == "OP" and self.current_token[1] in (
-            "*",
-            "/",
-            "%",
-        ):
-            op = self.current_token[1]
-            self.advance()
-            right = self.primary()
-            node = {"lhs": node, "operand": op, "rhs": right}
         return node
 
     def primary(self):
+        # --- 1) handle function calls like len(a), to_str(b), etc. ---
         if self.current_token[0] == "FUNC":
             fn = self.current_token[1]
             self.advance()
@@ -341,36 +342,58 @@ class _Parser:
                 if self.current_token[0] == "RPAREN":
                     self.advance()
                 else:
-                    raise RuntimeError(
-                        'Expected ")" after function call',
-                    )
+                    raise RuntimeError('Expected ")" after function call')
                 return {"operand": fn, "rhs": expr}
             else:
-                raise RuntimeError(
-                    'Expected "(" after function call',
-                )
+                raise RuntimeError('Expected "(" after function call')
+
+        # --- 2) handle round(...) with 1 or 2 arguments ---
+        elif self.current_token[0] == "ROUND":
+            fn = "round"
+            self.advance()  # consume the 'round' token
+            if self.current_token[0] == "LPAREN":
+                self.advance()
+                # parse the first arg
+                first_arg = self.expr()
+                args = [first_arg]
+
+                # check if there's a comma -> second arg
+                if self.current_token[0] == "COMMA":
+                    self.advance()
+                    second_arg = self.expr()
+                    args.append(second_arg)
+
+                # expect a closing parenthesis
+                if self.current_token[0] != "RPAREN":
+                    raise RuntimeError("Expected ')' after round(...) arguments")
+                self.advance()  # consume RPAREN
+
+                return {"operand": fn, "rhs": args}
+            else:
+                raise RuntimeError("Expected '(' after round")
+
+        # --- 3) handle BASE(...) with 2 arguments ---
         elif self.current_token[0] == "BASEFUNC":
-            # parse BASE(...) with 2 arguments
             fn = "BASE"
             self.advance()  # consume BASEFUNC
             if self.current_token[0] == "LPAREN":
                 self.advance()
                 # parse first arg
                 first_arg = self.expr()
-                # we expect a comma
-                if self.current_token[1] != ",":
-                    raise RuntimeError("Expected ',' after BASE( arg1")
+                # expect a comma
+                if self.current_token[0] != "COMMA":
+                    raise RuntimeError(f"Expected ',' after {fn}( arg1")
                 self.advance()  # consume comma
                 # parse second arg
                 second_arg = self.expr()
                 if self.current_token[0] != "RPAREN":
-                    raise RuntimeError("Expected ')' after BASE(...) arguments")
+                    raise RuntimeError(f"Expected ')' after {fn}(...) arguments")
                 self.advance()  # consume RPAREN
-                # store as a dict
                 return {"operand": fn, "rhs": [first_arg, second_arg]}
             else:
-                raise RuntimeError("Expected '(' after BASE")
+                raise RuntimeError(f"Expected '(' after {fn}")
 
+        # --- 4) handle type literals like int, float, etc. ---
         elif self.current_token[0] == "TYPE_LITERAL":
             if self.in_type_check_context():
                 node = {"type": "type_literal", "value": self.current_token[1]}
@@ -378,6 +401,8 @@ class _Parser:
                 node = {"type": "identifier", "value": self.current_token[1]}
             self.advance()
             return node
+
+        # --- 5) parentheses grouping ---
         elif self.current_token[0] == "LPAREN":
             self.advance()
             node = self.expr()
@@ -386,26 +411,62 @@ class _Parser:
             else:
                 raise RuntimeError('Expected ")"')
             return node
+
+        # --- 6) booleans ---
         elif self.current_token[0] == "BOOLEAN":
             node = self.current_token[1]
             self.advance()
             return node
+
+        # --- 7) identifiers (including subsequent indexing) ---
         elif self.current_token[0] == "IDENTIFIER":
             node = {"type": "identifier", "value": self.current_token[1]}
             self.advance()
+
+            # Now handle any subsequent indexing: x['key'], x[0], x['key'][something_else] ...
+            while self.current_token[0] == "OTHER":
+                bracket_str = self.current_token[1]
+                # If it's something like "[...]" or "{...}" we can parse inside as an expression:
+                if bracket_str.startswith("[") or bracket_str.startswith("{"):
+                    # remove outer brackets
+                    inside_str = bracket_str[
+                        1:-1
+                    ]  # drop the leading '[' or '{' and the trailing ']' or '}'
+                    # tokenize the inside substring
+                    sub_tokens = _tokenize(inside_str)
+                    sub_parser = _Parser(sub_tokens)
+                    inside_expr = sub_parser.parse()
+                    node = {
+                        "operand": "INDEX",
+                        "lhs": node,
+                        "rhs": inside_expr,
+                    }
+                    # consume this bracketed token
+                    self.advance()
+                else:
+                    # if for some reason it's "OTHER" not starting with bracket, break or error
+                    break
+
             return node
+
+        # --- 8) numbers ---
         elif self.current_token[0] == "NUMBER":
             node = self.current_token[1]
             self.advance()
             return node
+
+        # --- 9) strings ---
         elif self.current_token[0] == "STRING":
             node = {"type": "string", "value": self.current_token[1]}
             self.advance()
             return node
+
+        # --- 10) "OTHER" ---
         elif self.current_token[0] == "OTHER":
             node = {"type": "other", "value": self.current_token[1]}
             self.advance()
             return node
+
         else:
             raise RuntimeError(f"Unexpected token {self.current_token}")
 
