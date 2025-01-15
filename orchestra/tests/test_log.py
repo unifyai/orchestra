@@ -680,7 +680,7 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
         # Membership
         ("a in [1, 2, 3]", {"a": 2}),
         ("a not in [1, 2, 3]", {"a": 4}),
-        # # Indexing
+        # Indexing
         ("round(x['some_key'], 2) >= 100.44", {"x": {"some_key": 100.4479}}),
         # Nested Logical and Arithmetic
         ("((a + b) > 10) and ((c * d) < 20)", {"a": 5, "b": 8, "c": 2, "d": 3}),
@@ -691,6 +691,12 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
         # Using exists with nested conditions
         ("exists(a) and (b > 5)", {"a": 5, "b": 6}),
         ("not exists(c) or (d < 10)", {"d": 9}),
+        # # Nested Indexing with datetime
+        # (
+        #     "x['timestamps'][0]['time1'] >= '1993-03-01T00:00:00+00:00'",
+        #     {"x": {"timestamps": [{"time1": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat()},
+        #                         {"time2": (datetime(1993, 5, 20, tzinfo=timezone.utc)).isoformat()}]}},
+        # ),
     ],
 )
 async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, values):
