@@ -105,28 +105,30 @@ log_data = {
 }
 
 
-def _create_log(client, project_name, user=1):
+def _create_log(client, project_name, user=1, entries=None):
     _headers = HEADERS if user == 1 else HEADERS_2
+    if entries is None:
+        entries = log_data["log"]
     return client.post(
         "/v0/log",
         json={
             "project": project_name,
             "params": {"a/b/param1": "test"},
-            "entries": log_data["log"],
+            "entries": entries,
         },
         headers=_headers,
     )
 
 
-def _create_derived_entry(client, project_name, log_id, user=1):
+def _create_derived_entry(client, project_name, key, equation, referenced_logs, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     return client.put(
         "/v0/log/derived",
         json={
             "project": project_name,
-            "key": "doubled",
-            "equation": "{log1:a/b/c/numeric_input}*2",
-            "referenced_logs": {"log1": [log_id]},
+            "key": key,
+            "equation": equation,
+            "referenced_logs": referenced_logs,
         },
         headers=_headers,
     )
