@@ -1011,7 +1011,7 @@ def get_logs(
     """
     Returns a list of filtered entries from a project.
     """
-    all_logs, context_len, count = _get_logs_query(
+    all_rows, context_len, count = _get_logs_query(
         request_fastapi,
         project,
         context,
@@ -1027,41 +1027,62 @@ def get_logs(
         field_type_dao,
         session,
     )
+    # all_rows is now a list of (Log|DerivedLog, created_at, log_event_id)
     if return_ids_only:
-        return list(dict.fromkeys([log[0].log_event_id for log in all_logs]))
+        event_ids = [r[2] for r in all_rows]
+        return list(dict.fromkeys(event_ids))
 
-    formatted_logs = format_logs(all_logs, context_len)
+    # Format them
+    formatted = {}
+    for row_obj, created_at, event_id in all_rows:
+        if event_id not in formatted:
+            formatted[event_id] = {
+                "ts": created_at.isoformat() if created_at else None,
+                "entries": {},
+                "versions": {},
+            }
+        # row_obj is either a Log or a DerivedLog
+        # Apply context_len slicing to the key
+        key = row_obj.key[context_len:]
+        val = row_obj.value
+        # If row_obj is a base Log with param-version:
+        ver = getattr(row_obj, "version", None)
 
-    params = dict()
-    logs = []
-    for log_event_id, log_dict in formatted_logs.items():
+        assert (
+            key not in formatted[event_id]["entries"]
+        ), f"found duplicates for key {key} with log_id {event_id}"
 
-        for k, v in log_dict["entries"].items():
-            if log_dict["versions"][k] is not None:
-                if k not in params:
-                    params[k] = dict()
-                params[k][log_dict["versions"][k]] = v
+        formatted[event_id]["entries"][key] = val
+        formatted[event_id]["versions"][key] = ver
 
-        logs.append(
+    # Now build final JSON
+    logs_out = []
+    params_out = {}
+    for event_id, data in formatted.items():
+        entries = {}
+        params = {}
+        for k, v in data["entries"].items():
+            ver = data["versions"][k]
+            if ver is None:
+                entries[k] = v
+            else:
+                # treat as param
+                if k not in params_out:
+                    params_out[k] = {}
+                params_out[k][ver] = v
+                params[k] = str(ver)
+        logs_out.append(
             {
-                "id": log_event_id,
-                "ts": log_dict["ts"],
-                "entries": {
-                    k: v
-                    for k, v in log_dict["entries"].items()
-                    if log_dict["versions"][k] is None
-                },
-                "params": {
-                    k: str(log_dict["versions"][k])
-                    for k, _ in log_dict["entries"].items()
-                    if log_dict["versions"][k] is not None
-                },
+                "id": event_id,
+                "ts": data["ts"],
+                "entries": entries,
+                "params": params,
             },
         )
 
     return {
-        "params": params,
-        "logs": logs,
+        "params": params_out,
+        "logs": logs_out,
         "count": count,
     }
 
