@@ -576,94 +576,77 @@ def delete_logs(
     return {"info": "Logs and fields deleted successfully!"}
 
 
-def _get_logs_query(
-    request_fastapi: Request,
-    project: str,
-    context: Optional[str],
+def _get_base_logs_subq(
+    project_id: int,
     filter_expr: Optional[str],
-    sorting: Optional[str],
     from_ids: Optional[str],
     exclude_ids: Optional[str],
+    context: Optional[str],
     from_fields: Optional[str],
     exclude_fields: Optional[str],
-    limit: Optional[int],
-    offset: int,
-    project_dao: ProjectDAO,
-    field_type_dao: FieldTypeDAO,
-    session,
-    latest_timestamp=False,
-):
-    # try to get the project, and fail if not found
-    try:
-        user_id = request_fastapi.state.user_id
-        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
-    except IndexError:
-        raise not_found(f"Project {project}")
+    session=Depends(get_db_session),
+) -> Subquery:
+    """
+    Builds a SQLAlchemy query for base logs (Log + LogEvent) with user filters,
+    and returns it as a subquery.
+    """
+    # First build query for LogEvent filtering
+    event_query = session.query(LogEvent.id).filter(LogEvent.project_id == project_id)
 
-    # filter for log event ids within the project
-    log_event_query = session.query(
-        LogEvent.id,
-    ).where(LogEvent.project_id == project_obj.id)
+    # Handle ID filtering
+    if from_ids and exclude_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot set both from_ids and exclude_ids.",
+        )
 
-    # remove irrelevant log event ids based on from_ids and exclude_ids
-    assert not (from_ids and exclude_ids), (
-        f"Only one of from_ids or exclude_ids can be set, "
-        f"but found values {from_ids} and {exclude_ids}."
-    )
     if from_ids:
-        log_event_query = log_event_query.where(
-            LogEvent.id.in_([int(i) for i in from_ids.split("&")]),
-        )
+        include_ids = [int(x) for x in from_ids.split("&")]
+        event_query = event_query.filter(LogEvent.id.in_(include_ids))
     elif exclude_ids:
-        log_event_query = log_event_query.where(
-            LogEvent.id.notin_([int(i) for i in exclude_ids.split("&")]),
-        )
+        exclude_set = [int(x) for x in exclude_ids.split("&")]
+        event_query = event_query.filter(LogEvent.id.notin_(exclude_set))
 
-    # filter the log event ids based on the values of their fields (filter argument)
+    # Handle filter expression
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
         if filter_dict:
-            filter_condition = build_sql_query(filter_dict, LogEvent, session)
-
-            # Check if the result is a SQL expression or a subquery
-            if isinstance(filter_condition, Subquery):
-                condition = exists(
-                    select(1)
-                    .select_from(filter_condition)
-                    .where(
-                        and_(
-                            LogEvent.id == filter_condition.c.log_event_id,
-                            filter_condition.c.value.is_(True),
+            condition = build_sql_query(filter_dict, LogEvent, session)
+            if isinstance(condition, Subquery):
+                event_query = event_query.filter(
+                    exists(
+                        select(1)
+                        .select_from(condition)
+                        .where(
+                            and_(
+                                condition.c.log_event_id == LogEvent.id,
+                                condition.c.value.is_(True),
+                            ),
                         ),
                     ),
                 )
             else:
-                # Handle general expressions (BinaryExpression, etc.)
-                condition = filter_condition
+                event_query = event_query.filter(condition)
 
-            log_event_query = log_event_query.filter(condition)
-
-    # create sub-query for these relevant log events
-    relevant_log_events = log_event_query.subquery()
-
-    # query the logs themselves, which match the log event ids
-    log_query = (
+    # Now build the final query with Log join
+    q = (
         session.query(
-            Log,
-            LogEvent.created_at,
-            LogEvent.id,
+            Log.id.label("id"),
+            Log.log_event_id.label("log_event_id"),
+            Log.key.label("key"),
+            Log.value.label("value"),
+            Log.inferred_type.label("inferred_type"),
+            Log.version.label("version"),
+            Log.updated_at.label("updated_at"),
+            LogEvent.created_at.label("created_at"),
+            cast(None, JSONB).label("referenced_logs"),
+            literal("base").label("source_type"),
         )
-        .join(
-            LogEvent,
-            LogEvent.id == Log.log_event_id,
-        )
-        .join(
-            relevant_log_events,
-            relevant_log_events.c.id == LogEvent.id,
-        )
+        .join(LogEvent, LogEvent.id == Log.log_event_id)
+        .filter(LogEvent.id.in_(event_query))
     )
 
-    # filter out all logs which are not within the context
+    # Handle context filtering
     context_len = 0
     if context is not None:
         split_context = context.split("/")
@@ -678,27 +661,24 @@ def _get_logs_query(
         if context:
             context = context if context[-1] == "/" else context + "/"
             context_len = len(context)
-            log_query = log_query.where(Log.key.startswith(context))
+            q = q.where(Log.key.startswith(context))
         if exclude_params:
-            log_query = log_query.where(Log.version.is_(None))
+            q = q.where(Log.version.is_(None))
         elif exclude_entries:
-            log_query = log_query.where(Log.version.isnot(None))
+            q = q.where(Log.version.isnot(None))
 
-    # filter out all irrelevant logs as per from_fields and exclude_fields
+    # Handle field filtering
     assert not (from_fields and exclude_fields), (
         f"Only one of from_fields or exclude_fields can be set, "
         f"but found values {from_fields} and {exclude_fields}."
     )
     if from_fields:
-        log_query = log_query.where(Log.key.in_(from_fields.split("&")))
+        q = q.where(Log.key.in_(from_fields.split("&")))
     elif exclude_fields:
-        log_query = log_query.where(Log.key.notin_(exclude_fields.split("&")))
+        q = q.where(Log.key.notin_(exclude_fields.split("&")))
 
-    # create a sub-query of these relevant logs
-    relevant_logs = log_query.subquery()
+    return q.subquery(name="base_logs_subq"), context_len
 
-    # create a second set of relevant log event ids, removing all log events which did
-    # not contain any relevant fields as per the context and field pruning
 
     # query for the distinct log event ids
     distinct_ids_subq = (
