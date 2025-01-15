@@ -2,7 +2,7 @@ import json
 import re
 import statistics
 from datetime import datetime, timedelta
-from typing import Any, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 
 from sqlalchemy import (
     BindParameter,
@@ -37,6 +37,53 @@ STR_TO_SQL_TYPES = {
     "dict": JSONB,
     "list": JSONB,
 }
+
+
+def _extract_placeholders(equation: str) -> List[str]:
+    """
+    Find placeholders like '{log0:score}' in the equation.
+    """
+    pattern = re.compile(r"\{([^}]+)\}")
+    return pattern.findall(equation)
+
+
+def _substitute_placeholders(equation: str, single_ref: Dict[str, int]) -> str:
+    """
+    E.g. equation="{log0:score} - {log1:score}", single_ref={"log0":10,"log1":20}
+    => "BASE_IN([10],score) - BASE_IN([20],score)" if we are referencing 1 ID each time.
+
+    If you have multiple IDs, we might do "BASE_IN([10,11],score)" etc.
+    Because we want membership logic (log_event_id in [10,11]).
+    """
+    new_expr = equation
+    alias_to_key_map = {}
+    placeholders = _extract_placeholders(equation)
+    for ph in placeholders:
+        var, key = ph.split(":", 1)
+        alias_to_key_map[var] = key
+        base_ids = single_ref[var]
+        # Even if base_ids is a single int, let's store it as a list for membership
+        if not isinstance(base_ids, list):
+            base_ids = [base_ids]
+        rep = f"BASE({json.dumps(base_ids)},{key})"
+        new_expr = new_expr.replace(f"{{{ph}}}", rep)
+    return new_expr, alias_to_key_map
+
+
+def _compute_expression(filter_dict, log_event_alias, session):
+    """
+    Use build_sql_query -> subquery or expression -> .execute() -> return single result.
+    If multiple rows, pick the first or do an aggregator as needed.
+    """
+    expr = build_sql_query(filter_dict, log_event_alias, session)
+    if isinstance(expr, Subquery):
+        rows = session.execute(select(expr.c.log_event_id, expr.c.value)).fetchall()
+        if not rows:
+            return None
+        # If you want an aggregator, do sum(...) or so. For now, pick the first row's .value
+        return rows
+    else:
+        return session.execute(select(expr)).scalar()
 
 
 def parse_nested(s, pos):
@@ -98,6 +145,10 @@ def _tokenize(s):
             r"(?<!\w)(?:round|len|type|exists|version|str(?=\()|to_str)",
         ),  # Functions
         (
+            "BASEFUNC",
+            r"(?<!\w)BASE(?!\w)",  # new special function
+        ),
+        (
             "TYPE_LITERAL",
             r"(?<!\w)(?:str|int|float|bool|list|dict|tuple|set|timestamp|datetime)(?!\w)",
         ),  # Type literals
@@ -105,6 +156,7 @@ def _tokenize(s):
         ("IDENTIFIER", r"[A-Za-z_/][A-Za-z0-9_/]*"),  # Identifiers
         ("LPAREN", r"\("),
         ("RPAREN", r"\)"),
+        ("COMMA", r","),
         ("BRACKET_OPEN", r"[\[\{]"),
         ("SKIP", r"[ \t]+"),  # Skip over spaces and tabs
         ("MISMATCH", r"."),  # Any other character
@@ -145,6 +197,8 @@ def _tokenize(s):
             "LPAREN",
             "RPAREN",
             "FUNC",
+            "BASEFUNC",
+            "COMMA",
         ):
             tokens.append((kind, value))
         elif kind == "TYPE_LITERAL":
@@ -295,6 +349,28 @@ class _Parser:
                 raise RuntimeError(
                     'Expected "(" after function call',
                 )
+        elif self.current_token[0] == "BASEFUNC":
+            # parse BASE(...) with 2 arguments
+            fn = "BASE"
+            self.advance()  # consume BASEFUNC
+            if self.current_token[0] == "LPAREN":
+                self.advance()
+                # parse first arg
+                first_arg = self.expr()
+                # we expect a comma
+                if self.current_token[1] != ",":
+                    raise RuntimeError("Expected ',' after BASE( arg1")
+                self.advance()  # consume comma
+                # parse second arg
+                second_arg = self.expr()
+                if self.current_token[0] != "RPAREN":
+                    raise RuntimeError("Expected ')' after BASE(...) arguments")
+                self.advance()  # consume RPAREN
+                # store as a dict
+                return {"operand": fn, "rhs": [first_arg, second_arg]}
+            else:
+                raise RuntimeError("Expected '(' after BASE")
+
         elif self.current_token[0] == "TYPE_LITERAL":
             if self.in_type_check_context():
                 node = {"type": "type_literal", "value": self.current_token[1]}
@@ -871,8 +947,13 @@ def _handle_functions(filter_dict, log_event_alias, session):
         SQLAlchemy condition or expression based on the provided function.
     """
     operand = filter_dict.get("operand")
-    rhs_expr = build_sql_query(filter_dict.get("rhs"), log_event_alias, session)
-
+    if isinstance(filter_dict.get("rhs"), dict):
+        rhs_expr = build_sql_query(filter_dict.get("rhs"), log_event_alias, session)
+    else:
+        rhs_expr = [
+            build_sql_query(expr, log_event_alias, session)
+            for expr in filter_dict.get("rhs")
+        ]
     if operand == "len":
         rval = _select_value(rhs_expr, session)
         if isinstance(rhs_expr, Subquery):
@@ -1029,9 +1110,58 @@ def _handle_functions(filter_dict, log_event_alias, session):
                 .subquery()
             )
             return version_subq
+    elif operand == "BASE":
+        # The parse node might have: { "operand":"BASE", "rhs":[ <log_event_id_expr>, <key_expr> ] }
+        # We want to produce a subquery that fetches the (log_event_id, typed_value) from Log,
+        # specifically where log_event_id = X, key = Y.
+        # We'll interpret the first arg as an int literal, the second as a string key or an expression.
 
+        if len(rhs_expr) != 2:
+            raise ValueError("BASE(...) requires exactly 2 arguments: (event_id, key)")
+
+        event_id_expr = rhs_expr[0]
+        key_expr = rhs_expr[1]
+        return _build_subquery_for_base_call(event_id_expr, key_expr, session)
     else:
         raise ValueError(f"Unknown function operand: {operand}")
+
+
+def _build_subquery_for_base_call(list_of_ids_expr, key_expr, session):
+    """
+    Build a subselect that retrieves columns for a given list_of_ids and a key.
+    e.g. log_event_id in [101,102] AND key='score'
+    """
+    # Evaluate the expressions if they are BindParameter or subquery
+    # Typically, list_of_ids_expr might be a literal => e.g. [101,102]
+    if isinstance(list_of_ids_expr, BindParameter):
+        base_ids = list_of_ids_expr.value
+    elif isinstance(list_of_ids_expr, list):
+        base_ids = list_of_ids_expr
+    else:
+        # If it's a subquery or expression, we do session.execute(...)
+        base_ids = session.execute(select(list_of_ids_expr)).scalar()
+        if not isinstance(base_ids, list):
+            base_ids = [base_ids]
+
+    # If base_ids is a string, parse it as JSON
+    if isinstance(base_ids, str):
+        try:
+            base_ids = json.loads(base_ids)
+        except json.JSONDecodeError:
+            raise ValueError(f"Invalid JSON format for base_ids: {base_ids}")
+
+    # Filter the key_expr subquery to only include rows with log_event_id in base_ids
+    filtered_subquery = (
+        select(
+            key_expr.c.log_event_id.label("log_event_id"),
+            _select_value(key_expr, session).label("value"),
+        )
+        .select_from(key_expr)
+        .where(key_expr.c.log_event_id.in_(base_ids))
+        .subquery()
+    )
+
+    return filtered_subquery
 
 
 def build_sql_query(filter_dict, log_event_alias, session):
@@ -1085,7 +1215,7 @@ def build_sql_query(filter_dict, log_event_alias, session):
         return _handle_membership_operator(filter_dict, log_event_alias, session)
 
     # Handle functions (len, to_str, type, round, exists, version)
-    elif operand in ("len", "to_str", "type", "round", "exists", "version"):
+    elif operand in ("len", "to_str", "type", "round", "exists", "version", "BASE"):
         return _handle_functions(filter_dict, log_event_alias, session)
 
     # Handle unknown operand
