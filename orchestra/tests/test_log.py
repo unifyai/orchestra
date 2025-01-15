@@ -691,12 +691,26 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
         # Using exists with nested conditions
         ("exists(a) and (b > 5)", {"a": 5, "b": 6}),
         ("not exists(c) or (d < 10)", {"d": 9}),
-        # # Nested Indexing with datetime
-        # (
-        #     "x['timestamps'][0]['time1'] >= '1993-03-01T00:00:00+00:00'",
-        #     {"x": {"timestamps": [{"time1": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat()},
-        #                         {"time2": (datetime(1993, 5, 20, tzinfo=timezone.utc)).isoformat()}]}},
-        # ),
+        # Nested Indexing with datetime
+        (
+            "x['timestamps'][0]['time1'] >= '1993-03-25T00:00:00+00:00'",
+            {
+                "x": {
+                    "timestamps": [
+                        {
+                            "time1": (
+                                datetime(1993, 3, 24, tzinfo=timezone.utc)
+                            ).isoformat(),
+                        },
+                        {
+                            "time2": (
+                                datetime(1993, 3, 27, tzinfo=timezone.utc)
+                            ).isoformat(),
+                        },
+                    ],
+                },
+            },
+        ),
     ],
 )
 async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, values):

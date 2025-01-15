@@ -1307,7 +1307,12 @@ def _handle_index_operator(filter_dict, log_event_alias, session):
                 if isinstance(rhs_expr, BindParameter):
                     # get the actual python value
                     key_or_idx = rhs_expr.value
-                    extracted = lhs_valcol[json.loads(key_or_idx)]
+                    key_or_idx = (
+                        json.loads(key_or_idx)
+                        if isinstance(key_or_idx, str)
+                        else key_or_idx
+                    )
+                    extracted = lhs_valcol[key_or_idx]
                 else:
                     # fallback
                     extracted = lhs_valcol[rhs_expr]
