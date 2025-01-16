@@ -9,6 +9,7 @@ class Item(BaseModel):
     h: float
     moved: bool = False
     static: bool = False
+    visible: bool = True
     tab: str | None = None
     table: str | None = None
     auto_update: str | None = None
