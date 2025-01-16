@@ -518,7 +518,7 @@ def get_endpoint_details(
     """
     Extracts cost and context window data for the provided endpoint .
 
-    The `endpoint` is the endpoint name in the form <model>@<provider>.
+    The `endpoint` is the endpoint name in the form \<model\>@\<provider\>.
     """
     try:
         model, provider = endpoint.split("@")

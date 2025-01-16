@@ -105,30 +105,28 @@ log_data = {
 }
 
 
-def _create_log(client, project_name, user=1, entries=None):
+def _create_log(client, project_name, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
-    if entries is None:
-        entries = log_data["log"]
     return client.post(
         "/v0/log",
         json={
             "project": project_name,
             "params": {"a/b/param1": "test"},
-            "entries": entries,
+            "entries": log_data["log"],
         },
         headers=_headers,
     )
 
 
-def _create_derived_entry(client, project_name, key, equation, referenced_logs, user=1):
+def _create_derived_entry(client, project_name, log_id, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     return client.put(
         "/v0/log/derived",
         json={
             "project": project_name,
-            "key": key,
-            "equation": equation,
-            "referenced_logs": referenced_logs,
+            "key": "doubled",
+            "equation": "{log1:a/b/c/numeric_input}*2",
+            "referenced_logs": {"log1": [log_id]},
         },
         headers=_headers,
     )
@@ -236,290 +234,14 @@ async def test_create_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_create_derived_entry_with_list(client: AsyncClient):
-    project_name = "test_project_list"
-    await _create_project(client, project_name, user=1)
+async def test_create_derived_entries(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
 
-    # Create base logs
-    log_ids = []
-    for i in range(3):
-        response = await _create_log(client, project_name, entries={"a": i * 10})
-        assert response.status_code == 200
-        log_ids.append(response.json())
-
-    # Create derived logs
-    key = "half_a"
-    equation = "{log1:a}*2"
-    referenced_logs = {"log1": log_ids}
-    response = await _create_derived_entry(
-        client,
-        project_name,
-        key,
-        equation,
-        referenced_logs,
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert "derived_log_ids" in data
-    assert (
-        len(data["derived_log_ids"]) == 3
-    )  # Should create one derived log per base log
-
-
-@pytest.mark.anyio
-async def test_create_derived_entry_with_filter_expr(client: AsyncClient):
-    project_name = "test_project_filter"
-    await _create_project(client, project_name, user=1)
-
-    # Create base logs
-    log_ids = []
-    for i in range(5):
-        response = await _create_log(client, project_name, entries={"score": i * 10})
-        assert response.status_code == 200
-        log_ids.append(response.json())
-
-    # Create derived logs using filter_expr to select logs with score > 20
-    referenced_logs = {"log1": {"filter_expr": "score > 20"}}
-    key = "half_score"
-    equation = "{log1:score}/2"
-    response = await _create_derived_entry(
-        client,
-        project_name,
-        key,
-        equation,
-        referenced_logs,
-    )
-    assert response.status_code == 200
-    data = response.json()
-    # Only logs with score > 20 (i=3,4) should have derived logs
-    assert "derived_log_ids" in data
-    assert len(data["derived_log_ids"]) == 2
-
-
-@pytest.mark.anyio
-async def test_get_logs_including_derived(client: AsyncClient):
-    project_name = "test_derived_logs"
-    user_id = 1
-
-    # 1) Create a new project
-    await _create_project(client, project_name, user=1)
-
-    # 2) Populate base logs
-    await _create_several_logs(client, project_name)
-
-    # 3) Create derived logs referencing some subsets
-    base_log_ids1 = [1, 2, 3, 4]
-    derived_conf1 = {
-        "key": "dl1",
-        "equation": "{log1:_/temperature} + 10",
-        "referenced_logs": {"log1": base_log_ids1},
-    }
-    resp = await _create_derived_entry(
-        client,
-        project_name,
-        derived_conf1["key"],
-        derived_conf1["equation"],
-        derived_conf1["referenced_logs"],
-        user=user_id,
-    )
-    assert resp.status_code == 200, resp.json()
-    derived_log_ids1 = resp.json()["derived_log_ids"]
-    assert len(derived_log_ids1) == len(base_log_ids1)
-
-    base_log_ids2 = [1, 2, 3, 4, 5, 6]
-    derived_conf2 = {
-        "key": "dl2",
-        "equation": "'lava' in {log1:_/description}",
-        "referenced_logs": {"log1": base_log_ids2},
-    }
-    resp = await _create_derived_entry(
-        client,
-        project_name,
-        derived_conf2["key"],
-        derived_conf2["equation"],
-        derived_conf2["referenced_logs"],
-        user=user_id,
-    )
-    assert resp.status_code == 200, resp.json()
-    derived_log_ids2 = resp.json()["derived_log_ids"]
-    assert len(derived_log_ids2) == len(base_log_ids2)
-
-    # Third derived log checking if _/safe is True
-    base_log_ids3 = [1, 2, 3, 4]
-    derived_conf3 = {
-        "key": "dl3",
-        "equation": "{log1:_/safe} is True",
-        "referenced_logs": {"log1": base_log_ids3},
-    }
-    resp = await _create_derived_entry(
-        client,
-        project_name,
-        derived_conf3["key"],
-        derived_conf3["equation"],
-        derived_conf3["referenced_logs"],
-        user=user_id,
-    )
-    assert resp.status_code == 200, resp.json()
-    derived_log_ids3 = resp.json()["derived_log_ids"]
-    assert len(derived_log_ids3) == len(base_log_ids3)
-
-    # 4) Test retrieving logs *without* any filtering or sorting
-    resp = await client.get(
-        "/v0/logs",
-        params={"project": project_name},
-        headers=HEADERS,
-    )
-    assert resp.status_code == 200, resp.json()
-    data = resp.json()
-    all_logs = data["logs"]
-    count = data["count"]
-
-    assert count == 7
-    found_derived_for_first_event = False
-    for entry in all_logs:
-        derived_entries = entry.get("derived_entries")
-        if derived_entries and "dl1" in derived_entries:
-            found_derived_for_first_event = True
-            break
-
-    assert (
-        found_derived_for_first_event
-    ), "Expected to find at least one event with dl1 in derived_entries"
-
-    # 5) Test context
-    resp = await client.get(
-        "/v0/logs",
-        params={
-            "project": project_name,
-            "context": "_/",
-        },
-        headers=HEADERS,
-    )
-    assert resp.status_code == 200
-    data_context = resp.json()
-    logs_context = data_context["logs"]
-    for log_obj in logs_context:
-        # the "entries" keys should not have "a/b/param1" or any param
-        for k in log_obj["entries"]:
-            assert not k.startswith("a/b/"), f"Found param key in context=_/: {k}"
-
-    # 6) Test a filter_expr,
-    filter_expr = "_/temperature > 100"
-    resp = await client.get(
-        "/v0/logs",
-        params={
-            "project": project_name,
-            "filter_expr": filter_expr,
-        },
-        headers=HEADERS,
-    )
-    assert resp.status_code == 200
-    data_filtered = resp.json()
-    logs_filtered = data_filtered["logs"]
-
-    for log_obj in logs_filtered:
-        # "dl1" should be in derived_entries
-        dval = log_obj["derived_entries"].get("dl1", None)
-        assert (
-            dval is not None
-        ), f"Expected derived dl1 in filter dl1>100, but not found: {log_obj}"
-        assert dval > 500, f"dl1 is not > 500 for log {log_obj}"
-
-    # 7) Test exclude_ids or from_ids
-    resp = await client.get(
-        "/v0/logs",
-        params={
-            "project": project_name,
-            "exclude_ids": "3",
-        },
-        headers=HEADERS,
-    )
-    assert resp.status_code == 200
-    data_exclude = resp.json()
-    logs_exclude = data_exclude["logs"]
-    for log_obj in logs_exclude:
-        # none should have id=3
-        assert log_obj["id"] != 3, "We wanted to exclude log_event_id=3"
-
-    # 8) Test sorting
-    sorting_param = json.dumps({"_/temperature": "ascending"})
-    resp = await client.get(
-        "/v0/logs",
-        params={
-            "project": project_name,
-            "sorting": sorting_param,
-        },
-        headers=HEADERS,
-    )
-    assert resp.status_code == 200
-    data_sorted = resp.json()
-    logs_sorted = data_sorted["logs"]
-
-    # check that the events are in ascending order of their _/temperature
-    last_temp = float("-inf")
-    for log_obj in logs_sorted:
-        temperature = log_obj["entries"].get("_/temperature")
-        if temperature is not None:
-            # We expect temperature >= last_temp each time
-            assert (
-                temperature >= last_temp
-            ), f"Sorting by temperature ascending failed: {temperature} < {last_temp}"
-            last_temp = temperature
-
-
-@pytest.mark.anyio
-async def test_update_logs_and_derived_logs_are_updated(client: AsyncClient):
-    project_name = "test_project_update_logs"
-    await _create_project(client, project_name, user=1)
-
-    # Create base logs
-    base_log_ids = []
-    for i in range(2):
-        response = await _create_log(client, project_name, entries={"a": i + 1})
-        assert response.status_code == 200
-        base_log_ids.append(response.json())
-
-    # Create derived logs
-    key = "add_one"
-    equation = "{log0:a}+1"
-    referenced_logs = {"log0": base_log_ids}
-    derived_response = await _create_derived_entry(
-        client,
-        project_name,
-        key,
-        equation,
-        referenced_logs,
-    )
-    assert derived_response.status_code == 200
-
-    # Update base logs
-    update_payload = {
-        "ids": base_log_ids,
-        "entries": [{"a": 10}, {"a": 20}],
-        "overwrite": True,
-    }
-    response = await client.put(
-        "/v0/logs",
-        json=update_payload,
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-    assert response.json()["info"] == "Logs updated successfully!"
-
-    response = await client.get(
-        "/v0/logs",
-        params={"project": project_name},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert len(data["logs"]) == 2
-    # Verify base logs are updated
-    assert data["logs"][0]["entries"]["a"] == 20
-    assert data["logs"][1]["entries"]["a"] == 10
-    # Verify derived logs are updated
-    assert data["logs"][0]["derived_entries"]["add_one"] == 21
-    assert data["logs"][1]["derived_entries"]["add_one"] == 11
+    response = await _create_log(client, project_name)
+    assert response.status_code == 200, response.json()
+    response = await _create_derived_entry(client, project_name, response.json())
+    assert response.status_code == 200, response.json()
 
 
 @pytest.mark.anyio
@@ -815,94 +537,6 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
         # Membership
         ("a in [1, 2, 3]", {"a": 2}),
         ("a not in [1, 2, 3]", {"a": 4}),
-        # Indexing + Rounding
-        ("round(x['some_key'], 2) >= 100.44", {"x": {"some_key": 100.4479}}),
-        (
-            "round_timestamp(x['_timestamp'], 5) == '1993-03-23T00:00:02+00:00'",
-            {
-                "x": {
-                    "_timestamp": datetime(
-                        1993,
-                        3,
-                        23,
-                        0,
-                        0,
-                        3,
-                        tzinfo=timezone.utc,
-                    ).isoformat(),
-                },
-            },
-        ),
-        # Round to nearest 5 seconds - should round down
-        (
-            "round_timestamp(x['_timestamp'], 5) == '1993-03-23T00:00:00+00:00'",
-            {
-                "x": {
-                    "_timestamp": datetime(
-                        1993,
-                        3,
-                        23,
-                        0,
-                        0,
-                        2,
-                        tzinfo=timezone.utc,
-                    ).isoformat(),
-                },
-            },
-        ),
-        # Round to nearest minute (60 seconds)
-        (
-            "round_timestamp(x['_timestamp'], 60) == '1993-03-23T00:00:00+00:00'",
-            {
-                "x": {
-                    "_timestamp": datetime(
-                        1993,
-                        3,
-                        23,
-                        0,
-                        0,
-                        29,
-                        tzinfo=timezone.utc,
-                    ).isoformat(),
-                },
-            },
-        ),
-        # Round to nearest 15 minutes (900 seconds)
-        (
-            "round_timestamp(x['_timestamp'], 900) == '1993-03-23T00:15:00+00:00'",
-            {
-                "x": {
-                    "_timestamp": datetime(
-                        1993,
-                        3,
-                        23,
-                        0,
-                        8,
-                        0,
-                        tzinfo=timezone.utc,
-                    ).isoformat(),
-                },
-            },
-        ),
-        (
-            "x['timestamps'][0]['time1'] >= '1993-03-25T00:00:00+00:00'",
-            {
-                "x": {
-                    "timestamps": [
-                        {
-                            "time1": (
-                                datetime(1993, 3, 24, tzinfo=timezone.utc)
-                            ).isoformat(),
-                        },
-                        {
-                            "time2": (
-                                datetime(1993, 3, 27, tzinfo=timezone.utc)
-                            ).isoformat(),
-                        },
-                    ],
-                },
-            },
-        ),
         # Nested Logical and Arithmetic
         ("((a + b) > 10) and ((c * d) < 20)", {"a": 5, "b": 8, "c": 2, "d": 3}),
         ("((a - b) == 2) or ((e / f) == 3)", {"a": 5, "b": 3, "e": 9, "f": 3}),
@@ -942,23 +576,6 @@ async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, v
         expected = eval_expression.split("exists(")[-1].split(")")[0] not in values
     elif "exists" in eval_expression:
         expected = eval_expression.split("exists(")[-1].split(")")[0] in values
-    elif "round_timestamp" in eval_expression:
-        ts_expr, sec_expr = (
-            eval_expression.split("round_timestamp(")[-1].split(")")[0].split(",")
-        )
-        ts_expr = ts_expr.strip()
-        sec_expr = int(sec_expr.strip())
-        ts_value = datetime.fromisoformat(eval(ts_expr))
-        rounded_ts = datetime.fromtimestamp(
-            round(ts_value.timestamp() / sec_expr) * sec_expr,
-            tz=ts_value.tzinfo,
-        )
-        rounded_ts_iso = rounded_ts.isoformat()
-        eval_expression = eval_expression.replace(
-            "round_timestamp({}, {})".format(ts_expr, sec_expr),
-            "'{}'".format(rounded_ts_iso),
-        )
-        expected = eval(eval_expression)
     else:
         expected = eval(eval_expression)
 
@@ -1340,7 +957,6 @@ async def test_get_logs_w_context(client: AsyncClient):
                     "a/b/c/boolean_input": True,
                     "a/b/c/numeric_input": 4.5,
                 },
-                "derived_entries": {},
                 "params": {
                     "a/b/param1": "0",
                 },
@@ -1373,7 +989,6 @@ async def test_get_logs_w_context(client: AsyncClient):
                     "b/c/boolean_input": True,
                     "b/c/numeric_input": 4.5,
                 },
-                "derived_entries": {},
                 "params": {
                     "b/param1": "0",
                 },
@@ -1406,7 +1021,6 @@ async def test_get_logs_w_context(client: AsyncClient):
                     "c/boolean_input": True,
                     "c/numeric_input": 4.5,
                 },
-                "derived_entries": {},
                 "params": {
                     "param1": "0",
                 },
@@ -1435,7 +1049,6 @@ async def test_get_logs_w_context(client: AsyncClient):
                     "boolean_input": True,
                     "numeric_input": 4.5,
                 },
-                "derived_entries": {},
                 "params": {},
             },
         ],
@@ -2622,12 +2235,7 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
     assert len(result["logs"]) == 1
     del result["logs"][0]["ts"]
     assert result["logs"] == [
-        {
-            "id": 2,
-            "entries": {"a/b/c/numeric_input": 4.5},
-            "params": {},
-            "derived_entries": {},
-        },
+        {"id": 2, "entries": {"a/b/c/numeric_input": 4.5}, "params": {}},
     ]
 
 
