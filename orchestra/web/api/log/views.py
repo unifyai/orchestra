@@ -196,7 +196,6 @@ def create_derived_entry(
     """
     Creates one or more derived-log entries based on `body.equation` and `body.referenced_logs`.
     Eagerly computes each derived value and stores it in DerivedLog.value.
-
     """
     user_id = request_fastapi.state.user_id
 
@@ -275,8 +274,8 @@ def create_derived_entry(
         current_referenced_logs = {
             alias_to_key_map[key]: ids[i] for key, ids in resolved_ids.items()
         }
-        # 6) Create a new log_event for each derived
-        new_event = log_event_dao.create(project_id=project_obj.id)
+        # Get all log IDs involved in this specific computation
+        involved_log_ids = [ids[i] for ids in resolved_ids.values()]
 
         # Create a new derived log entry for each computed value
         class DecimalEncoder(json.JSONEncoder):
@@ -285,15 +284,17 @@ def create_derived_entry(
                     return float(obj)
                 return super().default(obj)
 
-        new_derived_id = derived_log_dao.create(
-            log_event_id=new_event,
-            key=body.key,
-            equation=body.equation,
-            referenced_logs=current_referenced_logs,
-            value=json.loads(json.dumps(value, cls=DecimalEncoder)),
-            inferred_type=inferred_type,
-        )
-        created_derived_ids.append(new_derived_id)
+        # Create a derived entry for each log ID involved in this computation
+        for log_event_id in involved_log_ids:
+            new_derived_id = derived_log_dao.create(
+                log_event_id=log_event_id,
+                key=body.key,
+                equation=body.equation,
+                referenced_logs=current_referenced_logs,
+                value=json.loads(json.dumps(value, cls=DecimalEncoder)),
+                inferred_type=inferred_type,
+            )
+            created_derived_ids.append(new_derived_id)
 
     return {
         "info": f"Created {len(created_derived_ids)} derived logs with key='{body.key}'.",
