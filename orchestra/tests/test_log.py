@@ -491,7 +491,6 @@ async def test_update_logs_and_derived_logs_are_updated(client: AsyncClient):
         referenced_logs,
     )
     assert derived_response.status_code == 200
-    derived_ids = derived_response.json()["derived_log_ids"]
 
     # Update base logs
     update_payload = {
@@ -507,7 +506,20 @@ async def test_update_logs_and_derived_logs_are_updated(client: AsyncClient):
     assert response.status_code == 200
     assert response.json()["info"] == "Logs updated successfully!"
 
-    # TODO: Retrieve derived logs and verify updates
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["logs"]) == 2
+    # Verify base logs are updated
+    assert data["logs"][0]["entries"]["a"] == 20
+    assert data["logs"][1]["entries"]["a"] == 10
+    # Verify derived logs are updated
+    assert data["logs"][0]["derived_entries"]["add_one"] == 21
+    assert data["logs"][1]["derived_entries"]["add_one"] == 11
 
 
 @pytest.mark.anyio
