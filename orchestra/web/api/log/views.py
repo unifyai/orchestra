@@ -1094,7 +1094,21 @@ def get_logs_metric(
         filter_dict = str_filter_exp_to_dict(filter_expr)
         if filter_dict:
             condition = build_sql_query(filter_dict, LogEvent, session)
-            query = query.filter(condition)
+            if isinstance(condition, Subquery):
+                query = query.filter(
+                    exists(
+                        select(1)
+                        .select_from(condition)
+                        .where(
+                            and_(
+                                condition.c.log_event_id == LogEvent.id,
+                                condition.c.value.is_(True),
+                            ),
+                        ),
+                    ),
+                )
+            else:
+                query = query.filter(condition)
 
     subquery = query.subquery()
 
