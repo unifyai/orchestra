@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple, Union
 
 from sqlalchemy import (
+    TIMESTAMP,
     BindParameter,
     Boolean,
     DateTime,
@@ -149,6 +150,7 @@ def _tokenize(s):
             r"==|!=|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)|\+|\-|\*|/|%",
         ),
         ("ROUND", r"(?<!\w)round(?!\w)"),
+        ("ROUND_TIMESTAMP", r"(?<!\w)round_timestamp(?!\w)"),
         (
             "FUNC",
             r"(?<!\w)(?:len|type|exists|version|str(?=\()|to_str)",
@@ -203,6 +205,7 @@ def _tokenize(s):
             "FUNC",
             "BASEFUNC",
             "ROUND",
+            "ROUND_TIMESTAMP",
             "OP",
             "LPAREN",
             "RPAREN",
@@ -349,8 +352,8 @@ class _Parser:
                 raise RuntimeError('Expected "(" after function call')
 
         # --- 2) handle round(...) with 1 or 2 arguments ---
-        elif self.current_token[0] == "ROUND":
-            fn = "round"
+        elif self.current_token[0] in ("ROUND", "ROUND_TIMESTAMP"):
+            fn = self.current_token[0].lower()
             self.advance()  # consume the 'round' token
             if self.current_token[0] == "LPAREN":
                 self.advance()
@@ -366,12 +369,12 @@ class _Parser:
 
                 # expect a closing parenthesis
                 if self.current_token[0] != "RPAREN":
-                    raise RuntimeError("Expected ')' after round(...) arguments")
+                    raise RuntimeError(f"Expected ')' after {fn}(...) arguments")
                 self.advance()  # consume RPAREN
 
                 return {"operand": fn, "rhs": args}
             else:
-                raise RuntimeError("Expected '(' after round")
+                raise RuntimeError(f"Expected '(' after {fn}")
 
         # --- 3) handle BASE(...) with 2 arguments ---
         elif self.current_token[0] == "BASEFUNC":
@@ -700,7 +703,7 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session):
             expr = lval % rval
         return _join_subqueries(lhs, rhs, expr)
     elif lhs_is_sub:
-        lval = _select_value(lhs, session)
+        lval = _select_value(lhs, session)  # TODO add JSONB support
         if operand == "+":
             expr = lval + rhs
         elif operand == "-":
@@ -1187,6 +1190,111 @@ def _handle_functions(filter_dict, log_event_alias, session):
                 return func.round(cast(val_expr, Numeric), digits_expr)
         else:
             raise ValueError("round(...) expects 1 or 2 arguments.")
+    elif operand == "round_timestamp":
+        if len(rhs_expr) != 2:
+            raise ValueError(
+                "round_timestamp(...) expects exactly 2 arguments: (timestamp_expr, seconds_expr)",
+            )
+
+        ts_expr = rhs_expr[0]
+        sec_expr = rhs_expr[1]
+
+        ts_is_sub = isinstance(ts_expr, Subquery)
+        sec_is_sub = isinstance(sec_expr, Subquery)
+
+        def _pg_round_timestamp(ts_col, seconds_col):
+            ts_text = cast(ts_col, String)
+            ts_cast = cast(ts_text, TIMESTAMP)
+            return func.to_timestamp(
+                func.round(
+                    func.extract("epoch", ts_cast) / seconds_col,
+                )
+                * seconds_col,
+            )
+
+        if ts_is_sub and sec_is_sub:
+            # both timestamp and seconds are subqueries
+            ts_col = _select_value(ts_expr, session)
+            sec_col = _select_value(sec_expr, session)
+
+            # build a subquery that joins them on log_event_id
+            subq = (
+                select(
+                    ts_expr.c.log_event_id.label("log_event_id"),
+                    _pg_round_timestamp(ts_col, sec_col).label("value"),
+                )
+                .select_from(ts_expr)
+                .join(sec_expr, ts_expr.c.log_event_id == sec_expr.c.log_event_id)
+                .subquery()
+            )
+            return subq
+
+        elif ts_is_sub:
+            # timestamp is subquery, seconds is literal
+            ts_col = _select_value(ts_expr, session)
+            if isinstance(sec_expr, BindParameter) and isinstance(
+                sec_expr.value,
+                (int, float),
+            ):
+                subq = (
+                    select(
+                        ts_expr.c.log_event_id.label("log_event_id"),
+                        _pg_round_timestamp(ts_col, sec_expr.value).label("value"),
+                    )
+                    .select_from(ts_expr)
+                    .subquery()
+                )
+                return subq
+            else:
+                raise ValueError(
+                    "round_timestamp() can't handle that form of seconds_expr (unless subquery).",
+                )
+
+        elif sec_is_sub:
+            # seconds is subquery, timestamp is literal or direct SQL
+            if isinstance(ts_expr, BindParameter) and isinstance(
+                ts_expr.value,
+                (datetime, str),
+            ):
+                # parse if needed. Or assume user gave a valid python datetime
+                ts_literal = literal(ts_expr.value, type_=TIMESTAMP)
+                sec_col = _select_value(sec_expr, session)
+
+                subq = (
+                    select(
+                        sec_expr.c.log_event_id.label("log_event_id"),
+                        _pg_round_timestamp(ts_literal, sec_expr.value).label("value"),
+                    )
+                    .select_from(sec_expr)
+                    .subquery()
+                )
+                return subq
+            else:
+                raise ValueError(
+                    "round_timestamp() can't handle that form of timestamp_expr (unless subquery).",
+                )
+
+        else:
+            # both are direct expressions or literals
+            if not isinstance(ts_expr, BindParameter) and not isinstance(
+                ts_expr,
+                (datetime, str),
+            ):
+                raise ValueError(
+                    "Expected a literal datetime or string for the timestamp.",
+                )
+            if not isinstance(sec_expr, BindParameter) and not isinstance(
+                sec_expr,
+                (int, float),
+            ):
+                raise ValueError(
+                    "Expected an integer or float literal for the rounding seconds.",
+                )
+
+            # Convert the Python datetime/string to a literal
+            ts_lit = literal(ts_expr.value, type_=TIMESTAMP)
+            return _pg_round_timestamp(ts_lit, sec_expr.value)
+
     elif operand == "type":
         if isinstance(rhs_expr, Subquery):
             expr = rhs_expr.c.inferred_type
@@ -1440,7 +1548,16 @@ def build_sql_query(filter_dict, log_event_alias, session):
         return _handle_membership_operator(filter_dict, log_event_alias, session)
 
     # Handle functions (len, to_str, type, round, exists, version)
-    elif operand in ("len", "to_str", "type", "round", "exists", "version", "BASE"):
+    elif operand in (
+        "len",
+        "to_str",
+        "type",
+        "round",
+        "round_timestamp",
+        "exists",
+        "version",
+        "BASE",
+    ):
         return _handle_functions(filter_dict, log_event_alias, session)
 
     # Handle list/dict indexing
