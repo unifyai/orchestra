@@ -4,26 +4,19 @@ Includes endpoints related to entries.
 
 import json
 from datetime import datetime, timedelta
-from decimal import Decimal
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy import (
     INTEGER,
     TIMESTAMP,
-    DateTime,
     Float,
-    Integer,
     String,
     and_,
-    asc,
     case,
     cast,
-    desc,
     exists,
     func,
-    literal,
-    or_,
     select,
 )
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
@@ -35,7 +28,7 @@ from orchestra.db.dao.log_dao import LogDAO, OverwriteError
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import DerivedLog, Log, LogEvent
+from orchestra.db.models.orchestra_models import Log, LogEvent
 from orchestra.web.api.log.schema import (
     CreateDerivedEntriesConfig,
     CreateLogConfig,
@@ -47,10 +40,9 @@ from orchestra.web.api.utils.http_responses import not_found
 
 from .helpers import (
     STR_TO_SQL_TYPES,
-    _compute_expression,
     _flatten_fields,
-    _substitute_placeholders,
     build_sql_query,
+    format_logs,
     str_filter_exp_to_dict,
 )
 
@@ -182,7 +174,29 @@ def create_log(
     return log_event_id
 
 
-@router.put("/log/derived")
+@router.put(
+    "/log/derived",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Log created successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project not found.",
+                    },
+                },
+            },
+        },
+    },
+)
 def create_derived_entry(
     request_fastapi: Request,
     body: CreateDerivedEntriesConfig,
@@ -191,118 +205,32 @@ def create_derived_entry(
     log_event_dao: LogEventDAO = Depends(),
     log_dao: LogDAO = Depends(),
     derived_log_dao: DerivedLogDAO = Depends(),
-    session=Depends(get_db_session),
 ):
     """
-    Creates one or more derived-log entries based on `body.equation` and `body.referenced_logs`.
-    Eagerly computes each derived value and stores it in DerivedLog.value.
+    Updates multiple logs with the provided entries. Each entry will be either added
+    or overridden in the specified logs.
+
+    A dictionary of "explicit_types" can be passed as part of the `entries`.
+    If present, it will override the inferred type of any matching key in all logs.
     """
-    user_id = request_fastapi.state.user_id
+    # ToDo: convert get_logs args to a query to return the log ids
+    # ToDo: prune all of these to the shortest list of ids
 
-    # 1) Validate the project
-    try:
-        project_obj = project_dao.filter(name=body.project, user_id=user_id)[0][0]
-    except IndexError:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project '{body.project}' not found.",
+    log_variables = list(body.referenced_logs.keys())
+    variables = list()
+    for log_var in log_variables:
+        variables += [
+            log_var + ":" + substr.split("}")[0]
+            for substr in body.equation.split("{" + log_var + ":")[1:]
+        ]
+    subqs = dict()
+    for variable in variables:
+        log_str, key = variable.split(":")
+        subqs[variable] = log_dao.filter(
+            log_event_id=body.referenced_logs[log_str],
+            key=key,
+            defer=True,
         )
-
-    # 3) Resolve referenced_logs
-    #    We either get a direct list [101,102], or a dict e.g. {"filter_expr":...}
-    resolved_ids: Dict[str, List[int]] = {}
-    for varname, val in body.referenced_logs.items():
-        if isinstance(val, list):
-            resolved_ids[varname] = val
-        elif isinstance(val, dict):
-            filter_expr = val.get("filter_expr")
-            if not filter_expr:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Dict for '{varname}' must contain 'filter_expr' or be a direct list of IDs.",
-                )
-            # Re-use _get_logs_query to find matching log_event_ids
-            logs, _, _count = _get_logs_query(
-                request_fastapi=request_fastapi,
-                project=body.project,
-                context=val.get("context", None),
-                filter_expr=filter_expr,
-                sorting=val.get("sort"),
-                from_ids=val.get("from_ids", None),
-                exclude_ids=val.get("exclude_ids", None),
-                from_fields=val.get("from_fields", None),
-                exclude_fields=val.get("exclude_fields", None),
-                limit=val.get("limit"),
-                offset=val.get("offset", 0),
-                project_dao=project_dao,
-                field_type_dao=field_type_dao,
-                session=session,
-            )
-            # logs is a list of (Log, created_at, log_event_id) or (DerivedLog,...),
-            # we only want distinct log_event_id
-            le_ids = list({r[2] for r in logs})
-            resolved_ids[varname] = le_ids
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unrecognized reference for '{varname}': {val}",
-            )
-
-    # If we want a 1:1 mapping, ensure all reference arrays have the same length
-    lengths = [len(lst) for lst in resolved_ids.values()]
-    if not lengths:
-        return {"info": "No references found. Nothing to create."}
-    if len(set(lengths)) != 1:
-        raise HTTPException(
-            status_code=400,
-            detail=f"All referenced log lists must have the same length. Found lengths: {lengths}",
-        )
-
-    # 5) Build a filter_dict that references those base logs. Then compute
-    filter_expr, alias_to_key_map = _substitute_placeholders(
-        body.equation,
-        resolved_ids,
-    )
-    filter_dict = str_filter_exp_to_dict(filter_expr)
-    computed_values = _compute_expression(filter_dict, LogEvent, session)
-    inferred_type = LogDAO.infer_type("", computed_values[0][1])
-
-    created_derived_ids = []
-    # Iterate over the computed values and resolved IDs
-    for i, (_, value) in enumerate(computed_values):
-        # Create a dictionary for the current set of referenced logs
-        current_referenced_logs = {
-            alias_to_key_map[key]: ids[i] for key, ids in resolved_ids.items()
-        }
-        # Get all log IDs involved in this specific computation
-        involved_log_ids = [ids[i] for ids in resolved_ids.values()]
-
-        # Create a new derived log entry for each computed value
-        class DecimalEncoder(json.JSONEncoder):
-            def default(self, obj):
-                if isinstance(obj, Decimal):
-                    return float(obj)
-                return super().default(obj)
-
-        # Create a derived entry for each log ID involved in this computation
-        for log_event_id in involved_log_ids:
-            val = json.loads(json.dumps(value, cls=DecimalEncoder))
-            new_derived_id = derived_log_dao.create(
-                log_event_id=log_event_id,
-                key=body.key,
-                equation=body.equation,
-                referenced_logs=current_referenced_logs,
-                value=val,
-                inferred_type=inferred_type,
-            )
-            created_derived_ids.append(new_derived_id)
-
-    # Create a field type for the derived log
-    field_type_dao.create_field_type(project_obj.id, body.key, val)
-    return {
-        "info": f"Created {len(created_derived_ids)} derived logs with key='{body.key}'.",
-        "derived_log_ids": created_derived_ids,
-    }
 
 
 @router.put(
@@ -344,8 +272,6 @@ def update_logs(
     log_dao: LogDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
-    derived_log_dao: DerivedLogDAO = Depends(),
-    session=Depends(get_db_session),
 ):
     """
     Updates multiple logs with the provided entries. Each entry will be either added
@@ -354,7 +280,6 @@ def update_logs(
     A dictionary of "explicit_types" can be passed as part of the `entries`.
     If present, it will override the inferred type of any matching key in all logs.
     """
-    updated_ids = set()
     for data_type in ("params", "entries"):
 
         data = getattr(body, data_type)
@@ -437,7 +362,6 @@ def update_logs(
                         explicit_types=explicit_types,
                         overwrite=body.overwrite,
                     )
-                    updated_ids.add((k, log_id))
                 except IndexError:
                     log_dao.create_from_raw_k_v(
                         project_id=project_id,
@@ -463,31 +387,6 @@ def update_logs(
                 status_code=404,
                 detail=f"Logs with ids {not_found_logs} not found or you don't have permission to update them.",
             )
-    # Now recompute the derived logs that reference any updated base logs
-    # We'll find derived logs that have `referenced_logs` containing *any* of these updated_log_ids
-    if updated_ids:
-        # Convert updated_ids to a list of JSONB objects for containment check
-        updated_ids_jsonb = [f'{{"{key}": {value}}}' for (key, value) in updated_ids]
-
-        # Find derived logs that need to be recomputed
-        derived_logs_to_recompute = (
-            session.query(DerivedLog)
-            .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
-            .filter(LogEvent.project_id == project_id)
-            .filter(
-                or_(
-                    *[
-                        DerivedLog.referenced_logs.op("@>")(jsonb_obj)
-                        for jsonb_obj in updated_ids_jsonb
-                    ],
-                ),
-            )
-            .all()
-        )
-
-        if derived_logs_to_recompute:
-            derived_log_dao.recompute_derived_logs(derived_logs_to_recompute, session)
-
     return {"info": "Logs updated successfully!"}
 
 
@@ -588,155 +487,6 @@ def delete_logs(
     return {"info": "Logs and fields deleted successfully!"}
 
 
-def _get_base_logs_subq(
-    project_id: int,
-    filter_expr: Optional[str],
-    from_ids: Optional[str],
-    exclude_ids: Optional[str],
-    context: Optional[str],
-    from_fields: Optional[str],
-    exclude_fields: Optional[str],
-    session=Depends(get_db_session),
-) -> Subquery:
-    """
-    Builds a SQLAlchemy query for base logs (Log + LogEvent) with user filters,
-    and returns it as a subquery.
-    """
-    # First build query for LogEvent filtering
-    event_query = session.query(LogEvent.id).filter(LogEvent.project_id == project_id)
-
-    # Handle ID filtering
-    if from_ids and exclude_ids:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot set both from_ids and exclude_ids.",
-        )
-
-    if from_ids:
-        include_ids = [int(x) for x in from_ids.split("&")]
-        event_query = event_query.filter(LogEvent.id.in_(include_ids))
-    elif exclude_ids:
-        exclude_set = [int(x) for x in exclude_ids.split("&")]
-        event_query = event_query.filter(LogEvent.id.notin_(exclude_set))
-
-    # Handle filter expression
-    if filter_expr:
-        filter_dict = str_filter_exp_to_dict(filter_expr)
-        if filter_dict:
-            condition = build_sql_query(filter_dict, LogEvent, session)
-            if isinstance(condition, Subquery):
-                event_query = event_query.filter(
-                    exists(
-                        select(1)
-                        .select_from(condition)
-                        .where(
-                            and_(
-                                condition.c.log_event_id == LogEvent.id,
-                                condition.c.value.is_(True),
-                            ),
-                        ),
-                    ),
-                )
-            else:
-                event_query = event_query.filter(condition)
-
-    # Now build the final query with Log join
-    q = (
-        session.query(
-            Log.id.label("id"),
-            Log.log_event_id.label("log_event_id"),
-            Log.key.label("key"),
-            Log.value.label("value"),
-            Log.inferred_type.label("inferred_type"),
-            Log.version.label("version"),
-            Log.updated_at.label("updated_at"),
-            LogEvent.created_at.label("created_at"),
-            cast(None, JSONB).label("referenced_logs"),
-            literal("base").label("source_type"),
-        )
-        .join(LogEvent, LogEvent.id == Log.log_event_id)
-        .filter(LogEvent.id.in_(event_query))
-    )
-
-    # Handle context filtering
-    context_len = 0
-    if context is not None:
-        split_context = context.split("/")
-        exclude_params = "entries" in split_context
-        exclude_entries = "params" in split_context
-        assert not (
-            exclude_params and exclude_entries
-        ), "'entries' and 'params' cannot both be specified in the context argument."
-        context = "/".join(
-            [substr for substr in split_context if substr not in ("params", "entries")],
-        )
-        if context:
-            context = context if context[-1] == "/" else context + "/"
-            context_len = len(context)
-            q = q.where(Log.key.startswith(context))
-        if exclude_params:
-            q = q.where(Log.version.is_(None))
-        elif exclude_entries:
-            q = q.where(Log.version.isnot(None))
-
-    # Handle field filtering
-    assert not (from_fields and exclude_fields), (
-        f"Only one of from_fields or exclude_fields can be set, "
-        f"but found values {from_fields} and {exclude_fields}."
-    )
-    if from_fields:
-        q = q.where(Log.key.in_(from_fields.split("&")))
-    elif exclude_fields:
-        q = q.where(Log.key.notin_(exclude_fields.split("&")))
-
-    return q.subquery(name="base_logs_subq"), context_len
-
-
-def _get_derived_logs_subq(
-    base_subq: Subquery,
-    session=Depends(get_db_session),
-) -> Subquery:
-    """
-    Given a subquery of base logs (already filtered), return a subquery of
-    *derived logs* that reference at least one row in base_subq.
-
-    The columns must match base_subq for union_all to work. So we return:
-      id, log_event_id, key, value, inferred_type, version, created_at, referenced_logs, source_type
-    """
-    # We'll join DerivedLog -> LogEvent, and then join base_subq on the
-    # condition that the derived log references base_subq's (key -> log_event_id).
-    q = (
-        session.query(
-            DerivedLog.id.label("id"),
-            DerivedLog.log_event_id.label("log_event_id"),
-            DerivedLog.key.label("key"),
-            DerivedLog.value.label("value"),
-            DerivedLog.inferred_type.label("inferred_type"),
-            # derived logs have no version, so cast(None, Integer)
-            cast(None, Integer).label("version"),
-            DerivedLog.updated_at.label("updated_at"),
-            LogEvent.created_at.label("created_at"),
-            DerivedLog.referenced_logs.label("referenced_logs"),
-            literal("derived").label("source_type"),
-        )
-        .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
-        # Now the crucial join to base_subq
-        .join(
-            base_subq,
-            and_(
-                # Compare JSONB ->> base_subq.c.key to base_subq.c.log_event_id
-                cast(DerivedLog.referenced_logs[base_subq.c.key].astext, Integer)
-                == base_subq.c.log_event_id,
-            ),
-        )
-        # If a derived log references multiple different base logs, it might appear multiple times;
-        # so we can ensure uniqueness with .distinct(DerivedLog.id)
-        .distinct(DerivedLog.id)
-        .subquery(name="derived_logs_subq")
-    )
-    return q
-
-
 def _get_logs_query(
     request_fastapi: Request,
     project: str,
@@ -754,273 +504,204 @@ def _get_logs_query(
     session,
     latest_timestamp=False,
 ):
-    """
-    Returns a combined list of base logs and derived logs that match user filters.
-    Each row is (Log or DerivedLog object, created_at, log_event_id).
-    """
-    user_id = request_fastapi.state.user_id
-
-    # --- 1) Validate the project
+    # try to get the project, and fail if not found
     try:
+        user_id = request_fastapi.state.user_id
         project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
     except IndexError:
         raise not_found(f"Project {project}")
-    project_id = project_obj.id
 
-    # --- 2) Build subqueries for base logs and derived logs
-    base_subq, context_len = _get_base_logs_subq(
-        project_id=project_id,
-        filter_expr=filter_expr,
-        from_ids=from_ids,
-        exclude_ids=exclude_ids,
-        context=context,
-        from_fields=from_fields,
-        exclude_fields=exclude_fields,
-        session=session,
-    )
-    # 2) Build derived_subq, passing base_subq to filter by references
-    derived_subq = _get_derived_logs_subq(
-        base_subq=base_subq,
-        session=session,
-    )
+    # filter for log event ids within the project
+    log_event_query = session.query(
+        LogEvent.id,
+    ).where(LogEvent.project_id == project_obj.id)
 
-    # union_q will have columns:
-    # id, log_event_id, key, value, inferred_type, version, created_at, source_type
-    union_q = (
-        session.query(
-            base_subq.c.id.label("id"),
-            base_subq.c.log_event_id.label("log_event_id"),
-            base_subq.c.key.label("key"),
-            base_subq.c.value.label("value"),
-            base_subq.c.inferred_type.label("inferred_type"),
-            base_subq.c.version.label("version"),
-            base_subq.c.created_at.label("created_at"),
-            base_subq.c.updated_at.label("updated_at"),
-            base_subq.c.referenced_logs.label("referenced_logs"),
-            base_subq.c.source_type.label("source_type"),
+    # remove irrelevant log event ids based on from_ids and exclude_ids
+    assert not (from_ids and exclude_ids), (
+        f"Only one of from_ids or exclude_ids can be set, "
+        f"but found values {from_ids} and {exclude_ids}."
+    )
+    if from_ids:
+        log_event_query = log_event_query.where(
+            LogEvent.id.in_([int(i) for i in from_ids.split("&")]),
         )
-        .union_all(
-            session.query(
-                derived_subq.c.id.label("id"),
-                derived_subq.c.log_event_id.label("log_event_id"),
-                derived_subq.c.key.label("key"),
-                derived_subq.c.value.label("value"),
-                derived_subq.c.inferred_type.label("inferred_type"),
-                derived_subq.c.version.label("version"),
-                derived_subq.c.created_at.label("created_at"),
-                derived_subq.c.updated_at.label("updated_at"),
-                derived_subq.c.referenced_logs.label("referenced_logs"),
-                derived_subq.c.source_type.label("source_type"),
-            ),
+    elif exclude_ids:
+        log_event_query = log_event_query.where(
+            LogEvent.id.notin_([int(i) for i in exclude_ids.split("&")]),
         )
-        .subquery(name="union_q")
-    )
 
-    # --- 3) Build a subquery of distinct log_event_ids that are actually present
-    # in the union (i.e. they matched context, filter_expr, from_fields, etc.).
-    distinct_ids_subq = (
-        session.query(union_q.c.log_event_id.label("log_event_id"))
-        .distinct()
-        .subquery(name="distinct_ids_subq")
-    )
+    # filter the log event ids based on the values of their fields (filter argument)
+    if filter_expr:
+        filter_dict = str_filter_exp_to_dict(filter_expr)
+        if filter_dict:
+            filter_condition = build_sql_query(filter_dict, LogEvent, session)
 
-    # --- 4) Sorting
-    # for each user-defined key, we create a subquery
-    # that grabs (log_event_id, value) from the union for that particular key.
-    # Then we cast the value to a known type (using the field_type table).
-    sorted_query = session.query(distinct_ids_subq.c.log_event_id)
-    sort_criteria = []
-
-    # We'll store subqueries for each key so we can outerjoin them
-    subqs_for_sort = {}
-    field_types = field_type_dao.get_field_types(
-        project_id,
-    )
-
-    if sorting:
-        # e.g. sorting='{"score":"ascending","timestamp":"descending"}'
-        sort_dict = json.loads(sorting)
-        #
-        # 4a) For each user-specified sort key, we create a sub-subquery that merges:
-        #     - base logs that have key=<sort_key>
-        #     - derived logs that reference <sort_key> -> base log (join to that base log's value)
-        #
-        for sort_key, _mode in sort_dict.items():
-            # build a subquery of shape (log_event_id, cast(value) AS val_for_key)
-            # Subquery #1: base logs that literally have key=sort_key
-            base_sort_subq = (
-                session.query(
-                    union_q.c.log_event_id.label("log_event_id"),
-                    # We'll store the raw_value in a column
-                    union_q.c.value.label("raw_value"),
-                )
-                .filter(union_q.c.source_type == "base")
-                .filter(union_q.c.key == sort_key)
-                .subquery(f"base_{sort_key}_subq")
-            )
-
-            # Subquery #2: derived logs that reference sort_key -> a base log_event_id
-            # We parse the JSON and get the base log_event_id. Then we join to Log to get the base log's .value
-            derived_ref_subq = (
-                session.query(
-                    union_q.c.log_event_id.label("log_event_id"),
-                    func.cast(
-                        func.jsonb_extract_path_text(
-                            union_q.c.referenced_logs,
-                            sort_key,
+            # Check if the result is a SQL expression or a subquery
+            if isinstance(filter_condition, Subquery):
+                condition = exists(
+                    select(1)
+                    .select_from(filter_condition)
+                    .where(
+                        and_(
+                            LogEvent.id == filter_condition.c.log_event_id,
+                            filter_condition.c.value.is_(True),
                         ),
-                        Integer,
-                    ).label("base_log_event_id"),
-                )
-                .filter(union_q.c.source_type == "derived")
-                .filter(func.jsonb_exists(union_q.c.referenced_logs, sort_key))
-                .subquery(f"derived_{sort_key}_ref_subq")
-            )
-
-            # Adjust the derived_with_base_subq to ensure correct join and filtering
-            derived_with_base_subq = (
-                session.query(
-                    derived_ref_subq.c.log_event_id.label("log_event_id"),
-                    Log.value.label("raw_value"),
-                )
-                .join(
-                    Log,
-                    and_(
-                        Log.log_event_id == derived_ref_subq.c.base_log_event_id,
-                        Log.key == sort_key,
                     ),
-                    isouter=False,
-                )
-                .subquery(f"derived_{sort_key}_joined_subq")
-            )
-
-            # Merge them (UNION) so that we have one subquery for "sort_key"
-            # that yields (log_event_id, raw_value)
-            union_sort_subq = (
-                session.query(
-                    base_sort_subq.c.log_event_id.label("log_event_id"),
-                    base_sort_subq.c.raw_value.label("raw_value"),
-                )
-                .union(
-                    session.query(
-                        derived_with_base_subq.c.log_event_id.label("log_event_id"),
-                        derived_with_base_subq.c.raw_value.label("raw_value"),
-                    ),
-                )
-                .subquery(f"sort_{sort_key}_union_subq")
-            )
-
-            subqs_for_sort[sort_key] = union_sort_subq
-
-        # Now we outerjoin each subq onto sorted_query
-        for key, mode in sort_dict.items():
-            if mode not in ("ascending", "descending"):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Sort mode must be 'ascending' or 'descending', got {mode}.",
-                )
-            direction = asc if mode == "ascending" else desc
-            subq = subqs_for_sort[key]
-
-            # Outer join
-            sorted_query = sorted_query.outerjoin(
-                subq,
-                subq.c.log_event_id == distinct_ids_subq.c.log_event_id,
-            )
-
-            # 4b) Cast the subq.c.raw_value based on the field type (if known)
-            if key in field_types:
-                python_type = field_types[key]
-                cast_type = STR_TO_SQL_TYPES[python_type]
-
-                # Now build an expression for sorting
-                sort_expr = (
-                    cast(
-                        cast(subq.c.raw_value, String),
-                        cast_type,
-                    )
-                    if cast_type == DateTime
-                    else cast(subq.c.raw_value, cast_type)
                 )
             else:
-                # fallback: treat it as text
-                sort_expr = subq.c.raw_value
+                # Handle general expressions (BinaryExpression, etc.)
+                condition = filter_condition
 
-            # For null handling:
-            sort_criteria.append(direction(sort_expr).nulls_last())
+            log_event_query = log_event_query.filter(condition)
 
-    # --- 4c) Always fallback to sorting by log_event_id desc
-    sort_criteria.append(distinct_ids_subq.c.log_event_id.desc())
+    # create sub-query for these relevant log events
+    relevant_log_events = log_event_query.subquery()
 
-    # --- 4d) row_number() approach
-    sorted_query = sorted_query.add_columns(
-        func.row_number().over(order_by=sort_criteria).label("row_num"),
-    ).order_by("row_num")
-
-    # --- 5) Pagination
-    count = sorted_query.count()  # total number of log_event_ids
-    if limit:
-        sorted_query = sorted_query.limit(limit)
-    if offset:
-        sorted_query = sorted_query.offset(offset)
-
-    # We'll subquery this so we can join back to union_q
-    final_ids_subq = sorted_query.subquery(name="final_ids_subq")
-    # final_ids_subq has columns: log_event_id, row_num
-
-    # --- 6) If user only wants latest_timestamp
-    if latest_timestamp:
-        max_updated_at = (
-            session.query(func.max(union_q.c.updated_at))
-            .join(
-                final_ids_subq,
-                final_ids_subq.c.log_event_id == union_q.c.log_event_id,
-            )
-            .scalar()
-        )
-        return max_updated_at.isoformat() if max_updated_at else None
-
-    # --- 7) Now fetch the actual rows by joining union_q to final_ids_subq
-    # so we only get the subset of log_event_ids that survived the pagination.
-    logs_query = (
+    # query the logs themselves, which match the log event ids
+    log_query = (
         session.query(
-            union_q.c.id,
-            union_q.c.log_event_id,
-            union_q.c.key,
-            union_q.c.value,
-            union_q.c.inferred_type,
-            union_q.c.version,
-            union_q.c.created_at,
-            union_q.c.source_type,
-            final_ids_subq.c.row_num,
+            Log,
+            LogEvent.created_at,
+            LogEvent.id,
         )
-        .join(final_ids_subq, final_ids_subq.c.log_event_id == union_q.c.log_event_id)
-        .order_by(final_ids_subq.c.row_num, union_q.c.created_at)
+        .join(
+            LogEvent,
+            LogEvent.id == Log.log_event_id,
+        )
+        .join(
+            relevant_log_events,
+            relevant_log_events.c.id == LogEvent.id,
+        )
     )
 
-    rows = logs_query.all()
+    # filter out all logs which are not within the context
+    context_len = 0
+    if context is not None:
+        split_context = context.split("/")
+        exclude_params = "entries" in split_context
+        exclude_entries = "params" in split_context
+        assert not (
+            exclude_params and exclude_entries
+        ), "'entries' and 'params' cannot both be specified in the context argument."
+        context = "/".join(
+            [substr for substr in split_context if substr not in ("params", "entries")],
+        )
+        if context:
+            context = context if context[-1] == "/" else context + "/"
+            context_len = len(context)
+            log_query = log_query.where(Log.key.startswith(context))
+        if exclude_params:
+            log_query = log_query.where(Log.version.is_(None))
+        elif exclude_entries:
+            log_query = log_query.where(Log.version.isnot(None))
 
-    # rows now is a list of:
-    # [
-    #   (
-    #       id, log_event_id, key, value, inferred_type, version,
-    #       created_at, source_type, row_num
-    #   ), ...
-    # ]
+    # filter out all irrelevant logs as per from_fields and exclude_fields
+    assert not (from_fields and exclude_fields), (
+        f"Only one of from_fields or exclude_fields can be set, "
+        f"but found values {from_fields} and {exclude_fields}."
+    )
+    if from_fields:
+        log_query = log_query.where(Log.key.in_(from_fields.split("&")))
+    elif exclude_fields:
+        log_query = log_query.where(Log.key.notin_(exclude_fields.split("&")))
 
-    # --- 8) Re-hydrate them into Log or DerivedLog
-    results = []
-    for row in rows:
-        if row.source_type == "base":
-            obj = session.query(Log).get(row.id)
-        else:
-            obj = session.query(DerivedLog).get(row.id)
+    # create a sub-query of these relevant logs
+    relevant_logs = log_query.subquery()
 
-        if obj:
-            results.append((obj, row.created_at, row.log_event_id))
+    # create a second set of relevant log event ids, removing all log events which did
+    # not contain any relevant fields as per the context and field pruning
 
-    # Return the same format: (list_of_rows, context_len, count)
-    return results, context_len, count
+    # query for the distinct log event ids
+    distinct_ids_subq = (
+        session.query(LogEvent.id)
+        .join(Log, Log.log_event_id == LogEvent.id)
+        .join(relevant_logs, relevant_logs.c.id == Log.id)
+        .distinct()
+        .subquery()
+    )
+
+    # sort the log ids based on the sorting criteria provided by the user,
+    # and dynamically add a post-sorting row number to keep the order info preserved
+    sort_criteria = list()
+    sorted_query = session.query(distinct_ids_subq.c.id)
+    if sorting:
+        subqs = {}
+        for key in json.loads(sorting):
+            subqs[key] = (
+                session.query(LogEvent.id, Log.value, Log.inferred_type)
+                .join(Log, LogEvent.id == Log.log_event_id)
+                .where(Log.key == key)
+                .subquery()
+            )
+            field_types = field_type_dao.get_field_types(project_obj.id)
+        for key, sort_mode in json.loads(sorting).items():
+            subq = subqs[key]
+            # Outer join to bring in the needed columns for sorting
+            sorted_query = sorted_query.outerjoin(
+                subq,
+                subq.c.id == distinct_ids_subq.c.id,
+            )
+
+            if key in field_types:
+                if key == "_/timestamp":
+                    criterion = cast(
+                        cast(subq.c.value, String),
+                        STR_TO_SQL_TYPES[field_types[key]],
+                    )
+                else:
+                    criterion = cast(subq.c.value, STR_TO_SQL_TYPES[field_types[key]])
+            else:
+                criterion = subq.c.value
+
+            if sort_mode == "ascending":
+                sort_criteria.append(criterion.asc().nulls_last())
+            elif sort_mode == "descending":
+                sort_criteria.append(criterion.desc().nulls_last())
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="sort_mode must be 'ascending' or 'descending', "
+                    f"but found {sort_mode}.",
+                )
+    sort_criteria.append(LogEvent.id.desc())
+
+    log_event_query = (
+        sorted_query.join(
+            LogEvent,
+            LogEvent.id == distinct_ids_subq.c.id,
+        )
+        .add_columns(
+            func.row_number().over(order_by=sort_criteria).label("row_num"),
+        )
+        .order_by("row_num")
+    )
+
+    count = log_event_query.count()
+    if limit:
+        log_event_query = log_event_query.limit(limit)
+    if offset:
+        log_event_query = log_event_query.offset(offset)
+    relevant_log_events = log_event_query.subquery()
+
+    # the final log query, with all of the pruning, filtering, sorting,
+    # and pagination applied
+    log_query = log_query.join(
+        relevant_log_events,
+        relevant_log_events.c.id == LogEvent.id,
+    )
+
+    if latest_timestamp:
+        relevant_logs = log_query.subquery()
+        max_query = session.query(func.max(Log.updated_at)).join(
+            relevant_logs,
+            relevant_logs.c.id == Log.id,
+        )
+        return max_query.scalar().isoformat()
+    return (
+        log_query.order_by(relevant_log_events.c.row_num, Log.created_at).all(),
+        context_len,
+        count,
+    )
 
 
 @router.get(
@@ -1136,7 +817,7 @@ def get_logs(
     """
     Returns a list of filtered entries from a project.
     """
-    all_rows, context_len, count = _get_logs_query(
+    all_logs, context_len, count = _get_logs_query(
         request_fastapi,
         project,
         context,
@@ -1152,92 +833,41 @@ def get_logs(
         field_type_dao,
         session,
     )
-    # all_rows is now a list of (Log|DerivedLog, created_at, log_event_id)
     if return_ids_only:
-        event_ids = [r[2] for r in all_rows]
-        return list(dict.fromkeys(event_ids))
+        return list(dict.fromkeys([log[0].log_event_id for log in all_logs]))
 
-    # Format them
-    formatted = {}
-    for row_obj, created_at, event_id in all_rows:
-        # Ensure we have a record in `formatted` for this event_id
-        if event_id not in formatted:
-            formatted[event_id] = {
-                "ts": created_at.isoformat() if created_at else None,
-                "entries": {},
-                "versions": {},
-                "derived_entries": {},
-            }
-        is_derived = isinstance(row_obj, DerivedLog)
+    formatted_logs = format_logs(all_logs, context_len)
 
-        # Apply context_len slicing to the key
-        key = row_obj.key[context_len:]
-        val = row_obj.value
+    params = dict()
+    logs = []
+    for log_event_id, log_dict in formatted_logs.items():
 
-        # If row_obj is a base Log with param-version:
-        ver = getattr(row_obj, "version", None)
+        for k, v in log_dict["entries"].items():
+            if log_dict["versions"][k] is not None:
+                if k not in params:
+                    params[k] = dict()
+                params[k][log_dict["versions"][k]] = v
 
-        if is_derived:
-            # --- Store in the derived_entries dict
-            assert (
-                key not in formatted[event_id]["derived_entries"]
-            ), f"found duplicate derived key {key} with log_id {event_id}"
-
-            formatted[event_id]["derived_entries"][key] = val
-
-        else:
-            # --- Handle base Log
-            #     Check if it’s versioned => treat as param, otherwise as normal entry
-            assert (
-                key not in formatted[event_id]["entries"]
-            ), f"found duplicates for key {key} with log_id {event_id}"
-
-            if ver is None:
-                # Put in "entries"
-                formatted[event_id]["entries"][key] = val
-            else:
-                # Put in "params"
-                if key not in formatted[event_id]["versions"]:
-                    formatted[event_id]["versions"][key] = {}
-                formatted[event_id]["versions"][key][ver] = val
-                formatted[event_id]["entries"][key] = str(ver)
-
-    # Now build final JSON
-    logs_out = []
-    params_out = {}
-    for event_id, data in formatted.items():
-        entries = {}
-        params = {}
-        for k, v in data["entries"].items():
-            if k in data["versions"]:
-                # It's param-based
-                params[k] = v  # v is the str(ver)
-                # Also store in params_out if needed
-                if k not in params_out:
-                    params_out[k] = {}
-                # We might have multiple versions for the same param
-                for ver_num, ver_val in data["versions"][k].items():
-                    params_out[k][ver_num] = ver_val
-            else:
-                # It's a normal base entry
-                entries[k] = v
-
-        # derived_entries
-        derived_entries = data["derived_entries"]
-
-        logs_out.append(
+        logs.append(
             {
-                "id": event_id,
-                "ts": data["ts"],
-                "entries": entries,
-                "params": params,
-                "derived_entries": derived_entries,
+                "id": log_event_id,
+                "ts": log_dict["ts"],
+                "entries": {
+                    k: v
+                    for k, v in log_dict["entries"].items()
+                    if log_dict["versions"][k] is None
+                },
+                "params": {
+                    k: str(log_dict["versions"][k])
+                    for k, _ in log_dict["entries"].items()
+                    if log_dict["versions"][k] is not None
+                },
             },
         )
 
     return {
-        "params": params_out,
-        "logs": logs_out,
+        "params": params,
+        "logs": logs,
         "count": count,
     }
 
@@ -1709,17 +1339,7 @@ def get_fields(
         session,
     )
     field_types = dict(
-        (
-            lg[0].key,
-            (
-                "derived_entry"
-                if isinstance(lg[0], DerivedLog)
-                else "entry"
-                if lg[0].version is None
-                else "param"
-            ),
-        )
-        for lg in all_logs
+        (lg[0].key, "entry" if lg[0].version is None else "param") for lg in all_logs
     )
     # end ToDo
 
