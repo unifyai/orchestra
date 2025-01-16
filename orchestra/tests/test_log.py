@@ -803,18 +803,75 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
         # Membership
         ("a in [1, 2, 3]", {"a": 2}),
         ("a not in [1, 2, 3]", {"a": 4}),
-        # Indexing
+        # Indexing + Rounding
         ("round(x['some_key'], 2) >= 100.44", {"x": {"some_key": 100.4479}}),
-        # Nested Logical and Arithmetic
-        ("((a + b) > 10) and ((c * d) < 20)", {"a": 5, "b": 8, "c": 2, "d": 3}),
-        ("((a - b) == 2) or ((e / f) == 3)", {"a": 5, "b": 3, "e": 9, "f": 3}),
-        # More Complex Nested Expressions
-        ("(len(a) == 3) and ((b + c) > 10)", {"a": [1, 2, 3], "b": 5, "c": 6}),
-        ("(to_str(a) == 'abc') or (len(b) == 2)", {"a": "abc", "b": [1, 2]}),
-        # Using exists with nested conditions
-        ("exists(a) and (b > 5)", {"a": 5, "b": 6}),
-        ("not exists(c) or (d < 10)", {"d": 9}),
-        # Nested Indexing with datetime
+        (
+            "round_timestamp(x['_timestamp'], 5) == '1993-03-23T00:00:02+00:00'",
+            {
+                "x": {
+                    "_timestamp": datetime(
+                        1993,
+                        3,
+                        23,
+                        0,
+                        0,
+                        3,
+                        tzinfo=timezone.utc,
+                    ).isoformat(),
+                },
+            },
+        ),
+        # Round to nearest 5 seconds - should round down
+        (
+            "round_timestamp(x['_timestamp'], 5) == '1993-03-23T00:00:00+00:00'",
+            {
+                "x": {
+                    "_timestamp": datetime(
+                        1993,
+                        3,
+                        23,
+                        0,
+                        0,
+                        2,
+                        tzinfo=timezone.utc,
+                    ).isoformat(),
+                },
+            },
+        ),
+        # Round to nearest minute (60 seconds)
+        (
+            "round_timestamp(x['_timestamp'], 60) == '1993-03-23T00:00:00+00:00'",
+            {
+                "x": {
+                    "_timestamp": datetime(
+                        1993,
+                        3,
+                        23,
+                        0,
+                        0,
+                        29,
+                        tzinfo=timezone.utc,
+                    ).isoformat(),
+                },
+            },
+        ),
+        # Round to nearest 15 minutes (900 seconds)
+        (
+            "round_timestamp(x['_timestamp'], 900) == '1993-03-23T00:15:00+00:00'",
+            {
+                "x": {
+                    "_timestamp": datetime(
+                        1993,
+                        3,
+                        23,
+                        0,
+                        8,
+                        0,
+                        tzinfo=timezone.utc,
+                    ).isoformat(),
+                },
+            },
+        ),
         (
             "x['timestamps'][0]['time1'] >= '1993-03-25T00:00:00+00:00'",
             {
@@ -834,6 +891,15 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 },
             },
         ),
+        # Nested Logical and Arithmetic
+        ("((a + b) > 10) and ((c * d) < 20)", {"a": 5, "b": 8, "c": 2, "d": 3}),
+        ("((a - b) == 2) or ((e / f) == 3)", {"a": 5, "b": 3, "e": 9, "f": 3}),
+        # More Complex Nested Expressions
+        ("(len(a) == 3) and ((b + c) > 10)", {"a": [1, 2, 3], "b": 5, "c": 6}),
+        ("(to_str(a) == 'abc') or (len(b) == 2)", {"a": "abc", "b": [1, 2]}),
+        # Using exists with nested conditions
+        ("exists(a) and (b > 5)", {"a": 5, "b": 6}),
+        ("not exists(c) or (d < 10)", {"d": 9}),
     ],
 )
 async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, values):
@@ -864,6 +930,23 @@ async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, v
         expected = eval_expression.split("exists(")[-1].split(")")[0] not in values
     elif "exists" in eval_expression:
         expected = eval_expression.split("exists(")[-1].split(")")[0] in values
+    elif "round_timestamp" in eval_expression:
+        ts_expr, sec_expr = (
+            eval_expression.split("round_timestamp(")[-1].split(")")[0].split(",")
+        )
+        ts_expr = ts_expr.strip()
+        sec_expr = int(sec_expr.strip())
+        ts_value = datetime.fromisoformat(eval(ts_expr))
+        rounded_ts = datetime.fromtimestamp(
+            round(ts_value.timestamp() / sec_expr) * sec_expr,
+            tz=ts_value.tzinfo,
+        )
+        rounded_ts_iso = rounded_ts.isoformat()
+        eval_expression = eval_expression.replace(
+            "round_timestamp({}, {})".format(ts_expr, sec_expr),
+            "'{}'".format(rounded_ts_iso),
+        )
+        expected = eval(eval_expression)
     else:
         expected = eval(eval_expression)
 
