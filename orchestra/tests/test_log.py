@@ -1122,6 +1122,7 @@ async def test_get_logs_w_context(client: AsyncClient):
                     "a/b/c/boolean_input": True,
                     "a/b/c/numeric_input": 4.5,
                 },
+                "derived_entries": {},
                 "params": {
                     "a/b/param1": "0",
                 },
@@ -1154,6 +1155,7 @@ async def test_get_logs_w_context(client: AsyncClient):
                     "b/c/boolean_input": True,
                     "b/c/numeric_input": 4.5,
                 },
+                "derived_entries": {},
                 "params": {
                     "b/param1": "0",
                 },
@@ -1186,6 +1188,7 @@ async def test_get_logs_w_context(client: AsyncClient):
                     "c/boolean_input": True,
                     "c/numeric_input": 4.5,
                 },
+                "derived_entries": {},
                 "params": {
                     "param1": "0",
                 },
@@ -1214,6 +1217,7 @@ async def test_get_logs_w_context(client: AsyncClient):
                     "boolean_input": True,
                     "numeric_input": 4.5,
                 },
+                "derived_entries": {},
                 "params": {},
             },
         ],
@@ -2400,7 +2404,7 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
     assert len(result["logs"]) == 1
     del result["logs"][0]["ts"]
     assert result["logs"] == [
-        {"id": 2, "entries": {"a/b/c/numeric_input": 4.5}, "params": {}},
+        {"id": 2, "entries": {"a/b/c/numeric_input": 4.5}, "params": {}, "derived_entries": {}},
     ]
 
 
