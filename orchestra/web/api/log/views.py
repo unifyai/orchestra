@@ -870,6 +870,7 @@ def _get_logs_query(
                     ).label("base_log_event_id"),
                 )
                 .filter(union_q.c.source_type == "derived")
+                .filter(func.jsonb_exists(union_q.c.referenced_logs, sort_key))
                 .subquery(f"derived_{sort_key}_ref_subq")
             )
 
@@ -885,7 +886,7 @@ def _get_logs_query(
                         Log.log_event_id == derived_ref_subq.c.base_log_event_id,
                         Log.key == sort_key,
                     ),
-                    isouter=True,
+                    isouter=False,
                 )
                 .subquery(f"derived_{sort_key}_joined_subq")
             )
@@ -897,7 +898,7 @@ def _get_logs_query(
                     base_sort_subq.c.log_event_id.label("log_event_id"),
                     base_sort_subq.c.raw_value.label("raw_value"),
                 )
-                .union_all(
+                .union(
                     session.query(
                         derived_with_base_subq.c.log_event_id.label("log_event_id"),
                         derived_with_base_subq.c.raw_value.label("raw_value"),
