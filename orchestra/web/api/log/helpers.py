@@ -2,14 +2,16 @@ import json
 import re
 import statistics
 from datetime import datetime, timedelta
-from typing import Any, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 
 from sqlalchemy import (
+    TIMESTAMP,
     BindParameter,
     Boolean,
     DateTime,
     Float,
     Integer,
+    Numeric,
     String,
     and_,
     case,
@@ -39,7 +41,62 @@ STR_TO_SQL_TYPES = {
 }
 
 
+def _extract_placeholders(equation: str) -> List[str]:
+    """
+    Find placeholders like '{log0:score}' in the equation.
+    """
+    pattern = re.compile(r"\{([^}]+)\}")
+    return pattern.findall(equation)
+
+
+def _substitute_placeholders(equation: str, single_ref: Dict[str, int]) -> str:
+    """
+    E.g. equation="{log0:score} - {log1:score}", single_ref={"log0":10,"log1":20}
+    => "BASE_IN([10],score) - BASE_IN([20],score)" if we are referencing 1 ID each time.
+
+    If you have multiple IDs, we might do "BASE_IN([10,11],score)" etc.
+    Because we want membership logic (log_event_id in [10,11]).
+    """
+    new_expr = equation
+    alias_to_key_map = {}
+    placeholders = _extract_placeholders(equation)
+    for ph in placeholders:
+        var, key = ph.split(":", 1)
+        alias_to_key_map[var] = key
+        base_ids = single_ref[var]
+        # Even if base_ids is a single int, let's store it as a list for membership
+        if not isinstance(base_ids, list):
+            base_ids = [base_ids]
+        rep = f"BASE({json.dumps(base_ids)},{key})"
+        new_expr = new_expr.replace(f"{{{ph}}}", rep)
+    return new_expr, alias_to_key_map
+
+
+def _compute_expression(filter_dict, log_event_alias, session):
+    """
+    Use build_sql_query -> subquery or expression -> .execute() -> return single result.
+    If multiple rows, pick the first or do an aggregator as needed.
+    """
+    expr = build_sql_query(filter_dict, log_event_alias, session)
+    if isinstance(expr, Subquery):
+        rows = session.execute(select(expr.c.log_event_id, expr.c.value)).fetchall()
+        if not rows:
+            return None
+        # If you want an aggregator, do sum(...) or so. For now, pick the first row's .value
+        return rows
+    else:
+        return session.execute(select(expr)).scalar()
+
+
 def parse_nested(s, pos):
+    """
+    Given a string s and a starting position pos, parse_nested()
+    finds the substring (with balanced parentheses/brackets/braces)
+    and returns (the_substring, new_position).
+
+    For example, if s = "x['key'][0]" and pos points to the first bracket,
+    parse_nested might return ("['key']", pos_after_closing_bracket).
+    """
     start_pos = pos
     stack = []
     while pos < len(s):
@@ -62,7 +119,7 @@ def parse_nested(s, pos):
                 pos += 1  # Include the closing bracket
                 break
         elif c in ("'", '"'):
-            # Skip over string literals
+            # Skip over string literals inside the brackets
             quote_char = c
             pos += 1
             while pos < len(s):
@@ -83,7 +140,6 @@ def parse_nested(s, pos):
 def _tokenize(s):
     token_specification = [
         ("NUMBER", r"-?(\d+(\.\d*)?|\.\d+)"),  # Integer or decimal number, +ve or -ve
-        # Updated STRING regex to handle nested quotation marks and escaped quotes correctly
         (
             "STRING",
             r'"(?:[^"\\]|\\.)*?"|\'(?:[^\'\\]|\\.)*?\'',
@@ -93,10 +149,16 @@ def _tokenize(s):
             "OP",
             r"==|!=|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)|\+|\-|\*|/|%",
         ),
+        ("ROUND", r"(?<!\w)round(?!\w)"),
+        ("ROUND_TIMESTAMP", r"(?<!\w)round_timestamp(?!\w)"),
         (
             "FUNC",
-            r"(?<!\w)(?:round|len|type|exists|version|str(?=\()|to_str)",
-        ),  # Functions
+            r"(?<!\w)(?:len|type|exists|version|str(?=\()|to_str)",
+        ),
+        (
+            "BASEFUNC",
+            r"(?<!\w)BASE(?!\w)",  # special function to handle derived log notation
+        ),
         (
             "TYPE_LITERAL",
             r"(?<!\w)(?:str|int|float|bool|list|dict|tuple|set|timestamp|datetime)(?!\w)",
@@ -105,7 +167,11 @@ def _tokenize(s):
         ("IDENTIFIER", r"[A-Za-z_/][A-Za-z0-9_/]*"),  # Identifiers
         ("LPAREN", r"\("),
         ("RPAREN", r"\)"),
-        ("BRACKET_OPEN", r"[\[\{]"),
+        ("COMMA", r","),
+        (
+            "BRACKET_OPEN",
+            r"[\[\{]",
+        ),  # We detect [ or {, then parse_nested to build an OTHER token
         ("SKIP", r"[ \t]+"),  # Skip over spaces and tabs
         ("MISMATCH", r"."),  # Any other character
     ]
@@ -136,20 +202,21 @@ def _tokenize(s):
             tokens.append(("BOOLEAN", value))
         elif kind in (
             "IDENTIFIER",
-            "LEN",
-            "STR",
-            "TYPE_CHECK",
-            "EXISTS",
-            "VERSION",
+            "FUNC",
+            "BASEFUNC",
+            "ROUND",
+            "ROUND_TIMESTAMP",
             "OP",
             "LPAREN",
             "RPAREN",
-            "FUNC",
+            "COMMA",
         ):
             tokens.append((kind, value))
         elif kind == "TYPE_LITERAL":
             tokens.append((kind, value))
         elif kind == "BRACKET_OPEN":
+            # We found a [ or {, so let's parse the entire bracketed substring
+            # with parse_nested, and store it as an "OTHER" token
             nested_content, new_pos = parse_nested(line, mo.start())
             tokens.append(("OTHER", nested_content))
             pos = new_pos
@@ -159,8 +226,10 @@ def _tokenize(s):
             pass  # Ignore whitespace
         elif kind == "MISMATCH":
             raise RuntimeError(f"Unexpected character {value!r} at position {pos}")
+
         pos = mo.end()
         mo = get_token(line, pos)
+
     tokens.append(("EOF", ""))
     return tokens
 
@@ -178,7 +247,7 @@ class _Parser:
         return None
 
     def in_type_check_context(self):
-        """Check if we're inside a type() function call"""
+        """Check if we're inside a type() function call like `type(x) is int`."""
         prev_token = self.peek_back(1)
         return (
             prev_token and prev_token[0] == "OP" and prev_token[1] in ("is", "is not")
@@ -198,8 +267,7 @@ class _Parser:
         return result
 
     def expr(self):
-        node = self.or_expr()
-        return node
+        return self.or_expr()
 
     def or_expr(self):
         node = self.and_expr()
@@ -224,8 +292,7 @@ class _Parser:
             op = self.current_token[1]
             self.advance()
             rhs = self.not_expr()
-            node = {"operand": op, "rhs": rhs}
-            return node
+            return {"operand": op, "rhs": rhs}
         else:
             return self.comp_expr()
 
@@ -266,18 +333,10 @@ class _Parser:
 
     def mul_div_expr(self):
         node = self.primary()
-        while self.current_token[0] == "OP" and self.current_token[1] in (
-            "*",
-            "/",
-            "%",
-        ):
-            op = self.current_token[1]
-            self.advance()
-            right = self.primary()
-            node = {"lhs": node, "operand": op, "rhs": right}
         return node
 
     def primary(self):
+        # --- 1) handle function calls like len(a), to_str(b), etc. ---
         if self.current_token[0] == "FUNC":
             fn = self.current_token[1]
             self.advance()
@@ -287,14 +346,58 @@ class _Parser:
                 if self.current_token[0] == "RPAREN":
                     self.advance()
                 else:
-                    raise RuntimeError(
-                        'Expected ")" after function call',
-                    )
+                    raise RuntimeError('Expected ")" after function call')
                 return {"operand": fn, "rhs": expr}
             else:
-                raise RuntimeError(
-                    'Expected "(" after function call',
-                )
+                raise RuntimeError('Expected "(" after function call')
+
+        # --- 2) handle round(...) with 1 or 2 arguments ---
+        elif self.current_token[0] in ("ROUND", "ROUND_TIMESTAMP"):
+            fn = self.current_token[0].lower()
+            self.advance()  # consume the 'round' token
+            if self.current_token[0] == "LPAREN":
+                self.advance()
+                # parse the first arg
+                first_arg = self.expr()
+                args = [first_arg]
+
+                # check if there's a comma -> second arg
+                if self.current_token[0] == "COMMA":
+                    self.advance()
+                    second_arg = self.expr()
+                    args.append(second_arg)
+
+                # expect a closing parenthesis
+                if self.current_token[0] != "RPAREN":
+                    raise RuntimeError(f"Expected ')' after {fn}(...) arguments")
+                self.advance()  # consume RPAREN
+
+                return {"operand": fn, "rhs": args}
+            else:
+                raise RuntimeError(f"Expected '(' after {fn}")
+
+        # --- 3) handle BASE(...) with 2 arguments ---
+        elif self.current_token[0] == "BASEFUNC":
+            fn = "BASE"
+            self.advance()  # consume BASEFUNC
+            if self.current_token[0] == "LPAREN":
+                self.advance()
+                # parse first arg
+                first_arg = self.expr()
+                # expect a comma
+                if self.current_token[0] != "COMMA":
+                    raise RuntimeError(f"Expected ',' after {fn}( arg1")
+                self.advance()  # consume comma
+                # parse second arg
+                second_arg = self.expr()
+                if self.current_token[0] != "RPAREN":
+                    raise RuntimeError(f"Expected ')' after {fn}(...) arguments")
+                self.advance()  # consume RPAREN
+                return {"operand": fn, "rhs": [first_arg, second_arg]}
+            else:
+                raise RuntimeError(f"Expected '(' after {fn}")
+
+        # --- 4) handle type literals like int, float, etc. ---
         elif self.current_token[0] == "TYPE_LITERAL":
             if self.in_type_check_context():
                 node = {"type": "type_literal", "value": self.current_token[1]}
@@ -302,6 +405,8 @@ class _Parser:
                 node = {"type": "identifier", "value": self.current_token[1]}
             self.advance()
             return node
+
+        # --- 5) parentheses grouping ---
         elif self.current_token[0] == "LPAREN":
             self.advance()
             node = self.expr()
@@ -310,26 +415,62 @@ class _Parser:
             else:
                 raise RuntimeError('Expected ")"')
             return node
+
+        # --- 6) booleans ---
         elif self.current_token[0] == "BOOLEAN":
             node = self.current_token[1]
             self.advance()
             return node
+
+        # --- 7) identifiers (including subsequent indexing) ---
         elif self.current_token[0] == "IDENTIFIER":
             node = {"type": "identifier", "value": self.current_token[1]}
             self.advance()
+
+            # Now handle any subsequent indexing: x['key'], x[0], x['key'][something_else] ...
+            while self.current_token[0] == "OTHER":
+                bracket_str = self.current_token[1]
+                # If it's something like "[...]" or "{...}" we can parse inside as an expression:
+                if bracket_str.startswith("[") or bracket_str.startswith("{"):
+                    # remove outer brackets
+                    inside_str = bracket_str[
+                        1:-1
+                    ]  # drop the leading '[' or '{' and the trailing ']' or '}'
+                    # tokenize the inside substring
+                    sub_tokens = _tokenize(inside_str)
+                    sub_parser = _Parser(sub_tokens)
+                    inside_expr = sub_parser.parse()
+                    node = {
+                        "operand": "INDEX",
+                        "lhs": node,
+                        "rhs": inside_expr,
+                    }
+                    # consume this bracketed token
+                    self.advance()
+                else:
+                    # if for some reason it's "OTHER" not starting with bracket, break or error
+                    break
+
             return node
+
+        # --- 8) numbers ---
         elif self.current_token[0] == "NUMBER":
             node = self.current_token[1]
             self.advance()
             return node
+
+        # --- 9) strings ---
         elif self.current_token[0] == "STRING":
             node = {"type": "string", "value": self.current_token[1]}
             self.advance()
             return node
+
+        # --- 10) "OTHER" ---
         elif self.current_token[0] == "OTHER":
             node = {"type": "other", "value": self.current_token[1]}
             self.advance()
             return node
+
         else:
             raise RuntimeError(f"Unexpected token {self.current_token}")
 
@@ -562,7 +703,7 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session):
             expr = lval % rval
         return _join_subqueries(lhs, rhs, expr)
     elif lhs_is_sub:
-        lval = _select_value(lhs, session)
+        lval = _select_value(lhs, session)  # TODO add JSONB support
         if operand == "+":
             expr = lval + rhs
         elif operand == "-":
@@ -829,6 +970,16 @@ def _substring_expr(lhs, rhs):
 
 
 def _parse_rhs_list_or_dict_if_needed(rhs_dict, rhs_val):
+    """
+    Parse the RHS value if it is a JSON string, list, or dictionary.
+
+    Args:
+        rhs_dict (dict): The RHS dictionary containing the value to parse.
+        rhs_val: The RHS value which can be a BindParameter, list, or dict.
+
+    Returns:
+        list, dict, or None: Parsed list or dictionary if successful, otherwise None.
+    """
     if not rhs_dict:
         return None
 
@@ -857,10 +1008,10 @@ def _parse_rhs_list_or_dict_if_needed(rhs_dict, rhs_val):
     return None
 
 
-# Helper function for functions (len, to_str, type, round, exists, version)
+# Helper function for functions (len, to_str, type, round, round_timestamp, exists, version)
 def _handle_functions(filter_dict, log_event_alias, session):
     """
-    Handles function-based operations ('len', 'to_str', 'type', 'round', 'exists', 'version') in the filter dictionary.
+    Handles function-based operations ('len', 'to_str', 'type', 'round', 'round_timestamp', 'exists', 'version') in the filter dictionary.
 
     Args:
         filter_dict (dict): The filter dictionary containing the function and its arguments.
@@ -871,8 +1022,13 @@ def _handle_functions(filter_dict, log_event_alias, session):
         SQLAlchemy condition or expression based on the provided function.
     """
     operand = filter_dict.get("operand")
-    rhs_expr = build_sql_query(filter_dict.get("rhs"), log_event_alias, session)
-
+    if isinstance(filter_dict.get("rhs"), dict):
+        rhs_expr = build_sql_query(filter_dict.get("rhs"), log_event_alias, session)
+    else:
+        rhs_expr = [
+            build_sql_query(expr, log_event_alias, session)
+            for expr in filter_dict.get("rhs")
+        ]
     if operand == "len":
         rval = _select_value(rhs_expr, session)
         if isinstance(rhs_expr, Subquery):
@@ -970,18 +1126,181 @@ def _handle_functions(filter_dict, log_event_alias, session):
             return str(rhs_expr)
 
     elif operand == "round":
-        if isinstance(rhs_expr, Subquery):
-            expr = func.round(_select_value(rhs_expr, session))
-            return (
-                select(
-                    rhs_expr.c.log_event_id.label("log_event_id"),
-                    expr.label("value"),
+        # 1) Normalize the "rhs_expr" into a list of length 1 or 2
+        if not isinstance(rhs_expr, list):
+            rhs_expr = [rhs_expr]
+        if len(rhs_expr) == 1:
+            # round(val)
+            val_expr = rhs_expr[0]
+            if isinstance(val_expr, Subquery):
+                # subquery => we retrieve the numeric column
+                val_col = _select_value(val_expr, session)
+                # produce a new subquery
+                subq = (
+                    select(
+                        val_expr.c.log_event_id.label("log_event_id"),
+                        func.round(cast(val_col, Numeric)).label("value"),
+                    )
+                    .select_from(val_expr)
+                    .subquery()
                 )
-                .select_from(rhs_expr)
+                return subq
+            else:
+                # val_expr is a literal or a direct SQL expression
+                return func.round(cast(val_col, Numeric))
+
+        elif len(rhs_expr) == 2:
+            # round(val, digits)
+            val_expr, digits_expr = rhs_expr
+            if isinstance(val_expr, Subquery) and isinstance(digits_expr, Subquery):
+                val_col = _select_value(val_expr, session)
+                dig_col = _select_value(digits_expr, session)
+                subq = (
+                    select(
+                        val_expr.c.log_event_id.label("log_event_id"),
+                        func.round(cast(val_col, Numeric), dig_col).label("value"),
+                    )
+                    .select_from(val_expr)
+                    .join(
+                        digits_expr,
+                        val_expr.c.log_event_id == digits_expr.c.log_event_id,
+                    )
+                    .subquery()
+                )
+                return subq
+            elif isinstance(val_expr, Subquery):
+                val_col = _select_value(val_expr, session)
+                # If digits_expr is literal or bind param, we can pass it directly:
+                subq = (
+                    select(
+                        val_expr.c.log_event_id.label("log_event_id"),
+                        func.round(cast(val_col, Numeric), digits_expr).label("value"),
+                    )
+                    .select_from(val_expr)
+                    .subquery()
+                )
+                return subq
+            elif isinstance(digits_expr, Subquery):
+                dig_col = _select_value(digits_expr, session)
+                # In that case, val_expr might be a literal
+                subq = (
+                    select(
+                        digits_expr.c.log_event_id.label("log_event_id"),
+                        func.round(cast(val_expr, Numeric), dig_col).label("value"),
+                    )
+                    .select_from(digits_expr)
+                    .subquery()
+                )
+                return subq
+            else:
+                # both val_expr and digits_expr are non-subquery expressions (literals or direct SQL)
+                return func.round(cast(val_expr, Numeric), digits_expr)
+        else:
+            raise ValueError("round(...) expects 1 or 2 arguments.")
+    elif operand == "round_timestamp":
+        if len(rhs_expr) != 2:
+            raise ValueError(
+                "round_timestamp(...) expects exactly 2 arguments: (timestamp_expr, seconds_expr)",
+            )
+
+        ts_expr = rhs_expr[0]
+        sec_expr = rhs_expr[1]
+
+        ts_is_sub = isinstance(ts_expr, Subquery)
+        sec_is_sub = isinstance(sec_expr, Subquery)
+
+        def _pg_round_timestamp(ts_col, seconds_col):
+            ts_text = cast(ts_col, String)
+            ts_cast = cast(ts_text, TIMESTAMP)
+            return func.to_timestamp(
+                func.round(
+                    func.extract("epoch", ts_cast) / seconds_col,
+                )
+                * seconds_col,
+            )
+
+        if ts_is_sub and sec_is_sub:
+            # both timestamp and seconds are subqueries
+            ts_col = _select_value(ts_expr, session)
+            sec_col = _select_value(sec_expr, session)
+
+            # build a subquery that joins them on log_event_id
+            subq = (
+                select(
+                    ts_expr.c.log_event_id.label("log_event_id"),
+                    _pg_round_timestamp(ts_col, sec_col).label("value"),
+                )
+                .select_from(ts_expr)
+                .join(sec_expr, ts_expr.c.log_event_id == sec_expr.c.log_event_id)
                 .subquery()
             )
+            return subq
+
+        elif ts_is_sub:
+            # timestamp is subquery, seconds is literal
+            ts_col = _select_value(ts_expr, session)
+            if isinstance(sec_expr, BindParameter) and isinstance(
+                sec_expr.value,
+                (int, float),
+            ):
+                subq = (
+                    select(
+                        ts_expr.c.log_event_id.label("log_event_id"),
+                        _pg_round_timestamp(ts_col, sec_expr.value).label("value"),
+                    )
+                    .select_from(ts_expr)
+                    .subquery()
+                )
+                return subq
+            else:
+                raise ValueError(
+                    "round_timestamp() can't handle that form of seconds_expr (unless subquery).",
+                )
+
+        elif sec_is_sub:
+            # seconds is subquery, timestamp is literal or direct SQL
+            if isinstance(ts_expr, BindParameter) and isinstance(
+                ts_expr.value,
+                (datetime, str),
+            ):
+                # parse if needed. Or assume user gave a valid python datetime
+                ts_literal = literal(ts_expr.value, type_=TIMESTAMP)
+                sec_col = _select_value(sec_expr, session)
+
+                subq = (
+                    select(
+                        sec_expr.c.log_event_id.label("log_event_id"),
+                        _pg_round_timestamp(ts_literal, sec_expr.value).label("value"),
+                    )
+                    .select_from(sec_expr)
+                    .subquery()
+                )
+                return subq
+            else:
+                raise ValueError(
+                    "round_timestamp() can't handle that form of timestamp_expr (unless subquery).",
+                )
+
         else:
-            return round(rhs_expr)
+            # both are direct expressions or literals
+            if not isinstance(ts_expr, BindParameter) and not isinstance(
+                ts_expr,
+                (datetime, str),
+            ):
+                raise ValueError(
+                    "Expected a literal datetime or string for the timestamp.",
+                )
+            if not isinstance(sec_expr, BindParameter) and not isinstance(
+                sec_expr,
+                (int, float),
+            ):
+                raise ValueError(
+                    "Expected an integer or float literal for the rounding seconds.",
+                )
+
+            # Convert the Python datetime/string to a literal
+            ts_lit = literal(ts_expr.value, type_=TIMESTAMP)
+            return _pg_round_timestamp(ts_lit, sec_expr.value)
 
     elif operand == "type":
         if isinstance(rhs_expr, Subquery):
@@ -1029,9 +1348,159 @@ def _handle_functions(filter_dict, log_event_alias, session):
                 .subquery()
             )
             return version_subq
+    elif operand == "BASE":
 
+        if len(rhs_expr) != 2:
+            raise ValueError("BASE(...) requires exactly 2 arguments: (event_id, key)")
+
+        event_id_expr = rhs_expr[0]
+        key_expr = rhs_expr[1]
+        return _build_subquery_for_base_call(event_id_expr, key_expr, session)
     else:
         raise ValueError(f"Unknown function operand: {operand}")
+
+
+def _handle_index_operator(filter_dict, log_event_alias, session):
+    """
+    Handle the INDEX operator in a filter expression.
+
+    Args:
+        filter_dict (dict): The filter expression dictionary containing "lhs" and "rhs".
+        log_event_alias: The alias for the log event.
+        session: The database session.
+
+    Returns:
+        Subquery: A subquery that extracts the sub-value from the LHS JSON object/array using the RHS key/index.
+    """
+    lhs_node = filter_dict.get("lhs")
+    rhs_node = filter_dict.get("rhs")
+
+    lhs_expr = build_sql_query(lhs_node, log_event_alias, session)
+    rhs_expr = build_sql_query(rhs_node, log_event_alias, session)
+
+    # If LHS is a subquery => we pull out its .c.log_event_id plus the "value" column
+    # If RHS is a subquery => that implies the index key is dynamic; in practice, you may or may not want to handle that
+    # For simplicity, let's assume RHS is literal or a direct bind param.
+    if isinstance(lhs_expr, Subquery):
+        lhs_valcol = _select_value(
+            lhs_expr,
+            session,
+        )  # JSONB column with the parent object/array
+        if isinstance(rhs_expr, Subquery):
+            # Potentially advanced scenario: the user wrote x[y], where y is a subquery.
+            # We'll pick the .value from y, interpret it as a string or integer, and then do -> or ->> extraction.
+            rhs_valcol = _select_value(rhs_expr, session)
+            # We must join them on log_event_id as well:
+            subq = (
+                select(
+                    lhs_expr.c.log_event_id.label("log_event_id"),
+                    # We'll do a JSON extraction. If rhs is a string => valcol->rhs.
+                    # If integer => valcol->rhs, but we must cast integer to text for JSON operator in PG.
+                    # The simplest approach is to do:
+                    func.jsonb_extract_path(
+                        lhs_valcol,
+                        func.cast(rhs_valcol, String),
+                    ).label("value"),
+                )
+                .select_from(lhs_expr)
+                .join(rhs_expr, lhs_expr.c.log_event_id == rhs_expr.c.log_event_id)
+                .subquery()
+            )
+            return subq
+        else:
+            # RHS is a literal or direct expression. Could be an int or string:
+            # If it's an int, we do valcol->'<idx>'. If string, we do valcol->'some_key'.
+            if isinstance(rhs_expr, int):
+                # For PG JSONB, array index is valcol -> idx as text
+                idx_str = str(rhs_expr)
+                extracted = lhs_valcol[idx_str]  # Postgres expression
+            elif isinstance(rhs_expr, str):
+                extracted = lhs_valcol[rhs_expr]
+            else:
+                # Possibly a BindParam. You can do .value
+                if isinstance(rhs_expr, BindParameter):
+                    # get the actual python value
+                    key_or_idx = rhs_expr.value
+                    key_or_idx = (
+                        json.loads(key_or_idx)
+                        if isinstance(key_or_idx, str)
+                        else key_or_idx
+                    )
+                    extracted = lhs_valcol[key_or_idx]
+                else:
+                    # fallback
+                    extracted = lhs_valcol[rhs_expr]
+
+            # Build the subquery
+            subq = (
+                select(
+                    lhs_expr.c.log_event_id.label("log_event_id"),
+                    extracted.label("value"),
+                )
+                .select_from(lhs_expr)
+                .subquery()
+            )
+            return subq
+
+    else:
+        # If LHS is not a subquery => e.g. LHS is a python dict or list literal
+        # Then we can do python-level extraction. Or if LHS is a direct SQL expression (rare), do something else.
+        # For simplicity, treat LHS as python literal:
+        if isinstance(lhs_expr, (dict, list)):
+            # Then we do a python-level extraction if the rhs is also python-literal
+            if isinstance(rhs_expr, (int, str)):
+                # Just do dictionary or list indexing:
+                try:
+                    extracted_value = lhs_expr[rhs_expr]
+                except (KeyError, IndexError, TypeError):
+                    extracted_value = None
+                return literal(extracted_value)
+            else:
+                raise ValueError(
+                    "Cannot index a python dict/list with a subquery or complex expr.",
+                )
+        else:
+            raise ValueError(
+                "INDEX operator expects LHS to be a subquery (JSON) or a python list/dict literal.",
+            )
+
+
+def _build_subquery_for_base_call(list_of_ids_expr, key_expr, session):
+    """
+    Build a subselect that retrieves columns for a given list_of_ids and a key.
+    e.g. log_event_id in [101,102] AND key='score'
+    """
+    # Evaluate the expressions if they are BindParameter or subquery
+    # Typically, list_of_ids_expr might be a literal => e.g. [101,102]
+    if isinstance(list_of_ids_expr, BindParameter):
+        base_ids = list_of_ids_expr.value
+    elif isinstance(list_of_ids_expr, list):
+        base_ids = list_of_ids_expr
+    else:
+        # If it's a subquery or expression, we do session.execute(...)
+        base_ids = session.execute(select(list_of_ids_expr)).scalar()
+        if not isinstance(base_ids, list):
+            base_ids = [base_ids]
+
+    # If base_ids is a string, parse it as JSON
+    if isinstance(base_ids, str):
+        try:
+            base_ids = json.loads(base_ids)
+        except json.JSONDecodeError:
+            raise ValueError(f"Invalid JSON format for base_ids: {base_ids}")
+
+    # Filter the key_expr subquery to only include rows with log_event_id in base_ids
+    filtered_subquery = (
+        select(
+            key_expr.c.log_event_id.label("log_event_id"),
+            _select_value(key_expr, session).label("value"),
+        )
+        .select_from(key_expr)
+        .where(key_expr.c.log_event_id.in_(base_ids))
+        .subquery()
+    )
+
+    return filtered_subquery
 
 
 def build_sql_query(filter_dict, log_event_alias, session):
@@ -1085,9 +1554,21 @@ def build_sql_query(filter_dict, log_event_alias, session):
         return _handle_membership_operator(filter_dict, log_event_alias, session)
 
     # Handle functions (len, to_str, type, round, exists, version)
-    elif operand in ("len", "to_str", "type", "round", "exists", "version"):
+    elif operand in (
+        "len",
+        "to_str",
+        "type",
+        "round",
+        "round_timestamp",
+        "exists",
+        "version",
+        "BASE",
+    ):
         return _handle_functions(filter_dict, log_event_alias, session)
 
+    # Handle list/dict indexing
+    elif operand == "INDEX":
+        return _handle_index_operator(filter_dict, log_event_alias, session)
     # Handle unknown operand
     else:
         raise ValueError(f"Unknown operand or structure: {filter_dict}")
@@ -1212,25 +1693,6 @@ reduction_methods = {
     "median": _median,
     "mode": _mode,
 }
-
-
-def format_logs(all_logs, context_len=0):
-    formatted_entries = dict()
-    for log_data in all_logs:
-        log = log_data[0]
-        ts = log_data[1]
-        key = log.key[context_len:]
-        log_event_id = log.log_event_id
-        if log_event_id not in formatted_entries:
-            formatted_entries[log_event_id] = {"entries": {}, "versions": {}}
-        assert (
-            key not in formatted_entries[log_event_id]
-        ), f"found duplicates for key {key} with log_id {log_event_id}"
-        formatted_entries[log_event_id]["ts"] = ts.isoformat()
-        formatted_entries[log_event_id]["entries"][key] = log.value
-
-        formatted_entries[log_event_id]["versions"][key] = log.version
-    return formatted_entries
 
 
 def _flatten_fields(
