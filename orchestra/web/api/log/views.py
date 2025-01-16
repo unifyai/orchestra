@@ -286,16 +286,19 @@ def create_derived_entry(
 
         # Create a derived entry for each log ID involved in this computation
         for log_event_id in involved_log_ids:
+            val = json.loads(json.dumps(value, cls=DecimalEncoder))
             new_derived_id = derived_log_dao.create(
                 log_event_id=log_event_id,
                 key=body.key,
                 equation=body.equation,
                 referenced_logs=current_referenced_logs,
-                value=json.loads(json.dumps(value, cls=DecimalEncoder)),
+                value=val,
                 inferred_type=inferred_type,
             )
             created_derived_ids.append(new_derived_id)
 
+    # Create a field type for the derived log
+    field_type_dao.create_field_type(project_obj.id, body.key, val)
     return {
         "info": f"Created {len(created_derived_ids)} derived logs with key='{body.key}'.",
         "derived_log_ids": created_derived_ids,
@@ -1714,7 +1717,15 @@ def get_fields(
         session,
     )
     field_types = dict(
-        (lg[0].key, "entry" if lg[0].version is None else "param") for lg in all_logs
+        (
+            lg[0].key,
+            (
+                "derived_entry"
+                if isinstance(lg[0], DerivedLog)
+                else "entry" if lg[0].version is None else "param"
+            ),
+        )
+        for lg in all_logs
     )
     # end ToDo
 
