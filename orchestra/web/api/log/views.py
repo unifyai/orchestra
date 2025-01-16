@@ -835,7 +835,7 @@ def _get_logs_query(
     subqs_for_sort = {}
     field_types = field_type_dao.get_field_types(
         project_id,
-    )  # { "score": "float", "timestamp": "datetime", ...}
+    )
 
     if sorting:
         # e.g. sorting='{"score":"ascending","timestamp":"descending"}'
@@ -929,7 +929,6 @@ def _get_logs_query(
             )
 
             # 4b) Cast the subq.c.raw_value based on the field type (if known)
-            # If you store the type in field_types, do something like:
             if key in field_types:
                 python_type = field_types[key]
                 cast_type = STR_TO_SQL_TYPES[python_type]
@@ -1180,8 +1179,6 @@ def get_logs(
 
         if is_derived:
             # --- Store in the derived_entries dict
-            #     Derived logs typically do not have a `version` column (it’s None),
-            #     so we don’t treat them like params.
             assert (
                 key not in formatted[event_id]["derived_entries"]
             ), f"found duplicate derived key {key} with log_id {event_id}"
@@ -1203,9 +1200,6 @@ def get_logs(
                 if key not in formatted[event_id]["versions"]:
                     formatted[event_id]["versions"][key] = {}
                 formatted[event_id]["versions"][key][ver] = val
-
-                # Store the actual param "name" => str(ver)
-                # so the final output can see which version was used
                 formatted[event_id]["entries"][key] = str(ver)
 
     # Now build final JSON
@@ -1215,8 +1209,6 @@ def get_logs(
         entries = {}
         params = {}
         for k, v in data["entries"].items():
-            # If the value is a numeric version (like '0'), then it’s param
-            # or you can rely on data["versions"].get(k) to see if it’s param
             if k in data["versions"]:
                 # It's param-based
                 params[k] = v  # v is the str(ver)
