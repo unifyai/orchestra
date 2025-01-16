@@ -1227,7 +1227,16 @@ def format_logs(all_logs, context_len=0):
             key not in formatted_entries[log_event_id]
         ), f"found duplicates for key {key} with log_id {log_event_id}"
         formatted_entries[log_event_id]["ts"] = ts.isoformat()
-        formatted_entries[log_event_id]["entries"][key] = log.value
+
+        # noinspection PyBroadException
+        def _try_decode(str_in):
+            try:
+                return json.loads(str_in)
+            except:
+                return str_in
+
+        value = _try_decode(log.value) if isinstance(log.value, str) else log.value
+        formatted_entries[log_event_id]["entries"][key] = value
 
         formatted_entries[log_event_id]["versions"][key] = log.version
     return formatted_entries
