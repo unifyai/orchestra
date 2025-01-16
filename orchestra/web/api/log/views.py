@@ -1158,25 +1158,52 @@ def get_logs(
     # Format them
     formatted = {}
     for row_obj, created_at, event_id in all_rows:
+        # Ensure we have a record in `formatted` for this event_id
         if event_id not in formatted:
             formatted[event_id] = {
                 "ts": created_at.isoformat() if created_at else None,
                 "entries": {},
                 "versions": {},
+                "derived_entries": {},
             }
-        # row_obj is either a Log or a DerivedLog
+        is_derived = isinstance(row_obj, DerivedLog)
+
         # Apply context_len slicing to the key
         key = row_obj.key[context_len:]
         val = row_obj.value
+
         # If row_obj is a base Log with param-version:
         ver = getattr(row_obj, "version", None)
 
-        assert (
-            key not in formatted[event_id]["entries"]
-        ), f"found duplicates for key {key} with log_id {event_id}"
+        if is_derived:
+            # --- Store in the derived_entries dict
+            #     Derived logs typically do not have a `version` column (it’s None),
+            #     so we don’t treat them like params.
+            assert (
+                key not in formatted[event_id]["derived_entries"]
+            ), f"found duplicate derived key {key} with log_id {event_id}"
 
-        formatted[event_id]["entries"][key] = val
-        formatted[event_id]["versions"][key] = ver
+            formatted[event_id]["derived_entries"][key] = val
+
+        else:
+            # --- Handle base Log
+            #     Check if it’s versioned => treat as param, otherwise as normal entry
+            assert (
+                key not in formatted[event_id]["entries"]
+            ), f"found duplicates for key {key} with log_id {event_id}"
+
+            if ver is None:
+                # Put in "entries"
+                formatted[event_id]["entries"][key] = val
+            else:
+                # Put in "params"
+                if key not in formatted[event_id]["versions"]:
+                    formatted[event_id]["versions"][key] = {}
+                formatted[event_id]["versions"][key][ver] = val
+
+                # Store the actual param "name" => str(ver)
+                # so the final output can see which version was used
+                formatted[event_id]["entries"][key] = str(ver)
 
     # Now build final JSON
     logs_out = []
@@ -1185,21 +1212,31 @@ def get_logs(
         entries = {}
         params = {}
         for k, v in data["entries"].items():
-            ver = data["versions"][k]
-            if ver is None:
-                entries[k] = v
-            else:
-                # treat as param
+            # If the value is a numeric version (like '0'), then it’s param
+            # or you can rely on data["versions"].get(k) to see if it’s param
+            if k in data["versions"]:
+                # It's param-based
+                params[k] = v  # v is the str(ver)
+                # Also store in params_out if needed
                 if k not in params_out:
                     params_out[k] = {}
-                params_out[k][ver] = v
-                params[k] = str(ver)
+                # We might have multiple versions for the same param
+                for ver_num, ver_val in data["versions"][k].items():
+                    params_out[k][ver_num] = ver_val
+            else:
+                # It's a normal base entry
+                entries[k] = v
+
+        # derived_entries
+        derived_entries = data["derived_entries"]
+
         logs_out.append(
             {
                 "id": event_id,
                 "ts": data["ts"],
                 "entries": entries,
                 "params": params,
+                "derived_entries": derived_entries,
             },
         )
 
