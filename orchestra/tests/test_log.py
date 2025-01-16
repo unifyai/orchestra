@@ -434,6 +434,38 @@ async def test_get_log(client: AsyncClient):
     )
 
 
+@pytest.mark.anyio
+async def test_get_log_w_nest(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+    log_response = await client.post(
+        "/v0/log",
+        json={
+            "project": project_name,
+            "params": {"a/b/param1": "test"},
+            "entries": {
+                "nest": {"a": 1, "b": {"c": 2, "d": 3, "e": [4, 5]}},
+            },
+        },
+        headers=HEADERS,
+    )
+    log_id = log_response.json()
+
+    # fetch the log
+    response = await _get_log(client, project_name, log_id)
+
+    assert response.status_code == 200, response.json()
+    assert "logs" in response.json()
+    assert "params" in response.json()
+    assert len(response.json()["logs"]) == 1
+    entries = response.json()["logs"][0]["entries"]
+    assert isinstance(entries["nest"], dict)
+    assert entries["nest"] == {
+        "a": 1,
+        "b": {"c": 2, "d": 3, "e": [4, 5]},
+    }
+
+
 @pytest.mark.parametrize(
     "expression, values",
     [
