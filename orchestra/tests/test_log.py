@@ -298,50 +298,173 @@ async def test_create_derived_entry_with_filter_expr(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_get_logs_including_derived(client: AsyncClient):
-    project_name = "test_project_get_logs"
+    project_name = "test_derived_logs"
+    user_id = 1
+
+    # 1) Create a new project
     await _create_project(client, project_name, user=1)
 
-    # Create base logs
-    base_log_ids = []
-    for i in range(2):
-        response = await _create_log(client, project_name, entries={"score": i * 2.5})
-        assert response.status_code == 200
-        base_log_ids.append(response.json())
+    # 2) Populate base logs
+    await _create_several_logs(client, project_name)
 
-    # Create derived logs
-    key = "doubled"
-    equation = "{log0:score}*2"
-    referenced_logs = {"log0": base_log_ids}
-    derived_response = await _create_derived_entry(
+    # 3) Create derived logs referencing some subsets
+    base_log_ids1 = [1, 2, 3, 4]
+    derived_conf1 = {
+        "key": "dl1",
+        "equation": "{log1:_/temperature} + 10",
+        "referenced_logs": {"log1": base_log_ids1},
+    }
+    resp = await _create_derived_entry(
         client,
         project_name,
-        key,
-        equation,
-        referenced_logs,
+        derived_conf1["key"],
+        derived_conf1["equation"],
+        derived_conf1["referenced_logs"],
+        user=user_id,
     )
-    assert derived_response.status_code == 200
-    derived_ids = derived_response.json()["derived_log_ids"]
+    assert resp.status_code == 200, resp.json()
+    derived_log_ids1 = resp.json()["derived_log_ids"]
+    assert len(derived_log_ids1) == len(base_log_ids1)
 
-    # Retrieve logs
-    response = await client.get(
+    base_log_ids2 = [1, 2, 3, 4, 5, 6]
+    derived_conf2 = {
+        "key": "dl2",
+        "equation": "'lava' in {log1:_/description}",
+        "referenced_logs": {"log1": base_log_ids2},
+    }
+    resp = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf2["key"],
+        derived_conf2["equation"],
+        derived_conf2["referenced_logs"],
+        user=user_id,
+    )
+    assert resp.status_code == 200, resp.json()
+    derived_log_ids2 = resp.json()["derived_log_ids"]
+    assert len(derived_log_ids2) == len(base_log_ids2)
+
+    # Third derived log checking if _/safe is True
+    base_log_ids3 = [1, 2, 3, 4]
+    derived_conf3 = {
+        "key": "dl3",
+        "equation": "{log1:_/safe} is True",
+        "referenced_logs": {"log1": base_log_ids3},
+    }
+    resp = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf3["key"],
+        derived_conf3["equation"],
+        derived_conf3["referenced_logs"],
+        user=user_id,
+    )
+    assert resp.status_code == 200, resp.json()
+    derived_log_ids3 = resp.json()["derived_log_ids"]
+    assert len(derived_log_ids3) == len(base_log_ids3)
+
+    # 4) Test retrieving logs *without* any filtering or sorting
+    resp = await client.get(
+        "/v0/logs",
+        params={"project": project_name},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.json()
+    data = resp.json()
+    all_logs = data["logs"]
+    count = data["count"]
+
+    assert count == 7
+    found_derived_for_first_event = False
+    for entry in all_logs:
+        derived_entries = entry.get("derived_entries")
+        if derived_entries and "dl1" in derived_entries:
+            found_derived_for_first_event = True
+            break
+
+    assert (
+        found_derived_for_first_event
+    ), "Expected to find at least one event with dl1 in derived_entries"
+
+    # 5) Test context
+    resp = await client.get(
         "/v0/logs",
         params={
             "project": project_name,
-            "sorting": json.dumps(
-                {
-                    "score": "descending",
-                },
-            ),
+            "context": "_/",
         },
         headers=HEADERS,
     )
+    assert resp.status_code == 200
+    data_context = resp.json()
+    logs_context = data_context["logs"]
+    for log_obj in logs_context:
+        # the "entries" keys should not have "a/b/param1" or any param
+        for k in log_obj["entries"]:
+            assert not k.startswith("a/b/"), f"Found param key in context=_/: {k}"
 
-    assert response.status_code == 200
-    data = response.json()
-    assert "logs" in data
-    assert len(data["logs"]) == 4  # 2 base logs + 2 derived logs
+    # 6) Test a filter_expr,
+    filter_expr = "_/temperature > 100"
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": filter_expr,
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+    data_filtered = resp.json()
+    logs_filtered = data_filtered["logs"]
 
-    # TODO: Verify derived logs are present
+    for log_obj in logs_filtered:
+        # "dl1" should be in derived_entries
+        dval = log_obj["derived_entries"].get("dl1", None)
+        assert (
+            dval is not None
+        ), f"Expected derived dl1 in filter dl1>100, but not found: {log_obj}"
+        assert dval > 500, f"dl1 is not > 500 for log {log_obj}"
+
+    # 7) Test exclude_ids or from_ids
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "exclude_ids": "3",
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+    data_exclude = resp.json()
+    logs_exclude = data_exclude["logs"]
+    for log_obj in logs_exclude:
+        # none should have id=3
+        assert log_obj["id"] != 3, "We wanted to exclude log_event_id=3"
+
+    # 8) Test sorting
+    sorting_param = json.dumps({"_/temperature": "ascending"})
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "sorting": sorting_param,
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+    data_sorted = resp.json()
+    logs_sorted = data_sorted["logs"]
+
+    # check that the events are in ascending order of their _/temperature
+    last_temp = float("-inf")
+    for log_obj in logs_sorted:
+        temperature = log_obj["entries"].get("_/temperature")
+        if temperature is not None:
+            # We expect temperature >= last_temp each time
+            assert (
+                temperature >= last_temp
+            ), f"Sorting by temperature ascending failed: {temperature} < {last_temp}"
+            last_temp = temperature
 
 
 @pytest.mark.anyio
@@ -2404,7 +2527,12 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
     assert len(result["logs"]) == 1
     del result["logs"][0]["ts"]
     assert result["logs"] == [
-        {"id": 2, "entries": {"a/b/c/numeric_input": 4.5}, "params": {}, "derived_entries": {}},
+        {
+            "id": 2,
+            "entries": {"a/b/c/numeric_input": 4.5},
+            "params": {},
+            "derived_entries": {},
+        },
     ]
 
 
