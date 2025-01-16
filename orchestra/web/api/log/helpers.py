@@ -970,6 +970,16 @@ def _substring_expr(lhs, rhs):
 
 
 def _parse_rhs_list_or_dict_if_needed(rhs_dict, rhs_val):
+    """
+    Parse the RHS value if it is a JSON string, list, or dictionary.
+
+    Args:
+        rhs_dict (dict): The RHS dictionary containing the value to parse.
+        rhs_val: The RHS value which can be a BindParameter, list, or dict.
+
+    Returns:
+        list, dict, or None: Parsed list or dictionary if successful, otherwise None.
+    """
     if not rhs_dict:
         return None
 
@@ -998,10 +1008,10 @@ def _parse_rhs_list_or_dict_if_needed(rhs_dict, rhs_val):
     return None
 
 
-# Helper function for functions (len, to_str, type, round, exists, version)
+# Helper function for functions (len, to_str, type, round, round_timestamp, exists, version)
 def _handle_functions(filter_dict, log_event_alias, session):
     """
-    Handles function-based operations ('len', 'to_str', 'type', 'round', 'exists', 'version') in the filter dictionary.
+    Handles function-based operations ('len', 'to_str', 'type', 'round', 'round_timestamp', 'exists', 'version') in the filter dictionary.
 
     Args:
         filter_dict (dict): The filter dictionary containing the function and its arguments.
@@ -1142,9 +1152,6 @@ def _handle_functions(filter_dict, log_event_alias, session):
         elif len(rhs_expr) == 2:
             # round(val, digits)
             val_expr, digits_expr = rhs_expr
-            # If digits_expr is not an integer-literal, we might need to cast.
-            # For Postgres, `round(double precision, integer)` is typical.
-            # If digits_expr is a subquery, we’d similarly do _select_value(digits_expr, session).
             if isinstance(val_expr, Subquery) and isinstance(digits_expr, Subquery):
                 val_col = _select_value(val_expr, session)
                 dig_col = _select_value(digits_expr, session)
@@ -1342,10 +1349,6 @@ def _handle_functions(filter_dict, log_event_alias, session):
             )
             return version_subq
     elif operand == "BASE":
-        # The parse node might have: { "operand":"BASE", "rhs":[ <log_event_id_expr>, <key_expr> ] }
-        # We want to produce a subquery that fetches the (log_event_id, typed_value) from Log,
-        # specifically where log_event_id = X, key = Y.
-        # We'll interpret the first arg as an int literal, the second as a string key or an expression.
 
         if len(rhs_expr) != 2:
             raise ValueError("BASE(...) requires exactly 2 arguments: (event_id, key)")
@@ -1359,12 +1362,15 @@ def _handle_functions(filter_dict, log_event_alias, session):
 
 def _handle_index_operator(filter_dict, log_event_alias, session):
     """
-    For a parse node like:
-      {"operand": "INDEX", "lhs": <some node>, "rhs": <some node>}
-    we interpret LHS as a JSON object/array, and RHS as either a string key or an integer index.
-    We'll produce a subquery that extracts that sub-value from LHS.
+    Handle the INDEX operator in a filter expression.
 
-    Return shape: Subquery with (log_event_id, value).
+    Args:
+        filter_dict (dict): The filter expression dictionary containing "lhs" and "rhs".
+        log_event_alias: The alias for the log event.
+        session: The database session.
+
+    Returns:
+        Subquery: A subquery that extracts the sub-value from the LHS JSON object/array using the RHS key/index.
     """
     lhs_node = filter_dict.get("lhs")
     rhs_node = filter_dict.get("rhs")
@@ -1687,34 +1693,6 @@ reduction_methods = {
     "median": _median,
     "mode": _mode,
 }
-
-
-def format_logs(all_logs, context_len=0):
-    formatted_entries = dict()
-    for log_data in all_logs:
-        log = log_data[0]
-        ts = log_data[1]
-        key = log.key[context_len:]
-        log_event_id = log.log_event_id
-        if log_event_id not in formatted_entries:
-            formatted_entries[log_event_id] = {"entries": {}, "versions": {}}
-        assert (
-            key not in formatted_entries[log_event_id]
-        ), f"found duplicates for key {key} with log_id {log_event_id}"
-        formatted_entries[log_event_id]["ts"] = ts.isoformat()
-
-        # noinspection PyBroadException
-        def _try_decode(str_in):
-            try:
-                return json.loads(str_in)
-            except:
-                return str_in
-
-        value = _try_decode(log.value) if isinstance(log.value, str) else log.value
-        formatted_entries[log_event_id]["entries"][key] = value
-
-        formatted_entries[log_event_id]["versions"][key] = log.version
-    return formatted_entries
 
 
 def _flatten_fields(
