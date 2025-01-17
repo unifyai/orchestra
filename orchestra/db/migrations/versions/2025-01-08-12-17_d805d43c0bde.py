@@ -5,6 +5,7 @@ Revises: f3153538b97e
 Create Date: 2025-01-08 12:17:01.005777
 
 """
+
 import sqlalchemy as sa
 from alembic import op
 
@@ -51,6 +52,7 @@ def upgrade() -> None:
         "id",
         existing_type=sa.INTEGER(),
         type_=sa.String(),
+        postgresql_using="id::text",
         existing_nullable=False,
     )
     # ### end Alembic commands ###
@@ -63,6 +65,7 @@ def downgrade() -> None:
         "id",
         existing_type=sa.String(),
         type_=sa.INTEGER(),
+        postgresql_using="id::integer",
         existing_nullable=False,
     )
     op.drop_column("interface", "project")
