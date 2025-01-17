@@ -24,6 +24,7 @@ def upgrade() -> None:
         "value",
         existing_type=sa.VARCHAR(),
         type_=postgresql.JSONB(astext_type=sa.Text()),
+        postgresql_using="value::jsonb",
         existing_nullable=True,
     )
     # ### end Alembic commands ###
@@ -36,6 +37,7 @@ def downgrade() -> None:
         "value",
         existing_type=postgresql.JSONB(astext_type=sa.Text()),
         type_=sa.VARCHAR(),
+        postgresql_using="value::text",
         existing_nullable=True,
     )
     # ### end Alembic commands ###
