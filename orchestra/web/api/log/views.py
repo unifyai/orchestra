@@ -1160,7 +1160,6 @@ def get_logs(
     # Format them
     formatted = {}
     for row_obj, created_at, event_id in all_rows:
-        # Ensure we have a record in `formatted` for this event_id
         if event_id not in formatted:
             formatted[event_id] = {
                 "ts": created_at.isoformat() if created_at else None,
@@ -1172,13 +1171,24 @@ def get_logs(
 
         # Apply context_len slicing to the key
         key = row_obj.key[context_len:]
-        val = row_obj.value
 
-        # If row_obj is a base Log with param-version:
+        # noinspection PyBroadException
+        def _try_decode(str_in):
+            try:
+                return json.loads(str_in)
+            except:
+                return str_in
+
+        val = (
+            _try_decode(row_obj.value)
+            if isinstance(row_obj.value, str)
+            else row_obj.value
+        )
+
         ver = getattr(row_obj, "version", None)
 
         if is_derived:
-            # --- Store in the derived_entries dict
+            # --- Handle derived Log
             assert (
                 key not in formatted[event_id]["derived_entries"]
             ), f"found duplicate derived key {key} with log_id {event_id}"
@@ -1187,7 +1197,6 @@ def get_logs(
 
         else:
             # --- Handle base Log
-            #     Check if it’s versioned => treat as param, otherwise as normal entry
             assert (
                 key not in formatted[event_id]["entries"]
             ), f"found duplicates for key {key} with log_id {event_id}"
@@ -1714,9 +1723,7 @@ def get_fields(
             (
                 "derived_entry"
                 if isinstance(lg[0], DerivedLog)
-                else "entry"
-                if lg[0].version is None
-                else "param"
+                else "entry" if lg[0].version is None else "param"
             ),
         )
         for lg in all_logs
