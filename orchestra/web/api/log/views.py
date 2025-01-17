@@ -1723,7 +1723,9 @@ def get_fields(
             (
                 "derived_entry"
                 if isinstance(lg[0], DerivedLog)
-                else "entry" if lg[0].version is None else "param"
+                else "entry"
+                if lg[0].version is None
+                else "param"
             ),
         )
         for lg in all_logs
