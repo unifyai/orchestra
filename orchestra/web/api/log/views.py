@@ -182,7 +182,42 @@ def create_log(
     return log_event_id
 
 
-@router.put("/log/derived")
+@router.put(
+    "/log/derived",
+    responses={
+        200: {
+            "description": "Derived log entries created successfully.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Created 3 derived logs with key='example_key'.",
+                        "derived_log_ids": [101, 102, 103],
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project 'example_project' not found.",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Bad Request",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "All referenced log lists must have the same length. Found lengths: [2, 3].",
+                    },
+                },
+            },
+        },
+    },
+)
 def create_derived_entry(
     request_fastapi: Request,
     body: CreateDerivedEntriesConfig,
@@ -1040,6 +1075,7 @@ def _get_logs_query(
                                     "key1": "a",
                                     "key2": 1.0,
                                 },
+                                "derived_entries": {},
                                 "params": {},
                             },
                             {
@@ -1049,6 +1085,7 @@ def _get_logs_query(
                                     "key1": "b",
                                     "key2": 2.0,
                                 },
+                                "derived_entries": {},
                                 "params": {},
                             },
                         ],
