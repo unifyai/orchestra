@@ -576,7 +576,7 @@ class DerivedLog(Base):
     key = Column(String, nullable=False)
     equation = Column(String)
     referenced_logs = Column(JSONB)
-    value = Column(String)
+    value = Column(JSONB)
     inferred_type = Column(String)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
