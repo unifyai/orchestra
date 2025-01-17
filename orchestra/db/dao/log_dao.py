@@ -1,4 +1,5 @@
 import base64
+import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
@@ -202,7 +203,7 @@ class LogDAO:
     ):
 
         inferred_type = type(raw_v).__name__
-        json_v = raw_v
+        json_v = json.dumps(raw_v)
 
         if explicit_types and isinstance(explicit_types, Dict):
             if raw_k in explicit_types:
@@ -223,7 +224,6 @@ class LogDAO:
                 "inferred_type",
                 inferred_type,
             )
-            self.session.commit()
         else:
             raise IndexError
 
