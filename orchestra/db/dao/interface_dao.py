@@ -13,6 +13,7 @@ class InterfaceDAO:
     def create_interface(
         self,
         user_id: str,
+        name: str,
         items: str,
         new_counter: int,
         project: str | None,
@@ -20,6 +21,7 @@ class InterfaceDAO:
         self.session.add(
             Interface(
                 user_id=user_id,
+                name=name,
                 items=items,
                 new_counter=new_counter,
                 project=project,
@@ -29,27 +31,49 @@ class InterfaceDAO:
     def update_interface(
         self,
         user_id: str,
+        name: str,
+        project: str,
         items: str,
         new_counter: int,
-        project: str | None,
+        new_name: str = None,
     ):
         query = select(Interface)
-        query = query.where(Interface.user_id == user_id)
+        query = query.where(Interface.user_id == user_id).where(
+            Interface.name == name,
+        )
         raw = self.session.execute(query)
         entry = raw.scalars().first()
         if entry is not None:
             setattr(entry, "items", items)  # noqa: B010
             setattr(entry, "new_counter", new_counter)
             setattr(entry, "project", project)
+            if new_name is not None:
+                setattr(entry, "name", new_name)
 
-    def get_interface(self, user_id: str):
+    def get_interfaces(
+        self,
+        user_id: str,
+        project: str = None,
+        name: str = None,
+    ) -> list[Interface]:
         query = select(Interface).where(Interface.user_id == user_id)
-        interface = self.session.execute(query).fetchall()
-        return interface[0][0] if len(interface) else None
+        if project is not None:
+            query = query.where(Interface.project == project)
+        if name is not None:
+            query = query.where(Interface.name == name)
+        interfaces = self.session.execute(query).fetchall()
+        return [interface[0] for interface in interfaces]
 
-    def delete_interface(self, user_id: str):
+    def delete_interface(self, user_id: str, name: str):
         try:
-            interface = self.session.query(Interface).filter_by(user_id=user_id).one()
+            interface = (
+                self.session.query(Interface)
+                .filter_by(
+                    user_id=user_id,
+                    name=name,
+                )
+                .one()
+            )
             self.session.delete(interface)
             self.session.commit()
         except:
