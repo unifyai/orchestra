@@ -79,7 +79,17 @@ def create_interface(
                 "application/json": {"info": "Interface updated successfully!"},
             },
         },
-        404: {
+        404_1: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <project> not found.",
+                    },
+                },
+            },
+        },
+        404_2: {
             "description": "Interface Not Found",
             "content": {
                 "application/json": {
@@ -103,7 +113,7 @@ def update_interface(
     if len(projects) == 0:
         raise HTTPException(
             status_code=404,
-            detail="Project not found.",
+            detail=f"Project {request.project} not found.",
         )
     dao = temp_interface_dao if request.temporary else interface_dao
     interfaces = dao.get_interfaces(
