@@ -1,8 +1,6 @@
-import os
 import time
 from typing import Tuple
 
-from fastapi import HTTPException
 from opentelemetry import trace
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram
 from prometheus_client.openmetrics.exposition import (
@@ -13,7 +11,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Match
-from starlette.status import HTTP_401_UNAUTHORIZED, HTTP_500_INTERNAL_SERVER_ERROR
+from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
 from starlette.types import ASGIApp
 
 INFO = Gauge(
@@ -153,22 +151,23 @@ def metrics(request: Request) -> Response:
     Endpoint that returns the aggregated Prometheus metrics.
     Includes simple Bearer-token authentication to secure the endpoint.
     """
-    # Bearer token required
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(
-            status_code=HTTP_401_UNAUTHORIZED,
-            detail="Missing or invalid Authorization header",
-        )
+    # TODO: figure out basic auth for prometheus
+    # # Bearer token required
+    # auth_header = request.headers.get("Authorization")
+    # if not auth_header or not auth_header.startswith("Bearer "):
+    #     raise HTTPException(
+    #         status_code=HTTP_401_UNAUTHORIZED,
+    #         detail="Missing or invalid Authorization header",
+    #     )
 
-    incoming_token = auth_header[len("Bearer ") :]
+    # incoming_token = auth_header[len("Bearer ") :]
 
-    expected_token = os.getenv("PROMETHEUS_METRICS_TOKEN")
-    if not expected_token or (incoming_token != expected_token):
-        raise HTTPException(
-            status_code=HTTP_401_UNAUTHORIZED,
-            detail="Invalid token",
-        )
+    # expected_token = os.getenv("PROMETHEUS_METRICS_TOKEN")
+    # if not expected_token or (incoming_token != expected_token):
+    #     raise HTTPException(
+    #         status_code=HTTP_401_UNAUTHORIZED,
+    #         detail="Invalid token",
+    #     )
 
     return Response(
         generate_latest(REGISTRY),
