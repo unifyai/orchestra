@@ -194,10 +194,58 @@ def get_interfaces(
         name=name,
     )
     if len(interfaces) == 0:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Couldn't find any interfaces under project {project}.",
+        name = "interface_1"
+        items = [
+            {
+                "i": "Tile_0",
+                "x": 0,
+                "y": 0,
+                "w": 6,
+                "h": 8,
+                "tab": "Table",
+                "moved": False,
+                "static": False,
+                "visible": True,
+            },
+            {
+                "i": "Tile_1",
+                "x": 6,
+                "y": 0,
+                "w": 6,
+                "h": 4,
+                "tab": "View",
+                "moved": False,
+                "static": False,
+                "visible": True,
+            },
+            {
+                "i": "Tile_2",
+                "x": 6,
+                "y": 4,
+                "w": 6,
+                "h": 4,
+                "tab": "Plot",
+                "moved": False,
+                "static": False,
+                "visible": True,
+            },
+        ]
+        new_counter = len(items)
+        interface_dao.create_interface(
+            user_id=request_fastapi.state.user_id,
+            name=name,
+            items=json.dumps(items),
+            new_counter=new_counter,
+            project=project,
         )
+        return [
+            {
+                "name": name,
+                "project": project,
+                "items": items,
+                "new_counter": new_counter,
+            },
+        ]
     return [
         {
             "name": interface.name,
