@@ -612,9 +612,10 @@ class Interface(Base):
         ForeignKey("organization.id", ondelete="CASCADE"),
         index=True,
     )
-    new_counter = Column(Integer)
+    name = Column(String(), nullable=False)
+    new_counter = Column(Integer, nullable=False)
     items = Column(String(), nullable=False)
-    project = Column(String())
+    project = Column(String(), nullable=False)
 
 
 class FieldType(Base):
@@ -650,6 +651,7 @@ class TempInterface(Base):
         ForeignKey("organization.id", ondelete="CASCADE"),
         index=True,
     )
-    new_counter = Column(Integer)
+    name = Column(String(), nullable=False)
+    new_counter = Column(Integer, nullable=False)
     items = Column(String(), nullable=False)
-    project = Column(String())
+    project = Column(String(), nullable=False)

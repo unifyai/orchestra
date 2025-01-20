@@ -11,11 +11,17 @@ HEADERS = {
 }
 
 
-def _create_interface(client: AsyncClient, items, new_counter):
+async def _create_project(client: AsyncClient, project):
+    return client.post("/v0/project", json={"name": project}, headers=HEADERS)
+
+
+async def _create_interface(client: AsyncClient, name, project, items, new_counter):
     return client.post(
         "/v0/interface",
         headers=HEADERS,
         json={
+            "name": name,
+            "project": project,
             "items": items,
             "new_counter": new_counter,
         },
@@ -24,6 +30,8 @@ def _create_interface(client: AsyncClient, items, new_counter):
 
 @pytest.mark.anyio
 async def test_create_interface(client: AsyncClient):
+    name = "my_interface"
+    project = "my_project"
     items = [
         {
             "i": "n0",
@@ -37,13 +45,16 @@ async def test_create_interface(client: AsyncClient):
         },
     ]
     new_counter = 1
-    response = await _create_interface(client, items, new_counter)
+    await _create_project(client, project)
+    response = await _create_interface(client, name, project, items, new_counter)
     assert response.status_code == 200
     assert response.json()["info"] == "Interface created successfully!"
 
 
 @pytest.mark.anyio
 async def test_update_interface(client: AsyncClient):
+    name = "my_interface"
+    project = "my_project"
     items = [
         {
             "i": "n0",
@@ -67,13 +78,17 @@ async def test_update_interface(client: AsyncClient):
         },
     ]
     new_counter = 2
-    await _create_interface(client, items[:1], new_counter - 1)
+    await _create_project(client, project)
+    await _create_interface(client, name, project, items[:1], new_counter - 1)
     response = await client.put(
         "/v0/interface",
         headers=HEADERS,
         json={
+            "name": name,
+            "project": project,
             "items": items,
             "new_counter": new_counter,
+            "new_name": "my_new_interface",
         },
     )
     assert response.status_code == 200
@@ -82,6 +97,8 @@ async def test_update_interface(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_get_interface(client: AsyncClient):
+    name = "my_interface"
+    project = "my_project"
     items = [
         {
             "i": "n0",
@@ -95,7 +112,8 @@ async def test_get_interface(client: AsyncClient):
         },
     ]
     new_counter = 1
-    await _create_interface(client, items, new_counter)
+    await _create_project(client, project)
+    await _create_interface(client, name, project, items, new_counter)
     response = await client.get("/v0/interface", headers=HEADERS)
     assert response.status_code == 200
     assert isinstance(response.json(), dict)
@@ -103,6 +121,8 @@ async def test_get_interface(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_delete_interface(client: AsyncClient):
+    name = "my_interface"
+    project = "my_project"
     items = [
         {
             "i": "n0",
@@ -116,7 +136,16 @@ async def test_delete_interface(client: AsyncClient):
         },
     ]
     new_counter = 1
-    await _create_interface(client, items, new_counter)
-    response = await client.delete("/v0/interface", headers=HEADERS)
+    await _create_interface(client, name, project, items, new_counter)
+    response = await client.delete(
+        "/v0/interface",
+        headers=HEADERS,
+        json={
+            "name": name,
+            "project": project,
+            "items": items,
+            "new_counter": new_counter,
+        },
+    )
     assert response.status_code == 200
     assert response.json()["info"] == "Interface deleted successfully!"
