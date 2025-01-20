@@ -144,12 +144,7 @@ async def test_delete_interface(client: AsyncClient):
     response = await client.delete(
         "/v0/interface",
         headers=HEADERS,
-        json={
-            "name": name,
-            "project": project,
-            "items": items,
-            "new_counter": new_counter,
-        },
+        params={"name": name, "project": project},
     )
     assert response.status_code == 200
     assert response.json()["info"] == "Interface deleted successfully!"
