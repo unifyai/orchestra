@@ -232,8 +232,8 @@ def get_interfaces(
 )
 async def delete_interface(
     request_fastapi: Request,
-    name: bool = Query(...),
-    project: bool = Query(...),
+    name: str = Query(...),
+    project: str = Query(...),
     temporary: bool = Query(False),
     interface_dao: InterfaceDAO = Depends(),
     temp_interface_dao: TempInterfaceDAO = Depends(),
