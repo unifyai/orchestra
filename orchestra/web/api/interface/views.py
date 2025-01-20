@@ -204,7 +204,7 @@ def update_interface(
 )
 def get_interfaces(
     request_fastapi: Request,
-    name: str = Query("interface_1"),
+    name: str = Query(None),
     project: str = Query(...),
     temporary: bool = Query(False),
     project_dao: ProjectDAO = Depends(),
@@ -218,6 +218,9 @@ def get_interfaces(
             detail=f"Project {project} not found.",
         )
     dao = temp_interface_dao if temporary else interface_dao
+    all_interfaces = dao.get_interfaces(request_fastapi.state.user_id, project=project)
+    if len(all_interfaces) == 0:
+        name = name if name is not None else "interface_1"
     interfaces = dao.get_interfaces(
         request_fastapi.state.user_id,
         project=project,
@@ -307,7 +310,7 @@ def get_interfaces(
         },
     },
 )
-async def delete_interface(
+def delete_interface(
     request_fastapi: Request,
     name: str = Query(...),
     project: str = Query(...),
