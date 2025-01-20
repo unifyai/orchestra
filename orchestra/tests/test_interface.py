@@ -11,11 +11,11 @@ HEADERS = {
 }
 
 
-async def _create_project(client: AsyncClient, project):
+def _create_project(client: AsyncClient, project):
     return client.post("/v0/project", json={"name": project}, headers=HEADERS)
 
 
-async def _create_interface(client: AsyncClient, name, project, items, new_counter):
+def _create_interface(client: AsyncClient, name, project, items, new_counter):
     return client.post(
         "/v0/interface",
         headers=HEADERS,
@@ -114,7 +114,11 @@ async def test_get_interface(client: AsyncClient):
     new_counter = 1
     await _create_project(client, project)
     await _create_interface(client, name, project, items, new_counter)
-    response = await client.get("/v0/interface", headers=HEADERS)
+    response = await client.get(
+        "/v0/interface",
+        headers=HEADERS,
+        params={"name": name, "project": project},
+    )
     assert response.status_code == 200
     assert isinstance(response.json(), dict)
 
