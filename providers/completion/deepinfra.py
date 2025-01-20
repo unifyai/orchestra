@@ -41,7 +41,7 @@ supported_models = {
     "llama-3.2-1b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-1B-Instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.01, "completion": 0.02},
+        "cost": {"prompt": 0.01, "completion": 0.01},
     },
     "llama-3.2-3b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-3B-Instruct",

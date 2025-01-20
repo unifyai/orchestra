@@ -33,11 +33,6 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
-    "gemma-7b-it": {
-        "endpoint": "groq/gemma-7b-it",
-        "context_window": 8192,
-        "cost": {"prompt": 0.07, "completion": 0.07},
-    },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "groq/mixtral-8x7b-32768",
         "context_window": 32768,
