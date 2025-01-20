@@ -99,9 +99,4 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.18, "completion": 0.18},
     },
-    "qwen-2-72b-instruct": {
-        "endpoint": "qwen2-72b",
-        "context_window": 128000,
-        "cost": {"prompt": 0.8, "completion": 0.8},
-    },
 }
