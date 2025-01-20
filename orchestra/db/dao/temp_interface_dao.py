@@ -16,7 +16,7 @@ class TempInterfaceDAO:
         name: str,
         items: str,
         new_counter: int,
-        project: str | None,
+        project: str,
     ):
         self.session.add(
             TempInterface(
