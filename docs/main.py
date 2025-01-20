@@ -157,6 +157,8 @@ def write_pages(paths, openapi_config):
 
             # get the details of the route
             route_config = openapi_config["paths"][path][route]
+            if "tags" not in route_config:
+                continue
             tag = route_config["tags"][0]
             summary = route_config["summary"].replace("Api", "API")
             description = route_config.get("description", "")
