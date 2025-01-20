@@ -31,6 +31,16 @@ router = APIRouter()
                 },
             },
         },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <project> not found.",
+                    },
+                },
+            },
+        },
     },
 )
 def create_interface(
@@ -47,7 +57,7 @@ def create_interface(
     if len(projects) == 0:
         raise HTTPException(
             status_code=404,
-            detail="Project not found.",
+            detail=f"Project {request.project} not found.",
         )
     dao = temp_interface_dao if request.temporary else interface_dao
     interfaces = dao.get_interfaces(
@@ -172,7 +182,17 @@ def update_interface(
                 },
             },
         },
-        404: {
+        404_1: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <project> not found.",
+                    },
+                },
+            },
+        },
+        404_2: {
             "description": "Interface Not Found",
             "content": {
                 "application/json": {
@@ -184,7 +204,7 @@ def update_interface(
 )
 def get_interfaces(
     request_fastapi: Request,
-    name: str = Query(None),
+    name: str = Query("interface_1"),
     project: str = Query(...),
     temporary: bool = Query(False),
     project_dao: ProjectDAO = Depends(),
@@ -195,7 +215,7 @@ def get_interfaces(
     if len(projects) == 0:
         raise HTTPException(
             status_code=404,
-            detail="Project not found.",
+            detail=f"Project {project} not found.",
         )
     dao = temp_interface_dao if temporary else interface_dao
     interfaces = dao.get_interfaces(
@@ -204,7 +224,6 @@ def get_interfaces(
         name=name,
     )
     if len(interfaces) == 0:
-        name = "interface_1"
         items = [
             {
                 "i": "Tile_0",
@@ -241,7 +260,7 @@ def get_interfaces(
             },
         ]
         new_counter = len(items)
-        interface_dao.create_interface(
+        dao.create_interface(
             user_id=request_fastapi.state.user_id,
             name=name,
             items=json.dumps(items),
