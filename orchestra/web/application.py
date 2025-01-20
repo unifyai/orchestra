@@ -12,6 +12,7 @@ from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from orchestra.logging import configure_logging
 from orchestra.settings import settings
 from orchestra.web.api.router import api_router
+from orchestra.web.api.utils.prometheus_middleware import PrometheusMiddleware, metrics
 from orchestra.web.lifetime import register_shutdown_event, register_startup_event
 
 
@@ -49,7 +50,7 @@ def get_app() -> FastAPI:
         swagger_ui_parameters={"defaultModelsExpandDepth": -1},
         default_response_class=UJSONResponse,
     )
-
+    # Add cors middleware
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allow_origins,
@@ -57,6 +58,8 @@ def get_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Add prometheus metrics middleware
+    app.add_middleware(PrometheusMiddleware, app_name="orchestra")
 
     # Adds startup and shutdown events.
     register_startup_event(app)
@@ -64,5 +67,7 @@ def get_app() -> FastAPI:
 
     # Main router for the API.
     app.include_router(router=api_router, prefix="/v0")
+    # Add prometheus metrics endpoint
+    app.add_api_route("/metrics", metrics)
 
     return app
