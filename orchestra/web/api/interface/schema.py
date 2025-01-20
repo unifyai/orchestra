@@ -32,6 +32,7 @@ class Item(BaseModel):
     x_axis: str | None = None
     y_axis: str | None = None
     plot_group_by: str | None = None
+    bin_count: str | None = None
 
 
 class InterfaceConfig(BaseModel):
