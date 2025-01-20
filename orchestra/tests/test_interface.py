@@ -139,6 +139,7 @@ async def test_delete_interface(client: AsyncClient):
         },
     ]
     new_counter = 1
+    await _create_project(client, project)
     await _create_interface(client, name, project, items, new_counter)
     response = await client.delete(
         f"/v0/interface?name={name}&project={project}",
