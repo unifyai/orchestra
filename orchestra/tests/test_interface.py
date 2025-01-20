@@ -115,12 +115,11 @@ async def test_get_interface(client: AsyncClient):
     await _create_project(client, project)
     await _create_interface(client, name, project, items, new_counter)
     response = await client.get(
-        "/v0/interface",
+        f"/v0/interface?name={name}&project={project}",
         headers=HEADERS,
-        params={"name": name, "project": project},
     )
     assert response.status_code == 200
-    assert isinstance(response.json(), dict)
+    assert isinstance(response.json(), list)
 
 
 @pytest.mark.anyio
@@ -142,9 +141,8 @@ async def test_delete_interface(client: AsyncClient):
     new_counter = 1
     await _create_interface(client, name, project, items, new_counter)
     response = await client.delete(
-        "/v0/interface",
+        f"/v0/interface?name={name}&project={project}",
         headers=HEADERS,
-        params={"name": name, "project": project},
     )
     assert response.status_code == 200
     assert response.json()["info"] == "Interface deleted successfully!"
