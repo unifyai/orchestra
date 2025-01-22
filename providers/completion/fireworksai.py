@@ -28,6 +28,11 @@ class FireworksAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "deepseek-r1": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-r1",
+        "context_window": 160000,
+        "cost": {"prompt": 8, "completion": 8},
+    },
     "deepseek-v3": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-v3",
         "context_window": 128000,

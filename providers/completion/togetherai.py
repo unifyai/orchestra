@@ -28,6 +28,16 @@ class TogetherAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "deepseek-r1": {
+        "endpoint": "together_ai/deepseek-ai/DeepSeek-R1",
+        "context_window": 64000,
+        "cost": {"prompt": 7, "completion": 7},
+    },
+    "deepseek-v3": {
+        "endpoint": "together_ai/deepseek-ai/DeepSeek-V3",
+        "context_window": 131072,
+        "cost": {"prompt": 1.25, "completion": 1.25},
+    },
     "llama-3.3-70b-chat": {
         "endpoint": "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
         "context_window": 131072,
