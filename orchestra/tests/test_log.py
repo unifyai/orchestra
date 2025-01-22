@@ -110,7 +110,7 @@ def _create_log(client, project_name, user=1, entries=None):
     if entries is None:
         entries = log_data["log"]
     return client.post(
-        "/v0/log",
+        "/v0/logs",
         json={
             "project": project_name,
             "params": {"a/b/param1": "test"},
@@ -194,7 +194,7 @@ async def _create_logs_for_grouping(client, project_name, user=1):
     data = log_data["logs_for_grouping"]
     for i in range(len(data)):
         response = await client.post(
-            "/v0/log",
+            "/v0/logs",
             json={"project": project_name, "entries": data[i]},
             headers=_headers,
         )
@@ -206,7 +206,7 @@ async def _create_several_logs(client, project_name, user=1):
     data = log_data["logs_for_various"]
     for i in range(len(data)):
         response = await client.post(
-            "/v0/log",
+            "/v0/logs",
             json={
                 "project": project_name,
                 "params": {"a/b/param1": f"test_{i}"},
@@ -229,10 +229,41 @@ async def test_create_logs(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
 
+    # Test single log creation
     response = await _create_log(client, project_name)
-
     assert response.status_code == 200, response.json()
-    assert isinstance(response.json(), int)
+    log_event_ids = response.json()
+    assert isinstance(log_event_ids, list) and len(log_event_ids) == 1
+    assert isinstance(log_event_ids[0], int)
+
+    # Test batch log creation with multiple entries
+    batch_entries = [
+        {"a/b/c/input": "Batch input 1", "a/b/c/numeric_input": 1.5},
+        {"a/b/c/input": "Batch input 2", "a/b/c/numeric_input": 2.5},
+        {"a/b/c/input": "Batch input 3", "a/b/c/numeric_input": 3.5},
+    ]
+    batch_params = [
+        {"a/b/param1": "test"},
+        {"a/b/param2": "test"},
+        {"a/b/param3": "test"},
+    ]
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "params": batch_params,
+            "entries": batch_entries,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    log_event_ids = response.json()
+    assert isinstance(log_event_ids, list)
+    assert len(log_event_ids) == 3
+    assert all(isinstance(id, int) for id in log_event_ids)
+    assert sorted(log_event_ids) == list(
+        range(min(log_event_ids), max(log_event_ids) + 1),
+    )
 
 
 @pytest.mark.anyio
@@ -245,7 +276,7 @@ async def test_create_derived_entry_with_list(client: AsyncClient):
     for i in range(3):
         response = await _create_log(client, project_name, entries={"a": i * 10})
         assert response.status_code == 200
-        log_ids.append(response.json())
+        log_ids.append(response.json()[0])
 
     # Create derived logs
     key = "half_a"
@@ -477,7 +508,7 @@ async def test_update_logs_and_derived_logs_are_updated(client: AsyncClient):
     for i in range(2):
         response = await _create_log(client, project_name, entries={"a": i + 1})
         assert response.status_code == 200
-        base_log_ids.append(response.json())
+        base_log_ids.append(response.json()[0])
 
     # Create derived logs
     key = "add_one"
@@ -537,7 +568,7 @@ async def test_create_log_w_image(client: AsyncClient):
 
     # log image
     response = await client.post(
-        "/v0/log",
+        "/v0/logs",
         json={
             "project": project_name,
             "entries": {
@@ -549,7 +580,7 @@ async def test_create_log_w_image(client: AsyncClient):
     )
 
     assert response.status_code == 200, response.json()
-    assert isinstance(response.json(), int)
+    assert isinstance(response.json()[0], int)
 
     # Verify field type
     field_types_response = await client.get(
@@ -570,7 +601,7 @@ async def test_create_logs_autoincrement_version(client: AsyncClient):
 
     # This should work fine
     response = await client.post(
-        "/v0/log",
+        "/v0/logs",
         json={"project": project_name, "params": {"p1": "test"}},
         headers=HEADERS,
     )
@@ -578,7 +609,7 @@ async def test_create_logs_autoincrement_version(client: AsyncClient):
 
     # same version and value
     response = await client.post(
-        "/v0/log",
+        "/v0/logs",
         json={"project": project_name, "params": {"p1": "test"}},
         headers=HEADERS,
     )
@@ -586,7 +617,7 @@ async def test_create_logs_autoincrement_version(client: AsyncClient):
 
     # same version and different value -> autoincrement
     response = await client.post(
-        "/v0/log",
+        "/v0/logs",
         json={"project": project_name, "params": {"p1": "test_v1"}},
         headers=HEADERS,
     )
@@ -609,12 +640,12 @@ async def test_update_logs_overwrites(client: AsyncClient):
     _ = await _create_project(client, project_name)
 
     response = await client.post(
-        "/v0/log",
+        "/v0/logs",
         json={"project": project_name, "entries": log_data["log"]},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
-    log_id = response.json()
+    log_id = response.json()[0]
 
     response = await _get_log(client, project_name, log_id)
     assert response.status_code == 200, response.json()
@@ -622,12 +653,12 @@ async def test_update_logs_overwrites(client: AsyncClient):
     assert len(orig_entries) == 3
 
     response = await client.post(
-        "/v0/log",
+        "/v0/logs",
         json={"project": project_name, "entries": log_data["log_update"]},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
-    log_id_2 = response.json()
+    log_id_2 = response.json()[0]
 
     log_ids = [log_id, log_id_2]
 
@@ -665,7 +696,7 @@ async def test_delete_project_deletes_logs(client: AsyncClient):
     # add a log
     response = await _create_log(client, project_name)
     assert response.status_code == 200, response.json()
-    log_id = response.json()
+    log_id = response.json()[0]
     assert isinstance(log_id, int)
 
     # verify it exists
@@ -690,7 +721,7 @@ async def test_get_log(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
     log_response = await _create_log(client, project_name)
-    log_id = log_response.json()
+    log_id = log_response.json()[0]
 
     # fetch the log
     response = await _get_log(client, project_name, log_id)
@@ -769,7 +800,7 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
     project_name = "test_filter_helper"
     _ = await _create_project(client, project_name, user=1)
     response = await client.post(
-        "/v0/log",
+        "/v0/logs",
         json={"project": project_name, "entries": values},
         headers=HEADERS,
     )
@@ -919,7 +950,7 @@ async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, v
     project_name = "test_filter_helper"
     _ = await _create_project(client, project_name, user=1)
     response = await client.post(
-        "/v0/log",
+        "/v0/logs",
         json={"project": project_name, "entries": values},
         headers=HEADERS,
     )
@@ -2217,7 +2248,7 @@ async def test_get_logs_w_timestamp_sorting(client: AsyncClient):
         entries = data[i]
         entries["_/timestamp"] = ts
         response = await client.post(
-            "/v0/log",
+            "/v0/logs",
             json={
                 "project": project_name,
                 "params": {"a/b/param1": f"test_{i}"},
@@ -2294,7 +2325,7 @@ async def test_get_logs_w_date_sorting(client: AsyncClient):
         entries = data[i]
         entries["_/timestamp"] = date
         response = await client.post(
-            "/v0/log",
+            "/v0/logs",
             json={
                 "project": project_name,
                 "params": {"a/b/param1": f"test_{i}"},
@@ -2480,8 +2511,8 @@ async def test_delete_logs(client: AsyncClient):
     assert response1.status_code == 200, response1.json()
     assert response2.status_code == 200, response2.json()
 
-    log_id1 = response1.json()
-    log_id2 = response2.json()
+    log_id1 = response1.json()[0]
+    log_id2 = response2.json()[0]
     ids_and_fields = [([log_id1, log_id2], None)]
 
     # Delete the logs
@@ -2510,8 +2541,8 @@ async def test_update_logs(client: AsyncClient):
     assert response1.status_code == 200, response1.json()
     assert response2.status_code == 200, response2.json()
 
-    log_id1 = response1.json()
-    log_id2 = response2.json()
+    log_id1 = response1.json()[0]
+    log_id2 = response2.json()[0]
     log_ids = [log_id1, log_id2]
 
     # Update both logs
@@ -2544,8 +2575,8 @@ async def test_update_logs_multi_values(client: AsyncClient):
     assert response1.status_code == 200, response1.json()
     assert response2.status_code == 200, response2.json()
 
-    log_id1 = response1.json()
-    log_id2 = response2.json()
+    log_id1 = response1.json()[0]
+    log_id2 = response2.json()[0]
     log_ids = [log_id1, log_id2]
 
     # Update both logs
@@ -2584,8 +2615,8 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
     assert response1.status_code == 200, response1.json()
     assert response2.status_code == 200, response2.json()
 
-    log_id1 = response1.json()
-    log_id2 = response2.json()
+    log_id1 = response1.json()[0]
+    log_id2 = response2.json()[0]
     entry_to_delete = "a/b/c/input"
     ids_and_fields = [(log_id1, entry_to_delete), (log_id2, entry_to_delete)]
 
@@ -2638,7 +2669,7 @@ async def test_create_log_strongly_typed(client: AsyncClient):
 
     # Create a log with strongly typed fields
     response = await client.post(
-        "/v0/log",
+        "/v0/logs",
         json={
             "project": project_name,
             "params": {"a/b/param1": "test"},
@@ -2671,7 +2702,7 @@ async def test_create_log_type_mismatch(client: AsyncClient):
     _ = await _create_project(client, project_name)
 
     response = await client.post(
-        "/v0/log",
+        "/v0/logs",
         json={
             "project": project_name,
             "params": {"a/b/param1": "test"},
@@ -2684,7 +2715,7 @@ async def test_create_log_type_mismatch(client: AsyncClient):
     )
     # Create a log with a type mismatch
     response = await client.post(
-        "/v0/log",
+        "/v0/logs",
         json={
             "project": project_name,
             "params": {"a/b/param1": True},  # This should cause a type mismatch
@@ -2707,7 +2738,7 @@ async def test_update_logs_strongly_typed(client: AsyncClient):
 
     # Create a log first
     response1 = await _create_log(client, project_name)
-    log_id1 = response1.json()
+    log_id1 = response1.json()[0]
 
     # Update the log with strongly typed fields
     response = await client.put(
@@ -2734,7 +2765,7 @@ async def test_update_logs_previously_none(client: AsyncClient):
 
     # Create a log first
     response1 = await client.post(
-        "/v0/log",
+        "/v0/logs",
         json={
             "project": project_name,
             "params": {"a/b/param1": "test"},
@@ -2746,7 +2777,7 @@ async def test_update_logs_previously_none(client: AsyncClient):
         },
         headers=HEADERS,
     )
-    log_id1 = response1.json()
+    log_id1 = response1.json()[0]
 
     # Verify numeric is NoneType
     field_types_response = await client.get(
@@ -2794,7 +2825,7 @@ async def test_update_logs_type_mismatch(client: AsyncClient):
 
     # Create a log first
     response1 = await _create_log(client, project_name)
-    log_id1 = response1.json()
+    log_id1 = response1.json()[0]
 
     # Update the log with a type mismatch
     response = await client.put(
@@ -2909,7 +2940,7 @@ async def test_set_field_typing_non_homogeneous(client: AsyncClient):
 
     # now add a non-homogenous entry
     response = await client.post(
-        "/v0/log",
+        "/v0/logs",
         json={
             "project": project_name,
             "entries": {
