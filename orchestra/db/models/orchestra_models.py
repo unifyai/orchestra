@@ -490,11 +490,87 @@ class Project(Base):
     name = Column(String, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
+    contexts = relationship("Context", back_populates="project")
     # we want sql nulls to be distinct in the unique constraints
     # (postgresql_nulls_not_distinct=False)
     __table_args__ = (
         UniqueConstraint("user_id", "name"),
         UniqueConstraint("organization_id", "name"),
+    )
+
+
+class LogEventContext(Base):
+    """Association table for the many-to-many relationship between LogEvent and Context."""
+
+    __tablename__ = "log_event_context"
+
+    log_event_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+
+class Context(Base):
+    """Model class for organizing logs and artifacts within projects."""
+
+    __tablename__ = "context"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name = Column(String, nullable=False)
+    description = Column(String)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+
+    project = relationship("Project", back_populates="contexts")
+    artifacts = relationship("ContextArtifact", back_populates="context")
+    log_events = relationship(
+        "LogEvent",
+        secondary="log_event_context",
+        back_populates="contexts",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_project_context_name"),
+    )
+
+
+class ContextArtifact(Base):
+    """Model class for storing artifacts within contexts."""
+
+    __tablename__ = "context_artifact"
+
+    id = Column(Integer, primary_key=True)
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key = Column(String, nullable=False)
+    value = Column(String)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+
+    context = relationship("Context", back_populates="artifacts")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "context_id",
+            "key",
+            name="uq_context_artifact_key",
+        ),
     )
 
 
@@ -542,6 +618,11 @@ class LogEvent(Base):
     )
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
+    contexts = relationship(
+        "Context",
+        secondary="log_event_context",
+        back_populates="log_events",
+    )
 
 
 class Log(Base):

@@ -1,0 +1,224 @@
+"""
+Includes endpoints related to context management within projects.
+"""
+
+from fastapi import APIRouter, Depends, HTTPException, Path, Request
+
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.web.api.context.schema import (
+    AddLogsToContextRequest,
+    ContextCreateRequest,
+)
+from orchestra.web.api.utils.http_responses import not_found
+
+router = APIRouter()
+
+
+@router.post(
+    "/project/{project_name}/contexts",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Context created successfully!"},
+                },
+            },
+        },
+        400: {
+            "description": "Already Existing Context",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "A context with this name already exists in the project.",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def create_context(
+    request_fastapi: Request,
+    request: ContextCreateRequest,
+    project_name: str = Path(
+        description="Name of the project to create context in.",
+        example="my_project",
+    ),
+    project_dao: ProjectDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+):
+    """
+    Creates a new context within a project. Contexts can be used to organize logs
+    and artifacts within a project.
+    """
+    try:
+        project = project_dao.filter(
+            user_id=request_fastapi.state.user_id,
+            name=project_name,
+        )
+        if not project:
+            raise IndexError
+        project_id = project[0][0].id
+
+        existing_context = context_dao.filter(
+            project_id=project_id,
+            name=request.name,
+        )
+        if existing_context:
+            raise ValueError("Context already exists")
+
+        context_dao.create(
+            project_id=project_id,
+            name=request.name,
+            description=request.description,
+        )
+
+        return {"info": "Context created successfully."}
+    except IndexError:
+        raise not_found("Project")
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail="A context with this name already exists in the project.",
+        )
+
+
+@router.delete(
+    "/project/{project_name}/contexts/{context_name}",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Context deleted successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Project or Context Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project or context not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def delete_context(
+    request_fastapi: Request,
+    project_name: str = Path(
+        description="Name of the project to create context in.",
+        example="my_project",
+    ),
+    context_name: str = Path(
+        description="Name of the context to delete.",
+        example="my_context",
+    ),
+    project_dao: ProjectDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+):
+    """
+    Deletes a context from a project. This will not delete the logs or artifacts
+    within the context, but will remove their association with this context.
+    """
+    try:
+        project = project_dao.filter(
+            user_id=request_fastapi.state.user_id,
+            name=project_name,
+        )
+        if not project:
+            raise IndexError("Project not found")
+        project_id = project[0][0].id
+
+        context = context_dao.filter(
+            project_id=project_id,
+            name=context_name,
+        )
+        if not context:
+            raise IndexError("Context not found")
+
+        context_dao.delete(id=context[0][0].id)
+        return {"info": "Context deleted successfully!"}
+    except IndexError as e:
+        raise not_found(str(e))
+
+
+@router.post(
+    "/project/{project_name}/contexts/add_logs",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Logs added to context successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Project, Context or Logs Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project, context or specified logs not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def add_logs_to_context(
+    request_fastapi: Request,
+    request: AddLogsToContextRequest,
+    project_name: str = Path(
+        description="Name of the project to create context in.",
+        example="my_project",
+    ),
+    project_dao: ProjectDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+):
+    """
+    Adds existing logs to a context within a project. The logs must already exist
+    in the project and can be specified by their IDs.
+    The same logs can be associated with multiple contexts.
+    """
+    try:
+        project = project_dao.filter(
+            user_id=request_fastapi.state.user_id,
+            name=project_name,
+        )
+        if not project:
+            raise IndexError("Project not found")
+        project_id = project[0][0].id
+
+        context = context_dao.filter(
+            project_id=project_id,
+            name=request.context_name,
+        )
+        if not context:
+            raise IndexError("Context not found")
+
+        context_dao.add_logs(
+            context_id=context[0][0].id,
+            log_ids=request.log_ids,
+        )
+        return {"info": "Logs added to context successfully!"}
+    except IndexError as e:
+        raise not_found(str(e))
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="One or more specified logs do not exist in the project.",
+        )
