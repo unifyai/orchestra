@@ -123,7 +123,7 @@ async def test_add_log_to_context(client: AsyncClient):
 
     # Create log with context
     response = await client.post(
-        "/v0/log",
+        "/v0/logs",
         json={
             "project": project_name,
             "params": {"a/b/param1": "test"},
@@ -134,10 +134,10 @@ async def test_add_log_to_context(client: AsyncClient):
         },
         headers=HEADERS,
     )
-    log_id = response.json()
+    log_ids = response.json()
     response = await client.post(
         f"/v0/project/{project_name}/contexts/add_logs",
-        json={"context_name": context_name, "log_ids": [log_id]},
+        json={"context_name": context_name, "log_ids": log_ids},
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -163,7 +163,7 @@ async def test_get_logs_by_context(client: AsyncClient):
 
     # Create log without context
     response = await client.post(
-        "/v0/log",
+        "/v0/logs",
         json={
             "project": project_name,
             "params": {"a/b/param1": "test"},
@@ -177,7 +177,7 @@ async def test_get_logs_by_context(client: AsyncClient):
 
     # create log with context
     response = await client.post(
-        "/v0/log",
+        "/v0/logs",
         json={
             "project": project_name,
             "params": {"a/b/param1": "test"},
@@ -224,7 +224,7 @@ async def test_add_log_to_multiple_contexts(client: AsyncClient):
 
     # Add log to multiple contexts
     response = await client.post(
-        "/v0/log",
+        "/v0/logs",
         json={
             "project": project_name,
             "params": {"a/b/param1": "test"},
@@ -235,16 +235,16 @@ async def test_add_log_to_multiple_contexts(client: AsyncClient):
         },
         headers=HEADERS,
     )
-    log_id = response.json()
+    log_ids = response.json()
     response = await client.post(
         f"/v0/project/{project_name}/contexts/add_logs",
-        json={"context_name": contexts[0], "log_ids": [log_id]},
+        json={"context_name": contexts[0], "log_ids": log_ids},
         headers=HEADERS,
     )
     assert response.status_code == 200
     response = await client.post(
         f"/v0/project/{project_name}/contexts/add_logs",
-        json={"context_name": contexts[1], "log_ids": [log_id]},
+        json={"context_name": contexts[1], "log_ids": log_ids},
         headers=HEADERS,
     )
     assert response.status_code == 200
