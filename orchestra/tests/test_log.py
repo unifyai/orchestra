@@ -1050,7 +1050,7 @@ async def test_get_params(client: AsyncClient):
     response = await client.get(
         f"/v0/logs?project={project_name}",
         headers=HEADERS,
-        params={"context": "params"},
+        params={"column_context": "params"},
     )
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), dict)
@@ -1065,7 +1065,7 @@ async def test_get_params(client: AsyncClient):
     response = await client.get(
         f"/v0/logs?project={project_name}",
         headers=HEADERS,
-        params={"context": "params/a/b"},
+        params={"column_context": "params/a/b"},
     )
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), dict)
@@ -1080,7 +1080,7 @@ async def test_get_params(client: AsyncClient):
     response = await client.get(
         f"/v0/logs?project={project_name}",
         headers=HEADERS,
-        params={"context": "a/params/b"},
+        params={"column_context": "a/params/b"},
     )
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), dict)
@@ -1095,7 +1095,7 @@ async def test_get_params(client: AsyncClient):
     response = await client.get(
         f"/v0/logs?project={project_name}",
         headers=HEADERS,
-        params={"context": "a/b/params"},
+        params={"column_context": "a/b/params"},
     )
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), dict)
@@ -1119,7 +1119,7 @@ async def test_get_entries(client: AsyncClient):
     response = await client.get(
         f"/v0/logs?project={project_name}",
         headers=HEADERS,
-        params={"context": "entries"},
+        params={"column_context": "entries"},
     )
 
     assert response.status_code == 200, response.json()
@@ -1142,7 +1142,7 @@ async def test_get_entries(client: AsyncClient):
     response = await client.get(
         f"/v0/logs?project={project_name}",
         headers=HEADERS,
-        params={"context": "entries/a/b"},
+        params={"column_context": "entries/a/b"},
     )
 
     assert response.status_code == 200, response.json()
@@ -1165,7 +1165,7 @@ async def test_get_entries(client: AsyncClient):
     response = await client.get(
         f"/v0/logs?project={project_name}",
         headers=HEADERS,
-        params={"context": "a/entries/b"},
+        params={"column_context": "a/entries/b"},
     )
 
     assert response.status_code == 200, response.json()
@@ -1188,7 +1188,7 @@ async def test_get_entries(client: AsyncClient):
     response = await client.get(
         f"/v0/logs?project={project_name}",
         headers=HEADERS,
-        params={"context": "a/b/entries"},
+        params={"column_context": "a/b/entries"},
     )
 
     assert response.status_code == 200, response.json()
@@ -1342,7 +1342,7 @@ async def test_get_logs_excluding_fields(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_get_logs_w_context(client: AsyncClient):
+async def test_get_logs_w_column_context(client: AsyncClient):
     project_name = "eval-project"
     # create project and log
     _ = await _create_project(client, project_name, user=1)
@@ -1383,7 +1383,7 @@ async def test_get_logs_w_context(client: AsyncClient):
     # get log with "a" context
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"context": "a"},
+        params={"column_context": "a"},
         headers=HEADERS,
     )
 
@@ -1416,7 +1416,7 @@ async def test_get_logs_w_context(client: AsyncClient):
     # get log with "a/b" context
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"context": "a/b"},
+        params={"column_context": "a/b"},
         headers=HEADERS,
     )
 
@@ -1449,7 +1449,7 @@ async def test_get_logs_w_context(client: AsyncClient):
     # get log with "a/b/c" context
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"context": "a/b/c"},
+        params={"column_context": "a/b/c"},
         headers=HEADERS,
     )
 

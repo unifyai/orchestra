@@ -2,12 +2,22 @@ from typing import Any, Dict, List, Tuple, Union
 
 from pydantic import BaseModel, Field
 
+from orchestra.web.api.context.schema import ContextCreateRequest
+
 
 class CreateLogConfig(BaseModel):
     project: str = Field(
         description="Name of the project the stored entries will be associated to.",
         json_schema_extra={
             "example": "eval-project",
+        },
+    )
+    context: ContextCreateRequest | None = Field(
+        default=None,
+        description="Optional context path to update for the logs. "
+        "Can use '/' for nested contexts (e.g. 'training/batch1').",
+        json_schema_extra={
+            "example": "experiment1/trial1",
         },
     )
     params: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(
@@ -87,6 +97,14 @@ class UpdateLogRequest(BaseModel):
         description="List of log IDs to update with new or overriding entries.",
         example=[123, 456, 789],
         min_items=1,
+    )
+    context: ContextCreateRequest | None = Field(
+        default=None,
+        description="Optional context path to update for the logs. "
+        "Can use '/' for nested contexts (e.g. 'training/batch1').",
+        json_schema_extra={
+            "example": "experiment1/trial1",
+        },
     )
     params: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(
         default=dict(),

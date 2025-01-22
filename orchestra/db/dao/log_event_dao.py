@@ -6,7 +6,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import LogEvent, Project
+from orchestra.db.models.orchestra_models import LogEvent, LogEventContext, Project
 
 
 class LogEventDAO:
@@ -16,6 +16,7 @@ class LogEventDAO:
     def create(  # noqa: WPS211
         self,
         project_id: int,
+        context_id: Optional[int] = None,
     ) -> Optional[int]:
 
         new_log_event = LogEvent(
@@ -24,20 +25,35 @@ class LogEventDAO:
 
         self.session.add(new_log_event)
         self.session.commit()
+
+        if context_id:
+            association = LogEventContext(
+                log_event_id=new_log_event.id,
+                context_id=context_id,
+            )
+            self.session.add(association)
+            self.session.commit()
+
         return new_log_event.id
 
     def filter(
         self,
         id: Optional[int] = None,
         project_id: Optional[int] = None,
+        context_id: Optional[int] = None,
         offset: int = 0,
         limit: Optional[int] = None,
     ) -> List[LogEvent]:
-        query = select(LogEvent)
+        query = select(LogEvent).distinct()
+
         if id:
             query = query.where(LogEvent.id == id)
         if project_id:
             query = query.where(LogEvent.project_id == project_id)
+        if context_id:
+            query = query.join(LogEventContext).where(
+                LogEventContext.context_id == context_id,
+            )
 
         query = query.offset(offset)
         if limit is not None:
