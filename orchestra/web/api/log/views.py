@@ -190,7 +190,8 @@ def create_logs(
 
         # Create log_event for each log
         log_event_id = log_event_dao.create(
-            project_id=project_id, context_id=context_id
+            project_id=project_id,
+            context_id=context_id,
         )
         log_event_ids.append(log_event_id)
 
@@ -322,19 +323,13 @@ def create_derived_entry(
         if isinstance(val, list):
             resolved_ids[varname] = val
         elif isinstance(val, dict):
-            filter_expr = val.get("filter_expr")
-            if not filter_expr:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Dict for '{varname}' must contain 'filter_expr' or be a direct list of IDs.",
-                )
             # Re-use _get_logs_query to find matching log_event_ids
             logs, _, _count = _get_logs_query(
                 request_fastapi=request_fastapi,
                 project=body.project,
                 column_context=val.get("column_context", None),
                 context=val.get("context", None),
-                filter_expr=filter_expr,
+                filter_expr=val.get("filter_expr", None),
                 sorting=val.get("sort"),
                 from_ids=val.get("from_ids", None),
                 exclude_ids=val.get("exclude_ids", None),
@@ -1850,7 +1845,7 @@ def get_fields(
 
     # ToDo: remove this hacky code once this task [https://app.clickup.com/t/86c1jupp2]
     #  is done
-    (all_logs, _, _,) = _get_logs_query(
+    (all_logs, _, _) = _get_logs_query(
         request_fastapi,
         project=project,
         column_context=None,
