@@ -126,7 +126,7 @@ def create_logs(
     params_list = (
         request.params if isinstance(request.params, list) else [request.params]
     )
-    
+
     # Validate that params and entries lists have equal lengths when both are provided as lists
     if isinstance(request.entries, list) and isinstance(request.params, list):
         if len(request.entries) != len(request.params):
@@ -176,7 +176,7 @@ def create_logs(
             )
         else:
             return None
-        
+
     # Process each log in the batch
     log_event_ids = []
     entries_len = len(entries_list)
@@ -189,7 +189,9 @@ def create_logs(
         context_id = get_context_id()
 
         # Create log_event for each log
-        log_event_id = log_event_dao.create(project_id=project_id, context_id=context_id)
+        log_event_id = log_event_dao.create(
+            project_id=project_id, context_id=context_id
+        )
         log_event_ids.append(log_event_id)
 
         # Get current entries and params
