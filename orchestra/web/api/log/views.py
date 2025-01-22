@@ -56,19 +56,21 @@ from .helpers import (
 
 router = APIRouter()
 
+
 ###########################
 # endpoints
 ###########################
-
-
 @router.post(
-    "/log",
+    "/logs",
     responses={
         200: {
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": {"info": "Log created successfully!"},
+                    "example": {
+                        "info": "Logs created successfully!",
+                        "log_event_ids": [1, 2, 3],
+                    },
                 },
             },
         },
@@ -84,7 +86,7 @@ router = APIRouter()
         },
     },
 )
-def create_log(
+def create_logs(
     request_fastapi: Request,
     request: CreateLogConfig,
     project_dao: ProjectDAO = Depends(),
@@ -93,14 +95,14 @@ def create_log(
     log_dao: LogDAO = Depends(),
 ):
     """
-    Creates a log associated to a project. Logs are
+    Creates one or more logs associated to a project. Logs are
     LLM-call-level data that might depend on other variables.
 
     A "explicit_types" dictionary can be passed as part of the `entries`.
     If present, any matching key inside this dictionary will override the
     inferred type of that particular entry.
 
-    This method returns the id of the new stored log.
+    This method returns the ids of the new stored logs.
     """
     # check if the project exists
     try:
@@ -111,15 +113,26 @@ def create_log(
     except IndexError:
         raise not_found("Project")
 
-    # Create log_event and get its id
-    log_event_id = log_event_dao.create(project_id=project_id)
+    # Convert single entries/params to list format for uniform processing
+    entries_list = (
+        request.entries if isinstance(request.entries, list) else [request.entries]
+    )
+    params_list = (
+        request.params if isinstance(request.params, list) else [request.params]
+    )
 
-    entries_explicit_types = request.entries.pop("explicit_types", None)
-    params_explicit_types = request.params.pop("explicit_types", None)
+    # Validate that params and entries lists have equal lengths when both are provided as lists
+    if isinstance(request.entries, list) and isinstance(request.params, list):
+        if len(request.entries) != len(request.params):
+            raise HTTPException(
+                status_code=400,
+                detail=f"When both 'params' and 'entries' are provided as lists, they must have equal lengths. "
+                f"Got params length: {len(request.params)}, entries length: {len(request.entries)}",
+            )
+
+    # Get field types once for all operations
     field_types = field_type_dao.get_field_types(project_id)
     strongly_typed = request.strongly_typed
-    entries = request.entries
-    params = request.params
 
     def enforce_types(field_name, value):
         entered_type = LogDAO.infer_type(field_name, value)
@@ -138,48 +151,77 @@ def create_log(
         ):
             field_type_dao.create_field_type(project_id, field_name, value)
 
-    for k, v in params.items():
-        enforce_types(k, v)
-        # see if there is any param with the same value
-        existing_param = log_dao.filter(
-            key=k,
-            value=json.dumps(v),
-            project_id=project_id,
+    # Process each log in the batch
+    log_event_ids = []
+    entries_len = len(entries_list)
+    params_len = len(params_list)
+
+    total_logs = max(entries_len, params_len)
+
+    for i in range(total_logs):
+        # Create log_event for each log
+        log_event_id = log_event_dao.create(project_id=project_id)
+        log_event_ids.append(log_event_id)
+
+        # Get current entries and params
+        # If i exceeds list length, use the last item in the list
+        current_entries = entries_list[min(i, entries_len - 1)]
+        current_params = params_list[min(i, params_len - 1)]
+
+        # Extract explicit types
+        entries_explicit_types = (
+            current_entries.pop("explicit_types", None)
+            if isinstance(current_entries, dict)
+            else None
         )
-        if existing_param:
-            version = existing_param[0][0].version
-        else:
-            # fetch the highest version for that param
-            existing_params = log_dao.filter(key=k, project_id=project_id)
-            highest_version = max([-1] + [e[0].version for e in existing_params])
-            version = highest_version + 1
-        try:
+        params_explicit_types = (
+            current_params.pop("explicit_types", None)
+            if isinstance(current_params, dict)
+            else None
+        )
+        # Process params
+        for k, v in current_params.items():
+            enforce_types(k, v)
+            # see if there is any param with the same value
+            existing_param = log_dao.filter(
+                key=k,
+                value=json.dumps(v),
+                project_id=project_id,
+            )
+            if existing_param:
+                version = existing_param[0][0].version
+            else:
+                # fetch the highest version for that param
+                existing_params = log_dao.filter(key=k, project_id=project_id)
+                highest_version = max([-1] + [e[0].version for e in existing_params])
+                version = highest_version + 1
+            try:
+                log_dao.create_from_raw_k_v(
+                    project_id=project_id,
+                    log_event_id=log_event_id,
+                    raw_k=k,
+                    raw_v=v,
+                    version=version,
+                    explicit_types=params_explicit_types,
+                )
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Found different value for log params with same version.",
+                )
+
+        # Process entries
+        for k, v in current_entries.items():
+            enforce_types(k, v)
             log_dao.create_from_raw_k_v(
                 project_id=project_id,
                 log_event_id=log_event_id,
                 raw_k=k,
                 raw_v=v,
-                version=version,
-                explicit_types=params_explicit_types,
-            )
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail="Found different value for log params with same version.",
+                explicit_types=entries_explicit_types,
             )
 
-    # Store each key, value entry pair for the log
-    for k, v in entries.items():
-        enforce_types(k, v)
-        log_dao.create_from_raw_k_v(
-            project_id=project_id,
-            log_event_id=log_event_id,
-            raw_k=k,
-            raw_v=v,
-            explicit_types=entries_explicit_types,
-        )
-
-    return log_event_id
+    return log_event_ids
 
 
 @router.put(
@@ -1760,9 +1802,7 @@ def get_fields(
             (
                 "derived_entry"
                 if isinstance(lg[0], DerivedLog)
-                else "entry"
-                if lg[0].version is None
-                else "param"
+                else "entry" if lg[0].version is None else "param"
             ),
         )
         for lg in all_logs
