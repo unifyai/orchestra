@@ -29,13 +29,19 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 from sqlalchemy.sql.selectable import Subquery
 
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.derived_log_dao import DerivedLogDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import LogDAO, OverwriteError
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import DerivedLog, Log, LogEvent
+from orchestra.db.models.orchestra_models import (
+    DerivedLog,
+    Log,
+    LogEvent,
+    LogEventContext,
+)
 from orchestra.web.api.log.schema import (
     CreateDerivedEntriesConfig,
     CreateLogConfig,
@@ -93,11 +99,11 @@ def create_logs(
     field_type_dao: FieldTypeDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
     log_dao: LogDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
 ):
     """
     Creates one or more logs associated to a project. Logs are
     LLM-call-level data that might depend on other variables.
-
     A "explicit_types" dictionary can be passed as part of the `entries`.
     If present, any matching key inside this dictionary will override the
     inferred type of that particular entry.
@@ -161,6 +167,16 @@ def create_logs(
         ):
             field_type_dao.create_field_type(project_id, field_name, value)
 
+    def get_context_id():
+        if request.context:
+            return context_dao.get_or_create(
+                project_id=project_id,
+                name=request.context.name,
+                description=request.context.description,
+            )
+        else:
+            return None
+
     # Process each log in the batch
     log_event_ids = []
     entries_len = len(entries_list)
@@ -169,8 +185,13 @@ def create_logs(
     total_logs = max(entries_len, params_len)
 
     for i in range(total_logs):
+        # Get or create context_id
+        context_id = get_context_id()
+
         # Create log_event for each log
-        log_event_id = log_event_dao.create(project_id=project_id)
+        log_event_id = log_event_dao.create(
+            project_id=project_id, context_id=context_id
+        )
         log_event_ids.append(log_event_id)
 
         # Get current entries and params
@@ -275,8 +296,7 @@ def create_derived_entry(
     body: CreateDerivedEntriesConfig,
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
-    log_event_dao: LogEventDAO = Depends(),
-    log_dao: LogDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
     derived_log_dao: DerivedLogDAO = Depends(),
     session=Depends(get_db_session),
 ):
@@ -312,6 +332,7 @@ def create_derived_entry(
             logs, _, _count = _get_logs_query(
                 request_fastapi=request_fastapi,
                 project=body.project,
+                column_context=val.get("column_context", None),
                 context=val.get("context", None),
                 filter_expr=filter_expr,
                 sorting=val.get("sort"),
@@ -323,6 +344,7 @@ def create_derived_entry(
                 offset=val.get("offset", 0),
                 project_dao=project_dao,
                 field_type_dao=field_type_dao,
+                context_dao=context_dao,
                 session=session,
             )
             # logs is a list of (Log, created_at, log_event_id) or (DerivedLog,...),
@@ -680,9 +702,11 @@ def _get_base_logs_subq(
     filter_expr: Optional[str],
     from_ids: Optional[str],
     exclude_ids: Optional[str],
+    column_context: Optional[str],
     context: Optional[str],
     from_fields: Optional[str],
     exclude_fields: Optional[str],
+    context_dao: ContextDAO,
     session=Depends(get_db_session),
 ) -> Subquery:
     """
@@ -747,24 +771,39 @@ def _get_base_logs_subq(
 
     # Handle context filtering
     context_len = 0
-    if context is not None:
-        split_context = context.split("/")
+    if column_context is not None:
+        split_context = column_context.split("/")
         exclude_params = "entries" in split_context
         exclude_entries = "params" in split_context
         assert not (
             exclude_params and exclude_entries
         ), "'entries' and 'params' cannot both be specified in the context argument."
-        context = "/".join(
+        column_context = "/".join(
             [substr for substr in split_context if substr not in ("params", "entries")],
         )
-        if context:
-            context = context if context[-1] == "/" else context + "/"
-            context_len = len(context)
-            q = q.where(Log.key.startswith(context))
+        if column_context:
+            column_context = (
+                column_context if column_context[-1] == "/" else column_context + "/"
+            )
+            context_len = len(column_context)
+            q = q.where(Log.key.startswith(column_context))
         if exclude_params:
             q = q.where(Log.version.is_(None))
         elif exclude_entries:
             q = q.where(Log.version.isnot(None))
+
+    # Filter by static context if provided
+    if context:
+        context_id = context_dao.filter(name=context, project_id=project_id)
+        if context_id:
+            # Join with log_event_context table to filter by context
+            q = q.join(
+                LogEventContext,
+                LogEventContext.log_event_id == LogEvent.id,
+                isouter=False,
+            ).where(
+                LogEventContext.context_id == context_id[0][0].id,
+            )
 
     # Handle field filtering
     assert not (from_fields and exclude_fields), (
@@ -827,6 +866,7 @@ def _get_derived_logs_subq(
 def _get_logs_query(
     request_fastapi: Request,
     project: str,
+    column_context: Optional[str],
     context: Optional[str],
     filter_expr: Optional[str],
     sorting: Optional[str],
@@ -838,6 +878,7 @@ def _get_logs_query(
     offset: int,
     project_dao: ProjectDAO,
     field_type_dao: FieldTypeDAO,
+    context_dao: ContextDAO,
     session,
     latest_timestamp=False,
 ):
@@ -860,9 +901,11 @@ def _get_logs_query(
         filter_expr=filter_expr,
         from_ids=from_ids,
         exclude_ids=exclude_ids,
+        column_context=column_context,
         context=context,
         from_fields=from_fields,
         exclude_fields=exclude_fields,
+        context_dao=context_dao,
         session=session,
     )
     # 2) Build derived_subq, passing base_subq to filter by references
@@ -1164,11 +1207,16 @@ def get_logs(
         description="Name of the project to get entries from.",
         example="eval-project",
     ),
-    context: Optional[str] = Query(
+    column_context: Optional[str] = Query(
         None,
         description="The context (prepending '/' seperated field names) from which to "
         "retrieve the logs.",
         example="subjects/science/physics",
+    ),
+    context: Optional[str] = Query(
+        None,
+        description="Static context to filter logs by.",
+        example="training",
     ),
     filter_expr: Optional[str] = Query(
         None,
@@ -1220,6 +1268,7 @@ def get_logs(
     return_ids_only: bool = False,
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -1227,19 +1276,21 @@ def get_logs(
     """
     all_rows, context_len, count = _get_logs_query(
         request_fastapi,
-        project,
-        context,
-        filter_expr,
-        sorting,
-        from_ids,
-        exclude_ids,
-        from_fields,
-        exclude_fields,
-        limit,
-        offset,
-        project_dao,
-        field_type_dao,
-        session,
+        project=project,
+        column_context=column_context,
+        context=context,
+        filter_expr=filter_expr,
+        sorting=sorting,
+        from_ids=from_ids,
+        exclude_ids=exclude_ids,
+        from_fields=from_fields,
+        exclude_fields=exclude_fields,
+        limit=limit,
+        offset=offset,
+        project_dao=project_dao,
+        field_type_dao=field_type_dao,
+        context_dao=context_dao,
+        session=session,
     )
     # all_rows is now a list of (Log|DerivedLog, created_at, log_event_id)
     if return_ids_only:
@@ -1392,11 +1443,16 @@ def get_logs_latest_timestamp(
         description="Name of the project to get entries from.",
         example="eval-project",
     ),
-    context: Optional[str] = Query(
+    column_context: Optional[str] = Query(
         None,
         description="The context (prepending '/' seperated field names) from which to "
         "retrieve the logs.",
         example="subjects/science/physics",
+    ),
+    context: Optional[str] = Query(
+        None,
+        description="Static context to filter logs by.",
+        example="training",
     ),
     filter_expr: Optional[str] = Query(
         None,
@@ -1447,6 +1503,7 @@ def get_logs_latest_timestamp(
     offset: int = Query(0, ge=0),
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -1455,19 +1512,21 @@ def get_logs_latest_timestamp(
     """
     return _get_logs_query(
         request_fastapi,
-        project,
-        context,
-        filter_expr,
-        sorting,
-        from_ids,
-        exclude_ids,
-        from_fields,
-        exclude_fields,
-        limit,
-        offset,
-        project_dao,
-        field_type_dao,
-        session,
+        project=project,
+        column_context=column_context,
+        context=context,
+        filter_expr=filter_expr,
+        sorting=sorting,
+        from_ids=from_ids,
+        exclude_ids=exclude_ids,
+        from_fields=from_fields,
+        exclude_fields=exclude_fields,
+        limit=limit,
+        offset=offset,
+        project_dao=project_dao,
+        field_type_dao=field_type_dao,
+        context_dao=context_dao,
+        session=session,
         latest_timestamp=True,
     )
 
@@ -1766,6 +1825,7 @@ def get_fields(
     ),
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -1790,21 +1850,24 @@ def get_fields(
 
     # ToDo: remove this hacky code once this task [https://app.clickup.com/t/86c1jupp2]
     #  is done
-    all_logs, _, _ = _get_logs_query(
+    (all_logs, _, _,) = _get_logs_query(
         request_fastapi,
-        project,
-        None,
-        None,
-        None,
-        None,
-        None,
-        all_field_names,
-        None,
-        1,
-        0,
-        project_dao,
-        field_type_dao,
-        session,
+        project=project,
+        column_context=None,
+        context=None,
+        filter_expr=None,
+        sorting=None,
+        from_ids=None,
+        exclude_ids=None,
+        from_fields=all_field_names,
+        exclude_fields=None,
+        limit=1,
+        offset=0,
+        project_dao=project_dao,
+        field_type_dao=field_type_dao,
+        context_dao=context_dao,
+        session=session,
+        latest_timestamp=False,
     )
     field_types = dict(
         (
