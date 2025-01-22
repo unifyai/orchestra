@@ -2,12 +2,22 @@ from typing import Any, Dict, List, Tuple, Union
 
 from pydantic import BaseModel, Field
 
+from orchestra.web.api.context.schema import ContextCreateRequest
+
 
 class CreateLogConfig(BaseModel):
     project: str = Field(
         description="Name of the project the stored entries will be associated to.",
         json_schema_extra={
             "example": "eval-project",
+        },
+    )
+    context: ContextCreateRequest | None = Field(
+        default=None,
+        description="Optional context path to update for the logs. "
+        "Can use '/' for nested contexts (e.g. 'training/batch1').",
+        json_schema_extra={
+            "example": "experiment1/trial1",
         },
     )
     params: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(
@@ -88,6 +98,14 @@ class UpdateLogRequest(BaseModel):
         example=[123, 456, 789],
         min_items=1,
     )
+    context: ContextCreateRequest | None = Field(
+        default=None,
+        description="Optional context path to update for the logs. "
+        "Can use '/' for nested contexts (e.g. 'training/batch1').",
+        json_schema_extra={
+            "example": "experiment1/trial1",
+        },
+    )
     params: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(
         default=dict(),
         description="Dictionary or list of dictionaries of key-value parameter pairs to add or update in the logs.",
@@ -130,17 +148,17 @@ class DeleteLogsRequest(BaseModel):
 
 
 class DeleteLogEntryRequest(BaseModel):
-    ids_and_fields: List[
-        Tuple[Union[int, List[int]], Union[None, str, List[str]]]
-    ] = Field(
-        description="List of tuples of log ID(s) and field(s) to delete, "
-        "either as an individual item or a list of items.",
-        example=[
-            (123, "score"),
-            ([456, 457], ["score", "response"]),
-            ([458, 459, 460], "response"),
-        ],
-        min_items=1,
+    ids_and_fields: List[Tuple[Union[int, List[int]], Union[None, str, List[str]]]] = (
+        Field(
+            description="List of tuples of log ID(s) and field(s) to delete, "
+            "either as an individual item or a list of items.",
+            example=[
+                (123, "score"),
+                ([456, 457], ["score", "response"]),
+                ([458, 459, 460], "response"),
+            ],
+            min_items=1,
+        )
     )
 
 
