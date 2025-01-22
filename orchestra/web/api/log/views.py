@@ -148,23 +148,22 @@ def create_logs(
 
     # Get field types once for all operations
     field_types = field_type_dao.get_field_types(project_id)
-    strongly_typed = request.strongly_typed
 
     def enforce_types(field_name, value):
         entered_type = LogDAO.infer_type(field_name, value)
         expected_type = field_types.get(field_name)
-        if expected_type and expected_type != "NoneType":
-            if entered_type != expected_type:
+        if expected_type:
+            if expected_type == "NoneType":
                 if entered_type == "NoneType":
                     return
+                # update the field type to the new type
+                field_type_dao.update_field_type(project_id, field_name, value)
+            elif entered_type != expected_type:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Type mismatch for field '{field_name}': expected {expected_type}, got {entered_type}",
                 )
-        elif (entered_type != "NoneType") and (
-            strongly_typed is True
-            or (isinstance(strongly_typed, list) and field_name in strongly_typed)
-        ):
+        else:
             field_type_dao.create_field_type(project_id, field_name, value)
 
     def get_context_id():
@@ -490,23 +489,20 @@ def update_logs(
 
             explicit_types = this_data.pop("explicit_types", None)
             field_types = field_type_dao.get_field_types(project_id)
-            strongly_typed = body.strongly_typed
             for k, v in this_data.items():
-                # Check and enforce types
+
                 if k in field_types:
                     expected_type = field_types[k]
                     original_type = LogDAO.infer_type(k, v)
-                    if original_type != expected_type:
+                    if expected_type == "NoneType":
+                        field_type_dao.update_field_type(project_id, k, v)
+                    elif original_type != expected_type:
                         raise HTTPException(
                             status_code=400,
                             detail=f"Type mismatch for field '{k}': expected {expected_type}, got {original_type}",
                         )
                 else:
-                    # If strongly_typed is True, set the type for the first entry
-                    if strongly_typed is True or (
-                        isinstance(strongly_typed, list) and k in strongly_typed
-                    ):
-                        field_type_dao.create_field_type(project_id, k, v)
+                    field_type_dao.create_field_type(project_id, k, v)
 
                 # see if there is any param with the same value
                 existing = log_dao.filter(
@@ -1888,6 +1884,7 @@ def get_fields(
     }
 
 
+# TODO: this endpoint will become deprecated once we enforce strong typing on all fields.
 @router.post(
     "/logs/fields/types",
     responses={
