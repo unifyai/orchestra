@@ -10,33 +10,47 @@ class CreateLogConfig(BaseModel):
             "example": "eval-project",
         },
     )
-    params: Dict[str, Any] = Field(
+    params: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(
         default=dict(),
         description="Dictionary containing one or more key:value pairs that "
-        "will be logged into the platform. Parameters will be automatically "
-        "versioned based on their values. Values must be JSON serializable. "
-        "If a `explicit_types` dictionary is present, its values "
+        "will be logged into the platform. Can be either a single dictionary or a list of dictionaries "
+        "for batch processing. When using lists for both params and entries, their lengths must match. "
+        "Parameters will be automatically versioned based on their values. "
+        "Values must be JSON serializable. If a `explicit_types` dictionary is present, its values "
         "will override the inferred types of the entries.",
         json_schema_extra={
-            "example": {
-                "system-prompt": "...",
-                "function_definition": "...",
-                "explicit_types": {"system-prompt": "str"},
-            },
+            "examples": [
+                {
+                    "system-prompt": "...",
+                    "function_definition": "...",
+                    "explicit_types": {"system-prompt": "str"},
+                },
+                [
+                    {"system-prompt": "prompt1"},
+                    {"system-prompt": "prompt2"},
+                ],
+            ],
         },
     )
-    entries: Dict[str, Any] = Field(
+    entries: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(
         default=dict(),
         description="Dictionary containing one or more key:value pairs that "
-        "will be logged into the platform. Values must be JSON serializable. "
-        "If a `explicit_types` dictionary is present, its values "
-        "will override the inferred types of the entries.",
+        "will be logged into the platform. Can be either a single dictionary or a list of dictionaries "
+        "for batch processing. When using lists for both params and entries, their lengths must match. "
+        "Values must be JSON serializable. If a `explicit_types` dictionary is present, "
+        "its values will override the inferred types of the entries.",
         json_schema_extra={
-            "example": {
-                "input": "...",
-                "score-test-1": "...",
-                "explicit_types": {"input": "Image"},
-            },
+            "examples": [
+                {
+                    "input": "...",
+                    "score-test-1": "...",
+                    "explicit_types": {"input": "Image"},
+                },
+                [
+                    {"input": "test1", "score": 0.8},
+                    {"input": "test2", "score": 0.9},
+                ],
+            ],
         },
     )
     strongly_typed: Union[bool, List[str]] = Field(
@@ -116,17 +130,17 @@ class DeleteLogsRequest(BaseModel):
 
 
 class DeleteLogEntryRequest(BaseModel):
-    ids_and_fields: List[
-        Tuple[Union[int, List[int]], Union[None, str, List[str]]]
-    ] = Field(
-        description="List of tuples of log ID(s) and field(s) to delete, "
-        "either as an individual item or a list of items.",
-        example=[
-            (123, "score"),
-            ([456, 457], ["score", "response"]),
-            ([458, 459, 460], "response"),
-        ],
-        min_items=1,
+    ids_and_fields: List[Tuple[Union[int, List[int]], Union[None, str, List[str]]]] = (
+        Field(
+            description="List of tuples of log ID(s) and field(s) to delete, "
+            "either as an individual item or a list of items.",
+            example=[
+                (123, "score"),
+                ([456, 457], ["score", "response"]),
+                ([458, 459, 460], "response"),
+            ],
+            min_items=1,
+        )
     )
 
 
