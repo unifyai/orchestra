@@ -129,6 +129,16 @@ def create_logs(
                 detail=f"When both 'params' and 'entries' are provided as lists, they must have equal lengths. "
                 f"Got params length: {len(request.params)}, entries length: {len(request.entries)}",
             )
+    elif isinstance(request.entries, list) and not isinstance(request.params, list):
+        raise HTTPException(
+            status_code=400,
+            detail="If 'entries' is a list, 'params' must also be a list or None.",
+        )
+    elif not isinstance(request.entries, list) and isinstance(request.params, list):
+        raise HTTPException(
+            status_code=400,
+            detail="If 'params' is a list, 'entries' must also be a list or None.",
+        )
 
     # Get field types once for all operations
     field_types = field_type_dao.get_field_types(project_id)
