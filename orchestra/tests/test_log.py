@@ -2786,7 +2786,7 @@ async def test_update_logs_previously_none(client: AsyncClient):
     )
     assert field_types_response.status_code == 200
     assert field_types_response.json()["a/b/c/numeric_input"] == {
-        "data_type": None,
+        "data_type": "NoneType",
         "field_type": "entry",
     }
 
