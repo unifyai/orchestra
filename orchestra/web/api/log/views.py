@@ -1848,11 +1848,7 @@ def get_fields(
 
     # ToDo: remove this hacky code once this task [https://app.clickup.com/t/86c1jupp2]
     #  is done
-    (
-        all_logs,
-        _,
-        _,
-    ) = _get_logs_query(
+    (all_logs, _, _,) = _get_logs_query(
         request_fastapi,
         project=project,
         column_context=None,
@@ -1877,7 +1873,9 @@ def get_fields(
             (
                 "derived_entry"
                 if isinstance(lg[0], DerivedLog)
-                else "entry" if lg[0].version is None else "param"
+                else "entry"
+                if lg[0].version is None
+                else "param"
             ),
         )
         for lg in all_logs
