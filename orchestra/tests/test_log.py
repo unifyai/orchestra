@@ -1919,6 +1919,74 @@ async def test_get_logs_w_filtering(client: AsyncClient):
         "_/timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
     }
 
+    # Test filtering by updated_at and created_at timestamps
+    # Update some logs to create a time difference
+    log_ids = [1, 2]
+    initial_time = datetime.now(timezone.utc)
+    entries = {"_/state": "gas->liquid"}
+    update_response = await client.put(
+        f"/v0/logs",
+        json={"ids": log_ids, "entries": entries, "overwrite": True},
+        headers=HEADERS,
+    )
+    assert update_response.status_code == 200
+
+    # Now test filtering for logs where updated_at > created_at
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "updated_at > created_at"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    updated_logs = result["logs"]
+    assert len(updated_logs) == 2  # Should find the two updated logs
+    # # Verify timestamps were updated
+    # for log in updated_logs:
+    #     assert datetime.fromisoformat(log["updated_at"]) > datetime.fromisoformat(log["created_at"])
+    log_ids_found = [log["id"] for log in result["logs"]]
+    assert log_ids_found == [2, 1]
+
+    # Test filtering for logs where updated_at = created_at
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "updated_at == created_at"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    # Should find the non-updated logs where updated_at equals created_at
+    assert len(result["logs"]) == 5  # Should find the non-updated logs
+    log_ids_found = [log["id"] for log in result["logs"]]
+    assert log_ids_found == [7, 6, 5, 4, 3]
+    # Test combining timestamp filters with other fields
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={
+            "filter_expr": "updated_at > created_at and _/state == 'gas->liquid'",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert len(result["logs"]) == 2
+    for log in result["logs"]:
+        assert log["entries"]["_/state"] == "gas->liquid"
+
+    # Test filtering by updated_at range
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={
+            "filter_expr": f'updated_at >= "{initial_time.isoformat()}"',
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert len(result["logs"]) == 2  # Should only find the updated logs
+    for log in result["logs"]:
+        assert log["entries"]["_/state"] == "gas->liquid"
+
     # check exists
     response = await client.get(
         f"/v0/logs?project={project_name}",
