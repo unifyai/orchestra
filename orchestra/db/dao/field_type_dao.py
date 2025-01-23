@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, List
 
 from fastapi import Depends
 from sqlalchemy import select
@@ -60,3 +60,16 @@ class FieldTypeDAO:
             self.session.commit()
         else:
             raise ValueError("Field type does not exist.")
+
+    def get_ordered_field_names(self, project_id: int) -> List[str]:
+        """Retrieve field names for a project ordered by creation time (id)."""
+        query = (
+            select(FieldType.field_name)
+            .where(
+                FieldType.project_id == project_id,
+            )
+            .order_by(FieldType.id)
+        )
+
+        result = self.session.execute(query).scalars().all()
+        return {field: i for i, field in enumerate(result)}
