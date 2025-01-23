@@ -518,6 +518,23 @@ def _build_subquery_for_identifier(key, log_event_alias, alias=None):
       - id (to allow joining)
       - several casted columns (str_value, int_value, float_value, bool_value, jsonb_value)
     """
+    # Special handling for created_at and updated_at fields from LogEvent table
+    if key in ("created_at", "updated_at"):
+        subq = select(
+            log_event_alias.id.label("log_event_id"),
+            case(
+                (True, cast(getattr(log_event_alias, key), TIMESTAMP)),
+                else_=None,
+            ).label("timestamp_value"),
+            literal(None).label("jsonb_value"),
+            literal(None).label("str_value"),
+            literal(None).label("int_value"),
+            literal(None).label("float_value"),
+            literal(None).label("bool_value"),
+            literal("timestamp").label("inferred_type"),
+        ).subquery(name=alias)
+        return subq
+
     log_alias = aliased(Log)
     subq = (
         select(
