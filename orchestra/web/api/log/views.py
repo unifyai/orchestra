@@ -1,4 +1,5 @@
 """
+
 Includes endpoints related to entries.
 """
 
@@ -1290,6 +1291,11 @@ def get_logs(
 
     # Format them
     formatted = {}
+
+    # Get ordered field names
+    user_id = request_fastapi.state.user_id
+    project_id = project_dao.filter(name=project, user_id=user_id)[0][0].id
+    field_order_map = field_type_dao.get_ordered_field_names(project_id)
     for row_obj, created_at, event_id in all_rows:
         if event_id not in formatted:
             formatted[event_id] = {
@@ -1365,13 +1371,33 @@ def get_logs(
         # derived_entries
         derived_entries = data["derived_entries"]
 
+        # Sort all dictionaries according to field_type order
+        sorted_entries = dict(
+            sorted(
+                entries.items(),
+                key=lambda x: field_order_map.get(x[0], float("inf")),
+            ),
+        )
+        sorted_params = dict(
+            sorted(
+                params.items(),
+                key=lambda x: field_order_map.get(x[0], float("inf")),
+            ),
+        )
+        sorted_derived = dict(
+            sorted(
+                derived_entries.items(),
+                key=lambda x: field_order_map.get(x[0], float("inf")),
+            ),
+        )
+
         logs_out.append(
             {
                 "id": event_id,
                 "ts": data["ts"],
-                "entries": entries,
-                "params": params,
-                "derived_entries": derived_entries,
+                "entries": sorted_entries,
+                "params": sorted_params,
+                "derived_entries": sorted_derived,
             },
         )
 
