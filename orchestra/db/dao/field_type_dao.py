@@ -25,8 +25,12 @@ class FieldTypeDAO:
         self.session.commit()
 
     def get_field_types(self, project_id: int) -> Dict[str, str]:
-        """Retrieve field types for a specific project."""
-        query = select(FieldType).where(FieldType.project_id == project_id)
+        """Retrieve field types for a specific project ordered by creation time (id)."""
+        query = (
+            select(FieldType)
+            .where(FieldType.project_id == project_id)
+            .order_by(FieldType.id)
+        )
         field_types = self.session.execute(query).scalars().all()
         return {
             field_type.field_name: field_type.field_type for field_type in field_types
