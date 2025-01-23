@@ -1541,6 +1541,60 @@ async def test_get_log_ids(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_logs_field_ordering(client: AsyncClient):
+    project_name = "field-order-test"
+    _ = await _create_project(client, project_name)
+
+    # Create first log with fields in one order
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "field1": "first",
+                "field2": "second",
+                "field3": "third",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create second log with fields in different order
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "field2": "second again",
+                "field3": "third again",
+                "field1": "first again",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Get logs and verify field ordering
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    logs = response.json()["logs"]
+    assert len(logs) == 2
+
+    # Verify field ordering in first log
+    first_log_fields = list(logs[0]["entries"].keys())
+    assert first_log_fields == ["field1", "field2", "field3"]
+
+    # Verify same field ordering in second log
+    second_log_fields = list(logs[1]["entries"].keys())
+    assert second_log_fields == ["field1", "field2", "field3"]
+
+
+@pytest.mark.anyio
 async def test_get_empty_logs(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
