@@ -2966,6 +2966,7 @@ async def test_update_logs_type_mismatch(client: AsyncClient):
     assert "Type mismatch for field" in response.json()["detail"]
 
 
+# TODO: remove this test once we enforce strong typing on all fields.
 @pytest.mark.anyio
 async def test_get_set_field_typing(client: AsyncClient):
     project_name = "test_project"
@@ -3007,7 +3008,7 @@ async def test_get_set_field_typing(client: AsyncClient):
             "types": {
                 "a/b/c/input": True,
                 "a/b/c/boolean_input": True,
-                "a/b/c/numeric_input": False,
+                "a/b/c/numeric_input": False,  # delete typing for numeric_input
             },
         },
         headers=HEADERS,
@@ -3024,11 +3025,11 @@ async def test_get_set_field_typing(client: AsyncClient):
     field_types = field_types_response.json()
 
     # ordering
+    # numeric_input is not included in the response because it was deleted
     assert list(field_types.keys()) == [
         "a/b/param1",
         "a/b/c/input",
         "a/b/c/boolean_input",
-        "a/b/c/numeric_input",
     ]
 
     # values
@@ -3036,8 +3037,6 @@ async def test_get_set_field_typing(client: AsyncClient):
     assert field_types["a/b/c/input"]["field_type"] == "entry"
     assert field_types["a/b/c/boolean_input"]["data_type"] == "bool"
     assert field_types["a/b/c/boolean_input"]["field_type"] == "entry"
-    assert field_types["a/b/c/numeric_input"]["data_type"] is None
-    assert field_types["a/b/c/numeric_input"]["field_type"] == "entry"
     assert field_types["a/b/param1"]["data_type"] == "str"
     assert field_types["a/b/param1"]["field_type"] == "param"
 

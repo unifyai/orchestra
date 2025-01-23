@@ -1901,12 +1901,13 @@ def get_fields(
     )
     # end ToDo
 
+    # return field types in the same order as they were created
     return {
         key: {
             "data_type": types.get(key),
-            "field_type": field_type,
+            "field_type": field_types.get(key),
         }
-        for key, field_type in field_types.items()
+        for key in types.keys()
     }
 
 
