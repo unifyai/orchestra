@@ -223,6 +223,11 @@ class LogDAO:
                 "inferred_type",
                 inferred_type,
             )
+            # Update the LogEvent's updated_at timestamp
+            log_event_query = select(LogEvent).where(LogEvent.id == log_event_id)
+            log_event = self.session.execute(log_event_query).scalars().first()
+            if log_event:
+                log_event.updated_at = datetime.now(timezone.utc)
             self.session.commit()
         else:
             raise IndexError
