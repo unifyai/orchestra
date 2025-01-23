@@ -227,41 +227,7 @@ def get_interfaces(
         name=name,
     )
     if len(interfaces) == 0:
-        items = [
-            {
-                "i": "Tile_0",
-                "x": 0,
-                "y": 0,
-                "w": 6,
-                "h": 8,
-                "tab": "Table",
-                "moved": False,
-                "static": False,
-                "visible": True,
-            },
-            {
-                "i": "Tile_1",
-                "x": 6,
-                "y": 0,
-                "w": 6,
-                "h": 4,
-                "tab": "View",
-                "moved": False,
-                "static": False,
-                "visible": True,
-            },
-            {
-                "i": "Tile_2",
-                "x": 6,
-                "y": 4,
-                "w": 6,
-                "h": 4,
-                "tab": "Plot",
-                "moved": False,
-                "static": False,
-                "visible": True,
-            },
-        ]
+        items = []
         new_counter = len(items)
         dao.create_interface(
             user_id=request_fastapi.state.user_id,
