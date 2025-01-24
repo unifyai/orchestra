@@ -52,7 +52,7 @@ def _extract_placeholders(equation: str) -> List[str]:
 def _substitute_placeholders(equation: str, single_ref: Dict[str, int]) -> str:
     """
     E.g. equation="{log0:score} - {log1:score}", single_ref={"log0":10,"log1":20}
-    => "BASE_IN([10],score) - BASE_IN([20],score)" if we are referencing 1 ID each time.
+    => "BASE([10],score) - BASE([20],score)" if we are referencing 1 ID each time.
 
     If you have multiple IDs, we might do "BASE_IN([10,11],score)" etc.
     Because we want membership logic (log_event_id in [10,11]).
@@ -336,7 +336,7 @@ class _Parser:
         return node
 
     def primary(self):
-        # --- 1) handle function calls like len(a), to_str(b), etc. ---
+        # Step 1: parse the core primary expression
         if self.current_token[0] == "FUNC":
             fn = self.current_token[1]
             self.advance()
@@ -347,14 +347,14 @@ class _Parser:
                     self.advance()
                 else:
                     raise RuntimeError('Expected ")" after function call')
-                return {"operand": fn, "rhs": expr}
+                node = {"operand": fn, "rhs": expr}
             else:
                 raise RuntimeError('Expected "(" after function call')
 
         # --- 2) handle round(...) with 1 or 2 arguments ---
         elif self.current_token[0] in ("ROUND", "ROUND_TIMESTAMP"):
             fn = self.current_token[0].lower()
-            self.advance()  # consume the 'round' token
+            self.advance()  # consume the 'round' / 'round_timestamp' token
             if self.current_token[0] == "LPAREN":
                 self.advance()
                 # parse the first arg
@@ -371,8 +371,7 @@ class _Parser:
                 if self.current_token[0] != "RPAREN":
                     raise RuntimeError(f"Expected ')' after {fn}(...) arguments")
                 self.advance()  # consume RPAREN
-
-                return {"operand": fn, "rhs": args}
+                node = {"operand": fn, "rhs": args}
             else:
                 raise RuntimeError(f"Expected '(' after {fn}")
 
@@ -393,18 +392,18 @@ class _Parser:
                 if self.current_token[0] != "RPAREN":
                     raise RuntimeError(f"Expected ')' after {fn}(...) arguments")
                 self.advance()  # consume RPAREN
-                return {"operand": fn, "rhs": [first_arg, second_arg]}
+                node = {"operand": fn, "rhs": [first_arg, second_arg]}
             else:
                 raise RuntimeError(f"Expected '(' after {fn}")
 
         # --- 4) handle type literals like int, float, etc. ---
         elif self.current_token[0] == "TYPE_LITERAL":
+            # Distinguish usage context
             if self.in_type_check_context():
                 node = {"type": "type_literal", "value": self.current_token[1]}
             else:
                 node = {"type": "identifier", "value": self.current_token[1]}
             self.advance()
-            return node
 
         # --- 5) parentheses grouping ---
         elif self.current_token[0] == "LPAREN":
@@ -414,65 +413,56 @@ class _Parser:
                 self.advance()
             else:
                 raise RuntimeError('Expected ")"')
-            return node
 
         # --- 6) booleans ---
         elif self.current_token[0] == "BOOLEAN":
             node = self.current_token[1]
             self.advance()
-            return node
 
         # --- 7) identifiers (including subsequent indexing) ---
         elif self.current_token[0] == "IDENTIFIER":
             node = {"type": "identifier", "value": self.current_token[1]}
             self.advance()
 
-            # Now handle any subsequent indexing: x['key'], x[0], x['key'][something_else] ...
-            while self.current_token[0] == "OTHER":
-                bracket_str = self.current_token[1]
-                # If it's something like "[...]" or "{...}" we can parse inside as an expression:
-                if bracket_str.startswith("[") or bracket_str.startswith("{"):
-                    # remove outer brackets
-                    inside_str = bracket_str[
-                        1:-1
-                    ]  # drop the leading '[' or '{' and the trailing ']' or '}'
-                    # tokenize the inside substring
-                    sub_tokens = _tokenize(inside_str)
-                    sub_parser = _Parser(sub_tokens)
-                    inside_expr = sub_parser.parse()
-                    node = {
-                        "operand": "INDEX",
-                        "lhs": node,
-                        "rhs": inside_expr,
-                    }
-                    # consume this bracketed token
-                    self.advance()
-                else:
-                    # if for some reason it's "OTHER" not starting with bracket, break or error
-                    break
-
-            return node
-
-        # --- 8) numbers ---
         elif self.current_token[0] == "NUMBER":
             node = self.current_token[1]
             self.advance()
-            return node
 
-        # --- 9) strings ---
         elif self.current_token[0] == "STRING":
             node = {"type": "string", "value": self.current_token[1]}
             self.advance()
-            return node
 
-        # --- 10) "OTHER" ---
         elif self.current_token[0] == "OTHER":
             node = {"type": "other", "value": self.current_token[1]}
             self.advance()
-            return node
 
         else:
             raise RuntimeError(f"Unexpected token {self.current_token}")
+
+        # Step 2: now handle any subsequent indexing: e.g. x[0], BASE(...)[1], etc.
+        while self.current_token[0] == "OTHER":
+            bracket_str = self.current_token[1]
+            if bracket_str.startswith("[") or bracket_str.startswith("{"):
+                # remove outer brackets
+                inside_str = bracket_str[
+                    1:-1
+                ]  # drop the leading '[' or '{' and the trailing ']' or '}'
+                # tokenize the inside substring
+                sub_tokens = _tokenize(inside_str)
+                sub_parser = _Parser(sub_tokens)
+                inside_expr = sub_parser.parse()
+                node = {
+                    "operand": "INDEX",
+                    "lhs": node,
+                    "rhs": inside_expr,
+                }
+                # consume this bracketed token
+                self.advance()
+            else:
+                # if for some reason it's "OTHER" not starting with bracket, just break or raise
+                break
+
+        return node
 
 
 # Filtering #
