@@ -28,6 +28,7 @@ from sqlalchemy import (
     select,
 )
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
+from sqlalchemy.orm import aliased
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.context_dao import ContextDAO
@@ -1619,7 +1620,7 @@ def get_logs_metric(
     session=Depends(get_db_session),
 ) -> Union[float, int, bool, str]:
     """
-    Returns the reduction metric for filtered values for a specific key from a project.
+    Returns the reduction metric for filtered values (base + derived) for a specific key from a project.
     """
     try:
         user_id = request_fastapi.state.user_id
@@ -1628,6 +1629,8 @@ def get_logs_metric(
         raise not_found(f"Project {project}")
     # TODO: Deal with organisation IDs
 
+    # 1) Build initial query to find matching LogEvent IDs
+    #    (i.e. those that pass filter_expr, from_ids, exclude_ids).
     query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
 
     assert not (from_ids and exclude_ids), (
@@ -1662,8 +1665,41 @@ def get_logs_metric(
             else:
                 query = query.filter(condition)
 
+    # Subquery of filtered LogEvents
     subquery = query.subquery()
 
+    # 2) retrieve rows from Log and DerivedLog for the requested `key`.
+    #    We'll unify them into a single subquery that yields (log_event_id, value, inferred_type).
+    # Base logs
+    log_q = (
+        session.query(
+            Log.log_event_id.label("log_event_id"),
+            Log.value.label("value"),
+            Log.inferred_type.label("inferred_type"),
+        )
+        .filter(Log.key == key)
+        .join(LogEvent, Log.log_event_id == LogEvent.id)
+        .filter(LogEvent.project_id == project_obj.id)
+    )
+
+    # Derived logs
+    derived_q = (
+        session.query(
+            DerivedLog.log_event_id.label("log_event_id"),
+            DerivedLog.value.label("value"),
+            DerivedLog.inferred_type.label("inferred_type"),
+        )
+        .filter(DerivedLog.key == key)
+        .join(LogEvent, DerivedLog.log_event_id == LogEvent.id)
+        .filter(LogEvent.project_id == project_obj.id)
+    )
+
+    # Union them
+    logs_or_derived_subq = log_q.union_all(derived_q).subquery()
+
+    # 3) Now we have a subquery for (log_event_id, value, inferred_type).
+    #    We only keep those whose log_event_id is in the `subquery` of filter_expr / from_ids / exclude_ids.
+    #    Then we apply the final aggregator (sum, mean, etc.).
     reduction_methods = {
         "count": func.count,
         "sum": func.sum,
@@ -1676,61 +1712,76 @@ def get_logs_metric(
         "mode": func.mode().within_group,
     }
 
-    reduced_query = (
+    # alias logs_or_derived_subq as "X"
+    X = aliased(logs_or_derived_subq)
+    # columns: X.c.log_event_id, X.c.value, X.c.inferred_type
+
+    # interpret X.c.value depending on X.c.inferred_type.
+    cast_expr = case(
+        (
+            X.c.inferred_type == "list",
+            func.jsonb_array_length(cast(X.c.value, JSONB)).cast(Float),
+        ),
+        (
+            X.c.inferred_type == "dict",
+            select(func.count())
+            .select_from(func.jsonb_object_keys(cast(X.c.value, JSONB)))
+            .scalar_subquery()
+            .cast(Float),
+        ),
+        (
+            X.c.inferred_type == "bool",
+            X.c.value.cast(BOOLEAN).cast(INTEGER).cast(Float),
+        ),
+        (
+            X.c.inferred_type == "str",
+            func.length(cast(X.c.value, JSONB)[0].astext).cast(Float),
+        ),
+        (
+            X.c.inferred_type == "timestamp",
+            func.extract("epoch", cast(cast(X.c.value, String), TIMESTAMP)).cast(Float),
+        ),
+        (X.c.inferred_type == "float", X.c.value.cast(Float)),
+        (X.c.inferred_type == "int", X.c.value.cast(Float)),
+        else_=literal(0, type_=Float),
+    ).label("value_as_float")
+
+    # Filter the subquery by the log_event_ids that survived above filters
+    # (subquery).
+    metric_query = (
         session.query(
-            reduction_methods[metric](
-                case(
-                    (
-                        Log.inferred_type == "list",
-                        func.jsonb_array_length(cast(Log.value, JSONB)).cast(Float),
-                    ),
-                    (
-                        Log.inferred_type == "dict",
-                        select(func.count())
-                        .select_from(func.jsonb_object_keys(cast(Log.value, JSONB)))
-                        .scalar_subquery()
-                        .cast(Float),
-                    ),
-                    (
-                        Log.inferred_type == "bool",
-                        Log.value.cast(BOOLEAN).cast(INTEGER).cast(Float),
-                    ),
-                    (
-                        Log.inferred_type == "str",
-                        func.length(cast(Log.value, JSONB)[0].astext).cast(Float),
-                    ),
-                    (
-                        Log.inferred_type == "timestamp",
-                        func.extract(
-                            "epoch",
-                            cast(cast(Log.value, String), TIMESTAMP),
-                        ).cast(Float),
-                    ),
-                    (Log.inferred_type == "float", Log.value.cast(Float)),
-                    (Log.inferred_type == "int", Log.value.cast(Float)),
-                    else_=0,
-                ),
-            ),
+            reduction_methods[metric](cast_expr),
         )
-        .where(Log.key == key)
-        .filter(Log.log_event_id.in_(select(subquery)))
-    ).scalar()
+        .select_from(X)
+        .filter(X.c.log_event_id.in_(select(subquery)))
+    )
+
+    reduced_query = metric_query.scalar()
+
+    # Post-process based on field type
     field_type = field_type_dao.get_field_types(project_obj.id).get(key)
     if metric == "count":
-        return int(reduced_query)
-    elif not field_type:
+        return int(reduced_query or 0)
+
+    if reduced_query is None:
+        return None
+
+    if not field_type:
         return reduced_query
-    elif field_type == "timestamp":
+
+    # Now do the same final conversions based on the field type:
+    if field_type == "timestamp":
         if metric in ("var", "std"):
             return timedelta(seconds=reduced_query).__repr__()
         return datetime.fromtimestamp(reduced_query).isoformat()
-    elif (
-        reduced_query.is_integer()
+
+    if (
+        float(reduced_query).is_integer()
         and metric in ("sum", "min", "max", "median", "mode")
         and field_type in ("int", "bool", "str")
     ):
         if field_type == "bool" and metric in ("min", "max", "median", "mode"):
-            return bool(reduced_query)
+            return bool(int(reduced_query))
         return int(reduced_query)
     return reduced_query
 
