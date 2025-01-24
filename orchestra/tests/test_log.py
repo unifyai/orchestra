@@ -2906,6 +2906,8 @@ async def test_get_logs_w_date_sorting(client: AsyncClient):
         "_/metadata",
         "_/_data",
         "_/timestamp",
+        "temp_plus_10",  # Derived: temp + 10
+        "desc_len",  # Derived: len(description)
     ],
 )
 @pytest.mark.parametrize(
@@ -2926,9 +2928,48 @@ async def test_get_logs_metric(
     _ = await _create_project(client, project_name)
     _ = await _create_several_logs(client, project_name)
     data = log_data["logs_for_various"]
+    derived_data = []
+    # Create derived logs if needed
+    if key == "temp_plus_10":
+        config = {
+            "key": "temp_plus_10",
+            "equation": "{t:_/temperature} + 10",
+            "referenced_logs": {"t": [1, 2, 3, 4]},
+        }
+        response = await _create_derived_entry(
+            client,
+            project_name,
+            config["key"],
+            config["equation"],
+            config["referenced_logs"],
+        )
+        assert response.status_code == 200
+        # Patch local data so test can reuse the same metric code:
+        for i in range(4):
+            if "_/temperature" in data[i]:
+                derived_data.append(data[i]["_/temperature"] + 10)
+
+    elif key == "desc_len":
+        config = {
+            "key": "desc_len",
+            "equation": "len({d:_/description})",
+            "referenced_logs": {"d": [1, 2, 3, 4, 5, 6]},
+        }
+        response = await _create_derived_entry(
+            client,
+            project_name,
+            config["key"],
+            config["equation"],
+            config["referenced_logs"],
+        )
+        assert response.status_code == 200
+        for i in range(len(data)):
+            if "_/description" in data[i]:
+                derived_data.append(len(data[i]["_/description"]))
+
     params = (
         {"key": key}
-        if from_ids is None
+        if from_ids is None or key in ("temp_plus_10", "desc_len")
         else {"key": key, "from_ids": "&".join([str(i) for i in from_ids])}
     )
     response = await client.get(
@@ -2938,11 +2979,14 @@ async def test_get_logs_metric(
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    vals = [
-        d[key]
-        for i, d in enumerate(data)
-        if key in d and (from_ids is None or i + 1 in from_ids)
-    ]
+    if key in ("temp_plus_10", "desc_len"):
+        vals = derived_data
+    else:
+        vals = [
+            d[key]
+            for i, d in enumerate(data)
+            if key in d and (from_ids is None or i + 1 in from_ids)
+        ]
     if metric == "mode" and _is_all_unique(vals):
         # early return to avoid computing 'mode' which is order-dependent
         # in case of unique entries.
