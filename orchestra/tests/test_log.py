@@ -1325,7 +1325,7 @@ async def test_get_logs_with_derived_math_expressions_and_indexing(client: Async
         # (D) dl_len_desc => len(desc)
         len_desc_val = derived.get("dl_len_desc")
         if len_desc_val is not None:
-            expected_len = len(desc) + 2  # account for ''
+            expected_len = len(desc)
             assert (
                 len_desc_val == expected_len
             ), f"dl_len_desc mismatch: log_id={log_id}, got {len_desc_val}, expected {expected_len}"
