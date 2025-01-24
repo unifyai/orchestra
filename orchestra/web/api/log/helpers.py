@@ -28,6 +28,7 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.sql import Subquery, and_, not_, or_
 from sqlalchemy.sql.selectable import Subquery
 
+from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.models.orchestra_models import Log
 
 STR_TO_SQL_TYPES = {
@@ -476,13 +477,20 @@ def str_filter_exp_to_dict(s):
     return result
 
 
-def _select_value(subq, session):
+def _select_value(subq, session, is_collection=False):
     """
     Helper function to select the appropriate value column from a subquery.
     Prioritizes 'value' if it exists, otherwise selects based on inferred types.
     """
     if hasattr(subq.c, "value"):
-        return subq.c.value
+        if is_collection:
+            # the assumption here is lists/dicts to have a single consistent type
+            # so we can just check the first element
+            first_elem = session.execute(select(subq).limit(1)).first()[0]
+            dt = LogDAO.infer_type("", first_elem)
+        else:
+            dt = session.execute(select(subq.c.inferred_type)).first()[0]
+        return subq.c.value, dt
     try:
         dt = session.execute(select(subq)).first()[
             -1
@@ -496,9 +504,30 @@ def _select_value(subq, session):
             "list": subq.c.jsonb_value,
             "dict": subq.c.jsonb_value,
         }
-        return d[dt]
+        return d[dt], dt
     except:
-        return None
+        return None, None
+
+
+def cast_expr(expr, const_expr: BindParameter):
+    """
+    Casts an expression to a compatible type if necessary.
+    """
+    try:
+        val = json.loads(const_expr.value)
+    except:
+        val = const_expr.value
+    const_type = LogDAO.infer_type("", val)
+    if const_type == "str":
+        return cast(expr, String)
+    elif const_type == "int":
+        return cast(expr, Integer)
+    elif const_type == "float":
+        return cast(expr, Float)
+    elif const_type == "bool":
+        return cast(expr, Boolean)
+    else:
+        return expr
 
 
 def _build_subquery_for_identifier(key, log_event_alias, alias=None):
@@ -565,7 +594,7 @@ def _build_subquery_for_identifier(key, log_event_alias, alias=None):
     return subq
 
 
-def _join_subqueries(lhs_subq, rhs_subq, expr):
+def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type):
     """
     Given two subqueries lhs_subq and rhs_subq and an expression expr that combines
     their respective columns, produce a new subquery that merges them (by log_event_id),
@@ -578,6 +607,7 @@ def _join_subqueries(lhs_subq, rhs_subq, expr):
         select(
             lhs_subq.c.log_event_id.label("log_event_id"),
             expr.label("value"),
+            literal(inferred_type).label("inferred_type"),
         )
         .select_from(lhs_subq)
         .join(rhs_subq, lhs_subq.c.log_event_id == rhs_subq.c.log_event_id)
@@ -613,18 +643,21 @@ def _handle_logical_operator(filter_dict, log_event_alias, session):
 
     if operand in ("and", "or"):
         if lhs_is_sub and rhs_is_sub:
-            lval = _select_value(lhs, session)
-            rval = _select_value(rhs, session)
-
+            lval, lval_type = _select_value(lhs, session)
+            rval, rval_type = _select_value(rhs, session)
+            if lval_type != rval_type:
+                inferred_type = "unknown"  # TODO: handle this case
+            else:
+                inferred_type = lval_type
             if operand == "and":
                 combined_expr = and_(lval, rval)
             else:
                 combined_expr = or_(lval, rval)
 
-            return _join_subqueries(lhs, rhs, combined_expr)
+            return _join_subqueries(lhs, rhs, combined_expr, inferred_type)
 
         elif lhs_is_sub:
-            lval = _select_value(lhs, session)
+            lval, lval_type = _select_value(lhs, session)
             if operand == "and":
                 combined_expr = and_(lval, rhs)
             else:
@@ -633,13 +666,14 @@ def _handle_logical_operator(filter_dict, log_event_alias, session):
                 select(
                     lhs.c.log_event_id.label("log_event_id"),
                     combined_expr.label("value"),
+                    literal(lval_type).label("inferred_type"),
                 )
                 .select_from(lhs)
                 .subquery()
             )
 
         elif rhs_is_sub:
-            rval = _select_value(rhs, session)
+            rval, rval_type = _select_value(rhs, session)
             if operand == "and":
                 combined_expr = and_(lhs, rval)
             else:
@@ -648,6 +682,7 @@ def _handle_logical_operator(filter_dict, log_event_alias, session):
                 select(
                     rhs.c.log_event_id.label("log_event_id"),
                     combined_expr.label("value"),
+                    literal(rval_type).label("inferred_type"),
                 )
                 .select_from(rhs)
                 .subquery()
@@ -661,12 +696,13 @@ def _handle_logical_operator(filter_dict, log_event_alias, session):
 
     elif operand == "not":
         if rhs_is_sub:
-            rval = _select_value(rhs, session)
+            rval, rval_type = _select_value(rhs, session)
             not_expr = not_(rval)
             return (
                 select(
                     rhs.c.log_event_id.label("log_event_id"),
                     not_expr.label("value"),
+                    literal(rval_type).label("inferred_type"),
                 )
                 .select_from(rhs)
                 .subquery()
@@ -696,8 +732,8 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session):
     rhs_is_sub = isinstance(rhs, Subquery)
 
     if lhs_is_sub and rhs_is_sub:
-        lval = _select_value(lhs, session)
-        rval = _select_value(rhs, session)
+        lval, lval_type = _select_value(lhs, session)
+        rval, rval_type = _select_value(rhs, session)
         if operand == "+":
             expr = lval + rval
         elif operand == "-":
@@ -710,7 +746,8 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session):
             expr = lval % rval
         return _join_subqueries(lhs, rhs, expr)
     elif lhs_is_sub:
-        lval = _select_value(lhs, session)  # TODO add JSONB support
+        lval, lval_type = _select_value(lhs, session)
+        lval = cast_expr(lval, rhs)
         if operand == "+":
             expr = lval + rhs
         elif operand == "-":
@@ -725,12 +762,14 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session):
             select(
                 lhs.c.log_event_id.label("log_event_id"),
                 expr.label("value"),
+                literal(lval_type).label("inferred_type"),
             )
             .select_from(lhs)
             .subquery()
         )
     elif rhs_is_sub:
-        rval = _select_value(rhs, session)
+        rval, rval_type = _select_value(rhs, session)
+        rval = cast_expr(rval, lhs)
         if operand == "+":
             expr = lhs + rval
         elif operand == "-":
@@ -745,6 +784,7 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session):
             select(
                 rhs.c.log_event_id.label("log_event_id"),
                 expr.label("value"),
+                literal(rval_type).label("inferred_type"),
             )
             .select_from(rhs)
             .subquery()
@@ -783,8 +823,8 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session):
     rhs_is_sub = isinstance(rhs, Subquery)
 
     if lhs_is_sub and rhs_is_sub:
-        lval = _select_value(lhs, session)
-        rval = _select_value(rhs, session)
+        lval, lval_type = _select_value(lhs, session)
+        rval, rval_type = _select_value(rhs, session)
         if operand == "==":
             expr = lval == rval
         elif operand == "!=":
@@ -801,7 +841,7 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session):
             expr = lval.is_(rval)
         elif operand == "is not":
             expr = lval.isnot(rval)
-        return _join_subqueries(lhs, rhs, expr)
+        return _join_subqueries(lhs, rhs, expr, "bool")
     elif lhs_is_sub:
         lval = _select_value(lhs, session)
         if operand == "==":
@@ -824,12 +864,14 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session):
             select(
                 lhs.c.log_event_id.label("log_event_id"),
                 expr.label("value"),
+                literal("bool").label("inferred_type"),
             )
             .select_from(lhs)
             .subquery()
         )
     elif rhs_is_sub:
-        rval = _select_value(rhs, session)
+        rval, rval_type = _select_value(rhs, session)
+        rval = cast_expr(rval, lhs)
         if operand == "==":
             expr = lhs == rval
         elif operand == "!=":
@@ -850,6 +892,7 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session):
             select(
                 rhs.c.log_event_id.label("log_event_id"),
                 expr.label("value"),
+                literal("bool").label("inferred_type"),
             )
             .select_from(rhs)
             .subquery()
@@ -897,8 +940,8 @@ def _handle_membership_operator(filter_dict, log_event_alias, session):
 
     # Both sides are subqueries
     if lhs_is_sub and rhs_is_sub:
-        lval = _select_value(lhs, session)
-        rval = _select_value(rhs, session)
+        lval, lval_type = _select_value(lhs, session)
+        rval, rval_type = _select_value(rhs, session)
         condition = _substring_expr(lval, rval)
         if not is_in:
             condition = ~condition
@@ -909,11 +952,11 @@ def _handle_membership_operator(filter_dict, log_event_alias, session):
                 condition,
             ),
         )
-        return _join_subqueries(lhs, rhs, expr)
+        return _join_subqueries(lhs, rhs, expr, "bool")
 
     # Only LHS is a subquery
     elif lhs_is_sub and not rhs_is_sub:
-        lval = _select_value(lhs, session)
+        lval, lval_type = _select_value(lhs, session)
         rhs_list = _parse_rhs_list_or_dict_if_needed(filter_dict.get("rhs"), rhs)
 
         if rhs_list and isinstance(rhs_list, list):
@@ -926,6 +969,7 @@ def _handle_membership_operator(filter_dict, log_event_alias, session):
             select(
                 lhs.c.log_event_id.label("log_event_id"),
                 expr.label("value"),
+                literal("bool").label("inferred_type"),
             )
             .select_from(lhs)
             .subquery()
@@ -933,7 +977,7 @@ def _handle_membership_operator(filter_dict, log_event_alias, session):
 
     # Only RHS is a subquery
     elif rhs_is_sub and not lhs_is_sub:
-        rval = _select_value(rhs, session)
+        rval, rval_type = _select_value(rhs, session)
         lhs_list = _parse_rhs_list_or_dict_if_needed(filter_dict.get("lhs"), lhs)
 
         if lhs_list is not None and isinstance(lhs_list, list):
@@ -948,6 +992,7 @@ def _handle_membership_operator(filter_dict, log_event_alias, session):
             select(
                 rhs.c.log_event_id.label("log_event_id"),
                 cond.label("value"),
+                literal("bool").label("inferred_type"),
             )
             .select_from(rhs)
             .subquery()
@@ -1037,94 +1082,55 @@ def _handle_functions(filter_dict, log_event_alias, session):
             for expr in filter_dict.get("rhs")
         ]
     if operand == "len":
-        rval = _select_value(rhs_expr, session)
+        rval, rval_type = _select_value(rhs_expr, session)
         if isinstance(rhs_expr, Subquery):
-            subq = (
-                select(
-                    Log.log_event_id.label("log_event_id"),
-                    case(
-                        (
-                            Log.inferred_type == "list",
-                            func.jsonb_array_length(
-                                cast(rval, JSONB),
-                            ).cast(Float),
+            expr = case(
+                (
+                    rval_type == "list",
+                    func.jsonb_array_length(
+                        cast(rval, JSONB),
+                    ).cast(Float),
+                ),
+                (
+                    rval_type == "dict",
+                    select(func.count())
+                    .select_from(
+                        func.jsonb_object_keys(
+                            cast(rval, JSONB),
                         ),
-                        (
-                            Log.inferred_type == "dict",
-                            select(func.count())
-                            .select_from(
-                                func.jsonb_object_keys(
-                                    cast(rval, JSONB),
-                                ),
-                            )
-                            .scalar_subquery()
-                            .cast(Float),
-                        ),
-                        (
-                            Log.inferred_type == "str",
-                            func.length(
-                                cast(rval, String),
-                            ).cast(Float),
-                        ),
-                        else_=0,
-                    ).label("value"),
-                )
-                .select_from(Log)
-                .join(log_event_alias, Log.log_event_id == log_event_alias.id)
-                .join(rhs_expr, Log.log_event_id == rhs_expr.c.log_event_id)
-                .where(
-                    Log.key == filter_dict["rhs"]["value"],
-                )
-                .subquery()
-            )
-            return subq
-        else:
-            subq = (
-                select(
-                    Log.log_event_id.label("log_event_id"),
-                    case(
-                        (
-                            Log.inferred_type == "list",
-                            func.jsonb_array_length(
-                                cast(Log.value, JSONB),
-                            ).cast(Float),
-                        ),
-                        (
-                            Log.inferred_type == "dict",
-                            select(func.count())
-                            .select_from(
-                                func.jsonb_object_keys(
-                                    cast(Log.value, JSONB),
-                                ),
-                            )
-                            .scalar_subquery()
-                            .cast(Float),
-                        ),
-                        (
-                            Log.inferred_type == "str",
-                            func.length(
-                                cast(Log.value, String),
-                            ).cast(Float),
-                        ),
-                        else_=0,
-                    ).label("value"),
-                )
-                .select_from(Log)
-                .join(log_event_alias, Log.log_event_id == log_event_alias.id)
-                .where(
-                    Log.key == filter_dict["rhs"]["value"],
-                )
-                .subquery()
-            )
-            return subq
-
-    elif operand == "to_str":
-        if isinstance(rhs_expr, Subquery):
-            expr = func.cast(_select_value(rhs_expr, session), String)
+                    )
+                    .scalar_subquery()
+                    .cast(Float),
+                ),
+                (
+                    rval_type == "str",
+                    func.length(
+                        cast(rval, String),
+                    ).cast(Float),
+                ),
+                else_=0,
+            ).label("value")
             return (
                 select(
                     rhs_expr.c.log_event_id.label("log_event_id"),
                     expr.label("value"),
+                    literal("int").label("inferred_type"),
+                )
+                .select_from(rhs_expr)
+                .subquery()
+            )
+        else:
+            return len(rhs_expr)
+
+    elif operand == "to_str":
+        if isinstance(rhs_expr, Subquery):
+            val, val_type = _select_value(rhs_expr, session)
+            expr = func.cast(val, String)
+            return (
+                select(
+                    rhs_expr.c.log_event_id.label("log_event_id"),
+                    expr.label("value"),
+                    literal("str").label("inferred_type"),
                 )
                 .select_from(rhs_expr)
                 .subquery()
@@ -1141,12 +1147,13 @@ def _handle_functions(filter_dict, log_event_alias, session):
             val_expr = rhs_expr[0]
             if isinstance(val_expr, Subquery):
                 # subquery => we retrieve the numeric column
-                val_col = _select_value(val_expr, session)
+                val_col, val_type = _select_value(val_expr, session)
                 # produce a new subquery
                 subq = (
                     select(
                         val_expr.c.log_event_id.label("log_event_id"),
                         func.round(cast(val_col, Numeric)).label("value"),
+                        literal("int").label("inferred_type"),
                     )
                     .select_from(val_expr)
                     .subquery()
@@ -1160,12 +1167,13 @@ def _handle_functions(filter_dict, log_event_alias, session):
             # round(val, digits)
             val_expr, digits_expr = rhs_expr
             if isinstance(val_expr, Subquery) and isinstance(digits_expr, Subquery):
-                val_col = _select_value(val_expr, session)
+                val_col, val_type = _select_value(val_expr, session)
                 dig_col = _select_value(digits_expr, session)
                 subq = (
                     select(
                         val_expr.c.log_event_id.label("log_event_id"),
                         func.round(cast(val_col, Numeric), dig_col).label("value"),
+                        literal("int").label("inferred_type"),
                     )
                     .select_from(val_expr)
                     .join(
@@ -1176,24 +1184,26 @@ def _handle_functions(filter_dict, log_event_alias, session):
                 )
                 return subq
             elif isinstance(val_expr, Subquery):
-                val_col = _select_value(val_expr, session)
+                val_col, val_type = _select_value(val_expr, session)
                 # If digits_expr is literal or bind param, we can pass it directly:
                 subq = (
                     select(
                         val_expr.c.log_event_id.label("log_event_id"),
                         func.round(cast(val_col, Numeric), digits_expr).label("value"),
+                        literal("int").label("inferred_type"),
                     )
                     .select_from(val_expr)
                     .subquery()
                 )
                 return subq
             elif isinstance(digits_expr, Subquery):
-                dig_col = _select_value(digits_expr, session)
+                dig_col, dig_type = _select_value(digits_expr, session)
                 # In that case, val_expr might be a literal
                 subq = (
                     select(
                         digits_expr.c.log_event_id.label("log_event_id"),
                         func.round(cast(val_expr, Numeric), dig_col).label("value"),
+                        literal("int").label("inferred_type"),
                     )
                     .select_from(digits_expr)
                     .subquery()
@@ -1228,14 +1238,15 @@ def _handle_functions(filter_dict, log_event_alias, session):
 
         if ts_is_sub and sec_is_sub:
             # both timestamp and seconds are subqueries
-            ts_col = _select_value(ts_expr, session)
-            sec_col = _select_value(sec_expr, session)
+            ts_col, ts_type = _select_value(ts_expr, session)
+            sec_col, sec_type = _select_value(sec_expr, session)
 
             # build a subquery that joins them on log_event_id
             subq = (
                 select(
                     ts_expr.c.log_event_id.label("log_event_id"),
                     _pg_round_timestamp(ts_col, sec_col).label("value"),
+                    literal("timestamp").label("inferred_type"),
                 )
                 .select_from(ts_expr)
                 .join(sec_expr, ts_expr.c.log_event_id == sec_expr.c.log_event_id)
@@ -1245,7 +1256,7 @@ def _handle_functions(filter_dict, log_event_alias, session):
 
         elif ts_is_sub:
             # timestamp is subquery, seconds is literal
-            ts_col = _select_value(ts_expr, session)
+            ts_col, ts_type = _select_value(ts_expr, session)
             if isinstance(sec_expr, BindParameter) and isinstance(
                 sec_expr.value,
                 (int, float),
@@ -1254,6 +1265,7 @@ def _handle_functions(filter_dict, log_event_alias, session):
                     select(
                         ts_expr.c.log_event_id.label("log_event_id"),
                         _pg_round_timestamp(ts_col, sec_expr.value).label("value"),
+                        literal("timestamp").label("inferred_type"),
                     )
                     .select_from(ts_expr)
                     .subquery()
@@ -1272,12 +1284,13 @@ def _handle_functions(filter_dict, log_event_alias, session):
             ):
                 # parse if needed. Or assume user gave a valid python datetime
                 ts_literal = literal(ts_expr.value, type_=TIMESTAMP)
-                sec_col = _select_value(sec_expr, session)
+                sec_col, sec_type = _select_value(sec_expr, session)
 
                 subq = (
                     select(
                         sec_expr.c.log_event_id.label("log_event_id"),
                         _pg_round_timestamp(ts_literal, sec_expr.value).label("value"),
+                        literal("timestamp").label("inferred_type"),
                     )
                     .select_from(sec_expr)
                     .subquery()
@@ -1316,6 +1329,7 @@ def _handle_functions(filter_dict, log_event_alias, session):
                 select(
                     rhs_expr.c.log_event_id.label("log_event_id"),
                     expr.label("value"),
+                    literal("str").label("inferred_type"),
                 )
                 .select_from(rhs_expr)
                 .subquery()
@@ -1346,6 +1360,7 @@ def _handle_functions(filter_dict, log_event_alias, session):
                 select(
                     Log.log_event_id.label("log_event_id"),
                     Log.version.label("value"),
+                    literal("int").label("inferred_type"),
                 )
                 .select_from(Log)
                 .join(log_event_alias, Log.log_event_id == log_event_alias.id)
@@ -1386,17 +1401,18 @@ def _handle_index_operator(filter_dict, log_event_alias, session):
     rhs_expr = build_sql_query(rhs_node, log_event_alias, session)
 
     # If LHS is a subquery => we pull out its .c.log_event_id plus the "value" column
-    # If RHS is a subquery => that implies the index key is dynamic; in practice, you may or may not want to handle that
+    # If RHS is a subquery => that implies the index key is dynamic; in practice, we may or may not want to handle that
     # For simplicity, let's assume RHS is literal or a direct bind param.
     if isinstance(lhs_expr, Subquery):
-        lhs_valcol = _select_value(
-            lhs_expr,
+        lhs_valcol, lhs_type = _select_value(
+            lhs_expr,  
             session,
+            is_collection=True,
         )  # JSONB column with the parent object/array
         if isinstance(rhs_expr, Subquery):
             # Potentially advanced scenario: the user wrote x[y], where y is a subquery.
             # We'll pick the .value from y, interpret it as a string or integer, and then do -> or ->> extraction.
-            rhs_valcol = _select_value(rhs_expr, session)
+            rhs_valcol, rhs_type = _select_value(rhs_expr, session)
             # We must join them on log_event_id as well:
             subq = (
                 select(
@@ -1408,6 +1424,7 @@ def _handle_index_operator(filter_dict, log_event_alias, session):
                         lhs_valcol,
                         func.cast(rhs_valcol, String),
                     ).label("value"),
+                    literal(rhs_type).label("inferred_type"),
                 )
                 .select_from(lhs_expr)
                 .join(rhs_expr, lhs_expr.c.log_event_id == rhs_expr.c.log_event_id)
@@ -1443,6 +1460,7 @@ def _handle_index_operator(filter_dict, log_event_alias, session):
                 select(
                     lhs_expr.c.log_event_id.label("log_event_id"),
                     extracted.label("value"),
+                    literal(lhs_type).label("inferred_type"),
                 )
                 .select_from(lhs_expr)
                 .subquery()
@@ -1497,10 +1515,15 @@ def _build_subquery_for_base_call(list_of_ids_expr, key_expr, session):
             raise ValueError(f"Invalid JSON format for base_ids: {base_ids}")
 
     # Filter the key_expr subquery to only include rows with log_event_id in base_ids
+    key_val, key_type = _select_value(key_expr, session)
+    row_number = (
+        func.row_number().over(order_by=key_expr.c.log_event_id).label("log_event_id")
+    )
     filtered_subquery = (
         select(
-            key_expr.c.log_event_id.label("log_event_id"),
-            _select_value(key_expr, session).label("value"),
+            row_number,  # use sequential log_event_ids as 1,2,3, etc..
+            key_val.label("value"),
+            literal(key_type).label("inferred_type"),
         )
         .select_from(key_expr)
         .where(key_expr.c.log_event_id.in_(base_ids))
