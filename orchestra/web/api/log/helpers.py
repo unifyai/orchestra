@@ -148,7 +148,7 @@ def _tokenize(s):
         # Operators, note the order to match 'not in' before 'not' and 'in'
         (
             "OP",
-            r"==|!=|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)|\+|\-|\*|/|%",
+            r"==|!=|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)|\*\*|//|\+|\-|\*|/|%",
         ),
         ("ROUND", r"(?<!\w)round(?!\w)"),
         ("ROUND_TIMESTAMP", r"(?<!\w)round_timestamp(?!\w)"),
@@ -325,6 +325,8 @@ class _Parser:
             "*",
             "/",
             "%",
+            "**",
+            "//",
         ):
             op = self.current_token[1]
             self.advance()
@@ -744,7 +746,11 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session):
             expr = lval / rval
         elif operand == "%":
             expr = lval % rval
-        return _join_subqueries(lhs, rhs, expr)
+        elif operand == "**":
+            expr = func.power(lval, rval)
+        elif operand == "//":
+            expr = func.floor(lval / rval)
+        return _join_subqueries(lhs, rhs, expr, lval_type)
     elif lhs_is_sub:
         lval, lval_type = _select_value(lhs, session)
         lval = cast_expr(lval, rhs)
@@ -758,6 +764,10 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session):
             expr = lval / rhs
         elif operand == "%":
             expr = lval % rhs
+        elif operand == "**":
+            expr = func.power(lval, rhs)
+        elif operand == "//":
+            expr = func.floor(lval / rhs)
         return (
             select(
                 lhs.c.log_event_id.label("log_event_id"),
@@ -780,6 +790,10 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session):
             expr = lhs / rval
         elif operand == "%":
             expr = lhs % rval
+        elif operand == "**":
+            expr = func.power(lhs, rval)
+        elif operand == "//":
+            expr = func.floor(lhs / rval)
         return (
             select(
                 rhs.c.log_event_id.label("log_event_id"),
@@ -800,6 +814,10 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session):
             return lhs / rhs
         elif operand == "%":
             return lhs % rhs
+        elif operand == "**":
+            return func.power(lhs, rhs)
+        elif operand == "//":
+            return func.floor(lhs / rhs)
 
 
 # Helper function for comparison operators (==, !=, <, >, <=, >=, is, is not)
@@ -843,7 +861,8 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session):
             expr = lval.isnot(rval)
         return _join_subqueries(lhs, rhs, expr, "bool")
     elif lhs_is_sub:
-        lval = _select_value(lhs, session)
+        lval, lval_type = _select_value(lhs, session)
+        lval = cast_expr(lval, rhs)
         if operand == "==":
             expr = lval == rhs
         elif operand == "!=":
@@ -1405,7 +1424,7 @@ def _handle_index_operator(filter_dict, log_event_alias, session):
     # For simplicity, let's assume RHS is literal or a direct bind param.
     if isinstance(lhs_expr, Subquery):
         lhs_valcol, lhs_type = _select_value(
-            lhs_expr,  
+            lhs_expr,
             session,
             is_collection=True,
         )  # JSONB column with the parent object/array
@@ -1571,8 +1590,8 @@ def build_sql_query(filter_dict, log_event_alias, session):
     if operand in ("and", "or", "not"):
         return _handle_logical_operator(filter_dict, log_event_alias, session)
 
-    # Handle arithmetic operators (+, -, *, /, %)
-    elif operand in ("+", "-", "*", "/", "%"):
+    # Handle arithmetic operators (+, -, *, /, %, **, //)
+    elif operand in ("+", "-", "*", "/", "%", "**", "//"):
         return _handle_arithmetic_operator(filter_dict, log_event_alias, session)
 
     # Handle comparison operators (==, !=, <, >, <=, >=, is, is not)
