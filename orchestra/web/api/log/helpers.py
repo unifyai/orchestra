@@ -1124,7 +1124,7 @@ def _handle_functions(filter_dict, log_event_alias, session):
                 (
                     rval_type == "str",
                     func.length(
-                        cast(rval, String),
+                        func.replace(cast(rval, String), '"', ""),
                     ).cast(Float),
                 ),
                 else_=0,
