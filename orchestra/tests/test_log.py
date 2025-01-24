@@ -997,6 +997,403 @@ async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, v
 
 
 @pytest.mark.anyio
+async def test_get_logs_with_derived_math_expressions_and_indexing(client: AsyncClient):
+    """
+    Demonstrates how to test derived logs that use purely mathematical expressions
+    and also tests indexing (both list indexing and dict-key indexing).
+
+    Expects _create_several_logs(...) to create 7 log events with the following keys:
+      - 1: "boiling water"     ( temp=100.0 )
+      - 2: "freezing water"    ( temp=0.0 )
+      - 3: "surface of the sun"( temp=6000.0 )
+      - 4: "freezing nitrogen" ( temp=-210.0 )
+      - 5: "lava", _/metadata=[1,5,6], _/_data={"a":2,"b":4}
+      - 6: "air",  _/metadata=[3,8,5], _/_data={"a":6,"b":12,"c":8,"d":11}
+      - 7: no _/description, but _/_data={"a":8,"b":10}, etc.
+    """
+
+    project_name = "test_derived_logs_math"
+    user_id = 1
+
+    # 1) Create project
+    await _create_project(client, project_name, user=user_id)
+
+    # 2) Create the base logs (7 logs total).
+    await _create_several_logs(client, project_name, user=user_id)
+
+    # Fetch them back to confirm we have 7 log events.
+    resp = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "sorting": json.dumps({"id": "ascending"})},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    base_logs = data["logs"]
+    assert (
+        len(base_logs) == 7
+    ), f"Expected exactly 7 logs from _create_several_logs, got {len(base_logs)}"
+
+    # Let's locate logs by description (and track the one missing description).
+    log_id_boiling = None
+    log_id_freezing = None
+    log_id_sun = None
+    log_id_nitrogen = None
+    log_id_lava = None
+    log_id_air = None
+    log_id_no_desc = None
+
+    for log_obj in base_logs:
+        desc = log_obj["entries"].get("_/description", "")
+        _id = log_obj["id"]
+        if desc == "boiling water":
+            log_id_boiling = _id
+        elif desc == "freezing water":
+            log_id_freezing = _id
+        elif desc == "surface of the sun":
+            log_id_sun = _id
+        elif desc == "freezing nitrogen":
+            log_id_nitrogen = _id
+        elif desc == "lava":
+            log_id_lava = _id
+        elif desc == "air":
+            log_id_air = _id
+        else:
+            log_id_no_desc = _id
+
+    # Sanity-check that we found all 7
+    assert all(
+        [
+            log_id_boiling,
+            log_id_freezing,
+            log_id_sun,
+            log_id_nitrogen,
+            log_id_lava,
+            log_id_air,
+            log_id_no_desc,
+        ],
+    ), "Did not locate all 7 logs by description / no-desc."
+
+    ############################################################
+    #              3) Create Derived Logs
+    ############################################################
+
+    #
+    # (A) Add 10 to _/temperature for logs [boiling, freezing, sun]
+    #
+    derived_conf_add10 = {
+        "key": "dl_add10",
+        "equation": "{temp:_/temperature} + 10",
+        "referenced_logs": {
+            "temp": [log_id_boiling, log_id_freezing, log_id_sun],
+        },
+    }
+    resp = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_add10["key"],
+        derived_conf_add10["equation"],
+        derived_conf_add10["referenced_logs"],
+        user=user_id,
+    )
+    assert resp.status_code == 200, resp.json()
+    dl_add10_ids = resp.json()["derived_log_ids"]
+    assert len(dl_add10_ids) == 3, f"Expected 3 derived logs, got {dl_add10_ids}"
+
+    #
+    # (B) Convert Celsius→Fahrenheit: (C × 9/5) + 32, referencing [boiling, freezing]
+    #
+    derived_conf_c_to_f = {
+        "key": "dl_c_to_f",
+        "equation": "({C:_/temperature} * 9 / 5) + 32",
+        "referenced_logs": {
+            "C": [log_id_boiling, log_id_freezing],
+        },
+    }
+    resp = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_c_to_f["key"],
+        derived_conf_c_to_f["equation"],
+        derived_conf_c_to_f["referenced_logs"],
+        user=user_id,
+    )
+    assert resp.status_code == 200, resp.json()
+    dl_c_to_f_ids = resp.json()["derived_log_ids"]
+    assert len(dl_c_to_f_ids) == 2, "Only boiling & freezing logs used"
+
+    #
+    # (C) Round the temperature to nearest hundred: round({t:_/temperature}, -2)
+    #     We'll reference [boiling, freezing, sun, nitrogen] for variety.
+    #
+    derived_conf_round_temp = {
+        "key": "dl_round_temp",
+        "equation": "round({t:_/temperature}, -2)",
+        "referenced_logs": {
+            "t": [log_id_boiling, log_id_freezing, log_id_sun, log_id_nitrogen],
+        },
+    }
+    resp = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_round_temp["key"],
+        derived_conf_round_temp["equation"],
+        derived_conf_round_temp["referenced_logs"],
+        user=user_id,
+    )
+    assert resp.status_code == 200, resp.json()
+    dl_round_temp_ids = resp.json()["derived_log_ids"]
+    assert len(dl_round_temp_ids) == 4
+
+    #
+    # (D) len({desc:_/description}) for [all logs that have _/description].
+    #     That excludes the log with no description (log_id_no_desc).
+    #
+    logs_with_desc = [
+        log_id_boiling,
+        log_id_freezing,
+        log_id_sun,
+        log_id_nitrogen,
+        log_id_lava,
+        log_id_air,
+    ]
+    derived_conf_len_desc = {
+        "key": "dl_len_desc",
+        "equation": "len({desc:_/description})",
+        "referenced_logs": {"desc": logs_with_desc},
+    }
+    resp = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_len_desc["key"],
+        derived_conf_len_desc["equation"],
+        derived_conf_len_desc["referenced_logs"],
+        user=user_id,
+    )
+    assert resp.status_code == 200, resp.json()
+    dl_len_desc_ids = resp.json()["derived_log_ids"]
+    assert len(dl_len_desc_ids) == len(logs_with_desc)
+
+    #
+    # (E) Subtraction across logs: "Sun temp minus boiling temp"
+    #
+    derived_conf_sub = {
+        "key": "dl_sun_minus_boil",
+        "equation": "{sun:_/temperature} - {boil:_/temperature}",
+        "referenced_logs": {
+            "sun": [log_id_sun],
+            "boil": [log_id_boiling],
+        },
+    }
+    resp = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_sub["key"],
+        derived_conf_sub["equation"],
+        derived_conf_sub["referenced_logs"],
+        user=user_id,
+    )
+    assert resp.status_code == 200, resp.json()
+    dl_sub_ids = resp.json()["derived_log_ids"]
+    assert len(dl_sub_ids) >= 1, "Should create derived log for that combination"
+
+    #
+    # (F) Indexing a list: {m:_/metadata}[1] + 2
+    #     We'll reference logs known to have _/metadata = [1,5,6] (lava) and [3,8,5] (air).
+    #     (We won't include nitrogen etc. if they don't have _/metadata.)
+    #
+    derived_conf_index_array = {
+        "key": "dl_index_array",
+        "equation": "{m:_/metadata}[1] + 2",
+        "referenced_logs": {
+            "m": [log_id_lava, log_id_air],  # they both have _/metadata
+        },
+    }
+    resp = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_index_array["key"],
+        derived_conf_index_array["equation"],
+        derived_conf_index_array["referenced_logs"],
+        user=user_id,
+    )
+    assert resp.status_code == 200, resp.json()
+    dl_index_array_ids = resp.json()["derived_log_ids"]
+    assert len(dl_index_array_ids) == 2, "lava + air"
+
+    #
+    # (G) Indexing a dict: {d:_/_data}['b'] + 5
+    #     We'll reference logs #5 (lava => b=4), #6 (air => b=12), #7 (no desc => b=10).
+    #
+    derived_conf_index_dict = {
+        "key": "dl_index_dict",
+        "equation": "{d:_/_data}['b'] + 5",
+        "referenced_logs": {
+            "d": [log_id_lava, log_id_air, log_id_no_desc],
+        },
+    }
+    resp = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_index_dict["key"],
+        derived_conf_index_dict["equation"],
+        derived_conf_index_dict["referenced_logs"],
+        user=user_id,
+    )
+    assert resp.status_code == 200, resp.json()
+    dl_index_dict_ids = resp.json()["derived_log_ids"]
+    assert len(dl_index_dict_ids) == 3, "lava + air + no-desc"
+
+    # (H) Exponent: e.g. {sun:_/temperature} ** 2
+    derived_conf_exp = {
+        "key": "dl_sun_exp2",
+        "equation": "{sun:_/temperature} ** 2",
+        "referenced_logs": {
+            "sun": [log_id_sun],  # surface of sun = 6000
+        },
+    }
+    resp = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_exp["key"],
+        derived_conf_exp["equation"],
+        derived_conf_exp["referenced_logs"],
+        user=user_id,
+    )
+    assert resp.status_code == 200, resp.json()
+    dl_exp_ids = resp.json()["derived_log_ids"]
+    assert len(dl_exp_ids) == 1
+
+    # (I) Floor Division: e.g. {boil:_/temperature} // 3
+    derived_conf_floor_div = {
+        "key": "dl_boil_floor_div",
+        "equation": "{boil:_/temperature} // 3",
+        "referenced_logs": {
+            "boil": [log_id_boiling],
+        },
+    }
+    resp = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_floor_div["key"],
+        derived_conf_floor_div["equation"],
+        derived_conf_floor_div["referenced_logs"],
+        user=user_id,
+    )
+    assert resp.status_code == 200, resp.json()
+    dl_floor_div_ids = resp.json()["derived_log_ids"]
+    assert len(dl_floor_div_ids) == 1
+
+    ############################################################################
+    # 4) Verify the derived entries in GET /v0/logs
+    ############################################################################
+
+    resp = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "sorting": json.dumps({"id": "ascending"})},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    data_all = resp.json()
+    all_logs = data_all["logs"]
+    assert len(all_logs) == 7, "Should still be 7 logs in this project."
+
+    # We'll check each log_event for the derived values
+    for log_obj in all_logs:
+        log_id = log_obj["id"]
+        entries = log_obj["entries"]
+        derived = log_obj.get("derived_entries", {})
+
+        # Unpack some known fields
+        temp = entries.get("_/temperature")
+        desc = entries.get("_/description", "")
+        metadata = entries.get("_/metadata")
+        data_dict = entries.get("_/_data")
+
+        # (A) dl_add10 => temp + 10
+        add10_val = derived.get("dl_add10")
+        if add10_val is not None and temp is not None:
+            expected = temp + 10
+            assert (
+                abs(add10_val - expected) < 1e-7
+            ), f"dl_add10 mismatch: log_id={log_id}, got {add10_val}, expected {expected}"
+
+        # (B) dl_c_to_f => (temp * 9/5) + 32
+        c_to_f_val = derived.get("dl_c_to_f")
+        if c_to_f_val is not None and temp is not None:
+            expected = (temp * 9.0 / 5.0) + 32
+            assert (
+                abs(c_to_f_val - expected) < 1e-7
+            ), f"dl_c_to_f mismatch: log_id={log_id}, got {c_to_f_val}, expected {expected}"
+
+        # (C) dl_round_temp => round(temp, -2)
+        rtemp_val = derived.get("dl_round_temp")
+        if rtemp_val is not None and temp is not None:
+            # For example,  100 => 100, 0 => 0, 6000 => 6000, -210 => -200
+            expected = round(temp, -2)
+            assert (
+                rtemp_val == expected
+            ), f"round_temp mismatch: log_id={log_id}, got {rtemp_val}, expected {expected}"
+
+        # (D) dl_len_desc => len(desc)
+        len_desc_val = derived.get("dl_len_desc")
+        if len_desc_val is not None:
+            expected_len = len(desc) + 2  # account for ''
+            assert (
+                len_desc_val == expected_len
+            ), f"dl_len_desc mismatch: log_id={log_id}, got {len_desc_val}, expected {expected_len}"
+
+        # (E) dl_sun_minus_boil => (sun_temp - boil_temp)
+        sub_val = derived.get("dl_sun_minus_boil")
+        # Typically only the "sun" log would have a valid numeric result; "boiling" might see None
+        if sub_val is not None and log_id == log_id_sun and temp is not None:
+            # sun=6000, boil=100 => 5900
+            # (assuming these are still the original temperatures)
+            expected = 6000 - 100
+            assert (
+                abs(sub_val - expected) < 1e-7
+            ), f"Expected sun-boil=5900 on log_id={log_id}, got {sub_val}"
+
+        # (F) dl_index_array => {m:_/metadata}[1] + 2
+        index_array_val = derived.get("dl_index_array")
+        if index_array_val is not None and metadata:
+            # For "lava" => metadata=[1,5,6], [1] => 5 => +2 => 7
+            # For "air"  => metadata=[3,8,5], [1] => 8 => +2 => 10
+            expected = metadata[1] + 2
+            assert (
+                index_array_val == expected
+            ), f"dl_index_array mismatch: log_id={log_id}, got {index_array_val}, expected {expected}"
+
+        # (G) dl_index_dict => {d:_/_data}['b'] + 5
+        index_dict_val = derived.get("dl_index_dict")
+        if index_dict_val is not None and data_dict and "b" in data_dict:
+            # For lava => b=4 => +5 => 9
+            # For air  => b=12 => +5 => 17
+            # For no_desc => b=10 => +5 => 15
+            expected = data_dict["b"] + 5
+            assert (
+                index_dict_val == expected
+            ), f"dl_index_dict mismatch: log_id={log_id}, got {index_dict_val}, expected {expected}"
+
+        # (H) Check dl_sun_exp2 => 6000 ** 2 = 36,000,000
+        sun_exp2_val = derived.get("dl_sun_exp2")
+        if sun_exp2_val is not None and log_id == log_id_sun:
+            expected = 6000**2
+            assert (
+                abs(sun_exp2_val - expected) < 1e-7
+            ), f"Exponent mismatch on log_id={log_id}. Got {sun_exp2_val}, expected {expected}"
+
+        # (I) Check dl_boil_floor_div => 100 // 3 = 33
+        boil_floor_val = derived.get("dl_boil_floor_div")
+        if boil_floor_val is not None and log_id == log_id_boiling:
+            # 100 // 3 => 33 in Python
+            expected = 33
+            assert (
+                boil_floor_val == expected
+            ), f"Floor division mismatch on log_id={log_id}. Got {boil_floor_val}, expected {expected}"
+
+
+@pytest.mark.anyio
 async def test_get_logs(client: AsyncClient):
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
