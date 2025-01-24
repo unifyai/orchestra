@@ -362,24 +362,17 @@ def create_derived_entry(
             detail=f"All referenced log lists must have the same length. Found lengths: {lengths}",
         )
 
-    # 5) Build a filter_dict that references those base logs. Then compute
-    filter_expr, alias_to_key_map = _substitute_placeholders(
-        body.equation,
-        resolved_ids,
-    )
-    filter_dict = str_filter_exp_to_dict(filter_expr)
-    computed_values = _compute_expression(filter_dict, LogEvent, session)
-    inferred_type = LogDAO.infer_type("", computed_values[0][1])
-
     created_derived_ids = []
-    # Iterate over the computed values and resolved IDs
-    for i, (_, value) in enumerate(computed_values):
-        # Create a dictionary for the current set of referenced logs
-        current_referenced_logs = {
-            alias_to_key_map[key]: ids[i] for key, ids in resolved_ids.items()
-        }
-        # Get all log IDs involved in this specific computation
-        involved_log_ids = [ids[i] for ids in resolved_ids.values()]
+    try:
+
+        # 5) Build a filter_dict that references those base logs. Then compute
+        filter_expr, alias_to_key_map = _substitute_placeholders(
+            body.equation,
+            resolved_ids,
+        )
+        filter_dict = str_filter_exp_to_dict(filter_expr)
+        computed_values = _compute_expression(filter_dict, LogEvent, session)
+        inferred_type = LogDAO.infer_type("", computed_values[0][1])
 
         # Create a new derived log entry for each computed value
         class DecimalEncoder(json.JSONEncoder):
@@ -388,21 +381,35 @@ def create_derived_entry(
                     return float(obj)
                 return super().default(obj)
 
-        # Create a derived entry for each log ID involved in this computation
-        for log_event_id in involved_log_ids:
-            val = json.loads(json.dumps(value, cls=DecimalEncoder))
-            new_derived_id = derived_log_dao.create(
-                log_event_id=log_event_id,
-                key=body.key,
-                equation=body.equation,
-                referenced_logs=current_referenced_logs,
-                value=val,
-                inferred_type=inferred_type,
-            )
-            created_derived_ids.append(new_derived_id)
+        # Iterate over the computed values and resolved IDs
+        for i, (_, value) in enumerate(computed_values):
+            # Create a dictionary for the current set of referenced logs
+            current_referenced_logs = {
+                alias_to_key_map[key]: ids[i] for key, ids in resolved_ids.items()
+            }
+            # Get all log IDs involved in this specific computation
+            involved_log_ids = [ids[i] for ids in resolved_ids.values()]
 
-    # Create a field type for the derived log
-    field_type_dao.create_field_type(project_obj.id, body.key, val)
+            # Create a derived entry for each log ID involved in this computation
+            for log_event_id in involved_log_ids:
+                val = json.loads(json.dumps(value, cls=DecimalEncoder))
+                new_derived_id = derived_log_dao.create(
+                    log_event_id=log_event_id,
+                    key=body.key,
+                    equation=body.equation,
+                    referenced_logs=current_referenced_logs,
+                    value=val,
+                    inferred_type=inferred_type,
+                )
+                created_derived_ids.append(new_derived_id)
+
+        # Create a field type for the derived log
+        field_type_dao.create_field_type(project_obj.id, body.key, val)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create derived logs with key='{body.key}'. Error: {e}",
+        )
     return {
         "info": f"Created {len(created_derived_ids)} derived logs with key='{body.key}'.",
         "derived_log_ids": created_derived_ids,
@@ -1071,8 +1078,9 @@ def _get_logs_query(
             # For null handling:
             sort_criteria.append(direction(sort_expr).nulls_last())
 
-    # --- 4c) Always fallback to sorting by log_event_id desc
-    sort_criteria.append(distinct_ids_subq.c.log_event_id.desc())
+    # --- 4c) Always fallback to sorting by log_event_id desc if not explicitly sorting by id
+    if not sorting or "id" not in sorting:
+        sort_criteria.append(distinct_ids_subq.c.log_event_id.desc())
 
     # --- 4d) row_number() approach
     sorted_query = sorted_query.add_columns(
