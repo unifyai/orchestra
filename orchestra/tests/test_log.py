@@ -998,19 +998,6 @@ async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, v
 
 @pytest.mark.anyio
 async def test_get_logs_with_derived_math_expressions_and_indexing(client: AsyncClient):
-    """
-    Demonstrates how to test derived logs that use purely mathematical expressions
-    and also tests indexing (both list indexing and dict-key indexing).
-
-    Expects _create_several_logs(...) to create 7 log events with the following keys:
-      - 1: "boiling water"     ( temp=100.0 )
-      - 2: "freezing water"    ( temp=0.0 )
-      - 3: "surface of the sun"( temp=6000.0 )
-      - 4: "freezing nitrogen" ( temp=-210.0 )
-      - 5: "lava", _/metadata=[1,5,6], _/_data={"a":2,"b":4}
-      - 6: "air",  _/metadata=[3,8,5], _/_data={"a":6,"b":12,"c":8,"d":11}
-      - 7: no _/description, but _/_data={"a":8,"b":10}, etc.
-    """
 
     project_name = "test_derived_logs_math"
     user_id = 1
