@@ -6,7 +6,7 @@ Includes endpoints related to entries.
 import json
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy import (
@@ -1219,6 +1219,10 @@ def get_logs(
         description="Static context to filter logs by.",
         example="training",
     ),
+    value_limit: Optional[int] = Query(
+        None,
+        description="Maximum number of characters to return for string values.",
+    ),
     filter_expr: Optional[str] = Query(
         None,
         description="Boolean string to filter entries. TODO: Detailed page.",
@@ -1273,7 +1277,15 @@ def get_logs(
     session=Depends(get_db_session),
 ):
     """
-    Returns a list of filtered entries from a project.
+    Returns a list of filtered entries from a project. When group_threshold is set,
+    entries that appear in at least that many logs will be grouped together in the
+    grouped_entries field to reduce response size.
+
+    The response will include:
+    - logs: List of log entries with their individual values
+    - params: Dictionary of parameter versions
+    - count: Total number of logs
+    - grouped_entries: (When group_threshold is set) Dictionary of field names to their shared values
     """
     all_rows, context_len, count = _get_logs_query(
         request_fastapi,
@@ -1309,6 +1321,7 @@ def get_logs(
         if event_id not in formatted:
             formatted[event_id] = {
                 "ts": created_at.isoformat() if created_at else None,
+                "clipped_fields": [],
                 "entries": {},
                 "versions": {},
                 "derived_entries": {},
@@ -1317,6 +1330,39 @@ def get_logs(
 
         # Apply context_len slicing to the key
         key = row_obj.key[context_len:]
+
+        def _limit_value(value: Any, inferred_type: str) -> Tuple[Any, bool]:
+            """Limit the size of a value based on its type and the value_limit parameter.
+            Returns a tuple of (limited_value, is_clipped)."""
+            if value_limit is None:
+                return value, False
+
+            # Handle numeric values - return as is
+            if inferred_type in ["int", "float", "bool"]:
+                return value, False
+
+            # Handle image fields - return empty string
+            if inferred_type == "image":
+                return "", True
+
+            # Convert value to string if it's a nested structure
+            if inferred_type in ["list", "dict", "tuple"]:
+                str_value = str(value)
+                if len(str_value) > value_limit:
+                    return str_value[:value_limit] + "...", True
+                return str_value, False
+
+            # Handle string values
+            if inferred_type == "str":
+                if len(str(value)) > value_limit:
+                    return str(value)[:value_limit] + "...", True
+                return value, False
+
+            # Default case - treat as string
+            str_value = str(value)
+            if len(str_value) > value_limit:
+                return str_value[:value_limit] + "...", True
+            return str_value, False
 
         # noinspection PyBroadException
         def _try_decode(str_in):
@@ -1331,6 +1377,14 @@ def get_logs(
             else row_obj.value
         )
 
+        # Apply value limiting and get clipped status
+        limited_val, is_clipped = _limit_value(val, row_obj.inferred_type)
+        if is_clipped:
+            formatted[event_id]["clipped_fields"] = formatted[event_id].get(
+                "clipped_fields",
+                [],
+            ) + [key]
+
         ver = getattr(row_obj, "version", None)
 
         if is_derived:
@@ -1339,7 +1393,7 @@ def get_logs(
                 key not in formatted[event_id]["derived_entries"]
             ), f"found duplicate derived key {key} with log_id {event_id}"
 
-            formatted[event_id]["derived_entries"][key] = val
+            formatted[event_id]["derived_entries"][key] = limited_val
 
         else:
             # --- Handle base Log
@@ -1349,12 +1403,12 @@ def get_logs(
 
             if ver is None:
                 # Put in "entries"
-                formatted[event_id]["entries"][key] = val
+                formatted[event_id]["entries"][key] = limited_val
             else:
                 # Put in "params"
                 if key not in formatted[event_id]["versions"]:
                     formatted[event_id]["versions"][key] = {}
-                formatted[event_id]["versions"][key][ver] = val
+                formatted[event_id]["versions"][key][ver] = limited_val
                 formatted[event_id]["entries"][key] = str(ver)
 
     # Now build final JSON
@@ -1407,6 +1461,7 @@ def get_logs(
                 "entries": sorted_entries,
                 "params": sorted_params,
                 "derived_entries": sorted_derived,
+                "clipped_fields": data.get("clipped_fields", []),
             },
         )
 
