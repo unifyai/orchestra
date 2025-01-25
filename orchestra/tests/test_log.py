@@ -1756,6 +1756,7 @@ async def test_get_logs_w_column_context(client: AsyncClient):
                     "a/b/c/numeric_input": 4.5,
                 },
                 "derived_entries": {},
+                "clipped_fields": [],
                 "params": {
                     "a/b/param1": "0",
                 },
@@ -1789,6 +1790,7 @@ async def test_get_logs_w_column_context(client: AsyncClient):
                     "b/c/numeric_input": 4.5,
                 },
                 "derived_entries": {},
+                "clipped_fields": [],
                 "params": {
                     "b/param1": "0",
                 },
@@ -1822,6 +1824,7 @@ async def test_get_logs_w_column_context(client: AsyncClient):
                     "c/numeric_input": 4.5,
                 },
                 "derived_entries": {},
+                "clipped_fields": [],
                 "params": {
                     "param1": "0",
                 },
@@ -1851,6 +1854,7 @@ async def test_get_logs_w_column_context(client: AsyncClient):
                     "numeric_input": 4.5,
                 },
                 "derived_entries": {},
+                "clipped_fields": [],
                 "params": {},
             },
         ],
@@ -3331,6 +3335,7 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
             "entries": {"a/b/c/numeric_input": 4.5},
             "params": {},
             "derived_entries": {},
+            "clipped_fields": [],
         },
     ]
 
