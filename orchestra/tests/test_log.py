@@ -25,6 +25,40 @@ HEADERS_2 = {
 }
 
 log_data = {
+    "logs_for_group_threshold": [
+        {
+            "shared_string": "common value",
+            "unique_string": "value1",
+            "shared_number": 42,
+            "unique_number": 1,
+            "shared_object": {"key": "value"},
+            "mixed_field": "appears twice",
+        },
+        {
+            "shared_string": "common value",
+            "unique_string": "value2",
+            "shared_number": 42,
+            "unique_number": 2,
+            "shared_object": {"key": "value"},
+            "mixed_field": "appears twice",
+        },
+        {
+            "shared_string": "common value",
+            "unique_string": "value3",
+            "shared_number": 42,
+            "unique_number": 3,
+            "shared_object": {"key": "value"},
+            "mixed_field": "unique value",
+        },
+        {
+            "shared_string": "common value",
+            "unique_string": "value4",
+            "shared_number": 42,
+            "unique_number": 4,
+            "shared_object": {"key": "value"},
+            "mixed_field": "another unique",
+        },
+    ],
     "log": {
         "a/b/c/input": "Some input data",
         "a/b/c/boolean_input": True,
@@ -192,6 +226,18 @@ def _delete_log_fields_from_logs(client, fields, delete_empty_logs=False, user=1
 async def _create_logs_for_grouping(client, project_name, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     data = log_data["logs_for_grouping"]
+    for i in range(len(data)):
+        response = await client.post(
+            "/v0/logs",
+            json={"project": project_name, "entries": data[i]},
+            headers=_headers,
+        )
+        assert response.status_code == 200, response.json()
+
+
+async def _create_logs_for_group_threshold(client, project_name, user=1):
+    _headers = HEADERS if user == 1 else HEADERS_2
+    data = log_data["logs_for_group_threshold"]
     for i in range(len(data)):
         response = await client.post(
             "/v0/logs",
@@ -2103,6 +2149,79 @@ async def test_get_logs_with_value_limit(client: AsyncClient):
     assert log_entries["nested_list"] == "..."
     assert log_entries["nested_tuple"] == "..."
     assert log_entries["image_field"] == ""
+
+
+@pytest.mark.anyio
+async def test_get_logs_with_group_threshold(client: AsyncClient):
+    project_name = "group-threshold-test"
+    _ = await _create_project(client, project_name)
+    await _create_logs_for_group_threshold(client, project_name)
+
+    # Test without group_threshold (default behavior)
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert len(result["logs"]) == 4
+    assert "grouped_entries" not in result
+
+    # Test with group_threshold=1 (should group all values)
+    response = await client.get(
+        f"/v0/logs?project={project_name}&group_threshold=1",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "grouped_entries" in result
+    assert result["grouped_entries"]["shared_string"] == "common value"
+    assert result["grouped_entries"]["shared_number"] == 42
+    assert result["grouped_entries"]["shared_object"] == {"key": "value"}
+
+    # Test with group_threshold=2 (should group values appearing twice or more)
+    response = await client.get(
+        f"/v0/logs?project={project_name}&group_threshold=2",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "grouped_entries" in result
+    assert "mixed_field" in result["grouped_entries"]
+    assert "unique_string" not in result["grouped_entries"]
+
+    # Test with group_threshold=4 (should only group values appearing in all logs)
+    response = await client.get(
+        f"/v0/logs?project={project_name}&group_threshold=4",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "grouped_entries" in result
+    assert result["grouped_entries"]["shared_string"] == "common value"
+    assert result["grouped_entries"]["shared_number"] == 42
+    assert result["grouped_entries"]["shared_object"] == {"key": "value"}
+    assert "mixed_field" not in result["grouped_entries"]
+
+    # Test with group_threshold exceeding number of logs (no grouping)
+    response = await client.get(
+        f"/v0/logs?project={project_name}&group_threshold=5",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "grouped_entries" not in result
+
+    # Test with empty logs
+    _ = await _delete_logs(client, [([1, 2, 3, 4], None)])
+    response = await client.get(
+        f"/v0/logs?project={project_name}&group_threshold=1",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert len(result["logs"]) == 0
+    assert "grouped_entries" not in result
 
 
 @pytest.mark.anyio
