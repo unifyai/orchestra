@@ -1979,6 +1979,129 @@ async def test_get_logs_field_ordering(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_logs_with_value_limit(client: AsyncClient):
+    project_name = "value-limit-test"
+    _ = await _create_project(client, project_name)
+
+    # Create test data with various value types and lengths
+    test_data = {
+        "entries": {
+            "numeric_int": 12345,
+            "numeric_float": 123.45,
+            "short_string": "Hello",
+            "long_string": "A" * 200,
+            "nested_dict": {"key1": "value1", "key2": "value2"},
+            "nested_list": [1, 2, 3, 4, 5],
+            "nested_tuple": ("a", "b", "c"),
+            "boolean_value": True,
+        },
+    }
+
+    # Add image data
+    img_path = os.path.join(
+        os.path.dirname(os.path.realpath(__file__)),
+        "sample_datasets/img.png",
+    )
+    success, buffer = cv2.imencode(".png", cv2.imread(img_path))
+    assert success
+    test_data["entries"]["image_field"] = base64.b64encode(buffer).decode("utf-8")
+
+    # Create log with test data
+    response = await client.post(
+        "/v0/logs",
+        json={"project": project_name, "entries": test_data["entries"]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Test with value_limit=10
+    response = await client.get(
+        f"/v0/logs?project={project_name}&value_limit=10",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    log_entries = result["logs"][0]["entries"]
+
+    # Test numeric values remain unchanged
+    assert log_entries["numeric_int"] == 12345
+    assert log_entries["numeric_float"] == 123.45
+    assert log_entries["boolean_value"] == True
+
+    # Test string truncation
+    assert log_entries["short_string"] == "Hello"  # Should not be truncated
+    assert log_entries["long_string"] == "AAAAAAAAAA..."  # Should be truncated
+
+    # Test nested structure handling
+    assert len(log_entries["nested_dict"]) <= 13  # '{"key1":"va...'
+    assert "..." in log_entries["nested_dict"]
+    assert len(log_entries["nested_list"]) <= 13
+    assert "..." in log_entries["nested_list"]
+    assert len(log_entries["nested_tuple"]) <= 13
+    assert "..." in log_entries["nested_tuple"]
+
+    # Test image field handling
+    assert log_entries["image_field"] == ""
+
+    # Test clipping indicator
+    assert "clipped_fields" in result["logs"][0]
+    clipped_fields = result["logs"][0]["clipped_fields"]
+    assert "long_string" in clipped_fields
+    assert "nested_dict" in clipped_fields
+    assert "nested_list" in clipped_fields
+    assert "nested_tuple" in clipped_fields
+    assert "image_field" in clipped_fields
+    assert "short_string" not in clipped_fields
+    assert "numeric_int" not in clipped_fields
+    assert "numeric_float" not in clipped_fields
+    assert "boolean_value" not in clipped_fields
+
+    # Test with no value_limit (backward compatibility)
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    log_entries = result["logs"][0]["entries"]
+
+    # Verify all values are returned in full
+    assert log_entries["numeric_int"] == 12345
+    assert log_entries["numeric_float"] == 123.45
+    assert log_entries["short_string"] == "Hello"
+    assert log_entries["long_string"] == "A" * 200
+    assert log_entries["nested_dict"] == {"key1": "value1", "key2": "value2"}
+    assert log_entries["nested_list"] == [1, 2, 3, 4, 5]
+    assert log_entries["nested_tuple"] == ["a", "b", "c"]  # JSON converts tuple to list
+    assert log_entries["boolean_value"] == True
+    assert log_entries["image_field"] == test_data["entries"]["image_field"]
+
+    # Verify no clipping indicators when value_limit is not set
+    assert "clipped_fields" in result["logs"][0]
+    assert len(result["logs"][0]["clipped_fields"]) == 0
+
+    # Test with zero value_limit
+    response = await client.get(
+        f"/v0/logs?project={project_name}&value_limit=0",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    log_entries = result["logs"][0]["entries"]
+
+    # Verify numeric values are unchanged but strings are empty or truncated
+    assert log_entries["numeric_int"] == 12345
+    assert log_entries["numeric_float"] == 123.45
+    assert log_entries["boolean_value"] == True
+    assert log_entries["short_string"] == "..."
+    assert log_entries["long_string"] == "..."
+    assert log_entries["nested_dict"] == "..."
+    assert log_entries["nested_list"] == "..."
+    assert log_entries["nested_tuple"] == "..."
+    assert log_entries["image_field"] == ""
+
+
+@pytest.mark.anyio
 async def test_get_empty_logs(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
