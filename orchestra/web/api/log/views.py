@@ -1279,13 +1279,16 @@ def get_logs(
     """
     Returns a list of filtered entries from a project. When group_threshold is set,
     entries that appear in at least that many logs will be grouped together in the
-    grouped_entries field to reduce response size.
+    grouped_entries field to reduce response size. When value_limit is set, fields
+    that exceed this limit will be clipped and the clipped_fields field will be
+    populated.
 
     The response will include:
     - logs: List of log entries with their individual values
     - params: Dictionary of parameter versions
     - count: Total number of logs
     - grouped_entries: (When group_threshold is set) Dictionary of field names to their shared values
+    - clipped_fields: List of fields that were clipped due to value_limit
     """
     all_rows, context_len, count = _get_logs_query(
         request_fastapi,
