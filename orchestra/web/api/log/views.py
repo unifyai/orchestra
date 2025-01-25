@@ -1219,6 +1219,10 @@ def get_logs(
         description="Static context to filter logs by.",
         example="training",
     ),
+    group_threshold: Optional[int] = Query(
+        None,
+        description="When set, entries that appear in at least this many logs will be grouped together.",
+    ),
     value_limit: Optional[int] = Query(
         None,
         description="Maximum number of characters to return for string values.",
@@ -1468,11 +1472,50 @@ def get_logs(
             },
         )
 
-    return {
+    # If group_threshold is set, analyze entries for grouping
+    grouped_entries = {}
+    if group_threshold is not None and group_threshold > 0:
+        # Track frequency of each field value across logs
+        field_values = {}
+        for log in logs_out:
+            for field, value in log["entries"].items():
+                if field not in field_values:
+                    field_values[field] = {}
+                value_str = json.dumps(value)
+                if value_str not in field_values[field]:
+                    field_values[field][value_str] = set()
+                field_values[field][value_str].add(log["id"])
+
+        # Identify fields that meet the threshold
+        for field, values in field_values.items():
+            for value_str, log_ids in values.items():
+                if len(log_ids) >= group_threshold:
+                    value = json.loads(value_str)
+                    grouped_entries[field] = value
+
+        # Remove grouped fields from individual logs
+        for log in logs_out:
+            entries = log["entries"]
+            for field in grouped_entries:
+                if field in entries:
+                    del entries[field]
+
+            # Add shared_entries reference
+            if grouped_entries:
+                log["shared_entries"] = grouped_entries
+
+    # Build final response
+    response = {
         "params": params_out,
         "logs": logs_out,
         "count": count,
     }
+
+    # Add grouped_entries if any were found
+    if grouped_entries:
+        response["grouped_entries"] = grouped_entries
+
+    return response
 
 
 @router.get(
