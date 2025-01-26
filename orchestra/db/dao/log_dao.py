@@ -1,9 +1,12 @@
 import base64
+import time
 from datetime import datetime, timezone
+from functools import wraps
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
@@ -16,9 +19,35 @@ class OverwriteError(Exception):
 
 # noinspection PyBroadException
 class LogDAO:
+    MAX_RETRIES = 3
+    INITIAL_RETRY_DELAY = 0.1
+
+    @staticmethod
+    def with_retry(f):
+        @wraps(f)
+        def wrapper(self, *args, **kwargs):
+            retries = 0
+            while retries < self.MAX_RETRIES:
+                try:
+                    return f(self, *args, **kwargs)
+                except OperationalError as e:
+                    if retries == self.MAX_RETRIES - 1:
+                        raise e
+                    retries += 1
+                    # Exponential backoff
+                    delay = self.INITIAL_RETRY_DELAY * (2**retries)
+                    time.sleep(delay)
+                    continue
+                except Exception as e:
+                    raise e
+            raise OperationalError("Max retries exceeded")
+
+        return wrapper
+
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
+    @with_retry
     def create(
         self,
         project_id: int,
@@ -29,8 +58,21 @@ class LogDAO:
         inferred_type: Optional[str] = None,
     ) -> int:
 
-        if version and not self.correct_key_version(project_id, key, version, value):
-            raise ValueError
+        if version:
+            # Lock the rows for version check
+            query = (
+                select(Log)
+                .join(LogEvent, Log.log_event_id == LogEvent.id)
+                .where(
+                    LogEvent.project_id == project_id,
+                    Log.key == key,
+                    Log.version == version,
+                )
+                .with_for_update()
+            )
+            existing = self.session.execute(query).first()
+            if existing and existing[0].value != value:
+                raise ValueError("Version mismatch")
 
         ts = datetime.now(timezone.utc)
 
@@ -191,6 +233,7 @@ class LogDAO:
             if log_event_id:
                 setattr(entry, "log_event_id", log_event_id)
 
+    @with_retry
     def update_value(
         self,
         log_event_id: int,
@@ -208,9 +251,12 @@ class LogDAO:
             if raw_k in explicit_types:
                 inferred_type = explicit_types[raw_k]
 
-        query = select(Log)
-        query = query.where(Log.log_event_id == log_event_id)
-        query = query.where(Log.key == raw_k)
+        query = (
+            select(Log)
+            .where(Log.log_event_id == log_event_id)
+            .where(Log.key == raw_k)
+            .with_for_update()
+        )
         raw = self.session.execute(query)
         entry = raw.scalars().first()
         if entry is not None:
@@ -218,13 +264,12 @@ class LogDAO:
                 raise OverwriteError
             setattr(entry, "value", json_v)
             setattr(entry, "version", version)
-            setattr(
-                entry,
-                "inferred_type",
-                inferred_type,
-            )
+            setattr(entry, "inferred_type", inferred_type)
+
             # Update the LogEvent's updated_at timestamp
-            log_event_query = select(LogEvent).where(LogEvent.id == log_event_id)
+            log_event_query = (
+                select(LogEvent).where(LogEvent.id == log_event_id).with_for_update()
+            )
             log_event = self.session.execute(log_event_query).scalars().first()
             if log_event:
                 log_event.updated_at = datetime.now(timezone.utc)
