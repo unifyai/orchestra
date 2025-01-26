@@ -159,14 +159,14 @@ def create_logs(
                 if entered_type == "NoneType":
                     return
                 # update the field type to the new type
-                field_type_dao.update_field_type(project_id, field_name, value)
+                field_type_dao.upsert_field_type(project_id, field_name, value)
             elif entered_type != expected_type:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Type mismatch for field '{field_name}': expected {expected_type}, got {entered_type}",
                 )
         else:
-            field_type_dao.create_field_type(project_id, field_name, value)
+            field_type_dao.create_field_type_if_absent(project_id, field_name, value)
 
     def get_context_id():
         if request.context:
@@ -511,7 +511,7 @@ def update_logs(
                             detail=f"Type mismatch for field '{k}': expected {expected_type}, got {original_type}",
                         )
                 else:
-                    field_type_dao.create_field_type(project_id, k, v)
+                    field_type_dao.create_field_type_if_absent(project_id, k, v)
 
                 # see if there is any param with the same value
                 existing = log_dao.filter(

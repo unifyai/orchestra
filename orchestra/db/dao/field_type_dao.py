@@ -2,6 +2,7 @@ from typing import Dict, List
 
 from fastapi import Depends
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.log_dao import LogDAO
@@ -29,7 +30,6 @@ class FieldTypeDAO:
         query = (
             select(FieldType)
             .where(FieldType.project_id == project_id)
-            .with_for_update()
             .order_by(FieldType.id)
         )
         field_types = self.session.execute(query).scalars().all()
@@ -82,3 +82,43 @@ class FieldTypeDAO:
 
         result = self.session.execute(query).scalars().all()
         return {field: i for i, field in enumerate(result)}
+
+    def create_field_type_if_absent(
+        self,
+        project_id: int,
+        field_name: str,
+        value,
+    ) -> None:
+        """Upsert approach: insert or do nothing if it exists."""
+        inferred_type = LogDAO.infer_type(field_name, value)
+
+        stmt = pg_insert(FieldType).values(
+            project_id=project_id,
+            field_name=field_name,
+            field_type=inferred_type,
+        )
+        # "on_conflict_do_nothing" will skip insertion if (project_id, field_name) already exists:
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=["project_id", "field_name"],
+        )
+        self.session.execute(stmt)
+        self.session.commit()
+
+    def upsert_field_type(self, project_id: int, field_name: str, value) -> None:
+        """Upsert approach: insert or overwrite the existing field_type."""
+        inferred_type = LogDAO.infer_type(field_name, value)
+
+        stmt = pg_insert(FieldType).values(
+            project_id=project_id,
+            field_name=field_name,
+            field_type=inferred_type,
+        )
+        # "on_conflict_do_update" to update existing row if it already exists
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["project_id", "field_name"],
+            set_={
+                "field_type": inferred_type,
+            },
+        )
+        self.session.execute(stmt)
+        self.session.commit()
