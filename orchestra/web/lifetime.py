@@ -38,10 +38,12 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
         echo=settings.db_echo,
         pool_size=35,
         max_overflow=70,  # noqa: WPS432, E501
+        isolation_level="REPEATABLE READ",
     )
     session_factory = sessionmaker(
         engine,
         expire_on_commit=False,
+        autocommit=False,
     )
     app.state.db_engine = engine
     app.state.db_session_factory = session_factory
