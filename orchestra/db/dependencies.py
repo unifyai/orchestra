@@ -13,24 +13,19 @@ def get_db_session(request: Request) -> Generator[Session, None, None]:
 
     :param request: current request.
     :yield: database session.
-
-    Note: The session factory should be configured with:
-        - autocommit=False: for explicit transaction management
-        - expire_on_commit=False: to allow access to objects after commit
-
-    The session is scoped to the request and automatically closed when done.
     """
     session: Session = request.app.state.db_session_factory()
 
     try:  # noqa: WPS501
         yield session
-    except Exception:
-        # Rollback the transaction on any exception
-        # This ensures no partial commits are left in case of errors
-        session.rollback()
-        raise
+    # TODO: Fix this, it catches all exceptions instead of just the db ones
+    # except Exception as e:
+    #     digest = hashlib.shake_256(str(e).encode()).digest(4).hex()
+    #     logger.error(f"Digest {digest}: {e}")
+    #     raise HTTPException(
+    #         status_code=500,  # noqa: WPS432
+    #         detail=f"Internal Server Error. Digest: {digest}",
+    #     )
     finally:
-        try:
-            session.close()
-        except Exception:
-            logger.exception("Error while closing database session")
+        session.commit()
+        session.close()
