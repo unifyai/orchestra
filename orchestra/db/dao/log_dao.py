@@ -39,7 +39,6 @@ class LogDAO:
                     Log.key == key,
                     Log.version == version,
                 )
-                .with_for_update()
             )
             existing = self.session.execute(query).first()
             if existing and existing[0].value != value:
@@ -222,10 +221,7 @@ class LogDAO:
                 inferred_type = explicit_types[raw_k]
 
         query = (
-            select(Log)
-            .where(Log.log_event_id == log_event_id)
-            .where(Log.key == raw_k)
-            .with_for_update()
+            select(Log).where(Log.log_event_id == log_event_id).where(Log.key == raw_k)
         )
         raw = self.session.execute(query)
         entry = raw.scalars().first()
