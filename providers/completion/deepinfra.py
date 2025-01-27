@@ -28,9 +28,14 @@ class Deepinfra(BaseCompletionProvider):
 
 
 supported_models = {
+    "deepseek-r1": {
+        "endpoint": "deepinfra/deepseek-ai/DeepSeek-R1",
+        "context_window": 15000,
+        "cost": {"prompt": 0.85, "completion": 2.5},
+    },
     "deepseek-v3": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3",
-        "context_window": 32000,
+        "context_window": 15000,
         "cost": {"prompt": 0.85, "completion": 0.9},
     },
     "llama-3.3-70b-chat": {
