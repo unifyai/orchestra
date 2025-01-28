@@ -686,7 +686,7 @@ def _handle_logical_operator(filter_dict, log_event_alias, session):
         session: SQLAlchemy session for executing subqueries.
 
     Returns:
-        SQLAlchemy condition or expression based on the logical operator.
+        Subquery or SQLAlchemy condition based on the logical operator.
     """
     operand = filter_dict.get("operand")
     lhs = (
@@ -700,74 +700,89 @@ def _handle_logical_operator(filter_dict, log_event_alias, session):
     lhs_is_sub = isinstance(lhs, Subquery)
     rhs_is_sub = isinstance(rhs, Subquery)
 
-    if operand in ("and", "or"):
-        if lhs_is_sub and rhs_is_sub:
-            lval, lval_type = _select_value(lhs, session)
-            rval, rval_type = _select_value(rhs, session)
-            if lval_type != rval_type:
-                inferred_type = "unknown"  # TODO: handle this case
-            else:
-                inferred_type = lval_type
-            if operand == "and":
-                combined_expr = and_(lval, rval)
-            else:
-                combined_expr = or_(lval, rval)
+    def _true_ids(subq):
+        return select(subq.c.log_event_id).where(subq.c.value.is_(True))
 
-            return _join_subqueries(lhs, rhs, combined_expr, inferred_type)
-
-        elif lhs_is_sub:
-            lval, lval_type = _select_value(lhs, session)
-            if operand == "and":
-                combined_expr = and_(lval, rhs)
-            else:
-                combined_expr = or_(lval, rhs)
-            return (
-                select(
-                    lhs.c.log_event_id.label("log_event_id"),
-                    combined_expr.label("value"),
-                    literal(lval_type).label("inferred_type"),
-                )
-                .select_from(lhs)
-                .subquery()
+    def _make_bool_subq(ids_selectable):
+        tmp = ids_selectable.subquery()
+        return (
+            select(
+                tmp.c.log_event_id.label("log_event_id"),
+                literal(True).label("value"),
+                literal("bool").label("inferred_type"),
             )
+            .select_from(tmp)
+            .subquery()
+        )
 
-        elif rhs_is_sub:
-            rval, rval_type = _select_value(rhs, session)
-            if operand == "and":
-                combined_expr = and_(lhs, rval)
-            else:
-                combined_expr = or_(lhs, rval)
-            return (
-                select(
-                    rhs.c.log_event_id.label("log_event_id"),
-                    combined_expr.label("value"),
-                    literal(rval_type).label("inferred_type"),
-                )
-                .select_from(rhs)
-                .subquery()
-            )
-
-        else:
-            if operand == "and":
-                return and_(lhs, rhs)
-            else:
-                return or_(lhs, rhs)
-
-    elif operand == "not":
+    # Handle "not"
+    if operand == "not":
         if rhs_is_sub:
-            rval, rval_type = _select_value(rhs, session)
-            not_expr = not_(rval)
+            not_expr = not_(rhs.c.value)
             return (
                 select(
                     rhs.c.log_event_id.label("log_event_id"),
                     not_expr.label("value"),
-                    literal(rval_type).label("inferred_type"),
+                    literal("bool").label("inferred_type"),
                 )
                 .select_from(rhs)
                 .subquery()
             )
         else:
             return not_(rhs)
+
+    # Handle "and"/"or"
+    if operand in ("and", "or"):
+        if lhs_is_sub and rhs_is_sub:
+            lhs_ids = _true_ids(lhs)
+            rhs_ids = _true_ids(rhs)
+            combined_ids = (
+                lhs_ids.intersect(rhs_ids)
+                if operand == "and"
+                else lhs_ids.union(rhs_ids)
+            )
+            return _make_bool_subq(combined_ids)
+
+        elif lhs_is_sub and not rhs_is_sub:
+            if operand == "and":
+                passed_ids = _true_ids(lhs).subquery()
+                filtered_ids = (
+                    select(passed_ids.c.log_event_id.label("log_event_id"))
+                    .join(
+                        log_event_alias,
+                        log_event_alias.id == passed_ids.c.log_event_id,
+                    )
+                    .where(rhs)
+                )
+                return _make_bool_subq(filtered_ids)
+            else:
+                passed_ids = _true_ids(lhs)
+                pass_rhs = select(log_event_alias.id.label("log_event_id")).where(rhs)
+                combined = passed_ids.union(pass_rhs)
+                return _make_bool_subq(combined)
+
+        elif not lhs_is_sub and rhs_is_sub:
+            if operand == "and":
+                passed_ids = _true_ids(rhs).subquery()
+                filtered_ids = (
+                    select(passed_ids.c.log_event_id.label("log_event_id"))
+                    .join(
+                        log_event_alias,
+                        log_event_alias.id == passed_ids.c.log_event_id,
+                    )
+                    .where(lhs)
+                )
+                return _make_bool_subq(filtered_ids)
+            else:
+                pass_rhs = _true_ids(rhs)
+                pass_lhs = select(log_event_alias.id.label("log_event_id")).where(lhs)
+                combined = pass_lhs.union(pass_rhs)
+                return _make_bool_subq(combined)
+
+        else:
+            return and_(lhs, rhs) if operand == "and" else or_(lhs, rhs)
+
+    raise ValueError(f"Unknown logical operand: {operand}")
 
 
 # Helper function for arithmetic operators (+, -, *, /, %)
