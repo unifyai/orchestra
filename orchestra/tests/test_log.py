@@ -3520,8 +3520,83 @@ async def test_get_log_groups(client: AsyncClient):
     assert isinstance(groups, dict)  # Ensure it's a dict of grouped logs
     assert len(groups) == 2
     assert groups == {
+        "0": "Respond only with a single digit.",
+        "1": "You are an expert mathematician.",
+    }
+
+
+@pytest.mark.anyio
+async def test_get_log_groups_combined(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+    _ = await _create_logs_for_grouping(client, project_name)
+
+    # Test filtering by system_prompt
+    response = await client.get(
+        f"/v0/logs/groups?project={project_name}&key=system_prompt&filter_expr=len(a/input) > 10",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    groups = response.json()
+    assert isinstance(groups, dict)
+    assert len(groups) == 2
+    assert groups == {
+        "0": "Respond only with a single digit.",
+        "1": "You are an expert mathematician.",
+    }
+
+    # Test with no matching logs after filtering
+    response = await client.get(
+        f"/v0/logs/groups?project={project_name}&key=system_prompt&filter_expr=a/input == 'nonexistent'",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    groups = response.json()
+    assert isinstance(groups, dict)
+    assert len(groups) == 0
+
+    # Get log IDs
+    response = await client.get(
+        f"/v0/logs?project={project_name}&return_ids_only=true",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    log_ids = response.json()
+
+    # Test with subset of log IDs
+    selected_ids = log_ids[:2]
+    response = await client.get(
+        f"/v0/logs/groups?project={project_name}",
+        params={
+            "key": "system_prompt",
+            "from_ids": "&".join([str(i) for i in selected_ids]),
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    groups = response.json()
+    assert isinstance(groups, dict)
+    assert len(groups) == 1
+    assert groups == {
+        "0": "Respond only with a single digit.",
+    }
+
+    # Test excluding some log IDs
+    exclude_ids = log_ids[:2]
+    response = await client.get(
+        f"/v0/logs/groups?project={project_name}",
+        params={
+            "key": "system_prompt",
+            "exclude_ids": "&".join([str(i) for i in exclude_ids]),
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    groups = response.json()
+    assert isinstance(groups, dict)
+    assert len(groups) == 1
+    assert groups == {
         "0": "You are an expert mathematician.",
-        "1": "Respond only with a single digit.",
     }
 
 
