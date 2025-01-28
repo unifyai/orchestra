@@ -2882,6 +2882,91 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     result = response.json()
     assert len(result["logs"]) == 3
 
+    # Test log_id equality filtering
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "log_id == 1"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["id"] == 1
+
+    # Test log_id inequality filtering
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "log_id != 1"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) > 0
+    assert all(log["id"] != 1 for log in result["logs"])
+
+    # Test log_id in operator
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "log_id in [1, 2, 3]"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) > 0
+    assert all(log["id"] in [1, 2, 3] for log in result["logs"])
+
+    # Test log_id not in operator
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "log_id not in [1, 2, 3]"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) > 0
+    assert all(log["id"] not in [1, 2, 3] for log in result["logs"])
+
+    # Test nested conditions with log_id
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "log_id > 2 and _/temperature > 0"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) > 0
+    for log in result["logs"]:
+        assert log["id"] > 2
+        assert log["entries"]["_/temperature"] > 0
+
+    # Test non-existent log_id
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "log_id == 9999"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 0
+
+    # Test log_id with complex nested conditions
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={
+            "filter_expr": "(log_id > 1 and log_id < 4) and (_/temperature > 0 or _/safe is True)",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) > 0
+    for log in result["logs"]:
+        assert 1 < log["id"] < 4
+        assert (
+            log["entries"].get("_/temperature", 0) > 0
+            or log["entries"].get("_/safe") is True
+        )
+
     # check len
     response = await client.get(
         f"/v0/logs?project={project_name}",
