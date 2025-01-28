@@ -1945,27 +1945,63 @@ def get_log_groups(
         description="Name of the log entry to get distinct values from.",
         example="system_prompt",
     ),
+    filter_expr: Optional[str] = Query(
+        None,
+        description="Boolean string to filter entries before grouping.",
+        example="len(output) > 200 and temperature == 0.5",
+    ),
+    from_ids: Optional[str] = Query(
+        None,
+        description="The log ids which are permitted to be included in the search. "
+        "Each log id listed does not need to be returned, but no logs "
+        "which are not included in this list can be returned. This "
+        "argument *cannot* be set if `exclude_ids` is set.",
+        example="0&1&2",
+    ),
+    exclude_ids: Optional[str] = Query(
+        None,
+        description="The log ids which cannot be returned from the search. "
+        "None of the listed ids will be returned, even if the logs are "
+        "valid as per the filtering expression etc. This argument *cannot* "
+        "be set if `from_ids` is set.",
+        example="0&1&2",
+    ),
     project_dao: ProjectDAO = Depends(),
-    log_event_dao: LogEventDAO = Depends(),
-    log_dao: LogDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> Dict[str, Any]:
     """
     Returns a dict with the different versions as keys and the values of the remaining
     items within a given project based on its key.
+    The logs can be filtered using filter_expr, from_ids, and exclude_ids parameters
+    before grouping.
     """
-    try:
-        user_id = request_fastapi.state.user_id
-        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
-    except IndexError:
-        raise not_found(f"Project {project}")
-    # TODO: Deal with organisation IDs
-    log_events = log_event_dao.filter(project_id=project_obj.id)
-    all_entries = log_dao.filter(log_event_id=[le[0].id for le in log_events], key=key)
+    # Get filtered logs using _get_logs_query
+    logs, _, _ = _get_logs_query(
+        request_fastapi=request_fastapi,
+        project=project,
+        column_context=None,
+        context=None,
+        filter_expr=filter_expr,
+        sorting=None,
+        from_ids=from_ids,
+        exclude_ids=exclude_ids,
+        from_fields=key,  # Only get entries for the specified key
+        exclude_fields=None,
+        limit=None,
+        offset=0,
+        project_dao=project_dao,
+        field_type_dao=field_type_dao,
+        context_dao=context_dao,
+        session=session,
+    )
+
     groups = dict()
-    for entry in all_entries:
+    for entry, _, _ in logs:
         # TODO: Add pagination
-        version = entry[0].version
-        value = entry[0].value
+        version = entry.version
+        value = entry.value
         if version is None:
             found_match = False
             for k, v in groups.items():
