@@ -29,7 +29,7 @@ from sqlalchemy.sql import Subquery, and_, not_, or_
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
-from orchestra.db.models.orchestra_models import Log
+from orchestra.db.models.orchestra_models import DerivedLog, Log
 
 STR_TO_SQL_TYPES = {
     "bool": Boolean,
@@ -557,43 +557,100 @@ def _build_subquery_for_identifier(key, log_event_alias, alias=None):
         return subq
 
     log_alias = aliased(Log)
-    subq = (
-        select(
-            log_alias.log_event_id.label("log_event_id"),
-            case(
-                (log_alias.inferred_type == "list", cast(log_alias.value, JSONB)),
-                (log_alias.inferred_type == "dict", cast(log_alias.value, JSONB)),
-                else_=None,
-            ).label("jsonb_value"),
-            case(
-                (log_alias.inferred_type == "timestamp", cast(log_alias.value, JSONB)),
-                else_=None,
-            ).label("timestamp_value"),
-            case(
-                (log_alias.inferred_type == "str", cast(log_alias.value, String)),
-                else_=None,
-            ).label("str_value"),
-            case(
-                (log_alias.inferred_type == "int", cast(log_alias.value, Integer)),
-                else_=None,
-            ).label("int_value"),
-            case(
-                (log_alias.inferred_type == "float", cast(log_alias.value, Float)),
-                else_=None,
-            ).label("float_value"),
-            case(
-                (log_alias.inferred_type == "bool", cast(log_alias.value, Boolean)),
-                else_=None,
-            ).label("bool_value"),
-            log_alias.inferred_type.label("inferred_type"),
-        )
-        .where(
-            log_alias.log_event_id == log_event_alias.id,
-            log_alias.key == key,
-        )
-        .subquery(name=alias)
+    derived_log_alias = aliased(DerivedLog)
+
+    # Build base logs subquery
+    base_subq = select(
+        log_alias.log_event_id.label("log_event_id"),
+        case(
+            (log_alias.inferred_type == "list", cast(log_alias.value, JSONB)),
+            (log_alias.inferred_type == "dict", cast(log_alias.value, JSONB)),
+            else_=None,
+        ).label("jsonb_value"),
+        case(
+            (log_alias.inferred_type == "timestamp", cast(log_alias.value, JSONB)),
+            else_=None,
+        ).label("timestamp_value"),
+        case(
+            (log_alias.inferred_type == "str", cast(log_alias.value, String)),
+            else_=None,
+        ).label("str_value"),
+        case(
+            (log_alias.inferred_type == "int", cast(log_alias.value, Integer)),
+            else_=None,
+        ).label("int_value"),
+        case(
+            (log_alias.inferred_type == "float", cast(log_alias.value, Float)),
+            else_=None,
+        ).label("float_value"),
+        case(
+            (log_alias.inferred_type == "bool", cast(log_alias.value, Boolean)),
+            else_=None,
+        ).label("bool_value"),
+        log_alias.inferred_type.label("inferred_type"),
+    ).where(
+        log_alias.log_event_id == log_event_alias.id,
+        log_alias.key == key,
     )
-    return subq
+
+    # Build derived logs subquery
+    derived_subq = select(
+        derived_log_alias.log_event_id.label("log_event_id"),
+        case(
+            (
+                derived_log_alias.inferred_type == "list",
+                cast(derived_log_alias.value, JSONB),
+            ),
+            (
+                derived_log_alias.inferred_type == "dict",
+                cast(derived_log_alias.value, JSONB),
+            ),
+            else_=None,
+        ).label("jsonb_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "timestamp",
+                cast(derived_log_alias.value, JSONB),
+            ),
+            else_=None,
+        ).label("timestamp_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "str",
+                cast(derived_log_alias.value, String),
+            ),
+            else_=None,
+        ).label("str_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "int",
+                cast(derived_log_alias.value, Integer),
+            ),
+            else_=None,
+        ).label("int_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "float",
+                cast(derived_log_alias.value, Float),
+            ),
+            else_=None,
+        ).label("float_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "bool",
+                cast(derived_log_alias.value, Boolean),
+            ),
+            else_=None,
+        ).label("bool_value"),
+        derived_log_alias.inferred_type.label("inferred_type"),
+    ).where(
+        derived_log_alias.log_event_id == log_event_alias.id,
+        derived_log_alias.key == key,
+    )
+
+    # Combine base and derived logs with union
+    combined_subq = base_subq.union_all(derived_subq).subquery(name=alias)
+    return combined_subq
 
 
 def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type):
