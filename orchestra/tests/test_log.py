@@ -168,6 +168,17 @@ def _create_derived_entry(client, project_name, key, equation, referenced_logs, 
     )
 
 
+async def fetch_logs(client, project_name, **query_params):
+    default_params = {
+        "project": project_name,
+        "sorting": json.dumps({"id": "ascending"}),
+    }
+    default_params.update(query_params)
+    resp = await client.get("/v0/logs", params=default_params, headers=HEADERS)
+    assert resp.status_code == 200, resp.text
+    return resp.json()["logs"]
+
+
 def _get_log(client, project_name, log_id, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     return client.get(
@@ -1424,6 +1435,159 @@ async def test_get_logs_with_derived_math_expressions_and_indexing(client: Async
             assert (
                 boil_floor_val == expected
             ), f"Floor division mismatch on log_id={log_id}. Got {boil_floor_val}, expected {expected}"
+
+
+@pytest.mark.anyio
+async def test_filtering_and_sorting_base_and_derived_logs(client: AsyncClient):
+    project_name = "test_base_derived_filters"
+    user_id = 1
+
+    await _create_project(client, project_name, user=user_id)
+
+    base_logs_data = [
+        {
+            "entries": {
+                "alpha/num": 100,
+                "alpha/str": "hello",
+                "common_field": True,
+            },
+            "params": {"p/param1": "base1-param"},
+        },
+        {
+            "entries": {
+                "beta/num": 5,
+                "beta/str": "world",
+                "common_field": False,
+            },
+            "params": {"p/param1": "base2-param"},
+        },
+    ]
+
+    base_log_ids = []
+
+    for data in base_logs_data:
+        resp = await client.post(
+            "/v0/logs",
+            headers=HEADERS,
+            json={
+                "project": project_name,
+                "entries": data["entries"],
+                "params": data["params"],
+            },
+        )
+        assert resp.status_code == 200, resp.json()
+        out_data = resp.json()
+        created_log_id = out_data[0]
+        base_log_ids.append(created_log_id)
+
+    assert len(base_log_ids) == 2, f"Expected 2 base log_event_ids, got {base_log_ids}"
+
+    derived_definitions = [
+        {
+            "key": "derv/calcA",
+            "equation": "{val:alpha/num} + 10",
+            "referenced_logs": {"val": [base_log_ids[0]]},
+        },
+        {
+            "key": "derv/calcB",
+            "equation": "{val:beta/num} * 2",
+            "referenced_logs": {"val": [base_log_ids[1]]},
+        },
+    ]
+
+    derived_log_ids = []
+    for ddef in derived_definitions:
+        resp = await _create_derived_entry(
+            client,
+            project_name,
+            key=ddef["key"],
+            equation=ddef["equation"],
+            referenced_logs=ddef["referenced_logs"],
+            user=user_id,
+        )
+        assert resp.status_code == 200, resp.json()
+        created_d_ids = resp.json()["derived_log_ids"]
+        derived_log_ids.extend(created_d_ids)
+
+    assert len(derived_log_ids) == 2, f"Expected 2 derived logs, got {derived_log_ids}"
+
+    # (a) Test that *all* 2 base + 2 derived logs appear across 2 distinct log_event_ids
+    logs_all = await fetch_logs(client, project_name)
+    assert len(logs_all) == 2, "We created 2 distinct log events total."
+    for log_obj in logs_all:
+        log_id = log_obj["id"]
+        if log_id == base_log_ids[0]:
+            assert "alpha/num" in log_obj["entries"]
+            assert "alpha/str" in log_obj["entries"]
+            assert "derv/calcA" in log_obj["derived_entries"]
+        elif log_id == base_log_ids[1]:
+            assert "beta/num" in log_obj["entries"]
+            assert "beta/str" in log_obj["entries"]
+            assert "derv/calcB" in log_obj["derived_entries"]
+
+    # (b) from_ids => If we only want log_id=base_log_ids[0], we should get 1 log event
+    logs_single = await fetch_logs(client, project_name, from_ids=str(base_log_ids[0]))
+    assert len(logs_single) == 1
+    assert logs_single[0]["id"] == base_log_ids[0]
+    assert "derv/calcA" in logs_single[0]["derived_entries"]
+
+    # (c) exclude_ids => Exclude the second log_id => only the first remains
+    logs_excluding = await fetch_logs(
+        client,
+        project_name,
+        exclude_ids=str(base_log_ids[1]),
+    )
+    assert len(logs_excluding) == 1
+    assert logs_excluding[0]["id"] == base_log_ids[0]
+
+    # (d) from_fields => e.g. only keys that match ["alpha/num", "beta/num"].
+    from_fields_param = "alpha/num&beta/num"
+    logs_field_incl = await fetch_logs(
+        client,
+        project_name,
+        from_fields=from_fields_param,
+    )
+    for lg in logs_field_incl:
+        assert set(lg["entries"].keys()).issubset({"alpha/num", "beta/num"})
+        assert lg["derived_entries"] == {}
+
+    # (e) exclude_fields => e.g. exclude "common_field" from both logs + exclude "derv/calcB"
+    exclude_fields_param = "common_field&derv/calcB"
+    logs_excluding_fields = await fetch_logs(
+        client,
+        project_name,
+        exclude_fields=exclude_fields_param,
+    )
+    for lg in logs_excluding_fields:
+        assert "common_field" not in lg["entries"]
+        assert "derv/calcB" not in lg["derived_entries"]
+        if lg["id"] == base_log_ids[0]:
+            assert "derv/calcA" in lg["derived_entries"]
+
+    # (f) column_context => Suppose we only want logs with a key starting with "alpha/"
+    col_ctx = "alpha/entries"
+    logs_alpha = await fetch_logs(client, project_name, column_context=col_ctx)
+    assert len(logs_alpha) == 1
+    assert logs_alpha[0]["id"] == base_log_ids[0]
+    assert set(logs_alpha[0]["entries"].keys()) == {"num", "str"}
+    assert logs_alpha[0]["derived_entries"] == {}
+
+    # (g) filter_expr => e.g. "alpha/num > 50 or beta/num < 10"
+    logs_filtered = await fetch_logs(
+        client,
+        project_name,
+        filter_expr="derv/calcA > 50 or derv/calcB <= 10",
+    )
+    assert len(logs_filtered) == 2, "Both logs match the filter expression."
+
+    # (h) sorting => e.g. sort by alpha/num descending
+    logs_sorted = await fetch_logs(
+        client,
+        project_name,
+        sorting=json.dumps({"derv/calcA": "descending"}),
+    )
+    assert len(logs_sorted) == 2
+    assert logs_sorted[0]["id"] == base_log_ids[0]
 
 
 @pytest.mark.anyio
