@@ -373,7 +373,6 @@ def create_derived_entry(
         )
         filter_dict = str_filter_exp_to_dict(filter_expr)
         computed_values = _compute_expression(filter_dict, LogEvent, session)
-        inferred_type = LogDAO.infer_type("", computed_values[0][1])
 
         # Create a new derived log entry for each computed value
         class DecimalEncoder(json.JSONEncoder):
@@ -394,6 +393,7 @@ def create_derived_entry(
             # Create a derived entry for each log ID involved in this computation
             for log_event_id in involved_log_ids:
                 val = json.loads(json.dumps(value, cls=DecimalEncoder))
+                inferred_type = LogDAO.infer_type("", val)
                 new_derived_id = derived_log_dao.create(
                     log_event_id=log_event_id,
                     key=body.key,
@@ -1939,12 +1939,22 @@ def get_fields(
         raise not_found(f"Project {project}")
 
     types = field_type_dao.get_field_types(project_obj.id)
-    query = (
+    # Get all field names from base and derived logs
+    log_keys_query = (
         session.query(Log.key)
         .join(LogEvent, LogEvent.id == Log.log_event_id)
         .filter(LogEvent.project_id == project_obj.id)
         .distinct()
     )
+
+    derived_log_keys_query = (
+        session.query(DerivedLog.key)
+        .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
+        .filter(LogEvent.project_id == project_obj.id)
+        .distinct()
+    )
+
+    query = log_keys_query.union(derived_log_keys_query)
 
     all_field_names = "&".join([field.key for field in query.all()])
 
@@ -1989,6 +1999,20 @@ def get_fields(
         key: {
             "data_type": types.get(key),
             "field_type": field_types.get(key),
+            "artifacts": (
+                session.query(DerivedLog.equation)
+                .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
+                .filter(
+                    and_(
+                        LogEvent.project_id == project_obj.id,
+                        DerivedLog.key == key,
+                    ),
+                )
+                .scalar()
+                or ""
+            )
+            if field_types.get(key) == "derived_entry"
+            else "",
         }
         for key in types.keys()
     }
