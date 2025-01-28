@@ -14,15 +14,25 @@ class FieldTypeDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    def create_field_type(self, project_id: int, field_name: str, value) -> None:
-        """Create a new field type for a project."""
-        field_type = LogDAO.infer_type(field_name, value)
-        new_field_type = FieldType(
+    def create_field_type_if_absent(
+        self,
+        project_id: int,
+        field_name: str,
+        value,
+    ) -> None:
+        """Upsert approach: insert or do nothing if it exists."""
+        inferred_type = LogDAO.infer_type(field_name, value)
+
+        stmt = pg_insert(FieldType).values(
             project_id=project_id,
             field_name=field_name,
-            field_type=field_type,
+            field_type=inferred_type,
         )
-        self.session.add(new_field_type)
+        # "on_conflict_do_nothing" will skip insertion if (project_id, field_name) already exists:
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=["project_id", "field_name"],
+        )
+        self.session.execute(stmt)
         self.session.commit()
 
     def get_field_types(self, project_id: int) -> Dict[str, str]:
@@ -37,24 +47,24 @@ class FieldTypeDAO:
             field_type.field_name: field_type.field_type for field_type in field_types
         }
 
-    def update_field_type(self, project_id: int, field_name: str, value) -> None:
-        """Update the type for a specific field in a project."""
-        field_type = LogDAO.infer_type(field_name, value)
-        query = (
-            select(FieldType)
-            .where(
-                FieldType.project_id == project_id,
-                FieldType.field_name == field_name,
-            )
-            .with_for_update()
-        )
-        existing_field_type = self.session.execute(query).scalars().first()
+    def upsert_field_type(self, project_id: int, field_name: str, value) -> None:
+        """Upsert approach: insert or overwrite the existing field_type."""
+        inferred_type = LogDAO.infer_type(field_name, value)
 
-        if existing_field_type:
-            existing_field_type.field_type = field_type
-            self.session.commit()
-        else:
-            raise ValueError("Field type does not exist.")
+        stmt = pg_insert(FieldType).values(
+            project_id=project_id,
+            field_name=field_name,
+            field_type=inferred_type,
+        )
+        # "on_conflict_do_update" to update existing row if it already exists
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["project_id", "field_name"],
+            set_={
+                "field_type": inferred_type,
+            },
+        )
+        self.session.execute(stmt)
+        self.session.commit()
 
     def delete_field_type(self, project_id: int, field_name: str) -> None:
         """Delete a specific field type for a project."""
@@ -82,43 +92,3 @@ class FieldTypeDAO:
 
         result = self.session.execute(query).scalars().all()
         return {field: i for i, field in enumerate(result)}
-
-    def create_field_type_if_absent(
-        self,
-        project_id: int,
-        field_name: str,
-        value,
-    ) -> None:
-        """Upsert approach: insert or do nothing if it exists."""
-        inferred_type = LogDAO.infer_type(field_name, value)
-
-        stmt = pg_insert(FieldType).values(
-            project_id=project_id,
-            field_name=field_name,
-            field_type=inferred_type,
-        )
-        # "on_conflict_do_nothing" will skip insertion if (project_id, field_name) already exists:
-        stmt = stmt.on_conflict_do_nothing(
-            index_elements=["project_id", "field_name"],
-        )
-        self.session.execute(stmt)
-        self.session.commit()
-
-    def upsert_field_type(self, project_id: int, field_name: str, value) -> None:
-        """Upsert approach: insert or overwrite the existing field_type."""
-        inferred_type = LogDAO.infer_type(field_name, value)
-
-        stmt = pg_insert(FieldType).values(
-            project_id=project_id,
-            field_name=field_name,
-            field_type=inferred_type,
-        )
-        # "on_conflict_do_update" to update existing row if it already exists
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["project_id", "field_name"],
-            set_={
-                "field_type": inferred_type,
-            },
-        )
-        self.session.execute(stmt)
-        self.session.commit()
