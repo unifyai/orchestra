@@ -405,7 +405,7 @@ def create_derived_entry(
                 created_derived_ids.append(new_derived_id)
 
         # Create a field type for the derived log
-        field_type_dao.create_field_type(project_obj.id, body.key, val)
+        field_type_dao.create_field_type_if_absent(project_obj.id, body.key, val)
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -504,7 +504,7 @@ def update_logs(
                     expected_type = field_types[k]
                     original_type = LogDAO.infer_type(k, v)
                     if expected_type == "NoneType":
-                        field_type_dao.update_field_type(project_id, k, v)
+                        field_type_dao.upsert_field_type(project_id, k, v)
                     elif original_type != expected_type:
                         raise HTTPException(
                             status_code=400,
@@ -2146,7 +2146,7 @@ def set_field_types(
             existing_field_types = field_type_dao.get_field_types(project_id)
             if field_name in existing_field_types:
                 # Update the field type if it exists
-                field_type_dao.update_field_type(
+                field_type_dao.upsert_field_type(
                     project_id,
                     field_name,
                     existing_logs[0][0].value,
