@@ -101,3 +101,48 @@ class DerivedLogDAO:
         except Exception as e:
             session.rollback()
             raise e
+
+    def update(
+        self,
+        id: int,
+        original_key: str = None,
+        key: str = None,
+        equation: str = None,
+    ) -> DerivedLog:
+        """
+        Update an existing derived log entry.
+
+        Args:
+            id: ID of the derived log to update
+            key: New key for the derived log (optional)
+            equation: New equation for computing the value (optional)
+            value: New value (optional, recomputed if equation/referenced_logs change)
+
+        Returns:
+            Updated DerivedLog instance
+
+        Raises:
+            ValueError: If derived log with given ID doesn't exist
+            Exception: If there's an error computing the new value
+        """
+        try:
+            derived_log = (
+                self.session.query(DerivedLog)
+                .filter(DerivedLog.log_event_id == id)
+                .filter(DerivedLog.key == original_key)
+                .first()
+            )
+            if not derived_log:
+                raise ValueError(f"No derived log found with id {id}")
+
+            if key is not None:
+                derived_log.key = key
+            if equation is not None:
+                derived_log.equation = equation
+
+            derived_log.updated_at = datetime.now(timezone.utc)
+            self.session.commit()
+            return derived_log
+        except Exception as e:
+            self.session.rollback()
+            raise e
