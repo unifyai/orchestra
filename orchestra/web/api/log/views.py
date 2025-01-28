@@ -49,6 +49,7 @@ from orchestra.web.api.log.schema import (
     CreateLogConfig,
     DeleteLogEntryRequest,
     SetFieldTypingRequest,
+    UpdateDerivedEntriesConfig,
     UpdateLogRequest,
 )
 from orchestra.web.api.utils.http_responses import not_found
@@ -257,8 +258,8 @@ def create_logs(
     return log_event_ids
 
 
-@router.put(
-    "/log/derived",
+@router.post(
+    "/logs/derived",
     responses={
         200: {
             "description": "Derived log entries created successfully.",
@@ -415,6 +416,98 @@ def create_derived_entry(
         "info": f"Created {len(created_derived_ids)} derived logs with key='{body.key}'.",
         "derived_log_ids": created_derived_ids,
     }
+
+
+@router.put(
+    "/logs/derived",
+    responses={
+        200: {
+            "description": "Derived log updated successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Derived logs updated successfully!",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Log Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "One or more logs with the specified IDs were not found.",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Bad Request",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid request format or data.",
+                    },
+                },
+            },
+        },
+    },
+)
+def update_derived_log(
+    request_fastapi: Request,
+    request: UpdateDerivedEntriesConfig,
+    derived_log_dao: DerivedLogDAO = Depends(),
+    log_event_dao: LogEventDAO = Depends(),
+    session=Depends(get_db_session),
+):
+    """Updates multiple derived log entries with new key, equation, or referenced logs.
+    Handles batch updates and recomputes values as needed."""
+    try:
+        not_found_logs = []
+        updated_logs = []
+
+        for derived_log_id in request.ids:
+            try:
+                # Check if user has permission to update this derived log
+                log_event_id = (
+                    derived_log_dao.session.query(DerivedLog.log_event_id)
+                    .filter(DerivedLog.id == derived_log_id)
+                    .scalar()
+                )
+                if (
+                    not log_event_id
+                    or log_event_dao.get_user_id(id=log_event_id)
+                    != request_fastapi.state.user_id
+                ):
+                    not_found_logs.append(derived_log_id)
+                    continue
+
+                # Update the derived log
+                updated_log = derived_log_dao.update(
+                    id=derived_log_id,
+                    original_key=request.original_key,
+                    key=request.key,
+                    equation=request.equation,
+                )
+                updated_logs.append(updated_log)
+
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+
+        if not_found_logs:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Derived logs with ids {not_found_logs} not found or you don't have permission to update them.",
+            )
+
+        # Recompute values for all updated logs
+        if updated_logs:
+            derived_log_dao.recompute_derived_logs(updated_logs, session)
+
+        return {"info": "Derived logs updated successfully!"}
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.put(
