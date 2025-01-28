@@ -156,8 +156,8 @@ def _create_log(client, project_name, user=1, entries=None):
 
 def _create_derived_entry(client, project_name, key, equation, referenced_logs, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
-    return client.put(
-        "/v0/log/derived",
+    return client.post(
+        "/v0/logs/derived",
         json={
             "project": project_name,
             "key": key,
@@ -382,6 +382,87 @@ async def test_create_derived_entry_with_filter_expr(client: AsyncClient):
     # Only logs with score > 20 (i=3,4) should have derived logs
     assert "derived_log_ids" in data
     assert len(data["derived_log_ids"]) == 2
+
+
+@pytest.mark.anyio
+async def test_update_derived_entry(client: AsyncClient):
+    project_name = "test_update_derived"
+    await _create_project(client, project_name)
+
+    # Create base logs with temperature values
+    base_log_ids = []
+    temperatures = [20.0, 25.0, 30.0, 35.0]
+    for temp in temperatures:
+        response = await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "entries": {"temperature": temp},
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+        base_log_ids.append(response.json()[0])
+
+    # Create initial derived log
+    initial_key = "temp_plus_10"
+    initial_equation = "{t:temperature} + 10"
+    initial_referenced_logs = {"t": [base_log_ids[0], base_log_ids[1]]}
+
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        initial_key,
+        initial_equation,
+        initial_referenced_logs,
+    )
+    assert response.status_code == 200
+    derived_log_ids = response.json()["derived_log_ids"]
+    assert len(derived_log_ids) == 2
+
+    # Verify initial derived values
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+    for log in logs[-2:]:
+        assert (
+            log["derived_entries"]["temp_plus_10"] == log["entries"]["temperature"] + 10
+        )
+
+    # Update the derived log with new key, equation and referenced logs
+    new_key = "temp_times_2"
+    new_equation = "{t:temperature} * 2"
+    new_referenced_logs = {"t": [base_log_ids[2], base_log_ids[3]]}
+
+    response = await client.put(
+        "/v0/logs/derived",
+        json={
+            "project": project_name,
+            "ids": derived_log_ids,
+            "original_key": initial_key,
+            "key": new_key,
+            "equation": new_equation,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify the updates and recomputed values
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+    for log in logs[-2:]:
+        assert (
+            log["derived_entries"]["temp_times_2"] == log["entries"]["temperature"] * 2
+        )
+        assert "temp_plus_10" not in log["derived_entries"]
+        assert "temp_times_2" in log["derived_entries"]
 
 
 @pytest.mark.anyio
