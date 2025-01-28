@@ -1,6 +1,6 @@
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from orchestra.web.api.context.schema import ContextCreateRequest
 
@@ -159,3 +159,33 @@ class SetFieldTypingRequest(BaseModel):
         ...,
         description="Dict of field names and booleans as to whether the field should be typed.",
     )
+
+
+class UpdateDerivedEntriesConfig(BaseModel):
+    ids: list[int] = Field(
+        description="List of derived log IDs to update.",
+        example=[123, 456, 789],
+        min_items=1,
+    )
+    original_key: str = Field(
+        description="The original key of the derived entry to update.",
+        example="score_diff",
+    )
+    key: Optional[str] = Field(
+        default=None,
+        description="The new name for the derived entry.",
+        example="new_score_diff",
+    )
+    equation: Optional[str] = Field(
+        default=None,
+        description="The new equation for computing the value of the derived entry.",
+        example="{log0:new_score} - {log1:new_score}",
+    )
+
+    @model_validator(mode="before")
+    def validate_at_least_one_field(cls, values):
+        if not any(values.get(field) is not None for field in ["key", "equation"]):
+            raise ValueError(
+                "At least one of 'key', 'equation' must be provided",
+            )
+        return values
