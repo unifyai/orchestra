@@ -646,8 +646,8 @@ async def test_create_log_w_image(client: AsyncClient):
     )
     assert field_types_response.status_code == 200
     assert field_types_response.json() == {
-        "img_raw": {"data_type": "image", "field_type": "entry"},
-        "img_url": {"data_type": "image", "field_type": "entry"},
+        "img_raw": {"data_type": "image", "field_type": "entry", "artifacts": ""},
+        "img_url": {"data_type": "image", "field_type": "entry", "artifacts": ""},
     }
 
 
@@ -3651,9 +3651,9 @@ async def test_create_log_strongly_typed(client: AsyncClient):
     )
     assert field_types_response.status_code == 200
     assert field_types_response.json() == {
-        "a/b/param1": {"data_type": "str", "field_type": "param"},
-        "score": {"data_type": "int", "field_type": "entry"},
-        "logged_at": {"data_type": "timestamp", "field_type": "entry"},
+        "a/b/param1": {"data_type": "str", "field_type": "param", "artifacts": ""},
+        "score": {"data_type": "int", "field_type": "entry", "artifacts": ""},
+        "logged_at": {"data_type": "timestamp", "field_type": "entry", "artifacts": ""},
     }
 
 
@@ -3749,6 +3749,7 @@ async def test_update_logs_previously_none(client: AsyncClient):
     assert field_types_response.json()["a/b/c/numeric_input"] == {
         "data_type": "NoneType",
         "field_type": "entry",
+        "artifacts": "",
     }
 
     # Update the log with strongly typed fields, but previously None
@@ -3776,6 +3777,7 @@ async def test_update_logs_previously_none(client: AsyncClient):
     assert field_types_response.json()["a/b/c/numeric_input"] == {
         "data_type": "float",
         "field_type": "entry",
+        "artifacts": "",
     }
 
 
@@ -3803,6 +3805,83 @@ async def test_update_logs_type_mismatch(client: AsyncClient):
 
     assert response.status_code == 400
     assert "Type mismatch for field" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_get_fields_with_derived_entries(client: AsyncClient):
+    project_name = "test_project_derived"
+    _ = await _create_project(client, project_name)
+
+    # Create base logs
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "params": {"param1": "test"},
+            "entries": {
+                "base_field": 100,
+                "temperature": 25.5,
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    log_id = response.json()[0]
+
+    # Create derived entries
+    derived_configs = [
+        {
+            "key": "temp_plus_10",
+            "equation": "{t:temperature} + 10",
+            "referenced_logs": {"t": [log_id]},
+        },
+        {
+            "key": "double_base",
+            "equation": "{b:base_field} * 2",
+            "referenced_logs": {"b": [log_id]},
+        },
+    ]
+
+    for config in derived_configs:
+        response = await _create_derived_entry(
+            client,
+            project_name,
+            config["key"],
+            config["equation"],
+            config["referenced_logs"],
+        )
+        assert response.status_code == 200
+
+    # Get field types and verify response
+    response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    fields = response.json()
+
+    # Verify base entries
+    assert fields["base_field"]["field_type"] == "entry"
+    assert fields["base_field"]["data_type"] == "int"
+    assert fields["base_field"]["artifacts"] == ""
+
+    assert fields["temperature"]["field_type"] == "entry"
+    assert fields["temperature"]["data_type"] == "float"
+    assert fields["temperature"]["artifacts"] == ""
+
+    # Verify params
+    assert fields["param1"]["field_type"] == "param"
+    assert fields["param1"]["data_type"] == "str"
+    assert fields["param1"]["artifacts"] == ""
+
+    # Verify derived entries
+    assert fields["temp_plus_10"]["field_type"] == "derived_entry"
+    assert fields["temp_plus_10"]["data_type"] == "int"
+    assert fields["temp_plus_10"]["artifacts"] == "{t:temperature} + 10"
+
+    assert fields["double_base"]["field_type"] == "derived_entry"
+    assert fields["double_base"]["data_type"] == "int"
+    assert fields["double_base"]["artifacts"] == "{b:base_field} * 2"
 
 
 # TODO: remove this test once we enforce strong typing on all fields.
