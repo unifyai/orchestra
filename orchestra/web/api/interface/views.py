@@ -226,7 +226,7 @@ def get_interfaces(
         project=project,
         name=name,
     )
-    if len(interfaces) == 0:
+    if len(interfaces) == 0 and len(all_interfaces) == 0:
         items = []
         new_counter = len(items)
         dao.create_interface(
@@ -244,6 +244,11 @@ def get_interfaces(
                 "new_counter": new_counter,
             },
         ]
+    elif len(interfaces) == 0:
+        raise HTTPException(
+            status_code=404,
+            detail="Interface not added yet. Create it first.",
+        )
     return [
         {
             "name": interface.name,
