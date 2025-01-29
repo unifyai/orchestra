@@ -72,7 +72,7 @@ class InterfaceDAO:
                     user_id=user_id,
                     name=name,
                 )
-                .one()
+                .first()
             )
             self.session.delete(interface)
             self.session.commit()
