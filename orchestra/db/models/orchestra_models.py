@@ -700,6 +700,10 @@ class Interface(Base):
     items = Column(String(), nullable=False)
     project = Column(String(), nullable=False)
 
+    __table_args__ = (
+        UniqueConstraint("user_id", "project", "name", name="it_uq_project_name"),
+    )
+
 
 class FieldType(Base):
     """Model class for the field_type table."""
@@ -738,3 +742,7 @@ class TempInterface(Base):
     new_counter = Column(Integer, nullable=False)
     items = Column(String(), nullable=False)
     project = Column(String(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "project", "name", name="temp_it_uq_project_name"),
+    )
