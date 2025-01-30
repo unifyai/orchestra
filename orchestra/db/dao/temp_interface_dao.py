@@ -38,8 +38,12 @@ class TempInterfaceDAO:
         new_name: str = None,
     ):
         query = select(TempInterface)
-        query = query.where(TempInterface.user_id == user_id).where(
-            TempInterface.name == name,
+        query = (
+            query.where(TempInterface.user_id == user_id)
+            .where(
+                TempInterface.project == project,
+            )
+            .where(TempInterface.name == name)
         )
         raw = self.session.execute(query)
         entry = raw.scalars().first()
