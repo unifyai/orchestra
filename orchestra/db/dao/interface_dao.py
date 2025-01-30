@@ -38,8 +38,12 @@ class InterfaceDAO:
         new_name: str = None,
     ):
         query = select(Interface)
-        query = query.where(Interface.user_id == user_id).where(
-            Interface.name == name,
+        query = (
+            query.where(Interface.user_id == user_id)
+            .where(
+                Interface.project == project,
+            )
+            .where(Interface.name == name)
         )
         raw = self.session.execute(query)
         entry = raw.scalars().first()
