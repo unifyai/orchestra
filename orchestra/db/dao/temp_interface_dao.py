@@ -40,9 +40,7 @@ class TempInterfaceDAO:
         query = select(TempInterface)
         query = (
             query.where(TempInterface.user_id == user_id)
-            .where(
-                TempInterface.project == project,
-            )
+            .where(TempInterface.project == project)
             .where(TempInterface.name == name)
         )
         raw = self.session.execute(query)
