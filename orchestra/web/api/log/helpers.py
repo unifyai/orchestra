@@ -1847,22 +1847,32 @@ def _flatten_fields(
 
 
 def _format_flat_logs(rows, context_len, value_limit, field_order_map):
-    """Helper function to format flat logs"""
+    """Helper function to format flat logs using raw query data"""
     formatted = {}
 
-    for row_obj, created_at, event_id in rows:
-        if event_id not in formatted:
-            formatted[event_id] = {
-                "ts": created_at.isoformat() if created_at else None,
+    for (
+        row_key,
+        row_value,
+        row_inferred_type,
+        row_version,
+        row_source_type,
+        row_created_at,
+        row_event_id,
+    ) in rows:
+
+        if row_event_id not in formatted:
+            formatted[row_event_id] = {
+                "ts": row_created_at.isoformat() if row_created_at else None,
                 "clipped_fields": [],
                 "entries": {},
                 "versions": {},
                 "derived_entries": {},
             }
-        is_derived = isinstance(row_obj, DerivedLog)
+
+        is_derived = row_source_type == "derived"
 
         # Apply context_len slicing to the key
-        key = row_obj.key[context_len:]
+        key = row_key[context_len:]
 
         def _limit_value(value: Any, inferred_type: str) -> Tuple[Any, bool]:
             """Limit the size of a value based on its type and the value_limit parameter.
@@ -1904,45 +1914,23 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
             except:
                 return str_in
 
-        val = (
-            _try_decode(row_obj.value)
-            if isinstance(row_obj.value, str)
-            else row_obj.value
-        )
+        val = _try_decode(row_value) if isinstance(row_value, str) else row_value
 
         # Apply value limiting and get clipped status
-        limited_val, is_clipped = _limit_value(val, row_obj.inferred_type)
+        limited_val, is_clipped = _limit_value(val, row_inferred_type)
         if is_clipped:
-            formatted[event_id]["clipped_fields"] = formatted[event_id].get(
-                "clipped_fields",
-                [],
-            ) + [key]
-
-        ver = getattr(row_obj, "version", None)
+            formatted[row_event_id]["clipped_fields"].append(key)
 
         if is_derived:
-            # --- Handle derived Log
-            assert (
-                key not in formatted[event_id]["derived_entries"]
-            ), f"found duplicate derived key {key} with log_id {event_id}"
-
-            formatted[event_id]["derived_entries"][key] = limited_val
-
+            formatted[row_event_id]["derived_entries"][key] = limited_val
         else:
-            # --- Handle base Log
-            assert (
-                key not in formatted[event_id]["entries"]
-            ), f"found duplicates for key {key} with log_id {event_id}"
-
-            if ver is None:
-                # Put in "entries"
-                formatted[event_id]["entries"][key] = limited_val
+            if row_version is None:
+                formatted[row_event_id]["entries"][key] = limited_val
             else:
-                # Put in "params"
-                if key not in formatted[event_id]["versions"]:
-                    formatted[event_id]["versions"][key] = {}
-                formatted[event_id]["versions"][key][ver] = limited_val
-                formatted[event_id]["entries"][key] = str(ver)
+                if key not in formatted[row_event_id]["versions"]:
+                    formatted[row_event_id]["versions"][key] = {}
+                formatted[row_event_id]["versions"][key][row_version] = limited_val
+                formatted[row_event_id]["entries"][key] = str(row_version)
 
     # Now build final JSON
     logs_out = []
