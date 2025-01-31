@@ -2068,7 +2068,7 @@ def get_fields(
                         DerivedLog.key == key,
                     ),
                 )
-                .scalar()
+                .first()[0]
                 or ""
             )
             if field_types.get(key) == "derived_entry"
