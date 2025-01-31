@@ -2420,9 +2420,17 @@ async def test_get_logs_with_group_threshold(client: AsyncClient):
     assert response.status_code == 200
     result = response.json()
     assert "grouped_entries" in result
-    assert result["grouped_entries"]["shared_string"] == "common value"
-    assert result["grouped_entries"]["shared_number"] == 42
-    assert result["grouped_entries"]["shared_object"] == {"key": "value"}
+    # All fields should be in grouped_entries since threshold=1
+    assert len(result["grouped_entries"]) == 6  # All fields from the log table
+    # Check specific values are mapped correctly
+    assert "shared_string" in result["grouped_entries"]
+    assert "common value" in result["grouped_entries"]["shared_string"].values()
+    assert "shared_number" in result["grouped_entries"]
+    assert 42 in result["grouped_entries"]["shared_number"].values()
+    # Verify logs have shared_entries and no regular entries
+    for log in result["logs"]:
+        assert "shared_entries" in log
+        assert len(log["entries"]) == 0
 
     # Test with group_threshold=2 (should group values appearing twice or more)
     response = await client.get(
@@ -2432,8 +2440,18 @@ async def test_get_logs_with_group_threshold(client: AsyncClient):
     assert response.status_code == 200
     result = response.json()
     assert "grouped_entries" in result
-    assert "mixed_field" in result["grouped_entries"]
+    # These fields have values appearing 2+ times
+    assert (
+        "shared_string" in result["grouped_entries"]
+    )  # "common value" appears 4 times
+    assert "shared_number" in result["grouped_entries"]  # 42 appears 4 times
+    assert (
+        "shared_object" in result["grouped_entries"]
+    )  # {"key": "value"} appears 4 times
+    assert "mixed_field" in result["grouped_entries"]  # "appears twice" appears 2 times
+    # These shouldn't be grouped as their values are unique
     assert "unique_string" not in result["grouped_entries"]
+    assert "unique_number" not in result["grouped_entries"]
 
     # Test with group_threshold=4 (should only group values appearing in all logs)
     response = await client.get(
@@ -2443,10 +2461,14 @@ async def test_get_logs_with_group_threshold(client: AsyncClient):
     assert response.status_code == 200
     result = response.json()
     assert "grouped_entries" in result
-    assert result["grouped_entries"]["shared_string"] == "common value"
-    assert result["grouped_entries"]["shared_number"] == 42
-    assert result["grouped_entries"]["shared_object"] == {"key": "value"}
+    # Only fields with values appearing in all 4 logs should be grouped
+    assert "shared_string" in result["grouped_entries"]
+    assert "shared_number" in result["grouped_entries"]
+    assert "shared_object" in result["grouped_entries"]
+    # These shouldn't be grouped as they don't appear in all logs
     assert "mixed_field" not in result["grouped_entries"]
+    assert "unique_string" not in result["grouped_entries"]
+    assert "unique_number" not in result["grouped_entries"]
 
     # Test with group_threshold exceeding number of logs (no grouping)
     response = await client.get(
@@ -2456,6 +2478,10 @@ async def test_get_logs_with_group_threshold(client: AsyncClient):
     assert response.status_code == 200
     result = response.json()
     assert "grouped_entries" not in result
+    # All entries should remain in the logs
+    for log in result["logs"]:
+        assert "shared_entries" not in log
+        assert len(log["entries"]) == 6  # All 6 fields should be present
 
     # Test with empty logs
     _ = await _delete_logs(client, [([1, 2, 3, 4], None)])
