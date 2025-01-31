@@ -4740,13 +4740,6 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
-    """
-    Test combining group_by with additional filters like from_fields, exclude_fields,
-    from_ids, exclude_ids, filter_expr, sorting, limit/offset, etc.
-    We'll reuse a fresh project with the same logs fixture as 'test_get_logs_grouping_all_scenarios'
-    so we have the same data to play with.
-    """
-
     project_name = "test-grouping-with-other-filters"
     _ = await _create_project(client, project_name)
 
@@ -4795,7 +4788,7 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
     #
     # ==========  SCENARIO A: group_by + from_fields  ==========
     #
-    # We'll group by "entries/_/state" but only include logs that have either
+    # group by "entries/_/state" but only include logs that have either
     # "entries/_/state" or "entries/_/description" (from_fields).
     # This should exclude logs that lack these keys entirely.
     response = await client.get(
@@ -4817,9 +4810,6 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
     assert "count" in group_obj
 
     # All logs that do NOT have _/state or _/description will be filtered out entirely,
-    # so let's confirm the total count is correct. Every log except id=7 has
-    # _/description. The "null" group covers logs missing _/state, but still they appear
-    # because they *do* have _/description. So we should have 9 logs.
     assert (
         group_obj["count"] == 9
     ), f"Expected 10 logs that contain either _/description or _/state, got {group_obj['count']}"
@@ -4867,12 +4857,10 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
     #
     # ==========  SCENARIO C: group_by + from_ids (or exclude_ids)  ==========
     #
-    # Let's pick a small subset of log_event_ids: for instance, the first 2 logs + the
-    # "param-version log #1" (which might be event_id=8 in your fixture).
-    # We'll group by "params/a/b/param1" now, but it should only return logs
+    # Pick a small subset of log_event_ids: for instance, the first 2 logs + the
+    # "param-version log #1"
+    # Group by "params/a/b/param1" now, but it should only return logs
     # that match these IDs.
-    # Let's assume the first 2 logs have IDs = 1,2, and the param-version #1 has ID=8.
-    # (Check your actual DB if needed.)
     from_ids_example = "1&2&8"
     response = await client.get(
         "/v0/logs",
@@ -4892,7 +4880,6 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
     assert "count" in param1_section
     # We expect exactly the logs with event_ids = 1, 2, 8
     # That should be 3 total logs if all exist with those IDs
-    # (Provided that they indeed exist in your fixture.)
     assert (
         param1_section["count"] == 3
     ), f"Expected 3 logs, got {param1_section['count']}"
@@ -4908,10 +4895,8 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
     #
     # ==========  SCENARIO D: group_by + filter_expr  ==========
     #
-    # Suppose we only want logs with a temperature above 100. (In your data, that might
-    # include 'surface of the sun' (6000), 'lava' (??), etc.)
-    # We'll group them by `_/state` for demonstration.
-    # For filter_expr, you might do something like: "float(_/temperature) > 100"
+    # Filter by temperature above 100.
+    # Then group by `_/state` for demonstration.
     response = await client.get(
         "/v0/logs",
         params={
@@ -4944,7 +4929,7 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
     #
     # ==========  SCENARIO E: group_by + sorting + limit/offset at the leaf level  ==========
     #
-    # We'll group by `entries/_/state`, then inside each state's group we want to
+    # Group by `entries/_/state`, then inside each state's group we want to
     # sort by `_/description` ascending, but only return the first 1 log (limit=1)
     # (and skip 0 logs offset=0). This ensures we see that each group's list is
     # truncated by limit=1 and sorted by description.
