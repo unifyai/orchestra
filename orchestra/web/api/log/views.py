@@ -58,6 +58,7 @@ from .helpers import (
     STR_TO_SQL_TYPES,
     _compute_expression,
     _flatten_fields,
+    _format_flat_logs,
     _substitute_placeholders,
     build_sql_query,
     str_filter_exp_to_dict,
@@ -1290,6 +1291,25 @@ def get_logs(
     ),
     limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    group_by: Optional[List[str]] = Query(
+        None,
+        description="List of fields to group results by. Results will be nested based on these fields.",
+        example=["model", "temperature"],
+    ),
+    group_limit: Optional[int] = Query(
+        None,
+        description="Maximum number of groups to return at each level",
+        ge=1,
+    ),
+    group_offset: int = Query(
+        0,
+        description="Number of groups to skip at each level",
+        ge=0,
+    ),
+    group_depth: Optional[int] = Query(
+        None,
+        description="Maximum depth of nested groups to return. If not specified, all levels are returned.",
+    ),
     return_ids_only: bool = False,
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
