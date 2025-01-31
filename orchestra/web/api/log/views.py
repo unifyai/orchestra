@@ -327,7 +327,15 @@ def create_derived_entry(
             resolved_ids[varname] = val
         elif isinstance(val, dict):
             # Re-use _get_logs_query to find matching log_event_ids
-            logs, _, _count = _get_logs_query(
+            # raw_rows is a list of:
+            # - row_key
+            # - row_value
+            # - row_inferred_type
+            # - row_version
+            # - row_source_type
+            # - row_created_at
+            # - row_event_id
+            raw_rows, _, _count = _get_logs_query(
                 request_fastapi=request_fastapi,
                 project=body.project,
                 column_context=val.get("column_context", None),
@@ -345,9 +353,8 @@ def create_derived_entry(
                 context_dao=context_dao,
                 session=session,
             )
-            # logs is a list of (Log, created_at, log_event_id) or (DerivedLog,...),
-            # we only want distinct log_event_id
-            le_ids = list({r[2] for r in logs})
+            # Extract log_event_ids from raw rows
+            le_ids = list({r[6] for r in raw_rows})  # r[6] is log_event_id
             resolved_ids[varname] = le_ids
         else:
             raise HTTPException(
@@ -1146,8 +1153,7 @@ def _get_logs_query(
     #   ), ...
     # ]
 
-    # 11) Re-hydrate them as (Log|DerivedLog, created_at, log_event_id)
-    #     So that the top-level get_logs can do the final formatting.
+    # 11) Return the raw rows so that the top-level get_logs can do the final formatting.
     results = []
     for (
         row_id,
@@ -1159,13 +1165,17 @@ def _get_logs_query(
         row_created_at,
         row_source_type,
     ) in raw_rows:
-        if row_source_type == "base":
-            obj = session.query(Log).get(row_id)
-        else:
-            obj = session.query(DerivedLog).get(row_id)
-
-        if obj is not None:
-            results.append((obj, row_created_at, row_event_id))
+        results.append(
+            (
+                row_key,
+                row_value,
+                row_inferred_type,
+                row_version,
+                row_source_type,
+                row_created_at,
+                row_event_id,
+            ),
+        )
 
     # 12) Return results
     return results, context_len, count
@@ -1351,9 +1361,9 @@ def get_logs(
             context_dao=context_dao,
             session=session,
         )
-
+        print("returning ids only", return_ids_only)
         if return_ids_only:
-            event_ids = [r[2] for r in all_rows]  # (obj, created_at, event_id)
+            event_ids = [r[6] for r in all_rows]  # (obj, created_at, event_id)
             return list(dict.fromkeys(event_ids))
 
         # Format
@@ -1883,7 +1893,15 @@ def get_log_groups(
     before grouping.
     """
     # Get filtered logs using _get_logs_query
-    logs, _, _ = _get_logs_query(
+    # raw_rows is a list of:
+    # - row_key
+    # - row_value
+    # - row_inferred_type
+    # - row_version
+    # - row_source_type
+    # - row_created_at
+    # - row_event_id
+    raw_rows, _, _ = _get_logs_query(
         request_fastapi=request_fastapi,
         project=project,
         column_context=None,
@@ -1903,10 +1921,11 @@ def get_log_groups(
     )
 
     groups = dict()
-    for entry, _, _ in logs:
-        # TODO: Add pagination
-        version = entry.version
-        value = entry.value
+    for row in raw_rows:
+        # Extract version and value from raw row
+        version = row[3]  # version
+        value = row[1]  # value
+
         if version is None:
             found_match = False
             for k, v in groups.items():
@@ -1989,12 +2008,18 @@ def get_fields(
     )
 
     query = log_keys_query.union(derived_log_keys_query)
-
     all_field_names = "&".join([field.key for field in query.all()])
 
-    # ToDo: remove this hacky code once this task [https://app.clickup.com/t/86c1jupp2]
-    #  is done
-    (all_logs, _, _) = _get_logs_query(
+    # Get raw rows from _get_logs_query
+    # raw_rows is a list of:
+    # - row_key
+    # - row_value
+    # - row_inferred_type
+    # - row_version
+    # - row_source_type
+    # - row_created_at
+    # - row_event_id
+    (raw_rows, _, _) = _get_logs_query(
         request_fastapi,
         project=project,
         column_context=None,
@@ -2013,22 +2038,23 @@ def get_fields(
         session=session,
         latest_timestamp=False,
     )
+
+    # Process raw rows to determine field types
     field_types = dict(
         (
-            lg[0].key,
+            row[0],  # key
             (
                 "derived_entry"
-                if isinstance(lg[0], DerivedLog)
+                if row[4] == "derived"  # source_type
                 else "entry"
-                if lg[0].version is None
+                if row[3] is None  # version
                 else "param"
             ),
         )
-        for lg in all_logs
+        for row in raw_rows
     )
-    # end ToDo
 
-    # return field types in the same order as they were created
+    # Return field types in the same order as they were created
     return {
         key: {
             "data_type": types.get(key),
@@ -2606,7 +2632,7 @@ def _fetch_logs_for_event_ids(
 
     raw_rows = final_logs_query.all()
 
-    # 6) Re-hydrate them as (Log|DerivedLog, created_at, log_event_id)
+    # 6) Return the raw rows so that the top-level get_logs can do the final formatting.
     results = []
     for (
         row_id,
@@ -2618,13 +2644,17 @@ def _fetch_logs_for_event_ids(
         row_created_at,
         row_source_type,
     ) in raw_rows:
-        if row_source_type == "base":
-            obj = session.query(Log).get(row_id)
-        else:
-            obj = session.query(DerivedLog).get(row_id)
-
-        if obj is not None:
-            results.append((obj, row_created_at, row_event_id))
+        results.append(
+            (
+                row_key,
+                row_value,
+                row_inferred_type,
+                row_version,
+                row_source_type,
+                row_created_at,
+                row_event_id,
+            ),
+        )
 
     return results, context_len, total_count
 
