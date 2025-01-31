@@ -2124,3 +2124,709 @@ def set_field_types(
             field_type_dao.delete_field_type(project_id, field_name)
 
     return {"info": "Field types updated successfully!"}
+
+
+#####################
+# GroupBy Utils     #
+#####################
+
+
+def _get_distinct_group_values(
+    log_event_ids: List[int],
+    group_key: str,
+    session,
+) -> List[Any]:
+    """Get distinct values for a group key among provided log event IDs."""
+
+    subquery = (
+        session.query(
+            Log.value,
+            Log.log_event_id,
+            func.row_number()
+            .over(
+                partition_by=Log.value,
+                order_by=desc(Log.log_event_id),
+            )
+            .label("rn"),
+        )
+        .filter(Log.log_event_id.in_(log_event_ids))
+        .filter(Log.key == group_key)
+        .subquery()
+    )
+
+    query = (
+        session.query(subquery.c.value)
+        .filter(subquery.c.rn == 1)
+        .order_by(desc(subquery.c.log_event_id))
+    )
+
+    return [row[0] for row in query.all()]
+
+
+def _get_log_event_ids_for_group_value(
+    log_event_ids: List[int],
+    group_key: str,
+    group_value: Any,
+    session,
+) -> List[int]:
+    """Get log event IDs that match a specific group value."""
+    query = (
+        session.query(Log.log_event_id)
+        .filter(Log.log_event_id.in_(log_event_ids))
+        .filter(Log.key == group_key)
+        .filter(cast(Log.value, JSONB) == cast(group_value, JSONB))
+    )
+    return [row[0] for row in query.all()]
+
+
+def _get_params_for_log_events(
+    log_event_ids: List[int],
+    session,
+) -> Dict[str, Dict[int, Any]]:
+    """Get all parameter versions used across the log events."""
+    query = (
+        session.query(Log)
+        .filter(Log.log_event_id.in_(log_event_ids))
+        .filter(Log.version.isnot(None))
+    )
+
+    params = {}
+    for log in query.all():
+        if log.key not in params:
+            params[log.key] = {}
+        params[log.key][log.version] = log.value
+
+    return params
+
+
+def apply_group_threshold(
+    logs_out: List[Dict[str, Any]],
+    group_threshold: int,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Given a list of logs (each a dict with 'entries'), find all (field, value) combos
+    that appear in >= group_threshold logs, remove them from 'entries',
+    and place them in a top-level 'grouped_entries' plus per-log 'shared_entries'.
+
+    Returns:
+      (updated_logs_out, grouped_entries_dict)
+    """
+    # Early return if group_threshold is None or invalid
+    if group_threshold is None or group_threshold <= 0:
+        return logs_out, {}
+
+    # Track frequency of each field value across logs
+    field_values = {}  # field -> value -> set(log_ids)
+    for log in logs_out:
+        for field, value in log["entries"].items():
+            if field not in field_values:
+                field_values[field] = {}
+            value_str = json.dumps(value)
+            if value_str not in field_values[field]:
+                field_values[field][value_str] = set()
+            field_values[field][value_str].add(log["id"])
+
+    # Build grouped_entries dict for fields that meet the threshold
+    grouped_entries = {}  # field -> value_dict
+    fields_to_group = set()  # fields that have any values meeting threshold
+
+    for field, values in field_values.items():
+        # For group_threshold=1, we always group
+        # For group_threshold>1, we only group if any value appears >= threshold times
+        if group_threshold == 1 or any(
+            len(log_ids) >= group_threshold for log_ids in values.values()
+        ):
+
+            # Add this field to grouped_entries with all its distinct values
+            grouped_entries[field] = {}
+            fields_to_group.add(field)
+
+            # Map each log_id to its value for this field
+            log_id_to_value = {}
+            for value_str, log_ids in values.items():
+                value = json.loads(value_str)
+                for log_id in log_ids:
+                    log_id_to_value[log_id] = value
+
+            # Add all distinct values to grouped_entries
+            for value in log_id_to_value.values():
+                if value not in grouped_entries[field].values():
+                    # Find next available index
+                    next_idx = len(grouped_entries[field])
+                    grouped_entries[field][next_idx] = value
+
+    # Update each log to use shared_entries
+    for log in logs_out:
+        shared_entries = {}
+
+        # For each field being grouped
+        for field in fields_to_group:
+            if field in log["entries"]:
+                # Find the index in grouped_entries that matches this value
+                value = log["entries"][field]
+                for idx, grouped_value in grouped_entries[field].items():
+                    if grouped_value == value:
+                        shared_entries[field] = idx
+                        break
+                # Remove from entries since it's now in shared_entries
+                del log["entries"][field]
+
+        # Only add shared_entries if we have any
+        if shared_entries:
+            log["shared_entries"] = shared_entries
+
+    return logs_out, grouped_entries
+
+
+def _get_all_filtered_log_event_ids(
+    request_fastapi: Request,
+    project: str,
+    context: Optional[str],
+    filter_expr: Optional[str],
+    from_ids: Optional[str],
+    exclude_ids: Optional[str],
+    project_dao: ProjectDAO,
+    context_dao: ContextDAO,
+    session=Depends(get_db_session),
+) -> Tuple[List[int], int]:
+    """
+    Return all log_event_ids (no pagination, no field-level filtering) that match
+    these top-level filters: from_ids, exclude_ids, filter_expr, context, and project.
+
+    Returns:
+        (event_ids, total_count)
+    """
+    user_id = request_fastapi.state.user_id
+
+    # Validate project
+    try:
+        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
+    except IndexError:
+        raise HTTPException(status_code=404, detail=f"Project {project} not found.")
+    project_id = project_obj.id
+
+    # Start from LogEvent table
+    log_event_query = session.query(LogEvent.id).filter(
+        LogEvent.project_id == project_id,
+    )
+
+    # Handle from_ids vs exclude_ids
+    if from_ids and exclude_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot set both from_ids and exclude_ids.",
+        )
+    if from_ids:
+        include_ids = [int(x) for x in from_ids.split("&")]
+        log_event_query = log_event_query.filter(LogEvent.id.in_(include_ids))
+    elif exclude_ids:
+        exclude_set = [int(x) for x in exclude_ids.split("&")]
+        log_event_query = log_event_query.filter(LogEvent.id.notin_(exclude_set))
+
+    # Handle user-defined filter_expr => build SQL expression on LogEvent
+    if filter_expr:
+        filter_dict = str_filter_exp_to_dict(filter_expr)
+        if filter_dict:
+            condition = build_sql_query(filter_dict, LogEvent, session)
+            if isinstance(condition, Subquery):
+                # Subquery => we check existence
+                log_event_query = log_event_query.filter(
+                    exists(
+                        select(1)
+                        .select_from(condition)
+                        .where(
+                            and_(
+                                condition.c.log_event_id == LogEvent.id,
+                                condition.c.value.is_(True),
+                            ),
+                        ),
+                    ),
+                )
+            else:
+                log_event_query = log_event_query.filter(condition)
+
+    # Filter by "static context"
+    if context:
+        ctx_id = context_dao.filter(name=context, project_id=project_id)
+        if ctx_id:
+            ctx_id_val = ctx_id[0][0].id
+            log_event_query = log_event_query.filter(
+                exists(
+                    select(1)
+                    .select_from(LogEventContext)
+                    .where(
+                        and_(
+                            LogEventContext.log_event_id == LogEvent.id,
+                            LogEventContext.context_id == ctx_id_val,
+                        ),
+                    ),
+                ),
+            )
+
+    # Execute the query: we get all relevant event IDs (no limit/offset)
+    all_ids = log_event_query.all()  # each row is a tuple (id,)
+    event_ids = [r[0] for r in all_ids]
+    total_count = len(event_ids)
+
+    return event_ids, total_count
+
+
+def _fetch_logs_for_event_ids(
+    request_fastapi: Request,
+    event_ids: List[int],
+    column_context: Optional[str],
+    from_fields: Optional[str],
+    exclude_fields: Optional[str],
+    sorting: Optional[str],
+    limit: Optional[int],
+    offset: int,
+    parent_fields: Optional[str],
+    project_dao: ProjectDAO,
+    field_type_dao: FieldTypeDAO,
+    session=Depends(get_db_session),
+    latest_timestamp: bool = False,
+) -> Union[Tuple[List[Tuple[Union[Log, DerivedLog], datetime, int]], int], str]:
+    """
+    Given a known list of event_ids, retrieve the union of Log + DerivedLog rows
+    that match column_context, from_fields/exclude_fields, etc. Then apply sorting
+    + pagination to the distinct event_ids, and return (rows, count).
+    If latest_timestamp=True, return only the max updated_at across those logs.
+    """
+    if not event_ids:
+        return ([], 0) if not latest_timestamp else None
+
+    user_id = request_fastapi.state.user_id
+
+    # Quick project check to retrieve field type info
+    # (We assume the user is allowed to see these events.)
+    try:
+        project_obj = project_dao.filter(user_id=user_id)[0][0]
+        project_id = project_obj.id
+    except IndexError:
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+    # 1) Build union subquery from base logs + derived logs, for these event IDs
+    base_logs_q = (
+        session.query(
+            Log.id.label("id"),
+            Log.log_event_id.label("log_event_id"),
+            Log.key.label("key"),
+            Log.value.label("value"),
+            Log.inferred_type.label("inferred_type"),
+            Log.version.label("version"),
+            Log.updated_at.label("updated_at"),
+            LogEvent.created_at.label("created_at"),
+            literal("base").label("source_type"),
+        )
+        .join(LogEvent, LogEvent.id == Log.log_event_id)
+        .filter(LogEvent.id.in_(event_ids))
+    )
+
+    derived_logs_q = (
+        session.query(
+            DerivedLog.id.label("id"),
+            DerivedLog.log_event_id.label("log_event_id"),
+            DerivedLog.key.label("key"),
+            DerivedLog.value.label("value"),
+            DerivedLog.inferred_type.label("inferred_type"),
+            cast(None, Integer).label("version"),
+            DerivedLog.updated_at.label("updated_at"),
+            LogEvent.created_at.label("created_at"),
+            literal("derived").label("source_type"),
+        )
+        .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
+        .filter(LogEvent.id.in_(event_ids))
+    )
+
+    unified_logs_subq = base_logs_q.union_all(derived_logs_q).subquery("unified_logs")
+
+    # 2) column_context logic + exclude_params/entries
+    exclude_params = False
+    exclude_entries = False
+    context_len = 0
+    if column_context:
+        parts = column_context.split("/")
+        exclude_params = "entries" in parts
+        exclude_entries = "params" in parts
+        # Clean out those tokens
+        cleaned_parts = [x for x in parts if x not in ("entries", "params")]
+        real_prefix = "/".join(cleaned_parts)
+        if real_prefix and not real_prefix.endswith("/"):
+            real_prefix += "/"
+
+        filtered_logs_q = session.query(unified_logs_subq).filter(True)
+        if real_prefix:
+            filtered_logs_q = filtered_logs_q.filter(
+                unified_logs_subq.c.key.startswith(real_prefix),
+            )
+            context_len = len(real_prefix)
+    else:
+        filtered_logs_q = session.query(unified_logs_subq)
+
+    if exclude_params:
+        filtered_logs_q = filtered_logs_q.filter(unified_logs_subq.c.version.is_(None))
+    elif exclude_entries:
+        filtered_logs_q = filtered_logs_q.filter(
+            unified_logs_subq.c.version.isnot(None),
+        )
+
+    # 3) from_fields / exclude_fields
+    if from_fields and exclude_fields:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot set both from_fields and exclude_fields.",
+        )
+    if from_fields:
+        allowed = from_fields.split("&")
+        filtered_logs_q = filtered_logs_q.filter(unified_logs_subq.c.key.in_(allowed))
+    elif exclude_fields:
+        excluded = exclude_fields.split("&")
+        filtered_logs_q = filtered_logs_q.filter(
+            unified_logs_subq.c.key.notin_(excluded),
+        )
+    if parent_fields:
+        # We want to exclude any logs with the parent_fields as these
+        # are the ones we're grouping by.
+        not_allowed = parent_fields.split("&")
+        filtered_logs_q = filtered_logs_q.filter(
+            unified_logs_subq.c.key.notin_(not_allowed),
+        )
+
+    filtered_logs_subq = filtered_logs_q.subquery("filtered_logs_subq")
+
+    # 4) Distinct log_event_ids => sort => limit => offset
+    distinct_ids_subq = (
+        session.query(filtered_logs_subq.c.log_event_id.label("log_event_id"))
+        .distinct()
+        .subquery("distinct_ids_subq")
+    )
+
+    field_types = field_type_dao.get_field_types(project_id)
+    sorted_query = session.query(distinct_ids_subq.c.log_event_id)
+    sort_criteria = []
+
+    # 4a) Sorting
+    if sorting:
+        sort_dict = json.loads(sorting)
+        for sort_key, mode in sort_dict.items():
+            if mode not in ("ascending", "descending"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Sort mode must be 'ascending' or 'descending'; got {mode}",
+                )
+            key_subq = (
+                session.query(
+                    filtered_logs_subq.c.log_event_id.label("log_event_id"),
+                    filtered_logs_subq.c.value.label("raw_value"),
+                )
+                .filter(filtered_logs_subq.c.key == sort_key)
+                .subquery(f"sort_{sort_key}_subq")
+            )
+            sorted_query = sorted_query.outerjoin(
+                key_subq,
+                key_subq.c.log_event_id == distinct_ids_subq.c.log_event_id,
+            )
+            direction = asc if mode == "ascending" else desc
+            if sort_key in field_types:
+                pytype = field_types[sort_key]
+                cast_type = STR_TO_SQL_TYPES.get(pytype, None)
+                if cast_type is not None:
+                    sort_expr = cast(key_subq.c.raw_value, cast_type)
+                else:
+                    sort_expr = key_subq.c.raw_value
+            else:
+                sort_expr = key_subq.c.raw_value
+
+            sort_criteria.append(direction(sort_expr).nulls_last())
+
+    # If not sorted, fallback to ID desc
+    if not sort_criteria:
+        sort_criteria.append(distinct_ids_subq.c.log_event_id.desc())
+
+    sorted_query = sorted_query.add_columns(
+        func.row_number().over(order_by=sort_criteria).label("row_num"),
+    ).order_by("row_num")
+
+    # 4b) Apply pagination
+    total_count = sorted_query.count()
+    if limit:
+        sorted_query = sorted_query.limit(limit)
+    if offset:
+        sorted_query = sorted_query.offset(offset)
+
+    if latest_timestamp:
+        # If we only want the max updated_at
+        max_updated_at = (
+            session.query(func.max(filtered_logs_subq.c.updated_at))
+            .filter(filtered_logs_subq.c.log_event_id.in_(event_ids))
+            .scalar()
+        )
+        return max_updated_at.isoformat() if max_updated_at else None
+
+    paginated_ids_subq = sorted_query.subquery("paginated_ids_subq")
+
+    # 5) Finally join back to get the actual rows
+    final_logs_query = (
+        session.query(
+            filtered_logs_subq.c.id,
+            filtered_logs_subq.c.log_event_id,
+            filtered_logs_subq.c.key,
+            filtered_logs_subq.c.value,
+            filtered_logs_subq.c.inferred_type,
+            filtered_logs_subq.c.version,
+            filtered_logs_subq.c.created_at,
+            filtered_logs_subq.c.source_type,
+        )
+        .join(
+            paginated_ids_subq,
+            paginated_ids_subq.c.log_event_id == filtered_logs_subq.c.log_event_id,
+        )
+        .order_by(paginated_ids_subq.c.row_num, filtered_logs_subq.c.created_at)
+    )
+
+    raw_rows = final_logs_query.all()
+
+    # 6) Re-hydrate them as (Log|DerivedLog, created_at, log_event_id)
+    results = []
+    for (
+        row_id,
+        row_event_id,
+        row_key,
+        row_value,
+        row_inferred_type,
+        row_version,
+        row_created_at,
+        row_source_type,
+    ) in raw_rows:
+        if row_source_type == "base":
+            obj = session.query(Log).get(row_id)
+        else:
+            obj = session.query(DerivedLog).get(row_id)
+
+        if obj is not None:
+            results.append((obj, row_created_at, row_event_id))
+
+    return results, context_len, total_count
+
+
+def _build_grouped_data(
+    request_fastapi: Request,
+    project: str,
+    log_event_ids: List[int],
+    field_order_map: Dict[str, int],
+    group_by: List[str],
+    group_depth: Optional[int],
+    group_limit: Optional[int],
+    group_offset: int,
+    level: int,
+    limit: Optional[int],
+    offset: int,
+    column_context: Optional[str],
+    from_fields: Optional[str],
+    exclude_fields: Optional[str],
+    sorting: Optional[str],
+    project_dao: ProjectDAO,
+    field_type_dao: FieldTypeDAO,
+    context_dao: ContextDAO,
+    session=Depends(get_db_session),
+    value_limit: Optional[int] = None,
+    parent_group_key: Optional[str] = "",
+) -> Dict[str, Any]:
+    """
+    Returns a dict shaped like:
+      {
+        "<current_group_key>": {
+          <group_value1 or "null">: <substructure or leaf logs>,
+          <group_value2>: <substructure or leaf logs>,
+          ...
+          "group_count": int,
+          "count": int
+        }
+      }
+
+    If level >= group_depth or we've exhausted group_by, we return the leaf logs (list).
+    """
+
+    def _get_count_from_substructure(sub_val: Union[List, Dict, int]) -> int:
+        """Helper to recursively get count from a substructure."""
+        if isinstance(sub_val, int):
+            return sub_val
+        elif isinstance(sub_val, list):
+            return len(sub_val)
+        elif isinstance(sub_val, dict):
+            # First check if this dict has a direct count
+            if "count" in sub_val:
+                return sub_val["count"]
+            # Otherwise sum up counts from all non-metadata fields
+            total = 0
+            for k, v in sub_val.items():
+                if k not in ("group_count", "count"):
+                    total += _get_count_from_substructure(v)
+            return total
+        else:
+            return 0
+
+    def parse_group_key(key: str) -> Tuple[str, str]:
+        """Returns (prefix, actual_field). e.g. 'entries/i' -> ('entries','i')."""
+        parts = key.split("/", 1)
+        if len(parts) == 1:
+            return ("", key)
+        return (parts[0], parts[1])
+
+    total_logs_in_group = len(log_event_ids)
+    # If no logs, return empty
+    if total_logs_in_group == 0:
+        return {}
+
+    # If we've run out of group_by keys OR group_depth
+    # => fetch the actual logs (leaf)
+    if level >= len(group_by):
+        rows, context_len, leaf_count = _fetch_logs_for_event_ids(
+            request_fastapi=request_fastapi,
+            event_ids=log_event_ids,
+            column_context=column_context,
+            from_fields=from_fields,
+            exclude_fields=exclude_fields,
+            sorting=sorting,
+            limit=limit,
+            offset=offset,
+            parent_fields=parent_group_key,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            session=session,
+        )
+        logs_out, _ = _format_flat_logs(rows, context_len, value_limit, field_order_map)
+        return logs_out  # A list of logs
+
+    current_group_key = group_by[level]
+    prefix, raw_key = parse_group_key(current_group_key)
+    # 1) Distinguish logs that *have* this group_key vs. logs that are missing it
+    #    (We put missing ones in the "null" group).
+    present_values = _get_distinct_group_values(
+        session=session,
+        log_event_ids=log_event_ids,
+        group_key=raw_key,
+    )
+
+    # If group_depth is specified AND we have reached it,
+    if group_depth is not None and level >= group_depth:
+        # For depth=0, we need to maintain the structure but only return counts
+        if level == 0:
+            return {
+                current_group_key: {
+                    "group_count": len(present_values),
+                    "count": total_logs_in_group,
+                },
+            }
+        return total_logs_in_group
+
+    # This is a list of distinct values that exist.
+
+    # 2) Build subsets for each distinct value
+    #    But also compute the set of all IDs that appear in these subsets
+    #    so we can figure out which are missing
+    used_ids = set()
+    value_to_ids = {}
+
+    for val in present_values:
+        subset_ids = _get_log_event_ids_for_group_value(
+            session=session,
+            log_event_ids=log_event_ids,
+            group_key=raw_key,
+            group_value=val,
+        )
+        value_to_ids[val] = subset_ids
+        used_ids.update(subset_ids)
+
+    # 3) "null" group => all log IDs that do not have the group_key
+    missing_ids = set(log_event_ids) - used_ids
+    have_null = len(missing_ids) > 0
+
+    # 4) Apply group_offset & group_limit to the distinct values (but not to "null")
+    total_distinct = len(present_values)
+    if group_limit is not None:
+        paged_values = present_values[group_offset : group_offset + group_limit]
+    else:
+        paged_values = present_values
+
+    # Build the data structure that will go inside e.g.  "params/a/b/param2": {...}
+    out_dict = {}
+    # We will fill out_dict[<value>] = substructure or logs
+    # then compute out_dict["count"] and out_dict["group_count"]
+
+    # 5) Recurse on each distinct value
+    #    The substructure might be a list (leaf logs) or a nested dict
+    #    We store them in a dictionary keyed by that value
+    for val in paged_values:
+        subset = value_to_ids[val]
+        sub = _build_grouped_data(
+            request_fastapi=request_fastapi,
+            project=project,
+            log_event_ids=list(subset),
+            field_order_map=field_order_map,
+            group_by=group_by,
+            group_depth=group_depth,
+            group_limit=group_limit,
+            group_offset=group_offset,
+            level=level + 1,
+            limit=limit,
+            offset=offset,
+            column_context=column_context,
+            from_fields=from_fields,
+            exclude_fields=exclude_fields,
+            sorting=sorting,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+            value_limit=value_limit,
+            parent_group_key="&".join([parent_group_key, raw_key])
+            if parent_group_key
+            else raw_key,
+        )
+        out_dict[val] = sub
+
+    # 6) If we have missing_ids => we create a "null" group
+    if have_null:
+        null_sub = _build_grouped_data(
+            request_fastapi=request_fastapi,
+            project=project,
+            log_event_ids=list(missing_ids),
+            field_order_map=field_order_map,
+            group_by=group_by,
+            group_depth=group_depth,
+            group_limit=group_limit,
+            group_offset=group_offset,
+            level=level + 1,
+            limit=limit,
+            offset=offset,
+            column_context=column_context,
+            from_fields=from_fields,
+            exclude_fields=exclude_fields,
+            sorting=sorting,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+            value_limit=value_limit,
+        )
+        out_dict["null"] = null_sub
+
+    # 7) Compute "count" = sum of substructures' counts
+    total_count_sub = 0
+    for k, sub_val in out_dict.items():
+        if k not in ("group_count", "count"):
+            total_count_sub += _get_count_from_substructure(sub_val)
+
+    # 8) group_count = # distinct values + 1 if we have a "null" group
+    computed_group_count = total_distinct
+
+    # 9) Put them into out_dict
+    out_dict["group_count"] = computed_group_count
+    out_dict["count"] = total_count_sub
+
+    # 10) Finally, wrap this under the current_group_key:
+    #     e.g. { "params/a/b/param2": out_dict }
+    return {
+        current_group_key: out_dict,
+    }
