@@ -4325,3 +4325,660 @@ async def test_get_logs_with_type_check(client: AsyncClient):
     )
     assert response.status_code == 200
     assert len(response.json()["logs"]) == 7
+
+
+@pytest.mark.anyio
+async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
+    # Test for the following:
+    # - Single-level grouping (entries & params)
+    # - Multi-level grouping
+    # - group_offset / group_limit
+    # - group_depth
+
+    project_name = "test-grouping-comprehensive"
+    _ = await _create_project(client, project_name)
+
+    # 1) Create initial logs using your existing fixture
+    await _create_several_logs(client, project_name)
+
+    # 2) Create *additional* logs so we can test grouping by params properly.
+    #    We'll vary the version param "a/b/param2" across logs.
+    custom_logs_for_param_versions = [
+        {
+            "params": {"a/b/param1": "extra_test_1", "a/b/param2": "0"},
+            "entries": {
+                "_/description": "param-version log #1",
+                "_/state": "extra_liquid",
+                "_/safe": True,
+            },
+        },
+        {
+            "params": {"a/b/param1": "extra_test_2", "a/b/param2": "1"},
+            "entries": {
+                "_/description": "param-version log #2",
+                "_/state": "extra_liquid",
+                "_/safe": False,
+            },
+        },
+        {
+            "params": {"a/b/param1": "extra_test_3", "a/b/param2": "1"},
+            "entries": {
+                "_/description": "param-version log #3",
+                "_/state": "extra_vapor",
+                "_/safe": True,
+            },
+        },
+    ]
+    for item in custom_logs_for_param_versions:
+        response = await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "params": item["params"],
+                "entries": item["entries"],
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+    #
+    # ==========  SCENARIO 1: Single-level grouping by "entries/_/state"  ==========
+    #
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={
+            "group_by": ["entries/_/state"],
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    logs_section = result["logs"]  # e.g. "logs": { "entries/_/state": { ... } }
+
+    # Make sure the top-level dict has exactly 1 key: "entries/_/state"
+    assert len(logs_section) == 1, f"Expected 1 group key, found: {logs_section.keys()}"
+    root_key = list(logs_section.keys())[0]
+    assert root_key == "entries/_/state"
+
+    group_obj = logs_section["entries/_/state"]
+    assert "group_count" in group_obj
+    assert "count" in group_obj
+
+    assert (
+        group_obj["count"] == 10
+    ), "We expect 10 total logs across all states (including null)."
+
+    # Check that the 'null' group is present if we have logs that do not have `_/state`.
+    # In your snippet, logs with event_id=5,6,7 do not have `_/state`, so we expect "null".
+    group_keys = [k for k in group_obj.keys() if k not in ("group_count", "count")]
+    assert (
+        "null" in group_keys
+    ), "We expect a 'null' group for logs that have no _/state field."
+    assert "extra_liquid" in group_keys
+    assert "extra_vapor" in group_keys
+    assert "gas" in group_keys
+    assert "liquid->solid" in group_keys
+    assert "liquid->gas" in group_keys
+
+    # Now check each group is either a list (leaf) or a sub-dict if we had more grouping
+    for key in group_keys:
+        sub = group_obj[key]
+        if isinstance(sub, list):
+            # Leaf logs
+            for log in sub:
+                assert "id" in log
+                assert "ts" in log
+                # etc.
+        else:
+            # If for some reason there's a nested grouping
+            # But this is a single-level grouping, so it should be a list
+            raise AssertionError(f"Expected a leaf list for {key}, got {type(sub)}")
+
+    #
+    # ==========  SCENARIO 2: Single-level grouping by param "a/b/param1"  ==========
+    #
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"group_by": ["params/a/b/param1"]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    logs_section = result.get("logs", {})
+
+    # Check top level structure
+    assert len(logs_section) == 1, f"Expected 1 group key, found: {logs_section.keys()}"
+    assert "params/a/b/param1" in logs_section
+
+    param1_groups = logs_section["params/a/b/param1"]
+    assert "group_count" in param1_groups
+    assert "count" in param1_groups
+    assert param1_groups["count"] == 10, "Expected 10 total logs"
+
+    # Check group keys - we should have test_0 through test_6 and extra_test_1 through extra_test_3
+    group_keys = [k for k in param1_groups.keys() if k not in ("group_count", "count")]
+    assert len(group_keys) >= 9, "Expected at least 9 distinct param1 values"
+
+    # Verify each group contains valid logs
+    for param1_val in group_keys:
+        group_logs = param1_groups[param1_val]
+        assert isinstance(group_logs, list), f"Expected list for param1={param1_val}"
+        for log in group_logs:
+            assert "id" in log
+            assert "ts" in log
+            assert "entries" in log
+            assert "params" in log
+            # The grouped-by field should be removed from params
+            assert "a/b/param1" not in log["params"]
+
+    #
+    # ==========  SCENARIO 3: Multi-level grouping by param "a/b/param2" and "entries/_/state"  ==========
+    #
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"group_by": ["params/a/b/param2", "entries/_/state"]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    logs_section = result["logs"]
+    assert len(logs_section) == 1
+    root_key = list(logs_section.keys())[0]
+    assert root_key == "params/a/b/param2"
+
+    top_level = logs_section["params/a/b/param2"]
+    assert "group_count" in top_level
+    assert "count" in top_level
+    assert top_level["count"] == 10, "Should still be 10 logs total at top level."
+
+    # Distinct param2 values might be "0", "1", plus "null" if some logs lack param2
+    top_keys = [k for k in top_level.keys() if k not in ("group_count", "count")]
+    assert (
+        "null" in top_keys
+    ), "We do have logs that lack param2 (IDs 1..7), so expect 'null'."
+
+    # For each version => sub-dict "entries/_/state"
+    for version_val in top_keys:
+        sub_obj = top_level[version_val]
+        # This should have exactly 1 key: "entries/_/state"
+        assert len(sub_obj) == 1 or (
+            len(sub_obj) in (2, 3) and "group_count" in sub_obj
+        ), f"Expected a single group key, found: {sub_obj.keys()}"
+    second_level_key = list(sub_obj.keys())[0]
+    assert second_level_key == "entries/_/state"
+    second_level = sub_obj["entries/_/state"]
+    assert "group_count" in second_level
+    assert "count" in second_level
+
+    # Then each distinct state is either a list or a further dict if you had more grouping
+    for st_key, st_val in second_level.items():
+        if st_key in ("group_count", "count"):
+            continue
+        if isinstance(st_val, list):
+            # leaf logs
+            for log in st_val:
+                assert "id" in log
+                assert "ts" in log
+                # etc.
+        else:
+            # Could be a deeper group if we had a third dimension
+            pass
+
+        #
+        # ==========  SCENARIO 4: Group pagination (group_limit, group_offset)  ==========
+        #
+        # We'll do it on the "entries/_/state" grouping, which we know has at least 5 distinct states.
+        # Example: group_limit=2, group_offset=1 => we skip the first group, only show the next 2
+        response = await client.get(
+            f"/v0/logs?project={project_name}",
+            params={
+                "group_by": ["entries/_/state"],
+                "group_limit": 2,
+                "group_offset": 1,
+            },
+            headers=HEADERS,
+        )
+    assert response.status_code == 200
+    result = response.json()
+
+    # Check top level structure
+    logs_section = result["logs"]
+    assert len(logs_section) == 1
+    assert "entries/_/state" in logs_section
+
+    state_groups = logs_section["entries/_/state"]
+    assert "group_count" in state_groups
+    assert "count" in state_groups
+    total_groups = state_groups["group_count"]
+    assert total_groups == 5, "Expected 5 total state groups"
+    assert state_groups["count"] == 7, "Expected 7 total logs (including null)"
+
+    # Check pagination results (2 groups after pagination +  1 null group (default))
+    returned_groups = [
+        k for k in state_groups.keys() if k not in ("group_count", "count")
+    ]
+    assert (
+        len(returned_groups) == 3
+    ), f"Expected exactly 3 groups with limit=2, got {len(returned_groups)}"
+    assert "null" in returned_groups, "Expected a 'null' group"
+
+    # Verify each returned group contains valid logs
+    for state_val in returned_groups:
+        group_logs = state_groups[state_val]
+        assert isinstance(group_logs, list), f"Expected list for state={state_val}"
+        for log in group_logs:
+            assert "id" in log
+            assert "ts" in log
+            assert "entries" in log
+            assert "params" in log
+            # The state field should be removed from entries since it's grouped
+            assert "_/state" not in log["entries"]
+
+    #
+    # ==========  SCENARIO 5: Group depth tests  ==========
+    #
+    for depth in [0, 1, 2, 3, 4]:
+        response = await client.get(
+            f"/v0/logs?project={project_name}",
+            params={
+                "group_by": ["params/a/b/param2", "entries/_/state", "entries/_/safe"],
+                "group_depth": depth,
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+        result = response.json()
+
+        logs_section = result["logs"]
+        assert len(logs_section) == 1
+        assert "params/a/b/param2" in logs_section
+        param2_groups = logs_section["params/a/b/param2"]
+
+        if depth == 0:
+            # At depth 0, we expect just counts for each param2 value
+            assert "group_count" in param2_groups
+            assert "count" in param2_groups
+            assert param2_groups["count"] == 10
+
+            # Check each param2 value has just an integer count
+            for k, v in param2_groups.items():
+                if k not in ("group_count", "count"):
+                    assert isinstance(
+                        v,
+                        int,
+                    ), f"Expected integer count for param2={k}, got {type(v)}"
+
+        elif depth == 1:
+            # At depth 1, param2 groups are expanded but state groups are counts
+            assert "group_count" in param2_groups
+            assert "count" in param2_groups
+            assert param2_groups["count"] == 10
+            assert param2_groups["group_count"] == 2  # Only non-null groups count
+
+            # Verify the counts for each group
+            assert param2_groups["1"] == 2
+            assert param2_groups["0"] == 1
+            assert param2_groups["null"] == 7
+
+            # No other fields should be present
+            assert set(param2_groups.keys()) == {
+                "1",
+                "0",
+                "null",
+                "group_count",
+                "count",
+            }
+
+        elif depth == 2:
+            # At depth 2, param2 and state are expanded but safe is counts
+            assert "group_count" in param2_groups
+            assert "count" in param2_groups
+            assert param2_groups["count"] == 10
+            assert param2_groups["group_count"] == 2  # Only non-null groups count
+
+            for param2_val, state_groups in param2_groups.items():
+                if param2_val not in ("group_count", "count"):
+                    assert "entries/_/state" in state_groups
+                    state_level = state_groups["entries/_/state"]
+                    assert "group_count" in state_level
+                    assert "count" in state_level
+
+                    if param2_val == "1":
+                        assert state_level["count"] == 2
+                        assert state_level["group_count"] == 2
+                        assert state_level["extra_vapor"] == 1
+                        assert state_level["extra_liquid"] == 1
+                    elif param2_val == "0":
+                        assert state_level["count"] == 1
+                        assert state_level["group_count"] == 1
+                        assert state_level["extra_liquid"] == 1
+                    elif param2_val == "null":
+                        assert state_level["count"] == 7
+                        assert (
+                            state_level["group_count"] == 3
+                        )  # Not counting null group
+                        assert state_level["liquid->solid"] == 2
+                        assert state_level["gas"] == 1
+                        assert state_level["liquid->gas"] == 1
+                        assert state_level["null"] == 3
+
+        elif depth >= 3:
+            # At depth 3+, everything should be fully expanded to log lists
+            assert "group_count" in param2_groups
+            assert "count" in param2_groups
+            assert param2_groups["count"] == 10
+            assert param2_groups["group_count"] == 2  # Only non-null groups count
+
+            for param2_val, state_groups in param2_groups.items():
+                if param2_val not in ("group_count", "count"):
+                    assert "entries/_/state" in state_groups
+                    state_level = state_groups["entries/_/state"]
+                    assert "group_count" in state_level
+                    assert "count" in state_level
+
+                    for state_val, safe_groups in state_level.items():
+                        if state_val not in ("group_count", "count"):
+                            assert "entries/_/safe" in safe_groups
+                            safe_level = safe_groups["entries/_/safe"]
+                            assert "group_count" in safe_level
+                            assert "count" in safe_level
+                            # Each safe value should just have an integer count
+                            for safe_val, logs in safe_level.items():
+                                if safe_val not in ("group_count", "count"):
+                                    assert isinstance(
+                                        logs,
+                                        list,
+                                    ), f"Expected list of logs for safe={safe_val}"
+                                    for log in logs:
+                                        assert "id" in log
+                                        assert "ts" in log
+                                        assert "entries" in log
+                                        assert "params" in log
+                                        # All grouped fields should be removed
+                                        assert "a/b/param2" not in log["params"]
+                                        assert "_/state" not in log["entries"]
+                                        assert "_/safe" not in log["entries"]
+
+        else:  # depth >= 3
+            # At depth 3+, everything should be fully expanded to log lists
+            assert "group_count" in param2_groups
+            assert "count" in param2_groups
+            assert param2_groups["count"] == 10
+
+            for param2_val, state_groups in param2_groups.items():
+                if param2_val not in ("group_count", "count"):
+                    assert "entries/_/state" in state_groups
+                    state_level = state_groups["entries/_/state"]
+                    assert "group_count" in state_level
+                    assert "count" in state_level
+
+                    for state_val, safe_groups in state_level.items():
+                        if state_val not in ("group_count", "count"):
+                            assert "entries/_/safe" in safe_groups
+                            safe_level = safe_groups["entries/_/safe"]
+                            assert "group_count" in safe_level
+                            assert "count" in safe_level
+
+                            for safe_val, logs in safe_level.items():
+                                if safe_val not in ("group_count", "count"):
+                                    assert isinstance(
+                                        logs,
+                                        list,
+                                    ), f"Expected list of logs for safe={safe_val}"
+                                    for log in logs:
+                                        assert "id" in log
+                                        assert "ts" in log
+                                        assert "entries" in log
+                                        assert "params" in log
+                                        # All grouped fields should be removed
+                                        assert "a/b/param2" not in log["params"]
+                                        assert "_/state" not in log["entries"]
+                                        assert "_/safe" not in log["entries"]
+
+
+@pytest.mark.anyio
+async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
+    """
+    Test combining group_by with additional filters like from_fields, exclude_fields,
+    from_ids, exclude_ids, filter_expr, sorting, limit/offset, etc.
+    We'll reuse a fresh project with the same logs fixture as 'test_get_logs_grouping_all_scenarios'
+    so we have the same data to play with.
+    """
+
+    project_name = "test-grouping-with-other-filters"
+    _ = await _create_project(client, project_name)
+
+    # Create the standard logs you used before:
+    await _create_several_logs(client, project_name)
+
+    # Create a few extra logs that have param "a/b/param2" and other fields:
+    custom_logs_for_param_versions = [
+        {
+            "params": {"a/b/param1": "extra_test_1", "a/b/param2": "0"},
+            "entries": {
+                "_/description": "param-version log #1",
+                "_/state": "extra_liquid",
+                "_/safe": True,
+            },
+        },
+        {
+            "params": {"a/b/param1": "extra_test_2", "a/b/param2": "1"},
+            "entries": {
+                "_/description": "param-version log #2",
+                "_/state": "extra_liquid",
+                "_/safe": False,
+            },
+        },
+        {
+            "params": {"a/b/param1": "extra_test_3", "a/b/param2": "1"},
+            "entries": {
+                "_/description": "param-version log #3",
+                "_/state": "extra_vapor",
+                "_/safe": True,
+            },
+        },
+    ]
+    for item in custom_logs_for_param_versions:
+        response = await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "params": item["params"],
+                "entries": item["entries"],
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+    #
+    # ==========  SCENARIO A: group_by + from_fields  ==========
+    #
+    # We'll group by "entries/_/state" but only include logs that have either
+    # "entries/_/state" or "entries/_/description" (from_fields).
+    # This should exclude logs that lack these keys entirely.
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/_/state"],
+            "from_fields": "_/description&_/state",  # only logs w/ these keys
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    logs_section = result["logs"]
+    assert "entries/_/state" in logs_section
+    group_obj = logs_section["entries/_/state"]
+    assert "group_count" in group_obj
+    assert "count" in group_obj
+
+    # All logs that do NOT have _/state or _/description will be filtered out entirely,
+    # so let's confirm the total count is correct. Every log except id=7 has
+    # _/description. The "null" group covers logs missing _/state, but still they appear
+    # because they *do* have _/description. So we should have 9 logs.
+    assert (
+        group_obj["count"] == 9
+    ), f"Expected 10 logs that contain either _/description or _/state, got {group_obj['count']}"
+
+    # Verify each returned log only has the from_fields in "entries":
+    for group_name, logs_or_meta in group_obj.items():
+        if group_name in ("group_count", "count"):
+            continue
+        assert isinstance(logs_or_meta, list)
+        for log in logs_or_meta:
+            for field in log["entries"].keys():
+                # Should only see _/description
+                assert field in ("_/description",), f"Unexpected field: {field}"
+
+    #
+    # ==========  SCENARIO B: group_by + exclude_fields  ==========
+    #
+    # Exclude `_/description`, and group by `_/state`. We expect the logs to be grouped
+    # by `_/state`, but none of the returned logs should contain `_/description`.
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/_/state"],
+            "exclude_fields": "_/description",  # remove the description field
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    logs_section = result["logs"]
+    assert "entries/_/state" in logs_section
+    group_obj = logs_section["entries/_/state"]
+    assert "group_count" in group_obj
+    assert "count" in group_obj
+
+    # Check logs to ensure `_/description` is excluded from each "entries" dict
+    for group_name, logs_or_meta in group_obj.items():
+        if group_name in ("count", "group_count"):
+            continue
+        for log in logs_or_meta:
+            assert "_/description" not in log["entries"]
+
+    #
+    # ==========  SCENARIO C: group_by + from_ids (or exclude_ids)  ==========
+    #
+    # Let's pick a small subset of log_event_ids: for instance, the first 2 logs + the
+    # "param-version log #1" (which might be event_id=8 in your fixture).
+    # We'll group by "params/a/b/param1" now, but it should only return logs
+    # that match these IDs.
+    # Let's assume the first 2 logs have IDs = 1,2, and the param-version #1 has ID=8.
+    # (Check your actual DB if needed.)
+    from_ids_example = "1&2&8"
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["params/a/b/param1"],
+            "from_ids": from_ids_example,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    logs_section = result["logs"]
+    assert "params/a/b/param1" in logs_section
+
+    param1_section = logs_section["params/a/b/param1"]
+    assert "count" in param1_section
+    # We expect exactly the logs with event_ids = 1, 2, 8
+    # That should be 3 total logs if all exist with those IDs
+    # (Provided that they indeed exist in your fixture.)
+    assert (
+        param1_section["count"] == 3
+    ), f"Expected 3 logs, got {param1_section['count']}"
+
+    # We can also verify that no other logs appear:
+    for k, subval in param1_section.items():
+        if k in ("group_count", "count"):
+            continue
+        # subval should be a list of logs
+        for log in subval:
+            assert log["id"] in (1, 2, 8), f"Found unexpected log ID: {log['id']}"
+
+    #
+    # ==========  SCENARIO D: group_by + filter_expr  ==========
+    #
+    # Suppose we only want logs with a temperature above 100. (In your data, that might
+    # include 'surface of the sun' (6000), 'lava' (??), etc.)
+    # We'll group them by `_/state` for demonstration.
+    # For filter_expr, you might do something like: "float(_/temperature) > 100"
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/_/state"],
+            "filter_expr": "_/temperature > 0",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    logs_section = result["logs"]
+    assert "entries/_/state" in logs_section
+    group_obj = logs_section["entries/_/state"]
+    assert "count" in group_obj
+    assert "group_count" in group_obj
+    # Confirm that each returned log has a temperature above 100
+    for group_name, logs_or_meta in group_obj.items():
+        if group_name in ("count", "group_count"):
+            continue
+        for log in logs_or_meta:
+            temp = log["entries"].get("_/temperature")
+            if isinstance(temp, str):
+                temp_float = float(temp)
+            else:
+                temp_float = temp
+            assert temp_float > 0, f"Expected temp>0, found {temp_float}"
+
+    #
+    # ==========  SCENARIO E: group_by + sorting + limit/offset at the leaf level  ==========
+    #
+    # We'll group by `entries/_/state`, then inside each state's group we want to
+    # sort by `_/description` ascending, but only return the first 1 log (limit=1)
+    # (and skip 0 logs offset=0). This ensures we see that each group's list is
+    # truncated by limit=1 and sorted by description.
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/_/state"],
+            "sorting": '{"_/description":"descending"}',
+            "limit": 1,
+            "offset": 0,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    logs_section = result["logs"]
+    assert "entries/_/state" in logs_section
+    group_obj = logs_section["entries/_/state"]
+    assert "count" in group_obj
+    assert "group_count" in group_obj
+    # Now each group is a list of *1* log, sorted by description.
+
+    for state_val, logs_or_meta in group_obj.items():
+        if state_val in ("count", "group_count"):
+            continue
+        assert (
+            len(logs_or_meta) <= 1
+        ), f"Expected limit=1 log per group, got {len(logs_or_meta)}"
+        if len(logs_or_meta) == 1:
+            single_log = logs_or_meta[0]
+            # Check presence of fields
+            assert "id" in single_log and "ts" in single_log
+            assert "entries" in single_log and "params" in single_log
+
+    # TODO(yusha): test group_by + sorting at the group level once group sorting is implemented
