@@ -1844,3 +1844,158 @@ def _flatten_fields(
                 if field is not None and field not in flattened[log_id]:
                     flattened[log_id].append(field)
     return flattened
+
+
+def _format_flat_logs(rows, context_len, value_limit, field_order_map):
+    """Helper function to format flat logs"""
+    formatted = {}
+
+    for row_obj, created_at, event_id in rows:
+        if event_id not in formatted:
+            formatted[event_id] = {
+                "ts": created_at.isoformat() if created_at else None,
+                "clipped_fields": [],
+                "entries": {},
+                "versions": {},
+                "derived_entries": {},
+            }
+        is_derived = isinstance(row_obj, DerivedLog)
+
+        # Apply context_len slicing to the key
+        key = row_obj.key[context_len:]
+
+        def _limit_value(value: Any, inferred_type: str) -> Tuple[Any, bool]:
+            """Limit the size of a value based on its type and the value_limit parameter.
+            Returns a tuple of (limited_value, is_clipped)."""
+            if value_limit is None:
+                return value, False
+
+            # Handle numeric values - return as is
+            if inferred_type in ["int", "float", "bool"]:
+                return value, False
+
+            # Handle image fields - return empty string
+            if inferred_type == "image":
+                return "", True
+
+            # Convert value to string if it's a nested structure
+            if inferred_type in ["list", "dict", "tuple"]:
+                str_value = str(value)
+                if len(str_value) > value_limit:
+                    return str_value[:value_limit] + "...", True
+                return str_value, False
+
+            # Handle string values
+            if inferred_type == "str":
+                if len(str(value)) > value_limit:
+                    return str(value)[:value_limit] + "...", True
+                return value, False
+
+            # Default case - treat as string
+            str_value = str(value)
+            if len(str_value) > value_limit:
+                return str_value[:value_limit] + "...", True
+            return str_value, False
+
+        # noinspection PyBroadException
+        def _try_decode(str_in):
+            try:
+                return json.loads(str_in)
+            except:
+                return str_in
+
+        val = (
+            _try_decode(row_obj.value)
+            if isinstance(row_obj.value, str)
+            else row_obj.value
+        )
+
+        # Apply value limiting and get clipped status
+        limited_val, is_clipped = _limit_value(val, row_obj.inferred_type)
+        if is_clipped:
+            formatted[event_id]["clipped_fields"] = formatted[event_id].get(
+                "clipped_fields",
+                [],
+            ) + [key]
+
+        ver = getattr(row_obj, "version", None)
+
+        if is_derived:
+            # --- Handle derived Log
+            assert (
+                key not in formatted[event_id]["derived_entries"]
+            ), f"found duplicate derived key {key} with log_id {event_id}"
+
+            formatted[event_id]["derived_entries"][key] = limited_val
+
+        else:
+            # --- Handle base Log
+            assert (
+                key not in formatted[event_id]["entries"]
+            ), f"found duplicates for key {key} with log_id {event_id}"
+
+            if ver is None:
+                # Put in "entries"
+                formatted[event_id]["entries"][key] = limited_val
+            else:
+                # Put in "params"
+                if key not in formatted[event_id]["versions"]:
+                    formatted[event_id]["versions"][key] = {}
+                formatted[event_id]["versions"][key][ver] = limited_val
+                formatted[event_id]["entries"][key] = str(ver)
+
+    # Now build final JSON
+    logs_out = []
+    params_out = {}
+    for event_id, data in formatted.items():
+        entries = {}
+        params = {}
+        for k, v in data["entries"].items():
+            if k in data["versions"]:
+                # It's param-based
+                params[k] = v  # v is the str(ver)
+                # Also store in params_out if needed
+                if k not in params_out:
+                    params_out[k] = {}
+                # We might have multiple versions for the same param
+                for ver_num, ver_val in data["versions"][k].items():
+                    params_out[k][ver_num] = ver_val
+            else:
+                # It's a normal base entry
+                entries[k] = v
+
+        # derived_entries
+        derived_entries = data["derived_entries"]
+
+        # Sort all dictionaries according to field_type order
+        sorted_entries = dict(
+            sorted(
+                entries.items(),
+                key=lambda x: field_order_map.get(x[0], float("inf")),
+            ),
+        )
+        sorted_params = dict(
+            sorted(
+                params.items(),
+                key=lambda x: field_order_map.get(x[0], float("inf")),
+            ),
+        )
+        sorted_derived = dict(
+            sorted(
+                derived_entries.items(),
+                key=lambda x: field_order_map.get(x[0], float("inf")),
+            ),
+        )
+
+        logs_out.append(
+            {
+                "id": event_id,
+                "ts": data["ts"],
+                "entries": sorted_entries,
+                "params": sorted_params,
+                "derived_entries": sorted_derived,
+                "clipped_fields": data.get("clipped_fields", []),
+            },
+        )
+
+    return logs_out, params_out
