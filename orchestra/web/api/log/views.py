@@ -1310,228 +1310,113 @@ def get_logs(
     - grouped_entries: (When group_threshold is set) Dictionary of field names to their shared values
     - clipped_fields: List of fields that were clipped due to value_limit
     """
-    all_rows, context_len, count = _get_logs_query(
-        request_fastapi,
+
+    # 1) If not grouping, just do the existing (monolithic) approach
+    if not group_by:
+        all_rows, context_len, total_count = _get_logs_query(
+            request_fastapi,
+            project=project,
+            column_context=column_context,
+            context=context,
+            filter_expr=filter_expr,
+            sorting=sorting,
+            from_ids=from_ids,
+            exclude_ids=exclude_ids,
+            from_fields=from_fields,
+            exclude_fields=exclude_fields,
+            limit=limit,
+            offset=offset,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+        )
+
+        if return_ids_only:
+            event_ids = [r[2] for r in all_rows]  # (obj, created_at, event_id)
+            return list(dict.fromkeys(event_ids))
+
+        # Format
+        field_order_map = field_type_dao.get_ordered_field_names(
+            project_dao.filter(name=project, user_id=request_fastapi.state.user_id)[0][
+                0
+            ].id,
+        )
+        logs_out, params_out = _format_flat_logs(
+            all_rows,
+            context_len,
+            value_limit,
+            field_order_map,
+        )
+
+        # If group_threshold => factor out repeated fields
+        grouped_entries = {}
+        if group_threshold is not None and group_threshold > 0:
+            logs_out, grouped_entries = apply_group_threshold(logs_out, group_threshold)
+
+        response = {
+            "params": params_out,
+            "logs": logs_out,
+            "count": total_count,
+        }
+        if grouped_entries:
+            response["grouped_entries"] = grouped_entries
+
+        return response
+
+    # 2) If grouping, do the 2-step approach:
+    #    (a) retrieve all event IDs, ignoring limit/offset
+    event_ids, total_count = _get_all_filtered_log_event_ids(
+        request_fastapi=request_fastapi,
         project=project,
-        column_context=column_context,
         context=context,
         filter_expr=filter_expr,
-        sorting=sorting,
         from_ids=from_ids,
         exclude_ids=exclude_ids,
-        from_fields=from_fields,
-        exclude_fields=exclude_fields,
+        project_dao=project_dao,
+        context_dao=context_dao,
+        session=session,
+    )
+    field_order_map = field_type_dao.get_ordered_field_names(
+        project_dao.filter(name=project, user_id=request_fastapi.state.user_id)[0][
+            0
+        ].id,
+    )
+    if return_ids_only:
+        return list(dict.fromkeys(event_ids))
+
+    # (b) Gather all param versions
+    params_out = _get_params_for_log_events(event_ids, session)
+
+    # (c) Build the nested structure
+    grouped_result = _build_grouped_data(
+        request_fastapi=request_fastapi,
+        project=project,
+        log_event_ids=event_ids,
+        field_order_map=field_order_map,
+        group_by=group_by,
+        group_depth=group_depth,
+        group_limit=group_limit,
+        group_offset=group_offset,
+        level=0,
         limit=limit,
         offset=offset,
+        column_context=column_context,
+        from_fields=from_fields,
+        exclude_fields=exclude_fields,
+        sorting=sorting,
         project_dao=project_dao,
         field_type_dao=field_type_dao,
         context_dao=context_dao,
         session=session,
+        value_limit=value_limit,
     )
-    # all_rows is now a list of (Log|DerivedLog, created_at, log_event_id)
-    if return_ids_only:
-        event_ids = [r[2] for r in all_rows]
-        return list(dict.fromkeys(event_ids))
 
-    # Format them
-    formatted = {}
-
-    # Get ordered field names
-    user_id = request_fastapi.state.user_id
-    project_id = project_dao.filter(name=project, user_id=user_id)[0][0].id
-    field_order_map = field_type_dao.get_ordered_field_names(project_id)
-    for row_obj, created_at, event_id in all_rows:
-        if event_id not in formatted:
-            formatted[event_id] = {
-                "ts": created_at.isoformat() if created_at else None,
-                "clipped_fields": [],
-                "entries": {},
-                "versions": {},
-                "derived_entries": {},
-            }
-        is_derived = isinstance(row_obj, DerivedLog)
-
-        # Apply context_len slicing to the key
-        key = row_obj.key[context_len:]
-
-        def _limit_value(value: Any, inferred_type: str) -> Tuple[Any, bool]:
-            """Limit the size of a value based on its type and the value_limit parameter.
-            Returns a tuple of (limited_value, is_clipped)."""
-            if value_limit is None:
-                return value, False
-
-            # Handle numeric values - return as is
-            if inferred_type in ["int", "float", "bool"]:
-                return value, False
-
-            # Handle image fields - return empty string
-            if inferred_type == "image":
-                return "", True
-
-            # Convert value to string if it's a nested structure
-            if inferred_type in ["list", "dict", "tuple"]:
-                str_value = str(value)
-                if len(str_value) > value_limit:
-                    return str_value[:value_limit] + "...", True
-                return str_value, False
-
-            # Handle string values
-            if inferred_type == "str":
-                if len(str(value)) > value_limit:
-                    return str(value)[:value_limit] + "...", True
-                return value, False
-
-            # Default case - treat as string
-            str_value = str(value)
-            if len(str_value) > value_limit:
-                return str_value[:value_limit] + "...", True
-            return str_value, False
-
-        # noinspection PyBroadException
-        def _try_decode(str_in):
-            try:
-                return json.loads(str_in)
-            except:
-                return str_in
-
-        val = (
-            _try_decode(row_obj.value)
-            if isinstance(row_obj.value, str)
-            else row_obj.value
-        )
-
-        # Apply value limiting and get clipped status
-        limited_val, is_clipped = _limit_value(val, row_obj.inferred_type)
-        if is_clipped:
-            formatted[event_id]["clipped_fields"] = formatted[event_id].get(
-                "clipped_fields",
-                [],
-            ) + [key]
-
-        ver = getattr(row_obj, "version", None)
-
-        if is_derived:
-            # --- Handle derived Log
-            assert (
-                key not in formatted[event_id]["derived_entries"]
-            ), f"found duplicate derived key {key} with log_id {event_id}"
-
-            formatted[event_id]["derived_entries"][key] = limited_val
-
-        else:
-            # --- Handle base Log
-            assert (
-                key not in formatted[event_id]["entries"]
-            ), f"found duplicates for key {key} with log_id {event_id}"
-
-            if ver is None:
-                # Put in "entries"
-                formatted[event_id]["entries"][key] = limited_val
-            else:
-                # Put in "params"
-                if key not in formatted[event_id]["versions"]:
-                    formatted[event_id]["versions"][key] = {}
-                formatted[event_id]["versions"][key][ver] = limited_val
-                formatted[event_id]["entries"][key] = str(ver)
-
-    # Now build final JSON
-    logs_out = []
-    params_out = {}
-    for event_id, data in formatted.items():
-        entries = {}
-        params = {}
-        for k, v in data["entries"].items():
-            if k in data["versions"]:
-                # It's param-based
-                params[k] = v  # v is the str(ver)
-                # Also store in params_out if needed
-                if k not in params_out:
-                    params_out[k] = {}
-                # We might have multiple versions for the same param
-                for ver_num, ver_val in data["versions"][k].items():
-                    params_out[k][ver_num] = ver_val
-            else:
-                # It's a normal base entry
-                entries[k] = v
-
-        # derived_entries
-        derived_entries = data["derived_entries"]
-
-        # Sort all dictionaries according to field_type order
-        sorted_entries = dict(
-            sorted(
-                entries.items(),
-                key=lambda x: field_order_map.get(x[0], float("inf")),
-            ),
-        )
-        sorted_params = dict(
-            sorted(
-                params.items(),
-                key=lambda x: field_order_map.get(x[0], float("inf")),
-            ),
-        )
-        sorted_derived = dict(
-            sorted(
-                derived_entries.items(),
-                key=lambda x: field_order_map.get(x[0], float("inf")),
-            ),
-        )
-
-        logs_out.append(
-            {
-                "id": event_id,
-                "ts": data["ts"],
-                "entries": sorted_entries,
-                "params": sorted_params,
-                "derived_entries": sorted_derived,
-                "clipped_fields": data.get("clipped_fields", []),
-            },
-        )
-
-    # If group_threshold is set, analyze entries for grouping
-    grouped_entries = {}
-    if group_threshold is not None and group_threshold > 0:
-        # Track frequency of each field value across logs
-        field_values = {}
-        for log in logs_out:
-            for field, value in log["entries"].items():
-                if field not in field_values:
-                    field_values[field] = {}
-                value_str = json.dumps(value)
-                if value_str not in field_values[field]:
-                    field_values[field][value_str] = set()
-                field_values[field][value_str].add(log["id"])
-
-        # Identify fields that meet the threshold
-        for field, values in field_values.items():
-            for value_str, log_ids in values.items():
-                if len(log_ids) >= group_threshold:
-                    value = json.loads(value_str)
-                    grouped_entries[field] = value
-
-        # Remove grouped fields from individual logs
-        for log in logs_out:
-            entries = log["entries"]
-            for field in grouped_entries:
-                if field in entries:
-                    del entries[field]
-
-            # Add shared_entries reference
-            if grouped_entries:
-                log["shared_entries"] = grouped_entries
-
-    # Build final response
-    response = {
+    return {
         "params": params_out,
-        "logs": logs_out,
-        "count": count,
+        "logs": grouped_result,
+        "count": total_count,
     }
-
-    # Add grouped_entries if any were found
-    if grouped_entries:
-        response["grouped_entries"] = grouped_entries
-
-    return response
 
 
 @router.get(
