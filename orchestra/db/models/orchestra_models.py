@@ -625,6 +625,21 @@ class LogEvent(Base):
     )
 
 
+class JSONLog(Base):
+    __tablename__ = "json_log"
+
+    id = Column(Integer, primary_key=True)
+    log_event_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key = Column(String, nullable=False)
+    value = Column(JSONB)
+    __table_args__ = (UniqueConstraint("log_event_id", "key"),)
+
+
 class Log(Base):
     __tablename__ = "log"
 
