@@ -154,7 +154,7 @@ def create_logs(
     # Get field types once for all operations
     field_types = field_type_dao.get_field_types(project_id)
 
-    def enforce_types(field_name, value):
+    def enforce_types(field_name, value, batch_index=None):
         entered_type = LogDAO.infer_type(field_name, value)
         expected_type = field_types.get(field_name)
         if expected_type:
@@ -164,9 +164,14 @@ def create_logs(
                 # update the field type to the new type
                 field_type_dao.upsert_field_type(project_id, field_name, value)
             elif entered_type != expected_type:
+                batch_info = (
+                    f" (in batch entry {batch_index})"
+                    if batch_index is not None
+                    else ""
+                )
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Type mismatch for field '{field_name}': expected {expected_type}, got {entered_type}",
+                    detail=f"Type mismatch for field '{field_name}'{batch_info}: expected {expected_type}, got {entered_type}. Value: {str(value)[:100]}",
                 )
         else:
             field_type_dao.create_field_type_if_absent(project_id, field_name, value)
@@ -217,7 +222,7 @@ def create_logs(
         )
         # Process params
         for k, v in current_params.items():
-            enforce_types(k, v)
+            enforce_types(k, v, i)
             # see if there is any param with the same value
             existing_param = log_dao.filter(
                 key=k,
@@ -248,7 +253,7 @@ def create_logs(
 
         # Process entries
         for k, v in current_entries.items():
-            enforce_types(k, v)
+            enforce_types(k, v, i)
             log_dao.create_from_raw_k_v(
                 project_id=project_id,
                 log_event_id=log_event_id,
