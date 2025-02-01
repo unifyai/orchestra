@@ -612,7 +612,7 @@ def update_logs(
                     original_type = LogDAO.infer_type(k, v)
                     if expected_type == "NoneType":
                         field_type_dao.upsert_field_type(project_id, k, v)
-                    elif original_type != expected_type:
+                    elif original_type != expected_type and original_type != "NoneType":
                         raise HTTPException(
                             status_code=400,
                             detail=f"Type mismatch for field '{k}': expected {expected_type}, got {original_type}",
