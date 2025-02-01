@@ -59,6 +59,7 @@ from .helpers import (
     _compute_expression,
     _flatten_fields,
     _format_flat_logs,
+    _get_final_logs,
     _substitute_placeholders,
     build_sql_query,
     str_filter_exp_to_dict,
@@ -1126,25 +1127,7 @@ def _get_logs_query(
 
     # 10) Otherwise, fetch final rows => join to paginated_ids_subq
     #     so we only get logs in the final log_event_id set, in sorted order.
-    final_logs_query = (
-        session.query(
-            filtered_logs_subq.c.id,
-            filtered_logs_subq.c.log_event_id,
-            filtered_logs_subq.c.key,
-            filtered_logs_subq.c.value,
-            filtered_logs_subq.c.inferred_type,
-            filtered_logs_subq.c.version,
-            filtered_logs_subq.c.created_at,
-            filtered_logs_subq.c.source_type,
-        )
-        .join(
-            paginated_ids_subq,
-            paginated_ids_subq.c.log_event_id == filtered_logs_subq.c.log_event_id,
-        )
-        .order_by(paginated_ids_subq.c.row_num, filtered_logs_subq.c.created_at)
-    )
-
-    raw_rows = final_logs_query.all()
+    raw_rows = _get_final_logs(session, filtered_logs_subq, paginated_ids_subq)
     # raw_rows is a list of:
     # [
     #   (
@@ -2612,25 +2595,7 @@ def _fetch_logs_for_event_ids(
     paginated_ids_subq = sorted_query.subquery("paginated_ids_subq")
 
     # 5) Finally join back to get the actual rows
-    final_logs_query = (
-        session.query(
-            filtered_logs_subq.c.id,
-            filtered_logs_subq.c.log_event_id,
-            filtered_logs_subq.c.key,
-            filtered_logs_subq.c.value,
-            filtered_logs_subq.c.inferred_type,
-            filtered_logs_subq.c.version,
-            filtered_logs_subq.c.created_at,
-            filtered_logs_subq.c.source_type,
-        )
-        .join(
-            paginated_ids_subq,
-            paginated_ids_subq.c.log_event_id == filtered_logs_subq.c.log_event_id,
-        )
-        .order_by(paginated_ids_subq.c.row_num, filtered_logs_subq.c.created_at)
-    )
-
-    raw_rows = final_logs_query.all()
+    raw_rows = _get_final_logs(session, filtered_logs_subq, paginated_ids_subq)
 
     # 6) Return the raw rows so that the top-level get_logs can do the final formatting.
     results = []
