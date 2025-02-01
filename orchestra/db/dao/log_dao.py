@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Log, LogEvent
+from orchestra.db.models.orchestra_models import JSONLog, Log, LogEvent
 
 
 class OverwriteError(Exception):
@@ -19,6 +19,26 @@ class LogDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
+    @staticmethod
+    def inject_order_indices(obj: Any) -> Any:
+        """
+        Recursively inject order indices into dictionaries.
+        Each dictionary value becomes a two-element list: [order_index, value].
+        Lists are processed recursively.
+        Scalars are returned unchanged.
+        """
+        if isinstance(obj, dict):
+            new_obj = {}
+            # enumerate keys in the order they appear (order is preserved in Python 3.7+)
+            for i, (k, v) in enumerate(obj.items(), start=1):
+                new_obj[k] = [i, LogDAO.inject_order_indices(v)]
+            return new_obj
+        elif isinstance(obj, list):
+            # Process each element in the list recursively.
+            return [LogDAO.inject_order_indices(item) for item in obj]
+        else:
+            return obj
+
     def create(
         self,
         project_id: int,
@@ -28,6 +48,15 @@ class LogDAO:
         version: Optional[int] = None,
         inferred_type: Optional[str] = None,
     ) -> int:
+        # If the value is a dict or list, inject ordering indices recursively.
+        if isinstance(value, (dict, list)):
+            new_value = self.inject_order_indices(value)
+            json_log = JSONLog(
+                log_event_id=log_event_id,
+                key=key,
+                value=new_value,
+            )
+            self.session.add(json_log)
 
         if version:
             # Lock the rows for version check
@@ -208,6 +237,30 @@ class LogDAO:
             setattr(entry, "version", version)
             setattr(entry, "inferred_type", inferred_type)
 
+            # Update the corresponding JSONLog row if needed.
+            # If raw_v is dict or list, inject order indices.
+            if isinstance(raw_v, (dict, list)):
+                new_json_value = self.inject_order_indices(raw_v)
+            else:
+                new_json_value = raw_v
+
+            json_query = select(JSONLog).where(
+                JSONLog.log_event_id == log_event_id,
+                JSONLog.key == raw_k,
+            )
+            json_raw = self.session.execute(json_query)
+            json_entry = json_raw.scalars().first()
+            if json_entry:
+                json_entry.value = new_json_value
+            else:
+                # Create a new JSONLog entry if one does not exist.
+                new_json_log = JSONLog(
+                    log_event_id=log_event_id,
+                    key=raw_k,
+                    value=new_json_value,
+                )
+                self.session.add(new_json_log)
+
             # Update the LogEvent's updated_at timestamp
             log_event_query = (
                 select(LogEvent).where(LogEvent.id == log_event_id).with_for_update()
@@ -222,6 +275,14 @@ class LogDAO:
     def delete(self, id: int):
         try:
             log = self.session.query(Log).filter_by(id=id).one()
+            # Also remove the JSONLog entry if it exists.
+            json_log = (
+                self.session.query(JSONLog)
+                .filter_by(log_event_id=log.log_event_id, key=log.key)
+                .first()
+            )
+            if json_log:
+                self.session.delete(json_log)
             self.session.delete(log)
             self.session.commit()
         except:
