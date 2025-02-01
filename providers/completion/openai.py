@@ -93,4 +93,9 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 15, "completion": 60},
     },
+    "o3-mini": {
+        "endpoint": "o3-mini",
+        "context_window": 200000,
+        "cost": {"prompt": 1.1, "completion": 4.4},
+    },
 }
