@@ -178,30 +178,6 @@ class LogDAO:
             return rows
         return rows.fetchall()
 
-    def update(
-        self,
-        id: int,
-        key: Optional[str] = None,
-        value: Optional[str] = None,
-        version: Optional[int] = None,
-        inferred_type: Optional[str] = None,
-        log_event_id: Optional[int] = None,
-    ) -> None:
-        query = select(Log)
-        query = query.where(Log.id == id)
-        raw = self.session.execute(query)
-        entry = raw.scalars().first()
-        if entry is not None:
-            if key:
-                setattr(entry, "key", key)
-            if value:
-                setattr(entry, "value", value)
-            if version:
-                setattr(entry, "version", version)
-            if inferred_type:
-                setattr(entry, "inferred_type", inferred_type)
-            if log_event_id:
-                setattr(entry, "log_event_id", log_event_id)
 
     def update_value(
         self,
@@ -252,18 +228,3 @@ class LogDAO:
             self.session.rollback()
             raise ValueError
 
-    def correct_key_version(self, project_id: int, key: str, version: str, value: str):
-        query = (
-            select(Log.value)
-            .join(LogEvent, Log.log_event_id == LogEvent.id)
-            .where(
-                LogEvent.project_id == project_id,
-                Log.key == key,
-                Log.version == version,
-            )
-            .limit(1)  # We only need one entry since we assume consistency
-        )
-
-        result = self.session.execute(query).fetchone()
-
-        return result is None or result[0] == value
