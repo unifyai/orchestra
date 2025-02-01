@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple, Union
 
 from sqlalchemy import (
+    JSON,
     TIMESTAMP,
     BindParameter,
     Boolean,
@@ -29,7 +30,7 @@ from sqlalchemy.sql import Subquery, and_, not_, or_
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
-from orchestra.db.models.orchestra_models import DerivedLog, Log
+from orchestra.db.models.orchestra_models import DerivedLog, JSONLog, Log
 
 STR_TO_SQL_TYPES = {
     "bool": Boolean,
@@ -1987,3 +1988,41 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
         )
 
     return logs_out, params_out
+
+
+def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
+    """
+    Returns final rows with the JSONLog value (if available) restored.
+    """
+    # Outer join JSONLog to see if a JSONLog row exists for this log_event_id and key.
+    final_logs_query = (
+        session.query(
+            filtered_logs_subq.c.id,
+            filtered_logs_subq.c.log_event_id,
+            filtered_logs_subq.c.key,
+            # Use the JSONLog value if present; otherwise fall back to the stored value.
+            func.coalesce(
+                func.restore_order_text(
+                    JSONLog.value,
+                ),  # use custom SQL function to restore order of dict
+                cast(filtered_logs_subq.c.value, JSON),
+            ).label("value"),
+            filtered_logs_subq.c.inferred_type,
+            filtered_logs_subq.c.version,
+            filtered_logs_subq.c.created_at,
+            filtered_logs_subq.c.source_type,
+        )
+        .outerjoin(
+            JSONLog,
+            and_(
+                JSONLog.log_event_id == filtered_logs_subq.c.log_event_id,
+                JSONLog.key == filtered_logs_subq.c.key,
+            ),
+        )
+        .join(
+            paginated_ids_subq,
+            paginated_ids_subq.c.log_event_id == filtered_logs_subq.c.log_event_id,
+        )
+        .order_by(paginated_ids_subq.c.row_num, filtered_logs_subq.c.created_at)
+    )
+    return final_logs_query.all()
