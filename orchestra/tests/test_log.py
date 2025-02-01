@@ -3602,6 +3602,107 @@ async def test_get_logs_metric(
 
 
 @pytest.mark.anyio
+async def test_get_logs_nested_dict_ordering(client: AsyncClient):
+    """Test that nested dictionary key ordering is preserved at multiple levels."""
+    project_name = "nested-dict-order-test"
+    _ = await _create_project(client, project_name)
+
+    # Create a log with deeply nested dictionaries in specific orders
+    nested_data = {
+        "level1": {
+            "c": {
+                "inner3": 3,
+                "inner2": 2,
+                "inner1": 1,
+                "nested": {
+                    "z": "last",
+                    "y": "middle",
+                    "x": "first",
+                },
+            },
+            "b": {
+                "foo": "bar",
+                "baz": "qux",
+                "empty_dict": {},
+                "list_of_dicts": [
+                    {"d3": 3, "d2": 2, "d1": 1},
+                    {"z": "z", "y": "y", "x": "x"},
+                ],
+            },
+            "a": "value",
+        },
+        "edge_cases": {
+            "empty": {},
+            "mixed_types": {
+                "num": 42,
+                "str": "text",
+                "bool": True,
+                "null": None,
+                "list": [1, 2, 3],
+                "nested_empty": {"empty": {}},
+            },
+        },
+        "simple": "field",
+    }
+
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": nested_data,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Retrieve and verify the log
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    log = response.json()["logs"][0]["entries"]
+
+    # Verify top level ordering
+    assert list(log.keys()) == ["level1", "edge_cases", "simple"]
+
+    # Verify level1 ordering
+    level1 = log["level1"]
+    assert list(level1.keys()) == ["c", "b", "a"]
+
+    # Verify inner dictionary ordering
+    inner_c = level1["c"]
+    assert list(inner_c.keys()) == ["inner3", "inner2", "inner1", "nested"]
+    assert list(inner_c["nested"].keys()) == ["z", "y", "x"]
+
+    inner_b = level1["b"]
+    assert list(inner_b.keys()) == ["foo", "baz", "empty_dict", "list_of_dicts"]
+    assert inner_b["empty_dict"] == {}
+
+    # Verify ordering in list of dictionaries
+    list_of_dicts = inner_b["list_of_dicts"]
+    assert len(list_of_dicts) == 2
+    assert list(list_of_dicts[0].keys()) == ["d3", "d2", "d1"]
+    assert list(list_of_dicts[1].keys()) == ["z", "y", "x"]
+
+    # Verify edge cases
+    edge_cases = log["edge_cases"]
+    assert list(edge_cases.keys()) == ["empty", "mixed_types"]
+    assert edge_cases["empty"] == {}
+
+    mixed_types = edge_cases["mixed_types"]
+    assert list(mixed_types.keys()) == [
+        "num",
+        "str",
+        "bool",
+        "null",
+        "list",
+        "nested_empty",
+    ]
+    assert mixed_types["nested_empty"] == {"empty": {}}
+
+
 async def test_get_logs_project_not_found(client: AsyncClient):
     project_name = "non_existent_project"
 
