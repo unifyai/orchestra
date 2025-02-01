@@ -4148,6 +4148,34 @@ async def test_update_logs_previously_none(client: AsyncClient):
         "artifacts": "",
     }
 
+    # Now update the field back to None and verify it works
+    response = await client.put(
+        f"/v0/logs",
+        json={
+            "ids": [log_id1],
+            "entries": {
+                "a/b/c/numeric_input": None,
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs updated successfully!"
+
+    # Verify numeric is still float type (since type was established)
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    assert field_types_response.json()["a/b/c/numeric_input"] == {
+        "data_type": "float",
+        "field_type": "entry",
+        "artifacts": "",
+    }
+
 
 @pytest.mark.anyio
 async def test_update_logs_type_mismatch(client: AsyncClient):
