@@ -155,16 +155,12 @@ def _tokenize(s):
         ("ROUND_TIMESTAMP", r"(?<!\w)round_timestamp(?!\w)"),
         (
             "FUNC",
-            r"(?<!\w)(?:len|type|exists|version|str(?=\()|to_str)",
+            r"(?<!\w)(?:len|exists|version|str(?=\()|to_str)",
         ),
         (
             "BASEFUNC",
             r"(?<!\w)BASE(?!\w)",  # special function to handle derived log notation
         ),
-        (
-            "TYPE_LITERAL",
-            r"(?<!\w)(?:str|int|float|bool|list|dict|tuple|set|timestamp|datetime)(?!\w)",
-        ),  # Type literals
         ("BOOLEAN", r"(?<!\w)(?:True|False)(?!\w)"),  # Booleans
         ("IDENTIFIER", r"[A-Za-z_/][A-Za-z0-9_/]*"),  # Identifiers
         ("LPAREN", r"\("),
@@ -214,8 +210,6 @@ def _tokenize(s):
             "COMMA",
         ):
             tokens.append((kind, value))
-        elif kind == "TYPE_LITERAL":
-            tokens.append((kind, value))
         elif kind == "BRACKET_OPEN":
             # We found a [ or {, so let's parse the entire bracketed substring
             # with parse_nested, and store it as an "OTHER" token
@@ -241,19 +235,6 @@ class _Parser:
         self.tokens = tokens
         self.pos = 0
         self.current_token = tokens[0]
-
-    def peek_back(self, n=1):
-        """Look back n tokens without moving position"""
-        if self.pos - n >= 0:
-            return self.tokens[self.pos - n]
-        return None
-
-    def in_type_check_context(self):
-        """Check if we're inside a type() function call like `type(x) is int`."""
-        prev_token = self.peek_back(1)
-        return (
-            prev_token and prev_token[0] == "OP" and prev_token[1] in ("is", "is not")
-        )
 
     def advance(self):
         self.pos += 1
@@ -400,16 +381,7 @@ class _Parser:
             else:
                 raise RuntimeError(f"Expected '(' after {fn}")
 
-        # --- 4) handle type literals like int, float, etc. ---
-        elif self.current_token[0] == "TYPE_LITERAL":
-            # Distinguish usage context
-            if self.in_type_check_context():
-                node = {"type": "type_literal", "value": self.current_token[1]}
-            else:
-                node = {"type": "identifier", "value": self.current_token[1]}
-            self.advance()
-
-        # --- 5) parentheses grouping ---
+        # --- 4) parentheses grouping ---
         elif self.current_token[0] == "LPAREN":
             self.advance()
             node = self.expr()
@@ -418,12 +390,12 @@ class _Parser:
             else:
                 raise RuntimeError('Expected ")"')
 
-        # --- 6) booleans ---
+        # --- 5) booleans ---
         elif self.current_token[0] == "BOOLEAN":
             node = self.current_token[1]
             self.advance()
 
-        # --- 7) identifiers (including subsequent indexing) ---
+        # --- 6) identifiers (including subsequent indexing) ---
         elif self.current_token[0] == "IDENTIFIER":
             node = {"type": "identifier", "value": self.current_token[1]}
             self.advance()
@@ -1427,21 +1399,6 @@ def _handle_functions(filter_dict, log_event_alias, session):
             # Convert the Python datetime/string to a literal
             ts_lit = literal(ts_expr.value, type_=TIMESTAMP)
             return _pg_round_timestamp(ts_lit, sec_expr.value)
-
-    elif operand == "type":
-        if isinstance(rhs_expr, Subquery):
-            expr = rhs_expr.c.inferred_type
-            return (
-                select(
-                    rhs_expr.c.log_event_id.label("log_event_id"),
-                    expr.label("value"),
-                    literal("str").label("inferred_type"),
-                )
-                .select_from(rhs_expr)
-                .subquery()
-            )
-        else:
-            return type(rhs_expr).__name__
 
     elif operand == "exists":
         if (
