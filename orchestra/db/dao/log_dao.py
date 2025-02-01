@@ -207,7 +207,6 @@ class LogDAO:
             return rows
         return rows.fetchall()
 
-
     def update_value(
         self,
         log_event_id: int,
@@ -288,4 +287,3 @@ class LogDAO:
         except:
             self.session.rollback()
             raise ValueError
-
