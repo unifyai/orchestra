@@ -1865,17 +1865,8 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
                 return str_value[:value_limit] + "...", True
             return str_value, False
 
-        # noinspection PyBroadException
-        def _try_decode(str_in):
-            try:
-                return json.loads(str_in)
-            except:
-                return str_in
-
-        val = _try_decode(row_value) if isinstance(row_value, str) else row_value
-
         # Apply value limiting and get clipped status
-        limited_val, is_clipped = _limit_value(val, row_inferred_type)
+        limited_val, is_clipped = _limit_value(row_value, row_inferred_type)
         if is_clipped:
             formatted[row_event_id]["clipped_fields"].append(key)
 
