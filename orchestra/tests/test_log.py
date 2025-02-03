@@ -5039,3 +5039,90 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
             assert "entries" in single_log and "params" in single_log
 
     # TODO(yusha): test group_by + sorting at the group level once group sorting is implemented
+
+
+@pytest.mark.anyio
+async def test_get_logs_multi_level_nested_and_flat(client: AsyncClient):
+    project_name = "test-multi-level-grouping"
+    await _create_project(client, project_name)
+
+    for i in [0, 1]:
+        for j in [0, 1, 2, 3]:
+            payload = {
+                "project": project_name,
+                "params": {"sys_msg": "hello"},
+                "entries": {"i": i, "j": j},
+            }
+            response = await client.post("/v0/logs", json=payload, headers=HEADERS)
+            assert response.status_code == 200, response.json()
+
+    # Test nested grouping (nested_groups=True)
+    params_nested = {
+        "project": project_name,
+        "group_by": ["params/sys_msg", "entries/i", "entries/j"],
+        "nested_groups": True,
+    }
+    response_nested = await client.get(
+        "/v0/logs",
+        params=params_nested,
+        headers=HEADERS,
+    )
+    assert response_nested.status_code == 200
+    result_nested = response_nested.json()
+
+    assert "params" in result_nested
+    assert result_nested["params"].get("sys_msg", {}).get("0") == "hello"
+
+    assert "logs" in result_nested
+    logs_nested = result_nested["logs"]
+    assert "params/sys_msg" in logs_nested
+    group_sys_msg = logs_nested["params/sys_msg"]
+    assert "0" in group_sys_msg
+
+    group_i = group_sys_msg["0"]
+    assert "entries/i" in group_i
+    group_i_data = group_i["entries/i"]
+    keys_i = [k for k in group_i_data.keys() if k not in ("group_count", "count")]
+    assert set(keys_i) == {"0", "1"}
+
+    for i_key in keys_i:
+        group_j_wrapper = group_i_data[i_key]
+        assert "entries/j" in group_j_wrapper
+        group_j = group_j_wrapper["entries/j"]
+        keys_j = [k for k in group_j.keys() if k not in ("group_count", "count")]
+        assert set(keys_j) == {"0", "1", "2", "3"}
+        for j_key in keys_j:
+            leaf = group_j[j_key]
+            assert isinstance(leaf, list)
+
+    # Test flat grouping (nested_groups=False)
+    params_flat = {
+        "project": project_name,
+        "group_by": ["params/sys_msg", "entries/i", "entries/j"],
+        "nested_groups": False,
+    }
+    response_flat = await client.get("/v0/logs", params=params_flat, headers=HEADERS)
+    assert response_flat.status_code == 200
+    result_flat = response_flat.json()
+
+    assert "groups" in result_flat
+    groups = result_flat["groups"]
+
+    for key in ["params/sys_msg", "entries/i", "entries/j"]:
+        assert key in groups
+
+    group_sys_msg_flat = groups["params/sys_msg"]
+    assert "0" in group_sys_msg_flat
+
+    group_i_flat = groups["entries/i"]
+    keys_i_flat = [k for k in group_i_flat.keys() if k not in ("group_count", "count")]
+    assert set(keys_i_flat) == {"0", "1"}
+
+    for i_key in keys_i_flat:
+        ids = group_i_flat[i_key]
+        assert all(isinstance(_id, int) for _id in ids)
+
+    flat_logs = result_flat["logs"]
+    assert isinstance(flat_logs, list)
+    assert len(flat_logs) <= 8
+    assert result_flat.get("count") == 8
