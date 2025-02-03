@@ -76,6 +76,40 @@ async def test_create_existing_context(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_contexts(client: AsyncClient):
+    project_name = "test-project"
+    context_name = "test-context"
+
+    # Create project and context
+    response = await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Test context"},
+        headers=HEADERS,
+    )
+
+    # Get contexts
+    response = await client.get(
+        f"/v0/project/{project_name}/contexts",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()[0]["name"] == context_name
+
+
+@pytest.mark.anyio
 async def test_delete_context(client: AsyncClient):
     project_name = "test-project"
     context_name = "test-context"

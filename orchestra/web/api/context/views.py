@@ -128,7 +128,6 @@ def create_context(
 )
 def get_contexts(
     request_fastapi: Request,
-    request: ContextCreateRequest,
     project_name: str = Path(
         description="Name of the project to create context in.",
         example="my_project",
@@ -147,10 +146,7 @@ def get_contexts(
         if not project:
             raise IndexError
         project_id = project[0][0].id
-        existing_contexts = context_dao.filter(
-            project_id=project_id,
-            name=request.name,
-        )
+        existing_contexts = context_dao.filter(project_id=project_id)
         return [
             {
                 "name": context.name,
