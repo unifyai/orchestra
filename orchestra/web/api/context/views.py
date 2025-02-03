@@ -149,8 +149,8 @@ def get_contexts(
         existing_contexts = context_dao.filter(project_id=project_id)
         return [
             {
-                "name": context.name,
-                "description": context.description,
+                "name": context[0].name,
+                "description": context[0].description,
             }
             for context in existing_contexts
         ]
