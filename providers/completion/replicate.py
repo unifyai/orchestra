@@ -53,4 +53,9 @@ supported_models = {
         "context_window": 131072,
         "cost": {"prompt": 9.5, "completion": 9.5},
     },
+    "deepseek-r1": {
+        "endpoint": "replicate/deepseek-ai/deepseek-r1",
+        "context_window": 64000,
+        "cost": {"prompt": 10, "completion": 10},
+    },
 }

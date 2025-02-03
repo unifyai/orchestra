@@ -46,7 +46,7 @@ supported_models = {
     "mistral-small": {
         "endpoint": "mistral/mistral-small-latest",
         "context_window": 128000,
-        "cost": {"prompt": 0.2, "completion": 0.6},
+        "cost": {"prompt": 0.1, "completion": 0.3},
     },
     "mistral-large": {
         "endpoint": "mistral/mistral-large-latest",
