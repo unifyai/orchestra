@@ -15,6 +15,7 @@ class Item(BaseModel):
     table_type: str | None = None
     auto_update: str | None = None
     context: str | None = None
+    prev_context: str | None = None
     filters: str | None = None
     common_filter: str | None = None
     page_number: str | None = None
