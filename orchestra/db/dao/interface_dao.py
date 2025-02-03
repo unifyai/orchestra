@@ -17,6 +17,7 @@ class InterfaceDAO:
         items: str,
         new_counter: int,
         project: str,
+        context: str | None,
     ):
         self.session.add(
             Interface(
@@ -25,6 +26,7 @@ class InterfaceDAO:
                 items=items,
                 new_counter=new_counter,
                 project=project,
+                context=context,
             ),
         )
 
@@ -33,6 +35,7 @@ class InterfaceDAO:
         user_id: str,
         name: str,
         project: str,
+        context: str | None,
         items: str,
         new_counter: int,
         new_name: str = None,
@@ -49,6 +52,7 @@ class InterfaceDAO:
             setattr(entry, "items", items)  # noqa: B010
             setattr(entry, "new_counter", new_counter)
             setattr(entry, "project", project)
+            setattr(entry, "context", context)
             if new_name is not None:
                 setattr(entry, "name", new_name)
 
