@@ -12,6 +12,7 @@ class Item(BaseModel):
     visible: bool = True
     tab: str | None = None
     table: str | None = None
+    table_type: str | None = None
     auto_update: str | None = None
     context: str | None = None
     filters: str | None = None
