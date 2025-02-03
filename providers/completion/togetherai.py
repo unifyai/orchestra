@@ -93,6 +93,11 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 0.8, "completion": 0.8},
     },
+    "mistral-small": {
+        "endpoint": "mistralai/Mistral-Small-24B-Instruct-2501",
+        "context_window": 32000,
+        "cost": {"prompt": 0.8, "completion": 0.8},
+    },
     "mixtral-8x22b-instruct-v0.1": {
         "endpoint": "together_ai/mistralai/Mixtral-8x22B-Instruct-v0.1",
         "context_window": 65536,

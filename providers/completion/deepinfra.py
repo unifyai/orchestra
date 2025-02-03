@@ -31,12 +31,12 @@ supported_models = {
     "deepseek-r1": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-R1",
         "context_window": 15000,
-        "cost": {"prompt": 0.85, "completion": 2.5},
+        "cost": {"prompt": 0.75, "completion": 2.4},
     },
     "deepseek-v3": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3",
         "context_window": 15000,
-        "cost": {"prompt": 0.85, "completion": 0.9},
+        "cost": {"prompt": 0.49, "completion": 0.89},
     },
     "llama-3.3-70b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.3-70B-Instruct",
@@ -102,6 +102,11 @@ supported_models = {
         "endpoint": "deepinfra/google/gemma-2-27b-it",
         "context_window": 8000,
         "cost": {"prompt": 0.27, "completion": 0.27},
+    },
+    "mistral-small": {
+        "endpoint": "mistralai/Mistral-Small-24B-Instruct-2501",
+        "context_window": 32000,
+        "cost": {"prompt": 0.07, "completion": 0.14},
     },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "deepinfra/mistralai/Mixtral-8x7B-Instruct-v0.1",
