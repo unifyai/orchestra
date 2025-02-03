@@ -40,6 +40,7 @@ class Item(BaseModel):
 class InterfaceConfig(BaseModel):
     name: str
     project: str
+    context: str | None = None
     items: list[Item]
     new_counter: int
     temporary: bool = False

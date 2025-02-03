@@ -17,6 +17,7 @@ class TempInterfaceDAO:
         items: str,
         new_counter: int,
         project: str,
+        context: str | None,
     ):
         self.session.add(
             TempInterface(
@@ -25,6 +26,7 @@ class TempInterfaceDAO:
                 items=items,
                 new_counter=new_counter,
                 project=project,
+                context=context,
             ),
         )
 
@@ -33,6 +35,7 @@ class TempInterfaceDAO:
         user_id: str,
         name: str,
         project: str,
+        context: str | None,
         items: str,
         new_counter: int,
         new_name: str = None,
@@ -49,6 +52,7 @@ class TempInterfaceDAO:
             setattr(entry, "items", items)  # noqa: B010
             setattr(entry, "new_counter", new_counter)
             setattr(entry, "project", project)
+            setattr(entry, "context", context)
             if new_name is not None:
                 setattr(entry, "name", new_name)
 

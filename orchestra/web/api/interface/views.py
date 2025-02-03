@@ -76,6 +76,7 @@ def create_interface(
         items=json.dumps([item.model_dump() for item in request.items]),
         new_counter=request.new_counter,
         project=request.project,
+        context=request.context,
     )
     return {"info": "Interface created successfully!"}
 
@@ -140,6 +141,7 @@ def update_interface(
         user_id=request_fastapi.state.user_id,
         name=request.name,
         project=request.project,
+        context=request.context,
         items=json.dumps([item.model_dump() for item in request.items]),
         new_counter=request.new_counter,
         new_name=request.new_name,
@@ -235,11 +237,13 @@ def get_interfaces(
             items=json.dumps(items),
             new_counter=new_counter,
             project=project,
+            context=None,
         )
         return [
             {
                 "name": name,
                 "project": project,
+                "context": None,
                 "items": items,
                 "new_counter": new_counter,
             },
@@ -253,6 +257,7 @@ def get_interfaces(
         {
             "name": interface.name,
             "project": interface.project,
+            "context": interface.context,
             "items": json.loads(interface.items),
             "new_counter": interface.new_counter,
         }
