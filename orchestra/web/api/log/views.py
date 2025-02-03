@@ -1308,6 +1308,10 @@ def get_logs(
         None,
         description="Maximum depth of nested groups to return. If not specified, all levels are returned.",
     ),
+    nested_groups: bool = Query(
+        True,
+        description="If True, groups are returned as a nested structure; if False, groups are returned as flat per-field mappings.",
+    ),
     return_ids_only: bool = False,
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
@@ -1349,7 +1353,6 @@ def get_logs(
             context_dao=context_dao,
             session=session,
         )
-        print("returning ids only", return_ids_only)
         if return_ids_only:
             event_ids = [r[6] for r in all_rows]  # (obj, created_at, event_id)
             return list(dict.fromkeys(event_ids))
@@ -1382,7 +1385,8 @@ def get_logs(
 
         return response
 
-    # 2) If grouping, do the 2-step approach:
+    # --- GROUPING CASE ---
+    # If grouping, do the 2-step approach:
     #    (a) retrieve all event IDs, ignoring limit/offset
     event_ids, total_count = _get_all_filtered_log_event_ids(
         request_fastapi=request_fastapi,
@@ -1406,35 +1410,115 @@ def get_logs(
     # (b) Gather all param versions
     params_out = _get_params_for_log_events(event_ids, session)
 
-    # (c) Build the nested structure
-    grouped_result = _build_grouped_data(
-        request_fastapi=request_fastapi,
-        project=project,
-        log_event_ids=event_ids,
-        field_order_map=field_order_map,
-        group_by=group_by,
-        group_depth=group_depth,
-        group_limit=group_limit,
-        group_offset=group_offset,
-        level=0,
-        limit=limit,
-        offset=offset,
-        column_context=column_context,
-        from_fields=from_fields,
-        exclude_fields=exclude_fields,
-        sorting=sorting,
-        project_dao=project_dao,
-        field_type_dao=field_type_dao,
-        context_dao=context_dao,
-        session=session,
-        value_limit=value_limit,
-    )
+    if nested_groups:
+        # (c) Build the nested structure
+        grouped_result = _build_grouped_data(
+            request_fastapi=request_fastapi,
+            project=project,
+            log_event_ids=event_ids,
+            field_order_map=field_order_map,
+            group_by=group_by,
+            group_depth=group_depth,
+            group_limit=group_limit,
+            group_offset=group_offset,
+            level=0,
+            limit=limit,
+            offset=offset,
+            column_context=column_context,
+            from_fields=from_fields,
+            exclude_fields=exclude_fields,
+            sorting=sorting,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+            value_limit=value_limit,
+        )
 
-    return {
-        "params": params_out,
-        "logs": grouped_result,
-        "count": total_count,
-    }
+        return {
+            "params": params_out,
+            "logs": grouped_result,
+            "count": total_count,
+        }
+
+    else:
+        # use the "flat" groups mode for the view pane.
+        # (a) Get the flat logs (without any recursive grouping)
+        rows, context_len, _ = _fetch_logs_for_event_ids(
+            request_fastapi=request_fastapi,
+            event_ids=event_ids,
+            column_context=column_context,
+            from_fields=from_fields,
+            exclude_fields=exclude_fields,
+            sorting=sorting,
+            limit=limit,
+            offset=offset,
+            parent_fields="",  # no parent grouping in flat mode
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            session=session,
+        )
+        logs_out, _ = _format_flat_logs(rows, context_len, value_limit, field_order_map)
+
+        # (b) Build a per-field grouping structure.
+        groups = {}
+
+        # A helper to “parse” a group key (e.g. "entries/i" => ("entries", "i"))
+        def parse_group_key(key: str) -> Tuple[str, str]:
+            parts = key.split("/", 1)
+            return (parts[0], parts[1]) if len(parts) == 2 else ("", key)
+
+        for group_field in group_by:
+            prefix, raw_key = parse_group_key(group_field)
+            is_param = prefix == "params"
+            # Retrieve distinct group values (if a log has no such key, it will be added later as "null")
+            distinct_values = _get_distinct_group_values(
+                log_event_ids=event_ids,
+                group_key=raw_key,
+                session=session,
+                is_param=is_param,
+            )
+            value_to_ids = {}
+            used_ids = set()
+            for val in distinct_values:
+                subset_ids = _get_log_event_ids_for_group_value(
+                    log_event_ids=event_ids,
+                    group_key=raw_key,
+                    group_value=val,
+                    session=session,
+                    is_param=is_param,
+                )
+                value_to_ids[val] = subset_ids
+                used_ids.update(subset_ids)
+            # Also include a group for logs that do not have the key
+            missing_ids = list(set(event_ids) - used_ids)
+            if missing_ids:
+                value_to_ids["null"] = missing_ids
+
+            # Apply pagination (group_offset / group_limit) to the keys.
+            all_keys = list(value_to_ids.keys())
+            total_distinct = len(all_keys)
+            # (You might want to sort keys in a deterministic way.)
+            all_keys_sorted = sorted(all_keys, key=lambda x: (x is None, x))
+            if group_limit is not None:
+                paged_keys = all_keys_sorted[group_offset : group_offset + group_limit]
+            else:
+                paged_keys = all_keys_sorted
+            paged_mapping = {k: value_to_ids[k] for k in paged_keys}
+            # For the count, we return the total number of logs that have this field (or you may sum the lengths)
+            field_total = sum(len(ids) for ids in value_to_ids.values())
+            groups[group_field] = {
+                **paged_mapping,
+                "group_count": total_distinct,
+                "count": field_total,
+            }
+
+        return {
+            "params": params_out,
+            "groups": groups,
+            "logs": logs_out,
+            "count": total_count,
+        }
 
 
 @router.get(
