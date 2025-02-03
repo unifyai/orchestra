@@ -714,6 +714,7 @@ class Interface(Base):
     new_counter = Column(Integer, nullable=False)
     items = Column(String(), nullable=False)
     project = Column(String(), nullable=False)
+    context = Column(String(), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("user_id", "project", "name", name="it_uq_project_name"),
@@ -757,6 +758,7 @@ class TempInterface(Base):
     new_counter = Column(Integer, nullable=False)
     items = Column(String(), nullable=False)
     project = Column(String(), nullable=False)
+    context = Column(String(), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("user_id", "project", "name", name="temp_it_uq_project_name"),

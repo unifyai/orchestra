@@ -15,13 +15,14 @@ def _create_project(client: AsyncClient, project):
     return client.post("/v0/project", json={"name": project}, headers=HEADERS)
 
 
-def _create_interface(client: AsyncClient, name, project, items, new_counter):
+def _create_interface(client: AsyncClient, name, project, context, items, new_counter):
     return client.post(
         "/v0/interface",
         headers=HEADERS,
         json={
             "name": name,
             "project": project,
+            "context": context,
             "items": items,
             "new_counter": new_counter,
         },
@@ -32,6 +33,7 @@ def _create_interface(client: AsyncClient, name, project, items, new_counter):
 async def test_create_interface(client: AsyncClient):
     name = "my_interface"
     project = "my_project"
+    context = "my_context"
     items = [
         {
             "i": "n0",
@@ -46,7 +48,14 @@ async def test_create_interface(client: AsyncClient):
     ]
     new_counter = 1
     await _create_project(client, project)
-    response = await _create_interface(client, name, project, items, new_counter)
+    response = await _create_interface(
+        client,
+        name,
+        project,
+        context,
+        items,
+        new_counter,
+    )
     assert response.status_code == 200
     assert response.json()["info"] == "Interface created successfully!"
 
@@ -55,6 +64,7 @@ async def test_create_interface(client: AsyncClient):
 async def test_update_interface(client: AsyncClient):
     name = "my_interface"
     project = "my_project"
+    context = "my_context"
     items = [
         {
             "i": "n0",
@@ -79,7 +89,7 @@ async def test_update_interface(client: AsyncClient):
     ]
     new_counter = 2
     await _create_project(client, project)
-    await _create_interface(client, name, project, items[:1], new_counter - 1)
+    await _create_interface(client, name, project, context, items[:1], new_counter - 1)
     response = await client.put(
         "/v0/interface",
         headers=HEADERS,
@@ -99,6 +109,7 @@ async def test_update_interface(client: AsyncClient):
 async def test_get_interface(client: AsyncClient):
     name = "my_interface"
     project = "my_project"
+    context = "my_context"
     items = [
         {
             "i": "n0",
@@ -113,7 +124,7 @@ async def test_get_interface(client: AsyncClient):
     ]
     new_counter = 1
     await _create_project(client, project)
-    await _create_interface(client, name, project, items, new_counter)
+    await _create_interface(client, name, project, context, items, new_counter)
     response = await client.get(
         f"/v0/interface?name={name}&project={project}",
         headers=HEADERS,
@@ -126,6 +137,7 @@ async def test_get_interface(client: AsyncClient):
 async def test_delete_interface(client: AsyncClient):
     name = "my_interface"
     project = "my_project"
+    context = "my_context"
     items = [
         {
             "i": "n0",
@@ -140,7 +152,7 @@ async def test_delete_interface(client: AsyncClient):
     ]
     new_counter = 1
     await _create_project(client, project)
-    await _create_interface(client, name, project, items, new_counter)
+    await _create_interface(client, name, project, context, items, new_counter)
     response = await client.delete(
         f"/v0/interface?name={name}&project={project}",
         headers=HEADERS,
