@@ -94,6 +94,74 @@ def create_context(
         )
 
 
+@router.get(
+    "/project/{project_name}/contexts",
+    responses={
+        200: {
+            "description": "Contexts retrieved.",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {
+                            "name": "context1",
+                            "description": "description1",
+                        },
+                        {
+                            "name": "context2",
+                            "description": "description2",
+                        },
+                    ],
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def get_contexts(
+    request_fastapi: Request,
+    request: ContextCreateRequest,
+    project_name: str = Path(
+        description="Name of the project to create context in.",
+        example="my_project",
+    ),
+    project_dao: ProjectDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+):
+    """
+    Get a list of contexts within a project.
+    """
+    try:
+        project = project_dao.filter(
+            user_id=request_fastapi.state.user_id,
+            name=project_name,
+        )
+        if not project:
+            raise IndexError
+        project_id = project[0][0].id
+        existing_contexts = context_dao.filter(
+            project_id=project_id,
+            name=request.name,
+        )
+        return [
+            {
+                "name": context.name,
+                "description": context.description,
+            }
+            for context in existing_contexts
+        ]
+    except IndexError:
+        raise not_found("Project")
+
+
 @router.delete(
     "/project/{project_name}/contexts/{context_name}",
     responses={
