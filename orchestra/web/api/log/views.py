@@ -2253,16 +2253,17 @@ def _get_distinct_group_values(
     log_event_ids: List[int],
     group_key: str,
     session,
+    is_param: bool = False,
 ) -> List[Any]:
     """Get distinct values for a group key among provided log event IDs."""
-
+    value_col = Log.version if is_param else Log.value
     subquery = (
         session.query(
-            Log.value,
+            value_col.label("value"),
             Log.log_event_id,
             func.row_number()
             .over(
-                partition_by=Log.value,
+                partition_by=value_col,
                 order_by=desc(Log.log_event_id),
             )
             .label("rn"),
@@ -2286,13 +2287,19 @@ def _get_log_event_ids_for_group_value(
     group_key: str,
     group_value: Any,
     session,
+    is_param: bool = False,
 ) -> List[int]:
     """Get log event IDs that match a specific group value."""
+    filter_expr = (
+        Log.version == group_value
+        if is_param
+        else cast(Log.value, JSONB) == cast(group_value, JSONB)
+    )
     query = (
         session.query(Log.log_event_id)
         .filter(Log.log_event_id.in_(log_event_ids))
         .filter(Log.key == group_key)
-        .filter(cast(Log.value, JSONB) == cast(group_value, JSONB))
+        .filter(filter_expr)
     )
     return [row[0] for row in query.all()]
 
@@ -2804,12 +2811,14 @@ def _build_grouped_data(
 
     current_group_key = group_by[level]
     prefix, raw_key = parse_group_key(current_group_key)
+    is_param = prefix == "params"
     # 1) Distinguish logs that *have* this group_key vs. logs that are missing it
     #    (We put missing ones in the "null" group).
     present_values = _get_distinct_group_values(
         session=session,
         log_event_ids=log_event_ids,
         group_key=raw_key,
+        is_param=is_param,
     )
 
     # If group_depth is specified AND we have reached it,
@@ -2838,6 +2847,7 @@ def _build_grouped_data(
             log_event_ids=log_event_ids,
             group_key=raw_key,
             group_value=val,
+            is_param=is_param,
         )
         value_to_ids[val] = subset_ids
         used_ids.update(subset_ids)
