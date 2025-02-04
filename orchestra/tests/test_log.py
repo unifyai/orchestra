@@ -5126,3 +5126,158 @@ async def test_get_logs_multi_level_nested_and_flat(client: AsyncClient):
     assert isinstance(flat_logs, list)
     assert len(flat_logs) <= 8
     assert result_flat.get("count") == 8
+
+
+@pytest.mark.anyio
+async def test_get_logs_groups_only_and_return_timestamps(client: AsyncClient):
+    project_name = "test-groups-only"
+    await _create_project(client, project_name)
+
+    # Create 8 logs: for i in [0,1] and j in [0,1,2,3]
+    for i in [0, 1]:
+        for j in [0, 1, 2, 3]:
+            payload = {
+                "project": project_name,
+                "params": {"sys_msg": "hello"},
+                "entries": {"i": i, "j": j},
+            }
+            response = await client.post("/v0/logs", json=payload, headers=HEADERS)
+            assert response.status_code == 200, response.json()
+
+    # Quick sanity check: we have 8 logs in normal, non-grouped mode
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "logs" in result
+    assert len(result["logs"]) == 8
+
+    # ----------------------------------------------------------------
+    # CASE A: Nested groups, groups_only=True, return_timestamps=False
+    #   group_by = ["params/sys_msg", "entries/i"]
+    #
+    # At the final leaf, we have a list of log IDs (no “j” field is visible,
+    # because groups_only=True discards full log objects).
+    # ----------------------------------------------------------------
+    params_nested = {
+        "project": project_name,
+        "group_by": ["params/sys_msg", "entries/i"],
+        "nested_groups": True,
+        "groups_only": True,
+        "return_timestamps": False,
+    }
+    response_nested = await client.get(
+        "/v0/logs",
+        params=params_nested,
+        headers=HEADERS,
+    )
+    assert response_nested.status_code == 200
+    result_nested = response_nested.json()
+    assert "logs" in result_nested
+    logs_nested = result_nested["logs"]
+
+    sys_msg_group = logs_nested.get("params/sys_msg", {})
+    assert (
+        "0" in sys_msg_group
+    ), f"Missing param version 0 group. Got keys: {list(sys_msg_group.keys())}"
+    i_group = sys_msg_group["0"].get("entries/i", {})
+    # i_group should have keys "0" and "1", each pointing to the final leaf (a list of IDs).
+    for i_key in ["0", "1"]:
+        leaf = i_group.get(i_key)
+        assert leaf is not None, f"Missing sub-group for i={i_key}"
+        # Because we've run out of group_by fields, 'leaf' should be a list of IDs:
+        assert isinstance(leaf, list), f"Leaf for i={i_key} is not a list of IDs"
+        # Each item in that list should be an integer log ID.
+        for log_id in leaf:
+            assert isinstance(log_id, int), f"Expected int log_id, got {type(log_id)}"
+
+    # ----------------------------------------------------------------
+    # CASE B: Nested groups, groups_only=True, return_timestamps=True
+    #   group_by = ["params/sys_msg", "entries/i"]
+    #
+    # The final leaves become dicts of { log_id: "YYYY-MM-DDTHH:MM:SS" }.
+    # ----------------------------------------------------------------
+    params_nested_ts = {
+        "project": project_name,
+        "group_by": ["params/sys_msg", "entries/i"],
+        "nested_groups": True,
+        "groups_only": True,
+        "return_timestamps": True,
+    }
+    response_nested_ts = await client.get(
+        "/v0/logs",
+        params=params_nested_ts,
+        headers=HEADERS,
+    )
+    assert response_nested_ts.status_code == 200
+    result_nested_ts = response_nested_ts.json()
+
+    # Similar structure as Case A, but final leaves are a dict of {id:timestamp}.
+    logs_nested_ts = result_nested_ts["logs"]
+    sys_msg_group_ts = logs_nested_ts.get("params/sys_msg", {})
+    assert "0" in sys_msg_group_ts
+    i_group_ts = sys_msg_group_ts["0"].get("entries/i", {})
+
+    for i_key in ["0", "1"]:
+        leaf_ts = i_group_ts.get(i_key)
+        # Now the leaf should be a dict:
+        assert isinstance(
+            leaf_ts,
+            dict,
+        ), f"Expected a dict of {{log_id: timestamp}} at i={i_key}, got {type(leaf_ts)}"
+        for log_id_str, timestamp in leaf_ts.items():
+            # log_id_str is a string key, parse it to int to confirm
+            log_id_int = int(log_id_str)  # will raise ValueError if not valid
+            assert isinstance(
+                timestamp,
+                str,
+            ), f"Expected a timestamp string, got {type(timestamp)}"
+
+    # ----------------------------------------------------------------
+    # CASE C: Flat groups, groups_only=True, return_timestamps=False
+    #   group_by = ["params/sys_msg", "entries/i"]
+    #
+    # We do NOT nest the groups. Instead, we get "groups": {
+    #    "params/sys_msg": { "0": [...IDs...], "group_count":1, "count":8 },
+    #    "entries/i":      { "0": [...IDs...], "1": [...IDs...], "group_count":2, "count":8 }
+    # }
+    # and no "logs" key is returned (since groups_only=True).
+    # ----------------------------------------------------------------
+    params_flat = {
+        "project": project_name,
+        "group_by": ["params/sys_msg", "entries/i"],
+        "nested_groups": False,
+        "groups_only": True,
+        "return_timestamps": False,
+    }
+    response_flat = await client.get("/v0/logs", params=params_flat, headers=HEADERS)
+    assert response_flat.status_code == 200
+    result_flat = response_flat.json()
+
+    # Because nested_groups=False + groups_only=True, the response has "groups" but no "logs".
+    assert "groups" in result_flat
+    assert "logs" not in result_flat
+    groups = result_flat["groups"]
+
+    # We expect two top-level group entries: "params/sys_msg" and "entries/i".
+    assert "params/sys_msg" in groups
+    assert "entries/i" in groups
+
+    # For "params/sys_msg", there's only one distinct version => "0".
+    sys_msg_flat = groups["params/sys_msg"]
+    # "group_count"=1, "count"=8, plus a key "0": [...list of 8 log IDs...]
+    assert "0" in sys_msg_flat
+    assert isinstance(sys_msg_flat["0"], list)
+    assert len(sys_msg_flat["0"]) == 8, "All logs share the same sys_msg=hello"
+
+    # For "entries/i", we have i=0 or i=1. Each should have 4 logs.
+    i_flat = groups["entries/i"]
+    for i_key in ("0", "1"):
+        assert i_key in i_flat
+        assert isinstance(i_flat[i_key], list)
+        assert len(i_flat[i_key]) == 4, f"Expected 4 logs with i={i_key}"
+        for log_id in i_flat[i_key]:
+            assert isinstance(log_id, int)
