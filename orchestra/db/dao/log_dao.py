@@ -6,6 +6,7 @@ from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from orchestra.db.dao.bucket_service import BucketService
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import JSONLog, Log, LogEvent
 
@@ -18,6 +19,7 @@ class OverwriteError(Exception):
 class LogDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
+        self.bucket_service = BucketService()
 
     @staticmethod
     def inject_order_indices(obj: Any) -> Any:
@@ -73,6 +75,14 @@ class LogDAO:
             if existing and existing[0].value != value:
                 raise ValueError("Version mismatch")
 
+        # If the field is of type image and value is base64, upload it to the bucket
+        if (
+            inferred_type == "image"
+            and isinstance(value, str)
+            and not value.lower().startswith("http")
+        ):
+            value = self.upload_image_to_bucket(value)
+
         ts = datetime.now(timezone.utc)
 
         new_log = Log(
@@ -88,6 +98,24 @@ class LogDAO:
         self.session.add(new_log)
         self.session.commit()
         return new_log.id
+
+    def upload_image_to_bucket(self, image_base64: str) -> str:
+        """Upload image to bucket and return the URL."""
+        try:
+            url, _ = self.bucket_service.upload_image(image_base64)
+            return url
+        except Exception as e:
+            raise ValueError(f"Failed to upload image to bucket: {str(e)}")
+
+    def get_image_from_bucket(self, url: str) -> Optional[str]:
+        """Retrieve image from bucket and return as base64."""
+        try:
+            # Extract filename from URL
+            filename = url.split("/")[-1]
+            base64_content = self.bucket_service.get_image(filename)
+            return base64_content
+        except Exception as e:
+            raise ValueError(f"Failed to retrieve image from bucket: {str(e)}")
 
     @staticmethod
     def possible_img(raw_k):
@@ -134,7 +162,6 @@ class LogDAO:
         raw_v: Optional[Any] = None,
         explicit_types: Optional[Dict] = None,
     ) -> Optional[str]:
-
         explicit_types = explicit_types if isinstance(explicit_types, dict) else {}
 
         return self.create(
@@ -224,6 +251,14 @@ class LogDAO:
             if raw_k in explicit_types:
                 inferred_type = explicit_types[raw_k]
 
+        # If the field is image and raw_v is a base64 string, upload it
+        if (
+            inferred_type == "image"
+            and isinstance(raw_v, str)
+            and not raw_v.lower().startswith("http")
+        ):
+            json_v = self.upload_image_to_bucket(raw_v)
+
         query = (
             select(Log).where(Log.log_event_id == log_event_id).where(Log.key == raw_k)
         )
@@ -237,11 +272,10 @@ class LogDAO:
             setattr(entry, "inferred_type", inferred_type)
 
             # Update the corresponding JSONLog row if needed.
-            # If raw_v is dict or list, inject order indices.
             if isinstance(raw_v, (dict, list)):
                 new_json_value = self.inject_order_indices(raw_v)
             else:
-                new_json_value = raw_v
+                new_json_value = json_v
 
             json_query = select(JSONLog).where(
                 JSONLog.log_event_id == log_event_id,
@@ -252,7 +286,6 @@ class LogDAO:
             if json_entry:
                 json_entry.value = new_json_value
             else:
-                # Create a new JSONLog entry if one does not exist.
                 new_json_log = JSONLog(
                     log_event_id=log_event_id,
                     key=raw_k,
@@ -260,7 +293,6 @@ class LogDAO:
                 )
                 self.session.add(new_json_log)
 
-            # Update the LogEvent's updated_at timestamp
             log_event_query = (
                 select(LogEvent).where(LogEvent.id == log_event_id).with_for_update()
             )
@@ -274,7 +306,6 @@ class LogDAO:
     def delete(self, id: int):
         try:
             log = self.session.query(Log).filter_by(id=id).one()
-            # Also remove the JSONLog entry if it exists.
             json_log = (
                 self.session.query(JSONLog)
                 .filter_by(log_event_id=log.log_event_id, key=log.key)
