@@ -162,30 +162,31 @@ class SetFieldTypingRequest(BaseModel):
 
 
 class UpdateDerivedEntriesConfig(BaseModel):
-    ids: list[int] = Field(
-        description="List of derived log IDs to update.",
-        example=[123, 456, 789],
-        min_items=1,
+    project: str = Field(
+        description="Name of the project these derived logs belong to.",
+        example="eval-project",
     )
-    original_key: str = Field(
-        description="The original key of the derived entry to update.",
-        example="score_diff",
+    target_derived_logs: Union[List[int], Dict[str, Any]] = Field(
+        description="The derived logs to update, either as a list of derived_log IDs or as a set of arguments for the get_logs endpoint.",
+        example={"log0": [0, 1, 2], "log1": {"filter_expr": "derived_score > 0.5"}},
     )
     key: Optional[str] = Field(
         default=None,
-        description="The new name for the derived entry.",
-        example="new_score_diff",
+        description="New key name for the derived entries",
+        example="temp_plus_20",
     )
     equation: Optional[str] = Field(
         default=None,
-        description="The new equation for computing the value of the derived entry.",
-        example="{log0:new_score} - {log1:new_score}",
+        description="New equation for computing derived values",
+        example="{t:temperature} + 20",
     )
 
     @model_validator(mode="before")
-    def validate_at_least_one_field(cls, values):
-        if not any(values.get(field) is not None for field in ["key", "equation"]):
+    def validate_params(cls, values):
+        if not values.get("target_derived_logs"):
             raise ValueError(
-                "At least one of 'key', 'equation' must be provided",
+                "target_derived_logs must be provided. Either as a list of derived_log IDs or as a set of arguments for the get_logs endpoint.",
             )
+        if not values.get("key") and not values.get("equation"):
+            raise ValueError("At least one of key or equation must be provided")
         return values
