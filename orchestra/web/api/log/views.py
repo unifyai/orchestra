@@ -2741,6 +2741,8 @@ def _build_grouped_data(
     context_dao: ContextDAO,
     session=Depends(get_db_session),
     value_limit: Optional[int] = None,
+    groups_only: bool = False,
+    return_timestamps: bool = False,
     parent_group_key: Optional[str] = "",
 ) -> Dict[str, Any]:
     """
@@ -2784,6 +2786,19 @@ def _build_grouped_data(
             return ("", key)
         return (parts[0], parts[1])
 
+    def _fetch_log_timestamps_for_event_ids(
+        event_ids: List[int],
+        session,
+    ) -> Dict[int, str]:
+        if not event_ids:
+            return {}
+        rows = (
+            session.query(LogEvent.id, LogEvent.created_at)
+            .filter(LogEvent.id.in_(event_ids))
+            .all()
+        )
+        return {row[0]: row[1].isoformat() for row in rows if row[1] is not None}
+
     total_logs_in_group = len(log_event_ids)
     # If no logs, return empty
     if total_logs_in_group == 0:
@@ -2792,6 +2807,11 @@ def _build_grouped_data(
     # If we've run out of group_by keys OR group_depth
     # => fetch the actual logs (leaf)
     if level >= len(group_by):
+        if groups_only:
+            if return_timestamps:
+                return _fetch_log_timestamps_for_event_ids(log_event_ids, session)
+            else:
+                return log_event_ids
         rows, context_len, leaf_count = _fetch_logs_for_event_ids(
             request_fastapi=request_fastapi,
             event_ids=log_event_ids,
@@ -2894,6 +2914,8 @@ def _build_grouped_data(
             context_dao=context_dao,
             session=session,
             value_limit=value_limit,
+            groups_only=groups_only,
+            return_timestamps=return_timestamps,
             parent_group_key="&".join([parent_group_key, raw_key])
             if parent_group_key
             else raw_key,
@@ -2923,6 +2945,8 @@ def _build_grouped_data(
             context_dao=context_dao,
             session=session,
             value_limit=value_limit,
+            groups_only=groups_only,
+            return_timestamps=return_timestamps,
         )
         out_dict["null"] = null_sub
 
