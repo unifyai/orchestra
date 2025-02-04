@@ -469,59 +469,124 @@ def create_derived_entry(
 )
 def update_derived_log(
     request_fastapi: Request,
-    request: UpdateDerivedEntriesConfig,
+    body: UpdateDerivedEntriesConfig,
     derived_log_dao: DerivedLogDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
+    project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
     session=Depends(get_db_session),
 ):
-    """Updates multiple derived log entries with new key, equation, or referenced logs.
-    Handles batch updates and recomputes values as needed."""
+    """
+    Updates multiple derived logs, identified either by a direct list of derived IDs or by
+    get_logs–style filters. Then sets a new key/equation, and recomputes them.
+    """
+    user_id = request_fastapi.state.user_id
+
+    # (A) Validate the project exists for this user
     try:
-        not_found_logs = []
-        updated_logs = []
+        project_obj = project_dao.filter(name=body.project, user_id=user_id)[0][0]
+    except IndexError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{body.project}' not found.",
+        )
 
-        for derived_log_id in request.ids:
-            try:
-                # Check if user has permission to update this derived log
-                log_event_id = (
-                    derived_log_dao.session.query(DerivedLog.log_event_id)
-                    .filter(DerivedLog.id == derived_log_id)
-                    .scalar()
-                )
-                if (
-                    not log_event_id
-                    or log_event_dao.get_user_id(id=log_event_id)
-                    != request_fastapi.state.user_id
-                ):
-                    not_found_logs.append(derived_log_id)
-                    continue
+    # (B) Resolve which derived_log IDs to update
+    if isinstance(body.target_derived_logs, list):
+        derived_log_ids = body.target_derived_logs
+    else:
+        argdict = body.target_derived_logs
+        raw_rows, _, _count = _get_logs_query(
+            request_fastapi=request_fastapi,
+            project=body.project,
+            column_context=argdict.get("column_context"),
+            context=argdict.get("context"),
+            filter_expr=argdict.get("filter_expr"),
+            sorting=argdict.get("sort"),
+            from_ids=argdict.get("from_ids"),
+            exclude_ids=argdict.get("exclude_ids"),
+            from_fields=argdict.get("from_fields"),
+            exclude_fields=argdict.get("exclude_fields"),
+            limit=argdict.get("limit"),
+            offset=argdict.get("offset", 0),
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+        )
 
-                # Update the derived log
-                updated_log = derived_log_dao.update(
-                    id=derived_log_id,
-                    original_key=request.original_key,
-                    key=request.key,
-                    equation=request.equation,
-                )
-                updated_logs.append(updated_log)
+        derived_event_ids = set()
+        for (
+            row_key,
+            row_value,
+            row_inferred_type,
+            row_version,
+            row_source_type,
+            row_created_at,
+            row_event_id,
+        ) in raw_rows:
+            if row_source_type == "derived":
+                derived_event_ids.add(row_event_id)
 
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
-
-        if not_found_logs:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Derived logs with ids {not_found_logs} not found or you don't have permission to update them.",
+        # Now find the actual derived_log IDs
+        derived_log_ids = (
+            session.query(DerivedLog.id)
+            .filter(
+                DerivedLog.log_event_id.in_(derived_event_ids),
             )
+            .all()
+        )
+        derived_log_ids = [t[0] for t in derived_log_ids]
 
-        # Recompute values for all updated logs
-        if updated_logs:
-            derived_log_dao.recompute_derived_logs(updated_logs, session)
+    if not derived_log_ids:
+        return {"info": "No derived logs matched. Nothing to update."}
 
-        return {"info": "Derived logs updated successfully!"}
+    # (C) Update each derived log, respecting user permissions, etc.
+    not_found_logs = []
+    updated_logs = []
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    for dlog_id in derived_log_ids:
+        # 1) Check if user can update it
+        #    For example, see if the underlying log_event belongs to the same user.
+        log_event_id = (
+            session.query(DerivedLog.log_event_id)
+            .filter(DerivedLog.id == dlog_id)
+            .scalar()
+        )
+        if not log_event_id:
+            not_found_logs.append(dlog_id)
+            continue
+        user_id_of_this_event = log_event_dao.get_user_id(id=log_event_id)
+        if user_id_of_this_event != user_id:
+            not_found_logs.append(dlog_id)
+            continue
+
+        # 2) Actually update
+        try:
+            updated_log = derived_log_dao.update(
+                id=dlog_id,
+                key=body.key,
+                equation=body.equation,
+            )
+            updated_logs.append(updated_log)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    if not_found_logs:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Derived logs with IDs {not_found_logs} do not exist "
+                "or you lack permission."
+            ),
+        )
+
+    # (D) Recompute
+    if updated_logs:
+        derived_log_dao.recompute_derived_logs(updated_logs, session)
+
+    return {"info": f"Updated {len(updated_logs)} derived logs successfully."}
 
 
 @router.put(
