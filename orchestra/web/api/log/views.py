@@ -2147,8 +2147,8 @@ def get_log_groups(
             if not found_match:
                 version = str(len(groups))
         if version not in groups:
-            groups[version] = set()
-        groups[version].add(value)
+            groups[str(version)] = set()
+        groups[str(version)].add(value)
     assert all(
         len(v) == 1 for v in groups.values()
     ), "All sets should contain a single unique value"

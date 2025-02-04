@@ -238,9 +238,20 @@ async def _create_logs_for_grouping(client, project_name, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     data = log_data["logs_for_grouping"]
     for i in range(len(data)):
+        # Split into params and entries
+        entries = {}
+        if "a/input" in data[i]:
+            entries["a/input"] = data[i]["a/input"]
+        elif "input" in data[i]:
+            entries["a/input"] = data[i]["input"]
+
         response = await client.post(
             "/v0/logs",
-            json={"project": project_name, "entries": data[i]},
+            json={
+                "project": project_name,
+                "params": {"system_prompt": data[i]["system_prompt"]},
+                "entries": entries,
+            },
             headers=_headers,
         )
         assert response.status_code == 200, response.json()
@@ -3730,7 +3741,7 @@ async def test_get_log_groups(client: AsyncClient):
     _ = await _create_project(client, project_name)
     _ = await _create_logs_for_grouping(client, project_name)
 
-    # fetch log groups for a given key
+    # fetch log groups for a given key (params)
     response = await client.get(
         f"/v0/logs/groups?project={project_name}&key=system_prompt",
         headers=HEADERS,
@@ -3741,8 +3752,23 @@ async def test_get_log_groups(client: AsyncClient):
     assert isinstance(groups, dict)  # Ensure it's a dict of grouped logs
     assert len(groups) == 2
     assert groups == {
-        "0": "Respond only with a single digit.",
-        "1": "You are an expert mathematician.",
+        "0": "You are an expert mathematician.",
+        "1": "Respond only with a single digit.",
+    }
+
+    # fetch log groups for a given key (entries)
+    response = await client.get(
+        f"/v0/logs/groups?project={project_name}&key=a/input",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    groups = response.json()
+    assert isinstance(groups, dict)  # Ensure it's a dict of grouped logs
+    assert len(groups) == 2
+    assert groups == {
+        "0": "What is 2 + 2?",
+        "1": "What is 1 + 1?",
     }
 
 
@@ -3762,8 +3788,8 @@ async def test_get_log_groups_combined(client: AsyncClient):
     assert isinstance(groups, dict)
     assert len(groups) == 2
     assert groups == {
-        "0": "Respond only with a single digit.",
-        "1": "You are an expert mathematician.",
+        "0": "You are an expert mathematician.",
+        "1": "Respond only with a single digit.",
     }
 
     # Test with no matching logs after filtering
@@ -3799,7 +3825,7 @@ async def test_get_log_groups_combined(client: AsyncClient):
     assert isinstance(groups, dict)
     assert len(groups) == 1
     assert groups == {
-        "0": "Respond only with a single digit.",
+        "1": "Respond only with a single digit.",
     }
 
     # Test excluding some log IDs
@@ -5168,7 +5194,7 @@ async def test_get_logs_groups_only_and_return_timestamps(client: AsyncClient):
     # CASE A: Nested groups, groups_only=True, return_timestamps=False
     #   group_by = ["params/sys_msg", "entries/i"]
     #
-    # At the final leaf, we have a list of log IDs (no “j” field is visible,
+    # At the final leaf, we have a list of log IDs (no "j" field is visible,
     # because groups_only=True discards full log objects).
     # ----------------------------------------------------------------
     params_nested = {
