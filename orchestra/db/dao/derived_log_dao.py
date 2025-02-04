@@ -105,42 +105,57 @@ class DerivedLogDAO:
     def update(
         self,
         id: int,
-        original_key: str = None,
         key: str = None,
         equation: str = None,
+        referenced_logs: Dict[str, List[int]] = None,
     ) -> DerivedLog:
-        """
-        Update an existing derived log entry.
-
-        Args:
-            id: ID of the derived log to update
-            key: New key for the derived log (optional)
-            equation: New equation for computing the value (optional)
-            value: New value (optional, recomputed if equation/referenced_logs change)
-
-        Returns:
-            Updated DerivedLog instance
-
-        Raises:
-            ValueError: If derived log with given ID doesn't exist
-            Exception: If there's an error computing the new value
-        """
+        """Update a derived log entry by ID"""
         try:
-            derived_log = (
-                self.session.query(DerivedLog)
-                .filter(DerivedLog.log_event_id == id)
-                .filter(DerivedLog.key == original_key)
-                .first()
-            )
+            derived_log = self.session.query(DerivedLog).get(id)
             if not derived_log:
                 raise ValueError(f"No derived log found with id {id}")
 
-            if key is not None:
-                derived_log.key = key
-            if equation is not None:
-                derived_log.equation = equation
+            # Update referenced logs if provided
+            if referenced_logs:
+                # Validate all referenced logs exist
+                valid_logs = (
+                    self.session.query(LogEvent.id)
+                    .filter(
+                        LogEvent.id.in_(
+                            [
+                                lid
+                                for sublist in referenced_logs.values()
+                                for lid in sublist
+                            ],
+                        ),
+                    )
+                    .all()
+                )
+                if len(valid_logs) != sum(len(v) for v in referenced_logs.values()):
+                    raise ValueError("One or more referenced logs not found")
 
+                derived_log.referenced_logs = referenced_logs
+
+            # Check for key conflicts
+            if key and key != derived_log.key:
+                exists = (
+                    self.session.query(DerivedLog)
+                    .filter(
+                        DerivedLog.log_event_id == derived_log.log_event_id,
+                        DerivedLog.key == key,
+                    )
+                    .first()
+                )
+                if exists:
+                    raise ValueError(f"Key '{key}' already exists for this log event")
+
+            # Apply updates
+            if key:
+                derived_log.key = key
+            if equation:
+                derived_log.equation = equation
             derived_log.updated_at = datetime.now(timezone.utc)
+
             self.session.commit()
             return derived_log
         except Exception as e:
