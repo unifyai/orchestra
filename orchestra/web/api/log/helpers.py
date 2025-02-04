@@ -1804,6 +1804,11 @@ def _flatten_fields(
     return flattened
 
 
+def is_image_field(field_name: str, field_types: Dict[str, str]) -> bool:
+    """Check if a field is an image type."""
+    return field_types.get(field_name) == "image"
+
+
 def _format_flat_logs(rows, context_len, value_limit, field_order_map):
     """Helper function to format flat logs using raw query data"""
     formatted = {}
