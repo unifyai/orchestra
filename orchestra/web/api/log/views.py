@@ -1359,7 +1359,7 @@ def get_logs(
             session=session,
         )
         if return_ids_only:
-            event_ids = [r[6] for r in all_rows]  
+            event_ids = [r[6] for r in all_rows]
             return list(dict.fromkeys(event_ids))
 
         # Format logs into flat structure.
