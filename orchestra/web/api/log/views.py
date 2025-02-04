@@ -62,6 +62,7 @@ from .helpers import (
     _get_final_logs,
     _substitute_placeholders,
     build_sql_query,
+    is_image_field,
     str_filter_exp_to_dict,
 )
 
@@ -941,6 +942,7 @@ def _get_logs_query(
     log_event_query = session.query(LogEvent.id).filter(
         LogEvent.project_id == project_id,
     )
+    field_types = field_type_dao.get_field_types(project_id)
 
     # Handle from_ids vs exclude_ids
     if from_ids and exclude_ids:
@@ -959,6 +961,24 @@ def _get_logs_query(
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
         if filter_dict:
+            # Only allow 'exists' checks for image fields
+            def validate_filter_dict(fd):
+                if isinstance(fd, dict):
+                    if "type" in fd and fd["type"] == "identifier":
+                        field = fd.get("value")
+                        if is_image_field(field, field_types):
+                            parent = getattr(validate_filter_dict, "parent", None)
+                            if parent and parent.get("operand") != "exists":
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail=f"Field '{field}' is an image type and can only be used with 'exists' operator",
+                                )
+                    for k, v in fd.items():
+                        if isinstance(v, dict):
+                            validate_filter_dict.parent = fd
+                            validate_filter_dict(v)
+
+            validate_filter_dict(filter_dict)
             condition = build_sql_query(filter_dict, LogEvent, session)
             if isinstance(condition, Subquery):
                 # Subquery => we check existence
@@ -1114,7 +1134,6 @@ def _get_logs_query(
     sorted_query = session.query(distinct_ids_subq.c.log_event_id)
 
     sort_criteria = []
-    field_types = field_type_dao.get_field_types(project_id)
 
     if sorting:
         # e.g. sorting='{"score":"ascending","timestamp":"descending"}'
@@ -1123,6 +1142,9 @@ def _get_logs_query(
         # For each field in sort_dict, we outer-join a subquery from filtered_logs_subq
         # that picks out the relevant value for that field. Then we cast it if known.
         for sort_key, mode in sort_dict.items():
+            # Skip image fields from sorting
+            if is_image_field(sort_key, field_types):
+                continue
             if mode not in ("ascending", "descending"):
                 raise HTTPException(
                     status_code=400,
