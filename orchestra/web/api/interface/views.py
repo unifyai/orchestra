@@ -71,15 +71,16 @@ def create_interface(
             status_code=404,
             detail=f"Project {request.project} not found.",
         )
-    context = context_dao.filter(
-        project_id=projects[0][0].id,
-        name=request.context,
-    )
-    if len(context) == 0:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Context {request.context} not found.",
+    if request.context:
+        context = context_dao.filter(
+            project_id=projects[0][0].id,
+            name=request.context,
         )
+        if len(context) == 0:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Context {request.context} not found.",
+            )
     dao = temp_interface_dao if request.temporary else interface_dao
     interfaces = dao.get_interfaces(
         request_fastapi.state.user_id,
@@ -158,15 +159,16 @@ def update_interface(
             status_code=404,
             detail=f"Project {request.project} not found.",
         )
-    context = context_dao.filter(
-        project_id=projects[0][0].id,
-        name=request.context,
-    )
-    if len(context) == 0:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Context {request.context} not found.",
+    if request.context:
+        context = context_dao.filter(
+            project_id=projects[0][0].id,
+            name=request.context,
         )
+        if len(context) == 0:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Context {request.context} not found.",
+            )
     dao = temp_interface_dao if request.temporary else interface_dao
     interfaces = dao.get_interfaces(
         request_fastapi.state.user_id,
