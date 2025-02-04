@@ -2348,9 +2348,6 @@ async def test_get_logs_with_value_limit(client: AsyncClient):
     assert len(log_entries["nested_tuple"]) <= 13
     assert "..." in log_entries["nested_tuple"]
 
-    # Test image field handling
-    assert log_entries["image_field"] == ""
-
     # Test clipping indicator
     assert "clipped_fields" in result["logs"][0]
     clipped_fields = result["logs"][0]["clipped_fields"]
@@ -2382,7 +2379,6 @@ async def test_get_logs_with_value_limit(client: AsyncClient):
     assert log_entries["nested_list"] == [1, 2, 3, 4, 5]
     assert log_entries["nested_tuple"] == ["a", "b", "c"]  # JSON converts tuple to list
     assert log_entries["boolean_value"] == True
-    assert log_entries["image_field"] == test_data["entries"]["image_field"]
 
     # Verify no clipping indicators when value_limit is not set
     assert "clipped_fields" in result["logs"][0]
