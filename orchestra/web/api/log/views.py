@@ -1225,8 +1225,7 @@ def get_logs(
     ),
     column_context: Optional[str] = Query(
         None,
-        description="The context (prepending '/' seperated field names) from which to "
-        "retrieve the logs.",
+        description="The context (prepending '/' seperated field names) from which to retrieve the logs.",
         example="subjects/science/physics",
     ),
     context: Optional[str] = Query(
@@ -1249,42 +1248,27 @@ def get_logs(
     ),
     sorting: Optional[str] = Query(
         None,
-        description="Dict with fields as keys and either 'ascending' or 'descending' "
-        "as values. The first entry in the dict is the last field to be "
-        "sorted by, which takes ultimate precedent, with other keys only "
-        "remaining in order when the first key values are equal.",
+        description="Dict with fields as keys and either 'ascending' or 'descending' as values. The first entry in the dict is the last field to be sorted by, which takes ultimate precedent, with other keys only remaining in order when the first key values are equal.",
         example={"score": "ascending", "timestamp": "descending"},
     ),
     from_ids: Optional[str] = Query(
         None,
-        description="The log ids which are permitted to be included in the search. "
-        "Each log id listed does not need to be returned, but no logs "
-        "which are not included in this list can be returned. This "
-        "argument *cannot* be set if `exclude_ids` is set.",
+        description="The log ids which are permitted to be included in the search. Each log id listed does not need to be returned, but no logs which are not included in this list can be returned. This argument *cannot* be set if `exclude_ids` is set.",
         example="0&1&2",
     ),
     exclude_ids: Optional[str] = Query(
         None,
-        description="The log ids which cannot be returned from the search. "
-        "None of the listed ids will be returned, even if the logs are "
-        "valid as per the filtering expression etc. This argument *cannot* "
-        "be set if `from_ids` is set.",
+        description="The log ids which cannot be returned from the search. None of the listed ids will be returned, even if the logs are valid as per the filtering expression etc. This argument *cannot* be set if `from_ids` is set.",
         example="0&1&2",
     ),
     from_fields: Optional[str] = Query(
         None,
-        description="The fields which are permitted to be included in the search. "
-        "Each field listed does not need to be returned, but no fields "
-        "which are not included in this list can be returned. This "
-        "argument *cannot* be set if `exclude_fields` is set.",
+        description="The fields which are permitted to be included in the search. Each field listed does not need to be returned, but no fields which are not included in this list can be returned. This argument *cannot* be set if `exclude_fields` is set.",
         example="score&response",
     ),
     exclude_fields: Optional[str] = Query(
         None,
-        description="The fields which cannot be returned from the search. "
-        "None of the listed fields will be returned, even if the fields "
-        "are valid as per the filtering expression etc. This argument "
-        "*cannot* be set if `from_fields` is set.",
+        description="The fields which cannot be returned from the search. None of the listed fields will be returned, even if the fields are valid as per the filtering expression etc. This argument *cannot* be set if `from_fields` is set.",
         example="score&response",
     ),
     limit: Optional[int] = Query(None, ge=1, le=200),
@@ -1312,6 +1296,14 @@ def get_logs(
         True,
         description="If True, groups are returned as a nested structure; if False, groups are returned as flat per-field mappings.",
     ),
+    groups_only: bool = Query(
+        False,
+        description="If True, do not include a full logs list; only return groups (with leaf values being either log ids or timestamps).",
+    ),
+    return_timestamps: bool = Query(
+        False,
+        description="When groups_only is True, return each leaf as a mapping from log id to timestamp instead of just a list of log ids.",
+    ),
     return_ids_only: bool = False,
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
@@ -1319,21 +1311,34 @@ def get_logs(
     session=Depends(get_db_session),
 ):
     """
-    Returns a list of filtered entries from a project. When group_threshold is set,
-    entries that appear in at least that many logs will be grouped together in the
-    grouped_entries field to reduce response size. When value_limit is set, fields
-    that exceed this limit will be clipped and the clipped_fields field will be
-    populated.
+    Returns a list of filtered log entries from a project with various expressiveness options:
 
-    The response will include:
-    - logs: List of log entries with their individual values
-    - params: Dictionary of parameter versions
-    - count: Total number of logs
-    - grouped_entries: (When group_threshold is set) Dictionary of field names to their shared values
-    - clipped_fields: List of fields that were clipped due to value_limit
+      1. **Monolithic mode** (when group_by is not provided):
+         - Returns a flat list of log entries (with fields clipped if value_limit is set).
+         - Optionally factors out repeated fields into a grouped_entries field if group_threshold is set.
+
+      2. **Grouped mode** (when group_by is provided):
+         - Supports multi-level grouping of logs. The order of fields in group_by dictates the nesting order.
+         - Supports pagination at the group level using group_limit and group_offset.
+         - Supports limiting the nesting depth with group_depth.
+         - When nested_groups is True, returns a nested structure under the "logs" key.
+         - When nested_groups is False, returns flat per-field mappings under the "groups" key.
+         - When groups_only is True, the detailed log objects are omitted and leaves are simplified
+           to either lists of log ids (if return_timestamps is False) or mappings of {log id: timestamp} (if True).
+
+      3. **Return IDs only mode**:
+         - If return_ids_only is True, returns only the log event ids.
+
+    The response always includes:
+      - `params`: The parameter versions used across the logs.
+      - `count`: The total number of logs matching the query.
+      - Additionally, it includes either `logs` (in monolithic or nested grouping mode) or `groups` (in flat grouping mode)
+        as specified by the arguments.
+
     """
-
-    # 1) If not grouping, just do the existing (monolithic) approach
+    # -----------------------------------------------------------
+    # Stage 1: Monolithic (non-grouped) Case
+    # -----------------------------------------------------------
     if not group_by:
         all_rows, context_len, total_count = _get_logs_query(
             request_fastapi,
@@ -1354,10 +1359,10 @@ def get_logs(
             session=session,
         )
         if return_ids_only:
-            event_ids = [r[6] for r in all_rows]  # (obj, created_at, event_id)
+            event_ids = [r[6] for r in all_rows]  
             return list(dict.fromkeys(event_ids))
 
-        # Format
+        # Format logs into flat structure.
         field_order_map = field_type_dao.get_ordered_field_names(
             project_dao.filter(name=project, user_id=request_fastapi.state.user_id)[0][
                 0
@@ -1370,7 +1375,7 @@ def get_logs(
             field_order_map,
         )
 
-        # If group_threshold => factor out repeated fields
+        # Apply grouping of repeated fields if group_threshold is set.
         grouped_entries = {}
         if group_threshold is not None and group_threshold > 0:
             logs_out, grouped_entries = apply_group_threshold(logs_out, group_threshold)
@@ -1385,9 +1390,10 @@ def get_logs(
 
         return response
 
-    # --- GROUPING CASE ---
-    # If grouping, do the 2-step approach:
-    #    (a) retrieve all event IDs, ignoring limit/offset
+    # -----------------------------------------------------------
+    # Stage 2: Grouping Case
+    #   (a) Retrieve all matching log event IDs (ignoring limit/offset)
+    # -----------------------------------------------------------
     event_ids, total_count = _get_all_filtered_log_event_ids(
         request_fastapi=request_fastapi,
         project=project,
@@ -1407,11 +1413,15 @@ def get_logs(
     if return_ids_only:
         return list(dict.fromkeys(event_ids))
 
-    # (b) Gather all param versions
+    # -----------------------------------------------------------
+    # Stage 3: Get Parameter Versions for the Log Events
+    # -----------------------------------------------------------
     params_out = _get_params_for_log_events(event_ids, session)
 
+    # -----------------------------------------------------------
+    # Stage 4: Build Grouped Structure
+    # -----------------------------------------------------------
     if nested_groups:
-        # (c) Build the nested structure
         grouped_result = _build_grouped_data(
             request_fastapi=request_fastapi,
             project=project,
@@ -1433,17 +1443,22 @@ def get_logs(
             context_dao=context_dao,
             session=session,
             value_limit=value_limit,
+            groups_only=groups_only,
+            return_timestamps=return_timestamps,
         )
 
-        return {
+        final_result = {
             "params": params_out,
             "logs": grouped_result,
             "count": total_count,
         }
 
     else:
-        # use the "flat" groups mode for the view pane.
-        # (a) Get the flat logs (without any recursive grouping)
+        # -----------------------------------------------------------
+        # Stage 4B: Flat Groups Mode for the View Pane.
+        #   (a) Fetch flat logs.
+        #   (b) Build per-field grouping structure.
+        # -----------------------------------------------------------
         rows, context_len, _ = _fetch_logs_for_event_ids(
             request_fastapi=request_fastapi,
             event_ids=event_ids,
@@ -1453,17 +1468,15 @@ def get_logs(
             sorting=sorting,
             limit=limit,
             offset=offset,
-            parent_fields="",  # no parent grouping in flat mode
+            parent_fields="",
             project_dao=project_dao,
             field_type_dao=field_type_dao,
             session=session,
         )
         logs_out, _ = _format_flat_logs(rows, context_len, value_limit, field_order_map)
 
-        # (b) Build a per-field grouping structure.
         groups = {}
 
-        # A helper to “parse” a group key (e.g. "entries/i" => ("entries", "i"))
         def parse_group_key(key: str) -> Tuple[str, str]:
             parts = key.split("/", 1)
             return (parts[0], parts[1]) if len(parts) == 2 else ("", key)
@@ -1471,7 +1484,6 @@ def get_logs(
         for group_field in group_by:
             prefix, raw_key = parse_group_key(group_field)
             is_param = prefix == "params"
-            # Retrieve distinct group values (if a log has no such key, it will be added later as "null")
             distinct_values = _get_distinct_group_values(
                 log_event_ids=event_ids,
                 group_key=raw_key,
@@ -1490,22 +1502,18 @@ def get_logs(
                 )
                 value_to_ids[val] = subset_ids
                 used_ids.update(subset_ids)
-            # Also include a group for logs that do not have the key
             missing_ids = list(set(event_ids) - used_ids)
             if missing_ids:
                 value_to_ids["null"] = missing_ids
 
-            # Apply pagination (group_offset / group_limit) to the keys.
             all_keys = list(value_to_ids.keys())
             total_distinct = len(all_keys)
-            # (You might want to sort keys in a deterministic way.)
             all_keys_sorted = sorted(all_keys, key=lambda x: (x is None, x))
             if group_limit is not None:
                 paged_keys = all_keys_sorted[group_offset : group_offset + group_limit]
             else:
                 paged_keys = all_keys_sorted
             paged_mapping = {k: value_to_ids[k] for k in paged_keys}
-            # For the count, we return the total number of logs that have this field (or you may sum the lengths)
             field_total = sum(len(ids) for ids in value_to_ids.values())
             groups[group_field] = {
                 **paged_mapping,
@@ -1513,12 +1521,56 @@ def get_logs(
                 "count": field_total,
             }
 
-        return {
+        final_result = {
             "params": params_out,
             "groups": groups,
             "logs": logs_out,
             "count": total_count,
         }
+
+    # -----------------------------------------------------------
+    # Stage 5: Simplify Leaves if groups_only is True
+    #   (Convert full log objects to simplified leaf values.)
+    # -----------------------------------------------------------
+    if groups_only:
+
+        def simplify_leaves(node):
+            if isinstance(node, list):
+                # Could be a list of log-dict(s) or a list of log-ids (ints)
+                if not node:
+                    return node
+                first_item = node[0]
+                if isinstance(first_item, dict):
+                    if return_timestamps:
+                        return {
+                            str(log["id"]): log["ts"]
+                            for log in node
+                            if "id" in log and "ts" in log
+                        }
+                    else:
+                        return [log["id"] for log in node if "id" in log]
+                else:
+                    return node
+            elif isinstance(node, dict):
+                new_node = {}
+                for k, v in node.items():
+                    if k in ("group_count", "count"):
+                        new_node[k] = v
+                    else:
+                        new_node[k] = simplify_leaves(v)
+                return new_node
+            return node
+
+        if nested_groups:
+            final_result["logs"] = simplify_leaves(final_result["logs"])
+        else:
+            final_result.pop("logs", None)
+            final_result["groups"] = simplify_leaves(final_result["groups"])
+
+    # -----------------------------------------------------------
+    # Stage 6: Return the Final Result.
+    # -----------------------------------------------------------
+    return final_result
 
 
 @router.get(
