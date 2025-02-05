@@ -4448,6 +4448,37 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
     # 1) Create initial logs using your existing fixture
     await _create_several_logs(client, project_name)
 
+    # Create derived logs for testing grouping
+    # First derived log: temperature + 10
+    derived_conf_temp = {
+        "key": "derived_temp",
+        "equation": "{t:_/temperature} + 10",
+        "referenced_logs": {"t": [1, 2, 3, 4]},  # logs with temperature field
+    }
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_temp["key"],
+        derived_conf_temp["equation"],
+        derived_conf_temp["referenced_logs"],
+    )
+    assert response.status_code == 200
+
+    # Second derived log: state length
+    derived_conf_state = {
+        "key": "state_len",
+        "equation": "len({s:_/state})",
+        "referenced_logs": {"s": [1, 2, 3, 4]},  # logs with state field
+    }
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_state["key"],
+        derived_conf_state["equation"],
+        derived_conf_state["referenced_logs"],
+    )
+    assert response.status_code == 200
+
     # 2) Create *additional* logs so we can test grouping by params properly.
     #    We'll vary the version param "a/b/param2" across logs.
     custom_logs_for_param_versions = [
@@ -4542,6 +4573,28 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
             # But this is a single-level grouping, so it should be a list
             raise AssertionError(f"Expected a leaf list for {key}, got {type(sub)}")
 
+    # Check for derived entries in grouped results
+    for state_val, logs_list in group_obj.items():
+        if state_val not in ("group_count", "count"):
+            for log in logs_list:
+                if log["id"] in [1, 2, 3, 4]:
+                    assert (
+                        "derived_temp" in log["derived_entries"]
+                    ), f"Missing derived_temp in log {log['id']}"
+                    assert (
+                        "state_len" in log["derived_entries"]
+                    ), f"Missing state_len in log {log['id']}"
+                    # Verify derived values are correct
+                    if "_/temperature" in log["entries"]:
+                        assert (
+                            log["derived_entries"]["derived_temp"]
+                            == log["entries"]["_/temperature"] + 10
+                        )
+                    if "_/state" in log["entries"]:
+                        assert log["derived_entries"]["state_len"] == len(
+                            log["entries"]["_/state"],
+                        )
+
     #
     # ==========  SCENARIO 2: Single-level grouping by param "a/b/param1"  ==========
     #
@@ -4579,6 +4632,17 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
             # The grouped-by field should be removed from params
             assert "a/b/param1" not in log["params"]
 
+    # Verify derived entries are preserved when grouping by params
+    for param_val, logs_list in param1_groups.items():
+        if param_val not in ("group_count", "count"):
+            for log in logs_list:
+                if log["id"] in [1, 2, 3, 4]:
+                    assert (
+                        "derived_temp" in log["derived_entries"]
+                    ), f"Missing derived_temp in log {log['id']}"
+                    assert (
+                        "state_len" in log["derived_entries"]
+                    ), f"Missing state_len in log {log['id']}"
     #
     # ==========  SCENARIO 3: Multi-level grouping by param "a/b/param2" and "entries/_/state"  ==========
     #
@@ -4633,20 +4697,32 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
             # Could be a deeper group if we had a third dimension
             pass
 
-        #
-        # ==========  SCENARIO 4: Group pagination (group_limit, group_offset)  ==========
-        #
-        # We'll do it on the "entries/_/state" grouping, which we know has at least 5 distinct states.
-        # Example: group_limit=2, group_offset=1 => we skip the first group, only show the next 2
-        response = await client.get(
-            f"/v0/logs?project={project_name}",
-            params={
-                "group_by": ["entries/_/state"],
-                "group_limit": 2,
-                "group_offset": 1,
-            },
-            headers=HEADERS,
-        )
+    # Verify derived entries are preserved in multi-level grouping
+    param2_groups = logs_section["params/a/b/param2"]
+    for param2_val, state_groups in param2_groups.items():
+        if param2_val not in ("group_count", "count"):
+            state_level = state_groups["entries/_/state"]
+            for state_val, logs_list in state_level.items():
+                if state_val not in ("group_count", "count"):
+                    for log in logs_list:
+                        if log["id"] in [1, 2, 3, 4]:
+                            assert "derived_temp" in log["derived_entries"]
+                            assert "state_len" in log["derived_entries"]
+
+    # Verify derived entries are preserved when grouping by params
+    # ==========  SCENARIO 4: Group pagination (group_limit, group_offset)  ==========
+    #
+    # We'll do it on the "entries/_/state" grouping, which we know has at least 5 distinct states.
+    # Example: group_limit=2, group_offset=1 => we skip the first group, only show the next 2
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={
+            "group_by": ["entries/_/state"],
+            "group_limit": 2,
+            "group_offset": 1,
+        },
+        headers=HEADERS,
+    )
     assert response.status_code == 200
     result = response.json()
 
@@ -4852,6 +4928,37 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
 
     # Create the standard logs you used before:
     await _create_several_logs(client, project_name)
+
+    # Create derived logs for testing grouping
+    # First derived log: temperature + 10
+    derived_conf_temp = {
+        "key": "derived_temp",
+        "equation": "{t:_/temperature} + 10",
+        "referenced_logs": {"t": [1, 2, 3, 4]},  # logs with temperature field
+    }
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_temp["key"],
+        derived_conf_temp["equation"],
+        derived_conf_temp["referenced_logs"],
+    )
+    assert response.status_code == 200
+
+    # Second derived log: state length
+    derived_conf_state = {
+        "key": "state_len",
+        "equation": "len({s:_/state})",
+        "referenced_logs": {"s": [1, 2, 3, 4]},  # logs with state field
+    }
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_state["key"],
+        derived_conf_state["equation"],
+        derived_conf_state["referenced_logs"],
+    )
+    assert response.status_code == 200
 
     # Create a few extra logs that have param "a/b/param2" and other fields:
     custom_logs_for_param_versions = [
@@ -5074,6 +5181,104 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
             assert "entries" in single_log and "params" in single_log
 
     # TODO(yusha): test group_by + sorting at the group level once group sorting is implemented
+
+    #
+    # ==========  SCENARIO F: Group by Derived Log Fields  ==========
+    #
+    # Test grouping by derived log 'derived_temp' which is defined as temperature + 10
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["derived_entries/derived_temp"],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    logs_section = result["logs"]
+    assert "derived_entries/derived_temp" in logs_section
+    group_obj = logs_section["derived_entries/derived_temp"]
+    assert "count" in group_obj
+    assert "group_count" in group_obj
+
+    # Verify each group's derived value matches temperature + 10
+    for derived_val_str, logs_list in group_obj.items():
+        if derived_val_str in ("count", "group_count", "null"):
+            continue
+        derived_val = float(derived_val_str)
+        for log in logs_list:
+            orig_temp = log["entries"].get("_/temperature")
+            if orig_temp is not None:
+                assert (
+                    derived_val == orig_temp + 10
+                ), f"Derived temp mismatch in log {log['id']}"
+
+    # Test grouping by derived log 'state_len' which computes length of state field
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["derived_entries/state_len"],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    logs_section = result["logs"]
+    assert "derived_entries/state_len" in logs_section
+    group_obj = logs_section["derived_entries/state_len"]
+    assert "count" in group_obj
+    assert "group_count" in group_obj
+
+    # Verify each group's derived value matches state length
+    for state_len_str, logs_list in group_obj.items():
+        if state_len_str in ("count", "group_count", "null"):
+            continue
+        state_len = float(state_len_str)
+        for log in logs_list:
+            state = log["entries"].get("_/state")
+            if state is not None:
+                assert state_len == len(
+                    state,
+                ), f"State length mismatch in log {log['id']}"
+
+    # Test multi-level grouping by both derived logs: first by 'derived_temp' then by 'state_len'
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["derived_entries/derived_temp", "derived_entries/state_len"],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    logs_section = result["logs"]
+    assert "derived_entries/derived_temp" in logs_section
+    temp_groups = logs_section["derived_entries/derived_temp"]
+
+    # Verify nested grouping structure and calculations
+    for temp_val_str, state_len_groups_wrapper in temp_groups.items():
+        if temp_val_str in ("count", "group_count", "null"):
+            continue
+        assert "derived_entries/state_len" in state_len_groups_wrapper
+        len_groups = state_len_groups_wrapper["derived_entries/state_len"]
+
+        for len_val_str, logs_list in len_groups.items():
+            if len_val_str in ("count", "group_count"):
+                continue
+            for log in logs_list:
+                orig_temp = log["entries"].get("_/temperature")
+                state = log["entries"].get("_/state")
+                if orig_temp is not None:
+                    assert (
+                        float(temp_val_str) == orig_temp + 10
+                    ), f"Derived temp mismatch in multi-level grouping for log {log['id']}"
+                if state is not None:
+                    assert float(len_val_str) == len(
+                        state,
+                    ), f"Derived state length mismatch in multi-level grouping for log {log['id']}"
 
 
 @pytest.mark.anyio
