@@ -2394,24 +2394,87 @@ def _get_distinct_group_values(
     session,
     is_param: bool = False,
 ) -> List[Any]:
-    """Get distinct values for a group key among provided log event IDs."""
-    value_col = Log.version if is_param else Log.value
-    subquery = (
-        session.query(
-            value_col.label("value"),
-            Log.log_event_id,
-            func.row_number()
-            .over(
-                partition_by=value_col,
-                order_by=desc(Log.log_event_id),
+    """
+    Get distinct values for a group key among provided log event IDs.
+    For non-parameter fields (is_param=False), includes both base logs and derived logs.
+    For parameters (is_param=True), only includes base logs.
+    """
+    if is_param:
+        # For parameters, use only base logs with version
+        value_col = Log.version
+        subquery = (
+            session.query(
+                value_col.label("value"),
+                Log.log_event_id,
+                func.row_number()
+                .over(
+                    partition_by=value_col,
+                    order_by=desc(Log.log_event_id),
+                )
+                .label("rn"),
             )
-            .label("rn"),
+            .filter(Log.log_event_id.in_(log_event_ids))
+            .filter(Log.key == group_key)
+            .subquery()
         )
-        .filter(Log.log_event_id.in_(log_event_ids))
-        .filter(Log.key == group_key)
-        .subquery()
-    )
+    elif group_key == "derived_entries":
+        # For derived entries, use only derived logs
+        subquery = (
+            session.query(
+                DerivedLog.value.label("value"),
+                DerivedLog.log_event_id,
+                func.row_number()
+                .over(
+                    partition_by=DerivedLog.value,
+                    order_by=desc(DerivedLog.log_event_id),
+                )
+                .label("rn"),
+            )
+            .filter(Log.log_event_id.in_(log_event_ids))
+            .filter(Log.key == group_key)
+            .subquery()
+        )
 
+    else:
+        # For non-parameters, union base logs and derived logs
+        base_query = (
+            session.query(
+                Log.value.label("value"),
+                Log.log_event_id.label("log_event_id"),
+            )
+            .filter(Log.log_event_id.in_(log_event_ids))
+            .filter(Log.key == group_key)
+        )
+
+        derived_query = (
+            session.query(
+                DerivedLog.value.label("value"),
+                DerivedLog.log_event_id.label("log_event_id"),
+            )
+            .filter(DerivedLog.log_event_id.in_(log_event_ids))
+            .filter(DerivedLog.key == group_key)
+        )
+
+        # Combine base and derived logs
+        combined_query = base_query.union_all(derived_query).subquery(
+            name="unified_logs",
+        )
+
+        # Apply row_number over the combined results
+        subquery = (
+            session.query(
+                combined_query.c.value,
+                combined_query.c.log_event_id,
+                func.row_number()
+                .over(
+                    partition_by=combined_query.c.value,
+                    order_by=desc(combined_query.c.log_event_id),
+                )
+                .label("rn"),
+            )
+        ).subquery()
+
+    # Get distinct values ordered by log_event_id
     query = (
         session.query(subquery.c.value)
         .filter(subquery.c.rn == 1)
@@ -2428,18 +2491,46 @@ def _get_log_event_ids_for_group_value(
     session,
     is_param: bool = False,
 ) -> List[int]:
-    """Get log event IDs that match a specific group value."""
-    filter_expr = (
-        Log.version == group_value
-        if is_param
-        else cast(Log.value, JSONB) == cast(group_value, JSONB)
-    )
-    query = (
-        session.query(Log.log_event_id)
-        .filter(Log.log_event_id.in_(log_event_ids))
-        .filter(Log.key == group_key)
-        .filter(filter_expr)
-    )
+    """
+    Get log event IDs that match a specific group value.
+    For non-parameter fields (is_param=False), searches both base logs and derived logs.
+    For parameters (is_param=True), only searches base logs.
+    """
+    if is_param:
+        # For parameters, only search base logs
+        query = (
+            session.query(Log.log_event_id)
+            .filter(Log.log_event_id.in_(log_event_ids))
+            .filter(Log.key == group_key)
+            .filter(Log.version == group_value)
+        )
+    elif group_key == "derived_entries":
+        # For derived entries, only search derived logs
+        query = (
+            session.query(DerivedLog.log_event_id)
+            .filter(DerivedLog.log_event_id.in_(log_event_ids))
+            .filter(DerivedLog.key == group_key)
+            .filter(cast(DerivedLog.value, JSONB) == cast(group_value, JSONB))
+        )
+    else:
+        # For non-parameters, search both base and derived logs
+        base_query = (
+            session.query(Log.log_event_id)
+            .filter(Log.log_event_id.in_(log_event_ids))
+            .filter(Log.key == group_key)
+            .filter(cast(Log.value, JSONB) == cast(group_value, JSONB))
+        )
+
+        derived_query = (
+            session.query(DerivedLog.log_event_id)
+            .filter(DerivedLog.log_event_id.in_(log_event_ids))
+            .filter(DerivedLog.key == group_key)
+            .filter(cast(DerivedLog.value, JSONB) == cast(group_value, JSONB))
+        )
+
+        # Combine results from both tables
+        query = base_query.union_all(derived_query)
+
     return [row[0] for row in query.all()]
 
 
