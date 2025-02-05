@@ -110,9 +110,22 @@ def create_logs(
     """
     Creates one or more logs associated to a project. Logs are
     LLM-call-level data that might depend on other variables.
-    A "explicit_types" dictionary can be passed as part of the `entries`.
+
+    An "explicit_types" dictionary can be passed as part of the `entries`.
     If present, any matching key inside this dictionary will override the
-    inferred type of that particular entry.
+    inferred type of that particular entry. The explicit_types dictionary
+    can also specify if a field is mutable via a 'mutable' boolean flag:
+
+    {
+        "field_name": {
+            "type": "str",
+            "mutable": false  # Makes the field immutable
+        }
+    }
+
+    By default, all fields are immmutable unless specified otherwise.
+    Once a field is marked as mutable, only then can it be modified through
+    the update endpoint.
 
     This method returns the ids of the new stored logs.
     """
@@ -155,7 +168,7 @@ def create_logs(
     # Get field types once for all operations
     field_types = field_type_dao.get_field_types(project_id)
 
-    def enforce_types(field_name, value, batch_index=None):
+    def enforce_types(field_name, value, batch_index=None, explicit_types=None):
         entered_type = LogDAO.infer_type(field_name, value)
         expected_type = field_types.get(field_name)
         if expected_type:
@@ -175,7 +188,18 @@ def create_logs(
                     detail=f"Type mismatch for field '{field_name}'{batch_info}: expected {expected_type}, got {entered_type}. Value: {str(value)[:100]}",
                 )
         else:
-            field_type_dao.create_field_type_if_absent(project_id, field_name, value)
+            # Extract mutable flag from explicit_types if present
+            mutable = (
+                explicit_types.get(field_name, {}).get("mutable", False)
+                if explicit_types
+                else False
+            )
+            field_type_dao.create_field_type_if_absent(
+                project_id,
+                field_name,
+                value,
+                mutable=mutable,
+            )
 
     def get_context_id():
         if request.context:
@@ -223,7 +247,7 @@ def create_logs(
         )
         # Process params
         for k, v in current_params.items():
-            enforce_types(k, v, i)
+            enforce_types(k, v, i, params_explicit_types)
             # see if there is any param with the same value
             existing_param = log_dao.filter(
                 key=k,
@@ -254,7 +278,7 @@ def create_logs(
 
         # Process entries
         for k, v in current_entries.items():
-            enforce_types(k, v, i)
+            enforce_types(k, v, i, entries_explicit_types)
             log_dao.create_from_raw_k_v(
                 project_id=project_id,
                 log_event_id=log_event_id,
@@ -669,23 +693,39 @@ def update_logs(
                     detail=f"entries and params must be of the same length as log ids ({len(body.ids)}) if passed as a list, but found {data_type} list of length {len(data)}",
                 )
 
-            explicit_types = this_data.pop("explicit_types", None)
-            field_types = field_type_dao.get_field_types(project_id)
+            explicit_types = this_data.pop("explicit_types", {})
+            field_types = field_type_dao.get_field_types(
+                project_id,
+                return_mutable=True,
+            )
+            new_field_types = []
             for k, v in this_data.items():
 
                 if k in field_types:
-                    expected_type = field_types[k]
+                    expected_type = field_types[k]["field_type"]
                     original_type = LogDAO.infer_type(k, v)
                     if expected_type == "NoneType":
-                        field_type_dao.upsert_field_type(project_id, k, v)
+                        # Check if field is mutable before updating
+                        field_type = field_types.get(k)
+                        if field_type and not field_type.get("mutable", False):
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Field {k} is immutable and cannot be modified.",
+                            )
+                        field_type_dao.upsert_field_type(project_id, k, v, mutable=True)
                     elif original_type != expected_type and original_type != "NoneType":
                         raise HTTPException(
                             status_code=400,
                             detail=f"Type mismatch for field '{k}': expected {expected_type}, got {original_type}",
                         )
                 else:
-                    field_type_dao.create_field_type_if_absent(project_id, k, v)
-
+                    # Extract mutable flag from explicit_types if present
+                    mutable = (
+                        explicit_types.get(k, {}).get("mutable", False)
+                        if explicit_types
+                        else False
+                    )
+                    new_field_types.append((k, v, mutable))
                 # see if there is any param with the same value
                 existing = log_dao.filter(
                     key=k,
@@ -711,6 +751,14 @@ def update_logs(
                         f"but found {data_type}",
                     )
                 try:
+                    # Check if field is mutable before updating an existing field
+                    if k in field_types:
+                        field_type = field_types.get(k)
+                        if field_type and not field_type.get("mutable", False):
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Field {k} is immutable and cannot be modified.",
+                            )
                     log_dao.update_value(
                         log_event_id=log_id,
                         raw_k=k,
@@ -745,6 +793,17 @@ def update_logs(
                 status_code=404,
                 detail=f"Logs with ids {not_found_logs} not found or you don't have permission to update them.",
             )
+
+    # create new field types if any
+    if new_field_types:
+        for k, v, mutable in new_field_types:
+            field_type_dao.create_field_type_if_absent(
+                project_id,
+                k,
+                v,
+                mutable=mutable,
+            )
+
     # Now recompute the derived logs that reference any updated base logs
     # We'll find derived logs that have `referenced_logs` containing *any* of these updated_log_ids
     if updated_ids:
@@ -2202,7 +2261,7 @@ def get_fields(
     except IndexError:
         raise not_found(f"Project {project}")
 
-    types = field_type_dao.get_field_types(project_obj.id)
+    types = field_type_dao.get_field_types(project_obj.id, return_mutable=True)
     # Get all field names from base and derived logs
     log_keys_query = (
         session.query(Log.key)
@@ -2257,9 +2316,7 @@ def get_fields(
             (
                 "derived_entry"
                 if row[4] == "derived"  # source_type
-                else "entry"
-                if row[3] is None  # version
-                else "param"
+                else "entry" if row[3] is None else "param"  # version
             ),
         )
         for row in raw_rows
@@ -2268,22 +2325,25 @@ def get_fields(
     # Return field types in the same order as they were created
     return {
         key: {
-            "data_type": types.get(key),
+            "data_type": types.get(key).get("field_type"),
             "field_type": field_types.get(key),
+            "mutable": types.get(key, {}).get("mutable", True),
             "artifacts": (
-                session.query(DerivedLog.equation)
-                .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
-                .filter(
-                    and_(
-                        LogEvent.project_id == project_obj.id,
-                        DerivedLog.key == key,
-                    ),
+                (
+                    session.query(DerivedLog.equation)
+                    .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
+                    .filter(
+                        and_(
+                            LogEvent.project_id == project_obj.id,
+                            DerivedLog.key == key,
+                        ),
+                    )
+                    .first()[0]
+                    or ""
                 )
-                .first()[0]
-                or ""
-            )
-            if field_types.get(key) == "derived_entry"
-            else "",
+                if field_types.get(key) == "derived_entry"
+                else ""
+            ),
         }
         for key in types.keys()
     }
@@ -3146,9 +3206,9 @@ def _build_grouped_data(
             value_limit=value_limit,
             groups_only=groups_only,
             return_timestamps=return_timestamps,
-            parent_group_key="&".join([parent_group_key, raw_key])
-            if parent_group_key
-            else raw_key,
+            parent_group_key=(
+                "&".join([parent_group_key, raw_key]) if parent_group_key else raw_key
+            ),
         )
         out_dict[val] = sub
 
