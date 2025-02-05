@@ -139,15 +139,22 @@ log_data = {
 }
 
 
-def _create_log(client, project_name, user=1, entries=None):
+def _create_log(client, project_name, user=1, params=None, entries=None):
     _headers = HEADERS if user == 1 else HEADERS_2
     if entries is None:
         entries = log_data["log"]
+    if params is None:
+        params = {"a/b/param1": "test"}
+    # set all entries and params to be mutable (backwards compatibility)
+    explicit_types_entries = {k: {"mutable": True} for k in entries.keys()}
+    explicit_types_params = {k: {"mutable": True} for k in params.keys()}
+    entries["explicit_types"] = explicit_types_entries
+    params["explicit_types"] = explicit_types_params
     return client.post(
         "/v0/logs",
         json={
             "project": project_name,
-            "params": {"a/b/param1": "test"},
+            "params": params,
             "entries": entries,
         },
         headers=_headers,
@@ -245,42 +252,30 @@ async def _create_logs_for_grouping(client, project_name, user=1):
         elif "input" in data[i]:
             entries["a/input"] = data[i]["input"]
 
-        response = await client.post(
-            "/v0/logs",
-            json={
-                "project": project_name,
-                "params": {"system_prompt": data[i]["system_prompt"]},
-                "entries": entries,
-            },
-            headers=_headers,
+        response = await _create_log(
+            client,
+            project_name,
+            params={"system_prompt": data[i]["system_prompt"]},
+            entries=entries,
         )
         assert response.status_code == 200, response.json()
 
 
 async def _create_logs_for_group_threshold(client, project_name, user=1):
-    _headers = HEADERS if user == 1 else HEADERS_2
     data = log_data["logs_for_group_threshold"]
     for i in range(len(data)):
-        response = await client.post(
-            "/v0/logs",
-            json={"project": project_name, "entries": data[i]},
-            headers=_headers,
-        )
+        response = await _create_log(client, project_name, entries=data[i])
         assert response.status_code == 200, response.json()
 
 
 async def _create_several_logs(client, project_name, user=1):
-    _headers = HEADERS if user == 1 else HEADERS_2
     data = log_data["logs_for_various"]
     for i in range(len(data)):
-        response = await client.post(
-            "/v0/logs",
-            json={
-                "project": project_name,
-                "params": {"a/b/param1": f"test_{i}"},
-                "entries": data[i],
-            },
-            headers=_headers,
+        response = await _create_log(
+            client,
+            project_name,
+            params={"a/b/param1": f"test_{i}"},
+            entries=data[i],
         )
         assert response.status_code == 200, response.json()
 
@@ -729,16 +724,14 @@ async def test_create_log_w_image(client: AsyncClient):
     img = base64.b64encode(buffer).decode("utf-8")
 
     # log image
-    response = await client.post(
-        "/v0/logs",
-        json={
-            "project": project_name,
-            "entries": {
-                "img_raw": img,
-                "img_url": "https://upload.wikimedia.org/wikipedia/commons/4/45/Eopsaltria_australis_-_Mogo_Campground.jpg",
-            },
+    response = await _create_log(
+        client,
+        project_name,
+        params={},
+        entries={
+            "img_raw": img,
+            "img_url": "https://upload.wikimedia.org/wikipedia/commons/4/45/Eopsaltria_australis_-_Mogo_Campground.jpg",
         },
-        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -751,8 +744,18 @@ async def test_create_log_w_image(client: AsyncClient):
     )
     assert field_types_response.status_code == 200
     assert field_types_response.json() == {
-        "img_raw": {"data_type": "image", "field_type": "entry", "artifacts": ""},
-        "img_url": {"data_type": "image", "field_type": "entry", "artifacts": ""},
+        "img_raw": {
+            "data_type": "image",
+            "field_type": "entry",
+            "mutable": True,
+            "artifacts": "",
+        },
+        "img_url": {
+            "data_type": "image",
+            "field_type": "entry",
+            "mutable": True,
+            "artifacts": "",
+        },
     }
 
 
@@ -801,11 +804,7 @@ async def test_update_logs_overwrites(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
 
-    response = await client.post(
-        "/v0/logs",
-        json={"project": project_name, "entries": log_data["log"]},
-        headers=HEADERS,
-    )
+    response = await _create_log(client, project_name, entries=log_data["log"])
     assert response.status_code == 200, response.json()
     log_id = response.json()[0]
 
@@ -2200,7 +2199,7 @@ async def test_get_logs_latest_timestamp(client: AsyncClient):
     # add new entries
     entries = {
         "new_entry": "Updated value",
-        "explicit_types": {"new_entry": "string"},
+        "explicit_types": {"new_entry": {"type": "str"}},
     }
     response = await _update_logs(client, [1, 2], entries)
     assert response.status_code == 200, response.json()
@@ -3911,7 +3910,7 @@ async def test_update_logs(client: AsyncClient):
     # Update both logs
     entries = {
         "new_entry": "Updated value",
-        "explicit_types": {"new_entry": "string"},
+        "explicit_types": {"new_entry": {"type": "str", "mutable": True}},
     }
     response = await _update_logs(client, log_ids, entries)
     assert response.status_code == 200, response.json()
@@ -3946,11 +3945,11 @@ async def test_update_logs_multi_values(client: AsyncClient):
     entries = [
         {
             "new_entry": "First updated value",
-            "explicit_types": {"new_entry": "string"},
+            "explicit_types": {"new_entry": {"type": "str", "mutable": True}},
         },
         {
             "new_entry": "Second updated value",
-            "explicit_types": {"new_entry": "string"},
+            "explicit_types": {"new_entry": {"type": "str", "mutable": True}},
         },
     ]
     response = await _update_logs(client, log_ids, entries)
@@ -4032,17 +4031,11 @@ async def test_create_log_strongly_typed(client: AsyncClient):
     _ = await _create_project(client, project_name)
 
     # Create a log with strongly typed fields
-    response = await client.post(
-        "/v0/logs",
-        json={
-            "project": project_name,
-            "params": {"a/b/param1": "test"},
-            "entries": {
-                "score": 10,
-                "logged_at": datetime.now(timezone.utc).isoformat(),
-            },
-        },
-        headers=HEADERS,
+    response = await _create_log(
+        client,
+        project_name,
+        params={"a/b/param1": "test"},
+        entries={"score": 10, "logged_at": datetime.now(timezone.utc).isoformat()},
     )
 
     assert response.status_code == 200, response.json()
@@ -4054,9 +4047,24 @@ async def test_create_log_strongly_typed(client: AsyncClient):
     )
     assert field_types_response.status_code == 200
     assert field_types_response.json() == {
-        "a/b/param1": {"data_type": "str", "field_type": "param", "artifacts": ""},
-        "score": {"data_type": "int", "field_type": "entry", "artifacts": ""},
-        "logged_at": {"data_type": "timestamp", "field_type": "entry", "artifacts": ""},
+        "a/b/param1": {
+            "data_type": "str",
+            "field_type": "param",
+            "mutable": True,
+            "artifacts": "",
+        },
+        "score": {
+            "data_type": "int",
+            "field_type": "entry",
+            "mutable": True,
+            "artifacts": "",
+        },
+        "logged_at": {
+            "data_type": "timestamp",
+            "field_type": "entry",
+            "mutable": True,
+            "artifacts": "",
+        },
     }
 
 
@@ -4128,18 +4136,15 @@ async def test_update_logs_previously_none(client: AsyncClient):
     _ = await _create_project(client, project_name)
 
     # Create a log first
-    response1 = await client.post(
-        "/v0/logs",
-        json={
-            "project": project_name,
-            "params": {"a/b/param1": "test"},
-            "entries": {
-                "a/b/c/input": "Some input data",
-                "a/b/c/boolean_input": True,
-                "a/b/c/numeric_input": None,
-            },
+    response1 = await _create_log(
+        client,
+        project_name,
+        params={"a/b/param1": "test"},
+        entries={
+            "a/b/c/input": "Some input data",
+            "a/b/c/boolean_input": True,
+            "a/b/c/numeric_input": None,
         },
-        headers=HEADERS,
     )
     log_id1 = response1.json()[0]
 
@@ -4152,6 +4157,7 @@ async def test_update_logs_previously_none(client: AsyncClient):
     assert field_types_response.json()["a/b/c/numeric_input"] == {
         "data_type": "NoneType",
         "field_type": "entry",
+        "mutable": True,
         "artifacts": "",
     }
 
@@ -4180,6 +4186,7 @@ async def test_update_logs_previously_none(client: AsyncClient):
     assert field_types_response.json()["a/b/c/numeric_input"] == {
         "data_type": "float",
         "field_type": "entry",
+        "mutable": True,
         "artifacts": "",
     }
 
@@ -4208,6 +4215,7 @@ async def test_update_logs_previously_none(client: AsyncClient):
     assert field_types_response.json()["a/b/c/numeric_input"] == {
         "data_type": "float",
         "field_type": "entry",
+        "mutable": True,
         "artifacts": "",
     }
 
