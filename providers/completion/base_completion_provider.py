@@ -225,7 +225,11 @@ class BaseCompletionProvider:
             return {"cost": 0, "prompt_tokens": 0, "completion_tokens": 0}
 
     def run_with_exceptions(
-        self, async_call: bool, messages: List, stream: bool = False, **kwargs: Any
+        self,
+        async_call: bool,
+        messages: List,
+        stream: bool = False,
+        **kwargs: Any,
     ):
         kwargs, extra_body = filter_kwargs_for_openai_client(kwargs)
         using_litellm = bool(self.litellm_provider_prefix)
@@ -297,14 +301,16 @@ class BaseCompletionProvider:
             response_dict = self._modify_output(response.model_dump(), stream=stream)
             return (
                 response_dict,
-                self.get_response_cost(
-                    response,
-                    response.usage.prompt_tokens,
-                    response.usage.completion_tokens,
-                    using_litellm,
-                )
-                if not self.custom_api_key
-                else 0,
+                (
+                    self.get_response_cost(
+                        response,
+                        response.usage.prompt_tokens,
+                        response.usage.completion_tokens,
+                        using_litellm,
+                    )
+                    if not self.custom_api_key
+                    else 0
+                ),
             )
         except litellm.AuthenticationError as error:
             error = AuthenticationError(error)
@@ -423,7 +429,10 @@ class BaseCompletionProvider:
         **kwargs: Any,
     ) -> Any:
         return self.run_with_exceptions(
-            async_call=False, messages=messages, stream=stream, **kwargs
+            async_call=False,
+            messages=messages,
+            stream=stream,
+            **kwargs,
         )
 
     def __call_async__(  # noqa: D102, WPS211, C901, WPS231, WPS238, WPS210
@@ -433,7 +442,10 @@ class BaseCompletionProvider:
         **kwargs: Any,
     ) -> Any:
         return self.run_with_exceptions(
-            async_call=True, messages=messages, stream=stream, **kwargs
+            async_call=True,
+            messages=messages,
+            stream=stream,
+            **kwargs,
         )
 
 
