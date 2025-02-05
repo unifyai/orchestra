@@ -170,8 +170,8 @@ class LogDAO:
             key=raw_k,
             value=raw_v,
             version=version,
-            inferred_type=explicit_types.get(
-                raw_k,
+            inferred_type=explicit_types.get(raw_k, {}).get(
+                "type",
                 self.infer_type(raw_k, raw_v),
             ),
         )
@@ -243,13 +243,12 @@ class LogDAO:
         explicit_types: Optional[Dict] = None,
         overwrite: bool = False,
     ):
-
-        inferred_type = type(raw_v).__name__
+        explicit_types = explicit_types if isinstance(explicit_types, dict) else {}
+        inferred_type = explicit_types.get(raw_k, {}).get(
+            "type",
+            self.infer_type(raw_k, raw_v),
+        )
         json_v = raw_v
-
-        if explicit_types and isinstance(explicit_types, Dict):
-            if raw_k in explicit_types:
-                inferred_type = explicit_types[raw_k]
 
         # If the field is image and raw_v is a base64 string, upload it
         if (
