@@ -58,7 +58,7 @@ class CustomEndpointBenchmarkDAO:
         endpoint_id = endpoint_id if isinstance(endpoint_id, list) else [endpoint_id]
         query = delete(CustomEndpointBenchmark).where(
             or_(
-                *[CustomEndpointBenchmark.custom_endpoint_id == i for i in endpoint_id]
+                *[CustomEndpointBenchmark.custom_endpoint_id == i for i in endpoint_id],
             ),
         )
         if timestamps is not None:
