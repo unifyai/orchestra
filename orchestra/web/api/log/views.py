@@ -2316,7 +2316,9 @@ def get_fields(
             (
                 "derived_entry"
                 if row[4] == "derived"  # source_type
-                else "entry" if row[3] is None else "param"  # version
+                else "entry"
+                if row[3] is None
+                else "param"  # version
             ),
         )
         for row in raw_rows
