@@ -2473,20 +2473,20 @@ referencing = ">=0.31.0"
 
 [[package]]
 name = "litellm"
-version = "1.60.2"
+version = "1.60.4"
 description = "Library to easily interface with LLM API providers"
 optional = false
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 groups = ["main"]
 files = [
-    {file = "litellm-1.60.2-py3-none-any.whl", hash = "sha256:1cb08cda04bf8c5ef3e690171a779979e4b16a5e3a24cd8dc1f198e7f198d5c4"},
-    {file = "litellm-1.60.2.tar.gz", hash = "sha256:a8170584fcfd6f5175201d869e61ccd8a40ffe3264fc5e53c5b805ddf8a6e05a"},
+    {file = "litellm-1.60.4-py3-none-any.whl", hash = "sha256:8c2d05e7e5983c67a0772b351a5c612b28a521c43d0cfba3bca211f84434fc24"},
+    {file = "litellm-1.60.4.tar.gz", hash = "sha256:fc377b2b2d60db8f137803262bd10137f6a0f7f625d61ad4ad6d5e3ba8a7b235"},
 ]
 
 [package.dependencies]
 aiohttp = "*"
 click = "*"
-httpx = ">=0.23.0,<0.28.0"
+httpx = ">=0.23.0"
 importlib-metadata = ">=6.8.0"
 jinja2 = ">=3.1.2,<4.0.0"
 jsonschema = ">=4.22.0,<5.0.0"
@@ -5784,4 +5784,4 @@ cffi = ["cffi (>=1.11)"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.9"
-content-hash = "5c4bd89e098cb740bdf39858dd29120bd60da47cc7b1aa547738a208bbbac7f5"
+content-hash = "f8c83bbc94d58ff1f43da8d8701f714d3a884ab36a2d01bece18ee8c77da3cca"
