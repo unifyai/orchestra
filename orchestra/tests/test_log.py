@@ -4239,6 +4239,155 @@ async def test_update_logs_type_mismatch(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_create_log_with_mutable_fields(client: AsyncClient):
+    project_name = "test_mutable_fields"
+    _ = await _create_project(client, project_name)
+
+    # Create a log with both mutable and immutable fields using explicit_types
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "mutable_field": "initial value",
+                "immutable_field": "fixed value",
+                "explicit_types": {
+                    "mutable_field": {"type": "str", "mutable": True},
+                    "immutable_field": {"type": "str", "mutable": False},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    log_id = response.json()[0]
+
+    # Verify field types include mutability information
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+
+    assert field_types["mutable_field"]["mutable"] is True
+    assert field_types["immutable_field"]["mutable"] is False
+
+
+@pytest.mark.anyio
+async def test_update_mutable_and_immutable_fields(client: AsyncClient):
+    project_name = "test_mutable_updates"
+    _ = await _create_project(client, project_name)
+
+    # Create initial log with mutable and immutable fields using explicit_types
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "mutable_field": "initial value",
+                "immutable_field": "fixed value",
+                "explicit_types": {
+                    "mutable_field": {"type": "str", "mutable": True},
+                    "immutable_field": {"type": "str", "mutable": False},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    log_id = response.json()[0]
+
+    # Test updating mutable field (should succeed)
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "ids": [log_id],
+            "entries": {
+                "mutable_field": "updated value",
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify mutable field was updated
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    log_data = response.json()["logs"][0]
+    assert log_data["entries"]["mutable_field"] == "updated value"
+    assert log_data["entries"]["immutable_field"] == "fixed value"
+
+    # Test updating immutable field (should fail)
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "ids": [log_id],
+            "entries": {
+                "immutable_field": "attempted update",
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 400
+    assert (
+        "Field immutable_field is immutable and cannot be modified."
+        in response.json()["detail"]
+    )
+
+
+@pytest.mark.anyio
+async def test_create_log_default_immutable(client: AsyncClient):
+    project_name = "test_default_immutable"
+    _ = await _create_project(client, project_name)
+
+    # Create a log without specifying mutability (should default to immutable)
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "default_field": "initial value",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    log_id = response.json()[0]
+
+    # Verify field is immutable by default
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert field_types["default_field"]["mutable"] is False
+
+    # Attempt to update the default immutable field (should fail)
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "ids": [log_id],
+            "entries": {
+                "default_field": "attempted update",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 400
+    assert (
+        "Field default_field is immutable and cannot be modified."
+        in response.json()["detail"]
+    )
+
+
+@pytest.mark.anyio
 async def test_get_fields_with_derived_entries(client: AsyncClient):
     project_name = "test_project_derived"
     _ = await _create_project(client, project_name)
