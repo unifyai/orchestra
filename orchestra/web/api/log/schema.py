@@ -27,13 +27,15 @@ class CreateLogConfig(BaseModel):
         "for batch processing. When using lists for both params and entries, their lengths must match. "
         "Parameters will be automatically versioned based on their values. "
         "Values must be JSON serializable. If a `explicit_types` dictionary is present, its values "
-        "will override the inferred types of the entries.",
+        "will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag.",
         json_schema_extra={
             "examples": [
                 {
                     "system-prompt": "...",
                     "function_definition": "...",
-                    "explicit_types": {"system-prompt": "str"},
+                    "explicit_types": {
+                        "system-prompt": {"type": "str", "mutable": True},
+                    },
                 },
                 [
                     {"system-prompt": "prompt1"},
@@ -48,13 +50,13 @@ class CreateLogConfig(BaseModel):
         "will be logged into the platform. Can be either a single dictionary or a list of dictionaries "
         "for batch processing. When using lists for both params and entries, their lengths must match. "
         "Values must be JSON serializable. If a `explicit_types` dictionary is present, "
-        "its values will override the inferred types of the entries.",
+        "its values will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag.",
         json_schema_extra={
             "examples": [
                 {
                     "input": "...",
                     "score-test-1": "...",
-                    "explicit_types": {"input": "Image"},
+                    "explicit_types": {"input": {"type": "Image", "mutable": True}},
                 },
                 [
                     {"input": "test1", "score": 0.8},
@@ -109,7 +111,7 @@ class UpdateLogRequest(BaseModel):
             "example": {
                 "system-prompt": "...",
                 "function_definition": "...",
-                "explicit_types": {"system-prompt": "str"},
+                "explicit_types": {"system-prompt": {"type": "str", "mutable": True}},
             },
         },
     )
@@ -120,7 +122,7 @@ class UpdateLogRequest(BaseModel):
             "example": {
                 "input": "...",
                 "score-test-1": "...",
-                "explicit_types": {"input": "Image"},
+                "explicit_types": {"input": {"type": "Image", "mutable": True}},
             },
         },
     )
@@ -140,17 +142,17 @@ class DeleteLogsRequest(BaseModel):
 
 
 class DeleteLogEntryRequest(BaseModel):
-    ids_and_fields: List[
-        Tuple[Union[int, List[int]], Union[None, str, List[str]]]
-    ] = Field(
-        description="List of tuples of log ID(s) and field(s) to delete, "
-        "either as an individual item or a list of items.",
-        example=[
-            (123, "score"),
-            ([456, 457], ["score", "response"]),
-            ([458, 459, 460], "response"),
-        ],
-        min_items=1,
+    ids_and_fields: List[Tuple[Union[int, List[int]], Union[None, str, List[str]]]] = (
+        Field(
+            description="List of tuples of log ID(s) and field(s) to delete, "
+            "either as an individual item or a list of items.",
+            example=[
+                (123, "score"),
+                ([456, 457], ["score", "response"]),
+                ([458, 459, 460], "response"),
+            ],
+            min_items=1,
+        )
     )
 
 
