@@ -709,6 +709,17 @@ def update_logs(
             )
             new_field_types = []
             for k, v in this_data.items():
+                # Check if this field update is for mutability only
+                if v is None:
+                    mutable_setting = explicit_types.get(k, {}).get("mutable")
+                    if mutable_setting is not None:
+                        field_type_dao.upsert_field_type(
+                            project_id,
+                            k,
+                            None,
+                            mutable=mutable_setting,
+                        )
+                        continue
 
                 if k in field_types:
                     expected_type = field_types[k]["field_type"]
