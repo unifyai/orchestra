@@ -74,12 +74,17 @@ def _substitute_placeholders(equation: str, single_ref: Dict[str, int]) -> str:
     return new_expr, alias_to_key_map
 
 
-def _compute_expression(filter_dict, log_event_alias, session):
+def _compute_expression(filter_dict, log_event_alias, session, log_event_ids=None):
     """
     Use build_sql_query -> subquery or expression -> .execute() -> return single result.
     If multiple rows, pick the first or do an aggregator as needed.
     """
-    expr = build_sql_query(filter_dict, log_event_alias, session)
+    expr = build_sql_query(
+        filter_dict,
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+    )
     if isinstance(expr, Subquery):
         rows = session.execute(select(expr.c.log_event_id, expr.c.value)).fetchall()
         if not rows:
@@ -505,42 +510,63 @@ def cast_expr(expr, const_expr: BindParameter):
         return expr
 
 
-def _build_subquery_for_identifier(key, log_event_alias, alias=None):
+def _build_subquery_for_identifier(
+    key,
+    log_event_alias,
+    log_event_ids,
+    alias=None,
+    session=None,
+):
     """
     Build a subselect that retrieves columns for a given log key.
     The returned subselect columns typically include:
       - id (to allow joining)
       - several casted columns (str_value, int_value, float_value, bool_value, jsonb_value)
     """
+    # raise an error if log_event_ids is not a list or is empty
+    if not isinstance(log_event_ids, list) or len(log_event_ids) == 0:
+        raise ValueError(
+            "log_event_ids must be a list with at least one element. Found: ",
+            log_event_ids,
+        )
+
     # Special handling for log_id field
     if key == "log_id":
-        subq = select(
-            log_event_alias.id.label("log_event_id"),
-            literal(None).label("jsonb_value"),
-            literal(None).label("timestamp_value"),
-            literal(None).label("str_value"),
-            log_event_alias.id.label("int_value"),
-            literal(None).label("float_value"),
-            literal(None).label("bool_value"),
-            literal("int").label("inferred_type"),
-        ).subquery(name=alias)
+        subq = (
+            select(
+                log_event_alias.id.label("log_event_id"),
+                literal(None).label("jsonb_value"),
+                literal(None).label("timestamp_value"),
+                literal(None).label("str_value"),
+                log_event_alias.id.label("int_value"),
+                literal(None).label("float_value"),
+                literal(None).label("bool_value"),
+                literal("int").label("inferred_type"),
+            )
+            .where(log_event_alias.id.in_(log_event_ids))
+            .subquery(name=alias)
+        )
         return subq
 
     # Special handling for created_at and updated_at fields from LogEvent table
     if key in ("created_at", "updated_at"):
-        subq = select(
-            log_event_alias.id.label("log_event_id"),
-            literal(None).label("jsonb_value"),
-            case(
-                (True, cast(getattr(log_event_alias, key), TIMESTAMP)),
-                else_=None,
-            ).label("timestamp_value"),
-            literal(None).label("str_value"),
-            literal(None).label("int_value"),
-            literal(None).label("float_value"),
-            literal(None).label("bool_value"),
-            literal("timestamp").label("inferred_type"),
-        ).subquery(name=alias)
+        subq = (
+            select(
+                log_event_alias.id.label("log_event_id"),
+                literal(None).label("jsonb_value"),
+                case(
+                    (True, cast(getattr(log_event_alias, key), TIMESTAMP)),
+                    else_=None,
+                ).label("timestamp_value"),
+                literal(None).label("str_value"),
+                literal(None).label("int_value"),
+                literal(None).label("float_value"),
+                literal(None).label("bool_value"),
+                literal("timestamp").label("inferred_type"),
+            )
+            .where(log_event_alias.id.in_(log_event_ids))
+            .subquery(name=alias)
+        )
         return subq
 
     log_alias = aliased(Log)
@@ -576,7 +602,7 @@ def _build_subquery_for_identifier(key, log_event_alias, alias=None):
         ).label("bool_value"),
         log_alias.inferred_type.label("inferred_type"),
     ).where(
-        log_alias.log_event_id == log_event_alias.id,
+        log_alias.log_event_id.in_(log_event_ids),
         log_alias.key == key,
     )
 
@@ -631,7 +657,7 @@ def _build_subquery_for_identifier(key, log_event_alias, alias=None):
         ).label("bool_value"),
         derived_log_alias.inferred_type.label("inferred_type"),
     ).where(
-        derived_log_alias.log_event_id == log_event_alias.id,
+        derived_log_alias.log_event_id.in_(log_event_ids),
         derived_log_alias.key == key,
     )
 
@@ -663,7 +689,7 @@ def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type):
 
 
 # Helper function for logical operators (and, or, not)
-def _handle_logical_operator(filter_dict, log_event_alias, session):
+def _handle_logical_operator(filter_dict, log_event_alias, session, log_event_ids):
     """
     Handles logical operators ('and', 'or', 'not') in the filter dictionary.
 
@@ -677,11 +703,21 @@ def _handle_logical_operator(filter_dict, log_event_alias, session):
     """
     operand = filter_dict.get("operand")
     lhs = (
-        build_sql_query(filter_dict.get("lhs"), log_event_alias, session)
+        build_sql_query(
+            filter_dict.get("lhs"),
+            log_event_alias,
+            session,
+            log_event_ids=log_event_ids,
+        )
         if operand != "not"
         else None
     )
-    rhs = build_sql_query(filter_dict.get("rhs"), log_event_alias, session)
+    rhs = build_sql_query(
+        filter_dict.get("rhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+    )
 
     # Check if lhs and rhs are subqueries
     lhs_is_sub = isinstance(lhs, Subquery)
@@ -773,7 +809,7 @@ def _handle_logical_operator(filter_dict, log_event_alias, session):
 
 
 # Helper function for arithmetic operators (+, -, *, /, %)
-def _handle_arithmetic_operator(filter_dict, log_event_alias, session):
+def _handle_arithmetic_operator(filter_dict, log_event_alias, session, log_event_ids):
     """
     Handles arithmetic operators ('+', '-', '*', '/', '%') in the filter dictionary.
 
@@ -786,8 +822,18 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session):
         SQLAlchemy condition or expression based on the arithmetic operator.
     """
     operand = filter_dict.get("operand")
-    lhs = build_sql_query(filter_dict.get("lhs"), log_event_alias, session)
-    rhs = build_sql_query(filter_dict.get("rhs"), log_event_alias, session)
+    lhs = build_sql_query(
+        filter_dict.get("lhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+    )
+    rhs = build_sql_query(
+        filter_dict.get("rhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+    )
 
     lhs_is_sub = isinstance(lhs, Subquery)
     rhs_is_sub = isinstance(rhs, Subquery)
@@ -880,7 +926,7 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session):
 
 
 # Helper function for comparison operators (==, !=, <, >, <=, >=, is, is not)
-def _handle_comparison_operator(filter_dict, log_event_alias, session):
+def _handle_comparison_operator(filter_dict, log_event_alias, session, log_event_ids):
     """
     Handles comparison operators ('==', '!=', '<', '>', '<=', '>=', 'is', 'is not') in the filter dictionary.
 
@@ -893,8 +939,18 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session):
         SQLAlchemy condition or expression based on the comparison operator.
     """
     operand = filter_dict.get("operand")
-    lhs = build_sql_query(filter_dict.get("lhs"), log_event_alias, session)
-    rhs = build_sql_query(filter_dict.get("rhs"), log_event_alias, session)
+    lhs = build_sql_query(
+        filter_dict.get("lhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+    )
+    rhs = build_sql_query(
+        filter_dict.get("rhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+    )
 
     lhs_is_sub = isinstance(lhs, Subquery)
     rhs_is_sub = isinstance(rhs, Subquery)
@@ -995,7 +1051,7 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session):
 
 
 # Helper function for membership operators (in, not in)
-def _handle_membership_operator(filter_dict, log_event_alias, session):
+def _handle_membership_operator(filter_dict, log_event_alias, session, log_event_ids):
     """
     Handles membership operators ('in', 'not in') in the filter dictionary.
 
@@ -1010,8 +1066,18 @@ def _handle_membership_operator(filter_dict, log_event_alias, session):
     operand = filter_dict.get("operand")
     is_in = operand == "in"
 
-    lhs = build_sql_query(filter_dict.get("lhs"), log_event_alias, session)
-    rhs = build_sql_query(filter_dict.get("rhs"), log_event_alias, session)
+    lhs = build_sql_query(
+        filter_dict.get("lhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+    )
+    rhs = build_sql_query(
+        filter_dict.get("rhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+    )
 
     lhs_is_sub = isinstance(lhs, Subquery)
     rhs_is_sub = isinstance(rhs, Subquery)
@@ -1139,7 +1205,7 @@ def _parse_rhs_list_or_dict_if_needed(rhs_dict, rhs_val):
 
 
 # Helper function for functions (len, to_str, type, round, round_timestamp, exists, version)
-def _handle_functions(filter_dict, log_event_alias, session):
+def _handle_functions(filter_dict, log_event_alias, session, log_event_ids):
     """
     Handles function-based operations ('len', 'to_str', 'type', 'round', 'round_timestamp', 'exists', 'version') in the filter dictionary.
 
@@ -1153,10 +1219,15 @@ def _handle_functions(filter_dict, log_event_alias, session):
     """
     operand = filter_dict.get("operand")
     if isinstance(filter_dict.get("rhs"), dict):
-        rhs_expr = build_sql_query(filter_dict.get("rhs"), log_event_alias, session)
+        rhs_expr = build_sql_query(
+            filter_dict.get("rhs"),
+            log_event_alias,
+            session,
+            log_event_ids=log_event_ids,
+        )
     else:
         rhs_expr = [
-            build_sql_query(expr, log_event_alias, session)
+            build_sql_query(expr, log_event_alias, session, log_event_ids=log_event_ids)
             for expr in filter_dict.get("rhs")
         ]
     if operand == "len":
@@ -1440,12 +1511,17 @@ def _handle_functions(filter_dict, log_event_alias, session):
 
         event_id_expr = rhs_expr[0]
         key_expr = rhs_expr[1]
-        return _build_subquery_for_base_call(event_id_expr, key_expr, session)
+        return _build_subquery_for_base_call(
+            event_id_expr,
+            key_expr,
+            session,
+            log_event_ids,
+        )
     else:
         raise ValueError(f"Unknown function operand: {operand}")
 
 
-def _handle_index_operator(filter_dict, log_event_alias, session):
+def _handle_index_operator(filter_dict, log_event_alias, session, log_event_ids):
     """
     Handle the INDEX operator in a filter expression.
 
@@ -1460,8 +1536,18 @@ def _handle_index_operator(filter_dict, log_event_alias, session):
     lhs_node = filter_dict.get("lhs")
     rhs_node = filter_dict.get("rhs")
 
-    lhs_expr = build_sql_query(lhs_node, log_event_alias, session)
-    rhs_expr = build_sql_query(rhs_node, log_event_alias, session)
+    lhs_expr = build_sql_query(
+        lhs_node,
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+    )
+    rhs_expr = build_sql_query(
+        rhs_node,
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+    )
 
     # If LHS is a subquery => we pull out its .c.log_event_id plus the "value" column
     # If RHS is a subquery => that implies the index key is dynamic; in practice, we may or may not want to handle that
@@ -1553,7 +1639,7 @@ def _handle_index_operator(filter_dict, log_event_alias, session):
             )
 
 
-def _build_subquery_for_base_call(list_of_ids_expr, key_expr, session):
+def _build_subquery_for_base_call(list_of_ids_expr, key_expr, session, log_event_ids):
     """
     Build a subselect that retrieves columns for a given list_of_ids and a key.
     e.g. log_event_id in [101,102] AND key='score'
@@ -1596,7 +1682,7 @@ def _build_subquery_for_base_call(list_of_ids_expr, key_expr, session):
     return filtered_subquery
 
 
-def build_sql_query(filter_dict, log_event_alias, session):
+def build_sql_query(filter_dict, log_event_alias, session, log_event_ids):
     """
     Recursively build SQLAlchemy filter or expression from filter_dict.
 
@@ -1616,10 +1702,17 @@ def build_sql_query(filter_dict, log_event_alias, session):
     if "type" in filter_dict:
         if filter_dict["type"] == "identifier":
             key = filter_dict["value"]
+            if isinstance(log_event_ids, dict):
+                event_ids = log_event_ids.get(key)
+            else:
+                event_ids = log_event_ids
+
             return _build_subquery_for_identifier(
                 key,
                 log_event_alias,
                 alias=f"select_{key}",
+                log_event_ids=event_ids,
+                session=session,
             )
         elif filter_dict["type"] == "type_literal":
             return literal(filter_dict["value"])
@@ -1632,19 +1725,39 @@ def build_sql_query(filter_dict, log_event_alias, session):
 
     # Handle logical operators (and, or, not)
     if operand in ("and", "or", "not"):
-        return _handle_logical_operator(filter_dict, log_event_alias, session)
+        return _handle_logical_operator(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+        )
 
     # Handle arithmetic operators (+, -, *, /, %, **, //)
     elif operand in ("+", "-", "*", "/", "%", "**", "//"):
-        return _handle_arithmetic_operator(filter_dict, log_event_alias, session)
+        return _handle_arithmetic_operator(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+        )
 
     # Handle comparison operators (==, !=, <, >, <=, >=, is, is not)
     elif operand in ("==", "!=", "<", ">", "<=", ">=", "is", "is not"):
-        return _handle_comparison_operator(filter_dict, log_event_alias, session)
+        return _handle_comparison_operator(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+        )
 
     # Handle membership operators (in, not in)
     elif operand in ("in", "not in"):
-        return _handle_membership_operator(filter_dict, log_event_alias, session)
+        return _handle_membership_operator(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+        )
 
     # Handle functions (len, to_str, type, round, exists, version)
     elif operand in (
@@ -1657,11 +1770,16 @@ def build_sql_query(filter_dict, log_event_alias, session):
         "version",
         "BASE",
     ):
-        return _handle_functions(filter_dict, log_event_alias, session)
+        return _handle_functions(filter_dict, log_event_alias, session, log_event_ids)
 
     # Handle list/dict indexing
     elif operand == "INDEX":
-        return _handle_index_operator(filter_dict, log_event_alias, session)
+        return _handle_index_operator(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+        )
     # Handle unknown operand
     else:
         raise ValueError(f"Unknown operand or structure: {filter_dict}")
