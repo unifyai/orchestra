@@ -3205,7 +3205,7 @@ def _build_grouped_data(
             out_dict["null"] = len(missing_ids)
         out_dict["group_count"] = total_distinct + (1 if have_null else 0)
         out_dict["count"] = total_logs_in_group
-        return { current_group_key: out_dict} if level == 0 else out_dict
+        return {current_group_key: out_dict} if level == 0 else out_dict
 
     # Build the data structure that will go inside e.g.  "params/a/b/param2": {...}
     out_dict = {}

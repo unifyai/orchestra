@@ -4960,7 +4960,9 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
 
             # Now each param2 value should map to a dict
             for key in ("1", "0", "null"):
-                assert isinstance(param2_groups[key], dict), f"Expected dict for key {key}"
+                assert isinstance(
+                    param2_groups[key], dict
+                ), f"Expected dict for key {key}"
 
             # Check that the state groups have the expected counts:
             state_for_1 = param2_groups["1"]
@@ -5063,7 +5065,6 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
                     # Overall, state level for param2 "null" must have count 7 and group_count 3.
                     assert state_level["count"] == 7
                     assert state_level["group_count"] == 3
-
 
         elif depth >= 3:
             # With group_depth>=3 all levels are fully expanded to log lists.
