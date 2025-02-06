@@ -523,12 +523,11 @@ def _build_subquery_for_identifier(
       - id (to allow joining)
       - several casted columns (str_value, int_value, float_value, bool_value, jsonb_value)
     """
-    # raise an error if log_event_ids is not a list or is empty
-    if not isinstance(log_event_ids, list) or len(log_event_ids) == 0:
-        raise ValueError(
-            "log_event_ids must be a list with at least one element. Found: ",
-            log_event_ids,
-        )
+    # TODO(yusha): figure out why empty ids were passed and remove this check once we have a better way to handle it
+    if not log_event_ids:
+        log_event_ids = [
+            x[0] for x in session.execute(select(log_event_alias.id)).fetchall()
+        ]
 
     # Special handling for log_id field
     if key == "log_id":
