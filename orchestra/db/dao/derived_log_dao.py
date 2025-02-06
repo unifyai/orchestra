@@ -88,12 +88,20 @@ class DerivedLogDAO:
                     dlog.equation,
                     dlog.referenced_logs,
                 )
-                filter_expr, _ = _substitute_placeholders(
+                filter_expr, alias_to_key_map = _substitute_placeholders(
                     dlog.equation,
                     transformed_logs,
                 )
+                log_event_ids = {
+                    alias_to_key_map[k]: [v] for k, v in transformed_logs.items()
+                }
                 filter_dict = str_filter_exp_to_dict(filter_expr)
-                new_val = _compute_expression(filter_dict, LogEvent, session)[0][1]
+                new_val = _compute_expression(
+                    filter_dict,
+                    LogEvent,
+                    session,
+                    log_event_ids,
+                )[0][1]
                 dlog.value = new_val
                 dlog.updated_at = datetime.now(timezone.utc)
 

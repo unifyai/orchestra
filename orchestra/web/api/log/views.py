@@ -412,7 +412,16 @@ def create_derived_entry(
             resolved_ids,
         )
         filter_dict = str_filter_exp_to_dict(filter_expr)
-        computed_values = _compute_expression(filter_dict, LogEvent, session)
+        resolved_ids_dict = {}
+        for key, ids in resolved_ids.items():
+            resolved_ids_dict.setdefault(alias_to_key_map[key], []).extend(ids)
+
+        computed_values = _compute_expression(
+            filter_dict,
+            LogEvent,
+            session,
+            log_event_ids=resolved_ids_dict,
+        )
 
         # Create a new derived log entry for each computed value
         class DecimalEncoder(json.JSONEncoder):
@@ -1038,7 +1047,13 @@ def _get_logs_query(
                             validate_filter_dict(v)
 
             validate_filter_dict(filter_dict)
-            condition = build_sql_query(filter_dict, LogEvent, session)
+            event_ids = [x[0] for x in log_event_query.all()]
+            condition = build_sql_query(
+                filter_dict,
+                LogEvent,
+                session,
+                log_event_ids=event_ids,
+            )
             if isinstance(condition, Subquery):
                 # Subquery => we check existence
                 log_event_query = log_event_query.filter(
@@ -1950,7 +1965,13 @@ def get_logs_metric(
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
         if filter_dict:
-            condition = build_sql_query(filter_dict, LogEvent, session)
+            event_ids = [x[0] for x in query.all()]
+            condition = build_sql_query(
+                filter_dict,
+                LogEvent,
+                session,
+                log_event_ids=event_ids,
+            )
             if isinstance(condition, Subquery):
                 query = query.filter(
                     exists(
@@ -2744,7 +2765,13 @@ def _get_all_filtered_log_event_ids(
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(filter_expr)
         if filter_dict:
-            condition = build_sql_query(filter_dict, LogEvent, session)
+            event_ids = [x[0] for x in log_event_query.all()]
+            condition = build_sql_query(
+                filter_dict,
+                LogEvent,
+                session,
+                log_event_ids=event_ids,
+            )
             if isinstance(condition, Subquery):
                 # Subquery => we check existence
                 log_event_query = log_event_query.filter(
