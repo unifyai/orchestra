@@ -4937,12 +4937,13 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
         param2_groups = logs_section["params/a/b/param2"]
 
         if depth == 0:
-            # At depth 0, we expect just counts for each param2 value
+            # With group_depth=0 the top‐level grouping is cut off:
+            # Each distinct param2 value is mapped directly to an integer count.
             assert "group_count" in param2_groups
             assert "count" in param2_groups
             assert param2_groups["count"] == 10
 
-            # Check each param2 value has just an integer count
+            # For every group key (other than metadata) we expect an integer
             for k, v in param2_groups.items():
                 if k not in ("group_count", "count"):
                     assert isinstance(
@@ -4951,131 +4952,160 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
                     ), f"Expected integer count for param2={k}, got {type(v)}"
 
         elif depth == 1:
-            # At depth 1, param2 groups are expanded but state groups are counts
+            # With group_depth=1 the first level (param2) is expanded,
+            # but the next level (state) is collapsed into counts.
             assert "group_count" in param2_groups
             assert "count" in param2_groups
             assert param2_groups["count"] == 10
-            assert param2_groups["group_count"] == 2  # Only non-null groups count
 
-            # Verify the counts for each group
-            assert param2_groups["1"] == 2
-            assert param2_groups["0"] == 1
-            assert param2_groups["null"] == 7
+            # Now each param2 value should map to a dict
+            for key in ("1", "0", "null"):
+                assert isinstance(param2_groups[key], dict), f"Expected dict for key {key}"
 
-            # No other fields should be present
-            assert set(param2_groups.keys()) == {
-                "1",
-                "0",
-                "null",
-                "group_count",
-                "count",
-            }
+            # Check that the state groups have the expected counts:
+            state_for_1 = param2_groups["1"]
+            assert state_for_1.get("group_count") == 2
+            assert state_for_1.get("count") == 2
+            assert state_for_1.get("extra_vapor") == 1
+            assert state_for_1.get("extra_liquid") == 1
+
+            state_for_0 = param2_groups["0"]
+            assert state_for_0.get("group_count") == 1
+            assert state_for_0.get("count") == 1
+            assert state_for_0.get("extra_liquid") == 1
+
+            state_for_null = param2_groups["null"]
+            assert state_for_null.get("group_count") == 4
+            assert state_for_null.get("count") == 7
+            assert state_for_null.get("liquid->solid") == 2
+            assert state_for_null.get("gas") == 1
+            assert state_for_null.get("liquid->gas") == 1
+            assert state_for_null.get("null") == 3
+
+            # Only these keys (plus metadata) should be present at the param2 level:
+            expected_keys = {"1", "0", "null", "group_count", "count"}
+            assert set(param2_groups.keys()) == expected_keys
 
         elif depth == 2:
-            # At depth 2, param2 and state are expanded but safe is counts
+            # With group_depth=2 the top-level param2 groups are expanded,
+            # and now the state groups (inside each param2 key) are expanded;
+            # however, the next level (safe) is collapsed to counts.
             assert "group_count" in param2_groups
             assert "count" in param2_groups
             assert param2_groups["count"] == 10
-            assert param2_groups["group_count"] == 2  # Only non-null groups count
+            assert param2_groups["group_count"] == 2
 
             for param2_val, state_groups in param2_groups.items():
-                if param2_val not in ("group_count", "count"):
-                    assert "entries/_/state" in state_groups
-                    state_level = state_groups["entries/_/state"]
-                    assert "group_count" in state_level
-                    assert "count" in state_level
+                if param2_val in ("group_count", "count"):
+                    continue
+                # Each param2 group must contain an "entries/_/state" key
+                assert "entries/_/state" in state_groups
+                state_level = state_groups["entries/_/state"]
+                assert "group_count" in state_level
+                assert "count" in state_level
 
-                    if param2_val == "1":
-                        assert state_level["count"] == 2
-                        assert state_level["group_count"] == 2
-                        assert state_level["extra_vapor"] == 1
-                        assert state_level["extra_liquid"] == 1
-                    elif param2_val == "0":
-                        assert state_level["count"] == 1
-                        assert state_level["group_count"] == 1
-                        assert state_level["extra_liquid"] == 1
-                    elif param2_val == "null":
-                        assert state_level["count"] == 7
-                        assert (
-                            state_level["group_count"] == 3
-                        )  # Not counting null group
-                        assert state_level["liquid->solid"] == 2
-                        assert state_level["gas"] == 1
-                        assert state_level["liquid->gas"] == 1
-                        assert state_level["null"] == 3
+                if param2_val == "1":
+                    # For param2 "1", we expect two state groups: "extra_vapor" and "extra_liquid"
+                    ev = state_level["extra_vapor"]
+                    assert isinstance(ev, dict)
+                    assert ev.get("true") == 1
+                    assert ev.get("group_count") == 1
+                    assert ev.get("count") == 1
+
+                    el = state_level["extra_liquid"]
+                    assert isinstance(el, dict)
+                    assert el.get("false") == 1
+                    assert el.get("group_count") == 1
+                    assert el.get("count") == 1
+
+                    # Overall, the state level for param2 "1" must sum to count 2 with group_count 2
+                    assert state_level["count"] == 2
+                    assert state_level["group_count"] == 2
+
+                elif param2_val == "0":
+                    # For param2 "0", we expect only the "extra_liquid" group
+                    el = state_level["extra_liquid"]
+                    assert isinstance(el, dict)
+                    assert el.get("true") == 1
+                    assert el.get("group_count") == 1
+                    assert el.get("count") == 1
+
+                    assert state_level["count"] == 1
+                    assert state_level["group_count"] == 1
+
+                elif param2_val == "null":
+                    # For param2 "null", there are several state groups.
+                    ls = state_level["liquid->solid"]
+                    assert isinstance(ls, dict)
+                    assert ls.get("false") == 1
+                    assert ls.get("true") == 1
+                    assert ls.get("group_count") == 2
+                    assert ls.get("count") == 2
+
+                    gas = state_level["gas"]
+                    assert isinstance(gas, dict)
+                    assert gas.get("false") == 1
+                    assert gas.get("group_count") == 1
+                    assert gas.get("count") == 1
+
+                    lg = state_level["liquid->gas"]
+                    assert isinstance(lg, dict)
+                    assert lg.get("false") == 1
+                    assert lg.get("group_count") == 1
+                    assert lg.get("count") == 1
+
+                    n = state_level["null"]
+                    assert isinstance(n, dict)
+                    assert n.get("null") == 3
+                    assert n.get("group_count") == 1
+                    assert n.get("count") == 3
+
+                    # Overall, state level for param2 "null" must have count 7 and group_count 3.
+                    assert state_level["count"] == 7
+                    assert state_level["group_count"] == 3
+
 
         elif depth >= 3:
-            # At depth 3+, everything should be fully expanded to log lists
+            # With group_depth>=3 all levels are fully expanded to log lists.
+            # That is, inside the state groups the safe groups are no longer counts but full lists of logs.
             assert "group_count" in param2_groups
             assert "count" in param2_groups
             assert param2_groups["count"] == 10
-            assert param2_groups["group_count"] == 2  # Only non-null groups count
+            assert param2_groups["group_count"] == 2
 
             for param2_val, state_groups in param2_groups.items():
-                if param2_val not in ("group_count", "count"):
-                    assert "entries/_/state" in state_groups
-                    state_level = state_groups["entries/_/state"]
-                    assert "group_count" in state_level
-                    assert "count" in state_level
+                if param2_val in ("group_count", "count"):
+                    continue
+                assert "entries/_/state" in state_groups
+                state_level = state_groups["entries/_/state"]
+                assert "group_count" in state_level
+                assert "count" in state_level
 
-                    for state_val, safe_groups in state_level.items():
-                        if state_val not in ("group_count", "count"):
-                            assert "entries/_/safe" in safe_groups
-                            safe_level = safe_groups["entries/_/safe"]
-                            assert "group_count" in safe_level
-                            assert "count" in safe_level
-                            # Each safe value should just have an integer count
-                            for safe_val, logs in safe_level.items():
-                                if safe_val not in ("group_count", "count"):
-                                    assert isinstance(
-                                        logs,
-                                        list,
-                                    ), f"Expected list of logs for safe={safe_val}"
-                                    for log in logs:
-                                        assert "id" in log
-                                        assert "ts" in log
-                                        assert "entries" in log
-                                        assert "params" in log
-                                        # All grouped fields should be removed
-                                        assert "a/b/param2" not in log["params"]
-                                        assert "_/state" not in log["entries"]
-                                        assert "_/safe" not in log["entries"]
+                for state_val, safe_groups in state_level.items():
+                    if state_val in ("group_count", "count"):
+                        continue
+                    assert "entries/_/safe" in safe_groups
+                    safe_level = safe_groups["entries/_/safe"]
+                    assert "group_count" in safe_level
+                    assert "count" in safe_level
 
-        else:  # depth >= 3
-            # At depth 3+, everything should be fully expanded to log lists
-            assert "group_count" in param2_groups
-            assert "count" in param2_groups
-            assert param2_groups["count"] == 10
-
-            for param2_val, state_groups in param2_groups.items():
-                if param2_val not in ("group_count", "count"):
-                    assert "entries/_/state" in state_groups
-                    state_level = state_groups["entries/_/state"]
-                    assert "group_count" in state_level
-                    assert "count" in state_level
-
-                    for state_val, safe_groups in state_level.items():
-                        if state_val not in ("group_count", "count"):
-                            assert "entries/_/safe" in safe_groups
-                            safe_level = safe_groups["entries/_/safe"]
-                            assert "group_count" in safe_level
-                            assert "count" in safe_level
-
-                            for safe_val, logs in safe_level.items():
-                                if safe_val not in ("group_count", "count"):
-                                    assert isinstance(
-                                        logs,
-                                        list,
-                                    ), f"Expected list of logs for safe={safe_val}"
-                                    for log in logs:
-                                        assert "id" in log
-                                        assert "ts" in log
-                                        assert "entries" in log
-                                        assert "params" in log
-                                        # All grouped fields should be removed
-                                        assert "a/b/param2" not in log["params"]
-                                        assert "_/state" not in log["entries"]
-                                        assert "_/safe" not in log["entries"]
+                    # Each safe value should now be a list of logs
+                    for safe_val, logs in safe_level.items():
+                        if safe_val in ("group_count", "count"):
+                            continue
+                        assert isinstance(
+                            logs,
+                            list,
+                        ), f"Expected list of logs for safe={safe_val}"
+                        for log in logs:
+                            assert "id" in log
+                            assert "ts" in log
+                            assert "entries" in log
+                            assert "params" in log
+                            # Grouped fields should be stripped from the leaf logs
+                            assert "a/b/param2" not in log["params"]
+                            assert "_/state" not in log["entries"]
+                            assert "_/safe" not in log["entries"]
 
 
 @pytest.mark.anyio
