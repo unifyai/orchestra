@@ -3,7 +3,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import cast, literal, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.bucket_service import BucketService
@@ -220,7 +221,8 @@ class LogDAO:
         if key:
             query = query.where(Log.key.in_(key))
         if value:
-            query = query.where(Log.value.in_(value))
+            cast_values = [cast(literal(val), JSONB) for val in value]
+            query = query.where(Log.value.in_(cast_values))
         if version:
             query = query.where(Log.version.in_(version))
         if inferred_type:
