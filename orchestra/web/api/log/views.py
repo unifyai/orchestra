@@ -3145,7 +3145,12 @@ def _build_grouped_data(
             field_type_dao=field_type_dao,
             session=session,
         )
-        logs_out, _ = _format_flat_logs(rows, context_len, value_limit, field_order_map)
+        logs_out, _ = _format_flat_logs(
+            rows,
+            context_len,
+            value_limit,
+            field_order_map,
+        )
         return logs_out  # A list of logs
 
     current_group_key = group_by[level]
@@ -3159,18 +3164,6 @@ def _build_grouped_data(
         group_key=raw_key,
         is_param=is_param,
     )
-
-    # If group_depth is specified AND we have reached it,
-    if group_depth is not None and level >= group_depth:
-        # For depth=0, we need to maintain the structure but only return counts
-        if level == 0:
-            return {
-                current_group_key: {
-                    "group_count": len(present_values),
-                    "count": total_logs_in_group,
-                },
-            }
-        return total_logs_in_group
 
     # This is a list of distinct values that exist.
 
@@ -3202,12 +3195,24 @@ def _build_grouped_data(
     else:
         paged_values = present_values
 
+    # 5) When we have reached the maximum depth,
+    # return the counts for each distinct group value instead of recursing further.
+    if group_depth is not None and level == group_depth:
+        out_dict = {}
+        for val in paged_values:
+            out_dict[val] = len(value_to_ids[val])
+        if have_null:  # if there were any logs missing the group key, include them too
+            out_dict["null"] = len(missing_ids)
+        out_dict["group_count"] = total_distinct + (1 if have_null else 0)
+        out_dict["count"] = total_logs_in_group
+        return { current_group_key: out_dict} if level == 0 else out_dict
+
     # Build the data structure that will go inside e.g.  "params/a/b/param2": {...}
     out_dict = {}
     # We will fill out_dict[<value>] = substructure or logs
     # then compute out_dict["count"] and out_dict["group_count"]
 
-    # 5) Recurse on each distinct value
+    # 6) Recurse on each distinct value
     #    The substructure might be a list (leaf logs) or a nested dict
     #    We store them in a dictionary keyed by that value
     for val in paged_values:
@@ -3241,7 +3246,7 @@ def _build_grouped_data(
         )
         out_dict[val] = sub
 
-    # 6) If we have missing_ids => we create a "null" group
+    # 7) If we have missing_ids => we create a "null" group
     if have_null:
         null_sub = _build_grouped_data(
             request_fastapi=request_fastapi,
@@ -3269,20 +3274,20 @@ def _build_grouped_data(
         )
         out_dict["null"] = null_sub
 
-    # 7) Compute "count" = sum of substructures' counts
+    # 8) Compute "count" = sum of substructures' counts
     total_count_sub = 0
     for k, sub_val in out_dict.items():
         if k not in ("group_count", "count"):
             total_count_sub += _get_count_from_substructure(sub_val)
 
-    # 8) group_count = # distinct values + 1 if we have a "null" group
+    # 9) group_count = # distinct values + 1 if we have a "null" group
     computed_group_count = total_distinct
 
-    # 9) Put them into out_dict
+    # 10) Put them into out_dict
     out_dict["group_count"] = computed_group_count
     out_dict["count"] = total_count_sub
 
-    # 10) Finally, wrap this under the current_group_key:
+    # 11) Finally, wrap this under the current_group_key:
     #     e.g. { "params/a/b/param2": out_dict }
     return {
         current_group_key: out_dict,
