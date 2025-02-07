@@ -29,7 +29,8 @@ class Item(BaseModel):
     selected: str | None = None
     base_index: str | None = None
     plot_type: str | None = None
-    plot_scale: str | None = None
+    plot_scale_x: str | None = None
+    plot_scale_y: str | None = None
     is_aggregated: str | None = None
     x_axis: str | None = None
     y_axis: str | None = None
