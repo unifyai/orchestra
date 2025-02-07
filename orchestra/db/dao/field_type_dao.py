@@ -71,22 +71,7 @@ class FieldTypeDAO:
         mutable: bool = False,
     ) -> None:
         """Upsert approach: insert or overwrite the existing field_type."""
-        # If value is None, we only want to update mutability
-        # Get existing field type if it exists
-        if value is None:
-            existing = (
-                self.session.query(FieldType)
-                .filter(
-                    FieldType.project_id == project_id,
-                    FieldType.field_name == field_name,
-                )
-                .first()
-            )
-            if not existing:
-                raise ValueError(f"Field type {field_name} does not exist")
-            inferred_type = existing.field_type
-        else:
-            inferred_type = LogDAO.infer_type(field_name, value)
+        inferred_type = LogDAO.infer_type(field_name, value)
 
         stmt = pg_insert(FieldType).values(
             project_id=project_id,
@@ -103,6 +88,29 @@ class FieldTypeDAO:
             },
         )
         self.session.execute(stmt)
+        self.session.commit()
+
+    def update_field_mutability(
+        self,
+        project_id: int,
+        field_name: str,
+        mutable: bool,
+    ) -> None:
+        """Update only the mutability attribute of a field type using an upsert approach."""
+        # First get the existing field type if it exists
+        existing = (
+            self.session.query(FieldType)
+            .filter(
+                FieldType.project_id == project_id,
+                FieldType.field_name == field_name,
+            )
+            .first()
+        )
+
+        if not existing:
+            raise ValueError(f"Field type {field_name} does not exist")
+
+        existing.mutable = mutable
         self.session.commit()
 
     def delete_field_type(self, project_id: int, field_name: str) -> None:

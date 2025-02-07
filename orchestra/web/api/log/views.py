@@ -679,84 +679,118 @@ def update_logs(
         not_found_logs = []
 
         for i, log_id in enumerate(body.ids):
-
+            # Retrieve project and permission details for each log.
             try:
-                # Get user and project ID for the log
                 project_user_id, project_id = log_event_dao.get_user_and_project_id(
                     id=log_id,
                 )
-
-                # Check if the log belongs to the requesting user
                 if project_user_id != request_fastapi.state.user_id:
-                    raise IndexError
-
-            except IndexError:
+                    raise IndexError(
+                        f"User {request_fastapi.state.user_id} does not have permission for log id {log_id}.",
+                    )
+            except IndexError as ie:
                 not_found_logs.append(log_id)
                 continue
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Unexpected error retrieving project info for log id {log_id}: {e}",
+                )
 
+            # Extract the data for this log. Support both dict and list formats.
             try:
                 this_data = data if isinstance(data, dict) else data[i]
             except IndexError:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"entries and params must be of the same length as log ids ({len(body.ids)}) if passed as a list, but found {data_type} list of length {len(data)}",
+                    detail=(
+                        f"Mismatch between number of log ids ({len(body.ids)}) and length of "
+                        f"{data_type} (got {len(data)}) at log id {log_id}."
+                    ),
                 )
 
+            # Remove explicit types if provided, which override inferred types.
             explicit_types = this_data.pop("explicit_types", {})
-            field_types = field_type_dao.get_field_types(
-                project_id,
-                return_mutable=True,
-            )
+            try:
+                field_types = field_type_dao.get_field_types(
+                    project_id,
+                    return_mutable=True,
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to retrieve field types for project {project_id} for log id {log_id}: {e}",
+                )
+
             new_field_types = []
-            for k, v in this_data.items():
-                # Check if this field update is for mutability only
-                if v is None:
-                    mutable_setting = explicit_types.get(k, {}).get("mutable")
-                    if mutable_setting is not None:
-                        field_type_dao.upsert_field_type(
+            # If only explicit_types are provided, update mutability.
+            if not this_data:
+                for k, v in explicit_types.items():
+                    mutable_setting = v.get("mutable", False)
+                    try:
+                        field_type_dao.update_field_mutability(
                             project_id,
                             k,
-                            None,
                             mutable=mutable_setting,
                         )
-                        continue
+                    except Exception as e:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Failed to update mutability for field '{k}' in log id {log_id}: {e}",
+                        )
 
+            # Process each field in the provided data.
+            for k, v in this_data.items():
                 if k in field_types:
                     expected_type = field_types[k]["field_type"]
                     original_type = LogDAO.infer_type(k, v)
                     if expected_type == "NoneType":
-                        # Check if field is mutable before updating
-                        field_type = field_types.get(k)
-                        if field_type and not field_type.get("mutable", False):
+                        # For fields with an undefined type, ensure they are mutable.
+                        field_info = field_types.get(k)
+                        if field_info and not field_info.get("mutable", False):
+                            raise HTTPException(
+                                status_code=400_1,
+                                detail=f"Field '{k}' in log id {log_id} is immutable and cannot be modified.",
+                            )
+                        try:
+                            field_type_dao.upsert_field_type(
+                                project_id,
+                                k,
+                                v,
+                                mutable=True,
+                            )
+                        except Exception as e:
                             raise HTTPException(
                                 status_code=400,
-                                detail=f"Field {k} is immutable and cannot be modified.",
+                                detail=f"Error upserting field type for '{k}' in log id {log_id}: {e}",
                             )
-                        field_type_dao.upsert_field_type(project_id, k, v, mutable=True)
                     elif original_type != expected_type and original_type != "NoneType":
                         raise HTTPException(
                             status_code=400,
-                            detail=f"Type mismatch for field '{k}': expected {expected_type}, got {original_type}",
+                            detail=(
+                                f"Type mismatch for field '{k}' in log id {log_id}: "
+                                f"expected {expected_type}, got {original_type}"
+                            ),
                         )
                 else:
-                    # Extract mutable flag from explicit_types if present
+                    # For new fields, record the field along with its mutability setting.
                     mutable = (
                         explicit_types.get(k, {}).get("mutable", False)
                         if explicit_types
                         else False
                     )
                     new_field_types.append((k, v, mutable))
-                # see if there is any param with the same value
-                existing = log_dao.filter(
-                    key=k,
-                    value=json.dumps(v),
-                    project_id=project_id,
-                )
+
+                # Compute the version based on whether we're handling params or entries.
                 if data_type == "params":
+                    existing = log_dao.filter(
+                        key=k,
+                        value=json.dumps(v),
+                        project_id=project_id,
+                    )
                     if existing:
                         version = existing[0][0].version
                     else:
-                        # fetch the highest version for that param
                         existing_params = log_dao.filter(key=k, project_id=project_id)
                         highest_version = max(
                             [-1] + [e[0].version for e in existing_params],
@@ -767,17 +801,20 @@ def update_logs(
                 else:
                     raise HTTPException(
                         status_code=400,
-                        detail="data_type must either be 'params' or 'entries', "
-                        f"but found {data_type}",
+                        detail=(
+                            f"Invalid data_type '{data_type}' encountered for log id {log_id}. "
+                            "Must be either 'params' or 'entries'."
+                        ),
                     )
+
+                # Attempt to update the log value; if it doesn't exist, create a new entry.
                 try:
-                    # Check if field is mutable before updating an existing field
                     if k in field_types:
-                        field_type = field_types.get(k)
-                        if field_type and not field_type.get("mutable", False):
+                        field_info = field_types.get(k)
+                        if field_info and not field_info.get("mutable", False):
                             raise HTTPException(
                                 status_code=400,
-                                detail=f"Field {k} is immutable and cannot be modified.",
+                                detail=f"Field '{k}' in log id {log_id} is immutable and cannot be modified.",
                             )
                     log_dao.update_value(
                         log_event_id=log_id,
@@ -789,65 +826,93 @@ def update_logs(
                     )
                     updated_ids.add((k, log_id))
                 except IndexError:
-                    log_dao.create_from_raw_k_v(
-                        project_id=project_id,
-                        log_event_id=log_id,
-                        raw_k=k,
-                        raw_v=v,
-                        version=version,
-                        explicit_types=explicit_types,
-                    )
+                    try:
+                        log_dao.create_from_raw_k_v(
+                            project_id=project_id,
+                            log_event_id=log_id,
+                            raw_k=k,
+                            raw_v=v,
+                            version=version,
+                            explicit_types=explicit_types,
+                        )
+                        updated_ids.add((k, log_id))
+                    except Exception as e:
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"Error creating log entry for field '{k}' in log id {log_id}: {e}",
+                        )
                 except ValueError:
                     raise HTTPException(
                         status_code=400,
-                        detail="Found different value for log params with same version.",
+                        detail=(
+                            f"Found differing log param value for field '{k}' in log id {log_id} "
+                            "with the same version."
+                        ),
                     )
                 except OverwriteError:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Found existing value for log entry with key {k} but overwrite is set to False.",
+                        detail=(
+                            f"Existing value for log entry with key '{k}' in log id {log_id} "
+                            "cannot be overwritten because overwrite is set to False."
+                        ),
                     )
 
         if not_found_logs:
             raise HTTPException(
                 status_code=404,
-                detail=f"Logs with ids {not_found_logs} not found or you don't have permission to update them.",
-            )
-
-    # create new field types if any
-    if new_field_types:
-        for k, v, mutable in new_field_types:
-            field_type_dao.create_field_type_if_absent(
-                project_id,
-                k,
-                v,
-                mutable=mutable,
-            )
-
-    # Now recompute the derived logs that reference any updated base logs
-    # We'll find derived logs that have `referenced_logs` containing *any* of these updated_log_ids
-    if updated_ids:
-        # Convert updated_ids to a list of JSONB objects for containment check
-        updated_ids_jsonb = [f'{{"{key}": {value}}}' for (key, value) in updated_ids]
-
-        # Find derived logs that need to be recomputed
-        derived_logs_to_recompute = (
-            session.query(DerivedLog)
-            .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
-            .filter(LogEvent.project_id == project_id)
-            .filter(
-                or_(
-                    *[
-                        DerivedLog.referenced_logs.op("@>")(jsonb_obj)
-                        for jsonb_obj in updated_ids_jsonb
-                    ],
+                detail=(
+                    f"The following log ids were not found or permission was denied: {not_found_logs}. "
+                    "No updates were applied."
                 ),
             )
-            .all()
-        )
 
-        if derived_logs_to_recompute:
-            derived_log_dao.recompute_derived_logs(derived_logs_to_recompute, session)
+    # Create any new field types collected from the updates.
+    if new_field_types:
+        for k, v, mutable in new_field_types:
+            try:
+                field_type_dao.create_field_type_if_absent(
+                    project_id,
+                    k,
+                    v,
+                    mutable=mutable,
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Error creating new field type for '{k}' in project id {project_id}: {e}",
+                )
+
+    # Recompute derived logs that reference any updated base logs.
+    if updated_ids:
+        try:
+            updated_ids_jsonb = [
+                f'{{"{key}": {value}}}' for (key, value) in updated_ids
+            ]
+            derived_logs_to_recompute = (
+                session.query(DerivedLog)
+                .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
+                .filter(LogEvent.project_id == project_id)
+                .filter(
+                    or_(
+                        *[
+                            DerivedLog.referenced_logs.op("@>")(jsonb_obj)
+                            for jsonb_obj in updated_ids_jsonb
+                        ],
+                    ),
+                )
+                .all()
+            )
+            if derived_logs_to_recompute:
+                derived_log_dao.recompute_derived_logs(
+                    derived_logs_to_recompute,
+                    session,
+                )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error recomputing derived logs for project id {project_id}: {e}",
+            )
 
     return {"info": "Logs updated successfully!"}
 
