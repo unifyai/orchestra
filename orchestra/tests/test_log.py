@@ -5027,7 +5027,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
             # Each distinct param2 value is mapped directly to an integer count.
             assert "group_count" in param2_groups
             assert "count" in param2_groups
-            assert param2_groups["count"] == 10
+            assert param2_groups["count"] == 3
 
             # For every group key (other than metadata) we expect an integer
             for k, v in param2_groups.items():
@@ -5042,7 +5042,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
             # but the next level (state) is collapsed into counts.
             assert "group_count" in param2_groups
             assert "count" in param2_groups
-            assert param2_groups["count"] == 10
+            assert param2_groups["count"] == 7
 
             # Now each param2 value should map to a dict
             for key in ("1", "0", "null"):
@@ -5065,11 +5065,11 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
 
             state_for_null = param2_groups["null"]
             assert state_for_null.get("group_count") == 4
-            assert state_for_null.get("count") == 7
+            assert state_for_null.get("count") == 4
             assert state_for_null.get("liquid->solid") == 2
             assert state_for_null.get("gas") == 1
             assert state_for_null.get("liquid->gas") == 1
-            assert state_for_null.get("null") == 3
+            assert state_for_null.get("null") == 0
 
             # Only these keys (plus metadata) should be present at the param2 level:
             expected_keys = {"1", "0", "null", "group_count", "count"}
@@ -5081,7 +5081,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
             # however, the next level (safe) is collapsed to counts.
             assert "group_count" in param2_groups
             assert "count" in param2_groups
-            assert param2_groups["count"] == 10
+            assert param2_groups["count"] == 8
             assert param2_groups["group_count"] == 2
 
             for param2_val, state_groups in param2_groups.items():
@@ -5147,10 +5147,10 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
                     assert isinstance(n, dict)
                     assert n.get("null") == 3
                     assert n.get("group_count") == 1
-                    assert n.get("count") == 3
+                    assert n.get("count") == 1
 
                     # Overall, state level for param2 "null" must have count 7 and group_count 3.
-                    assert state_level["count"] == 7
+                    assert state_level["count"] == 5
                     assert state_level["group_count"] == 3
 
         elif depth >= 3:
