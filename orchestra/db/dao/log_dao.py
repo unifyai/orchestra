@@ -16,6 +16,10 @@ class OverwriteError(Exception):
     pass
 
 
+class ImmutableFieldError(Exception):
+    pass
+
+
 # noinspection PyBroadException
 class LogDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
@@ -244,6 +248,7 @@ class LogDAO:
         version: Optional[int] = None,
         explicit_types: Optional[Dict] = None,
         overwrite: bool = False,
+        field_types: Optional[Dict] = None,
     ):
         explicit_types = explicit_types if isinstance(explicit_types, dict) else {}
         inferred_type = explicit_types.get(raw_k, {}).get(
@@ -268,6 +273,10 @@ class LogDAO:
         if entry is not None:
             if not overwrite and hasattr(entry, "value"):
                 raise OverwriteError
+            if raw_k in field_types:
+                field_info = field_types.get(raw_k)
+                if field_info and not field_info.get("mutable", False):
+                    raise ImmutableFieldError
             setattr(entry, "value", json_v)
             setattr(entry, "version", version)
             setattr(entry, "inferred_type", inferred_type)
