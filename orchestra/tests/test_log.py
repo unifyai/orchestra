@@ -4470,6 +4470,7 @@ async def test_create_log_default_immutable(client: AsyncClient):
             "entries": {
                 "default_field": "attempted update",
             },
+            "overwrite": True,
         },
         headers=HEADERS,
     )
