@@ -4294,6 +4294,7 @@ async def test_update_field_mutability_only(client: AsyncClient):
             "entries": {
                 "mutable_field": "new value",
             },
+            "overwrite": True,
         },
         headers=HEADERS,
     )
