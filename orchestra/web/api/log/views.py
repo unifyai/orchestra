@@ -3276,12 +3276,51 @@ def _build_grouped_data(
     # return the counts for each distinct group value instead of recursing further.
     if group_depth is not None and level == group_depth:
         out_dict = {}
-        for val in paged_values:
-            out_dict[val] = len(value_to_ids[val])
-        if have_null:  # if there were any logs missing the group key, include them too
-            out_dict["null"] = len(missing_ids)
+
+        if (level + 1) < len(group_by):
+            # We have a "next" group key
+            next_group_key = group_by[level + 1]
+            prefix2, raw_key2 = parse_group_key(next_group_key)
+
+            for val in paged_values:
+                subset_ids = value_to_ids[
+                    val
+                ]  # The log IDs for the current group value
+
+                # Now we figure out how many distinct *child groups* appear in the next column:
+                next_values = _get_distinct_group_values(
+                    log_event_ids=subset_ids,
+                    group_key=raw_key2,
+                    session=session,
+                    is_param=(prefix2 == "params"),
+                )
+                # We only want to show how many *distinct subgroups* are
+                # immediately under val's subtree:
+                out_dict[val] = len(next_values)
+
+            if have_null:
+                subset_ids = list(missing_ids)
+                next_values = _get_distinct_group_values(
+                    log_event_ids=subset_ids,
+                    group_key=raw_key2,
+                    session=session,
+                    is_param=(prefix2 == "params"),
+                )
+                out_dict["null"] = len(next_values)
+
+        else:
+            # If there's no next level to look at,
+            # then fallback to # of logs in each group
+            for val in paged_values:
+                out_dict[val] = len(value_to_ids[val])
+            if have_null:
+                out_dict["null"] = len(missing_ids)
+
+        # Then also fill out group_count and count as usual
         out_dict["group_count"] = total_distinct + (1 if have_null else 0)
-        out_dict["count"] = total_logs_in_group
+        out_dict["count"] = len(paged_values) + (1 if have_null else 0)
+
+        # Return at whichever nesting level we are
         return {current_group_key: out_dict} if level == 0 else out_dict
 
     # Build the data structure that will go inside e.g.  "params/a/b/param2": {...}
