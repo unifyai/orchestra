@@ -34,7 +34,7 @@ from sqlalchemy.sql.selectable import Subquery
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.derived_log_dao import DerivedLogDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
-from orchestra.db.dao.log_dao import LogDAO, OverwriteError
+from orchestra.db.dao.log_dao import ImmutableFieldError, LogDAO, OverwriteError
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
@@ -809,13 +809,6 @@ def update_logs(
 
                 # Attempt to update the log value; if it doesn't exist, create a new entry.
                 try:
-                    if k in field_types:
-                        field_info = field_types.get(k)
-                        if field_info and not field_info.get("mutable", False):
-                            raise HTTPException(
-                                status_code=400,
-                                detail=f"Field '{k}' in log id {log_id} is immutable and cannot be modified.",
-                            )
                     log_dao.update_value(
                         log_event_id=log_id,
                         raw_k=k,
@@ -823,6 +816,7 @@ def update_logs(
                         version=version,
                         explicit_types=explicit_types,
                         overwrite=body.overwrite,
+                        field_types=field_types,
                     )
                     updated_ids.add((k, log_id))
                 except IndexError:
@@ -855,6 +849,13 @@ def update_logs(
                         detail=(
                             f"Existing value for log entry with key '{k}' in log id {log_id} "
                             "cannot be overwritten because overwrite is set to False."
+                        ),
+                    )
+                except ImmutableFieldError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Field '{k}' in log id {log_id} is immutable and cannot be modified."
                         ),
                     )
 
