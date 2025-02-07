@@ -4258,7 +4258,6 @@ async def test_update_field_mutability_only(client: AsyncClient):
         json={
             "ids": [log_id],
             "entries": {
-                "mutable_field": None,
                 "explicit_types": {
                     "mutable_field": {"mutable": False},
                 },
@@ -4300,7 +4299,7 @@ async def test_update_field_mutability_only(client: AsyncClient):
     )
     assert response.status_code == 400
     assert (
-        "Field mutable_field is immutable and cannot be modified"
+        "Field 'mutable_field' in log id 1 is immutable and cannot be modified."
         in response.json()["detail"]
     )
 
@@ -4429,7 +4428,7 @@ async def test_update_mutable_and_immutable_fields(client: AsyncClient):
     )
     assert response.status_code == 400
     assert (
-        "Field immutable_field is immutable and cannot be modified."
+        "Field 'immutable_field' in log id 1 is immutable and cannot be modified."
         in response.json()["detail"]
     )
 
@@ -4475,7 +4474,7 @@ async def test_create_log_default_immutable(client: AsyncClient):
     )
     assert response.status_code == 400
     assert (
-        "Field default_field is immutable and cannot be modified."
+        "Field 'default_field' in log id 1 is immutable and cannot be modified."
         in response.json()["detail"]
     )
 
