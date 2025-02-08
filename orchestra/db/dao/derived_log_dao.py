@@ -115,34 +115,12 @@ class DerivedLogDAO:
         id: int,
         key: str = None,
         equation: str = None,
-        referenced_logs: Dict[str, List[int]] = None,
     ) -> DerivedLog:
         """Update a derived log entry by ID"""
         try:
             derived_log = self.session.query(DerivedLog).get(id)
             if not derived_log:
                 raise ValueError(f"No derived log found with id {id}")
-
-            # Update referenced logs if provided
-            if referenced_logs:
-                # Validate all referenced logs exist
-                valid_logs = (
-                    self.session.query(LogEvent.id)
-                    .filter(
-                        LogEvent.id.in_(
-                            [
-                                lid
-                                for sublist in referenced_logs.values()
-                                for lid in sublist
-                            ],
-                        ),
-                    )
-                    .all()
-                )
-                if len(valid_logs) != sum(len(v) for v in referenced_logs.values()):
-                    raise ValueError("One or more referenced logs not found")
-
-                derived_log.referenced_logs = referenced_logs
 
             # Check for key conflicts
             if key and key != derived_log.key:
@@ -166,6 +144,19 @@ class DerivedLogDAO:
 
             self.session.commit()
             return derived_log
+        except Exception as e:
+            self.session.rollback()
+            raise e
+
+    def delete(self, id: int) -> None:
+        """Delete a derived log entry by ID"""
+        try:
+            derived_log = self.session.query(DerivedLog).get(id)
+            if not derived_log:
+                raise ValueError(f"No derived log found with id {id}")
+
+            self.session.delete(derived_log)
+            self.session.commit()
         except Exception as e:
             self.session.rollback()
             raise e
