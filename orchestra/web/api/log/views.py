@@ -4,7 +4,8 @@ Includes endpoints related to entries.
 """
 
 import json
-from datetime import datetime, timedelta
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -47,6 +48,7 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.web.api.log.schema import (
     CreateDerivedEntriesConfig,
     CreateLogConfig,
+    DeleteDerivedLogsRequest,
     DeleteLogEntryRequest,
     SetFieldTypingRequest,
     UpdateDerivedEntriesConfig,
@@ -513,11 +515,13 @@ def update_derived_log(
 ):
     """
     Updates multiple derived logs, identified either by a direct list of derived IDs or by
-    get_logs–style filters. Then sets a new key/equation, and recomputes them.
+    get_logs–style filters. If 'referenced_logs' is provided, we delete all existing
+    derived logs for each (log_event_id, key) group and re-insert new ones referencing
+    the new base logs. Finally, we recompute them.
     """
     user_id = request_fastapi.state.user_id
 
-    # (A) Validate the project exists for this user
+    # 1) Validate the project for this user
     try:
         project_obj = project_dao.filter(name=body.project, user_id=user_id)[0][0]
     except IndexError:
@@ -526,10 +530,11 @@ def update_derived_log(
             detail=f"Project '{body.project}' not found.",
         )
 
-    # (B) Resolve which derived_log IDs to update
+    # 2) Resolve which DerivedLog IDs to update
     if isinstance(body.target_derived_logs, list):
         derived_log_ids = body.target_derived_logs
     else:
+        # treat as get_logs argument, gather all derived log rows that match
         argdict = body.target_derived_logs
         raw_rows, _, _count = _get_logs_query(
             request_fastapi=request_fastapi,
@@ -550,77 +555,298 @@ def update_derived_log(
             session=session,
         )
 
-        derived_event_ids = set()
-        for (
-            row_key,
-            row_value,
-            row_inferred_type,
-            row_version,
-            row_source_type,
-            row_created_at,
-            row_event_id,
-        ) in raw_rows:
-            if row_source_type == "derived":
-                derived_event_ids.add(row_event_id)
+        derived_event_ids = [
+            row[6]
+            for row in raw_rows
+            if row[4] == "derived"  # row_source_type=="derived"
+        ]
+        if not derived_event_ids:
+            return {"info": "No derived logs matched. Nothing to update."}
+
+        derived_log_ids = [
+            t[0]
+            for t in session.query(DerivedLog.id)
+            .filter(DerivedLog.log_event_id.in_(derived_event_ids))
+            .all()
+        ]
+
+    if not derived_log_ids:
+        return {"info": "No derived logs matched. Nothing to update."}
+
+    # 3) Load the actual DerivedLog objects for these IDs
+    matched_derived_logs = (
+        session.query(DerivedLog).filter(DerivedLog.id.in_(derived_log_ids)).all()
+    )
+
+    if not matched_derived_logs:
+        return {"info": "No derived logs matched. Nothing to update."}
+
+    # 4) Verify user has permission
+    valid_logs = []
+    for dlog in matched_derived_logs:
+        user_id_of_this_event = log_event_dao.get_user_id(id=dlog.log_event_id)
+        if user_id_of_this_event != user_id:
+            continue
+        valid_logs.append(dlog)
+    if not valid_logs:
+        raise HTTPException(
+            status_code=404,
+            detail="No matching derived logs belong to your project or you lack permission.",
+        )
+
+    # 5) Group them by (log_event_id, old_key)
+    group_map = defaultdict(list)
+    for dlog in valid_logs:
+        group_map[(dlog.log_event_id, dlog.key)].append(dlog)
+
+    updated_equation = body.equation
+    updated_key = body.key
+    new_refs = body.referenced_logs  # can be None
+
+    # If user *did not* pass new referenced_logs, do a simple "update in place"
+    if not new_refs:
+        # just update existing rows for new key/equation, then recompute
+        for dlogs in group_map.values():
+            for d in dlogs:
+                try:
+                    derived_log_dao.update(
+                        id=d.id,
+                        key=updated_key,
+                        equation=updated_equation,
+                    )
+                except ValueError as ve:
+                    raise HTTPException(status_code=400, detail=str(ve))
+        # re-fetch them (some might have new key)
+        updated_log_ids = [d.id for d in valid_logs]
+        updated_objs = (
+            session.query(DerivedLog).filter(DerivedLog.id.in_(updated_log_ids)).all()
+        )
+        # recompute
+        derived_log_dao.recompute_derived_logs(updated_objs, session)
+        return {"info": f"Updated {len(updated_objs)} derived logs successfully."}
+
+    # 6) If new_refs *is* provided, do the "delete & re-insert" approach
+    if new_refs:
+        # Use updated_key/equation if provided; otherwise, take them from one of the matched logs.
+        final_key = updated_key if updated_key else valid_logs[0].key
+        final_equation = (
+            updated_equation if updated_equation else valid_logs[0].equation
+        )
+
+        # Delete all derived logs that were matched by the update filter.
+        valid_ids = [d.id for d in valid_logs]
+        session.query(DerivedLog).filter(DerivedLog.id.in_(valid_ids)).delete(
+            synchronize_session=False
+        )
+        session.flush()  # flush the deletion so that new insertions do not conflict
+
+        # Resolve the new referenced logs (this is similar to the create_derived_entry code)
+        resolved_ids = {}
+        for alias_name, val in new_refs.items():
+            if isinstance(val, list):
+                resolved_ids[alias_name] = val
+            elif isinstance(val, dict):
+                # Reuse _get_logs_query to resolve the dict reference
+                rows, _, _ = _get_logs_query(
+                    request_fastapi=request_fastapi,
+                    project=body.project,
+                    column_context=val.get("column_context"),
+                    context=val.get("context"),
+                    filter_expr=val.get("filter_expr"),
+                    sorting=val.get("sort"),
+                    from_ids=val.get("from_ids"),
+                    exclude_ids=val.get("exclude_ids"),
+                    from_fields=val.get("from_fields"),
+                    exclude_fields=val.get("exclude_fields"),
+                    limit=val.get("limit"),
+                    offset=val.get("offset", 0),
+                    project_dao=project_dao,
+                    field_type_dao=field_type_dao,
+                    context_dao=context_dao,
+                    session=session,
+                )
+                found_ids = list({r[6] for r in rows})  # r[6] is the log_event_id
+                resolved_ids[alias_name] = found_ids
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unrecognized reference for '{alias_name}': {val}",
+                )
+
+        # If any referenced list is provided, they all must have the same length.
+        lengths = [len(lst) for lst in resolved_ids.values()]
+        if lengths and len(set(lengths)) != 1:
+            raise HTTPException(
+                status_code=400,
+                detail=f"All referenced log lists must have the same length. Found lengths: {lengths}",
+            )
+        common_length = lengths[0] if lengths else 0
+
+        # Substitute placeholders in the equation (to get the mapping from alias to actual field key)
+        filter_expr, alias_to_key_map = _substitute_placeholders(
+            final_equation, resolved_ids
+        )
+
+        now = datetime.now(timezone.utc)
+        new_derived_logs = []
+
+        for i in range(common_length):
+            # For each alias, get the base log id for this derived log candidate.
+            # To enforce the 1:1 relationship, ensure that all alias lists yield the same log_event_id.
+            base_ids = [resolved_ids[alias][i] for alias in resolved_ids]
+            if len(set(base_ids)) > 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Inconsistent referenced log IDs across aliases for index {i}: {base_ids}",
+                )
+            new_log_event_id = base_ids[0]
+            single_refs = {
+                alias_to_key_map[alias]: resolved_ids[alias][i]
+                for alias in resolved_ids
+            }
+
+            new_d = DerivedLog(
+                log_event_id=new_log_event_id,
+                key=final_key,
+                equation=final_equation,
+                referenced_logs=single_refs,
+                value=None,  # to be computed later
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(new_d)
+            new_derived_logs.append(new_d)
+
+        session.commit()
+
+        # Recompute values for all newly inserted derived logs
+        derived_log_dao.recompute_derived_logs(new_derived_logs, session)
+
+        return {
+            "info": f"Updated references and replaced {len(valid_logs)} old derived logs with {len(new_derived_logs)} new ones.",
+            "derived_log_ids": [obj.id for obj in new_derived_logs],
+        }
+
+
+@router.delete(
+    "/logs/derived",
+    responses={
+        200: {
+            "description": "Derived logs deleted successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Successfully deleted 3 derived logs.",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Derived Log Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "One or more derived logs were not found or you don't have permission to delete them.",
+                    },
+                },
+            },
+        },
+    },
+)
+def delete_derived_logs(
+    request_fastapi: Request,
+    body: DeleteDerivedLogsRequest,
+    derived_log_dao: DerivedLogDAO = Depends(),
+    log_event_dao: LogEventDAO = Depends(),
+    project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+    session=Depends(get_db_session),
+):
+    """
+    Deletes specified derived log entries. Logs can be specified either by a direct list
+    of derived log IDs or by get_logs-style filters. Only deletes derived logs that belong
+    to the user's project and where the user has appropriate permissions.
+    """
+    user_id = request_fastapi.state.user_id
+
+    # Validate project and get project ID
+    try:
+        project_obj = project_dao.filter(name=body.project, user_id=user_id)[0][0]
+        project_id = project_obj.id
+    except IndexError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{body.project}' not found.",
+        )
+
+    # Get list of derived log IDs to delete
+    derived_log_ids = []
+    if isinstance(body.target_derived_logs, list):
+        derived_log_ids = body.target_derived_logs
+    else:
+        # Use the filter expression to find matching derived logs
+        raw_rows, _, _ = _get_logs_query(
+            request_fastapi=request_fastapi,
+            project=body.project,
+            column_context=body.target_derived_logs.get("column_context"),
+            context=body.target_derived_logs.get("context"),
+            filter_expr=body.target_derived_logs.get("filter_expr"),
+            sorting=body.target_derived_logs.get("sort"),
+            from_ids=body.target_derived_logs.get("from_ids"),
+            exclude_ids=body.target_derived_logs.get("exclude_ids"),
+            from_fields=body.target_derived_logs.get("from_fields"),
+            exclude_fields=body.target_derived_logs.get("exclude_fields"),
+            limit=body.target_derived_logs.get("limit"),
+            offset=body.target_derived_logs.get("offset", 0),
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+        )
+
+        # Extract derived log IDs from raw rows
+        derived_log_event_ids = set()
+        for row in raw_rows:
+            if row[4] == "derived":  # source_type is "derived"
+                derived_log_event_ids.add(row[-1])  # id
 
         # Now find the actual derived_log IDs
         derived_log_ids = (
             session.query(DerivedLog.id)
             .filter(
-                DerivedLog.log_event_id.in_(derived_event_ids),
+                DerivedLog.log_event_id.in_(derived_log_event_ids),
             )
             .all()
         )
         derived_log_ids = [t[0] for t in derived_log_ids]
 
     if not derived_log_ids:
-        return {"info": "No derived logs matched. Nothing to update."}
+        return {"info": "No derived logs found matching the criteria."}
 
-    # (C) Update each derived log, respecting user permissions, etc.
+    # Track which logs we couldn't delete
     not_found_logs = []
-    updated_logs = []
+    deleted_count = 0
 
+    # Delete each derived log if user has permission
     for dlog_id in derived_log_ids:
-        # 1) Check if user can update it
-        #    For example, see if the underlying log_event belongs to the same user.
-        log_event_id = (
-            session.query(DerivedLog.log_event_id)
-            .filter(DerivedLog.id == dlog_id)
-            .scalar()
-        )
-        if not log_event_id:
-            not_found_logs.append(dlog_id)
-            continue
-        user_id_of_this_event = log_event_dao.get_user_id(id=log_event_id)
-        if user_id_of_this_event != user_id:
-            not_found_logs.append(dlog_id)
-            continue
-
-        # 2) Actually update
+        # Delete the derived log
         try:
-            updated_log = derived_log_dao.update(
-                id=dlog_id,
-                key=body.key,
-                equation=body.equation,
+            derived_log_dao.delete(id=dlog_id)
+            deleted_count += 1
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error deleting derived log {dlog_id}: {str(e)}",
             )
-            updated_logs.append(updated_log)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
 
     if not_found_logs:
         raise HTTPException(
             status_code=404,
-            detail=(
-                f"Derived logs with IDs {not_found_logs} do not exist "
-                "or you lack permission."
-            ),
+            detail=f"Derived logs with IDs {not_found_logs} were not found or you don't have permission to delete them.",
         )
 
-    # (D) Recompute
-    if updated_logs:
-        derived_log_dao.recompute_derived_logs(updated_logs, session)
-
-    return {"info": f"Updated {len(updated_logs)} derived logs successfully."}
+    return {"info": f"Successfully deleted {deleted_count} derived logs."}
 
 
 @router.put(
