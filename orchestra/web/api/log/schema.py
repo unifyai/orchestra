@@ -163,6 +163,25 @@ class SetFieldTypingRequest(BaseModel):
     )
 
 
+class DeleteDerivedLogsRequest(BaseModel):
+    project: str = Field(
+        description="Name of the project these derived logs belong to.",
+        example="eval-project",
+    )
+    target_derived_logs: Union[List[int], Dict[str, Any]] = Field(
+        description="The derived logs to delete, either as a list of derived_log IDs or as a set of arguments for the get_logs endpoint.",
+        example=[123, 456, 789],
+    )
+
+    @model_validator(mode="before")
+    def validate_params(cls, values):
+        if not values.get("target_derived_logs"):
+            raise ValueError(
+                "target_derived_logs must be provided. Either as a list of derived_log IDs or as a set of arguments for the get_logs endpoint.",
+            )
+        return values
+
+
 class UpdateDerivedEntriesConfig(BaseModel):
     project: str = Field(
         description="Name of the project these derived logs belong to.",
@@ -181,6 +200,12 @@ class UpdateDerivedEntriesConfig(BaseModel):
         default=None,
         description="New equation for computing derived values",
         example="{t:temperature} + 20",
+    )
+    referenced_logs: Optional[Dict[str, Union[List[int], Dict[str, Any]]]] = Field(
+        default=None,
+        description="Optional new referenced logs to use for computation. Can be specified either as "
+        "a list of log IDs or as a set of arguments for the get_logs endpoint.",
+        example={"t": [1, 2, 3], "other": {"filter_expr": "score > 0.5"}},
     )
 
     @model_validator(mode="before")
