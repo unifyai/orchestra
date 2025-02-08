@@ -636,7 +636,7 @@ def update_derived_log(
         # Delete all derived logs that were matched by the update filter.
         valid_ids = [d.id for d in valid_logs]
         session.query(DerivedLog).filter(DerivedLog.id.in_(valid_ids)).delete(
-            synchronize_session=False
+            synchronize_session=False,
         )
         session.flush()  # flush the deletion so that new insertions do not conflict
 
@@ -684,7 +684,8 @@ def update_derived_log(
 
         # Substitute placeholders in the equation (to get the mapping from alias to actual field key)
         filter_expr, alias_to_key_map = _substitute_placeholders(
-            final_equation, resolved_ids
+            final_equation,
+            resolved_ids,
         )
 
         now = datetime.now(timezone.utc)

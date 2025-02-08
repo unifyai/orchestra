@@ -220,6 +220,17 @@ def _delete_logs(client, log_ids, user=1):
     return client.send(request)
 
 
+def _delete_derived_logs(client, project_name, derived_log_ids, user=1):
+    _headers = HEADERS if user == 1 else HEADERS_2
+    request = Request(
+        "DELETE",
+        str(client.base_url) + "/v0/logs/derived",
+        json={"project": project_name, "target_derived_logs": derived_log_ids},
+        headers=_headers,
+    )
+    return client.send(request)
+
+
 def _update_logs(client, log_ids, entries, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     return client.put(
@@ -391,6 +402,213 @@ async def test_create_derived_entry_with_filter_expr(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_delete_derived_logs(client: AsyncClient):
+    project_name = "test_delete_derived"
+    await _create_project(client, project_name)
+
+    # Create base logs
+    log_ids = []
+    for i in range(3):
+        response = await _create_log(client, project_name, entries={"a": i * 10})
+        assert response.status_code == 200
+        log_ids.append(response.json()[0])
+
+    # Create first derived log
+    key1 = "derived1"
+    equation1 = "{log1:a}*2"
+    referenced_logs1 = {"log1": log_ids}
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key1,
+        equation1,
+        referenced_logs1,
+    )
+    assert response.status_code == 200
+    derived_log_ids1 = response.json()["derived_log_ids"]
+    assert len(derived_log_ids1) == 3
+
+    # Create second derived log
+    key2 = "derived2"
+    equation2 = "{log1:a}+5"
+    referenced_logs2 = {"log1": log_ids}
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key2,
+        equation2,
+        referenced_logs2,
+    )
+    assert response.status_code == 200
+    derived_log_ids2 = response.json()["derived_log_ids"]
+    assert len(derived_log_ids2) == 3
+
+    # Delete only the first derived log
+    response = await _delete_derived_logs(client, project_name, derived_log_ids1)
+    assert response.status_code == 200
+    assert "Successfully deleted" in response.json()["info"]
+
+    # Verify first derived log is deleted but second remains
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+
+    for log in logs:
+        assert "derived1" not in log["derived_entries"]
+        if log["id"] in log_ids:  # Only check base logs that had derived entries
+            assert "derived2" in log["derived_entries"]
+
+    # Delete second derived log
+    response = await _delete_derived_logs(client, project_name, derived_log_ids2)
+    assert response.status_code == 200
+    assert "Successfully deleted" in response.json()["info"]
+
+    # Verify all derived logs are deleted
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+    for log in logs:
+        assert len(log["derived_entries"]) == 0
+
+
+@pytest.mark.anyio
+async def test_delete_derived_logs_by_filter(client: AsyncClient):
+    project_name = "test_delete_derived_by_filter"
+    await _create_project(client, project_name)
+
+    # Create base logs
+    log_ids = []
+    for i in range(2):
+        response = await _create_log(client, project_name, entries={"a": i * 10})
+        assert response.status_code == 200
+        log_ids.append(response.json()[0])
+
+    # Create derived log
+    key = "derived1"
+    equation = "{log1:a}*2"
+    referenced_logs = {"log1": log_ids}
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        equation,
+        referenced_logs,
+    )
+    assert response.status_code == 200
+    derived_log_ids = response.json()["derived_log_ids"]
+    assert len(derived_log_ids) == 2
+
+    # Delete specific derived log by filter
+    response = await _delete_derived_logs(
+        client,
+        project_name,
+        {"from_fields": "derived1"},
+    )
+    assert response.status_code == 200
+    assert "Successfully deleted" in response.json()["info"]
+
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+
+    for log in logs:
+        if log["id"] == log_ids[0]:
+            assert "derived1" not in log["derived_entries"]
+        elif log["id"] == log_ids[1]:
+            assert "derived1" not in log["derived_entries"]
+
+
+@pytest.mark.anyio
+async def test_update_derived_entry_with_referenced_logs(client: AsyncClient):
+    project_name = "test_update_derived_refs"
+    await _create_project(client, project_name)
+
+    # 1. Create base logs with temperature values
+    base_log_ids = []
+    temps = [20.0, 25.0, 30.0, 35.0]  # Four base logs
+    for temp in temps:
+        resp = await client.post(
+            "/v0/logs",
+            json={"project": project_name, "entries": {"temperature": temp}},
+            headers=HEADERS,
+        )
+        assert resp.status_code == 200
+        base_log_ids.append(resp.json()[0])
+
+    assert len(base_log_ids) == 4, "Expected to create 4 base logs"
+
+    # 2. Create initial derived log using first two base logs
+    initial_referenced_logs = {
+        "t": [base_log_ids[0], base_log_ids[1]],
+    }  # Only first two logs
+    resp = await _create_derived_entry(
+        client,
+        project_name,
+        key="temp_plus_10",
+        equation="{t:temperature} + 10",
+        referenced_logs=initial_referenced_logs,
+    )
+    assert resp.status_code == 200
+    initial_derived_ids = resp.json()["derived_log_ids"]
+    assert (
+        len(initial_derived_ids) == 2
+    ), "Should create derived logs for first two base logs"
+
+    # Verify initial derived values
+    resp = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert resp.status_code == 200
+    logs = resp.json()["logs"]
+
+    # Check initial derived values (only first two logs should have derived entries)
+    for log in logs:
+        if log["id"] in [base_log_ids[0], base_log_ids[1]]:
+            assert "temp_plus_10" in log["derived_entries"]
+            assert (
+                log["derived_entries"]["temp_plus_10"]
+                == log["entries"]["temperature"] + 10
+            )
+        else:
+            assert "temp_plus_10" not in log["derived_entries"]
+
+    # 3. Update derived log to use different base logs and modified equation
+    new_referenced_logs = {
+        "t": [base_log_ids[2], base_log_ids[3]],
+    }  # Use last two logs instead
+    resp = await client.put(
+        "/v0/logs/derived",
+        json={
+            "project": project_name,
+            "target_derived_logs": {"from_fields": "temp_plus_10"},
+            "equation": "{t:temperature} + 20",  # Modified equation
+            "referenced_logs": new_referenced_logs,
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+
+    # 4. Verify the updates
+    resp = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert resp.status_code == 200
+    updated_logs = resp.json()["logs"]
+
+    # Previous logs should no longer have derived entries
+    for log in updated_logs:
+        if log["id"] in [base_log_ids[0], base_log_ids[1]]:
+            assert (
+                "temp_plus_10" not in log["derived_entries"]
+            ), f"Log {log['id']} should no longer have derived entry"
+        elif log["id"] in [base_log_ids[2], base_log_ids[3]]:
+            assert (
+                "temp_plus_10" in log["derived_entries"]
+            ), f"Log {log['id']} should now have derived entry"
+            # Verify new equation is used (temp + 20 instead of temp + 10)
+            assert (
+                log["derived_entries"]["temp_plus_10"]
+                == log["entries"]["temperature"] + 20
+            )
+
+
+@pytest.mark.anyio
 async def test_update_derived_entry_with_filter(client: AsyncClient):
     project_name = "test_update_derived_filter"
     await _create_project(client, project_name)
@@ -436,6 +654,7 @@ async def test_update_derived_entry_with_filter(client: AsyncClient):
     #   1 of them with key="temp_minus_5"
 
     # 4) Update ONLY the logs with key="temp_plus_10" => rename them to "temp_times_3"
+    # Also update the referenced_logs to only use first two base logs
     resp = await client.put(
         "/v0/logs/derived",
         json={
@@ -443,6 +662,7 @@ async def test_update_derived_entry_with_filter(client: AsyncClient):
             "target_derived_logs": {"from_fields": "temp_plus_10"},
             "key": "temp_times_3",
             "equation": "{t:temperature} * 3",
+            "referenced_logs": {"t": [base_log_ids[0], base_log_ids[1]]},
         },
         headers=HEADERS,
     )
