@@ -1423,9 +1423,6 @@ def _get_logs_query(
                 detail="Cannot return versions for unversioned context",
             )
 
-        # TODO (versioned_contexts): add support for retrieving a specific version of the context.
-        # if specified. Right now, context is just given by the name. But we should allow users
-        # to also specify a version number along with the name.
         # Filter by context_id
         log_event_query = log_event_query.filter(
             exists(
