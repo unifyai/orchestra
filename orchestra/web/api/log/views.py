@@ -3780,3 +3780,113 @@ def _build_grouped_data(
     return {
         current_group_key: out_dict,
     }
+
+
+#########################
+# GET Logs Utils        #
+#########################
+# TODO(yusha): refactor get_logs_query to make it modular
+def _build_unified_logs_subquery(
+    session,
+    event_ids: Optional[List[int]] = None,
+    relevant_log_events: Optional[Subquery] = None,
+    return_versions: bool = False,
+) -> Subquery:
+    """
+    Build a unified subquery that combines base logs and derived logs based on return_versions parameter.
+
+    Args:
+        session: The database session
+        event_ids: Optional list of event IDs to filter by directly
+        relevant_log_events: Optional subquery containing relevant log event IDs to join with
+        return_versions: Whether to include version history in the query
+
+    Returns:
+        A unified subquery combining base and derived logs
+    """
+    if event_ids is None and relevant_log_events is None:
+        raise ValueError("Either event_ids or relevant_log_events must be provided")
+
+    def _apply_event_filter(query):
+        if event_ids is not None:
+            return query.filter(LogEvent.id.in_(event_ids))
+        return query.join(relevant_log_events, relevant_log_events.c.id == LogEvent.id)
+
+    if return_versions:
+        # get latest version + all history logs
+        base_logs_q_current = session.query(
+            Log.id.label("id"),
+            Log.log_event_id.label("log_event_id"),
+            Log.key.label("key"),
+            Log.value.label("value"),
+            Log.inferred_type.label("inferred_type"),
+            Log.version.label("param_version"),
+            cast(None, Integer).label("context_version"),
+            Log.updated_at.label("updated_at"),
+            LogEvent.created_at.label("created_at"),
+            literal("current").label("source_type"),
+        ).join(LogEvent, LogEvent.id == Log.log_event_id)
+        base_logs_q_current = _apply_event_filter(base_logs_q_current)
+
+        base_logs_q_history = session.query(
+            LogHistory.id.label("id"),
+            LogHistory.log_event_id.label("log_event_id"),
+            LogHistory.key.label("key"),
+            LogHistory.value.label("value"),
+            LogHistory.inferred_type.label("inferred_type"),
+            cast(None, Integer).label("param_version"),
+            LogHistory.version.label("context_version"),
+            LogHistory.archived_at.label("updated_at"),
+            LogEvent.created_at.label("created_at"),
+            literal("history").label("source_type"),
+        ).join(LogEvent, LogEvent.id == LogHistory.log_event_id)
+        base_logs_q_history = _apply_event_filter(base_logs_q_history)
+
+        base_logs_q = base_logs_q_current.union_all(base_logs_q_history)
+    else:
+        # get only the latest version of the logs
+        base_logs_q = session.query(
+            Log.id.label("id"),
+            Log.log_event_id.label("log_event_id"),
+            Log.key.label("key"),
+            Log.value.label("value"),
+            Log.inferred_type.label("inferred_type"),
+            Log.version.label("param_version"),
+            cast(None, Integer).label("context_version"),
+            Log.updated_at.label("updated_at"),
+            LogEvent.created_at.label("created_at"),
+            literal("base").label("source_type"),
+        ).join(LogEvent, LogEvent.id == Log.log_event_id)
+        base_logs_q = _apply_event_filter(base_logs_q)
+
+    derived_logs_q = session.query(
+        DerivedLog.id.label("id"),
+        DerivedLog.log_event_id.label("log_event_id"),
+        DerivedLog.key.label("key"),
+        DerivedLog.value.label("value"),
+        DerivedLog.inferred_type.label("inferred_type"),
+        # derived logs have no version => cast to None
+        cast(None, Integer).label("param_version"),
+        cast(None, Integer).label("context_version"),
+        DerivedLog.updated_at.label("updated_at"),
+        LogEvent.created_at.label("created_at"),
+        literal("derived").label("source_type"),
+    ).join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
+    derived_logs_q = _apply_event_filter(derived_logs_q)
+
+    unified_logs_subq = base_logs_q.union_all(derived_logs_q).subquery(
+        name="unified_logs",
+    )
+    # re-label columns to avoid anonymous column names
+    return select(
+        unified_logs_subq.c[unified_logs_subq.c.keys()[0]].label("id"),
+        unified_logs_subq.c[unified_logs_subq.c.keys()[1]].label("log_event_id"),
+        unified_logs_subq.c[unified_logs_subq.c.keys()[2]].label("key"),
+        unified_logs_subq.c[unified_logs_subq.c.keys()[3]].label("value"),
+        unified_logs_subq.c[unified_logs_subq.c.keys()[4]].label("inferred_type"),
+        unified_logs_subq.c[unified_logs_subq.c.keys()[5]].label("param_version"),
+        unified_logs_subq.c[unified_logs_subq.c.keys()[6]].label("context_version"),
+        unified_logs_subq.c[unified_logs_subq.c.keys()[7]].label("updated_at"),
+        unified_logs_subq.c[unified_logs_subq.c.keys()[8]].label("created_at"),
+        unified_logs_subq.c[unified_logs_subq.c.keys()[9]].label("source_type"),
+    ).subquery("unified_logs")
