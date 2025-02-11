@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
@@ -532,6 +533,8 @@ class Context(Base):
     description = Column(String)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
+    is_versioned = Column(Boolean, nullable=False, server_default="f")
+    version = Column(Integer, nullable=False, server_default="1")
 
     project = relationship("Project", back_populates="contexts")
     artifacts = relationship("ContextArtifact", back_populates="context")
@@ -544,6 +547,30 @@ class Context(Base):
     __table_args__ = (
         UniqueConstraint("project_id", "name", name="uq_project_context_name"),
     )
+
+
+class ContextHistory(Base):
+    """Model class for storing historical versions of contexts."""
+
+    __tablename__ = "context_history"
+
+    id = Column(Integer, primary_key=True)
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    version = Column(Integer, nullable=False)
+    log_versions = Column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'"),
+        comment="Stores {log_event_id: {field_key: version_int}}",
+    )
+    name = Column(String, nullable=True)
+    description = Column(String, nullable=True)
+    archived_at = Column(TIMESTAMP, server_default=func.now())
 
 
 class ContextArtifact(Base):
@@ -657,6 +684,41 @@ class Log(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     __table_args__ = (UniqueConstraint("log_event_id", "key"),)
+
+
+class LogHistory(Base):
+    __tablename__ = "log_history"
+
+    id = Column(Integer, primary_key=True)
+    log_event_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key = Column(String, nullable=False)
+    value = Column(JSONB)
+    version = Column(Integer, nullable=False)
+    inferred_type = Column(String)
+    description = Column(String)
+    archived_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class JSONLogHistory(Base):
+    __tablename__ = "json_log_history"
+
+    id = Column(Integer, primary_key=True)
+    log_event_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key = Column(String, nullable=False)
+    value = Column(JSONB)
+    version = Column(Integer, nullable=False)
+    description = Column(String)
+    archived_at = Column(TIMESTAMP, server_default=func.now())
 
 
 class DerivedLog(Base):
