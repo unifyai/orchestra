@@ -998,13 +998,7 @@ def update_logs(
                     expected_type = field_types[k]["field_type"]
                     original_type = LogDAO.infer_type(k, v)
                     if expected_type == "NoneType":
-                        # For fields with an undefined type, ensure they are mutable.
-                        field_info = field_types.get(k)
-                        if field_info and not field_info.get("mutable", False):
-                            raise HTTPException(
-                                status_code=400_1,
-                                detail=f"Field '{k}' in log id {log_id} is immutable and cannot be modified.",
-                            )
+                        # undefined types are by-default mutable
                         try:
                             field_type_dao.upsert_field_type(
                                 project_id,
