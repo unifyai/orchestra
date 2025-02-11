@@ -21,6 +21,11 @@ class ContextCreateRequest(BaseModel):
         description="Optional description of the context",
         example="Context for experiment 1 trial 1",
     )
+    is_versioned: bool = Field(
+        default=False,
+        description="Whether the context should be versioned. If True, the context will be versioned and mutable. ",
+        example=True,
+    )
 
 
 class AddLogsToContextRequest(BaseModel):
