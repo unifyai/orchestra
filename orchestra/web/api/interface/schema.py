@@ -36,6 +36,7 @@ class Item(BaseModel):
     y_axis: str | None = None
     plot_group_by: str | None = None
     bin_count: str | None = None
+    regression_line: str | None = None
 
 
 class InterfaceConfig(BaseModel):
