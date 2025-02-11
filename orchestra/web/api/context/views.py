@@ -22,7 +22,12 @@ router = APIRouter()
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": {"info": "Context created successfully!"},
+                    "example": {
+                        "name": "experiment1/trial1",
+                        "description": "Context for experiment 1 trial 1",
+                        "is_versioned": True,
+                        "version": 1,
+                    },
                 },
             },
         },
@@ -61,6 +66,9 @@ def create_context(
     """
     Creates a new context within a project. Contexts can be used to organize logs
     and artifacts within a project.
+
+    If is_versioned=True, all logs in this context will be versioned and mutable.
+    The context version will increment automatically when logs are added, updated, or removed.
     """
     try:
         project = project_dao.filter(
@@ -82,6 +90,7 @@ def create_context(
             project_id=project_id,
             name=request.name,
             description=request.description,
+            is_versioned=request.is_versioned,
         )
 
         return {"info": "Context created successfully."}
@@ -105,10 +114,14 @@ def create_context(
                         {
                             "name": "context1",
                             "description": "description1",
+                            "is_versioned": True,
+                            "version": 1,
                         },
                         {
                             "name": "context2",
                             "description": "description2",
+                            "is_versioned": False,
+                            "version": 1,
                         },
                     ],
                 },
@@ -137,7 +150,10 @@ def get_contexts(
 ):
     """
     Get a list of contexts within a project.
+    Returns information about each context including its versioning status and current version.
     """
+    # TODO (versioned_contexts): add support for getting **all** versions of all contexts OR
+    # a specific version of **all** contexts.
     try:
         project = project_dao.filter(
             user_id=request_fastapi.state.user_id,
@@ -156,6 +172,78 @@ def get_contexts(
         ]
     except IndexError:
         raise not_found("Project")
+
+
+@router.get(
+    "/project/{project_name}/contexts/{context_name}",
+    responses={
+        200: {
+            "description": "Context retrieved.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "name": "context1",
+                        "description": "description1",
+                        "is_versioned": True,
+                        "version": 1,
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project or Context Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project or context not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def get_context(
+    request_fastapi: Request,
+    project_name: str = Path(
+        description="Name of the project containing the context.",
+        example="my_project",
+    ),
+    context_name: str = Path(
+        description="Name of the context to retrieve.",
+        example="my_context",
+    ),
+    project_dao: ProjectDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+):
+    """
+    Get information about a specific context including its versioning status and current version.
+    """
+    # TODO (versioned_contexts): add support for getting **all** versions of a specific context OR
+    # a specific version of a specific context.
+    try:
+        project = project_dao.filter(
+            user_id=request_fastapi.state.user_id,
+            name=project_name,
+        )
+        if not project:
+            raise IndexError("Project not found")
+        project_id = project[0][0].id
+
+        context = context_dao.filter(
+            project_id=project_id,
+            name=context_name,
+        )
+        if not context:
+            raise IndexError("Context not found")
+
+        return {
+            "name": context[0][0].name,
+            "description": context[0][0].description,
+            "is_versioned": context[0][0].is_versioned,
+            "version": context[0][0].version,
+        }
+    except IndexError as e:
+        raise not_found(str(e))
 
 
 @router.delete(
@@ -198,6 +286,7 @@ def delete_context(
     Deletes a context from a project. This will not delete the logs or artifacts
     within the context, but will remove their association with this context.
     """
+    # TODO (versioned_contexts): deleting a context should delete **all** versions of the context.
     try:
         project = project_dao.filter(
             user_id=request_fastapi.state.user_id,
