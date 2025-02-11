@@ -152,8 +152,6 @@ def get_contexts(
     Get a list of contexts within a project.
     Returns information about each context including its versioning status and current version.
     """
-    # TODO (versioned_contexts): add support for getting **all** versions of all contexts OR
-    # a specific version of **all** contexts.
     try:
         project = project_dao.filter(
             user_id=request_fastapi.state.user_id,
@@ -218,8 +216,6 @@ def get_context(
     """
     Get information about a specific context including its versioning status and current version.
     """
-    # TODO (versioned_contexts): add support for getting **all** versions of a specific context OR
-    # a specific version of a specific context.
     try:
         project = project_dao.filter(
             user_id=request_fastapi.state.user_id,
@@ -286,7 +282,6 @@ def delete_context(
     Deletes a context from a project. This will not delete the logs or artifacts
     within the context, but will remove their association with this context.
     """
-    # TODO (versioned_contexts): deleting a context should delete **all** versions of the context.
     try:
         project = project_dao.filter(
             user_id=request_fastapi.state.user_id,
