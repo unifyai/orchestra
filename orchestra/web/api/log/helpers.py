@@ -30,7 +30,12 @@ from sqlalchemy.sql import Subquery, and_, not_, or_
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
-from orchestra.db.models.orchestra_models import DerivedLog, JSONLog, Log
+from orchestra.db.models.orchestra_models import (
+    DerivedLog,
+    JSONLog,
+    JSONLogHistory,
+    Log,
+)
 
 STR_TO_SQL_TYPES = {
     "bool": Boolean,
@@ -1934,7 +1939,8 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
         row_key,
         row_value,
         row_inferred_type,
-        row_version,
+        row_param_version,
+        row_context_version,
         row_source_type,
         row_created_at,
         row_event_id,
@@ -1946,6 +1952,7 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
                 "clipped_fields": [],
                 "entries": {},
                 "versions": {},
+                "context_versions": {},
                 "derived_entries": {},
             }
 
@@ -1995,13 +2002,28 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
         if is_derived:
             formatted[row_event_id]["derived_entries"][key] = limited_val
         else:
-            if row_version is None:
-                formatted[row_event_id]["entries"][key] = limited_val
-            else:
+            if row_param_version is not None:
+                # param-based version
                 if key not in formatted[row_event_id]["versions"]:
                     formatted[row_event_id]["versions"][key] = {}
-                formatted[row_event_id]["versions"][key][row_version] = limited_val
-                formatted[row_event_id]["entries"][key] = str(row_version)
+                formatted[row_event_id]["versions"][key][
+                    row_param_version
+                ] = limited_val
+                formatted[row_event_id]["entries"][key] = str(row_param_version)
+
+            elif row_context_version is not None:
+                # context-based version
+                if key not in formatted[row_event_id]["context_versions"]:
+                    formatted[row_event_id]["context_versions"][key] = {}
+                formatted[row_event_id]["context_versions"][key][
+                    row_context_version
+                ] = limited_val
+                if key not in formatted[row_event_id]["entries"]:
+                    formatted[row_event_id]["entries"][key] = limited_val
+
+            else:
+                # entries
+                formatted[row_event_id]["entries"][key] = limited_val
 
     # Now build final JSON
     logs_out = []
@@ -2045,7 +2067,11 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
                 key=lambda x: field_order_map.get(x[0], float("inf")),
             ),
         )
-
+        # sort keys which are strings by descending order
+        sorted_context_versions = {
+            field: dict(sorted(versions.items(), key=lambda x: x[0], reverse=True))
+            for field, versions in data["context_versions"].items()
+        }
         logs_out.append(
             {
                 "id": event_id,
@@ -2053,6 +2079,7 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
                 "entries": sorted_entries,
                 "params": sorted_params,
                 "derived_entries": sorted_derived,
+                "versions": sorted_context_versions,
                 "clipped_fields": data.get("clipped_fields", []),
             },
         )
@@ -2064,21 +2091,26 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
     """
     Returns final rows with the JSONLog value (if available) restored.
     """
-    # Outer join JSONLog to see if a JSONLog row exists for this log_event_id and key.
+    # Outer join JSONLog and JSONLogHistory based on source_type
     final_logs_query = (
         session.query(
             filtered_logs_subq.c.id,
             filtered_logs_subq.c.log_event_id,
             filtered_logs_subq.c.key,
-            # Use the JSONLog value if present; otherwise fall back to the stored value.
+            # Use coalesce to select the appropriate JSON value based on source_type
             func.coalesce(
-                func.restore_order_text(
-                    JSONLog.value,
-                ),  # use custom SQL function to restore order of dict
+                case(
+                    (
+                        filtered_logs_subq.c.source_type == "history",
+                        func.restore_order_text(JSONLogHistory.value),
+                    ),
+                    else_=func.restore_order_text(JSONLog.value),
+                ),
                 cast(filtered_logs_subq.c.value, JSON),
             ).label("value"),
             filtered_logs_subq.c.inferred_type,
-            filtered_logs_subq.c.version,
+            filtered_logs_subq.c.param_version,
+            filtered_logs_subq.c.context_version,
             filtered_logs_subq.c.created_at,
             filtered_logs_subq.c.source_type,
         )
@@ -2087,6 +2119,16 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
             and_(
                 JSONLog.log_event_id == filtered_logs_subq.c.log_event_id,
                 JSONLog.key == filtered_logs_subq.c.key,
+                filtered_logs_subq.c.source_type != "history",
+            ),
+        )
+        .outerjoin(
+            JSONLogHistory,
+            and_(
+                JSONLogHistory.log_event_id == filtered_logs_subq.c.log_event_id,
+                JSONLogHistory.key == filtered_logs_subq.c.key,
+                JSONLogHistory.version == filtered_logs_subq.c.context_version,
+                filtered_logs_subq.c.source_type == "history",
             ),
         )
         .join(
