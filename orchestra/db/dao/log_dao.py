@@ -16,6 +16,7 @@ from orchestra.db.models.orchestra_models import (
     JSONLogHistory,
     Log,
     LogEvent,
+    LogEventContext,
     LogHistory,
 )
 
@@ -156,8 +157,10 @@ class LogDAO:
         value: Optional[str] = None,  # JSON serialised
         version: Optional[int] = None,
         inferred_type: Optional[str] = None,
+        context_id: Optional[int] = None,
     ) -> int:
         # If the value is a dict or list, inject ordering indices recursively.
+        new_value = None
         if isinstance(value, (dict, list)):
             new_value = self.inject_order_indices(value)
             json_log = JSONLog(
@@ -166,6 +169,17 @@ class LogDAO:
                 value=new_value,
             )
             self.session.add(json_log)
+
+        # Handle versioned history
+        self._handle_versioned_history(
+            context_id=context_id,
+            log_event_id=log_event_id,
+            key=key,
+            value=value,
+            inferred_type=inferred_type,
+            description=f"Created entry with key {key}",
+            json_value=new_value,
+        )
 
         if version:
             # Lock the rows for version check
@@ -268,6 +282,7 @@ class LogDAO:
         version: Optional[int] = None,
         raw_v: Optional[Any] = None,
         explicit_types: Optional[Dict] = None,
+        context_id: Optional[int] = None,
     ) -> Optional[str]:
         explicit_types = explicit_types if isinstance(explicit_types, dict) else {}
 
@@ -281,6 +296,7 @@ class LogDAO:
                 "type",
                 self.infer_type(raw_k, raw_v),
             ),
+            context_id=context_id,
         )
 
     def filter(
@@ -351,6 +367,7 @@ class LogDAO:
         explicit_types: Optional[Dict] = None,
         overwrite: bool = False,
         field_types: Optional[Dict] = None,
+        context_id: Optional[int] = None,
     ):
         explicit_types = explicit_types if isinstance(explicit_types, dict) else {}
         inferred_type = explicit_types.get(raw_k, {}).get(
@@ -372,38 +389,73 @@ class LogDAO:
         )
         raw = self.session.execute(query)
         entry = raw.scalars().first()
+        # Get the context before any updates
+        context = self.session.query(Context).filter_by(id=context_id).first()
         if entry is not None:
             if not overwrite and hasattr(entry, "value"):
                 raise OverwriteError
             if raw_k in field_types:
-                field_info = field_types.get(raw_k)
-                if field_info and not field_info.get("mutable", False):
-                    raise ImmutableFieldError
+                if not context or not context.is_versioned:
+                    field_info = field_types.get(raw_k)
+                    if field_info and not field_info.get("mutable", False):
+                        raise ImmutableFieldError
+
             setattr(entry, "value", json_v)
             setattr(entry, "version", version)
             setattr(entry, "inferred_type", inferred_type)
 
+            # Handle regular log history first
+            self._handle_versioned_history(
+                context_id=context_id,
+                log_event_id=entry.log_event_id,
+                key=entry.key,
+                value=entry.value,
+                inferred_type=entry.inferred_type,
+                description=f"Updated entry with key {raw_k}",
+            )
+
             # Update the corresponding JSONLog row if needed.
             if isinstance(raw_v, (dict, list)):
                 new_json_value = self.inject_order_indices(raw_v)
-            else:
-                new_json_value = json_v
 
-            json_query = select(JSONLog).where(
-                JSONLog.log_event_id == log_event_id,
-                JSONLog.key == raw_k,
-            )
-            json_raw = self.session.execute(json_query)
-            json_entry = json_raw.scalars().first()
-            if json_entry:
-                json_entry.value = new_json_value
-            else:
-                new_json_log = JSONLog(
-                    log_event_id=log_event_id,
-                    key=raw_k,
-                    value=new_json_value,
+                json_query = select(JSONLog).where(
+                    JSONLog.log_event_id == log_event_id,
+                    JSONLog.key == raw_k,
                 )
-                self.session.add(new_json_log)
+                json_raw = self.session.execute(json_query)
+                json_entry = json_raw.scalars().first()
+
+                # Update or create the JSONLog entry
+                if json_entry:
+                    json_entry.value = new_json_value
+                else:
+                    new_json_log = JSONLog(
+                        log_event_id=log_event_id,
+                        key=raw_k,
+                        value=new_json_value,
+                    )
+                    self.session.add(new_json_log)
+
+                # Handle JSON history separately since it needs special treatment
+                if context and context.is_versioned:
+                    if json_entry:
+                        # Archive the current JSON value before updating
+                        self._create_json_log_history(
+                            log_event_id=log_event_id,
+                            key=raw_k,
+                            value=json_entry.value,  # Archive the old value
+                            version=context.version,
+                            description=f"Updated entry with key {raw_k}",
+                        )
+                    else:
+                        # If creating a new JSON entry in a versioned context, archive it
+                        self._create_json_log_history(
+                            log_event_id=log_event_id,
+                            key=raw_k,
+                            value=new_json_value,  # Archive the new value
+                            version=context.version,
+                            description=f"Created JSON entry with key {raw_k}",
+                        )
 
             log_event_query = (
                 select(LogEvent).where(LogEvent.id == log_event_id).with_for_update()
@@ -417,7 +469,32 @@ class LogDAO:
 
     def delete(self, id: int):
         try:
+            # First get the log and check if it belongs to a versioned context
             log = self.session.query(Log).filter_by(id=id).one()
+
+            # Check if this log is part of a versioned context
+            log_event_context = (
+                self.session.query(LogEventContext)
+                .filter_by(
+                    log_event_id=log.log_event_id,
+                )
+                .first()
+            )
+
+            if log_event_context:
+                # Handle versioned history
+                self._handle_versioned_history(
+                    context_id=log_event_context.context_id,
+                    log_event_id=log.log_event_id,
+                    key=log.key,
+                    value=log.value,
+                    inferred_type=log.inferred_type,
+                    description=f"Deleted entry with key {log.key}",
+                    created_at=log.created_at,
+                    updated_at=log.updated_at,
+                )
+
+            # Proceed with log deletion
             json_log = (
                 self.session.query(JSONLog)
                 .filter_by(log_event_id=log.log_event_id, key=log.key)
