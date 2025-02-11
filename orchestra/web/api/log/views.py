@@ -27,6 +27,7 @@ from sqlalchemy import (
     literal,
     or_,
     select,
+    tuple_,
 )
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 from sqlalchemy.orm import aliased
@@ -1293,8 +1294,8 @@ def _get_logs_query(
     context: Optional[str],
     filter_expr: Optional[str],
     sorting: Optional[str],
-    from_ids: Optional[str],
-    exclude_ids: Optional[str],
+    from_ids: Optional[Any],
+    exclude_ids: Optional[Any],
     from_fields: Optional[str],
     exclude_fields: Optional[str],
     limit: Optional[int],
@@ -1304,6 +1305,7 @@ def _get_logs_query(
     context_dao: ContextDAO,
     session=Depends(get_db_session),
     latest_timestamp=False,
+    return_versions: bool = False,
 ):
     """
     Returns a combined list of base logs (Log) and derived logs (DerivedLog)
@@ -1332,8 +1334,8 @@ def _get_logs_query(
         latest_timestamp: If True, returns only the latest .updated_at timestamp
             (as an ISO string) across all matching logs, otherwise returns
             the matching rows.
-
-    Returns:
+        return_versions: If True, return all versions of logs. Only valid for versioned contexts.
+        version: If provided, return only the logs with the specified version from LogHistory.
         tuple: (list_of_rows, context_len, total_count)
             Where:
                 list_of_rows = [(Log|DerivedLog, created_at, log_event_id), ...]
@@ -1359,19 +1361,6 @@ def _get_logs_query(
         LogEvent.project_id == project_id,
     )
     field_types = field_type_dao.get_field_types(project_id)
-
-    # Handle from_ids vs exclude_ids
-    if from_ids and exclude_ids:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot set both from_ids and exclude_ids.",
-        )
-    if from_ids:
-        include_ids = [int(x) for x in from_ids.split("&")]
-        log_event_query = log_event_query.filter(LogEvent.id.in_(include_ids))
-    elif exclude_ids:
-        exclude_set = [int(x) for x in exclude_ids.split("&")]
-        log_event_query = log_event_query.filter(LogEvent.id.notin_(exclude_set))
 
     # Handle user-defined filter_expr => build SQL expression on LogEvent
     if filter_expr:
@@ -1422,63 +1411,50 @@ def _get_logs_query(
 
     # filter LogEvent by "static context" (LogEventContext + Context)
     if context:
-        # See if the user-specified context name exists for this project
-        context_id = context_dao.filter(name=context, project_id=project_id)
-        if context_id:
-            ctx_id_val = context_id[0][0].id
-            log_event_query = log_event_query.filter(
-                exists(
-                    select(1)
-                    .select_from(LogEventContext)
-                    .where(
-                        and_(
-                            LogEventContext.log_event_id == LogEvent.id,
-                            LogEventContext.context_id == ctx_id_val,
-                        ),
+        # Get context object and check if it's versioned when return_versions=True
+        context_obj = context_dao.filter(name=context, project_id=project_id)
+        if not context_obj:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Context '{context}' not found",
+            )
+
+        context_obj = context_obj[0][0]
+        ctx_id_val = context_obj.id
+
+        # If return_versions is True, verify the context is versioned
+        if return_versions and not context_obj.is_versioned:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot return versions for unversioned context",
+            )
+
+        # TODO (versioned_contexts): add support for retrieving a specific version of the context.
+        # if specified. Right now, context is just given by the name. But we should allow users
+        # to also specify a version number along with the name.
+        # Filter by context_id
+        log_event_query = log_event_query.filter(
+            exists(
+                select(1)
+                .select_from(LogEventContext)
+                .where(
+                    and_(
+                        LogEventContext.log_event_id == LogEvent.id,
+                        LogEventContext.context_id == ctx_id_val,
                     ),
                 ),
-            )
+            ),
+        )
 
     # Turn into a subquery => these are the log_event_ids we care about so far
     relevant_log_events = log_event_query.subquery(name="relevant_log_events")
 
     # 3) Union base logs and derived logs into a single subquery
     #    so they can be treated identically downstream.
-    base_logs_q = (
-        session.query(
-            Log.id.label("id"),
-            Log.log_event_id.label("log_event_id"),
-            Log.key.label("key"),
-            Log.value.label("value"),
-            Log.inferred_type.label("inferred_type"),
-            Log.version.label("version"),
-            Log.updated_at.label("updated_at"),
-            LogEvent.created_at.label("created_at"),
-            literal("base").label("source_type"),
-        )
-        .join(LogEvent, LogEvent.id == Log.log_event_id)
-        .join(relevant_log_events, relevant_log_events.c.id == LogEvent.id)
-    )
-
-    derived_logs_q = (
-        session.query(
-            DerivedLog.id.label("id"),
-            DerivedLog.log_event_id.label("log_event_id"),
-            DerivedLog.key.label("key"),
-            DerivedLog.value.label("value"),
-            DerivedLog.inferred_type.label("inferred_type"),
-            # derived logs have no version => cast to None
-            cast(None, Integer).label("version"),
-            DerivedLog.updated_at.label("updated_at"),
-            LogEvent.created_at.label("created_at"),
-            literal("derived").label("source_type"),
-        )
-        .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
-        .join(relevant_log_events, relevant_log_events.c.id == LogEvent.id)
-    )
-
-    unified_logs_subq = base_logs_q.union_all(derived_logs_q).subquery(
-        name="unified_logs",
+    unified_logs_subq = _build_unified_logs_subquery(
+        session=session,
+        relevant_log_events=relevant_log_events,
+        return_versions=return_versions,
     )
 
     # 4) Apply "column_context" + 'params'/'entries' logic
@@ -1515,12 +1491,97 @@ def _get_logs_query(
             unified_logs_subq.c.key.startswith(column_context),
         )
 
+    # Handle from_ids vs exclude_ids
+    if from_ids and exclude_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot set both from_ids and exclude_ids.",
+        )
+
+    # Handle ID filtering differently based on return_versions
+    if return_versions:
+        if from_ids:
+            try:
+                # Validate from_ids format for versioned logs
+                from_ids = json.loads(from_ids)
+                if not isinstance(from_ids, list):
+                    raise ValueError(
+                        "from_ids must be a list when return_versions is True",
+                    )
+                for item in from_ids:
+                    if (
+                        not isinstance(item, dict)
+                        or "id" not in item
+                        or "version" not in item
+                    ):
+                        raise ValueError(
+                            "Each item in from_ids must have 'id' and 'version' keys",
+                        )
+                allowed_pairs = [(item["id"], item["version"]) for item in from_ids]
+                # Apply filtering at the Log/LogHistory level since we need version info
+                filtered_logs_q = filtered_logs_q.filter(
+                    tuple_(
+                        unified_logs_subq.c.log_event_id,
+                        unified_logs_subq.c.context_version,
+                    ).in_(allowed_pairs),
+                )
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid from_ids format for versioned logs: {str(e)}",
+                )
+        if exclude_ids:
+            try:
+                # Validate exclude_ids format for versioned logs
+                exclude_ids = json.loads(exclude_ids)
+                if not isinstance(exclude_ids, list):
+                    raise ValueError(
+                        "exclude_ids must be a list when return_versions is True",
+                    )
+                for item in exclude_ids:
+                    if (
+                        not isinstance(item, dict)
+                        or "id" not in item
+                        or "version" not in item
+                    ):
+                        raise ValueError(
+                            "Each item in exclude_ids must have 'id' and 'version' keys",
+                        )
+                excluded_pairs = [(item["id"], item["version"]) for item in exclude_ids]
+                # Apply filtering at the Log/LogHistory level since we need version info
+                filtered_logs_q = filtered_logs_q.filter(
+                    ~tuple_(
+                        unified_logs_subq.c.log_event_id,
+                        unified_logs_subq.c.context_version,
+                    ).in_(excluded_pairs),
+                )
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid exclude_ids format for versioned logs: {str(e)}",
+                )
+    else:
+        # For non-versioned queries, use simple log_event_id filtering
+        if from_ids:
+            include_ids = [int(x) for x in from_ids.split("&")]
+            filtered_logs_q = filtered_logs_q.filter(
+                unified_logs_subq.c.log_event_id.in_(include_ids),
+            )
+        elif exclude_ids:
+            exclude_set = [int(x) for x in exclude_ids.split("&")]
+            filtered_logs_q = filtered_logs_q.filter(
+                unified_logs_subq.c.log_event_id.notin_(exclude_set),
+            )
+
     # If exclude_params / exclude_entries => filter on version
+    # TODO(yusha): handle filtering out corresponding rows from LogHistory as well
     if exclude_params:
-        filtered_logs_q = filtered_logs_q.filter(unified_logs_subq.c.version.is_(None))
+        filtered_logs_q = filtered_logs_q.filter(
+            unified_logs_subq.c.param_version.is_(None),
+        )
     elif exclude_entries:
         filtered_logs_q = filtered_logs_q.filter(
-            unified_logs_subq.c.version.isnot(None),
+            unified_logs_subq.c.param_version.isnot(None),
         )
 
     # 5) from_fields / exclude_fields
@@ -1645,7 +1706,7 @@ def _get_logs_query(
     # raw_rows is a list of:
     # [
     #   (
-    #       id, log_event_id, key, value, inferred_type, version,
+    #       id, log_event_id, key, value, inferred_type, param_version, context_version,
     #       created_at, source_type
     #   ), ...
     # ]
@@ -1658,7 +1719,8 @@ def _get_logs_query(
         row_key,
         row_value,
         row_inferred_type,
-        row_version,
+        row_param_version,
+        row_context_version,
         row_created_at,
         row_source_type,
     ) in raw_rows:
@@ -1667,7 +1729,8 @@ def _get_logs_query(
                 row_key,
                 row_value,
                 row_inferred_type,
-                row_version,
+                row_param_version,
+                row_context_version,
                 row_source_type,
                 row_created_at,
                 row_event_id,
@@ -1742,6 +1805,10 @@ def get_logs(
         description="Static context to filter logs by.",
         example="training",
     ),
+    return_versions: bool = Query(
+        False,
+        description="Whether to return all versions of logs. Only valid for versioned contexts.",
+    ),
     group_threshold: Optional[int] = Query(
         None,
         description="When set, entries that appear in at least this many logs will be grouped together.",
@@ -1760,12 +1827,12 @@ def get_logs(
         description="Dict with fields as keys and either 'ascending' or 'descending' as values. The first entry in the dict is the last field to be sorted by, which takes ultimate precedent, with other keys only remaining in order when the first key values are equal.",
         example={"score": "ascending", "timestamp": "descending"},
     ),
-    from_ids: Optional[str] = Query(
+    from_ids: Optional[Any] = Query(
         None,
         description="The log ids which are permitted to be included in the search. Each log id listed does not need to be returned, but no logs which are not included in this list can be returned. This argument *cannot* be set if `exclude_ids` is set.",
         example="0&1&2",
     ),
-    exclude_ids: Optional[str] = Query(
+    exclude_ids: Optional[Any] = Query(
         None,
         description="The log ids which cannot be returned from the search. None of the listed ids will be returned, even if the logs are valid as per the filtering expression etc. This argument *cannot* be set if `from_ids` is set.",
         example="0&1&2",
@@ -1837,6 +1904,7 @@ def get_logs(
 
       3. **Return IDs only mode**:
          - If return_ids_only is True, returns only the log event ids.
+         - If return_versions is also True, returns a list of objects with both id and version information.
 
     The response always includes:
       - `params`: The parameter versions used across the logs.
@@ -1844,6 +1912,15 @@ def get_logs(
       - Additionally, it includes either `logs` (in monolithic or nested grouping mode) or `groups` (in flat grouping mode)
         as specified by the arguments.
 
+    If return_versions=True:
+    - Returns all versions of logs in versioned contexts
+    - from_ids and exclude_ids must be provided as lists of objects with 'id' and 'version' keys
+    - Each object must have format: {"id": log_event_id, "version": version_number}
+    - This is only valid for logs in versioned contexts
+
+    If return_versions=False (default):
+    - Returns only the latest version of each log
+    - from_ids and exclude_ids should be strings of '&'-separated log event IDs
     """
     # -----------------------------------------------------------
     # Stage 1: Monolithic (non-grouped) Case
@@ -1866,10 +1943,31 @@ def get_logs(
             field_type_dao=field_type_dao,
             context_dao=context_dao,
             session=session,
+            return_versions=return_versions,
         )
         if return_ids_only:
-            event_ids = [r[6] for r in all_rows]
-            return list(dict.fromkeys(event_ids))
+            if return_versions:
+                # Return list of objects with both id and version information
+                id_version_map = {}
+                for row in all_rows:
+                    event_id = row[7]  # log_event_id
+                    version = row[4]  # context_version
+                    if event_id not in id_version_map:
+                        id_version_map[event_id] = set()
+                    if version is not None:
+                        id_version_map[event_id].add(version)
+
+                result = []
+                for event_id, versions in id_version_map.items():
+                    if versions:
+                        for version in versions:
+                            result.append({"id": event_id, "version": version})
+                    else:
+                        result.append({"id": event_id})
+                return result
+            return list(
+                dict.fromkeys(row[7] for row in all_rows),
+            )  # Return unique log_event_ids
 
         # Format logs into flat structure.
         field_order_map = field_type_dao.get_ordered_field_names(
@@ -1909,6 +2007,7 @@ def get_logs(
         context=context,
         filter_expr=filter_expr,
         from_ids=from_ids,
+        return_versions=return_versions,
         exclude_ids=exclude_ids,
         project_dao=project_dao,
         context_dao=context_dao,
@@ -1954,6 +2053,7 @@ def get_logs(
             value_limit=value_limit,
             groups_only=groups_only,
             return_timestamps=return_timestamps,
+            return_versions=return_versions,
         )
 
         final_result = {
@@ -1980,6 +2080,7 @@ def get_logs(
             parent_fields="",
             project_dao=project_dao,
             field_type_dao=field_type_dao,
+            return_versions=return_versions,
             session=session,
         )
         logs_out, _ = _format_flat_logs(rows, context_len, value_limit, field_order_map)
