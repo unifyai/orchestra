@@ -1,12 +1,19 @@
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Context, LogEvent, LogEventContext
+from orchestra.db.models.orchestra_models import (
+    Context,
+    ContextHistory,
+    Log,
+    LogEvent,
+    LogEventContext,
+)
+from orchestra.web.api.context.schema import ContextCreateRequest
 
 
 class ContextDAO:
@@ -18,6 +25,7 @@ class ContextDAO:
         project_id: int,
         name: str,
         description: Optional[str] = None,
+        is_versioned: bool = False,
     ) -> int:
         ts = datetime.now(timezone.utc)
         new_context = Context(
@@ -26,6 +34,8 @@ class ContextDAO:
             description=description,
             created_at=ts,
             updated_at=ts,
+            is_versioned=is_versioned,
+            version=1,
         )
 
         self.session.add(new_context)
@@ -74,6 +84,18 @@ class ContextDAO:
         else:
             raise ValueError(f"Context with id {id} not found")
 
+    def increment_version(self, id: int) -> None:
+        """Increment the version of a context if it is versioned."""
+        context = self.session.query(Context).filter_by(id=id).one_or_none()
+        if context and context.is_versioned:
+            # 1) Archive current state before incrementing
+            self.archive_context_state(context)
+
+            # 2) Now increment
+            context.version += 1
+            context.updated_at = datetime.now(timezone.utc)
+            self.session.commit()
+
     def delete(self, id: int) -> None:
         try:
             context = self.session.query(Context).filter_by(id=id).one()
@@ -88,20 +110,28 @@ class ContextDAO:
         project_id: int,
         name: str,
         description: Optional[str] = None,
+        is_versioned: bool = False,
     ) -> Context:
         """Get or create a context.
 
         Args:
             project_id: ID of the project to create the context in
             name: Name of the context to create
+            description: Optional description for the context
+            version: Optional version for the context
 
         Returns:
             Context: The created or existing context
         """
         context = self.filter(project_id=project_id, name=name)
         if context:
-            return context[0][0]
-        return self.create(project_id=project_id, name=name, description=description)
+            return context[0][0].id
+        return self.create(
+            project_id=project_id,
+            name=name,
+            description=description,
+            is_versioned=is_versioned,
+        )
 
     def add_logs(self, context_id: int, log_ids: List[int]) -> None:
         """Associate LogEvent instances with the specified context.
@@ -132,7 +162,75 @@ class ContextDAO:
                 )
                 self.session.add(association)
 
+            # Increment version if context is versioned
+            self.increment_version(context_id)
+
             self.session.commit()
         except Exception as e:
             self.session.rollback()
             raise e
+
+    def is_versioned(self, context_id: int) -> bool:
+        context = self.session.query(Context).filter_by(id=context_id).one_or_none()
+        return context and context.is_versioned
+
+    def get_context_id(self, project_id: int, body: ContextCreateRequest):
+        if body:
+            return self.get_or_create(
+                project_id=project_id,
+                name=body.name,
+                description=body.description,
+                is_versioned=body.is_versioned,
+            )
+        else:
+            return None
+
+    def build_log_versions_map(self, context: Context) -> Dict[str, Dict[str, int]]:
+        """
+        For each log_event in the context, gather each log key and store
+        the current context.version as that log's version. We store a map:
+
+            {
+                "<log_event_id>": {
+                    "<field_key>": <context.version>,
+                    ...
+                },
+                ...
+            }
+        """
+        result = {}
+        for le in context.log_events:
+            log_rows = self.session.query(Log).filter_by(log_event_id=le.id).all()
+            # we store context.version as the version integer for each key in that log
+            row_map = {}
+            for row in log_rows:
+                row_map[row.key] = context.version
+            if row_map:
+                result[str(le.id)] = row_map
+
+        return result
+
+    def archive_context_state(
+        self,
+        context: Context,
+        name: str,
+        description: str,
+    ) -> None:
+        """Archive the current state of a context in ContextHistory."""
+        if not context.is_versioned:
+            return
+
+        # build the log_versions map for all logs in this context
+        current_log_versions = self.build_log_versions_map(context)
+
+        history = ContextHistory(
+            context_id=context.id,
+            version=context.version,
+            name=name,
+            description=description,
+            log_versions=current_log_versions,
+            archived_at=datetime.now(timezone.utc),
+        )
+        self.session.add(history)
+        self.session.flush()  # so we get an ID
+        self.session.commit()
