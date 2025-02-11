@@ -113,6 +113,10 @@ def create_logs(
     Creates one or more logs associated to a project. Logs are
     LLM-call-level data that might depend on other variables.
 
+    If a context is specified and it is versioned, all logs will be versioned
+    and mutable. The context version will be incremented automatically when
+    logs are added, updated, or removed.
+
     An "explicit_types" dictionary can be passed as part of the `entries`.
     If present, any matching key inside this dictionary will override the
     inferred type of that particular entry. The explicit_types dictionary
@@ -170,7 +174,13 @@ def create_logs(
     # Get field types once for all operations
     field_types = field_type_dao.get_field_types(project_id)
 
-    def enforce_types(field_name, value, batch_index=None, explicit_types=None):
+    def enforce_types(
+        field_name,
+        value,
+        batch_index=None,
+        explicit_types=None,
+        context_id=None,
+    ):
         entered_type = LogDAO.infer_type(field_name, value)
         expected_type = field_types.get(field_name)
         if expected_type:
@@ -196,22 +206,15 @@ def create_logs(
                 if explicit_types
                 else False
             )
+            # If in a versioned context, force mutable=True
+            if context_id and context_dao.is_versioned(context_id):
+                mutable = True
             field_type_dao.create_field_type_if_absent(
                 project_id,
                 field_name,
                 value,
                 mutable=mutable,
             )
-
-    def get_context_id():
-        if request.context:
-            return context_dao.get_or_create(
-                project_id=project_id,
-                name=request.context.name,
-                description=request.context.description,
-            )
-        else:
-            return None
 
     # Process each log in the batch
     log_event_ids = []
@@ -222,7 +225,7 @@ def create_logs(
 
     for i in range(total_logs):
         # Get or create context_id
-        context_id = get_context_id()
+        context_id = context_dao.get_context_id(project_id, request.context)
 
         # Create log_event for each log
         log_event_id = log_event_dao.create(
@@ -249,7 +252,7 @@ def create_logs(
         )
         # Process params
         for k, v in current_params.items():
-            enforce_types(k, v, i, params_explicit_types)
+            enforce_types(k, v, i, params_explicit_types, context_id)
             # see if there is any param with the same value
             existing_param = log_dao.filter(
                 key=k,
@@ -271,6 +274,7 @@ def create_logs(
                     raw_v=v,
                     version=version,
                     explicit_types=params_explicit_types,
+                    context_id=context_id,
                 )
             except ValueError:
                 raise HTTPException(
@@ -280,15 +284,32 @@ def create_logs(
 
         # Process entries
         for k, v in current_entries.items():
-            enforce_types(k, v, i, entries_explicit_types)
+            enforce_types(k, v, i, entries_explicit_types, context_id)
             log_dao.create_from_raw_k_v(
                 project_id=project_id,
                 log_event_id=log_event_id,
                 raw_k=k,
                 raw_v=v,
                 explicit_types=entries_explicit_types,
+                context_id=context_id,
             )
 
+        # If context is versioned => do a *single* increment after inserting all fields
+        context_obj = None
+        if context_id:
+            context_obj = (
+                context_dao.session.query(Context).filter_by(id=context_id).first()
+            )
+        if context_obj and context_obj.is_versioned:
+            # archive the new state
+            context_dao.archive_context_state(
+                context_obj,
+                name="create",
+                description=f"Created new LogEvent {log_event_id}",
+            )
+            context_obj.version += 1
+            context_obj.updated_at = datetime.now(timezone.utc)
+            context_dao.session.commit()
     return log_event_ids
 
 
