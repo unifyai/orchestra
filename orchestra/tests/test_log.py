@@ -139,23 +139,26 @@ log_data = {
 }
 
 
-def _create_log(client, project_name, user=1, params=None, entries=None):
+def _create_log(client, project_name, user=1, params=None, entries=None, context=None):
     _headers = HEADERS if user == 1 else HEADERS_2
     if entries is None:
         entries = log_data["log"]
     if params is None:
         params = {"a/b/param1": "test"}
     # set all entries and params to be mutable (backwards compatibility)
-    explicit_types_entries = {k: {"mutable": True} for k in entries.keys()}
-    explicit_types_params = {k: {"mutable": True} for k in params.keys()}
-    entries["explicit_types"] = explicit_types_entries
-    params["explicit_types"] = explicit_types_params
+    if "explicit_types" not in entries:
+        explicit_types_entries = {k: {"mutable": True} for k in entries.keys()}
+        entries["explicit_types"] = explicit_types_entries
+    if "explicit_types" not in params:
+        explicit_types_params = {k: {"mutable": True} for k in params.keys()}
+        params["explicit_types"] = explicit_types_params
     return client.post(
         "/v0/logs",
         json={
             "project": project_name,
             "params": params,
             "entries": entries,
+            "context": context,
         },
         headers=_headers,
     )
@@ -231,11 +234,16 @@ def _delete_derived_logs(client, project_name, derived_log_ids, user=1):
     return client.send(request)
 
 
-def _update_logs(client, log_ids, entries, user=1):
+def _update_logs(client, log_ids, entries, user=1, context=None, overwrite=False):
     _headers = HEADERS if user == 1 else HEADERS_2
     return client.put(
         "/v0/logs",
-        json={"ids": log_ids, "entries": entries},
+        json={
+            "ids": log_ids,
+            "entries": entries,
+            "overwrite": overwrite,
+            "context": context,
+        },
         headers=_headers,
     )
 
@@ -279,7 +287,7 @@ async def _create_logs_for_group_threshold(client, project_name, user=1):
         assert response.status_code == 200, response.json()
 
 
-async def _create_several_logs(client, project_name, user=1):
+async def _create_several_logs(client, project_name, context_name=None, user=1):
     data = log_data["logs_for_various"]
     for i in range(len(data)):
         response = await _create_log(
@@ -287,6 +295,9 @@ async def _create_several_logs(client, project_name, user=1):
             project_name,
             params={"a/b/param1": f"test_{i}"},
             entries=data[i],
+            context={"name": context_name, "description": "test context"}
+            if context_name
+            else None,
         )
         assert response.status_code == 200, response.json()
 
@@ -794,12 +805,12 @@ async def test_get_logs_including_derived(client: AsyncClient):
         found_derived_for_first_event
     ), "Expected to find at least one event with dl1 in derived_entries"
 
-    # 5) Test context
+    # 5) Test column context
     resp = await client.get(
         "/v0/logs",
         params={
             "project": project_name,
-            "context": "_/",
+            "column_context": "_/",
         },
         headers=HEADERS,
     )
@@ -2290,6 +2301,7 @@ async def test_get_logs_w_column_context(client: AsyncClient):
                     "a/b/c/numeric_input": 4.5,
                 },
                 "derived_entries": {},
+                "versions": {},
                 "clipped_fields": [],
                 "params": {
                     "a/b/param1": "0",
@@ -2324,6 +2336,7 @@ async def test_get_logs_w_column_context(client: AsyncClient):
                     "b/c/numeric_input": 4.5,
                 },
                 "derived_entries": {},
+                "versions": {},
                 "clipped_fields": [],
                 "params": {
                     "b/param1": "0",
@@ -2358,6 +2371,7 @@ async def test_get_logs_w_column_context(client: AsyncClient):
                     "c/numeric_input": 4.5,
                 },
                 "derived_entries": {},
+                "versions": {},
                 "clipped_fields": [],
                 "params": {
                     "param1": "0",
@@ -2388,6 +2402,7 @@ async def test_get_logs_w_column_context(client: AsyncClient):
                     "numeric_input": 4.5,
                 },
                 "derived_entries": {},
+                "versions": {},
                 "clipped_fields": [],
                 "params": {},
             },
@@ -4240,6 +4255,7 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
             "entries": {"a/b/c/numeric_input": 4.5},
             "params": {},
             "derived_entries": {},
+            "versions": {},
             "clipped_fields": [],
         },
     ]
