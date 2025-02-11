@@ -40,10 +40,12 @@ from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
+    Context,
     DerivedLog,
     Log,
     LogEvent,
     LogEventContext,
+    LogHistory,
 )
 from orchestra.web.api.log.schema import (
     CreateDerivedEntriesConfig,
@@ -911,6 +913,7 @@ def update_logs(
     log_event_dao: LogEventDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
     derived_log_dao: DerivedLogDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -988,6 +991,7 @@ def update_logs(
                         )
 
             # Process each field in the provided data.
+            changed_something = False
             for k, v in this_data.items():
                 if k in field_types:
                     expected_type = field_types[k]["field_type"]
@@ -1056,6 +1060,7 @@ def update_logs(
                     )
 
                 # Attempt to update the log value; if it doesn't exist, create a new entry.
+                ctx_id = context_dao.get_context_id(project_id, body.context)
                 try:
                     log_dao.update_value(
                         log_event_id=log_id,
@@ -1065,8 +1070,10 @@ def update_logs(
                         explicit_types=explicit_types,
                         overwrite=body.overwrite,
                         field_types=field_types,
+                        context_id=ctx_id,
                     )
                     updated_ids.add((k, log_id))
+                    changed_something = True
                 except IndexError:
                     try:
                         log_dao.create_from_raw_k_v(
@@ -1076,8 +1083,10 @@ def update_logs(
                             raw_v=v,
                             version=version,
                             explicit_types=explicit_types,
+                            context_id=ctx_id,
                         )
                         updated_ids.add((k, log_id))
+                        changed_something = True
                     except Exception as e:
                         raise HTTPException(
                             status_code=500,
@@ -1107,6 +1116,20 @@ def update_logs(
                         ),
                     )
 
+            if changed_something and ctx_id is not None:
+                ctx_obj = (
+                    context_dao.session.query(Context).filter_by(id=ctx_id).first()
+                )
+                if ctx_obj and ctx_obj.is_versioned:
+                    # final archive & increment
+                    context_dao.archive_context_state(
+                        ctx_obj,
+                        name="update",
+                        description=f"Updated log_id={log_id}",
+                    )
+                    ctx_obj.version += 1
+                    ctx_obj.updated_at = datetime.now(timezone.utc)
+                    context_dao.session.commit()
         if not_found_logs:
             raise HTTPException(
                 status_code=404,
