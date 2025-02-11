@@ -8,8 +8,16 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.bucket_service import BucketService
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import JSONLog, Log, LogEvent
+from orchestra.db.models.orchestra_models import (
+    Context,
+    JSONLog,
+    JSONLogHistory,
+    Log,
+    LogEvent,
+    LogHistory,
+)
 
 
 class OverwriteError(Exception):
@@ -22,9 +30,14 @@ class ImmutableFieldError(Exception):
 
 # noinspection PyBroadException
 class LogDAO:
-    def __init__(self, session: Session = Depends(get_db_session)):
+    def __init__(
+        self,
+        session: Session = Depends(get_db_session),
+        context_dao: ContextDAO = Depends(ContextDAO),
+    ):
         self.session = session
         self.bucket_service = BucketService()
+        self.context_dao = context_dao
 
     @staticmethod
     def inject_order_indices(obj: Any) -> Any:
@@ -45,6 +58,95 @@ class LogDAO:
             return [LogDAO.inject_order_indices(item) for item in obj]
         else:
             return obj
+
+    def _create_log_history(
+        self,
+        log_event_id: int,
+        key: str,
+        value: Any,
+        version: int,
+        inferred_type: Optional[str],
+        description: str,
+        created_at: Optional[datetime] = None,
+        updated_at: Optional[datetime] = None,
+    ) -> LogHistory:
+        """Helper method to create a LogHistory entry."""
+        log_history = LogHistory(
+            log_event_id=log_event_id,
+            key=key,
+            value=value,
+            version=version,
+            inferred_type=inferred_type,
+            description=description,
+            archived_at=datetime.now(timezone.utc),
+        )
+        if created_at:
+            log_history.created_at = created_at
+        if updated_at:
+            log_history.updated_at = updated_at
+        self.session.add(log_history)
+        return log_history
+
+    def _create_json_log_history(
+        self,
+        log_event_id: int,
+        key: str,
+        value: Any,
+        version: int,
+        description: str,
+    ) -> JSONLogHistory:
+        """Helper method to create a JSONLogHistory entry."""
+        json_log_history = JSONLogHistory(
+            log_event_id=log_event_id,
+            key=key,
+            value=value,
+            version=version,
+            description=description,
+            archived_at=datetime.now(timezone.utc),
+        )
+        self.session.add(json_log_history)
+        return json_log_history
+
+    def _handle_versioned_history(
+        self,
+        context_id: Optional[int],
+        log_event_id: int,
+        key: str,
+        value: Any,
+        inferred_type: Optional[str] = None,
+        description: str = "",
+        json_value: Any = None,
+    ) -> Optional[Context]:
+        """Helper method to handle versioned history creation for both Log and JSONLog entries."""
+        if context_id is None:
+            return None
+
+        context = self.session.query(Context).filter_by(id=context_id).first()
+        if not context or not context.is_versioned:
+            return None
+
+        # Create regular log history
+        self._create_log_history(
+            log_event_id=log_event_id,
+            key=key,
+            value=value,
+            version=context.version,
+            inferred_type=inferred_type,
+            description=description,
+        )
+
+        # Create JSON log history if json_value is provided
+        if json_value is not None:
+            self._create_json_log_history(
+                log_event_id=log_event_id,
+                key=key,
+                value=json_value,
+                version=context.version,
+                description=description,
+            )
+
+        context.updated_at = datetime.now(timezone.utc)
+        return context
 
     def create(
         self,
