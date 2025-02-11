@@ -411,7 +411,7 @@ def create_derived_entry(
                 session=session,
             )
             # Extract log_event_ids from raw rows
-            le_ids = list({r[6] for r in raw_rows})  # r[6] is log_event_id
+            le_ids = list({r[7] for r in raw_rows})  # r[7] is log_event_id
             resolved_ids[varname] = le_ids
         else:
             raise HTTPException(
@@ -580,9 +580,9 @@ def update_derived_log(
         )
 
         derived_event_ids = [
-            row[6]
+            row[7]
             for row in raw_rows
-            if row[4] == "derived"  # row_source_type=="derived"
+            if row[5] == "derived"  # row_source_type=="derived"
         ]
         if not derived_event_ids:
             return {"info": "No derived logs matched. Nothing to update."}
@@ -689,7 +689,7 @@ def update_derived_log(
                     context_dao=context_dao,
                     session=session,
                 )
-                found_ids = list({r[6] for r in rows})  # r[6] is the log_event_id
+                found_ids = list({r[7] for r in rows})  # r[7] is the log_event_id
                 resolved_ids[alias_name] = found_ids
             else:
                 raise HTTPException(
@@ -833,7 +833,7 @@ def delete_derived_logs(
         # Extract derived log IDs from raw rows
         derived_log_event_ids = set()
         for row in raw_rows:
-            if row[4] == "derived":  # source_type is "derived"
+            if row[5] == "derived":  # source_type is "derived"
                 derived_log_event_ids.add(row[-1])  # id
 
         # Now find the actual derived_log IDs
@@ -2785,7 +2785,7 @@ def get_fields(
             row[0],  # key
             (
                 "derived_entry"
-                if row[4] == "derived"  # source_type
+                if row[5] == "derived"  # source_type
                 else "entry"
                 if row[3] is None
                 else "param"  # version
@@ -3175,6 +3175,7 @@ def _get_all_filtered_log_event_ids(
     project_dao: ProjectDAO,
     context_dao: ContextDAO,
     session=Depends(get_db_session),
+    return_versions: bool = False,
 ) -> Tuple[List[int], int]:
     """
     Return all log_event_ids (no pagination, no field-level filtering) that match
@@ -3203,12 +3204,77 @@ def _get_all_filtered_log_event_ids(
             status_code=400,
             detail="Cannot set both from_ids and exclude_ids.",
         )
-    if from_ids:
-        include_ids = [int(x) for x in from_ids.split("&")]
-        log_event_query = log_event_query.filter(LogEvent.id.in_(include_ids))
-    elif exclude_ids:
-        exclude_set = [int(x) for x in exclude_ids.split("&")]
-        log_event_query = log_event_query.filter(LogEvent.id.notin_(exclude_set))
+
+    # Handle ID filtering differently based on return_versions
+    if return_versions:
+        if from_ids:
+            try:
+                # Validate from_ids format for versioned logs
+                from_ids = json.loads(from_ids)
+                if not isinstance(from_ids, list):
+                    raise ValueError(
+                        "from_ids must be a list when return_versions is True",
+                    )
+                for item in from_ids:
+                    if (
+                        not isinstance(item, dict)
+                        or "id" not in item
+                        or "version" not in item
+                    ):
+                        raise ValueError(
+                            "Each item in from_ids must have 'id' and 'version' keys",
+                        )
+                allowed_pairs = [(item["id"], item["version"]) for item in from_ids]
+                # Apply filtering at the Log/LogHistory level since we need version info
+                filtered_logs_q = filtered_logs_q.filter(
+                    tuple_(
+                        LogHistory.log_event_id,
+                        LogHistory.context_version,
+                    ).in_(allowed_pairs),
+                )
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid from_ids format for versioned logs: {str(e)}",
+                )
+        if exclude_ids:
+            try:
+                # Validate exclude_ids format for versioned logs
+                exclude_ids = json.loads(exclude_ids)
+                if not isinstance(exclude_ids, list):
+                    raise ValueError(
+                        "exclude_ids must be a list when return_versions is True",
+                    )
+                for item in exclude_ids:
+                    if (
+                        not isinstance(item, dict)
+                        or "id" not in item
+                        or "version" not in item
+                    ):
+                        raise ValueError(
+                            "Each item in exclude_ids must have 'id' and 'version' keys",
+                        )
+                excluded_pairs = [(item["id"], item["version"]) for item in exclude_ids]
+                # Apply filtering at the Log/LogHistory level since we need version info
+                filtered_logs_q = filtered_logs_q.filter(
+                    ~tuple_(
+                        LogHistory.log_event_id,
+                        LogHistory.context_version,
+                    ).in_(excluded_pairs),
+                )
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid exclude_ids format for versioned logs: {str(e)}",
+                )
+    else:
+        # For non-versioned queries, use simple log_event_id filtering
+        if from_ids:
+            include_ids = [int(x) for x in from_ids.split("&")]
+            log_event_query = log_event_query.filter(LogEvent.id.in_(include_ids))
+        elif exclude_ids:
+            exclude_set = [int(x) for x in exclude_ids.split("&")]
+            log_event_query = log_event_query.filter(LogEvent.id.notin_(exclude_set))
 
     # Handle user-defined filter_expr => build SQL expression on LogEvent
     if filter_expr:
@@ -3278,6 +3344,7 @@ def _fetch_logs_for_event_ids(
     field_type_dao: FieldTypeDAO,
     session=Depends(get_db_session),
     latest_timestamp: bool = False,
+    return_versions: bool = False,
 ) -> Union[Tuple[List[Tuple[Union[Log, DerivedLog], datetime, int]], int], str]:
     """
     Given a known list of event_ids, retrieve the union of Log + DerivedLog rows
@@ -3299,39 +3366,11 @@ def _fetch_logs_for_event_ids(
         raise HTTPException(status_code=404, detail="Project not found.")
 
     # 1) Build union subquery from base logs + derived logs, for these event IDs
-    base_logs_q = (
-        session.query(
-            Log.id.label("id"),
-            Log.log_event_id.label("log_event_id"),
-            Log.key.label("key"),
-            Log.value.label("value"),
-            Log.inferred_type.label("inferred_type"),
-            Log.version.label("version"),
-            Log.updated_at.label("updated_at"),
-            LogEvent.created_at.label("created_at"),
-            literal("base").label("source_type"),
-        )
-        .join(LogEvent, LogEvent.id == Log.log_event_id)
-        .filter(LogEvent.id.in_(event_ids))
+    unified_logs_subq = _build_unified_logs_subquery(
+        session=session,
+        event_ids=event_ids,
+        return_versions=return_versions,
     )
-
-    derived_logs_q = (
-        session.query(
-            DerivedLog.id.label("id"),
-            DerivedLog.log_event_id.label("log_event_id"),
-            DerivedLog.key.label("key"),
-            DerivedLog.value.label("value"),
-            DerivedLog.inferred_type.label("inferred_type"),
-            cast(None, Integer).label("version"),
-            DerivedLog.updated_at.label("updated_at"),
-            LogEvent.created_at.label("created_at"),
-            literal("derived").label("source_type"),
-        )
-        .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
-        .filter(LogEvent.id.in_(event_ids))
-    )
-
-    unified_logs_subq = base_logs_q.union_all(derived_logs_q).subquery("unified_logs")
 
     # 2) column_context logic + exclude_params/entries
     exclude_params = False
@@ -3356,11 +3395,14 @@ def _fetch_logs_for_event_ids(
     else:
         filtered_logs_q = session.query(unified_logs_subq)
 
+    # TODO(yusha): handle filtering out corresponding rows from LogHistory as well
     if exclude_params:
-        filtered_logs_q = filtered_logs_q.filter(unified_logs_subq.c.version.is_(None))
+        filtered_logs_q = filtered_logs_q.filter(
+            unified_logs_subq.c.param_version.is_(None),
+        )
     elif exclude_entries:
         filtered_logs_q = filtered_logs_q.filter(
-            unified_logs_subq.c.version.isnot(None),
+            unified_logs_subq.c.param_version.isnot(None),
         )
 
     # 3) from_fields / exclude_fields
@@ -3469,7 +3511,8 @@ def _fetch_logs_for_event_ids(
         row_key,
         row_value,
         row_inferred_type,
-        row_version,
+        row_param_version,
+        row_context_version,
         row_created_at,
         row_source_type,
     ) in raw_rows:
@@ -3478,7 +3521,8 @@ def _fetch_logs_for_event_ids(
                 row_key,
                 row_value,
                 row_inferred_type,
-                row_version,
+                row_param_version,
+                row_context_version,
                 row_source_type,
                 row_created_at,
                 row_event_id,
@@ -3511,6 +3555,7 @@ def _build_grouped_data(
     value_limit: Optional[int] = None,
     groups_only: bool = False,
     return_timestamps: bool = False,
+    return_versions: bool = False,
     parent_group_key: Optional[str] = "",
 ) -> Dict[str, Any]:
     """
@@ -3590,6 +3635,7 @@ def _build_grouped_data(
             limit=limit,
             offset=offset,
             parent_fields=parent_group_key,
+            return_versions=return_versions,
             project_dao=project_dao,
             field_type_dao=field_type_dao,
             session=session,
@@ -3728,6 +3774,7 @@ def _build_grouped_data(
             value_limit=value_limit,
             groups_only=groups_only,
             return_timestamps=return_timestamps,
+            return_versions=return_versions,
             parent_group_key=(
                 "&".join([parent_group_key, raw_key]) if parent_group_key else raw_key
             ),
@@ -3759,6 +3806,7 @@ def _build_grouped_data(
             value_limit=value_limit,
             groups_only=groups_only,
             return_timestamps=return_timestamps,
+            return_versions=return_versions,
         )
         out_dict["null"] = null_sub
 
