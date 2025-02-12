@@ -3326,7 +3326,25 @@ async def test_get_logs_w_str_filtering(client: AsyncClient):
 
     response = await client.get(
         f"/v0/logs?project={project_name}",
+        params={"filter_expr": "to_str('2') in to_str(_/_data)"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 2
+
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
         params={"filter_expr": """'{"a": 2' in to_str(_/_data)"""},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 1
+
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": """to_str('{"a": 2') in to_str(_/_data)"""},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
