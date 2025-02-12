@@ -112,7 +112,8 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_log_history_log_event_id"), table_name="log_history")
     op.drop_table("log_history")
     op.drop_index(
-        op.f("ix_json_log_history_log_event_id"), table_name="json_log_history"
+        op.f("ix_json_log_history_log_event_id"),
+        table_name="json_log_history",
     )
     op.drop_table("json_log_history")
     op.drop_index(op.f("ix_context_history_context_id"), table_name="context_history")
