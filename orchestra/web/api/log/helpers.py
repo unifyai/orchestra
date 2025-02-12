@@ -2171,9 +2171,9 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
                 case(
                     (
                         filtered_logs_subq.c.source_type == "history",
-                        func.restore_order_text(JSONLogHistory.value),
+                        JSONLogHistory.value,
                     ),
-                    else_=func.restore_order_text(JSONLog.value),
+                    else_=JSONLog.value,
                 ),
                 cast(filtered_logs_subq.c.value, JSON),
             ).label("value"),

@@ -40,26 +40,6 @@ class LogDAO:
         self.bucket_service = BucketService()
         self.context_dao = context_dao
 
-    @staticmethod
-    def inject_order_indices(obj: Any) -> Any:
-        """
-        Recursively inject order indices into dictionaries.
-        Each dictionary value becomes a two-element list: [order_index, value].
-        Lists are processed recursively.
-        Scalars are returned unchanged.
-        """
-        if isinstance(obj, dict):
-            new_obj = {}
-            # enumerate keys in the order they appear (order is preserved in Python 3.7+)
-            for i, (k, v) in enumerate(obj.items(), start=1):
-                new_obj[k] = [i, LogDAO.inject_order_indices(v)]
-            return new_obj
-        elif isinstance(obj, list):
-            # Process each element in the list recursively.
-            return [LogDAO.inject_order_indices(item) for item in obj]
-        else:
-            return obj
-
     def _create_log_history(
         self,
         log_event_id: int,
@@ -159,14 +139,12 @@ class LogDAO:
         inferred_type: Optional[str] = None,
         context_id: Optional[int] = None,
     ) -> int:
-        # If the value is a dict or list, inject ordering indices recursively.
-        new_value = None
         if isinstance(value, (dict, list)):
-            new_value = self.inject_order_indices(value)
+            # for dicts and lists, we use JSONLog to preserve ordering
             json_log = JSONLog(
                 log_event_id=log_event_id,
                 key=key,
-                value=new_value,
+                value=value,
             )
             self.session.add(json_log)
 
@@ -178,7 +156,7 @@ class LogDAO:
             value=value,
             inferred_type=inferred_type,
             description=f"Created entry with key {key}",
-            json_value=new_value,
+            json_value=value,
         )
 
         if version:
@@ -416,8 +394,7 @@ class LogDAO:
 
             # Update the corresponding JSONLog row if needed.
             if isinstance(raw_v, (dict, list)):
-                new_json_value = self.inject_order_indices(raw_v)
-
+                # for dicts and lists, we use JSONLog to preserve ordering
                 json_query = select(JSONLog).where(
                     JSONLog.log_event_id == log_event_id,
                     JSONLog.key == raw_k,
@@ -427,12 +404,12 @@ class LogDAO:
 
                 # Update or create the JSONLog entry
                 if json_entry:
-                    json_entry.value = new_json_value
+                    json_entry.value = raw_v
                 else:
                     new_json_log = JSONLog(
                         log_event_id=log_event_id,
                         key=raw_k,
-                        value=new_json_value,
+                        value=raw_v,
                     )
                     self.session.add(new_json_log)
 
@@ -445,14 +422,14 @@ class LogDAO:
                             key=raw_k,
                             value=json_entry.value,  # Archive the old value
                             version=context.version,
-                            description=f"Updated entry with key {raw_k}",
+                            description=f"Updated JSON entry with key {raw_k}",
                         )
                     else:
                         # If creating a new JSON entry in a versioned context, archive it
                         self._create_json_log_history(
                             log_event_id=log_event_id,
                             key=raw_k,
-                            value=new_json_value,  # Archive the new value
+                            value=raw_v,  # Archive the new value
                             version=context.version,
                             description=f"Created JSON entry with key {raw_k}",
                         )
