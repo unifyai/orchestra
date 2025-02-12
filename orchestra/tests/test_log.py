@@ -5747,7 +5747,77 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
             assert "id" in single_log and "ts" in single_log
             assert "entries" in single_log and "params" in single_log
 
-    # TODO(yusha): test group_by + sorting at the group level once group sorting is implemented
+    # Test sorting by a single group field
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/_/state"],
+            "sorting": json.dumps({"_/state": "ascending"}),
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    # Get the state groups in order they appear
+    logs_section = result["logs"]
+    assert "entries/_/state" in logs_section
+    group_obj = logs_section["entries/_/state"]
+
+    # Get all group names excluding metadata keys
+    group_names = [k for k in group_obj.keys() if k not in ("group_count", "count")]
+
+    # Verify ascending order of state groups
+    # Note: null should be at the end in ascending order
+    non_null_groups = [g for g in group_names if g != "null"]
+    assert (
+        sorted(non_null_groups) == non_null_groups
+    ), "Groups should be in ascending order"
+    assert "null" in group_names, "Null group should be present"
+    assert group_names[-1] == "null", "Null group should be last in ascending order"
+
+    # Test sorting by multiple group fields
+    # This would be relevant when we have multiple group-by fields
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/_/state", "entries/_/safe"],
+            "sorting": json.dumps(
+                {
+                    "_/state": "ascending",
+                    "_/safe": "descending",
+                },
+            ),
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    logs_section = result["logs"]
+    assert "entries/_/state" in logs_section
+    group_obj = logs_section["entries/_/state"]
+
+    # Verify the outer groups (states) are in ascending order
+    state_groups = [k for k in group_obj.keys() if k not in ("group_count", "count")]
+    non_null_states = [g for g in state_groups if g != "null"]
+    assert (
+        sorted(non_null_states) == non_null_states
+    ), "State groups should be in ascending order"
+
+    # For each state group, verify the inner groups (safe values) are in descending order
+    for state in non_null_states:
+        if isinstance(group_obj[state], dict) and "entries/_/safe" in group_obj[state]:
+            safe_groups = group_obj[state]["entries/_/safe"]
+            safe_values = [
+                k for k in safe_groups.keys() if k not in ("group_count", "count")
+            ]
+            non_null_safes = [s for s in safe_values if s != "null"]
+            assert (
+                sorted(non_null_safes, reverse=True) == non_null_safes
+            ), f"Safe groups in state={state} should be in descending order"
 
     #
     # ==========  SCENARIO F: Group by Derived Log Fields  ==========
