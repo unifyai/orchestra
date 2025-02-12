@@ -3006,23 +3006,6 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     result = response.json()
     assert len(result["logs"]) == 7
 
-    # safe is True
-    response = await client.get(
-        f"/v0/logs?project={project_name}",
-        params={"filter_expr": "_/safe is True"},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-    result = response.json()
-    assert len(result["logs"]) == 1
-    assert result["logs"][0]["entries"] == {
-        "_/description": "freezing water",
-        "_/temperature": 0.0,
-        "_/state": "liquid->solid",
-        "_/safe": True,
-        "_/timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
-    }
-
     # liquid not in state
     response = await client.get(
         f"/v0/logs?project={project_name}",
@@ -3288,6 +3271,42 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     result = response.json()
     assert len(result["logs"]) == 1
     assert result["logs"][0]["params"]["a/b/param1"] == "1"
+
+    # check is <val>
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "_/safe is True"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"] == {
+        "_/description": "freezing water",
+        "_/temperature": 0.0,
+        "_/state": "gas->liquid",
+        "_/safe": True,
+        "_/timestamp": datetime(1993, 3, 22, tzinfo=timezone.utc).isoformat(),
+    }
+
+    # check is None
+    # update description to None
+    response = await client.put(
+        f"/v0/logs",
+        json={"ids": [3, 4], "entries": {"_/description": None}, "overwrite": True},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "_/description is None"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    assert len(result["logs"]) == 2
+    assert result["logs"][0]["entries"]["_/description"] is None
+    assert result["logs"][1]["entries"]["_/description"] is None
 
 
 @pytest.mark.anyio
