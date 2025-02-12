@@ -2916,6 +2916,7 @@ def _get_distinct_group_values(
     group_key: str,
     session,
     is_param: bool = False,
+    sort_direction: Optional[str] = None,
 ) -> List[Any]:
     """
     Get distinct values for a group key among provided log event IDs.
@@ -2940,24 +2941,6 @@ def _get_distinct_group_values(
             .filter(Log.key == group_key)
             .subquery()
         )
-    elif group_key == "derived_entries":
-        # For derived entries, use only derived logs
-        subquery = (
-            session.query(
-                DerivedLog.value.label("value"),
-                DerivedLog.log_event_id,
-                func.row_number()
-                .over(
-                    partition_by=DerivedLog.value,
-                    order_by=desc(DerivedLog.log_event_id),
-                )
-                .label("rn"),
-            )
-            .filter(Log.log_event_id.in_(log_event_ids))
-            .filter(Log.key == group_key)
-            .subquery()
-        )
-
     else:
         # For non-parameters, union base logs and derived logs
         base_query = (
@@ -2997,12 +2980,16 @@ def _get_distinct_group_values(
             )
         ).subquery()
 
-    # Get distinct values ordered by log_event_id
-    query = (
-        session.query(subquery.c.value)
-        .filter(subquery.c.rn == 1)
-        .order_by(desc(subquery.c.log_event_id))
-    )
+    # Get distinct values with configurable ordering
+    query = session.query(subquery.c.value).filter(subquery.c.rn == 1)
+
+    if sort_direction == "ascending":
+        query = query.order_by(asc(subquery.c.value).nulls_last())
+    elif sort_direction == "descending":
+        query = query.order_by(desc(subquery.c.value).nulls_first())
+    else:
+        # Default ordering by log_event_id descending
+        query = query.order_by(desc(subquery.c.log_event_id))
 
     return [row[0] for row in query.all()]
 
@@ -3644,11 +3631,25 @@ def _build_grouped_data(
     is_param = prefix == "params"
     # 1) Distinguish logs that *have* this group_key vs. logs that are missing it
     #    (We put missing ones in the "null" group).
+    # Extract sort direction for this group key from sorting parameter
+    sort_direction = None
+    if sorting:
+        try:
+            sort_dict = json.loads(sorting)
+            # Check if this group key is in the sorting dict
+            if raw_key in sort_dict:
+                sort_direction = sort_dict[raw_key].lower()
+                if sort_direction not in ("ascending", "descending"):
+                    sort_direction = None
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
     present_values = _get_distinct_group_values(
         session=session,
         log_event_ids=log_event_ids,
         group_key=raw_key,
         is_param=is_param,
+        sort_direction=sort_direction,
     )
 
     # This is a list of distinct values that exist.
