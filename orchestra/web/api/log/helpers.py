@@ -1318,7 +1318,7 @@ def _handle_functions(filter_dict, log_event_alias, session, log_event_ids):
                 .subquery()
             )
         else:
-            return str(rhs_expr)
+            return cast(rhs_expr, String)
 
     elif operand == "round":
         # 1) Normalize the "rhs_expr" into a list of length 1 or 2
