@@ -295,9 +295,11 @@ async def _create_several_logs(client, project_name, context_name=None, user=1):
             project_name,
             params={"a/b/param1": f"test_{i}"},
             entries=data[i],
-            context={"name": context_name, "description": "test context"}
-            if context_name
-            else None,
+            context=(
+                {"name": context_name, "description": "test context"}
+                if context_name
+                else None
+            ),
         )
         assert response.status_code == 200, response.json()
 
@@ -1335,6 +1337,11 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
         # Using exists with nested conditions
         ("exists(a) and (b > 5)", {"a": 5, "b": 6}),
         ("not exists(c) or (d < 10)", {"d": 9}),
+        # Testing isNone function
+        ("isNone(field1)", {"field1": None}),
+        ("not isNone(field2)", {"field2": "non-null"}),
+        ("isNone(field3)", {"field3": None}),
+        ("not isNone(field4)", {"field4": 0}),
     ],
 )
 async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, values):
@@ -1355,7 +1362,15 @@ async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, v
     assert response.status_code == 200, response.text
     result = len(response.json()["logs"]) == 1
     for key, value in values.items():
-        exec(key + "=" + (str(value) if isinstance(value, bool) else json.dumps(value)))
+        exec(
+            key
+            + "="
+            + (
+                str(value)
+                if isinstance(value, bool) or value is None
+                else json.dumps(value)
+            ),
+        )
 
     # Replace to_str with str in the expression for evaluation
     eval_expression = expression.replace("to_str", "str")
@@ -1365,6 +1380,10 @@ async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, v
         expected = eval_expression.split("exists(")[-1].split(")")[0] not in values
     elif "exists" in eval_expression:
         expected = eval_expression.split("exists(")[-1].split(")")[0] in values
+    elif "not isNone" in eval_expression:
+        expected = eval(eval_expression.split("isNone(")[-1].split(")")[0]) is not None
+    elif "isNone" in eval_expression:
+        expected = eval(eval_expression.split("isNone(")[-1].split(")")[0]) is None
     elif "round_timestamp" in eval_expression:
         ts_expr, sec_expr = (
             eval_expression.split("round_timestamp(")[-1].split(")")[0].split(",")
