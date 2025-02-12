@@ -1367,7 +1367,10 @@ def _get_logs_query(
                         field = fd.get("value")
                         if is_image_field(field, field_types):
                             parent = getattr(validate_filter_dict, "parent", None)
-                            if parent and parent.get("operand") != "exists":
+                            if parent and parent.get("operand") not in (
+                                "exists",
+                                "isNone",
+                            ):
                                 raise HTTPException(
                                     status_code=400,
                                     detail=f"Field '{field}' is an image type and can only be used with 'exists' operator",
