@@ -168,7 +168,7 @@ def _tokenize(s):
         ("ROUND_TIMESTAMP", r"(?<!\w)round_timestamp(?!\w)"),
         (
             "FUNC",
-            r"(?<!\w)(?:len|exists|version|str(?=\()|to_str)",
+            r"(?<!\w)(?:len|exists|version|str(?=\()|to_str|isNone)",
         ),
         (
             "BASEFUNC",
@@ -199,9 +199,7 @@ def _tokenize(s):
             value = (
                 None
                 if value == "None"
-                else float(value)
-                if "." in value
-                else int(value)
+                else float(value) if "." in value else int(value)
             )
             tokens.append(("NUMBER", value))
         elif kind == "STRING":
@@ -497,6 +495,7 @@ def _select_value(subq, session, is_collection=False):
             "timestamp": subq.c.timestamp_value,
             "list": subq.c.jsonb_value,
             "dict": subq.c.jsonb_value,
+            "NoneType": subq.c.int_value,
         }
         return d[dt], dt
     except:
@@ -1237,10 +1236,10 @@ def _parse_rhs_list_or_dict_if_needed(rhs_dict, rhs_val):
     return None
 
 
-# Helper function for functions (len, to_str, type, round, round_timestamp, exists, version)
+# Helper function for functions (len, to_str, type, round, round_timestamp, exists, version, isNone)
 def _handle_functions(filter_dict, log_event_alias, session, log_event_ids):
     """
-    Handles function-based operations ('len', 'to_str', 'type', 'round', 'round_timestamp', 'exists', 'version') in the filter dictionary.
+    Handles function-based operations ('len', 'to_str', 'type', 'round', 'round_timestamp', 'exists', 'version', 'isNone') in the filter dictionary.
 
     Args:
         filter_dict (dict): The filter dictionary containing the function and its arguments.
@@ -1550,6 +1549,44 @@ def _handle_functions(filter_dict, log_event_alias, session, log_event_ids):
             session,
             log_event_ids,
         )
+    elif operand == "isNone":
+        # Handle the isNone function: check if the filtered value is None
+        if isinstance(filter_dict.get("rhs"), dict):
+            rhs_expr = build_sql_query(
+                filter_dict.get("rhs"),
+                log_event_alias,
+                session,
+                log_event_ids=log_event_ids,
+            )
+        else:
+            rhs_expr = [
+                build_sql_query(
+                    expr,
+                    log_event_alias,
+                    session,
+                    log_event_ids=log_event_ids,
+                )
+                for expr in filter_dict.get("rhs")
+            ]
+
+        # If the rhs_expr is a Subquery, select its value and check is_(None)
+        if isinstance(rhs_expr, Subquery):
+            rval, rval_type = _select_value(rhs_expr, session)
+            if rval is None:
+                return None
+            expr = rval.is_(None)
+            return (
+                select(
+                    rhs_expr.c.log_event_id.label("log_event_id"),
+                    expr.label("value"),
+                    literal("bool").label("inferred_type"),
+                )
+                .select_from(rhs_expr)
+                .subquery()
+            )
+        else:
+            # For non-subquery cases, simply return the boolean expression
+            return rhs_expr.is_(None)
     else:
         raise ValueError(f"Unknown function operand: {operand}")
 
@@ -1792,7 +1829,7 @@ def build_sql_query(filter_dict, log_event_alias, session, log_event_ids):
             log_event_ids,
         )
 
-    # Handle functions (len, to_str, type, round, exists, version)
+    # Handle functions (len, to_str, type, round, round_timestamp, exists, version, isNone)
     elif operand in (
         "len",
         "to_str",
@@ -1802,6 +1839,7 @@ def build_sql_query(filter_dict, log_event_alias, session, log_event_ids):
         "exists",
         "version",
         "BASE",
+        "isNone",
     ):
         return _handle_functions(filter_dict, log_event_alias, session, log_event_ids)
 
