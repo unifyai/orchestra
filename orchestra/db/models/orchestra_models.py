@@ -14,7 +14,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSON, JSONB
 from sqlalchemy.orm import relationship
 
 from orchestra.db.base import Base
@@ -663,7 +663,7 @@ class JSONLog(Base):
         index=True,
     )
     key = Column(String, nullable=False)
-    value = Column(JSONB)
+    value = Column(JSON)
     __table_args__ = (UniqueConstraint("log_event_id", "key"),)
 
 
@@ -715,7 +715,7 @@ class JSONLogHistory(Base):
         index=True,
     )
     key = Column(String, nullable=False)
-    value = Column(JSONB)
+    value = Column(JSON)
     version = Column(Integer, nullable=False)
     description = Column(String)
     archived_at = Column(TIMESTAMP, server_default=func.now())
