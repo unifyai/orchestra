@@ -498,6 +498,7 @@ def _select_value(subq, session, is_collection=False):
             "list": subq.c.jsonb_value,
             "dict": subq.c.jsonb_value,
             "NoneType": subq.c.int_value,
+            "image": subq.c.str_value,
         }
         return d[dt], dt
     except:
@@ -600,6 +601,7 @@ def _build_subquery_for_identifier(
         ).label("timestamp_value"),
         case(
             (log_alias.inferred_type == "str", cast(log_alias.value, String)),
+            (log_alias.inferred_type == "image", cast(log_alias.value, String)),
             else_=None,
         ).label("str_value"),
         case(
