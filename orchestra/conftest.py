@@ -56,8 +56,6 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
         api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
         with open("orchestra/tests/seeding.sql") as file:
             conn.execute(text(file.read()), {"user_id": user_id, "api_key": api_key})
-        with open("orchestra/tests/restore_order.sql") as file:
-            conn.execute(text(file.read()))
 
     try:
         yield engine
