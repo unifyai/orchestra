@@ -199,7 +199,7 @@ def list_projects(
 
 
 @router.delete(
-    "/project/{project_name}/logs",
+    "/project/{name}/logs",
     responses={
         200: {
             "description": "Project logs deleted.",
@@ -214,7 +214,7 @@ def list_projects(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Project <project_name> not found.",
+                        "detail": "Project <name> not found.",
                     },
                 },
             },
@@ -254,7 +254,7 @@ def delete_project_logs(
 
 
 @router.delete(
-    "/project/{project_name}/contexts",
+    "/project/{name}/contexts",
     responses={
         200: {
             "description": "Project contexts and logs deleted.",
@@ -271,7 +271,7 @@ def delete_project_logs(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Project <project_name> not found.",
+                        "detail": "Project <name> not found.",
                     },
                 },
             },
