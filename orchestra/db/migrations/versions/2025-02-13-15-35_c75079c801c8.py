@@ -20,28 +20,47 @@ def upgrade() -> None:
     op.add_column("interface", sa.Column("project_id", sa.Integer(), nullable=False))
     op.drop_constraint("it_uq_project_name", "interface", type_="unique")
     op.create_unique_constraint(
-        "it_uq_project_name", "interface", ["user_id", "project_id", "name"]
+        "it_uq_project_name",
+        "interface",
+        ["user_id", "project_id", "name"],
     )
     op.create_index(
-        op.f("ix_interface_project_id"), "interface", ["project_id"], unique=False
+        op.f("ix_interface_project_id"),
+        "interface",
+        ["project_id"],
+        unique=False,
     )
     op.create_foreign_key(
-        None, "interface", "project", ["project_id"], ["id"], ondelete="CASCADE"
+        None,
+        "interface",
+        "project",
+        ["project_id"],
+        ["id"],
+        ondelete="CASCADE",
     )
     op.drop_column("interface", "project")
     op.drop_column("interface", "context")
     op.drop_constraint(
-        "log_event_context_log_event_id_fkey", "log_event_context", type_="foreignkey"
+        "log_event_context_log_event_id_fkey",
+        "log_event_context",
+        type_="foreignkey",
     )
     op.create_foreign_key(
-        None, "log_event_context", "log_event", ["log_event_id"], ["id"]
+        None,
+        "log_event_context",
+        "log_event",
+        ["log_event_id"],
+        ["id"],
     )
     op.add_column(
-        "temp_interface", sa.Column("project_id", sa.Integer(), nullable=False)
+        "temp_interface",
+        sa.Column("project_id", sa.Integer(), nullable=False),
     )
     op.drop_constraint("temp_it_uq_project_name", "temp_interface", type_="unique")
     op.create_unique_constraint(
-        "temp_it_uq_project_name", "temp_interface", ["user_id", "project_id", "name"]
+        "temp_it_uq_project_name",
+        "temp_interface",
+        ["user_id", "project_id", "name"],
     )
     op.create_index(
         op.f("ix_temp_interface_project_id"),
@@ -50,7 +69,12 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_foreign_key(
-        None, "temp_interface", "project", ["project_id"], ["id"], ondelete="CASCADE"
+        None,
+        "temp_interface",
+        "project",
+        ["project_id"],
+        ["id"],
+        ondelete="CASCADE",
     )
     op.drop_column("temp_interface", "project")
     op.drop_column("temp_interface", "context")
@@ -71,7 +95,9 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_temp_interface_project_id"), table_name="temp_interface")
     op.drop_constraint("temp_it_uq_project_name", "temp_interface", type_="unique")
     op.create_unique_constraint(
-        "temp_it_uq_project_name", "temp_interface", ["user_id", "project", "name"]
+        "temp_it_uq_project_name",
+        "temp_interface",
+        ["user_id", "project", "name"],
     )
     op.drop_column("temp_interface", "project_id")
     op.drop_constraint(None, "log_event_context", type_="foreignkey")
@@ -95,7 +121,9 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_interface_project_id"), table_name="interface")
     op.drop_constraint("it_uq_project_name", "interface", type_="unique")
     op.create_unique_constraint(
-        "it_uq_project_name", "interface", ["user_id", "project", "name"]
+        "it_uq_project_name",
+        "interface",
+        ["user_id", "project", "name"],
     )
     op.drop_column("interface", "project_id")
     # ### end Alembic commands ###
