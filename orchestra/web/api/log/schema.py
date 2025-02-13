@@ -217,3 +217,23 @@ class UpdateDerivedEntriesConfig(BaseModel):
         if not values.get("key") and not values.get("equation"):
             raise ValueError("At least one of key or equation must be provided")
         return values
+
+
+class RenameFieldRequest(BaseModel):
+    project: str = Field(
+        description="Name of the project the field belongs to.",
+        example="eval-project",
+    )
+    context: Optional[str] = Field(
+        default="default",
+        description="The context of the field to rename.",
+        example="test-context",
+    )
+    old_field_name: str = Field(
+        description="The current name of the field to rename.",
+        example="score",
+    )
+    new_field_name: str = Field(
+        description="The new name for the field.",
+        example="score_new",
+    )
