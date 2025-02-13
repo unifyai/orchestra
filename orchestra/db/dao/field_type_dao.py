@@ -139,3 +139,53 @@ class FieldTypeDAO:
 
         result = self.session.execute(query).scalars().all()
         return {field: i for i, field in enumerate(result)}
+
+    def rename_field(
+        self,
+        project_id: int,
+        old_field_name: str,
+        new_field_name: str,
+    ) -> None:
+        """Rename a field type for a given project.
+
+        Args:
+            project_id: The ID of the project containing the field
+            old_field_name: The current name of the field to rename
+            new_field_name: The new name to assign to the field
+
+        Raises:
+            ValueError: If the field doesn't exist or if the new name conflicts with an existing field
+        """
+        # First check if the old field exists
+        field_to_rename = (
+            self.session.query(FieldType)
+            .filter(
+                FieldType.project_id == project_id,
+                FieldType.field_name == old_field_name,
+            )
+            .first()
+        )
+
+        if not field_to_rename:
+            raise ValueError(
+                f"Field '{old_field_name}' does not exist in project {project_id}",
+            )
+
+        # Check if the new name would conflict with an existing field
+        existing_field = (
+            self.session.query(FieldType)
+            .filter(
+                FieldType.project_id == project_id,
+                FieldType.field_name == new_field_name,
+            )
+            .first()
+        )
+
+        if existing_field:
+            raise ValueError(
+                f"Cannot rename field to '{new_field_name}' as it already exists in project {project_id}",
+            )
+
+        # Perform the rename
+        field_to_rename.field_name = new_field_name
+        self.session.commit()
