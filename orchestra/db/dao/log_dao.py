@@ -467,8 +467,6 @@ class LogDAO:
                     value=log.value,
                     inferred_type=log.inferred_type,
                     description=f"Deleted entry with key {log.key}",
-                    created_at=log.created_at,
-                    updated_at=log.updated_at,
                 )
 
             # Proceed with log deletion
