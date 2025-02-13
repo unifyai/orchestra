@@ -183,7 +183,17 @@ class ContextDAO:
                 is_versioned=body.is_versioned,
             )
         else:
-            return None
+            # create a new context with a default name if it doesn't exist
+            context = self.filter(project_id=project_id, name="default")
+            if context:
+                return context[0][0].id
+            else:
+                return self.create(
+                    project_id=project_id,
+                    name="default",
+                    description="default context",
+                    is_versioned=False,
+                )
 
     def build_log_versions_map(self, context: Context) -> Dict[str, Dict[str, int]]:
         """
