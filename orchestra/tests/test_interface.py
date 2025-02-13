@@ -23,14 +23,13 @@ def _create_context(client: AsyncClient, project, name, description):
     )
 
 
-def _create_interface(client: AsyncClient, name, project, context, items, new_counter):
+def _create_interface(client: AsyncClient, name, project, items, new_counter):
     return client.post(
         "/v0/interface",
         headers=HEADERS,
         json={
             "name": name,
             "project": project,
-            "context": context,
             "items": items,
             "new_counter": new_counter,
         },
@@ -61,7 +60,6 @@ async def test_create_interface(client: AsyncClient):
         client,
         name,
         project,
-        context,
         items,
         new_counter,
     )
@@ -99,7 +97,7 @@ async def test_update_interface(client: AsyncClient):
     new_counter = 2
     await _create_project(client, project)
     await _create_context(client, project, context, "")
-    await _create_interface(client, name, project, context, items[:1], new_counter - 1)
+    await _create_interface(client, name, project, items[:1], new_counter - 1)
     response = await client.put(
         "/v0/interface",
         headers=HEADERS,
@@ -135,7 +133,7 @@ async def test_get_interface(client: AsyncClient):
     new_counter = 1
     await _create_project(client, project)
     await _create_context(client, project, context, "")
-    await _create_interface(client, name, project, context, items, new_counter)
+    await _create_interface(client, name, project, items, new_counter)
     response = await client.get(
         f"/v0/interface?name={name}&project={project}",
         headers=HEADERS,
@@ -164,7 +162,7 @@ async def test_delete_interface(client: AsyncClient):
     new_counter = 1
     await _create_project(client, project)
     await _create_context(client, project, context, "")
-    await _create_interface(client, name, project, context, items, new_counter)
+    await _create_interface(client, name, project, items, new_counter)
     response = await client.delete(
         f"/v0/interface?name={name}&project={project}",
         headers=HEADERS,
