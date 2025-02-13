@@ -2551,6 +2551,125 @@ async def test_get_logs_field_ordering(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_rename_field_basic(client: AsyncClient):
+    """Test basic field renaming functionality."""
+    project_name = "test-rename-field"
+    _ = await _create_project(client, project_name)
+
+    # Create initial logs with old field name
+    initial_entries = {
+        "old_field_name": "test value",
+        "other_field": 42,
+        "explicit_types": {
+            "old_field_name": {"type": "str", "mutable": True},
+            "other_field": {"type": "int", "mutable": True},
+        },
+    }
+    response = await _create_log(client, project_name, entries=initial_entries)
+    assert response.status_code == 200
+    log_id = response.json()[0]
+
+    # Rename the field
+    rename_response = await client.post(
+        "/v0/logs/rename_field",
+        json={
+            "project": project_name,
+            "old_field_name": "old_field_name",
+            "new_field_name": "new_field_name",
+        },
+        headers=HEADERS,
+    )
+    assert rename_response.status_code == 200, rename_response.json()
+
+    # Verify field types are updated
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200, field_types_response.json()
+    field_types = field_types_response.json()
+
+    # Check old field is gone and new field exists with same type info
+    assert "old_field_name" not in field_types
+    assert "new_field_name" in field_types
+    assert field_types["new_field_name"]["data_type"] == "str"
+    assert field_types["new_field_name"]["mutable"] is True
+
+    # Verify logs are updated
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200, logs_response.json()
+    logs = logs_response.json()["logs"]
+
+    # Check log entries use new field name
+    assert len(logs) == 1
+    log = logs[0]
+    assert "old_field_name" not in log["entries"]
+    assert "new_field_name" in log["entries"]
+    assert log["entries"]["new_field_name"] == "test value"
+
+
+@pytest.mark.anyio
+async def test_rename_field_edge_cases(client: AsyncClient):
+    """Test edge cases for field renaming functionality."""
+    project_name = "test-rename-field-edges"
+    _ = await _create_project(client, project_name)
+
+    # Create a log with existing fields
+    initial_entries = {
+        "existing_field": "test value",
+        "other_field": "other value",
+        "explicit_types": {
+            "existing_field": {"type": "str", "mutable": True},
+            "other_field": {"type": "str", "mutable": True},
+        },
+    }
+    response = await _create_log(client, project_name, entries=initial_entries)
+    assert response.status_code == 200
+
+    # Test case 1: Attempt to rename non-existent field
+    response = await client.post(
+        "/v0/logs/rename_field",
+        json={
+            "project": project_name,
+            "old_field_name": "nonexistent_field",
+            "new_field_name": "new_field",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 404
+    assert "Field not found" in response.json()["detail"]
+
+    # Test case 2: Attempt to rename to an existing field name
+    response = await client.post(
+        "/v0/logs/rename_field",
+        json={
+            "project": project_name,
+            "old_field_name": "existing_field",
+            "new_field_name": "other_field",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 400
+    assert "already exists" in response.json()["detail"]
+
+    # Test case 3: Attempt to rename with invalid new field name
+    response = await client.post(
+        "/v0/logs/rename_field",
+        json={
+            "project": project_name,
+            "old_field_name": "existing_field",
+            "new_field_name": "",  # Empty string
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 400
+    assert "Invalid field name" in response.json()["detail"]
+
+
+@pytest.mark.anyio
 async def test_get_logs_with_value_limit(client: AsyncClient):
     project_name = "value-limit-test"
     _ = await _create_project(client, project_name)
