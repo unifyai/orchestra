@@ -16,8 +16,7 @@ class TempInterfaceDAO:
         name: str,
         items: str,
         new_counter: int,
-        project: str,
-        context: str | None,
+        project_id: int,
     ):
         self.session.add(
             TempInterface(
@@ -25,17 +24,16 @@ class TempInterfaceDAO:
                 name=name,
                 items=items,
                 new_counter=new_counter,
-                project=project,
-                context=context,
+                project_id=project_id,
             ),
         )
+        self.session.commit()
 
     def update_interface(
         self,
         user_id: str,
         name: str,
-        project: str,
-        context: str | None,
+        project_id: int,
         items: str,
         new_counter: int,
         new_name: str = None,
@@ -43,7 +41,7 @@ class TempInterfaceDAO:
         query = select(TempInterface)
         query = (
             query.where(TempInterface.user_id == user_id)
-            .where(TempInterface.project == project)
+            .where(TempInterface.project_id == project_id)
             .where(TempInterface.name == name)
         )
         raw = self.session.execute(query)
@@ -51,32 +49,31 @@ class TempInterfaceDAO:
         if entry is not None:
             setattr(entry, "items", items)  # noqa: B010
             setattr(entry, "new_counter", new_counter)
-            setattr(entry, "project", project)
-            setattr(entry, "context", context)
+            setattr(entry, "project_id", project_id)
             if new_name is not None:
                 setattr(entry, "name", new_name)
 
     def get_interfaces(
         self,
         user_id: str,
-        project: str = None,
+        project_id: int = None,
         name: str = None,
     ) -> list[TempInterface]:
         query = select(TempInterface).where(TempInterface.user_id == user_id)
-        if project is not None:
-            query = query.where(TempInterface.project == project)
+        if project_id is not None:
+            query = query.where(TempInterface.project_id == project_id)
         if name is not None:
             query = query.where(TempInterface.name == name)
-        interfaces = self.session.execute(query).fetchall()
-        return [interface[0] for interface in interfaces]
+        interfaces = self.session.execute(query).scalars().all()
+        return interfaces
 
     def delete_interface(self, user_id: str, name: str):
         try:
             interface = (
                 self.session.query(TempInterface)
-                .filter_by(
-                    user_id=user_id,
-                    name=name,
+                .filter(
+                    TempInterface.user_id == user_id,
+                    TempInterface.name == name,
                 )
                 .first()
             )
