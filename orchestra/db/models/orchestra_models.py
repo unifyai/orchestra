@@ -775,11 +775,19 @@ class Interface(Base):
     name = Column(String(), nullable=False)
     new_counter = Column(Integer, nullable=False)
     items = Column(String(), nullable=False)
-    project = Column(String(), nullable=False)
-    context = Column(String(), nullable=True)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Relationships
+    project = relationship("Project", backref="interfaces")
+    user = relationship("AuthUser", backref="interfaces")
+    organization = relationship("Organization", backref="interfaces")
 
     __table_args__ = (
-        UniqueConstraint("user_id", "project", "name", name="it_uq_project_name"),
+        UniqueConstraint("user_id", "project_id", "name", name="it_uq_project_name"),
     )
 
 
@@ -820,9 +828,21 @@ class TempInterface(Base):
     name = Column(String(), nullable=False)
     new_counter = Column(Integer, nullable=False)
     items = Column(String(), nullable=False)
-    project = Column(String(), nullable=False)
-    context = Column(String(), nullable=True)
-
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Relationships
+    project = relationship("Project", backref="temp_interfaces")
+    user = relationship("AuthUser", backref="temp_interfaces")
+    organization = relationship("Organization", backref="temp_interfaces")
     __table_args__ = (
-        UniqueConstraint("user_id", "project", "name", name="temp_it_uq_project_name"),
+        UniqueConstraint(
+            "user_id",
+            "project_id",
+            "name",
+            name="temp_it_uq_project_name",
+        ),
     )
