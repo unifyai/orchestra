@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Union
 
 from fastapi import Depends
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
@@ -82,10 +82,14 @@ class LogEventDAO:
     def delete(self, id: Union[int, List[int]]):
         id = id if isinstance(id, list) else [id]
         try:
-            log_events = self.session.query(LogEvent).where(
-                or_(*[LogEvent.id == i for i in id]),
-            )
-            [self.session.delete(le) for le in log_events]
+            # First, delete the association rows referencing these log events
+            self.session.query(LogEventContext).filter(
+                LogEventContext.log_event_id.in_(id),
+            ).delete(synchronize_session=False)
+            # Then, delete the log event(s)
+            self.session.query(LogEvent).filter(
+                LogEvent.id.in_(id),
+            ).delete(synchronize_session=False)
             self.session.commit()
         except:
             self.session.rollback()

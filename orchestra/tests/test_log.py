@@ -4158,7 +4158,7 @@ async def test_delete_logs(client: AsyncClient):
     project_name = "multi-log-project"
     _ = await _create_project(client, project_name)
 
-    # Create multiple logs
+    # Create multiple logs (using the default context)
     response1 = await _create_log(client, project_name)
     response2 = await _create_log(client, project_name)
     assert response1.status_code == 200, response1.json()
@@ -4167,6 +4167,21 @@ async def test_delete_logs(client: AsyncClient):
     log_id1 = response1.json()[0]
     log_id2 = response2.json()[0]
     ids_and_fields = [([log_id1, log_id2], None)]
+
+    # create a new context
+    context_name = "test-context"
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name},
+        headers=HEADERS,
+    )
+    # add logs to the new context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts/add_logs",
+        json={"context_name": context_name, "log_ids": [log_id1, log_id2]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
 
     # Delete the logs
     response = await _delete_logs(client, ids_and_fields)
