@@ -84,7 +84,7 @@ def create_interface(
     dao = temp_interface_dao if request.temporary else interface_dao
     interfaces = dao.get_interfaces(
         request_fastapi.state.user_id,
-        project=request.project,
+        project_id=projects[0][0].id,
         name=request.name,
     )
     if len(interfaces) > 0:
@@ -97,8 +97,7 @@ def create_interface(
         name=request.name,
         items=json.dumps([item.model_dump() for item in request.items]),
         new_counter=request.new_counter,
-        project=request.project,
-        context=request.context,
+        project_id=projects[0][0].id,
     )
     return {"info": "Interface created successfully!"}
 
@@ -172,7 +171,7 @@ def update_interface(
     dao = temp_interface_dao if request.temporary else interface_dao
     interfaces = dao.get_interfaces(
         request_fastapi.state.user_id,
-        project=request.project,
+        project_id=projects[0][0].id,
         name=request.name,
     )
     if len(interfaces) == 0:
@@ -183,8 +182,7 @@ def update_interface(
     dao.update_interface(
         user_id=request_fastapi.state.user_id,
         name=request.name,
-        project=request.project,
-        context=request.context,
+        project_id=projects[0][0].id,
         items=json.dumps([item.model_dump() for item in request.items]),
         new_counter=request.new_counter,
         new_name=request.new_name,
@@ -263,12 +261,15 @@ def get_interfaces(
             detail=f"Project {project} not found.",
         )
     dao = temp_interface_dao if temporary else interface_dao
-    all_interfaces = dao.get_interfaces(request_fastapi.state.user_id, project=project)
+    all_interfaces = dao.get_interfaces(
+        request_fastapi.state.user_id,
+        project_id=projects[0][0].id,
+    )
     if len(all_interfaces) == 0:
         name = name if name is not None else "interface_1"
     interfaces = dao.get_interfaces(
         request_fastapi.state.user_id,
-        project=project,
+        project_id=projects[0][0].id,
         name=name,
     )
     if len(interfaces) == 0 and len(all_interfaces) == 0:
@@ -302,14 +303,12 @@ def get_interfaces(
             name=name,
             items=json.dumps(items),
             new_counter=new_counter,
-            project=project,
-            context=None,
+            project_id=projects[0][0].id,
         )
         return [
             {
                 "name": name,
                 "project": project,
-                "context": None,
                 "items": items,
                 "new_counter": new_counter,
             },
@@ -323,7 +322,6 @@ def get_interfaces(
         {
             "name": interface.name,
             "project": interface.project,
-            "context": interface.context,
             "items": json.loads(interface.items),
             "new_counter": interface.new_counter,
         }
@@ -359,11 +357,18 @@ def delete_interface(
     temporary: bool = Query(False),
     interface_dao: InterfaceDAO = Depends(),
     temp_interface_dao: TempInterfaceDAO = Depends(),
+    project_dao: ProjectDAO = Depends(),
 ):
+    projects = project_dao.filter(user_id=request_fastapi.state.user_id, name=project)
+    if len(projects) == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project} not found.",
+        )
     dao = temp_interface_dao if temporary else interface_dao
     interfaces = dao.get_interfaces(
         request_fastapi.state.user_id,
-        project=project,
+        project_id=projects[0][0].id,
         name=name,
     )
     if len(interfaces) == 0:
