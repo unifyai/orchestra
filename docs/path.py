@@ -4,7 +4,9 @@ from docs.query import get_param_details
 def get_request_code(route, path, examples):
     # create the params string
     for key, value in examples.items():
-        path = path.replace("{" + key + "}", value)
+        # Use a placeholder if value is None
+        placeholder = f"<{key}>" if value is None else value
+        path = path.replace("{" + key + "}", placeholder)
 
     # create the curl example
     curl_example = [
