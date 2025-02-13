@@ -11,11 +11,13 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    event,
     func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSON, JSONB
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql import DDL
 
 from orchestra.db.base import Base
 
@@ -491,7 +493,7 @@ class Project(Base):
     name = Column(String, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
-    contexts = relationship("Context", back_populates="project")
+    contexts = relationship("Context", back_populates="project", passive_deletes=True)
     # we want sql nulls to be distinct in the unique constraints
     # (postgresql_nulls_not_distinct=False)
     __table_args__ = (
@@ -507,7 +509,7 @@ class LogEventContext(Base):
 
     log_event_id = Column(
         Integer,
-        ForeignKey("log_event.id", ondelete="CASCADE"),
+        ForeignKey("log_event.id"),
         primary_key=True,
     )
     context_id = Column(
@@ -515,6 +517,28 @@ class LogEventContext(Base):
         ForeignKey("context.id", ondelete="CASCADE"),
         primary_key=True,
     )
+
+
+event.listen(
+    LogEventContext.__table__,
+    "after_create",
+    DDL(
+        """
+        CREATE OR REPLACE FUNCTION delete_orphaned_log_events() RETURNS TRIGGER AS $$
+        BEGIN
+            DELETE FROM log_event
+            WHERE id NOT IN (SELECT DISTINCT log_event_id FROM log_event_context);
+            RETURN NULL;
+        END;
+        $$ LANGUAGE plpgsql;
+
+        CREATE TRIGGER cleanup_orphaned_log_events
+        AFTER DELETE ON log_event_context
+        FOR EACH STATEMENT
+            EXECUTE FUNCTION delete_orphaned_log_events();
+            """,
+    ),
+)
 
 
 class Context(Base):
@@ -649,6 +673,7 @@ class LogEvent(Base):
         "Context",
         secondary="log_event_context",
         back_populates="log_events",
+        passive_deletes="all",
     )
 
 
