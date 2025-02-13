@@ -223,7 +223,7 @@ def list_projects(
 )
 def delete_project_logs(
     request_fastapi: Request,
-    project_name: str,
+    name: str,
     project_dao: ProjectDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
 ):
@@ -233,12 +233,12 @@ def delete_project_logs(
     # Verify project exists and user has access
     projects = project_dao.filter(
         user_id=request_fastapi.state.user_id,
-        name=project_name,
+        name=name,
     )
     if len(projects) == 0:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {project_name} not found.",
+            detail=f"Project {name} not found.",
         )
 
     project_id = projects[0][0].id
@@ -280,12 +280,11 @@ def delete_project_logs(
 )
 def delete_project_contexts(
     request_fastapi: Request,
-    project_name: str = Path(
+    name: str = Path(
         description="Name of the project to delete contexts from.",
         example="test-project",
     ),
     project_dao: ProjectDAO = Depends(),
-    log_event_dao: LogEventDAO = Depends(),
     context_dao: ContextDAO = Depends(),
 ):
     """
@@ -295,12 +294,12 @@ def delete_project_contexts(
     # Verify project exists and user has access
     projects = project_dao.filter(
         user_id=request_fastapi.state.user_id,
-        name=project_name,
+        name=name,
     )
     if len(projects) == 0:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {project_name} not found.",
+            detail=f"Project {name} not found.",
         )
 
     project_id = projects[0][0].id
