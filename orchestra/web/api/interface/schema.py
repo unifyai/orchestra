@@ -7,6 +7,8 @@ class Item(BaseModel):
     y: float
     w: float
     h: float
+    minW: float | None = None
+    minH: float | None = None
     moved: bool = False
     static: bool = False
     visible: bool = True
