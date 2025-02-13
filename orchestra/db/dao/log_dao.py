@@ -444,6 +444,116 @@ class LogDAO:
         else:
             raise IndexError
 
+    def rename_field_in_logs(
+        self,
+        project_id: int,
+        old_field_name: str,
+        new_field_name: str,
+        context_id: Optional[int] = None,
+    ) -> None:
+        """
+        Rename a field across all log tables while maintaining data consistency.
+
+        Args:
+            project_id: The project ID to scope the rename operation
+            old_field_name: The current field name to be renamed
+            new_field_name: The new field name
+            context_id: Optional context ID to scope the rename operation
+
+        Raises:
+            ValueError: If the field names are invalid or if the rename operation fails
+        """
+        try:
+            # Start by finding all relevant log events for the project
+            log_event_query = select(LogEvent.id).where(
+                LogEvent.project_id == project_id,
+            )
+            if context_id:
+                log_event_query = log_event_query.join(
+                    LogEventContext,
+                    LogEventContext.log_event_id == LogEvent.id,
+                ).where(LogEventContext.context_id == context_id)
+
+            log_event_ids = [row[0] for row in self.session.execute(log_event_query)]
+
+            if not log_event_ids:
+                raise ValueError(f"No log events found for project_id {project_id}")
+
+            # Update Log table
+            log_update = (
+                self.session.query(Log)
+                .filter(
+                    Log.log_event_id.in_(log_event_ids),
+                    Log.key == old_field_name,
+                )
+                .update(
+                    {"key": new_field_name, "updated_at": datetime.now(timezone.utc)},
+                    synchronize_session=False,
+                )
+            )
+
+            # Update JSONLog table
+            json_log_update = (
+                self.session.query(JSONLog)
+                .filter(
+                    JSONLog.log_event_id.in_(log_event_ids),
+                    JSONLog.key == old_field_name,
+                )
+                .update({"key": new_field_name}, synchronize_session=False)
+            )
+
+            # Update LogHistory table
+            log_history_update = (
+                self.session.query(LogHistory)
+                .filter(
+                    LogHistory.log_event_id.in_(log_event_ids),
+                    LogHistory.key == old_field_name,
+                )
+                .update({"key": new_field_name}, synchronize_session=False)
+            )
+
+            # Update JSONLogHistory table
+            json_log_history_update = (
+                self.session.query(JSONLogHistory)
+                .filter(
+                    JSONLogHistory.log_event_id.in_(log_event_ids),
+                    JSONLogHistory.key == old_field_name,
+                )
+                .update({"key": new_field_name}, synchronize_session=False)
+            )
+
+            # If this is a versioned context, create history entries for the rename
+            if context_id:
+                context = self.session.query(Context).filter_by(id=context_id).first()
+                if context and context.is_versioned:
+                    # Get all affected logs to create history entries
+                    affected_logs = (
+                        self.session.query(Log)
+                        .filter(
+                            Log.log_event_id.in_(log_event_ids),
+                            Log.key == new_field_name,
+                        )
+                        .all()
+                    )
+
+                    for log in affected_logs:
+                        self._create_log_history(
+                            log_event_id=log.log_event_id,
+                            key=new_field_name,
+                            value=log.value,
+                            version=context.version,
+                            inferred_type=log.inferred_type,
+                            description=f"Renamed field from {old_field_name} to {new_field_name}",
+                            created_at=log.created_at,
+                            updated_at=log.updated_at,
+                        )
+
+            self.session.commit()
+
+        except Exception as e:
+            self.session.rollback()
+            raise ValueError(f"Failed to rename field: {str(e)}")
+
     def delete(self, id: int):
         try:
             # First get the log and check if it belongs to a versioned context
