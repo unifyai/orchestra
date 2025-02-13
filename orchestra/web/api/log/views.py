@@ -53,6 +53,7 @@ from orchestra.web.api.log.schema import (
     CreateLogConfig,
     DeleteDerivedLogsRequest,
     DeleteLogEntryRequest,
+    RenameFieldRequest,
     SetFieldTypingRequest,
     UpdateDerivedEntriesConfig,
     UpdateLogRequest,
@@ -2676,6 +2677,144 @@ def get_log_groups(
         len(v) == 1 for v in groups.values()
     ), "All sets should contain a single unique value"
     return {k: next(iter(v)) for k, v in groups.items()}
+
+
+@router.post(
+    "/logs/rename_field",
+    responses={
+        200: {
+            "description": "Field renamed successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Field renamed successfully from 'old_name' to 'new_name'",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Bad Request",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid field name or field already exists",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project or field not found",
+                    },
+                },
+            },
+        },
+    },
+)
+def rename_field(
+    request_fastapi: Request,
+    request: RenameFieldRequest,
+    project_dao: ProjectDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    log_dao: LogDAO = Depends(),
+):
+    """
+    Renames a field across all logs in a project. This includes:
+    - Updating the field type record
+    - Renaming the field in all logs (regular and history)
+
+    The operation is atomic - either all renames succeed or none do.
+    """
+    try:
+        # Validate project and permissions
+        user_id = request_fastapi.state.user_id
+        project = project_dao.filter(user_id=user_id, name=request.project)
+
+        if not project:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project '{request.project}' not found",
+            )
+        project_id = project[0][0].id
+
+        context_name = request.context if request.context else "default"
+        context = context_dao.filter(project_id=project_id, name=context_name)
+        if not context:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Context '{context_name}' not found",
+            )
+        context_id = context[0][0].id
+
+        # Validate new field name
+        if not request.new_field_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid field name: cannot be empty",
+            )
+
+        try:
+            # Try to rename the field - this will raise ValueError if old field doesn't exist
+            field_type_dao.rename_field(
+                project_id=project_id,
+                old_field_name=request.old_field_name,
+                new_field_name=request.new_field_name,
+            )
+        except ValueError as e:
+            if "does not exist" in str(e):
+                raise HTTPException(
+                    status_code=404,
+                    detail="Field not found",
+                )
+            elif "already exists" in str(e):
+                raise HTTPException(
+                    status_code=400,
+                    detail=str(e),
+                )
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=str(e),
+                )
+
+        # Update all log records
+        try:
+            log_dao.rename_field_in_logs(
+                project_id=project_id,
+                old_field_name=request.old_field_name,
+                new_field_name=request.new_field_name,
+                context_id=context_id,
+            )
+        except ValueError as e:
+            # Rollback the field type rename since log rename failed
+            try:
+                field_type_dao.rename_field(
+                    project_id=project_id,
+                    old_field_name=request.new_field_name,
+                    new_field_name=request.old_field_name,
+                )
+            except:
+                pass
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to rename field in logs: {str(e)}",
+            )
+
+        return {
+            "info": f"Field renamed successfully from '{request.old_field_name}' to '{request.new_field_name}'",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error renaming field: {str(e)}",
+        )
 
 
 @router.get(
