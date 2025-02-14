@@ -1071,27 +1071,17 @@ def update_logs(
             "content": {
                 "application/json": {
                     "example": {
-                        "info": "Log entry deleted successfully from all logs!",
+                        "info": "Log entries deleted successfully!",
                     },
                 },
             },
         },
-        404_1: {
+        404: {
             "description": "Log Not Found",
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "One or more logs with the specified IDs were not found.",
-                    },
-                },
-            },
-        },
-        404_2: {
-            "description": "Log Entry Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Log entry <entry> not found in one or more logs.",
+                        "detail": "One or more logs were not found or you don't have permission to delete them.",
                     },
                 },
             },
@@ -1109,46 +1099,148 @@ def delete_logs(
     ),
     log_event_dao: LogEventDAO = Depends(),
     log_dao: LogDAO = Depends(),
+    derived_log_dao: DerivedLogDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+    project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
-    Deletes a specific entry from multiple logs.
+    Deletes log entries based on specified criteria. Can delete both base logs and derived logs.
+
+    Args:
+        source_type: Controls which type of logs to delete:
+            - 'all': Delete both base and derived logs (default)
+            - 'base': Only delete base logs
+            - 'derived': Only delete derived logs
     """
+    if body.source_type not in ("all", "base", "derived"):
+        raise HTTPException(
+            status_code=400,
+            detail="source_type must be one of: 'all', 'base', 'derived'",
+        )
 
     not_found_logs = []
     not_found_entries = []
-
     ids_and_fields = _flatten_fields(body.ids_and_fields)
 
+    # Get all matching logs using the unified query mechanism
     for log_id, fields in ids_and_fields.items():
-        # Verify if the log belongs to the user
+        # Verify if the log belongs to the user and get project info
         try:
-            if log_event_dao.get_user_id(id=log_id) != request_fastapi.state.user_id:
+            user_id = request_fastapi.state.user_id
+            project_id = project_dao.filter(user_id=user_id, name=body.project)[0][0].id
+            if log_event_dao.get_user_id(id=log_id) != user_id:
                 raise IndexError
         except IndexError:
             not_found_logs.append(log_id)
             continue
 
+        # Get context info if available
+        context_id = None
+        if body.context:
+            context = context_dao.filter(project_id=project_id, name=body.context)
+            if context:
+                context_id = context[0][0].id
+
         if len(fields) == 0:
+            if body.source_type == "derived":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot delete derived logs without specifying fields.",
+                )
+            # Delete entire log event if no fields specified
             log_event_dao.delete(log_id)
-        else:
-            for field in fields:
-                # Check for the existence of the log entry
-                log = log_dao.filter(log_event_id=log_id, key=field)
-                if not log:
-                    not_found_entries.append(log_id)
-                    continue
+            continue
 
-                # Delete the log entry
-                log_dao.delete(id=log[0][0].id)
+        # Use _get_logs_query to get all matching logs with their source types
+        try:
+            matching_logs, _, _ = _get_logs_query(
+                request_fastapi=request_fastapi,
+                project=body.project,
+                column_context=None,
+                context=body.context,
+                filter_expr=None,
+                sorting=None,
+                from_ids=str(log_id),
+                exclude_ids=None,
+                from_fields="&".join(fields),
+                exclude_fields=None,
+                limit=None,
+                offset=0,
+                project_dao=project_dao,
+                field_type_dao=field_type_dao,
+                context_dao=context_dao,
+                session=session,
+            )
 
-        if delete_empty_logs and not log_dao.filter(log_event_id=log_id):
-            log_event_dao.delete(id=log_id)
+            if not matching_logs:
+                not_found_entries.append(log_id)
+                continue
+
+            # Process each matching log based on its source type
+            for row in matching_logs:
+                row_key = row[0]  # key
+                row_source_type = row[5]  # source_type
+                row_event_id = row[7]  # log_event_id
+
+                # Skip if source_type doesn't match filter
+                if body.source_type != "all":
+                    if body.source_type == "base" and row_source_type == "derived":
+                        continue
+                    if body.source_type == "derived" and row_source_type != "derived":
+                        continue
+
+                # Delete the appropriate type of log
+                if row_source_type == "derived":
+                    derived_log = derived_log_dao.filter(
+                        log_event_id=row_event_id,
+                        key=row_key,
+                    )
+                    if derived_log:
+                        derived_log_dao.delete(id=derived_log[0][0].id)
+                else:
+                    log = log_dao.filter(
+                        log_event_id=row_event_id,
+                        key=row_key,
+                    )
+                    if log:
+                        log_dao.delete(id=log[0][0].id)
+
+                # Handle versioned contexts
+                if context_id:
+                    context_obj = (
+                        context_dao.session.query(Context)
+                        .filter_by(id=context_id)
+                        .first()
+                    )
+                    if context_obj and context_obj.is_versioned:
+                        context_dao.archive_context_state(
+                            context_obj,
+                            name="delete",
+                            description=f"Deleted log entries for log_event_id={row_event_id}",
+                        )
+                        context_obj.version += 1
+                        context_obj.updated_at = datetime.now(timezone.utc)
+                        context_dao.session.commit()
+
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error processing log {log_id}: {str(e)}",
+            )
+
+        # Delete empty log events if requested
+        if delete_empty_logs:
+            base_logs = log_dao.filter(log_event_id=log_id)
+            if not base_logs:
+                log_event_dao.delete(id=log_id)
 
     # Handle cases where some logs or entries were not found
     if not_found_logs:
         raise HTTPException(
             status_code=404,
-            detail=f"Logs with ids {not_found_logs} not found or you don't have permission to delete from them.",
+            detail=f"Logs with ids {not_found_logs} not found or you don't have permission to delete them.",
         )
 
     if not_found_entries:
