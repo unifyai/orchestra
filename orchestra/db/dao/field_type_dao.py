@@ -1,4 +1,4 @@
-from typing import Dict, Optional, Union
+from typing import Dict, Union
 
 from fastapi import Depends
 from sqlalchemy import select

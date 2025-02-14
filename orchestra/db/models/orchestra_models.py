@@ -829,7 +829,13 @@ class FieldType(Base):
     )
     field_name = Column(String, nullable=False)
     field_type = Column(String, nullable=False)
+    field_category = Column(
+        String,
+        nullable=False,
+        server_default="entry",
+    )  # entry, param, derived_entry
     mutable = Column(Boolean(), nullable=False, server_default="f")  # type: ignore
+    created_at = Column(TIMESTAMP, server_default=func.now())
 
     __table_args__ = (
         UniqueConstraint("project_id", "field_name", name="uq_project_field_name"),
