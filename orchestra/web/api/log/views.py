@@ -1155,7 +1155,7 @@ def update_logs(
     if updated_ids:
         try:
             updated_ids_jsonb = [
-                f'{{"{key}": {value}}}' for (key, value) in updated_ids
+                cast({key: value}, JSONB) for (key, value) in updated_ids
             ]
             derived_logs_to_recompute = (
                 session.query(DerivedLog)
