@@ -212,23 +212,17 @@ def _update_multiple_logs_w_overwrite(client, log_ids, overwrite, user=1):
 
 
 # Helper function to delete multiple logs
-def _delete_logs(client, log_ids, user=1):
+def _delete_logs(client, log_ids, user=1, source_type=None, project_name=None):
     _headers = HEADERS if user == 1 else HEADERS_2
+    json_data = {"ids_and_fields": log_ids}
+    if source_type:
+        json_data["source_type"] = source_type
+    if project_name:
+        json_data["project"] = project_name
     request = Request(
         "DELETE",
         str(client.base_url) + "/v0/logs",
-        json={"ids_and_fields": log_ids},
-        headers=_headers,
-    )
-    return client.send(request)
-
-
-def _delete_derived_logs(client, project_name, derived_log_ids, user=1):
-    _headers = HEADERS if user == 1 else HEADERS_2
-    request = Request(
-        "DELETE",
-        str(client.base_url) + "/v0/logs/derived",
-        json={"project": project_name, "target_derived_logs": derived_log_ids},
+        json=json_data,
         headers=_headers,
     )
     return client.send(request)
@@ -248,13 +242,19 @@ def _update_logs(client, log_ids, entries, user=1, context=None, overwrite=False
     )
 
 
-def _delete_log_fields_from_logs(client, fields, delete_empty_logs=False, user=1):
+def _delete_log_fields_from_logs(
+    client,
+    fields,
+    delete_empty_logs=False,
+    user=1,
+    project_name=None,
+):
     _headers = HEADERS if user == 1 else HEADERS_2
     request = Request(
         "DELETE",
         str(client.base_url) + f"/v0/logs",
         params={"delete_empty_logs": delete_empty_logs},
-        json={"ids_and_fields": fields},
+        json={"ids_and_fields": fields, "project": project_name},
         headers=_headers,
     )
     return client.send(request)
@@ -456,10 +456,16 @@ async def test_delete_derived_logs(client: AsyncClient):
     derived_log_ids2 = response.json()["derived_log_ids"]
     assert len(derived_log_ids2) == 3
 
-    # Delete only the first derived log
-    response = await _delete_derived_logs(client, project_name, derived_log_ids1)
+    # Delete only the first derived log using unified endpoint
+    ids_and_fields = [(id_, key1) for id_ in log_ids]
+    response = await _delete_logs(
+        client,
+        ids_and_fields,
+        project_name=project_name,
+        source_type="derived",
+    )
     assert response.status_code == 200
-    assert "Successfully deleted" in response.json()["info"]
+    assert "Logs and fields deleted successfully" in response.json()["info"]
 
     # Verify first derived log is deleted but second remains
     response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
@@ -471,10 +477,16 @@ async def test_delete_derived_logs(client: AsyncClient):
         if log["id"] in log_ids:  # Only check base logs that had derived entries
             assert "derived2" in log["derived_entries"]
 
-    # Delete second derived log
-    response = await _delete_derived_logs(client, project_name, derived_log_ids2)
+    # Delete second derived log using unified endpoint
+    ids_and_fields = [(id_, key2) for id_ in log_ids]
+    response = await _delete_logs(
+        client,
+        ids_and_fields,
+        project_name=project_name,
+        source_type="derived",
+    )
     assert response.status_code == 200
-    assert "Successfully deleted" in response.json()["info"]
+    assert "Logs and fields deleted successfully" in response.json()["info"]
 
     # Verify all derived logs are deleted
     response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
@@ -482,53 +494,6 @@ async def test_delete_derived_logs(client: AsyncClient):
     logs = response.json()["logs"]
     for log in logs:
         assert len(log["derived_entries"]) == 0
-
-
-@pytest.mark.anyio
-async def test_delete_derived_logs_by_filter(client: AsyncClient):
-    project_name = "test_delete_derived_by_filter"
-    await _create_project(client, project_name)
-
-    # Create base logs
-    log_ids = []
-    for i in range(2):
-        response = await _create_log(client, project_name, entries={"a": i * 10})
-        assert response.status_code == 200
-        log_ids.append(response.json()[0])
-
-    # Create derived log
-    key = "derived1"
-    equation = "{log1:a}*2"
-    referenced_logs = {"log1": log_ids}
-    response = await _create_derived_entry(
-        client,
-        project_name,
-        key,
-        equation,
-        referenced_logs,
-    )
-    assert response.status_code == 200
-    derived_log_ids = response.json()["derived_log_ids"]
-    assert len(derived_log_ids) == 2
-
-    # Delete specific derived log by filter
-    response = await _delete_derived_logs(
-        client,
-        project_name,
-        {"from_fields": "derived1"},
-    )
-    assert response.status_code == 200
-    assert "Successfully deleted" in response.json()["info"]
-
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
-    assert response.status_code == 200
-    logs = response.json()["logs"]
-
-    for log in logs:
-        if log["id"] == log_ids[0]:
-            assert "derived1" not in log["derived_entries"]
-        elif log["id"] == log_ids[1]:
-            assert "derived1" not in log["derived_entries"]
 
 
 @pytest.mark.anyio
@@ -2876,7 +2841,7 @@ async def test_get_logs_with_group_threshold(client: AsyncClient):
         assert len(log["entries"]) == 6  # All 6 fields should be present
 
     # Test with empty logs
-    _ = await _delete_logs(client, [([1, 2, 3, 4], None)])
+    _ = await _delete_logs(client, [([1, 2, 3, 4], None)], project_name=project_name)
     response = await client.get(
         f"/v0/logs?project={project_name}&group_threshold=1",
         headers=HEADERS,
@@ -4303,7 +4268,7 @@ async def test_delete_logs(client: AsyncClient):
     assert response.status_code == 200, response.json()
 
     # Delete the logs
-    response = await _delete_logs(client, ids_and_fields)
+    response = await _delete_logs(client, ids_and_fields, project_name=project_name)
     assert response.status_code == 200, response.json()
     assert response.json()["info"] == "Logs and fields deleted successfully!"
 
@@ -4408,7 +4373,11 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
     ids_and_fields = [(log_id1, entry_to_delete), (log_id2, entry_to_delete)]
 
     # Delete entries from the logs
-    response = await _delete_log_fields_from_logs(client, ids_and_fields)
+    response = await _delete_log_fields_from_logs(
+        client,
+        ids_and_fields,
+        project_name=project_name,
+    )
     assert response.status_code == 200, response.json()
     assert response.json()["info"] == "Logs and fields deleted successfully!"
 
@@ -4430,6 +4399,7 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
         client,
         ids_and_fields,
         delete_empty_logs=True,
+        project_name=project_name,
     )
     assert response.status_code == 200, response.json()
     assert response.json()["info"] == "Logs and fields deleted successfully!"
