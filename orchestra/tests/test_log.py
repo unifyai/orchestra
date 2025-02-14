@@ -941,20 +941,16 @@ async def test_create_log_w_image(client: AsyncClient):
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
-    assert field_types_response.json() == {
-        "img_raw": {
-            "data_type": "image",
-            "field_type": "entry",
-            "mutable": True,
-            "artifacts": "",
-        },
-        "img_url": {
-            "data_type": "image",
-            "field_type": "entry",
-            "mutable": True,
-            "artifacts": "",
-        },
-    }
+    assert field_types_response.json()["img_raw"]["data_type"] == "image"
+    assert field_types_response.json()["img_url"]["data_type"] == "image"
+    assert field_types_response.json()["img_raw"]["field_type"] == "entry"
+    assert field_types_response.json()["img_url"]["field_type"] == "entry"
+    assert field_types_response.json()["img_raw"]["mutable"] == True
+    assert field_types_response.json()["img_url"]["mutable"] == True
+    assert field_types_response.json()["img_raw"]["artifacts"] == ""
+    assert field_types_response.json()["img_url"]["artifacts"] == ""
+    assert field_types_response.json()["img_raw"]["created_at"] is not None
+    assert field_types_response.json()["img_url"]["created_at"] is not None
 
 
 @pytest.mark.anyio
@@ -4442,26 +4438,32 @@ async def test_create_log_strongly_typed(client: AsyncClient):
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
-    assert field_types_response.json() == {
-        "a/b/param1": {
-            "data_type": "str",
-            "field_type": "param",
-            "mutable": True,
-            "artifacts": "",
-        },
-        "score": {
-            "data_type": "int",
-            "field_type": "entry",
-            "mutable": True,
-            "artifacts": "",
-        },
-        "logged_at": {
-            "data_type": "timestamp",
-            "field_type": "entry",
-            "mutable": True,
-            "artifacts": "",
-        },
-    }
+    field_types = field_types_response.json()
+
+    # Verify field types and their properties
+    assert "a/b/param1" in field_types
+    param1_type = field_types["a/b/param1"]
+    assert param1_type["data_type"] == "str"
+    assert param1_type["field_type"] == "param"
+    assert param1_type["mutable"] is True
+    assert param1_type["artifacts"] == ""
+    assert "created_at" in param1_type
+
+    assert "score" in field_types
+    score_type = field_types["score"]
+    assert score_type["data_type"] == "int"
+    assert score_type["field_type"] == "entry"
+    assert score_type["mutable"] is True
+    assert score_type["artifacts"] == ""
+    assert "created_at" in score_type
+
+    assert "logged_at" in field_types
+    logged_at_type = field_types["logged_at"]
+    assert logged_at_type["data_type"] == "timestamp"
+    assert logged_at_type["field_type"] == "entry"
+    assert logged_at_type["mutable"] is True
+    assert logged_at_type["artifacts"] == ""
+    assert "created_at" in logged_at_type
 
 
 @pytest.mark.anyio
@@ -4550,12 +4552,11 @@ async def test_update_logs_previously_none(client: AsyncClient):
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
-    assert field_types_response.json()["a/b/c/numeric_input"] == {
-        "data_type": "NoneType",
-        "field_type": "entry",
-        "mutable": True,
-        "artifacts": "",
-    }
+    assert field_types_response.json()["a/b/c/numeric_input"]["data_type"] == "NoneType"
+    assert field_types_response.json()["a/b/c/numeric_input"]["field_type"] == "entry"
+    assert field_types_response.json()["a/b/c/numeric_input"]["mutable"] == True
+    assert field_types_response.json()["a/b/c/numeric_input"]["artifacts"] == ""
+    assert field_types_response.json()["a/b/c/numeric_input"]["created_at"] is not None
 
     # Update the log with strongly typed fields, but previously None
     response = await client.put(
@@ -4579,12 +4580,11 @@ async def test_update_logs_previously_none(client: AsyncClient):
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
-    assert field_types_response.json()["a/b/c/numeric_input"] == {
-        "data_type": "float",
-        "field_type": "entry",
-        "mutable": True,
-        "artifacts": "",
-    }
+    assert field_types_response.json()["a/b/c/numeric_input"]["data_type"] == "float"
+    assert field_types_response.json()["a/b/c/numeric_input"]["field_type"] == "entry"
+    assert field_types_response.json()["a/b/c/numeric_input"]["mutable"] == True
+    assert field_types_response.json()["a/b/c/numeric_input"]["artifacts"] == ""
+    assert field_types_response.json()["a/b/c/numeric_input"]["created_at"] is not None
 
     # Now update the field back to None and verify it works
     response = await client.put(
@@ -4608,12 +4608,11 @@ async def test_update_logs_previously_none(client: AsyncClient):
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
-    assert field_types_response.json()["a/b/c/numeric_input"] == {
-        "data_type": "float",
-        "field_type": "entry",
-        "mutable": True,
-        "artifacts": "",
-    }
+    assert field_types_response.json()["a/b/c/numeric_input"]["data_type"] == "float"
+    assert field_types_response.json()["a/b/c/numeric_input"]["field_type"] == "entry"
+    assert field_types_response.json()["a/b/c/numeric_input"]["mutable"] == True
+    assert field_types_response.json()["a/b/c/numeric_input"]["artifacts"] == ""
+    assert field_types_response.json()["a/b/c/numeric_input"]["created_at"] is not None
 
 
 @pytest.mark.anyio
@@ -4883,17 +4882,11 @@ async def test_get_fields_with_derived_entries(client: AsyncClient):
     _ = await _create_project(client, project_name)
 
     # Create base logs
-    response = await client.post(
-        "/v0/logs",
-        json={
-            "project": project_name,
-            "params": {"param1": "test"},
-            "entries": {
-                "base_field": 100,
-                "temperature": 25.5,
-            },
-        },
-        headers=HEADERS,
+    response = await _create_log(
+        client,
+        project_name,
+        params={"param1": "test"},
+        entries={"base_field": 100, "temperature": 25.5},
     )
     assert response.status_code == 200
     log_id = response.json()[0]
@@ -4934,24 +4927,43 @@ async def test_get_fields_with_derived_entries(client: AsyncClient):
     assert fields["base_field"]["field_type"] == "entry"
     assert fields["base_field"]["data_type"] == "int"
     assert fields["base_field"]["artifacts"] == ""
+    assert fields["base_field"]["created_at"] is not None
+    assert fields["base_field"]["mutable"] is True
 
     assert fields["temperature"]["field_type"] == "entry"
     assert fields["temperature"]["data_type"] == "float"
     assert fields["temperature"]["artifacts"] == ""
+    assert fields["temperature"]["created_at"] is not None
+    assert fields["temperature"]["mutable"] is True
 
     # Verify params
     assert fields["param1"]["field_type"] == "param"
     assert fields["param1"]["data_type"] == "str"
     assert fields["param1"]["artifacts"] == ""
+    assert fields["param1"]["created_at"] is not None
+    assert fields["param1"]["mutable"] is True
 
     # Verify derived entries
     assert fields["temp_plus_10"]["field_type"] == "derived_entry"
     assert fields["temp_plus_10"]["data_type"] == "int"
     assert fields["temp_plus_10"]["artifacts"] == "{t:temperature} + 10"
+    assert fields["temp_plus_10"]["created_at"] is not None
+    assert (
+        fields["temp_plus_10"]["mutable"] is False
+    )  # Derived entries are always immutable
 
     assert fields["double_base"]["field_type"] == "derived_entry"
     assert fields["double_base"]["data_type"] == "int"
     assert fields["double_base"]["artifacts"] == "{b:base_field} * 2"
+    assert fields["double_base"]["created_at"] is not None
+    assert (
+        fields["double_base"]["mutable"] is False
+    )  # Derived entries are always immutable
+
+    # Verify field ordering by created_at
+    created_times = [fields[k]["created_at"] for k in fields.keys()]
+    assert created_times == sorted(created_times)
+
 
 async def test_field_type_constraints_and_mutability(client: AsyncClient):
     """Test that fields maintain their type (entry/param/derived) consistently and respect mutability."""
