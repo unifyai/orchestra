@@ -142,6 +142,18 @@ class DeleteLogsRequest(BaseModel):
 
 
 class DeleteLogEntryRequest(BaseModel):
+    project: str = Field(
+        description="Name of the project the logs belong to.",
+        example="eval-project",
+    )
+    context: ContextCreateRequest | None = Field(
+        default=None,
+        description="Optional context path to update for the logs. "
+        "Can use '/' for nested contexts (e.g. 'training/batch1').",
+        json_schema_extra={
+            "example": "experiment1/trial1",
+        },
+    )
     ids_and_fields: List[
         Tuple[Union[int, List[int]], Union[None, str, List[str]]]
     ] = Field(
@@ -153,6 +165,15 @@ class DeleteLogEntryRequest(BaseModel):
             ([458, 459, 460], "response"),
         ],
         min_items=1,
+    )
+    source_type: str = Field(
+        default="all",
+        description="Specifies which type of logs to delete. Can be 'base' for base logs only, "
+        "'derived' for derived logs only, or 'all' to delete from both types.",
+        json_schema_extra={
+            "example": "all",
+            "enum": ["base", "derived", "all"],
+        },
     )
 
 
