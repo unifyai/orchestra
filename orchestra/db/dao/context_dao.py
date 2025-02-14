@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 
 from fastapi import Depends
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
@@ -27,8 +28,10 @@ class ContextDAO:
         description: Optional[str] = None,
         is_versioned: bool = False,
     ) -> int:
+        """Create a new context using upsert to handle race conditions."""
         ts = datetime.now(timezone.utc)
-        new_context = Context(
+
+        stmt = pg_insert(Context).values(
             project_id=project_id,
             name=name,
             description=description,
@@ -38,9 +41,24 @@ class ContextDAO:
             version=1,
         )
 
-        self.session.add(new_context)
+        # On conflict, do nothing and return the existing context's id
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=["project_id", "name"],
+        ).returning(Context.id)
+
+        result = self.session.execute(stmt)
+        context_id = result.scalar()
+
+        if context_id is None:
+            # If insert failed due to conflict, retrieve the existing context
+            context = self.filter(project_id=project_id, name=name)
+            if context:
+                context_id = context[0][0].id
+            else:
+                raise ValueError(f"Failed to create or retrieve context {name}")
+
         self.session.commit()
-        return new_context.id
+        return context_id
 
     def filter(
         self,
@@ -111,21 +129,8 @@ class ContextDAO:
         name: str,
         description: Optional[str] = None,
         is_versioned: bool = False,
-    ) -> Context:
-        """Get or create a context.
-
-        Args:
-            project_id: ID of the project to create the context in
-            name: Name of the context to create
-            description: Optional description for the context
-            version: Optional version for the context
-
-        Returns:
-            Context: The created or existing context
-        """
-        context = self.filter(project_id=project_id, name=name)
-        if context:
-            return context[0][0].id
+    ) -> int:
+        """Get or create a context using upsert."""
         return self.create(
             project_id=project_id,
             name=name,
@@ -183,17 +188,13 @@ class ContextDAO:
                 is_versioned=body.is_versioned,
             )
         else:
-            # create a new context with a default name if it doesn't exist
-            context = self.filter(project_id=project_id, name="default")
-            if context:
-                return context[0][0].id
-            else:
-                return self.create(
-                    project_id=project_id,
-                    name="default",
-                    description="default context",
-                    is_versioned=False,
-                )
+            # Create or get default context using upsert
+            return self.get_or_create(
+                project_id=project_id,
+                name="default",
+                description="default context",
+                is_versioned=False,
+            )
 
     def build_log_versions_map(self, context: Context) -> Dict[str, Dict[str, int]]:
         """
