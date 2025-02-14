@@ -103,20 +103,37 @@ def delete_project(
         example="eval-project",
     ),
     project_dao: ProjectDAO = Depends(),
+    log_event_dao: LogEventDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
 ):
     """
     Deletes a project from your account.
     """
     try:
-        project_id = project_dao.filter(
-            user_id=request_fastapi.state.user_id,
-            # TODO: Deal with org when appropriate
-            name=name,
-        )[0][0].id
-        project_dao.delete(id=project_id)
+        # Get the project
+        project = project_dao.filter(user_id=request_fastapi.state.user_id, name=name)[
+            0
+        ][0]
+
+        # Get all contexts for this project and delete them
+        # This will cascade delete log_event_context associations
+        contexts = context_dao.filter(project_id=project.id)
+        for context in contexts:
+            context_dao.delete(context[0].id)
+
+        # Now get and delete any remaining log events
+        # This will cascade delete logs and derived logs
+        log_events = log_event_dao.filter(project_id=project.id)
+        for event in log_events:
+            log_event_dao.delete(event[0].id)
+
+        # Finally delete the project
+        # This will cascade delete interfaces and temp_interfaces
+        project_dao.delete(id=project.id)
+
     except (IndexError, ValueError):
         raise not_found(f"Project {name}")
-    # TODO: Deal with organisation IDs
+
     return {"info": "Project deleted successfully"}
 
 
