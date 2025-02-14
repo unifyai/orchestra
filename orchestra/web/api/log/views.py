@@ -2823,8 +2823,13 @@ def rename_field(
             "content": {
                 "application/json": {
                     "example": {
-                        "field1": "string",
-                        "field2": "int",
+                        "field1": {
+                            "data_type": "string",
+                            "field_type": "entry",
+                            "mutable": "true",
+                            "created_at": "2025-02-14T10:00:00Z",
+                            "artifacts": "",
+                        },
                     },
                 },
             },
@@ -2849,12 +2854,16 @@ def get_fields(
     ),
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
     Returns a dictionary of field names and their types for the specified project.
-    Strongly typed fields return their type, while others return None.
+    Each field entry contains:
+    - data_type: The data type of the field (int, str, etc)
+    - field_type: Whether it's an entry, param, or derived_entry
+    - mutable: Whether the field can be modified
+    - created_at: When the field was first created
+    - artifacts: For derived entries, contains the equation
     """
     try:
         user_id = request_fastapi.state.user_id
@@ -2862,93 +2871,31 @@ def get_fields(
     except IndexError:
         raise not_found(f"Project {project}")
 
+    # Get all field types with mutability info
     types = field_type_dao.get_field_types(project_obj.id, return_mutable=True)
-    # Get all field names from base and derived logs
-    log_keys_query = (
-        session.query(Log.key)
-        .join(LogEvent, LogEvent.id == Log.log_event_id)
-        .filter(LogEvent.project_id == project_obj.id)
-        .distinct()
-    )
 
-    derived_log_keys_query = (
-        session.query(DerivedLog.key)
+    # For derived entries, get their equations
+    derived_equations = {}
+    derived_fields = (
+        session.query(DerivedLog.key, DerivedLog.equation)
         .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
         .filter(LogEvent.project_id == project_obj.id)
         .distinct()
+        .all()
     )
+    for key, equation in derived_fields:
+        derived_equations[key] = equation
 
-    query = log_keys_query.union(derived_log_keys_query)
-    all_field_names = "&".join([field.key for field in query.all()])
-
-    # Get raw rows from _get_logs_query
-    # raw_rows is a list of:
-    # - row_key
-    # - row_value
-    # - row_inferred_type
-    # - row_version
-    # - row_source_type
-    # - row_created_at
-    # - row_event_id
-    (raw_rows, _, _) = _get_logs_query(
-        request_fastapi,
-        project=project,
-        column_context=None,
-        context=None,
-        filter_expr=None,
-        sorting=None,
-        from_ids=None,
-        exclude_ids=None,
-        from_fields=all_field_names,
-        exclude_fields=None,
-        limit=1,
-        offset=0,
-        project_dao=project_dao,
-        field_type_dao=field_type_dao,
-        context_dao=context_dao,
-        session=session,
-        latest_timestamp=False,
-    )
-
-    # Process raw rows to determine field types
-    field_types = dict(
-        (
-            row[0],  # key
-            (
-                "derived_entry"
-                if row[5] == "derived"  # source_type
-                else "entry"
-                if row[3] is None
-                else "param"  # version
-            ),
-        )
-        for row in raw_rows
-    )
-
-    # Return field types in the same order as they were created
+    # Build response
     return {
         key: {
-            "data_type": types.get(key).get("field_type"),
-            "field_type": field_types.get(key),
-            "mutable": types.get(key, {}).get("mutable", True),
-            "artifacts": (
-                (
-                    session.query(DerivedLog.equation)
-                    .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
-                    .filter(
-                        and_(
-                            LogEvent.project_id == project_obj.id,
-                            DerivedLog.key == key,
-                        ),
-                    )
-                    .first()[0]
-                    or ""
-                )
-                if field_types.get(key) == "derived_entry"
-                else ""
-            ),
+            "data_type": info["field_type"],
+            "field_type": info["field_category"],
+            "mutable": info["mutable"],
+            "created_at": info["created_at"],
+            "artifacts": derived_equations.get(key, ""),
         }
-        for key in types.keys()
+        for key, info in types.items()
     }
 
 
