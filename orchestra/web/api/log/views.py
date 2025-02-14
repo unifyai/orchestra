@@ -51,7 +51,6 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.web.api.log.schema import (
     CreateDerivedEntriesConfig,
     CreateLogConfig,
-    DeleteDerivedLogsRequest,
     DeleteLogEntryRequest,
     RenameFieldRequest,
     SetFieldTypingRequest,
@@ -752,127 +751,6 @@ def update_derived_log(
             "info": f"Updated references and replaced {len(valid_logs)} old derived logs with {len(new_derived_logs)} new ones.",
             "derived_log_ids": [obj.id for obj in new_derived_logs],
         }
-
-
-@router.delete(
-    "/logs/derived",
-    responses={
-        200: {
-            "description": "Derived logs deleted successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "info": "Successfully deleted 3 derived logs.",
-                    },
-                },
-            },
-        },
-        404: {
-            "description": "Derived Log Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "One or more derived logs were not found or you don't have permission to delete them.",
-                    },
-                },
-            },
-        },
-    },
-)
-def delete_derived_logs(
-    request_fastapi: Request,
-    body: DeleteDerivedLogsRequest,
-    derived_log_dao: DerivedLogDAO = Depends(),
-    log_event_dao: LogEventDAO = Depends(),
-    project_dao: ProjectDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
-    session=Depends(get_db_session),
-):
-    """
-    Deletes specified derived log entries. Logs can be specified either by a direct list
-    of derived log IDs or by get_logs-style filters. Only deletes derived logs that belong
-    to the user's project and where the user has appropriate permissions.
-    """
-    user_id = request_fastapi.state.user_id
-
-    # Validate project and get project ID
-    try:
-        project_obj = project_dao.filter(name=body.project, user_id=user_id)[0][0]
-        project_id = project_obj.id
-    except IndexError:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project '{body.project}' not found.",
-        )
-
-    # Get list of derived log IDs to delete
-    derived_log_ids = []
-    if isinstance(body.target_derived_logs, list):
-        derived_log_ids = body.target_derived_logs
-    else:
-        # Use the filter expression to find matching derived logs
-        raw_rows, _, _ = _get_logs_query(
-            request_fastapi=request_fastapi,
-            project=body.project,
-            column_context=body.target_derived_logs.get("column_context"),
-            context=body.target_derived_logs.get("context"),
-            filter_expr=body.target_derived_logs.get("filter_expr"),
-            sorting=body.target_derived_logs.get("sort"),
-            from_ids=body.target_derived_logs.get("from_ids"),
-            exclude_ids=body.target_derived_logs.get("exclude_ids"),
-            from_fields=body.target_derived_logs.get("from_fields"),
-            exclude_fields=body.target_derived_logs.get("exclude_fields"),
-            limit=body.target_derived_logs.get("limit"),
-            offset=body.target_derived_logs.get("offset", 0),
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            session=session,
-        )
-
-        # Extract derived log IDs from raw rows
-        derived_log_event_ids = set()
-        for row in raw_rows:
-            if row[5] == "derived":  # source_type is "derived"
-                derived_log_event_ids.add(row[-1])  # id
-
-        # Now find the actual derived_log IDs
-        derived_log_ids = (
-            session.query(DerivedLog.id)
-            .filter(
-                DerivedLog.log_event_id.in_(derived_log_event_ids),
-            )
-            .all()
-        )
-        derived_log_ids = [t[0] for t in derived_log_ids]
-
-    if not derived_log_ids:
-        return {"info": "No derived logs found matching the criteria."}
-
-    # Track which logs we couldn't delete
-    not_found_logs = []
-    deleted_count = 0
-
-    # Delete each derived log if user has permission
-    for dlog_id in derived_log_ids:
-        # Delete the derived log
-        try:
-            derived_log_dao.delete(id=dlog_id)
-            deleted_count += 1
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error deleting derived log {dlog_id}: {str(e)}",
-            )
-
-    if not_found_logs:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Derived logs with IDs {not_found_logs} were not found or you don't have permission to delete them.",
-        )
-
-    return {"info": f"Successfully deleted {deleted_count} derived logs."}
 
 
 @router.put(
