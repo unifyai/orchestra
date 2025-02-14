@@ -175,7 +175,7 @@ def create_logs(
         )
 
     # Get field types once for all operations
-    field_types = field_type_dao.get_field_types(project_id)
+    field_types = field_type_dao.get_field_types(project_id, return_mutable=True)
 
     def enforce_types(
         field_name,
@@ -183,15 +183,35 @@ def create_logs(
         batch_index=None,
         explicit_types=None,
         context_id=None,
+        is_param=False,
     ):
         entered_type = LogDAO.infer_type(field_name, value)
-        expected_type = field_types.get(field_name)
+        field_info = field_types.get(field_name)
+        if field_info:
+            # Check field category first
+            existing_category = field_info["field_category"]
+            new_category = "param" if is_param else "entry"
+            if existing_category != new_category:
+                new_article = "an" if new_category == "entry" else "a"
+                existing_article = "an" if existing_category == "entry" else "a"
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Field '{field_name}' already exists as {existing_article} {existing_category}. Cannot create it as {new_article} {new_category}.",
+                )
+
+        # Then check data type
+        expected_type = field_info["field_type"] if field_info else None
         if expected_type:
             if expected_type == "NoneType":
                 if entered_type == "NoneType":
                     return
                 # update the field type to the new type
-                field_type_dao.upsert_field_type(project_id, field_name, value)
+                field_type_dao.upsert_field_type(
+                    project_id,
+                    field_name,
+                    value,
+                    field_category="param" if is_param else "entry",
+                )
             elif entered_type != expected_type:
                 batch_info = (
                     f" (in batch entry {batch_index})"
@@ -217,6 +237,7 @@ def create_logs(
                 field_name,
                 value,
                 mutable=mutable,
+                field_category="param" if is_param else "entry",
             )
 
     # Process each log in the batch
@@ -255,7 +276,7 @@ def create_logs(
         )
         # Process params
         for k, v in current_params.items():
-            enforce_types(k, v, i, params_explicit_types, context_id)
+            enforce_types(k, v, i, params_explicit_types, context_id, is_param=True)
             # see if there is any param with the same value
             existing_param = log_dao.filter(
                 key=k,
@@ -287,7 +308,7 @@ def create_logs(
 
         # Process entries
         for k, v in current_entries.items():
-            enforce_types(k, v, i, entries_explicit_types, context_id)
+            enforce_types(k, v, i, entries_explicit_types, context_id, is_param=False)
             log_dao.create_from_raw_k_v(
                 project_id=project_id,
                 log_event_id=log_event_id,
@@ -479,8 +500,14 @@ def create_derived_entry(
                 )
                 created_derived_ids.append(new_derived_id)
 
-        # Create a field type for the derived log
-        field_type_dao.create_field_type_if_absent(project_obj.id, body.key, val)
+        # Create or update field type record for derived entry
+        field_type_dao.create_field_type_if_absent(
+            project_id=project_obj.id,
+            field_name=body.key,
+            value=val,
+            field_category="derived_entry",
+        )
+
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -905,7 +932,7 @@ def update_logs(
                         if explicit_types
                         else False
                     )
-                    new_field_types.append((k, v, mutable))
+                    new_field_types.append((k, v, mutable, data_type))
 
                 # Compute the version based on whether we're handling params or entries.
                 if data_type == "params":
@@ -1015,13 +1042,14 @@ def update_logs(
 
     # Create any new field types collected from the updates.
     if new_field_types:
-        for k, v, mutable in new_field_types:
+        for k, v, mutable, data_type in new_field_types:
             try:
                 field_type_dao.create_field_type_if_absent(
                     project_id,
                     k,
                     v,
                     mutable=mutable,
+                    field_category=data_type,
                 )
             except Exception as e:
                 raise HTTPException(
