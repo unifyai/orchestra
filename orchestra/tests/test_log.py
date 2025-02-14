@@ -4953,6 +4953,119 @@ async def test_get_fields_with_derived_entries(client: AsyncClient):
     assert fields["double_base"]["data_type"] == "int"
     assert fields["double_base"]["artifacts"] == "{b:base_field} * 2"
 
+async def test_field_type_constraints_and_mutability(client: AsyncClient):
+    """Test that fields maintain their type (entry/param/derived) consistently and respect mutability."""
+    project_name = "test_field_type_constraints"
+    await _create_project(client, project_name)
+
+    # Create a parameter
+    param_response = await _create_log(
+        client,
+        project_name,
+        params={"test_field": "value"},
+        entries={},
+    )
+    assert param_response.status_code == 200, param_response.json()
+
+    # Try to create an entry with the same name (should fail)
+    entry_response = await _create_log(
+        client,
+        project_name,
+        entries={"test_field": "value"},
+        params={},
+    )
+    assert entry_response.status_code == 400, entry_response.json()
+    assert "already exists as a param" in entry_response.json()["detail"]
+    assert "Cannot create it as an entry" in entry_response.json()["detail"]
+
+    # Verify field type and mutability in field types
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+
+    assert field_types["test_field"]["field_type"] == "param"
+    assert field_types["test_field"]["mutable"] is True
+    assert field_types["test_field"]["created_at"] is not None
+
+    # Create an entry
+    entry_response = await _create_log(
+        client,
+        project_name,
+        entries={"entry_field": "value"},
+        params={},
+    )
+    assert entry_response.status_code == 200, entry_response.json()
+
+    # Try to create a parameter with the same name (should fail)
+    param_response = await _create_log(
+        client,
+        project_name,
+        params={"entry_field": "value"},
+        entries={},
+    )
+    assert param_response.status_code == 400, param_response.json()
+    assert "already exists as an entry" in param_response.json()["detail"]
+    assert "Cannot create it as a param" in param_response.json()["detail"]
+
+    # Create a derived entry
+    derived_response = await _create_derived_entry(
+        client,
+        project_name,
+        key="derived_field",
+        equation="{x:entry_field}",
+        referenced_logs={"x": [3]},
+    )
+    assert derived_response.status_code == 200, derived_response.json()
+
+    # Try to create an entry with the same name as derived (should fail)
+    entry_response = await _create_log(
+        client,
+        project_name,
+        entries={"derived_field": "value"},
+        params={},
+    )
+    assert entry_response.status_code == 400, entry_response.json()
+    assert "already exists as a derived_entry" in entry_response.json()["detail"]
+    assert "Cannot create it as an entry" in entry_response.json()["detail"]
+
+    # Try to create a param with the same name as derived (should fail)
+    param_response = await _create_log(
+        client,
+        project_name,
+        params={"derived_field": "value"},
+        entries={},
+    )
+    assert param_response.status_code == 400, param_response.json()
+    assert "already exists as a derived_entry" in param_response.json()["detail"]
+    assert "Cannot create it as a param" in param_response.json()["detail"]
+
+    # Try to create a derived entry with same name as param (should fail)
+    derived_response = await _create_derived_entry(
+        client,
+        project_name,
+        key="test_field",  # This is already a param
+        equation="{x:entry_field}",
+        referenced_logs={"x": [3]},
+    )
+    assert derived_response.status_code == 500, derived_response.json()
+    assert "already exists as a param" in derived_response.json()["detail"]
+    assert "Cannot create it as a derived_entry" in derived_response.json()["detail"]
+
+    # Try to create a derived entry with same name as entry (should fail)
+    derived_response = await _create_derived_entry(
+        client,
+        project_name,
+        key="entry_field",  # This is already an entry
+        equation="{x:entry_field}",
+        referenced_logs={"x": [3]},
+    )
+    assert derived_response.status_code == 500, derived_response.json()
+    assert "already exists as an entry" in derived_response.json()["detail"]
+    assert "Cannot create it as a derived_entry" in derived_response.json()["detail"]
+
 
 # TODO: remove this test once we enforce strong typing on all fields.
 @pytest.mark.anyio
