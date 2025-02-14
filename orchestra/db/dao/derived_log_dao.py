@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional, Union
 
 from fastapi import Depends
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
@@ -72,6 +73,53 @@ class DerivedLogDAO:
         self.session.add(new_derived_log)
         self.session.commit()
         return new_derived_log.id
+
+    def filter(
+        self,
+        id: Optional[Union[int, List[int]]] = None,
+        log_event_id: Optional[Union[int, List[int]]] = None,
+        key: Optional[Union[str, List[str]]] = None,
+        value: Optional[Union[str, List[str]]] = None,
+        equation: Optional[Union[str, List[str]]] = None,
+        project_id: Optional[int] = None,
+        defer: bool = False,
+    ) -> List[DerivedLog]:
+        def normalize_input(value):
+            if value is None or isinstance(value, list):
+                return value
+            return [value]
+
+        id = normalize_input(id)
+        log_event_id = normalize_input(log_event_id)
+        key = normalize_input(key)
+        value = normalize_input(value)
+        equation = normalize_input(equation)
+
+        if id == [] or log_event_id == [] or key == [] or value == [] or equation == []:
+            return []
+
+        query = select(DerivedLog).join(
+            LogEvent,
+            LogEvent.id == DerivedLog.log_event_id,
+        )
+        if id:
+            query = query.where(DerivedLog.id.in_(id))
+        if log_event_id:
+            query = query.where(DerivedLog.log_event_id.in_(log_event_id))
+        if key:
+            query = query.where(DerivedLog.key.in_(key))
+        if value:
+            query = query.where(DerivedLog.value.in_(value))
+        if equation:
+            query = query.where(DerivedLog.equation.in_(equation))
+        if project_id:
+            query = query.where(LogEvent.project_id == project_id)
+
+        query = query.order_by(DerivedLog.created_at)
+        rows = self.session.execute(query)
+        if defer:
+            return rows
+        return rows.fetchall()
 
     def recompute_derived_logs(
         self,
