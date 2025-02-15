@@ -5,8 +5,10 @@ Includes endpoints related to log projects.
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 
 from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.temp_interface_dao import TempInterfaceDAO
 from orchestra.web.api.project.schema import ProjectConfig
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -105,6 +107,8 @@ def delete_project(
     project_dao: ProjectDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
     context_dao: ContextDAO = Depends(),
+    interface_dao: InterfaceDAO = Depends(),
+    temp_interface_dao: TempInterfaceDAO = Depends(),
 ):
     """
     Deletes a project from your account.
@@ -126,6 +130,28 @@ def delete_project(
         log_events = log_event_dao.filter(project_id=project.id)
         for event in log_events:
             log_event_dao.delete(event[0].id)
+
+        # TODO: This is a temporary solution to delete interfaces and temp interfaces
+        # for older projects that don't have the project_id field in the interface and temp_interface tables
+        # For new projects, the cascade delete should handle this automatically.
+        # Delete all interfaces for this project
+        interfaces = interface_dao.get_interfaces(
+            user_id=request_fastapi.state.user_id,
+            project_id=project.id,
+        )
+        for interface in interfaces:
+            interface_dao.delete_interface(interface.user_id, interface.name)
+
+        # Delete all temp interfaces for this project
+        temp_interfaces = temp_interface_dao.get_interfaces(
+            user_id=request_fastapi.state.user_id,
+            project_id=project.id,
+        )
+        for temp_interface in temp_interfaces:
+            temp_interface_dao.delete_interface(
+                temp_interface.user_id,
+                temp_interface.name,
+            )
 
         # Finally delete the project
         # This will cascade delete interfaces and temp_interfaces
