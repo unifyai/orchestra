@@ -932,7 +932,8 @@ def update_logs(
                         if explicit_types
                         else False
                     )
-                    new_field_types.append((k, v, mutable, data_type))
+                    category = "entry" if data_type == "entries" else "param"
+                    new_field_types.append((k, v, mutable, category))
 
                 # Compute the version based on whether we're handling params or entries.
                 if data_type == "params":
