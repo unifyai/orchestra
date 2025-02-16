@@ -2,7 +2,6 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.temp_interface_dao import TempInterfaceDAO
@@ -58,7 +57,6 @@ def create_interface(
     request_fastapi: Request,
     request: InterfaceConfig,
     project_dao: ProjectDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
     interface_dao: InterfaceDAO = Depends(),
     temp_interface_dao: TempInterfaceDAO = Depends(),
 ):
@@ -71,16 +69,6 @@ def create_interface(
             status_code=404,
             detail=f"Project {request.project} not found.",
         )
-    if request.context:
-        context = context_dao.filter(
-            project_id=projects[0][0].id,
-            name=request.context,
-        )
-        if len(context) == 0:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Context {request.context} not found.",
-            )
     dao = temp_interface_dao if request.temporary else interface_dao
     interfaces = dao.get_interfaces(
         request_fastapi.state.user_id,
@@ -145,7 +133,6 @@ def update_interface(
     request_fastapi: Request,
     request: InterfaceConfig,
     project_dao: ProjectDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
     interface_dao: InterfaceDAO = Depends(),
     temp_interface_dao: TempInterfaceDAO = Depends(),
 ):
@@ -158,16 +145,6 @@ def update_interface(
             status_code=404,
             detail=f"Project {request.project} not found.",
         )
-    if request.context:
-        context = context_dao.filter(
-            project_id=projects[0][0].id,
-            name=request.context,
-        )
-        if len(context) == 0:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Context {request.context} not found.",
-            )
     dao = temp_interface_dao if request.temporary else interface_dao
     interfaces = dao.get_interfaces(
         request_fastapi.state.user_id,
