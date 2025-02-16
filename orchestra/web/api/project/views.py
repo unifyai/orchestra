@@ -131,27 +131,6 @@ def delete_project(
         for event in log_events:
             log_event_dao.delete(event[0].id)
 
-        # TODO: figure out why we are needing to manually delete interfaces and temp interfaces
-        # with the cascade delete not working
-        # Delete all interfaces for this project
-        interfaces = interface_dao.get_interfaces(
-            user_id=request_fastapi.state.user_id,
-            project_id=project.id,
-        )
-        for interface in interfaces:
-            interface_dao.delete_interface(interface.user_id, interface.name)
-
-        # Delete all temp interfaces for this project
-        temp_interfaces = temp_interface_dao.get_interfaces(
-            user_id=request_fastapi.state.user_id,
-            project_id=project.id,
-        )
-        for temp_interface in temp_interfaces:
-            temp_interface_dao.delete_interface(
-                temp_interface.user_id,
-                temp_interface.name,
-            )
-
         # Finally delete the project
         # This will cascade delete interfaces and temp_interfaces
         project_dao.delete(id=project.id)
