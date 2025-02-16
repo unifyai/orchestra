@@ -67,12 +67,13 @@ class TempInterfaceDAO:
         interfaces = self.session.execute(query).scalars().all()
         return interfaces
 
-    def delete_interface(self, user_id: str, name: str):
+    def delete_interface(self, user_id: str, project_id: int, name: str):
         try:
             interface = (
                 self.session.query(TempInterface)
                 .filter(
                     TempInterface.user_id == user_id,
+                    TempInterface.project_id == project_id,
                     TempInterface.name == name,
                 )
                 .first()
