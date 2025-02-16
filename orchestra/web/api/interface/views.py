@@ -349,5 +349,9 @@ def delete_interface(
             status_code=404,
             detail="Interface not added yet. Create it first.",
         )
-    dao.delete_interface(request_fastapi.state.user_id, name=name)
+    dao.delete_interface(
+        user_id=request_fastapi.state.user_id,
+        project_id=projects[0][0].id,
+        name=name,
+    )
     return {"info": "Interface deleted successfully!"}
