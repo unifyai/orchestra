@@ -410,6 +410,20 @@ class AuthUser(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
 
+    # Relationships
+    interfaces = relationship(
+        "Interface",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    temp_interfaces = relationship(
+        "TempInterface",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
 
 # Account table (for external providers like Google, GitHub)
 # Each user can have multiple accounts
@@ -440,6 +454,20 @@ class Organization(Base):
     )
     name = Column(String, unique=True, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
+
+    # Relationships
+    interfaces = relationship(
+        "Interface",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    temp_interfaces = relationship(
+        "TempInterface",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class OrganizationMember(Base):
@@ -494,6 +522,18 @@ class Project(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     contexts = relationship("Context", back_populates="project", passive_deletes=True)
+    interfaces = relationship(
+        "Interface",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    temp_interfaces = relationship(
+        "TempInterface",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     # we want sql nulls to be distinct in the unique constraints
     # (postgresql_nulls_not_distinct=False)
     __table_args__ = (
@@ -807,9 +847,9 @@ class Interface(Base):
         index=True,
     )
     # Relationships
-    project = relationship("Project", backref="interfaces")
-    user = relationship("AuthUser", backref="interfaces")
-    organization = relationship("Organization", backref="interfaces")
+    project = relationship("Project", back_populates="interfaces")
+    user = relationship("AuthUser", back_populates="interfaces")
+    organization = relationship("Organization", back_populates="interfaces")
 
     __table_args__ = (
         UniqueConstraint("user_id", "project_id", "name", name="it_uq_project_name"),
@@ -866,9 +906,9 @@ class TempInterface(Base):
         index=True,
     )
     # Relationships
-    project = relationship("Project", backref="temp_interfaces")
-    user = relationship("AuthUser", backref="temp_interfaces")
-    organization = relationship("Organization", backref="temp_interfaces")
+    project = relationship("Project", back_populates="temp_interfaces")
+    user = relationship("AuthUser", back_populates="temp_interfaces")
+    organization = relationship("Organization", back_populates="temp_interfaces")
     __table_args__ = (
         UniqueConstraint(
             "user_id",
