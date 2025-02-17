@@ -12,8 +12,6 @@ from orchestra.web.api import (  # noqa: WPS235
     custom_api_keys,
     custom_endpoints,
     dashboard_view,
-    dataset,
-    dataset_artifact,
     docs,
     endpoint_metrics,
     interface,
@@ -124,18 +122,7 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 
-# Benchmarking
-
-api_router.include_router(
-    dataset_artifact.router,
-    tags=["Dataset Artifacts"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(  # TODO: Change this to dataset
-    dataset.router,
-    tags=["Datasets"],
-    dependencies=API_KEY_AUTH,
-)
+# Benchmarking)
 api_router.include_router(
     project.router,
     tags=["Projects"],
