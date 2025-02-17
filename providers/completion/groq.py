@@ -78,4 +78,9 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.59, "completion": 0.79},
     },
+    "qwen-2.5-coder-32b-instruct": {
+        "endpoint": "groq/qwen-2.5-coder-32b",
+        "context_window": 32768,
+        "cost": {"prompt": 0.79, "completion": 0.79},
+    },
 }

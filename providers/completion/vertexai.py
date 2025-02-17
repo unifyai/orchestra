@@ -68,7 +68,7 @@ supported_models = {
         "endpoint": "vertex_ai/gemini-2.0-flash-lite-preview-02-05",
         "region": "us-central1",
         "context_window": 128000,
-        "cost": {"prompt": 0.075, "completion": 0.3},
+        "cost": {"prompt": 0, "completion": 0},
     },
     "gemini-2.0-flash": {
         "endpoint": "vertex_ai/gemini-2.0-flash-001",

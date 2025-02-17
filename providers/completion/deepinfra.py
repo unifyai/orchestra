@@ -128,11 +128,6 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.07, "completion": 0.16},
     },
-    "qwen-qwq-32b-preview": {
-        "endpoint": "deepinfra/Qwen/QwQ-32B-Preview",
-        "context_window": 32768,
-        "cost": {"prompt": 0.12, "completion": 0.18},
-    },
     "qwen-2.5-7b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-7B-Instruct",
         "context_window": 32000,
@@ -141,6 +136,6 @@ supported_models = {
     "qwen-2.5-72b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-72B-Instruct",
         "context_window": 32000,
-        "cost": {"prompt": 0.23, "completion": 0.40},
+        "cost": {"prompt": 0.13, "completion": 0.40},
     },
 }
