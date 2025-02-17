@@ -2998,6 +2998,8 @@ def set_field_types(
 # GroupBy Utils     #
 #####################
 
+GROUP_THRESHOLD = 100
+
 
 def _get_distinct_group_values(
     log_event_ids: List[int],
@@ -3741,7 +3743,12 @@ def _build_grouped_data(
     )
 
     # This is a list of distinct values that exist.
-
+    # check if the number of distinct values is too large
+    if len(present_values) > GROUP_THRESHOLD:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Grouping by {raw_key} would result in {len(present_values)} groups. This is too many. Please use a more specific group_by key.",
+        )
     # 2) Build subsets for each distinct value
     #    But also compute the set of all IDs that appear in these subsets
     #    so we can figure out which are missing
