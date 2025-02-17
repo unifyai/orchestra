@@ -31,7 +31,7 @@ supported_models = {
     "deepseek-r1": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-r1",
         "context_window": 160000,
-        "cost": {"prompt": 8, "completion": 8},
+        "cost": {"prompt": 3, "completion": 8},
     },
     "deepseek-v3": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-v3",
@@ -41,7 +41,7 @@ supported_models = {
     "llama-3.3-70b-chat": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.9, "completion": 0.9},
+        "cost": {"prompt": 0.1, "completion": 0.1},
     },
     "llama-3.2-3b-chat": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3p2-3b-instruct",
