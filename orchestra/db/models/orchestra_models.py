@@ -342,41 +342,6 @@ class Query(Base):
     __table_args__ = (Index("ix_user_endpoint", "user_id", "endpoint_id"),)
 
 
-class Dataset(Base):
-    """Model class for the dataset table."""
-
-    __tablename__ = "dataset"
-
-    id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), index=True)
-    name = Column(String(), nullable=False)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_userid_name"),)
-
-
-class DatasetEntry(Base):
-    """Model class for the dataset entries table."""
-
-    __tablename__ = "dataset_entry"
-
-    id = Column(String(10), primary_key=True)
-    dataset_id = Column(
-        Integer(),
-        ForeignKey("dataset.id", ondelete="CASCADE"),
-        index=True,
-    )
-    entry = Column(String(), nullable=False)  # JSON serialised
-    entry_hash = Column(String(64), nullable=False)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    __table_args__ = (
-        UniqueConstraint(
-            "dataset_id",
-            "entry_hash",
-            name="uq_dataset_entry_hash",
-        ),
-    )
-
-
 class Router(Base):
     """Model class for the router table."""
 
@@ -672,22 +637,6 @@ class Artifact(Base):
     project_id = Column(
         Integer,
         ForeignKey("project.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    key = Column(String, nullable=False)
-    value = Column(String)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    updated_at = Column(TIMESTAMP, onupdate=func.now())
-
-
-class DatasetArtifact(Base):
-    __tablename__ = "dataset_artifact"
-
-    id = Column(Integer, primary_key=True)
-    dataset_id = Column(
-        Integer,
-        ForeignKey("dataset.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
