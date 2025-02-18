@@ -818,6 +818,11 @@ class FieldType(Base):
         ForeignKey("project.id", ondelete="CASCADE"),
         nullable=False,
     )
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     field_name = Column(String, nullable=False)
     field_type = Column(String, nullable=False)
     field_category = Column(
@@ -829,7 +834,12 @@ class FieldType(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     __table_args__ = (
-        UniqueConstraint("project_id", "field_name", name="uq_project_field_name"),
+        UniqueConstraint(
+            "project_id",
+            "field_name",
+            "context_id",
+            name="uq_project_field_name_context_id",
+        ),
     )
 
 
