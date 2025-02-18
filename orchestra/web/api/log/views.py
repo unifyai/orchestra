@@ -1393,11 +1393,7 @@ def _get_logs_query(
         LogEvent.project_id == project_id,
     )
     context_name = "default" if not context else context
-    context_obj = context_dao.filter(name=context_name, project_id=project_id)
-    if context_obj:
-        context_id = context_obj[0][0].id
-    else:
-        context_id = None
+    context_id = context_dao.get_or_create(project_id, context_name)
     field_types = field_type_dao.get_field_types(project_id, context_id=context_id)
 
     # Handle user-defined filter_expr => build SQL expression on LogEvent
@@ -1839,7 +1835,7 @@ def get_logs(
         example="subjects/science/physics",
     ),
     context: Optional[str] = Query(
-        None,
+        "default",
         description="Static context to filter logs by.",
         example="training",
     ),
@@ -2019,11 +2015,7 @@ def get_logs(
             )
         # Format logs into flat structure.
         context_name = "default" if not context else context
-        context_obj = context_dao.filter(name=context_name, project_id=project_id)
-        if context_obj:
-            context_id = context_obj[0][0].id
-        else:
-            context_id = None
+        context_id = context_dao.get_or_create(project_id, context_name)
         field_order_map = field_type_dao.get_ordered_field_names(
             project_id,
             context_id=context_id,
