@@ -531,39 +531,17 @@ event.listen(
         """
         CREATE OR REPLACE FUNCTION delete_orphaned_log_events() RETURNS TRIGGER AS $$
         BEGIN
-            -- Delete any log_events that are no longer associated with any contexts
             DELETE FROM log_event
-            WHERE id NOT IN (
-                SELECT DISTINCT log_event_id
-                FROM log_event_context
-            );
-
-            -- Handle both statement-level and row-level triggers
-            IF TG_LEVEL = 'STATEMENT' THEN
-                -- Additional cleanup for statement-level operations
-                DELETE FROM log_event le
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM log_event_context lec
-                    WHERE lec.log_event_id = le.id
-                );
-            END IF;
-
+            WHERE id NOT IN (SELECT DISTINCT log_event_id FROM log_event_context);
             RETURN NULL;
         END;
         $$ LANGUAGE plpgsql;
 
-        DROP TRIGGER IF EXISTS cleanup_orphaned_log_events ON log_event_context;
-
         CREATE TRIGGER cleanup_orphaned_log_events
         AFTER DELETE ON log_event_context
-        FOR EACH ROW
-        EXECUTE FUNCTION delete_orphaned_log_events();
-
-        CREATE TRIGGER cleanup_orphaned_log_events_statement
-        AFTER DELETE ON log_event_context
         FOR EACH STATEMENT
-        EXECUTE FUNCTION delete_orphaned_log_events();
-        """,
+            EXECUTE FUNCTION delete_orphaned_log_events();
+            """,
     ),
 )
 
@@ -840,11 +818,6 @@ class FieldType(Base):
         ForeignKey("project.id", ondelete="CASCADE"),
         nullable=False,
     )
-    context_id = Column(
-        Integer,
-        ForeignKey("context.id", ondelete="CASCADE"),
-        nullable=True,
-    )
     field_name = Column(String, nullable=False)
     field_type = Column(String, nullable=False)
     field_category = Column(
@@ -856,12 +829,7 @@ class FieldType(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     __table_args__ = (
-        UniqueConstraint(
-            "project_id",
-            "context_id",
-            "field_name",
-            name="uq_project_context_field_name",
-        ),
+        UniqueConstraint("project_id", "field_name", name="uq_project_field_name"),
     )
 
 
