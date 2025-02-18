@@ -17,6 +17,8 @@ class TempInterfaceDAO:
         items: str,
         new_counter: int,
         project_id: int,
+        context: str | None = None,
+        column_context: str | None = None,
     ):
         self.session.add(
             TempInterface(
@@ -25,6 +27,8 @@ class TempInterfaceDAO:
                 items=items,
                 new_counter=new_counter,
                 project_id=project_id,
+                context=context,
+                column_context=column_context,
             ),
         )
         self.session.commit()
@@ -37,6 +41,8 @@ class TempInterfaceDAO:
         items: str,
         new_counter: int,
         new_name: str = None,
+        context: str | None = None,
+        column_context: str | None = None,
     ):
         query = select(TempInterface)
         query = (
@@ -52,6 +58,10 @@ class TempInterfaceDAO:
             setattr(entry, "project_id", project_id)
             if new_name is not None:
                 setattr(entry, "name", new_name)
+            if context is not None:
+                setattr(entry, "context", context)
+            if column_context is not None:
+                setattr(entry, "column_context", column_context)
 
     def get_interfaces(
         self,

@@ -795,6 +795,8 @@ class Interface(Base):
         nullable=False,
         index=True,
     )
+    context = Column(String(), nullable=True)
+    column_context = Column(String(), nullable=True)
     # Relationships
     project = relationship("Project", back_populates="interfaces")
     user = relationship("AuthUser", back_populates="interfaces")
@@ -854,6 +856,8 @@ class TempInterface(Base):
         nullable=False,
         index=True,
     )
+    context = Column(String(), nullable=True)
+    column_context = Column(String(), nullable=True)
     # Relationships
     project = relationship("Project", back_populates="temp_interfaces")
     user = relationship("AuthUser", back_populates="temp_interfaces")
