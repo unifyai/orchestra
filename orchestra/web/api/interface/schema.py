@@ -18,6 +18,7 @@ class Item(BaseModel):
     auto_update: str | None = None
     freeze: str | None = None
     context: str | None = None
+    column_context: str | None = None
     prev_context: str | None = None
     filters: str | None = None
     common_filter: str | None = None
@@ -48,4 +49,6 @@ class InterfaceConfig(BaseModel):
     items: list[Item]
     new_counter: int
     temporary: bool = False
-    new_name: str = None
+    new_name: str | None = None
+    context: str | None = None
+    column_context: str | None = None
