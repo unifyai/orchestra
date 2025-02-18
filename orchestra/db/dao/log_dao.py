@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Union
 from fastapi import Depends
 from sqlalchemy import cast, literal, select
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.bucket_service import BucketService
@@ -134,21 +135,23 @@ class LogDAO:
         project_id: int,
         log_event_id: int,
         key: str,
-        value: Optional[str] = None,  # JSON serialised
+        value: Optional[Any] = None,
         version: Optional[int] = None,
         inferred_type: Optional[str] = None,
         context_id: Optional[int] = None,
     ) -> int:
+        """Create a new Log row and optionally a JSONLog row with concurrency control."""
+        if (
+            inferred_type == "image"
+            and isinstance(value, str)
+            and not value.lower().startswith("http")
+        ):
+            value = self.upload_image_to_bucket(value)
+
         if isinstance(value, (dict, list)):
-            # for dicts and lists, we use JSONLog to preserve ordering
-            json_log = JSONLog(
-                log_event_id=log_event_id,
-                key=key,
-                value=value,
-            )
+            json_log = JSONLog(log_event_id=log_event_id, key=key, value=value)
             self.session.add(json_log)
 
-        # Handle versioned history
         self._handle_versioned_history(
             context_id=context_id,
             log_event_id=log_event_id,
@@ -159,42 +162,66 @@ class LogDAO:
             json_value=value,
         )
 
-        if version:
-            # Lock the rows for version check
-            query = (
-                select(Log)
-                .join(LogEvent, Log.log_event_id == LogEvent.id)
-                .where(
-                    LogEvent.project_id == project_id,
-                    Log.key == key,
-                    Log.version == version,
+        ts = datetime.now(timezone.utc)
+        if version is not None:
+            # Build an INSERT ... ON CONFLICT DO NOTHING for concurrency control.
+            insert_stmt = (
+                pg_insert(Log)
+                .values(
+                    log_event_id=log_event_id,
+                    key=key,
+                    version=version,
+                    value=value,
+                    inferred_type=inferred_type,
+                    created_at=ts,
+                    updated_at=ts,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=["log_event_id", "key", "version"],
                 )
             )
-            existing = self.session.execute(query).first()
-            if existing and existing[0].value != value:
-                raise ValueError("Version mismatch")
 
-        # If the field is of type image and value is base64, upload it to the bucket
-        if (
-            inferred_type == "image"
-            and isinstance(value, str)
-            and not value.lower().startswith("http")
-        ):
-            value = self.upload_image_to_bucket(value)
+            result = self.session.execute(insert_stmt)
+            inserted_rows = (
+                result.rowcount
+            )  # 1 if new row inserted, 0 if conflict existed
 
-        ts = datetime.now(timezone.utc)
+            if inserted_rows == 1:
+                # We successfully inserted a brand-new row, so fetch it back.
+                new_log = (
+                    self.session.query(Log)
+                    .filter_by(log_event_id=log_event_id, key=key, version=version)
+                    .one()
+                )
+            else:
+                # Another thread/process already inserted (log_event_id, key, version).
+                # Check if the existing row has the same value or not.
+                existing_log = (
+                    self.session.query(Log)
+                    .filter_by(log_event_id=log_event_id, key=key, version=version)
+                    .one()
+                )
+                if existing_log.value != value:
+                    raise ValueError(
+                        f"Version mismatch: Attempted to insert (log_event_id={log_event_id}, "
+                        f"key='{key}', version={version}) with a different value.\n"
+                        f"Existing: {existing_log.value}\nNew: {value}",
+                    )
+                # If the values match, do nothing and reuse the existing row
+                new_log = existing_log
 
-        new_log = Log(
-            log_event_id=log_event_id,
-            key=key,
-            value=value,
-            version=version,
-            inferred_type=inferred_type,
-            created_at=ts,
-            updated_at=ts,
-        )
+        else:
+            new_log = Log(
+                log_event_id=log_event_id,
+                key=key,
+                value=value,
+                version=None,
+                inferred_type=inferred_type,
+                created_at=ts,
+                updated_at=ts,
+            )
+            self.session.add(new_log)
 
-        self.session.add(new_log)
         self.session.commit()
         return new_log.id
 
