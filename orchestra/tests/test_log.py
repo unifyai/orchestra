@@ -5079,6 +5079,125 @@ async def test_field_type_constraints_and_mutability(client: AsyncClient):
     assert "Cannot create it as a derived_entry" in derived_response.json()["detail"]
 
 
+# TODO: remove this test once we enforce strong typing on all fields.
+@pytest.mark.anyio
+async def test_get_set_field_typing(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    await _create_log(client, project_name)
+
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+
+    field_types = field_types_response.json()
+
+    # ordering
+    assert list(field_types.keys()) == [
+        "a/b/param1",
+        "a/b/c/input",
+        "a/b/c/boolean_input",
+        "a/b/c/numeric_input",
+    ]
+
+    # values
+    assert field_types["a/b/c/input"]["data_type"] == "str"
+    assert field_types["a/b/c/input"]["field_type"] == "entry"
+    assert field_types["a/b/c/boolean_input"]["data_type"] == "bool"
+    assert field_types["a/b/c/boolean_input"]["field_type"] == "entry"
+    assert field_types["a/b/c/numeric_input"]["data_type"] == "float"
+    assert field_types["a/b/c/numeric_input"]["field_type"] == "entry"
+    assert field_types["a/b/param1"]["data_type"] == "str"
+    assert field_types["a/b/param1"]["field_type"] == "param"
+
+    # Set field typing for the log entries
+    response = await client.post(
+        f"/v0/logs/fields/types",
+        params={"project": project_name},
+        json={
+            "types": {
+                "a/b/c/input": True,
+                "a/b/c/boolean_input": True,
+                "a/b/c/numeric_input": False,  # delete typing for numeric_input
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["info"] == "Field types updated successfully!"
+
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+
+    field_types = field_types_response.json()
+
+    # ordering
+    # numeric_input is not included in the response because it was deleted
+    assert list(field_types.keys()) == [
+        "a/b/param1",
+        "a/b/c/input",
+        "a/b/c/boolean_input",
+    ]
+
+    # values
+    assert field_types["a/b/c/input"]["data_type"] == "str"
+    assert field_types["a/b/c/input"]["field_type"] == "entry"
+    assert field_types["a/b/c/boolean_input"]["data_type"] == "bool"
+    assert field_types["a/b/c/boolean_input"]["field_type"] == "entry"
+    assert field_types["a/b/param1"]["data_type"] == "str"
+    assert field_types["a/b/param1"]["field_type"] == "param"
+
+
+@pytest.mark.anyio
+async def test_set_field_typing_non_homogeneous(client: AsyncClient):
+    project_name = "test_project"
+    _ = await _create_project(client, project_name)
+
+    # create a log entry (with strongly_typed=True)
+    await _create_log(client, project_name)
+
+    # set strongly_typed as False for the field 'a/b/c/numeric_input'
+    response = await client.post(
+        f"/v0/logs/fields/types",
+        params={"project": project_name},
+        json={"types": {"a/b/c/numeric_input": False}},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["info"] == "Field types updated successfully!"
+
+    # now add a non-homogenous entry
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "a/b/c/numeric_input": True,
+            },
+        },
+        headers=HEADERS,
+    )
+
+    # setting strongly_typed as True for 'a/b/c/numeric_input' should fail!
+    response = await client.post(
+        f"/v0/logs/fields/types",
+        params={"project": project_name},
+        json={"types": {"a/b/c/numeric_input": True}},
+        headers=HEADERS,
+    )
+    assert response.status_code == 400
+    assert (
+        "Cannot enable typing for field 'a/b/c/numeric_input' as existing logs have different types."
+        in response.json()["detail"]
+    )
+
+
 @pytest.mark.anyio
 async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
     # Test for the following:
