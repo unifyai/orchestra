@@ -243,7 +243,7 @@ def get_context(
 
 
 @router.delete(
-    "/project/{project_name}/contexts/{context_name}",
+    "/project/{project_name}/contexts/{context_name:path}",
     responses={
         200: {
             "description": "Successful Response",
@@ -282,6 +282,7 @@ def delete_context(
     Deletes a context from a project. This will not delete the logs or artifacts
     within the context, but will remove their association with this context.
     """
+    print("Deleting context", context_name)
     try:
         project = project_dao.filter(
             user_id=request_fastapi.state.user_id,
