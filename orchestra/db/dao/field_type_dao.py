@@ -1,4 +1,4 @@
-from typing import Dict, Union
+from typing import Dict, Optional, Union
 
 from fastapi import Depends
 from sqlalchemy import select
@@ -21,6 +21,7 @@ class FieldTypeDAO:
         value,
         mutable: bool = False,
         field_category: str = "entry",
+        context_id: Optional[int] = None,
     ) -> None:
         """Upsert approach: insert or do nothing if it exists."""
         # First check if a field with this name exists but with a different category
@@ -29,6 +30,7 @@ class FieldTypeDAO:
             .filter(
                 FieldType.project_id == project_id,
                 FieldType.field_name == field_name,
+                FieldType.context_id == context_id,
             )
             .first()
         )
@@ -50,10 +52,11 @@ class FieldTypeDAO:
             field_type=inferred_type,
             field_category=field_category,
             mutable=mutable,
+            context_id=context_id,
         )
-        # "on_conflict_do_nothing" will skip insertion if (project_id, field_name) already exists:
+        # "on_conflict_do_nothing" will skip insertion if (project_id, field_name, context_id) already exists:
         stmt = stmt.on_conflict_do_nothing(
-            index_elements=["project_id", "field_name"],
+            index_elements=["project_id", "field_name", "context_id"],
         )
         self.session.execute(stmt)
         self.session.commit()
@@ -62,11 +65,15 @@ class FieldTypeDAO:
         self,
         project_id: int,
         return_mutable: bool = False,
+        context_id: Optional[int] = None,
     ) -> Dict[str, Union[str, Dict[str, Union[str, bool]]]]:
         """Retrieve field types for a specific project ordered by creation time."""
         query = (
             select(FieldType)
-            .where(FieldType.project_id == project_id)
+            .where(
+                FieldType.project_id == project_id,
+                FieldType.context_id == context_id,
+            )
             .order_by(FieldType.created_at)
         )
         field_types = self.session.execute(query).scalars().all()
@@ -95,6 +102,7 @@ class FieldTypeDAO:
         value,
         mutable: bool = False,
         field_category: str = "entry",
+        context_id: Optional[int] = None,
     ) -> None:
         """Upsert approach: insert or overwrite the existing field_type."""
         # First check if a field with this name exists but with a different category
@@ -103,6 +111,7 @@ class FieldTypeDAO:
             .filter(
                 FieldType.project_id == project_id,
                 FieldType.field_name == field_name,
+                FieldType.context_id == context_id,
             )
             .first()
         )
@@ -120,10 +129,11 @@ class FieldTypeDAO:
             field_type=inferred_type,
             field_category=field_category,
             mutable=mutable,
+            context_id=context_id,
         )
         # "on_conflict_do_update" to update existing row if it already exists
         stmt = stmt.on_conflict_do_update(
-            index_elements=["project_id", "field_name"],
+            index_elements=["project_id", "field_name", "context_id"],
             set_={
                 "field_type": inferred_type,
                 "field_category": field_category,
@@ -138,6 +148,7 @@ class FieldTypeDAO:
         project_id: int,
         field_name: str,
         mutable: bool,
+        context_id: Optional[int] = None,
     ) -> None:
         """Update only the mutability attribute of a field type using an upsert approach."""
         # First get the existing field type if it exists
@@ -146,6 +157,7 @@ class FieldTypeDAO:
             .filter(
                 FieldType.project_id == project_id,
                 FieldType.field_name == field_name,
+                FieldType.context_id == context_id,
             )
             .first()
         )
@@ -156,11 +168,17 @@ class FieldTypeDAO:
         existing.mutable = mutable
         self.session.commit()
 
-    def delete_field_type(self, project_id: int, field_name: str) -> None:
+    def delete_field_type(
+        self,
+        project_id: int,
+        field_name: str,
+        context_id: Optional[int] = None,
+    ) -> None:
         """Delete a specific field type for a project."""
         query = select(FieldType).where(
             FieldType.project_id == project_id,
             FieldType.field_name == field_name,
+            FieldType.context_id == context_id,
         )
         field_type = self.session.execute(query).scalars().first()
 
@@ -170,12 +188,17 @@ class FieldTypeDAO:
         else:
             raise ValueError("Field type does not exist.")
 
-    def get_ordered_field_names(self, project_id: int) -> Dict[str, int]:
+    def get_ordered_field_names(
+        self,
+        project_id: int,
+        context_id: Optional[int] = None,
+    ) -> Dict[str, int]:
         """Retrieve field names for a project ordered by creation time."""
         query = (
             select(FieldType.field_name)
             .where(
                 FieldType.project_id == project_id,
+                FieldType.context_id == context_id,
             )
             .order_by(FieldType.created_at)
         )
@@ -188,6 +211,7 @@ class FieldTypeDAO:
         project_id: int,
         old_field_name: str,
         new_field_name: str,
+        context_id: Optional[int] = None,
     ) -> None:
         """Rename a field type for a given project.
 
@@ -205,6 +229,7 @@ class FieldTypeDAO:
             .filter(
                 FieldType.project_id == project_id,
                 FieldType.field_name == old_field_name,
+                FieldType.context_id == context_id,
             )
             .first()
         )
@@ -220,6 +245,7 @@ class FieldTypeDAO:
             .filter(
                 FieldType.project_id == project_id,
                 FieldType.field_name == new_field_name,
+                FieldType.context_id == context_id,
             )
             .first()
         )
