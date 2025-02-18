@@ -177,6 +177,13 @@ class DeleteLogEntryRequest(BaseModel):
     )
 
 
+class SetFieldTypingRequest(BaseModel):
+    types: Dict[str, bool] = Field(
+        ...,
+        description="Dict of field names and booleans as to whether the field should be typed.",
+    )
+
+
 class UpdateDerivedEntriesConfig(BaseModel):
     project: str = Field(
         description="Name of the project these derived logs belong to.",
