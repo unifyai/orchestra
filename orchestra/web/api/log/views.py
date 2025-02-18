@@ -53,7 +53,6 @@ from orchestra.web.api.log.schema import (
     CreateLogConfig,
     DeleteLogEntryRequest,
     RenameFieldRequest,
-    SetFieldTypingRequest,
     UpdateDerivedEntriesConfig,
     UpdateLogRequest,
 )
@@ -154,6 +153,17 @@ def create_logs(
     params_list = (
         request.params if isinstance(request.params, list) else [request.params]
     )
+    # Get or create context_id
+    if request.context:
+        context_id = context_dao.get_or_create(
+            project_id,
+            name=request.context.name,
+            description=request.context.description,
+            is_versioned=request.context.is_versioned,
+        )
+    else:
+        # get the default context
+        context_id = context_dao.get_or_create(project_id, name="default")
 
     # Validate that params and entries lists have equal lengths when both are provided as lists
     if isinstance(request.entries, list) and isinstance(request.params, list):
@@ -175,7 +185,11 @@ def create_logs(
         )
 
     # Get field types once for all operations
-    field_types = field_type_dao.get_field_types(project_id, return_mutable=True)
+    field_types = field_type_dao.get_field_types(
+        project_id,
+        return_mutable=True,
+        context_id=context_id,
+    )
 
     def enforce_types(
         field_name,
@@ -211,6 +225,7 @@ def create_logs(
                     field_name,
                     value,
                     field_category="param" if is_param else "entry",
+                    context_id=context_id,
                 )
             elif entered_type != expected_type:
                 batch_info = (
@@ -238,6 +253,7 @@ def create_logs(
                 value,
                 mutable=mutable,
                 field_category="param" if is_param else "entry",
+                context_id=context_id,
             )
 
     # Process each log in the batch
@@ -248,9 +264,6 @@ def create_logs(
     total_logs = max(entries_len, params_len)
 
     for i in range(total_logs):
-        # Get or create context_id
-        context_id = context_dao.get_context_id(project_id, request.context)
-
         # Create log_event for each log
         log_event_id = log_event_dao.create(
             project_id=project_id,
@@ -396,6 +409,17 @@ def create_derived_entry(
             status_code=404,
             detail=f"Project '{body.project}' not found.",
         )
+    # Get or create context_id
+    if body.context:
+        context_id = context_dao.get_or_create(
+            project_obj.id,
+            name=body.context.name,
+            description=body.context.description,
+            is_versioned=body.context.is_versioned,
+        )
+    else:
+        # get the default context
+        context_id = context_dao.get_or_create(project_obj.id, name="default")
 
     # 3) Resolve referenced_logs
     #    We either get a direct list [101,102], or a dict e.g. {"filter_expr":...}
@@ -506,6 +530,7 @@ def create_derived_entry(
             field_name=body.key,
             value=val,
             field_category="derived_entry",
+            context_id=context_id,
         )
 
     except Exception as e:
@@ -869,10 +894,21 @@ def update_logs(
 
             # Remove explicit types if provided, which override inferred types.
             explicit_types = this_data.pop("explicit_types", {})
+            if body.context:
+                ctx_id = context_dao.get_or_create(
+                    project_id,
+                    name=body.context.name,
+                    description=body.context.description,
+                    is_versioned=body.context.is_versioned,
+                )
+            else:
+                # get the default context
+                ctx_id = context_dao.get_or_create(project_id, name="default")
             try:
                 field_types = field_type_dao.get_field_types(
                     project_id,
                     return_mutable=True,
+                    context_id=ctx_id,
                 )
             except Exception as e:
                 raise HTTPException(
@@ -890,6 +926,7 @@ def update_logs(
                             project_id,
                             k,
                             mutable=mutable_setting,
+                            context_id=ctx_id,
                         )
                     except Exception as e:
                         raise HTTPException(
@@ -911,6 +948,7 @@ def update_logs(
                                 k,
                                 v,
                                 mutable=True,
+                                context_id=ctx_id,
                             )
                         except Exception as e:
                             raise HTTPException(
@@ -962,7 +1000,6 @@ def update_logs(
                     )
 
                 # Attempt to update the log value; if it doesn't exist, create a new entry.
-                ctx_id = context_dao.get_context_id(project_id, body.context)
                 try:
                     log_dao.update_value(
                         log_event_id=log_id,
@@ -1051,6 +1088,7 @@ def update_logs(
                     v,
                     mutable=mutable,
                     field_category=data_type,
+                    context_id=ctx_id,
                 )
             except Exception as e:
                 raise HTTPException(
@@ -1354,7 +1392,9 @@ def _get_logs_query(
     log_event_query = session.query(LogEvent.id).filter(
         LogEvent.project_id == project_id,
     )
-    field_types = field_type_dao.get_field_types(project_id)
+    context_name = "default" if not context else context
+    context_id = context_dao.get_or_create(project_id, context_name)
+    field_types = field_type_dao.get_field_types(project_id, context_id=context_id)
 
     # Handle user-defined filter_expr => build SQL expression on LogEvent
     if filter_expr:
@@ -1795,7 +1835,7 @@ def get_logs(
         example="subjects/science/physics",
     ),
     context: Optional[str] = Query(
-        None,
+        "default",
         description="Static context to filter logs by.",
         example="training",
     ),
@@ -1963,11 +2003,22 @@ def get_logs(
                 dict.fromkeys(row[7] for row in all_rows),
             )  # Return unique log_event_ids
 
+        try:
+            project_id = project_dao.filter(
+                name=project,
+                user_id=request_fastapi.state.user_id,
+            )[0][0].id
+        except Exception as e:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project '{project}' not found.",
+            )
         # Format logs into flat structure.
+        context_name = "default" if not context else context
+        context_id = context_dao.get_or_create(project_id, context_name)
         field_order_map = field_type_dao.get_ordered_field_names(
-            project_dao.filter(name=project, user_id=request_fastapi.state.user_id)[0][
-                0
-            ].id,
+            project_id,
+            context_id=context_id,
         )
         logs_out, params_out = _format_flat_logs(
             all_rows,
@@ -2354,6 +2405,11 @@ def get_logs_metric(
         description="Name of the project to get entries from.",
         example="eval-project",
     ),
+    context: Optional[str] = Query(
+        "default",
+        description="Static context to filter logs by.",
+        example="training",
+    ),
     filter_expr: Optional[str] = Query(
         None,
         description="Boolean string to filter entries. TODO: Detailed page.",
@@ -2377,6 +2433,7 @@ def get_logs_metric(
     ),
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
     session=Depends(get_db_session),
 ) -> Union[float, int, bool, str]:
     """
@@ -2525,7 +2582,11 @@ def get_logs_metric(
     reduced_query = metric_query.scalar()
 
     # Post-process based on field type
-    field_type = field_type_dao.get_field_types(project_obj.id).get(key)
+    context_id = context_dao.get_or_create(project_obj.id, context)
+    field_type = field_type_dao.get_field_types(
+        project_obj.id,
+        context_id=context_id,
+    ).get(key)
     if metric == "count":
         return int(reduced_query or 0)
 
@@ -2762,6 +2823,7 @@ def rename_field(
                 project_id=project_id,
                 old_field_name=request.old_field_name,
                 new_field_name=request.new_field_name,
+                context_id=context_id,
             )
         except ValueError as e:
             if "does not exist" in str(e):
@@ -2795,6 +2857,7 @@ def rename_field(
                     project_id=project_id,
                     old_field_name=request.new_field_name,
                     new_field_name=request.old_field_name,
+                    context_id=context_id,
                 )
             except:
                 pass
@@ -2853,12 +2916,20 @@ def get_fields(
         description="Name of the project to get fields and their types for.",
         example="eval-project",
     ),
+    context: Optional[str] = Query(
+        "default",
+        description="Optional context name to filter field types",
+        example="training",
+    ),
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
     Returns a dictionary of field names and their types for the specified project.
+    If a context is provided, returns only fields associated with that context.
+
     Each field entry contains:
     - data_type: The data type of the field (int, str, etc)
     - field_type: Whether it's an entry, param, or derived_entry
@@ -2872,8 +2943,23 @@ def get_fields(
     except IndexError:
         raise not_found(f"Project {project}")
 
+    # Get context_id if context is provided
+    context_id = None
+    if context:
+        context_obj = context_dao.filter(project_id=project_obj.id, name=context)
+        if not context_obj:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Context '{context}' not found",
+            )
+        context_id = context_obj[0][0].id
+
     # Get all field types with mutability info
-    types = field_type_dao.get_field_types(project_obj.id, return_mutable=True)
+    types = field_type_dao.get_field_types(
+        project_obj.id,
+        context_id=context_id,
+        return_mutable=True,
+    )
 
     # For derived entries, get their equations
     derived_equations = {}
