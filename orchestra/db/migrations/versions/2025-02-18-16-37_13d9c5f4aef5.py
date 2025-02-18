@@ -25,7 +25,12 @@ def upgrade() -> None:
         ["project_id", "context_id", "field_name"],
     )
     op.create_foreign_key(
-        None, "field_type", "context", ["context_id"], ["id"], ondelete="CASCADE"
+        None,
+        "field_type",
+        "context",
+        ["context_id"],
+        ["id"],
+        ondelete="CASCADE",
     )
     # ### end Alembic commands ###
 
@@ -35,7 +40,9 @@ def downgrade() -> None:
     op.drop_constraint(None, "field_type", type_="foreignkey")
     op.drop_constraint("uq_project_context_field_name", "field_type", type_="unique")
     op.create_unique_constraint(
-        "uq_project_field_name", "field_type", ["project_id", "field_name"]
+        "uq_project_field_name",
+        "field_type",
+        ["project_id", "field_name"],
     )
     op.drop_column("field_type", "context_id")
     # ### end Alembic commands ###
