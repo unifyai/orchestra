@@ -2595,7 +2595,12 @@ def get_logs_metric(
     reduced_query = metric_query.scalar()
 
     # Post-process based on field type
-    context_id = context_dao.get_or_create(project_obj.id, context)
+    context_name = "default" if not context else context
+    context_id = context_dao.filter(name=context_name, project_id=project_obj.id)
+    if context_id:
+        context_id = context_id[0][0].id
+    else:
+        context_id = None
     field_type = field_type_dao.get_field_types(
         project_obj.id,
         context_id=context_id,
