@@ -530,8 +530,10 @@ async def test_versioning_constraints(client: AsyncClient):
     # Verify the field is mutable despite explicit setting
     fields_response = await client.get(
         f"/v0/logs/fields?project={project_name}",
+        params={"context": "versioned_context"},
         headers=HEADERS,
     )
+    assert fields_response.status_code == 200, fields_response.json()
     fields_data = fields_response.json()
     assert fields_data["field1"]["mutable"] == True
 
@@ -567,6 +569,7 @@ async def test_versioning_constraints(client: AsyncClient):
     # Verify the field is immutable as specified
     fields_response = await client.get(
         f"/v0/logs/fields?project={project_name}",
+        params={"context": "unversioned_context"},
         headers=HEADERS,
     )
     fields_data = fields_response.json()
