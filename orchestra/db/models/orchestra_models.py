@@ -821,7 +821,7 @@ class FieldType(Base):
     context_id = Column(
         Integer,
         ForeignKey("context.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     field_name = Column(String, nullable=False)
     field_type = Column(String, nullable=False)
