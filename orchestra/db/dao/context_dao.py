@@ -117,7 +117,30 @@ class ContextDAO:
     def delete(self, id: int) -> None:
         try:
             context = self.session.query(Context).filter_by(id=id).one()
+            print("Before Deleting context")
+            query = select(LogEventContext).where(LogEventContext.context_id == id)
+            rows = self.session.execute(query)
+            print(rows.fetchall())
+            print(len(rows.fetchall()))
+
             self.session.delete(context)
+
+            self.session.flush()
+            # Find orphaned LogEvents
+            orphaned_events = (
+                self.session.query(LogEvent)
+                .filter(~LogEvent.contexts.any())  # no associated contexts
+                .all()
+            )
+            print("After Deleting context")
+            query = select(LogEventContext).where(LogEventContext.context_id == id)
+            rows = self.session.execute(query)
+            print(rows.fetchall())
+            print(len(rows.fetchall()))
+            # Delete the orphaned log events
+            for orphan in orphaned_events:
+                self.session.delete(orphan)
+
             self.session.commit()
         except Exception:
             self.session.rollback()
