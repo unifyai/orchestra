@@ -24,12 +24,15 @@ def upgrade() -> None:
         UPDATE field_type
         SET context_id = 1
         WHERE context_id IS NULL
-    """
+    """,
     )
 
     # Now we can safely set the NOT NULL constraint
     op.alter_column(
-        "field_type", "context_id", existing_type=sa.INTEGER(), nullable=False
+        "field_type",
+        "context_id",
+        existing_type=sa.INTEGER(),
+        nullable=False,
     )
     op.drop_constraint("uq_project_context_field_name", "field_type", type_="unique")
     op.create_unique_constraint(
@@ -49,6 +52,9 @@ def downgrade() -> None:
         ["project_id", "context_id", "field_name"],
     )
     op.alter_column(
-        "field_type", "context_id", existing_type=sa.INTEGER(), nullable=True
+        "field_type",
+        "context_id",
+        existing_type=sa.INTEGER(),
+        nullable=True,
     )
     # ### end Alembic commands ###
