@@ -19,9 +19,9 @@ class FieldTypeDAO:
         project_id: int,
         field_name: str,
         value,
+        context_id: int,
         mutable: bool = False,
         field_category: str = "entry",
-        context_id: Optional[int] = None,
     ) -> None:
         """Upsert approach: insert or do nothing if it exists."""
         # First check if a field with this name exists but with a different category
@@ -63,19 +63,30 @@ class FieldTypeDAO:
 
     def get_field_types(
         self,
-        project_id: int,
-        return_mutable: bool = False,
+        project_id: Optional[int] = None,
         context_id: Optional[int] = None,
+        return_mutable: bool = False,
     ) -> Dict[str, Union[str, Dict[str, Union[str, bool]]]]:
-        """Retrieve field types for a specific project ordered by creation time."""
-        query = (
-            select(FieldType)
-            .where(
-                FieldType.project_id == project_id,
-                FieldType.context_id == context_id,
-            )
-            .order_by(FieldType.created_at)
-        )
+        """Retrieve field types for a specific project ordered by creation time.
+
+        Args:
+            project_id: Optional project ID filter
+            context_id: Optional context ID filter
+            return_mutable: Whether to return additional field metadata
+
+        Returns:
+            Dictionary mapping field names to their types or metadata
+        """
+        query = select(FieldType).order_by(FieldType.created_at)
+
+        # Build filters progressively
+        print("project_id: ", project_id)
+        print("context_id: ", context_id)
+        if project_id is not None:
+            query = query.where(FieldType.project_id == project_id)
+        if context_id is not None:
+            query = query.where(FieldType.context_id == context_id)
+
         field_types = self.session.execute(query).scalars().all()
         if return_mutable:
             return {
@@ -83,9 +94,11 @@ class FieldTypeDAO:
                     "field_type": field_type.field_type,
                     "field_category": field_type.field_category,
                     "mutable": field_type.mutable,
-                    "created_at": field_type.created_at.isoformat()
-                    if field_type.created_at
-                    else None,
+                    "created_at": (
+                        field_type.created_at.isoformat()
+                        if field_type.created_at
+                        else None
+                    ),
                 }
                 for field_type in field_types
             }
@@ -100,9 +113,9 @@ class FieldTypeDAO:
         project_id: int,
         field_name: str,
         value,
+        context_id: int,
         mutable: bool = False,
         field_category: str = "entry",
-        context_id: Optional[int] = None,
     ) -> None:
         """Upsert approach: insert or overwrite the existing field_type."""
         # First check if a field with this name exists but with a different category
@@ -148,7 +161,7 @@ class FieldTypeDAO:
         project_id: int,
         field_name: str,
         mutable: bool,
-        context_id: Optional[int] = None,
+        context_id: int,
     ) -> None:
         """Update only the mutability attribute of a field type using an upsert approach."""
         # First get the existing field type if it exists
@@ -172,7 +185,7 @@ class FieldTypeDAO:
         self,
         project_id: int,
         field_name: str,
-        context_id: Optional[int] = None,
+        context_id: int,
     ) -> None:
         """Delete a specific field type for a project."""
         query = select(FieldType).where(
@@ -190,18 +203,25 @@ class FieldTypeDAO:
 
     def get_ordered_field_names(
         self,
-        project_id: int,
+        project_id: Optional[int] = None,
         context_id: Optional[int] = None,
     ) -> Dict[str, int]:
-        """Retrieve field names for a project ordered by creation time."""
-        query = (
-            select(FieldType.field_name)
-            .where(
-                FieldType.project_id == project_id,
-                FieldType.context_id == context_id,
-            )
-            .order_by(FieldType.created_at)
-        )
+        """Retrieve field names ordered by creation time.
+
+        Args:
+            project_id: Optional project ID filter
+            context_id: Optional context ID filter
+
+        Returns:
+            Dictionary mapping field names to their order index
+        """
+        query = select(FieldType.field_name).order_by(FieldType.created_at)
+
+        # Build filters progressively
+        if project_id is not None:
+            query = query.where(FieldType.project_id == project_id)
+        if context_id is not None:
+            query = query.where(FieldType.context_id == context_id)
 
         result = self.session.execute(query).scalars().all()
         return {field: i for i, field in enumerate(result)}
@@ -211,7 +231,7 @@ class FieldTypeDAO:
         project_id: int,
         old_field_name: str,
         new_field_name: str,
-        context_id: Optional[int] = None,
+        context_id: int,
     ) -> None:
         """Rename a field type for a given project.
 
