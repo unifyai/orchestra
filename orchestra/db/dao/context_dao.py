@@ -118,19 +118,6 @@ class ContextDAO:
         try:
             context = self.session.query(Context).filter_by(id=id).one()
             self.session.delete(context)
-
-            self.session.flush()
-            # Find orphaned LogEvents
-            orphaned_events = (
-                self.session.query(LogEvent)
-                .filter(~LogEvent.contexts.any())  # no associated contexts
-                .all()
-            )
-
-            # Delete the orphaned log events
-            for orphan in orphaned_events:
-                self.session.delete(orphan)
-
             self.session.commit()
         except Exception:
             self.session.rollback()
