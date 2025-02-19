@@ -74,14 +74,6 @@ class CreateDerivedEntriesConfig(BaseModel):
             "example": "eval-project",
         },
     )
-    context: ContextCreateRequest | None = Field(
-        default=None,
-        description="Optional context path to update for the logs. "
-        "Can use '/' for nested contexts (e.g. 'training/batch1').",
-        json_schema_extra={
-            "example": "experiment1/trial1",
-        },
-    )
     key: str = Field(
         description="The name of the entry.",
         example="score_diff",
@@ -182,6 +174,13 @@ class DeleteLogEntryRequest(BaseModel):
             "example": "all",
             "enum": ["base", "derived", "all"],
         },
+    )
+
+
+class SetFieldTypingRequest(BaseModel):
+    types: Dict[str, bool] = Field(
+        ...,
+        description="Dict of field names and booleans as to whether the field should be typed.",
     )
 
 
