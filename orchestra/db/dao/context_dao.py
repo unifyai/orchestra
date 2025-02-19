@@ -117,7 +117,6 @@ class ContextDAO:
     def delete(self, id: int) -> None:
         try:
             context = self.session.query(Context).filter_by(id=id).one()
-            print("Before Deleting context")
             query = select(LogEventContext).where(LogEventContext.context_id == id)
             rows = self.session.execute(query)
             print(rows.fetchall())
@@ -132,7 +131,6 @@ class ContextDAO:
                 .filter(~LogEvent.contexts.any())  # no associated contexts
                 .all()
             )
-            print("After Deleting context")
             query = select(LogEventContext).where(LogEventContext.context_id == id)
             rows = self.session.execute(query)
             print(rows.fetchall())
