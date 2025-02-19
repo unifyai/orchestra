@@ -524,28 +524,6 @@ class LogEventContext(Base):
     )
 
 
-event.listen(
-    LogEventContext.__table__,
-    "after_create",
-    DDL(
-        """
-        CREATE OR REPLACE FUNCTION delete_orphaned_log_events() RETURNS TRIGGER AS $$
-        BEGIN
-            DELETE FROM log_event
-            WHERE id NOT IN (SELECT DISTINCT log_event_id FROM log_event_context);
-            RETURN NULL;
-        END;
-        $$ LANGUAGE plpgsql;
-
-        CREATE TRIGGER cleanup_orphaned_log_events
-        AFTER DELETE ON log_event_context
-        FOR EACH STATEMENT
-            EXECUTE FUNCTION delete_orphaned_log_events();
-            """,
-    ),
-)
-
-
 class Context(Base):
     """Model class for organizing logs and artifacts within projects."""
 
