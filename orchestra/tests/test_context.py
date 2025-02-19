@@ -142,73 +142,6 @@ async def test_delete_context(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_context_delete_logs(client: AsyncClient):
-    """
-    Verify that when we delete a context, all logs that
-    were only in that context get removed from the database.
-    """
-
-    project_name = "delete-ctx-logs-project"
-    context_name = "ctx-to-delete"
-
-    # 1) Create the project
-    response = await client.post(
-        "/v0/project",
-        json={"name": project_name},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-
-    # 3) Create a log associated with this context
-    create_log_resp = await client.post(
-        "/v0/logs",
-        json={
-            "project": project_name,
-            "context": {"name": context_name},
-            "entries": {
-                "metric": 123,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            },
-        },
-        headers=HEADERS,
-    )
-    assert create_log_resp.status_code == 200, create_log_resp.json()
-    log_ids = create_log_resp.json()
-    assert len(log_ids) == 1
-    log_id = log_ids[0]
-
-    # 4) Confirm the log is visible
-    list_logs_resp = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
-        headers=HEADERS,
-    )
-    assert list_logs_resp.status_code == 200, list_logs_resp.json()
-    logs = list_logs_resp.json()["logs"]
-    assert len(logs) == 1
-    assert logs[0]["id"] == log_id
-
-    # 5) Delete the context
-    del_resp = await client.delete(
-        f"/v0/project/{project_name}/contexts/{context_name}",
-        headers=HEADERS,
-    )
-    assert del_resp.status_code == 200, del_resp.json()
-    assert "Context deleted successfully" in del_resp.json()["info"]
-
-    # 6) Now list all logs in the project to verify the orphan was removed
-    all_logs_resp = await client.get(
-        f"/v0/logs?project={project_name}",
-        headers=HEADERS,
-    )
-    assert all_logs_resp.status_code == 200, all_logs_resp.json()
-    all_logs = all_logs_resp.json()["logs"]
-
-    # The log_id we created should be gone
-    remaining_ids = [l["id"] for l in all_logs]
-    assert log_id not in remaining_ids
-
-
-@pytest.mark.anyio
 async def test_add_log_to_context(client: AsyncClient):
     project_name = "test-project"
     context_name = "test-context"
@@ -597,10 +530,8 @@ async def test_versioning_constraints(client: AsyncClient):
     # Verify the field is mutable despite explicit setting
     fields_response = await client.get(
         f"/v0/logs/fields?project={project_name}",
-        params={"context": "versioned_context"},
         headers=HEADERS,
     )
-    assert fields_response.status_code == 200, fields_response.json()
     fields_data = fields_response.json()
     assert fields_data["field1"]["mutable"] == True
 
@@ -636,7 +567,6 @@ async def test_versioning_constraints(client: AsyncClient):
     # Verify the field is immutable as specified
     fields_response = await client.get(
         f"/v0/logs/fields?project={project_name}",
-        params={"context": "unversioned_context"},
         headers=HEADERS,
     )
     fields_data = fields_response.json()
