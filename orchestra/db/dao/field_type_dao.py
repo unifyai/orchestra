@@ -80,8 +80,6 @@ class FieldTypeDAO:
         query = select(FieldType).order_by(FieldType.created_at)
 
         # Build filters progressively
-        print("project_id: ", project_id)
-        print("context_id: ", context_id)
         if project_id is not None:
             query = query.where(FieldType.project_id == project_id)
         if context_id is not None:

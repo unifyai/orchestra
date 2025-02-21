@@ -1187,6 +1187,8 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
         ("(a * b) == 15", {"a": 3, "b": 5}),
         ("(a / b) == 2", {"a": 10, "b": 5}),
         ("(a % b) == 1", {"a": 10, "b": 3}),
+        # String arithmetic
+        ("(a + b) == 'apple banana'", {"a": "apple", "b": " banana"}),
         # Logical
         ("(a > 5) and (b < 10)", {"a": 6, "b": 9}),
         ("(a < 5) or (b > 10)", {"a": 4, "b": 11}),
