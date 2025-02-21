@@ -1,4 +1,4 @@
-""" create latest_benchmark table
+"""create latest_benchmark table
 
 Revision ID: e226d1c25675
 Revises: 70b602194a76
