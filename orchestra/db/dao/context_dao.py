@@ -130,7 +130,8 @@ class ContextDAO:
                 self.session.delete(orphan)
 
             self.session.commit()
-        except Exception:
+        except Exception as e:
+            print(e)
             self.session.rollback()
             raise ValueError(f"Failed to delete context with id {id}")
 

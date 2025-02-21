@@ -1,6 +1,7 @@
 """
 Includes endpoints for creating router configurations.
 """
+
 from typing import List
 
 from fastapi import APIRouter, Query

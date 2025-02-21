@@ -1,6 +1,7 @@
 """
 Includes endpoints for router deployment.
 """
+
 import os
 from typing import Dict
 

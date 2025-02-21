@@ -910,6 +910,7 @@ def update_logs(
                     return_mutable=True,
                     context_id=ctx_id,
                 )
+                print("field_types: ", field_types)
             except Exception as e:
                 raise HTTPException(
                     status_code=500,
