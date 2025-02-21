@@ -642,6 +642,10 @@ class LogEvent(Base):
         back_populates="log_events",
         passive_deletes="all",
     )
+    # Relationships
+    derived_logs = relationship(
+        "DerivedLog", cascade="all, delete-orphan", backref="log_event"
+    )
 
 
 class JSONLog(Base):
@@ -731,7 +735,6 @@ class DerivedLog(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
 
-    log_event = relationship("LogEvent", backref="derived_logs")
     __table_args__ = (UniqueConstraint("log_event_id", "key"),)
 
 
