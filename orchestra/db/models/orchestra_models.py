@@ -11,13 +11,11 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
-    event,
     func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSON, JSONB
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import DDL
 
 from orchestra.db.base import Base
 
@@ -644,7 +642,9 @@ class LogEvent(Base):
     )
     # Relationships
     derived_logs = relationship(
-        "DerivedLog", cascade="all, delete-orphan", backref="log_event"
+        "DerivedLog",
+        cascade="all, delete-orphan",
+        backref="log_event",
     )
 
 
