@@ -515,7 +515,7 @@ def cast_expr(expr, const_expr: BindParameter):
         val = const_expr.value
     const_type = LogDAO.infer_type("", val)
     if const_type == "str":
-        return cast(expr, String)
+        return func.replace(cast(expr, String), '"', "")
     elif const_type == "int":
         return cast(expr, Integer)
     elif const_type == "float":
@@ -858,7 +858,12 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session, log_event
         lval, lval_type = _select_value(lhs, session)
         rval, rval_type = _select_value(rhs, session)
         if operand == "+":
-            expr = lval + rval
+            if lval_type == "str" and rval_type == "str":
+                lval = func.replace(cast(lval, String), '"', "")
+                rval = func.replace(cast(rval, String), '"', "")
+                expr = func.concat(lval, rval)
+            else:
+                expr = lval + rval
         elif operand == "-":
             expr = lval - rval
         elif operand == "*":
@@ -875,8 +880,12 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session, log_event
     elif lhs_is_sub:
         lval, lval_type = _select_value(lhs, session)
         lval = cast_expr(lval, rhs)
+        rhs = cast_expr(rhs, rhs)
         if operand == "+":
-            expr = lval + rhs
+            if lval_type == "str":
+                expr = func.concat(lval, rhs)
+            else:
+                expr = lval + rhs
         elif operand == "-":
             expr = lval - rhs
         elif operand == "*":
@@ -901,8 +910,12 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session, log_event
     elif rhs_is_sub:
         rval, rval_type = _select_value(rhs, session)
         rval = cast_expr(rval, lhs)
+        lhs = cast_expr(lhs, lhs)
         if operand == "+":
-            expr = lhs + rval
+            if rval_type == "str":
+                expr = func.concat(lhs, rval)
+            else:
+                expr = lhs + rval
         elif operand == "-":
             expr = lhs - rval
         elif operand == "*":
@@ -994,6 +1007,7 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session, log_event
     elif lhs_is_sub:
         lval, lval_type = _select_value(lhs, session)
         lval = cast_expr(lval, rhs)
+        rhs = cast_expr(rhs, rhs)
         if operand == "==":
             expr = lval == rhs
         elif operand == "!=":
@@ -1030,6 +1044,7 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session, log_event
     elif rhs_is_sub:
         rval, rval_type = _select_value(rhs, session)
         rval = cast_expr(rval, lhs)
+        lhs = cast_expr(lhs, lhs)
         if operand == "==":
             expr = lhs == rval
         elif operand == "!=":
