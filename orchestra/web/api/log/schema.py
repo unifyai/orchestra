@@ -162,17 +162,17 @@ class DeleteLogEntryRequest(BaseModel):
             "example": "experiment1/trial1",
         },
     )
-    ids_and_fields: List[Tuple[Union[int, List[int]], Union[None, str, List[str]]]] = (
-        Field(
-            description="List of tuples of log ID(s) and field(s) to delete, "
-            "either as an individual item or a list of items.",
-            example=[
-                (123, "score"),
-                ([456, 457], ["score", "response"]),
-                ([458, 459, 460], "response"),
-            ],
-            min_items=1,
-        )
+    ids_and_fields: List[
+        Tuple[Union[int, List[int]], Union[None, str, List[str]]]
+    ] = Field(
+        description="List of tuples of log ID(s) and field(s) to delete, "
+        "either as an individual item or a list of items.",
+        example=[
+            (123, "score"),
+            ([456, 457], ["score", "response"]),
+            ([458, 459, 460], "response"),
+        ],
+        min_items=1,
     )
     source_type: str = Field(
         default="all",
