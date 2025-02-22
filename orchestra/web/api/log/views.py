@@ -7,7 +7,7 @@ import json
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy import (
@@ -61,6 +61,7 @@ from orchestra.web.api.utils.http_responses import not_found
 from .helpers import (
     STR_TO_SQL_TYPES,
     _compute_expression,
+    _extract_placeholders,
     _flatten_fields,
     _format_flat_logs,
     _get_final_logs,
@@ -350,6 +351,187 @@ def create_logs(
     return log_event_ids
 
 
+from typing import Dict, Set
+
+from fastapi import HTTPException, status
+
+
+def unify_id_sets_by_subset(alias_id_sets: Dict[str, Set[int]]) -> Dict[str, Set[int]]:
+    """
+    Applies your 3-step logic:
+      1) If all sets are the same size, do nothing.
+      2) Else, pick the smallest set S_min. If S_min is a subset of every other set,
+         then reduce every alias to S_min. Otherwise, raise HTTP 400 error.
+    """
+    if not alias_id_sets:
+        return alias_id_sets
+
+    all_sets = list(alias_id_sets.values())
+    lengths = [len(s) for s in all_sets]
+
+    # 1) If all sets have the same length, do nothing.
+    if len(set(lengths)) == 1:
+        # They are already consistent, so no changes needed.
+        return alias_id_sets
+
+    # 2) Identify the smallest set
+    smallest = min(all_sets, key=len)
+
+    # Check if smallest is a subset of each other set
+    for s in all_sets:
+        if not smallest.issubset(s):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Mismatch in referenced log IDs: no single subset can unify them.\n"
+                    f"Smallest set={smallest}, but found disjoint set={s}."
+                ),
+            )
+
+    # If we get here, it's safe to unify everything to that smallest set
+    for alias in alias_id_sets:
+        alias_id_sets[alias] = smallest
+
+    return alias_id_sets
+
+
+def prepare_resolved_ids(
+    equation: str,
+    referenced_logs: Dict[str, Union[List[int], Dict[str, Any]]],
+    request_fastapi: Request,
+    project_name: str,
+    project_dao,
+    field_type_dao,
+    context_dao,
+    session,
+) -> Dict[str, List[int]]:
+    """
+    1) Parses `equation` to find placeholders.
+    2) Groups them by 'alias' (the part before the colon).
+    3) If user gave a direct list for that alias, just use it.
+       Otherwise, if user gave a dict, run one or more `_get_logs_query` calls:
+         - For each subfield in the placeholders for that alias,
+           do a query with from_fields=<subfield>, then intersect the results.
+         - If the placeholder is just {alias} (no subfield),
+           do a single query without forcing from_fields.
+    4) Finally, do a global intersection across all aliases
+       so that each alias has exactly the same set of IDs.
+       (This ensures no mismatch lengths.)
+    5) Return a dict of shape: { alias -> sorted_list_of_ids }
+    """
+    placeholders = _extract_placeholders(equation)
+
+    # Step 1: Group placeholders by alias
+    # e.g. "Table:gender" => alias="Table", subfield="gender"
+    #      "Table:nationality" => alias="Table", subfield="nationality"
+    alias_to_subfields = defaultdict(set)
+
+    for ph in placeholders:
+        if ":" in ph:
+            alias, subfield = ph.split(":", 1)
+            alias_to_subfields[alias].add(subfield)
+        else:
+            # e.g. placeholder is just {Table}, no subfield
+            alias_to_subfields[ph]
+
+    alias_id_sets: Dict[str, Set[int]] = {}
+
+    # Step 2: For each alias, figure out the set of IDs
+    for alias, subfields in alias_to_subfields.items():
+        user_val = referenced_logs.get(alias)
+
+        # A) If user gave a direct list: just convert to set
+        if isinstance(user_val, list):
+            alias_id_sets[alias] = set(user_val)
+            continue
+
+        # B) Otherwise, user_val might be a dict or None
+        base_dict = user_val if isinstance(user_val, dict) else {}
+
+        # If there are NO subfields => placeholder was {alias}, no : part
+        if not subfields:
+            # We do exactly one query using base_dict
+            raw_rows, _, _count = _get_logs_query(
+                request_fastapi=request_fastapi,
+                project=project_name,
+                column_context=base_dict.get("column_context"),
+                context=base_dict.get("context"),
+                filter_expr=base_dict.get("filter_expr"),
+                sorting=base_dict.get("sort"),
+                from_ids=base_dict.get("from_ids"),
+                exclude_ids=base_dict.get("exclude_ids"),
+                from_fields=base_dict.get("from_fields"),
+                exclude_fields=base_dict.get("exclude_fields"),
+                limit=base_dict.get("limit"),
+                offset=base_dict.get("offset", 0),
+                project_dao=project_dao,
+                field_type_dao=field_type_dao,
+                context_dao=context_dao,
+                session=session,
+            )
+            le_ids = {r[7] for r in raw_rows}  # r[7] is log_event_id
+            alias_id_sets[alias] = le_ids
+        else:
+            # We have one or more subfields: {alias:subfield}
+            # For each subfield, do a query with from_fields=<subfield> (plus user filters), then intersect.
+            combined_ids = None
+            for sf in subfields:
+                # Make a shallow copy so we don't overwrite the original
+                query_dict = dict(base_dict)
+
+                # If user didn't explicitly set from_fields, set it to subfield
+                if "from_fields" not in query_dict:
+                    query_dict["from_fields"] = sf
+                else:
+                    # If they already have from_fields, you might decide either:
+                    # - Overwrite it with sf,
+                    # - OR combine with an "&" if you want logs that have both fields.
+                    #
+                    # Here we simply overwrite if we want logs only for that subfield.
+                    # If you prefer to combine them, do something like:
+                    # query_dict["from_fields"] += f"&{sf}"
+                    query_dict["from_fields"] = sf
+
+                raw_rows, _, _count = _get_logs_query(
+                    request_fastapi=request_fastapi,
+                    project=project_name,
+                    column_context=query_dict.get("column_context"),
+                    context=query_dict.get("context"),
+                    filter_expr=query_dict.get("filter_expr"),
+                    sorting=query_dict.get("sort"),
+                    from_ids=query_dict.get("from_ids"),
+                    exclude_ids=query_dict.get("exclude_ids"),
+                    from_fields=query_dict.get("from_fields"),
+                    exclude_fields=query_dict.get("exclude_fields"),
+                    limit=query_dict.get("limit"),
+                    offset=query_dict.get("offset", 0),
+                    project_dao=project_dao,
+                    field_type_dao=field_type_dao,
+                    context_dao=context_dao,
+                    session=session,
+                )
+                le_ids = {r[7] for r in raw_rows}
+
+                if combined_ids is None:
+                    combined_ids = le_ids
+                else:
+                    combined_ids = combined_ids.intersection(le_ids)
+
+            alias_id_sets[alias] = combined_ids if combined_ids else set()
+
+    # Step 3: Fix mismatch lengths by a global intersection:
+    # If we have multiple aliases, each has its own set. Intersect them so they match.
+    alias_id_sets = unify_id_sets_by_subset(alias_id_sets)
+    # That function either raises 400 or updates
+    # the sets so they are all the same size or they remain as is if they're already equal length.
+
+    # Convert to sorted lists
+    resolved_ids: Dict[str, List[int]] = {
+        alias: sorted(id_set) for alias, id_set in alias_id_sets.items()
+    }
+    return resolved_ids
+
+
 @router.post(
     "/logs/derived",
     responses={
@@ -421,59 +603,20 @@ def create_derived_entry(
         # get the default context
         context_id = context_dao.get_or_create(project_obj.id, name="default")
 
-    # 3) Resolve referenced_logs
-    #    We either get a direct list [101,102], or a dict e.g. {"filter_expr":...}
-    resolved_ids: Dict[str, List[int]] = {}
-    for varname, val in body.referenced_logs.items():
-        if isinstance(val, list):
-            resolved_ids[varname] = val
-        elif isinstance(val, dict):
-            # Re-use _get_logs_query to find matching log_event_ids
-            # raw_rows is a list of:
-            # - row_key
-            # - row_value
-            # - row_inferred_type
-            # - row_version
-            # - row_source_type
-            # - row_created_at
-            # - row_event_id
-            raw_rows, _, _count = _get_logs_query(
-                request_fastapi=request_fastapi,
-                project=body.project,
-                column_context=val.get("column_context", None),
-                context=val.get("context", None),
-                filter_expr=val.get("filter_expr", None),
-                sorting=val.get("sort"),
-                from_ids=val.get("from_ids", None),
-                exclude_ids=val.get("exclude_ids", None),
-                from_fields=val.get("from_fields", None),
-                exclude_fields=val.get("exclude_fields", None),
-                limit=val.get("limit"),
-                offset=val.get("offset", 0),
-                project_dao=project_dao,
-                field_type_dao=field_type_dao,
-                context_dao=context_dao,
-                session=session,
-            )
-            # Extract log_event_ids from raw rows
-            le_ids = list({r[7] for r in raw_rows})  # r[7] is log_event_id
-            resolved_ids[varname] = le_ids
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unrecognized reference for '{varname}': {val}",
-            )
+    resolved_ids = prepare_resolved_ids(
+        equation=body.equation,
+        referenced_logs=body.referenced_logs,
+        request_fastapi=request_fastapi,
+        project_name=body.project,
+        project_dao=project_dao,
+        field_type_dao=field_type_dao,
+        context_dao=context_dao,
+        session=session,
+    )
 
-    # If we want a 1:1 mapping, ensure all reference arrays have the same length
-    lengths = [len(lst) for lst in resolved_ids.values()]
-    if not lengths:
+    # If none found, short‐circuit
+    if not any(len(v) for v in resolved_ids.values()):
         return {"info": "No references found. Nothing to create."}
-    if len(set(lengths)) != 1:
-        raise HTTPException(
-            status_code=400,
-            detail=f"All referenced log lists must have the same length. Found lengths: {lengths}",
-        )
-
     created_derived_ids = []
     try:
 
@@ -486,7 +629,6 @@ def create_derived_entry(
         resolved_ids_dict = {}
         for key, ids in resolved_ids.items():
             resolved_ids_dict.setdefault(alias_to_key_map[key], []).extend(ids)
-
         computed_values = _compute_expression(
             filter_dict,
             LogEvent,
@@ -508,7 +650,7 @@ def create_derived_entry(
                 alias_to_key_map[key]: ids[i] for key, ids in resolved_ids.items()
             }
             # Get all log IDs involved in this specific computation
-            involved_log_ids = [ids[i] for ids in resolved_ids.values()]
+            involved_log_ids = list(set(ids[i] for ids in resolved_ids.values()))
 
             # Create a derived entry for each log ID involved in this computation
             for log_event_id in involved_log_ids:
@@ -910,7 +1052,6 @@ def update_logs(
                     return_mutable=True,
                     context_id=ctx_id,
                 )
-                print("field_types: ", field_types)
             except Exception as e:
                 raise HTTPException(
                     status_code=500,
@@ -3979,7 +4120,7 @@ def _build_unified_logs_subquery(
             Log.updated_at.label("updated_at"),
             LogEvent.created_at.label("created_at"),
             literal("current").label("source_type"),
-        ).join(LogEvent, LogEvent.id == Log.log_event_id)
+        )  # .join(LogEvent, LogEvent.id == Log.log_event_id)
         base_logs_q_current = _apply_event_filter(base_logs_q_current)
 
         base_logs_q_history = session.query(
@@ -3993,7 +4134,7 @@ def _build_unified_logs_subquery(
             LogHistory.archived_at.label("updated_at"),
             LogEvent.created_at.label("created_at"),
             literal("history").label("source_type"),
-        ).join(LogEvent, LogEvent.id == LogHistory.log_event_id)
+        )  # .join(LogEvent, LogEvent.id == LogHistory.log_event_id)
         base_logs_q_history = _apply_event_filter(base_logs_q_history)
 
         base_logs_q = base_logs_q_current.union_all(base_logs_q_history)
@@ -4023,7 +4164,7 @@ def _build_unified_logs_subquery(
         cast(None, Integer).label("param_version"),
         cast(None, Integer).label("context_version"),
         DerivedLog.updated_at.label("updated_at"),
-        LogEvent.created_at.label("created_at"),
+        DerivedLog.created_at.label("created_at"),
         literal("derived").label("source_type"),
     ).join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
     derived_logs_q = _apply_event_filter(derived_logs_q)
