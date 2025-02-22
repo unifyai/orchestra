@@ -4948,7 +4948,7 @@ async def test_get_fields_with_derived_entries(client: AsyncClient):
 
     # Verify derived entries
     assert fields["temp_plus_10"]["field_type"] == "derived_entry"
-    assert fields["temp_plus_10"]["data_type"] == "int"
+    assert fields["temp_plus_10"]["data_type"] == "float"
     assert fields["temp_plus_10"]["artifacts"] == "{t:temperature} + 10"
     assert fields["temp_plus_10"]["created_at"] is not None
     assert (
