@@ -64,6 +64,20 @@ def _substitute_placeholders(equation: str, single_ref: Dict[str, int]) -> str:
     If you have multiple IDs, we might do "BASE_IN([10,11],score)" etc.
     Because we want membership logic (log_event_id in [10,11]).
     """
+    # Count opening and closing parentheses
+    open_count = 0
+    close_count = 0
+    for c in equation:
+        if c == '(':
+            open_count += 1
+        elif c == ')':
+            close_count += 1
+
+    # If we have more closing than opening parentheses, remove the extra ones from the end
+    if close_count > open_count:
+        equation = equation.rstrip(')')
+        equation = equation + ')' * open_count
+
     new_expr = equation
     alias_to_key_map = {}
     placeholders = _extract_placeholders(equation)
@@ -150,6 +164,17 @@ def parse_nested(s, pos):
 
 
 def _tokenize(s):
+    paren_count = 0
+    for c in s:
+        if c == '(':
+            paren_count += 1
+        elif c == ')':
+            paren_count -= 1
+        if paren_count < 0:
+            raise RuntimeError("Unmatched closing parenthesis")
+    if paren_count != 0:
+        raise RuntimeError("Unbalanced parentheses")
+
     token_specification = [
         (
             "NUMBER",
@@ -320,15 +345,7 @@ class _Parser:
 
     def add_sub_expr(self):
         node = self.mul_div_expr()
-        while self.current_token[0] == "OP" and self.current_token[1] in (
-            "+",
-            "-",
-            "*",
-            "/",
-            "%",
-            "**",
-            "//",
-        ):
+        while self.current_token[0] == "OP" and self.current_token[1] in ("+", "-"):
             op = self.current_token[1]
             self.advance()
             right = self.mul_div_expr()
@@ -336,7 +353,21 @@ class _Parser:
         return node
 
     def mul_div_expr(self):
+        node = self.power_expr()
+        while self.current_token[0] == "OP" and self.current_token[1] in ("*", "/", "//", "%"):
+            op = self.current_token[1]
+            self.advance()
+            right = self.power_expr()
+            node = {"lhs": node, "operand": op, "rhs": right}
+        return node
+
+    def power_expr(self):
         node = self.primary()
+        while self.current_token[0] == "OP" and self.current_token[1] == "**":
+            op = self.current_token[1]
+            self.advance()
+            right = self.power_expr()  # Note: power is right-associative
+            node = {"lhs": node, "operand": op, "rhs": right}
         return node
 
     def primary(self):
