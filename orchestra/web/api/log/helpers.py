@@ -68,15 +68,15 @@ def _substitute_placeholders(equation: str, single_ref: Dict[str, int]) -> str:
     open_count = 0
     close_count = 0
     for c in equation:
-        if c == '(':
+        if c == "(":
             open_count += 1
-        elif c == ')':
+        elif c == ")":
             close_count += 1
 
     # If we have more closing than opening parentheses, remove the extra ones from the end
     if close_count > open_count:
-        equation = equation.rstrip(')')
-        equation = equation + ')' * open_count
+        equation = equation.rstrip(")")
+        equation = equation + ")" * open_count
 
     new_expr = equation
     alias_to_key_map = {}
@@ -166,9 +166,9 @@ def parse_nested(s, pos):
 def _tokenize(s):
     paren_count = 0
     for c in s:
-        if c == '(':
+        if c == "(":
             paren_count += 1
-        elif c == ')':
+        elif c == ")":
             paren_count -= 1
         if paren_count < 0:
             raise RuntimeError("Unmatched closing parenthesis")
@@ -354,7 +354,12 @@ class _Parser:
 
     def mul_div_expr(self):
         node = self.power_expr()
-        while self.current_token[0] == "OP" and self.current_token[1] in ("*", "/", "//", "%"):
+        while self.current_token[0] == "OP" and self.current_token[1] in (
+            "*",
+            "/",
+            "//",
+            "%",
+        ):
             op = self.current_token[1]
             self.advance()
             right = self.power_expr()
@@ -713,7 +718,7 @@ def _build_subquery_for_identifier(
     return combined_subq
 
 
-def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type):
+def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type, session=None):
     """
     Given two subqueries lhs_subq and rhs_subq and an expression expr that combines
     their respective columns, produce a new subquery that merges them (by log_event_id),
@@ -722,14 +727,30 @@ def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type):
     This is useful for arithmetic operations and comparisons. The resulting
     subquery can be used in further operations.
     """
+    # Get the value columns for both sides
+    lhs_val, lhs_type = _select_value(lhs_subq, session)
+    rhs_val, rhs_type = _select_value(rhs_subq, session)
+
     j = (
         select(
-            lhs_subq.c.log_event_id.label("log_event_id"),
-            expr.label("value"),
+            func.coalesce(lhs_subq.c.log_event_id, rhs_subq.c.log_event_id).label(
+                "log_event_id",
+            ),
+            case(
+                # If either side is NULL, the result is NULL
+                (
+                    or_(
+                        lhs_val.is_(None),
+                        rhs_val.is_(None),
+                    ),
+                    None,
+                ),
+                else_=expr,
+            ).label("value"),
             literal(inferred_type).label("inferred_type"),
         )
         .select_from(lhs_subq)
-        .join(rhs_subq, lhs_subq.c.log_event_id == rhs_subq.c.log_event_id)
+        .outerjoin(rhs_subq, lhs_subq.c.log_event_id == rhs_subq.c.log_event_id)
         .subquery()
     )
     return j
@@ -907,7 +928,7 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session, log_event
             expr = func.power(lval, rval)
         elif operand == "//":
             expr = func.floor(lval / rval)
-        return _join_subqueries(lhs, rhs, expr, lval_type)
+        return _join_subqueries(lhs, rhs, expr, lval_type, session=session)
     elif lhs_is_sub:
         lval, lval_type = _select_value(lhs, session)
         lval = cast_expr(lval, rhs)
@@ -1034,7 +1055,7 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session, log_event
             expr = lval.is_(rval)
         elif operand == "is not":
             expr = lval.isnot(rval)
-        return _join_subqueries(lhs, rhs, expr, "bool")
+        return _join_subqueries(lhs, rhs, expr, "bool", session=session)
     elif lhs_is_sub:
         lval, lval_type = _select_value(lhs, session)
         lval = cast_expr(lval, rhs)
@@ -1178,7 +1199,7 @@ def _handle_membership_operator(filter_dict, log_event_alias, session, log_event
                 condition,
             ),
         )
-        return _join_subqueries(lhs, rhs, expr, "bool")
+        return _join_subqueries(lhs, rhs, expr, "bool", session=session)
 
     # Only LHS is a subquery
     elif lhs_is_sub and not rhs_is_sub:
