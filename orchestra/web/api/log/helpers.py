@@ -512,6 +512,8 @@ def _select_value(subq, session, is_collection=False):
     Helper function to select the appropriate value column from a subquery.
     Prioritizes 'value' if it exists, otherwise selects based on inferred types.
     """
+    if isinstance(subq, BindParameter):
+        return subq.value, LogDAO.infer_type("", subq.value)
     if hasattr(subq.c, "value"):
         if is_collection:
             # the assumption here is lists/dicts to have a single consistent type
@@ -541,24 +543,64 @@ def _select_value(subq, session, is_collection=False):
         return None, None
 
 
-def cast_expr(expr, const_expr: BindParameter):
+def unify_inferred_types(t1: str, t2: str) -> str:
     """
-    Casts an expression to a compatible type if necessary.
+    Given two inferred types like "int", "float", "str", return which type has higher precedence.
+    For example, unify_inferred_types('int', 'float') -> 'float'
+    unify_inferred_types('bool', 'float') -> 'float'
+    unify_inferred_types('int', 'str') -> 'str'
     """
+    # You can customize this ordering as you please
+    precedence = ["bool", "int", "float", "str"]
+
+    # If either side is “none”, we skip it or treat it as the other side
+    if t1 is None:
+        return t2
+    if t2 is None:
+        return t1
+
+    # Find each type’s position in the precedence list
     try:
-        val = json.loads(const_expr.value)
-    except:
-        val = const_expr.value
-    const_type = LogDAO.infer_type("", val)
-    if const_type == "str":
+        i1 = precedence.index(t1)
+    except ValueError:
+        i1 = len(precedence)
+
+    try:
+        i2 = precedence.index(t2)
+    except ValueError:
+        i2 = len(precedence)
+
+    # Return the “max” of the two
+    final_index = max(i1, i2)
+    if final_index >= len(precedence):
+        # unknown type => fallback to one side
+        return t1 or t2
+    return precedence[final_index]
+
+
+def cast_expr(expr, from_type: str, to_type: str):
+    """
+    Casts SQLAlchemy `expr` from `from_type` to the unified final type
+    after comparing `from_type` and `to_type`.
+
+    For example, if from_type='int' and to_type='float',
+    the final type is 'float' => cast(expr, Float).
+    If from_type='float' and to_type='int',
+    we still end up casting to float so we don't lose decimal data.
+    """
+    final_type = unify_inferred_types(from_type, to_type)
+
+    if final_type == "str":
+        # Strings in your DB might still have quotes, so remove them via `replace()`
         return func.replace(cast(expr, String), '"', "")
-    elif const_type == "int":
-        return cast(expr, Integer)
-    elif const_type == "float":
+    elif final_type == "float":
         return cast(expr, Float)
-    elif const_type == "bool":
+    elif final_type == "int":
+        return cast(expr, Integer)
+    elif final_type == "bool":
         return cast(expr, Boolean)
     else:
+        # If neither side is recognized or is "NoneType", just return expr uncasted
         return expr
 
 
@@ -909,6 +951,8 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session, log_event
     if lhs_is_sub and rhs_is_sub:
         lval, lval_type = _select_value(lhs, session)
         rval, rval_type = _select_value(rhs, session)
+        lval = cast_expr(lval, lval_type, rval_type)
+        rval = cast_expr(rval, rval_type, lval_type)
         if operand == "+":
             if lval_type == "str" and rval_type == "str":
                 lval = func.replace(cast(lval, String), '"', "")
@@ -931,8 +975,9 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session, log_event
         return _join_subqueries(lhs, rhs, expr, lval_type, session=session)
     elif lhs_is_sub:
         lval, lval_type = _select_value(lhs, session)
-        lval = cast_expr(lval, rhs)
-        rhs = cast_expr(rhs, rhs)
+        rval, rval_type = _select_value(rhs, session)
+        lval = cast_expr(lval, lval_type, rval_type)
+        rhs = cast_expr(rhs, rval_type, lval_type)
         if operand == "+":
             if lval_type == "str":
                 expr = func.concat(lval, rhs)
@@ -961,8 +1006,9 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session, log_event
         )
     elif rhs_is_sub:
         rval, rval_type = _select_value(rhs, session)
-        rval = cast_expr(rval, lhs)
-        lhs = cast_expr(lhs, lhs)
+        lval, lval_type = _select_value(lhs, session)
+        rval = cast_expr(rval, rval_type, lval_type)
+        lhs = cast_expr(lhs, lval_type, rval_type)
         if operand == "+":
             if rval_type == "str":
                 expr = func.concat(lhs, rval)
@@ -1039,6 +1085,8 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session, log_event
     if lhs_is_sub and rhs_is_sub:
         lval, lval_type = _select_value(lhs, session)
         rval, rval_type = _select_value(rhs, session)
+        lval = cast_expr(lval, lval_type, rval_type)
+        rval = cast_expr(rval, rval_type, lval_type)
         if operand == "==":
             expr = lval == rval
         elif operand == "!=":
@@ -1058,8 +1106,9 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session, log_event
         return _join_subqueries(lhs, rhs, expr, "bool", session=session)
     elif lhs_is_sub:
         lval, lval_type = _select_value(lhs, session)
-        lval = cast_expr(lval, rhs)
-        rhs = cast_expr(rhs, rhs)
+        rval, rval_type = _select_value(rhs, session)
+        lval = cast_expr(lval, lval_type, rval_type)
+        rhs = cast_expr(rhs, rval_type, lval_type)
         if operand == "==":
             expr = lval == rhs
         elif operand == "!=":
@@ -1095,8 +1144,9 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session, log_event
         )
     elif rhs_is_sub:
         rval, rval_type = _select_value(rhs, session)
-        rval = cast_expr(rval, lhs)
-        lhs = cast_expr(lhs, lhs)
+        lval, lval_type = _select_value(lhs, session)
+        rval = cast_expr(rval, rval_type, lval_type)
+        lhs = cast_expr(lhs, lval_type, rval_type)
         if operand == "==":
             expr = lhs == rval
         elif operand == "!=":
