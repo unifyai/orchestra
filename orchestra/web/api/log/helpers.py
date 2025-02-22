@@ -1875,7 +1875,6 @@ def _build_subquery_for_base_call(list_of_ids_expr, key_expr, session, log_event
         .where(key_expr.c.log_event_id.in_(base_ids))
         .subquery()
     )
-
     return filtered_subquery
 
 

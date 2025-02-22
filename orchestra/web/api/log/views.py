@@ -629,11 +629,18 @@ def create_derived_entry(
         resolved_ids_dict = {}
         for key, ids in resolved_ids.items():
             resolved_ids_dict.setdefault(alias_to_key_map[key], []).extend(ids)
+        # get the filtered log events
+        log_event_ids = (
+            session.query(LogEvent.id)
+            .filter(project_obj.id == LogEvent.project_id)
+            .all()
+        )
+        log_event_ids = [id for id, in log_event_ids]
         computed_values = _compute_expression(
             filter_dict,
             LogEvent,
             session,
-            log_event_ids=resolved_ids_dict,
+            log_event_ids=log_event_ids,
         )
 
         # Create a new derived log entry for each computed value
