@@ -551,7 +551,18 @@ def unify_inferred_types(t1: str, t2: str) -> str:
     unify_inferred_types('int', 'str') -> 'str'
     """
     # You can customize this ordering as you please
-    precedence = ["bool", "int", "float", "str"]
+    precedence = [
+        "bool",
+        "int",
+        "float",
+        "str",
+        "timestamp",
+        "list",
+        "dict",
+        "tuple",
+        "image",
+        "NoneType",
+    ]
 
     # If either side is “none”, we skip it or treat it as the other side
     if t1 is None:
@@ -570,12 +581,7 @@ def unify_inferred_types(t1: str, t2: str) -> str:
     except ValueError:
         i2 = len(precedence)
 
-    # Return the “max” of the two
-    final_index = max(i1, i2)
-    if final_index >= len(precedence):
-        # unknown type => fallback to one side
-        return t1 or t2
-    return precedence[final_index]
+    return precedence[max(i1, i2)]
 
 
 def cast_expr(expr, from_type: str, to_type: str):
