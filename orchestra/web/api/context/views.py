@@ -162,6 +162,8 @@ def get_contexts(
         project_id = project[0][0].id
         existing_contexts = context_dao.filter(project_id=project_id)
         # filter out default context
+        if not existing_contexts:
+            return []
         existing_contexts = [
             context for context in existing_contexts[0] if context.name != ""
         ]
