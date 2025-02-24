@@ -1,3 +1,4 @@
+import os
 from typing import Callable
 
 from fastapi import FastAPI
@@ -35,19 +36,20 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
     :param app: fastAPI application.
     """
     ssl_params = {
-            "sslmode": "verify-ca",
-            "sslrootcert": "/etc/secrets/server-ca.pem",
-            "sslcert": "/etc/secrets/client-cert.pem",
-            "sslkey": "/etc/secrets/client-key.pem",
+        "sslmode": "verify-ca",
+        "sslrootcert": os.environ["ORCHESTRA_DB_CA_CERT"],
+        "sslcert": os.environ["ORCHESTRA_DB_CLIENT_CERT"],
+        "sslkey": os.environ["ORCHESTRA_DB_CLIENT_KEY"],
     }
+    print("ssl_params", ssl_params)
     db_url = URL.build(
-            scheme="postgresql+psycopg2",
-            host=settings.db_host,
-            port=settings.db_port,
-            user=settings.db_user,
-            password=settings.db_pass,
-            path=f"/{settings.db_base}",
-            query=ssl_params,
+        scheme="postgresql+psycopg2",
+        host=settings.db_host,
+        port=settings.db_port,
+        user=settings.db_user,
+        password=settings.db_pass,
+        path=f"/{settings.db_base}",
+        query=ssl_params,
     )
     engine = create_engine(
         str(db_url),
