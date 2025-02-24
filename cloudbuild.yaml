@@ -39,6 +39,7 @@ steps:
     --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID,gcb-trigger-id=$_TRIGGER_ID
   - '--region=$_JOB_REGION'
   - '--quiet'
+  - '--set-secrets=ORCHESTRA_DB_PASS=ORCHESTRA_DB_PASS:latest'
   id: Update migration image
   entrypoint: gcloud
   waitFor:
