@@ -1,4 +1,3 @@
-import os
 from typing import Callable
 
 from fastapi import FastAPI
@@ -37,11 +36,10 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
     """
     ssl_params = {
         "sslmode": "verify-ca",
-        "sslrootcert": os.environ["ORCHESTRA_DB_CA_CERT"],
-        "sslcert": os.environ["ORCHESTRA_DB_CLIENT_CERT"],
-        "sslkey": os.environ["ORCHESTRA_DB_CLIENT_KEY"],
+        "sslrootcert": "/secrets/server-ca.pem",
+        "sslcert": "/secrets/client-cert.pem",
+        "sslkey": "/secrets/client-key.pem",
     }
-    print("ssl_params", ssl_params)
     db_url = URL.build(
         scheme="postgresql+psycopg2",
         host=settings.db_host,
