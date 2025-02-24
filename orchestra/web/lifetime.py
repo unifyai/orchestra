@@ -19,6 +19,7 @@ from prometheus_fastapi_instrumentator.instrumentation import (
 )
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from yarl import URL
 
 from orchestra.settings import settings
 
@@ -33,8 +34,23 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
 
     :param app: fastAPI application.
     """
+    ssl_params = {
+            "sslmode": "verify-ca",
+            "sslrootcert": "/etc/secrets/server-ca.pem",
+            "sslcert": "/etc/secrets/client-cert.pem",
+            "sslkey": "/etc/secrets/client-key.pem",
+    }
+    db_url = URL.build(
+            scheme="postgresql+psycopg2",
+            host=settings.db_host,
+            port=settings.db_port,
+            user=settings.db_user,
+            password=settings.db_pass,
+            path=f"/{settings.db_base}",
+            query=ssl_params,
+    )
     engine = create_engine(
-        str(settings.db_url),
+        str(db_url),
         echo=settings.db_echo,
         pool_size=35,
         max_overflow=70,  # noqa: WPS432, E501
