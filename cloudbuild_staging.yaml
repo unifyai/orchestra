@@ -67,9 +67,6 @@ steps:
   - >-
     --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID,gcb-trigger-id=$_TRIGGER_ID
   - '--region=$_DEPLOY_REGION'
-  - '--update-secrets=/etc/secrets/server-ca.pem=server-ca:latest'
-  - '--update-secrets=/etc/secrets/client-cert.pem=client-cert:latest'
-  - '--update-secrets=/etc/secrets/client-key.pem=client-key:latest'
   - '--quiet'
   id: Deploy Orchestra
   entrypoint: gcloud
