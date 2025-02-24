@@ -164,15 +164,13 @@ def get_contexts(
         # filter out default context
         if not existing_contexts:
             return []
-        existing_contexts = [
-            context for context in existing_contexts[0] if context.name != ""
-        ]
         return [
             {
-                "name": context.name,
-                "description": context.description,
+                "name": context[0].name,
+                "description": context[0].description,
             }
             for context in existing_contexts
+            if context[0].name != ""
         ]
     except IndexError:
         raise not_found("Project")
