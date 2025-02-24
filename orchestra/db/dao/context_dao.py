@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 from fastapi import Depends
 from sqlalchemy import select
@@ -72,7 +72,7 @@ class ContextDAO:
             query = query.where(Context.id == id)
         if project_id:
             query = query.where(Context.project_id == project_id)
-        if name:
+        if name is not None:
             query = query.where(Context.name == name)
 
         rows = self.session.execute(query)
@@ -90,7 +90,7 @@ class ContextDAO:
         entry = raw.scalars().first()
 
         if entry is not None:
-            if name:
+            if name is not None:
                 if not all(c.isalnum() or c == "/" for c in name):
                     raise ValueError(
                         "Context name must contain only alphanumeric characters and '/'",
@@ -191,7 +191,7 @@ class ContextDAO:
         context = self.session.query(Context).filter_by(id=context_id).one_or_none()
         return context and context.is_versioned
 
-    def get_context_id(self, project_id: int, body: ContextCreateRequest):
+    def get_context_id(self, project_id: int, body: Union[ContextCreateRequest, None]):
         if body:
             return self.get_or_create(
                 project_id=project_id,
@@ -203,7 +203,7 @@ class ContextDAO:
             # Create or get default context using upsert
             return self.get_or_create(
                 project_id=project_id,
-                name="default",
+                name="",
                 description="default context",
                 is_versioned=False,
             )
