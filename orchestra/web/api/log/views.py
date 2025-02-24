@@ -625,7 +625,14 @@ def create_derived_entry(
             body.equation,
             resolved_ids,
         )
-        filter_dict = str_filter_exp_to_dict(filter_expr)
+        field_types = field_type_dao.get_field_types(
+            project_obj.id,
+            context_id=context_id,
+        )
+        filter_dict = str_filter_exp_to_dict(
+            filter_expr,
+            field_names=list(field_types.keys()),
+        )
         resolved_ids_dict = {}
         for key, ids in resolved_ids.items():
             resolved_ids_dict.setdefault(alias_to_key_map[key], []).extend(ids)
@@ -1551,7 +1558,10 @@ def _get_logs_query(
 
     # Handle user-defined filter_expr => build SQL expression on LogEvent
     if filter_expr:
-        filter_dict = str_filter_exp_to_dict(filter_expr)
+        filter_dict = str_filter_exp_to_dict(
+            filter_expr,
+            field_names=list(field_types.keys()),
+        )
         if filter_dict:
             # Only allow 'exists' checks for image fields
             def validate_filter_dict(fd):
@@ -1575,6 +1585,7 @@ def _get_logs_query(
 
             validate_filter_dict(filter_dict)
             event_ids = [x[0] for x in log_event_query.all()]
+            print("filter_dict", json.dumps(filter_dict, indent=4))
             condition = build_sql_query(
                 filter_dict,
                 LogEvent,
@@ -2214,6 +2225,7 @@ def get_logs(
         exclude_ids=exclude_ids,
         project_dao=project_dao,
         context_dao=context_dao,
+        field_type_dao=field_type_dao,
         session=session,
     )
     field_order_map = field_type_dao.get_ordered_field_names(
@@ -2624,8 +2636,18 @@ def get_logs_metric(
             LogEvent.id.notin_([int(i) for i in exclude_ids.split("&")]),
         )
 
+    context_name = "default" if not context else context
+    context_obj = context_dao.filter(name=context_name, project_id=project_obj.id)
+    if context_obj:
+        context_id = context_obj[0][0].id
+    else:
+        context_id = None
+    field_types = field_type_dao.get_field_types(project_obj.id, context_id=context_id)
     if filter_expr:
-        filter_dict = str_filter_exp_to_dict(filter_expr)
+        filter_dict = str_filter_exp_to_dict(
+            filter_expr,
+            field_names=list(field_types.keys()),
+        )
         if filter_dict:
             event_ids = [x[0] for x in query.all()]
             condition = build_sql_query(
@@ -3400,6 +3422,7 @@ def _get_all_filtered_log_event_ids(
     exclude_ids: Optional[str],
     project_dao: ProjectDAO,
     context_dao: ContextDAO,
+    field_type_dao: FieldTypeDAO,
     session=Depends(get_db_session),
     return_versions: bool = False,
 ) -> Tuple[List[int], int]:
@@ -3502,9 +3525,19 @@ def _get_all_filtered_log_event_ids(
             exclude_set = [int(x) for x in exclude_ids.split("&")]
             log_event_query = log_event_query.filter(LogEvent.id.notin_(exclude_set))
 
+    context_name = "default" if not context else context
+    context_obj = context_dao.filter(name=context_name, project_id=project_id)
+    if context_obj:
+        context_id = context_obj[0][0].id
+    else:
+        context_id = None
+    field_types = field_type_dao.get_field_types(project_id, context_id=context_id)
     # Handle user-defined filter_expr => build SQL expression on LogEvent
     if filter_expr:
-        filter_dict = str_filter_exp_to_dict(filter_expr)
+        filter_dict = str_filter_exp_to_dict(
+            filter_expr,
+            field_names=list(field_types.keys()),
+        )
         if filter_dict:
             event_ids = [x[0] for x in log_event_query.all()]
             condition = build_sql_query(
