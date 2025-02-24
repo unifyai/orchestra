@@ -228,7 +228,7 @@ class RenameFieldRequest(BaseModel):
         example="eval-project",
     )
     context: Optional[str] = Field(
-        default="default",
+        default="",
         description="The context of the field to rename.",
         example="test-context",
     )
