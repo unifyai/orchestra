@@ -91,12 +91,6 @@ async def test_get_contexts(client: AsyncClient):
     )
     assert response.status_code == 200
 
-    # Create project and context
-    await client.post(
-        "/v0/project",
-        json={"name": project_name},
-        headers=HEADERS,
-    )
     await client.post(
         f"/v0/project/{project_name}/contexts",
         json={"name": context_name, "description": "Test context"},
@@ -239,6 +233,50 @@ async def test_get_logs_by_context(client: AsyncClient):
     logs = response.json()["logs"]
     assert len(logs) == 1
     assert logs[0]["entries"]["metric"] == 1.5
+
+
+async def test_get_logs_no_context(client: AsyncClient):
+    project_name = "test-project"
+    context_name = "test-context"
+    # Setup project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Test context"},
+        headers=HEADERS,
+    )
+
+    # Create log within context
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "params": {"a/b/param1": "test"},
+            "entries": {
+                "metric": 0.95,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+            "context": {
+                "name": context_name,
+                "description": "Test context",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Get logs without context (should return 0 logs)
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+    assert len(logs) == 0
 
 
 @pytest.mark.anyio

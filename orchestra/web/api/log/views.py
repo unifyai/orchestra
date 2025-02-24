@@ -164,7 +164,7 @@ def create_logs(
         )
     else:
         # get the default context
-        context_id = context_dao.get_or_create(project_id, name="default")
+        context_id = context_dao.get_or_create(project_id, name="")
 
     # Validate that params and entries lists have equal lengths when both are provided as lists
     if isinstance(request.entries, list) and isinstance(request.params, list):
@@ -601,7 +601,7 @@ def create_derived_entry(
         )
     else:
         # get the default context
-        context_id = context_dao.get_or_create(project_obj.id, name="default")
+        context_id = context_dao.get_or_create(project_obj.id, name="")
 
     resolved_ids = prepare_resolved_ids(
         equation=body.equation,
@@ -1059,7 +1059,7 @@ def update_logs(
                 )
             else:
                 # get the default context
-                ctx_id = context_dao.get_or_create(project_id, name="default")
+                ctx_id = context_dao.get_or_create(project_id, name="")
             try:
                 field_types = field_type_dao.get_field_types(
                     project_id,
@@ -1548,7 +1548,7 @@ def _get_logs_query(
     log_event_query = session.query(LogEvent.id).filter(
         LogEvent.project_id == project_id,
     )
-    context_name = "default" if not context else context
+    context_name = "" if not context else context
     context_obj = context_dao.filter(name=context_name, project_id=project_id)
     if context_obj:
         context_id = context_obj[0][0].id
@@ -1614,35 +1614,41 @@ def _get_logs_query(
     if context:
         # Get context object and check if it's versioned when return_versions=True
         context_obj = context_dao.filter(name=context, project_id=project_id)
+    else:
+        # use the default context
+        context_obj = context_dao.filter(name="", project_id=project_id)
         if not context_obj:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Context '{context}' not found",
-            )
+            # no logs present within this context, return empty logs
+            return [], 0, 0
 
-        context_obj = context_obj[0][0]
-        ctx_id_val = context_obj.id
+    if not context_obj:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Context '{context}' not found",
+        )
+    context_obj = context_obj[0][0]
+    ctx_id_val = context_obj.id
 
-        # If return_versions is True, verify the context is versioned
-        if return_versions and not context_obj.is_versioned:
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot return versions for unversioned context",
-            )
+    # If return_versions is True, verify the context is versioned
+    if return_versions and not context_obj.is_versioned:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot return versions for unversioned context",
+        )
 
-        # Filter by context_id
-        log_event_query = log_event_query.filter(
-            exists(
-                select(1)
-                .select_from(LogEventContext)
-                .where(
-                    and_(
-                        LogEventContext.log_event_id == LogEvent.id,
-                        LogEventContext.context_id == ctx_id_val,
-                    ),
+    # Filter by context_id
+    log_event_query = log_event_query.filter(
+        exists(
+            select(1)
+            .select_from(LogEventContext)
+            .where(
+                and_(
+                    LogEventContext.log_event_id == LogEvent.id,
+                    LogEventContext.context_id == ctx_id_val,
                 ),
             ),
-        )
+        ),
+    )
 
     # Turn into a subquery => these are the log_event_ids we care about so far
     relevant_log_events = log_event_query.subquery(name="relevant_log_events")
@@ -2131,7 +2137,7 @@ def get_logs(
             detail=f"Project {project} not found.",
         )
     # Format logs into flat structure.
-    context_name = "default" if not context else context
+    context_name = "" if not context else context
     context_obj = context_dao.filter(name=context_name, project_id=project_id)
     if context_obj:
         context_id = context_obj[0][0].id
@@ -2580,7 +2586,7 @@ def get_logs_metric(
         example="eval-project",
     ),
     context: Optional[str] = Query(
-        "default",
+        "",
         description="Static context to filter logs by.",
         example="training",
     ),
@@ -2636,7 +2642,7 @@ def get_logs_metric(
             LogEvent.id.notin_([int(i) for i in exclude_ids.split("&")]),
         )
 
-    context_name = "default" if not context else context
+    context_name = "" if not context else context
     context_obj = context_dao.filter(name=context_name, project_id=project_obj.id)
     if context_obj:
         context_id = context_obj[0][0].id
@@ -2766,7 +2772,7 @@ def get_logs_metric(
     reduced_query = metric_query.scalar()
 
     # Post-process based on field type
-    context_name = "default" if not context else context
+    context_name = "" if not context else context
     context_id = context_dao.filter(name=context_name, project_id=project_obj.id)
     if context_id:
         context_id = context_id[0][0].id
@@ -2990,7 +2996,7 @@ def rename_field(
             )
         project_id = project[0][0].id
 
-        context_name = request.context if request.context else "default"
+        context_name = request.context if request.context else ""
         context = context_dao.filter(project_id=project_id, name=context_name)
         if not context:
             raise HTTPException(
@@ -3106,7 +3112,7 @@ def get_fields(
         example="eval-project",
     ),
     context: Optional[str] = Query(
-        "default",
+        "",
         description="Optional context name to filter field types",
         example="training",
     ),
@@ -3525,7 +3531,7 @@ def _get_all_filtered_log_event_ids(
             exclude_set = [int(x) for x in exclude_ids.split("&")]
             log_event_query = log_event_query.filter(LogEvent.id.notin_(exclude_set))
 
-    context_name = "default" if not context else context
+    context_name = "" if not context else context
     context_obj = context_dao.filter(name=context_name, project_id=project_id)
     if context_obj:
         context_id = context_obj[0][0].id
@@ -3565,21 +3571,34 @@ def _get_all_filtered_log_event_ids(
 
     # Filter by "static context"
     if context:
-        ctx_id = context_dao.filter(name=context, project_id=project_id)
-        if ctx_id:
-            ctx_id_val = ctx_id[0][0].id
-            log_event_query = log_event_query.filter(
-                exists(
-                    select(1)
-                    .select_from(LogEventContext)
-                    .where(
-                        and_(
-                            LogEventContext.log_event_id == LogEvent.id,
-                            LogEventContext.context_id == ctx_id_val,
-                        ),
+        context_obj = context_dao.filter(name=context, project_id=project_id)
+    else:
+        # use the default context
+        context_obj = context_dao.filter(name="", project_id=project_id)
+        if not context_obj:
+            # no logs present within this context, return empty logs
+            return [], 0
+
+    if not context_obj:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Context '{context}' not found",
+        )
+    context_obj = context_obj[0][0]
+    ctx_id = context_obj.id
+    if ctx_id:
+        log_event_query = log_event_query.filter(
+            exists(
+                select(1)
+                .select_from(LogEventContext)
+                .where(
+                    and_(
+                        LogEventContext.log_event_id == LogEvent.id,
+                        LogEventContext.context_id == ctx_id,
                     ),
                 ),
-            )
+            ),
+        )
 
     # Execute the query: we get all relevant event IDs (no limit/offset)
     all_ids = log_event_query.all()  # each row is a tuple (id,)
@@ -3697,7 +3716,7 @@ def _fetch_logs_for_event_ids(
         .subquery("distinct_ids_subq")
     )
 
-    context_name = "default" if not context else context
+    context_name = "" if not context else context
     context_id = context_dao.filter(name=context_name, project_id=project_id)[0][0].id
     field_types = field_type_dao.get_field_types(project_id, context_id=context_id)
     sorted_query = session.query(distinct_ids_subq.c.log_event_id)
@@ -4160,7 +4179,7 @@ def _build_unified_logs_subquery(
             Log.updated_at.label("updated_at"),
             LogEvent.created_at.label("created_at"),
             literal("current").label("source_type"),
-        )  # .join(LogEvent, LogEvent.id == Log.log_event_id)
+        ).join(LogEvent, LogEvent.id == Log.log_event_id)
         base_logs_q_current = _apply_event_filter(base_logs_q_current)
 
         base_logs_q_history = session.query(
@@ -4174,7 +4193,7 @@ def _build_unified_logs_subquery(
             LogHistory.archived_at.label("updated_at"),
             LogEvent.created_at.label("created_at"),
             literal("history").label("source_type"),
-        )  # .join(LogEvent, LogEvent.id == LogHistory.log_event_id)
+        ).join(LogEvent, LogEvent.id == LogHistory.log_event_id)
         base_logs_q_history = _apply_event_filter(base_logs_q_history)
 
         base_logs_q = base_logs_q_current.union_all(base_logs_q_history)
