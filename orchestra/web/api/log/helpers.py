@@ -4,6 +4,7 @@ import statistics
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple, Union
 
+from fastapi import HTTPException
 from sqlalchemy import (
     JSON,
     TIMESTAMP,
@@ -163,6 +164,19 @@ def parse_nested(s, pos):
     return s[start_pos:pos], pos
 
 
+def _relabel_identifiers(tokens, field_names):
+    new_tokens = []
+    for (kind, value) in tokens:
+        if kind == "IDENTIFIER":
+            if field_names and (value not in field_names):
+                # TODO: what to do here?
+                pass
+            else:
+                pass
+        new_tokens.append((kind, value))
+    return new_tokens
+
+
 def _tokenize(s):
     paren_count = 0
     for c in s:
@@ -176,40 +190,40 @@ def _tokenize(s):
         raise RuntimeError("Unbalanced parentheses")
 
     token_specification = [
-        (
-            "NUMBER",
-            r"-?(\d+(\.\d*)?|\.\d+)|None",
-        ),  # Integer or decimal number (+ve/-ve) or None
-        (
-            "STRING",
-            r'"(?:[^"\\]|\\.)*?"|\'(?:[^\'\\]|\\.)*?\'',
-        ),  # String with non-greedy quantifier
-        # Operators, note the order to match 'not in' before 'not' and 'in'
-        (
-            "OP",
-            r"==|!=|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)|\*\*|//|\+|\-|\*|/|%",
-        ),
+        # 1) Numbers or None
+        ("NUMBER", r"-?(\d+(\.\d*)?|\.\d+)|None"),
+        # 2) String literals
+        ("STRING", r'"(?:[^"\\]|\\.)*?"|\'(?:[^\'\\]|\\.)*?\''),
+        # 3) Booleans
+        ("BOOLEAN", r"(?<!\w)(?:True|False)(?!\w)"),
+        # 4) Functions/Keywords (with word boundaries)
         ("ROUND", r"(?<!\w)round(?!\w)"),
         ("ROUND_TIMESTAMP", r"(?<!\w)round_timestamp(?!\w)"),
         (
             "FUNC",
-            r"(?<!\w)(?:len|exists|version|str(?=\()|to_str|isNone)",
+            r"(?<!\w)(?:len|exists|version|str(?=\()|to_str|isNone)(?!\w)",
         ),
+        ("BASEFUNC", r"(?<!\w)BASE(?!\w)"),
+        # 5) Operators. Note we catch 'not in', 'is not' first:
         (
-            "BASEFUNC",
-            r"(?<!\w)BASE(?!\w)",  # special function to handle derived log notation
+            "OP",
+            r"==|!=|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)|\*\*|//|\+|\-|\*|/|%",
         ),
-        ("BOOLEAN", r"(?<!\w)(?:True|False)(?!\w)"),  # Booleans
-        ("IDENTIFIER", r"[A-Za-z_/][A-Za-z0-9_/]*"),  # Identifiers
+        # 6) Identifiers (allow dashes, underscores, slashes, digits, etc.)
+        #    We allow them as a single "word" if no whitespace in between
+        (
+            "IDENTIFIER",
+            r"[A-Za-z0-9_/]+(?:-[A-Za-z0-9_/]+)*",
+        ),
+        # 7) Parentheses / Comma / Bracket
         ("LPAREN", r"\("),
         ("RPAREN", r"\)"),
         ("COMMA", r","),
-        (
-            "BRACKET_OPEN",
-            r"[\[\{]",
-        ),  # We detect [ or {, then parse_nested to build an OTHER token
-        ("SKIP", r"[ \t]+"),  # Skip over spaces and tabs
-        ("MISMATCH", r"."),  # Any other character
+        ("BRACKET_OPEN", r"[\[\{]"),
+        # 8) Whitespace to skip
+        ("SKIP", r"[ \t]+"),
+        # 9) Any single character that doesn't match
+        ("MISMATCH", r"."),
     ]
     tok_regex = "|".join("(?P<%s>%s)" % pair for pair in token_specification)
     get_token = re.compile(tok_regex).match
@@ -242,8 +256,9 @@ def _tokenize(s):
         elif kind == "BOOLEAN":
             value = True if value == "True" else False
             tokens.append(("BOOLEAN", value))
+        elif kind == "IDENTIFIER":
+            tokens.append((kind, value))
         elif kind in (
-            "IDENTIFIER",
             "FUNC",
             "BASEFUNC",
             "ROUND",
@@ -500,11 +515,17 @@ class _Parser:
 # ----------#
 
 
-def str_filter_exp_to_dict(s):
-    tokens = _tokenize(s)
-    parser = _Parser(tokens)
-    result = parser.parse()
-    return result
+def str_filter_exp_to_dict(s, field_names=None):
+    try:
+        tokens = _tokenize(s)
+        if field_names is not None:
+            tokens = _relabel_identifiers(tokens, field_names)
+        # print("tokens", tokens)
+        parser = _Parser(tokens)
+        result = parser.parse()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid filter expression: {e}")
 
 
 def _select_value(subq, session, is_collection=False):
@@ -564,13 +585,13 @@ def unify_inferred_types(t1: str, t2: str) -> str:
         "NoneType",
     ]
 
-    # If either side is “none”, we skip it or treat it as the other side
+    # If either side is "none", we skip it or treat it as the other side
     if t1 is None:
         return t2
     if t2 is None:
         return t1
 
-    # Find each type’s position in the precedence list
+    # Find each type's position in the precedence list
     try:
         i1 = precedence.index(t1)
     except ValueError:
@@ -760,7 +781,7 @@ def _build_subquery_for_identifier(
         derived_log_alias.log_event_id.in_(log_event_ids),
         derived_log_alias.key == key,
     )
-
+    # print("derived_subq", session.execute(derived_subq).fetchall())
     # Combine base and derived logs with union
     combined_subq = base_subq.union_all(derived_subq).subquery(name=alias)
     return combined_subq
