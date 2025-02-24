@@ -36,9 +36,9 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
     """
     ssl_params = {
         "sslmode": "verify-ca",
-        "sslrootcert": "/secrets/server-ca.pem",
-        "sslcert": "/secrets/client-cert.pem",
-        "sslkey": "/secrets/client-key.pem",
+        "sslrootcert": "/secrets/server_ca/server-ca.pem",
+        "sslcert": "/secrets/client_cert/client-cert.pem",
+        "sslkey": "/secrets/client_key/client-key.pem",
     }
     db_url = URL.build(
         scheme="postgresql+psycopg2",
