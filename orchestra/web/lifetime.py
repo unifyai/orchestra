@@ -34,13 +34,12 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
 
     :param app: fastAPI application.
     """
-    # TODO: enable SSL connection
-    # ssl_params = {
-    #     "sslmode": "verify-ca",
-    #     "sslrootcert": "/secrets/server_ca/server-ca.pem",
-    #     "sslcert": "/secrets/client_cert/client-cert.pem",
-    #     "sslkey": "/secrets/client_key/client-key.pem",
-    # }
+    ssl_params = {
+        "sslmode": "verify-ca",
+        "sslrootcert": "/secrets/server_ca/server-ca.pem",
+        "sslcert": "/secrets/client_cert/client-cert.pem",
+        "sslkey": "/secrets/client_key/client-key.pem",
+    }
     db_url = URL.build(
         scheme="postgresql+psycopg2",
         host=settings.db_host,
@@ -48,7 +47,7 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
         user=settings.db_user,
         password=settings.db_pass,
         path=f"/{settings.db_base}",
-        # query=ssl_params,
+        query=ssl_params,
     )
     engine = create_engine(
         str(db_url),
