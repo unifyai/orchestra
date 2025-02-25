@@ -74,6 +74,42 @@ from .helpers import (
 router = APIRouter()
 
 
+# Sorting configuration modes
+class SortType(str, Enum):
+    WITHIN_GROUPS = "within_groups"
+    SORT_GROUPS = "sort_groups"
+
+
+class SortDirection(str, Enum):
+    ASCENDING = "ascending"
+    DESCENDING = "descending"
+
+
+class AggregationMetric(str, Enum):
+    MEAN = "mean"
+    VAR = "var"
+    STD = "std"
+    SUM = "sum"
+    MIN = "min"
+    MAX = "max"
+    COUNT = "count"
+    MEDIAN = "median"
+    MODE = "mode"
+
+
+class SortConfig(BaseModel):
+    field: str = Field(..., description="The field to sort by")
+    direction: SortDirection = Field(..., description="Sort direction")
+    sort_type: SortType = Field(
+        ...,
+        description="Whether to sort within groups or sort groups themselves",
+    )
+    metric: Optional[AggregationMetric] = Field(
+        None,
+        description="Required when sort_type is sort_groups. The metric to use for group-level sorting.",
+    )
+
+
 ###########################
 # endpoints
 ###########################
