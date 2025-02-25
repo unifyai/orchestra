@@ -5036,7 +5036,27 @@ async def test_create_log_type_mismatch(client: AsyncClient):
         },
         headers=HEADERS,
     )
-    # Create a log with a type mismatch
+    assert response.status_code == 200, response.json()
+    # Create a log with a None value (should work)
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {"score": None},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    # get field types
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert field_types["response"]["data_type"] == "str"
+    assert field_types["score"]["data_type"] == "int"
+    assert field_types["response"]["data_type"] == "str"
     response = await client.post(
         "/v0/logs",
         json={
