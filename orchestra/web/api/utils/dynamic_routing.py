@@ -593,11 +593,6 @@ metrics = {
         "ttft": 405.11531099997455,
         "itl": 4.174361656626742,
     },
-    "mixtral-8x7b-instruct-v0.1@replicate": {
-        "cost": 1,
-        "ttft": 887.903352999956,
-        "itl": 15.394309863636439,
-    },
     "mixtral-8x7b-instruct-v0.1@mistral-ai": {
         "cost": 0.7,
         "ttft": 352.0689869999387,
