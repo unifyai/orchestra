@@ -156,4 +156,9 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 0.8, "completion": 4},
     },
+    "claude-3.7-sonnet": {
+        "endpoint": "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "context_window": 200000,
+        "cost": {"prompt": 3, "completion": 15},
+    },
 }
