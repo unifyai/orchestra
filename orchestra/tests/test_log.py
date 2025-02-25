@@ -6233,6 +6233,246 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
                 )
 
 @pytest.mark.anyio
+async def test_sorting_with_grouping(client: AsyncClient):
+    """Test sorting functionality within groups and across groups."""
+    project_name = "test-sorting-with-grouping"
+    await _create_project(client, project_name)
+
+    # Create test data: student scores across different tests
+    test_data = [
+        {"student": "Alice", "test": "Math", "score": 95},
+        {"student": "Alice", "test": "Physics", "score": 88},
+        {"student": "Alice", "test": "Chemistry", "score": 92},
+        {"student": "Bob", "test": "Math", "score": 82},
+        {"student": "Bob", "test": "Physics", "score": 90},
+        {"student": "Bob", "test": "Chemistry", "score": 85},
+        {"student": "Charlie", "test": "Math", "score": 78},
+        {"student": "Charlie", "test": "Physics", "score": 75},
+        {"student": "Charlie", "test": "Chemistry", "score": 80},
+    ]
+
+    # Create logs for each test score
+    for entry in test_data:
+        response = await _create_log(client, project_name, entries=entry)
+        assert response.status_code == 200, response.json()
+
+    #
+    # TEST 1: Sort within groups (group_by=student, normal "sorting")
+    # We expect: "logs" -> { "entries/student": { "Alice": [..], "Bob": [..], ...,
+    #                                           "group_count": 3, "count": 9 } }
+    #
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/student"],
+            "sorting": json.dumps({"score": "descending"}),
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    # The grouped data should be in result["logs"]["entries/student"]
+    logs_section = result["logs"]
+    assert isinstance(logs_section, dict), "Expected a dict for logs"
+
+    group_obj = logs_section["entries/student"]
+    assert "group_count" in group_obj, "Missing 'group_count' in group-level dict"
+    assert "count" in group_obj, "Missing 'count' in group-level dict"
+
+    # Here we specifically look for each known student by name
+    # and verify each group's logs are sorted (descending) by "score".
+    for student in ["Alice", "Bob", "Charlie"]:
+        # group_obj[student] should be a list of logs
+        logs_list = group_obj[student]
+        scores = [log["entries"]["score"] for log in logs_list]
+        assert scores == sorted(
+            scores,
+            reverse=True,
+        ), f"Scores not properly sorted in descending order for {student}"
+
+        # Confirm the exact descending sequence:
+        if student == "Alice":
+            assert scores == [95, 92, 88], "Alice's scores not in correct order"
+        elif student == "Bob":
+            assert scores == [90, 85, 82], "Bob's scores not in correct order"
+        elif student == "Charlie":
+            assert scores == [80, 78, 75], "Charlie's scores not in correct order"
+
+    #
+    # TEST 2: Sort across groups via "sort_across_groups" (aggregator = mean of 'score')
+    #
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/student"],
+            "group_sorting": json.dumps(
+                {
+                    "entries/student": {
+                        "field": "score",
+                        "metric": "mean",
+                        "direction": "descending",
+                        "sort_type": "sort_groups",
+                    },
+                },
+            ),
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    # The grouped data is still under result["logs"]["entries/student"],
+    # but now the *order* of the group keys is aggregator-based.
+    logs_section = result["logs"]["entries/student"]
+    group_keys = [
+        k
+        for k in logs_section.keys()
+        if k not in ("group_count", "count", "_aggregator_metric")
+    ]
+
+    # We'll compute each group's mean ourselves to verify ordering
+    def mean(lst):
+        return sum(lst) / len(lst) if lst else float("nan")
+
+    mean_map = {}
+    for student in group_keys:
+        logs_list = logs_section[student]
+        sc = [log["entries"]["score"] for log in logs_list if "score" in log["entries"]]
+        mean_map[student] = mean(sc)
+
+    # The groups appear in dictionary order by default in Python 3.7+,
+    # but we can see them in the returned JSON in a certain order. We'll
+    # parse them in that sequence:
+    # E.g. group_keys might be ["Alice", "Bob", "Charlie"] or any order
+    # We'll compare group_keys to the sorted descending sequence by mean_map
+    descending_students = sorted(mean_map, key=lambda s: mean_map[s], reverse=True)
+    assert group_keys == descending_students, (
+        "Groups not sorted by aggregator mean(score) in descending order. "
+        f"Expected {descending_students}, got {group_keys}"
+    )
+
+    # For these students:
+    #  - Alice's mean = (95 + 88 + 92) / 3 = 91.666..
+    #  - Bob's   mean = (82 + 90 + 85) / 3 = 85.666..
+    #  - Charlie's = (78 + 75 + 80) / 3 = 77.666..
+    # So we expect ["Alice", "Bob", "Charlie"] in that order
+    assert group_keys == ["Alice", "Bob", "Charlie"], "Unexpected group order"
+
+
+@pytest.mark.anyio
+async def test_sorting_edge_cases(client: AsyncClient):
+    """Test edge cases in sorting with groups."""
+    project_name = "test-sorting-edge-cases"
+    await _create_project(client, project_name)
+
+    # Create test data with edge cases
+    test_data = [
+        {"student": "Alice", "test": "Math", "score": None},  # Null score
+        {"student": "Alice", "test": "Physics", "score": 88},
+        {"student": "Bob", "test": "Math", "score": 82},
+        {"student": "Bob", "test": "Physics"},  # Missing score field
+        {"student": "Charlie", "test": "Math", "score": 0},  # Zero score
+        {"student": "Charlie", "test": "Physics", "score": -5},  # Negative score
+    ]
+    for entry in test_data:
+        response = await _create_log(client, project_name, entries=entry)
+        assert response.status_code == 200, response.json()
+
+    # 1) Sort across groups with null or missing score fields
+    #    We group by 'student' and want to see which group is highest in mean(score)
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/student"],
+            "group_sorting": json.dumps(
+                {
+                    "entries/student": {
+                        "field": "score",
+                        "metric": "mean",
+                        "direction": "descending",
+                        "sort_type": "sort_groups",
+                    },
+                },
+            ),
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    # The grouped data is under result["logs"]["entries/student"]
+    groups_dict = result["logs"]["entries/student"]
+    group_names = [
+        k
+        for k in groups_dict.keys()
+        if k not in ("count", "group_count", "_aggregator_metric")
+    ]
+
+    # Compute the mean of scores for each group
+    def safe_mean(logs_list):
+        vals = []
+        for lg in logs_list:
+            if "score" in lg["entries"]:
+                sc = lg["entries"].get("score", None)
+                # if missing or None, skip or treat as 0
+                if sc is None:
+                    vals.append(0)
+                else:
+                    vals.append(sc)
+        return sum(vals) / len(vals) if vals else float("-inf")
+
+    mean_map = {gn: safe_mean(groups_dict[gn]) for gn in group_names}
+
+    # Make sure the group_names are sorted desc by that mean
+    sorted_desc = sorted(mean_map, key=lambda x: mean_map[x], reverse=True)
+    assert group_names == sorted_desc, (
+        f"Groups not sorted descending by mean score. "
+        f"Got group order={group_names}, expected={sorted_desc}"
+    )
+
+    # 2) Sort within groups
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/student"],
+            "sorting": json.dumps({"score": "descending"}),
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    groups_dict = result["logs"]["entries/student"]
+    # Check each group to ensure logs are sorted descending by "score",
+    # with None or missing fields placed last if your logic does so.
+    for student, logs_list in groups_dict.items():
+        if student in ("count", "group_count", "_aggregator_metric"):
+            continue
+        # We expect logs_list is a list
+        actual_scores = [lg["entries"].get("score", None) for lg in logs_list]
+        # Typically, null or missing appear at the end
+        # We'll just check that all numeric scores are in descending order
+        numeric_scores = [x for x in actual_scores if isinstance(x, (int, float))]
+        # find the first None in the list
+        idx_first_null = next((i for i, v in enumerate(actual_scores) if v is None), -1)
+        # confirm numeric part is descending
+        assert numeric_scores == sorted(numeric_scores, reverse=True), (
+            f"Scores not in descending order for {student}. " f"Got {actual_scores}"
+        )
+        if idx_first_null != -1:
+            # everything after idx_first_null should be None
+            for v in actual_scores[idx_first_null:]:
+                assert (
+                    v is None
+                ), f"Non-null score {v} found after first null in {actual_scores}"
+
+
+@pytest.mark.anyio
 async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
     project_name = "test-grouping-with-other-filters"
     _ = await _create_project(client, project_name)
