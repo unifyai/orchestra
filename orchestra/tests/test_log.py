@@ -1264,7 +1264,7 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
         ),
         (
             "length > 2.",
-            # tricky because 'len' is a function, but 'length' shouldn’t match 'len'
+            # tricky because 'len' is a function, but 'length' shouldn't match 'len'
             [
                 ("IDENTIFIER", "length"),
                 ("OP", ">"),
@@ -5659,6 +5659,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
     # - Multi-level grouping
     # - group_offset / group_limit
     # - group_depth
+    # - group_sorting
 
     project_name = "test-grouping-comprehensive"
     _ = await _create_project(client, project_name)
@@ -6170,6 +6171,66 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
                             assert "_/state" not in log["entries"]
                             assert "_/safe" not in log["entries"]
 
+        # ==========  SCENARIO 6: Group by + sort_across_groups  ==========
+        response = await client.get(
+            "/v0/logs",
+            params={
+                "project": project_name,
+                "group_by": ["entries/_/state"],
+                "group_sorting": json.dumps(
+                    {
+                        "entries/_/state": {
+                            "field": "derived_temp",
+                            "metric": "mean",
+                            "direction": "descending",
+                            "sort_type": "sort_groups",
+                        },
+                    },
+                ),
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+        result = response.json()
+
+        # Extract the top-level group object:
+        logs_section = result["logs"]
+        assert (
+            "entries/_/state" in logs_section
+        ), "Expected a top-level grouping by 'entries/_/state'"
+        group_obj = logs_section["entries/_/state"]
+        assert "group_count" in group_obj and "count" in group_obj
+
+        # Get all actual group names (excluding metadata like "count" and "group_count")
+        group_keys = [k for k in group_obj.keys() if k not in ("count", "group_count")]
+
+        # For each group, compute the average derived_temp among its logs (if any).
+        def compute_mean_derived_temp(logs_list):
+            vals = []
+            for log_item in logs_list:
+                dt = log_item["derived_entries"].get("derived_temp")
+                if dt is not None:
+                    vals.append(dt)
+            return sum(vals) / len(vals) if vals else float("inf")  # or 0 if you prefer
+
+        grouped_averages = []
+        for gk in group_keys:
+            # Each group here should be a list of logs (leaf level).
+            group_logs = group_obj[gk]
+            if not isinstance(group_logs, list):
+                continue
+            avg_temp = compute_mean_derived_temp(group_logs)
+            grouped_averages.append((gk, avg_temp))
+
+        # Verify the groups are sorted in descending order by mean(derived_temp)
+        for i in range(len(grouped_averages) - 1):
+            if grouped_averages[i + 1][0] == "null":
+                continue
+            else:
+                assert grouped_averages[i][1] >= grouped_averages[i + 1][1], (
+                    f"Groups are not in descending order by derived_temp mean: "
+                    f"{grouped_averages[i]} vs {grouped_averages[i+1]}"
+                )
 
 @pytest.mark.anyio
 async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
