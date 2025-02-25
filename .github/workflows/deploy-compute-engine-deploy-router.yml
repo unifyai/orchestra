@@ -10,10 +10,11 @@ env:
   GCLOUD_USERNAME: serviceuser
 
 on:
-  push:
-    branches:
-    - main
-    - staging
+  workflow_dispatch:
+  # push:
+  #   branches:
+  #   - main
+  #   - staging
 
 jobs:
   deploy:
