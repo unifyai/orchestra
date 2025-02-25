@@ -33,11 +33,6 @@ class Replicate(BaseCompletionProvider):
 
 
 supported_models = {
-    "mixtral-8x7b-instruct-v0.1": {
-        "endpoint": "replicate/mistralai/mixtral-8x7b-instruct-v0.1",
-        "context_window": 16384,
-        "cost": {"prompt": 0.3, "completion": 1},
-    },
     "llama-3-8b-chat": {
         "endpoint": "replicate/meta/meta-llama-3-8b-instruct",
         "context_window": 8192,
