@@ -4198,6 +4198,8 @@ def _build_grouped_data(
             ),
         )
 
+        # TODO(yusha): computing reduction metric in a plain for-loop is inefficient.
+        # Potential Optimization could be to instead use SQL GROUPBY (ie: compute_group_aggregate)
         # Extract the child's aggregator metric if it exists
         metric_value = None
         if isinstance(sub, dict) and "_aggregator_metric" in sub:
@@ -4521,10 +4523,7 @@ def _compute_group_metric(
             ),
             (
                 X.c.inferred_type == "timestamp",
-                func.extract(
-                    "epoch",
-                    cast(cast(X.c.value, String), TIMESTAMP),
-                ).cast(
+                func.extract("epoch", cast(cast(X.c.value, String), TIMESTAMP)).cast(
                     Float,
                 ),
             ),
