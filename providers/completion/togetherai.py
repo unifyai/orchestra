@@ -31,7 +31,7 @@ supported_models = {
     "deepseek-r1": {
         "endpoint": "together_ai/deepseek-ai/DeepSeek-R1",
         "context_window": 64000,
-        "cost": {"prompt": 7, "completion": 7},
+        "cost": {"prompt": 3, "completion": 7},
     },
     "deepseek-v3": {
         "endpoint": "together_ai/deepseek-ai/DeepSeek-V3",

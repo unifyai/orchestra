@@ -68,7 +68,7 @@ supported_models = {
         "endpoint": "vertex_ai/gemini-2.0-flash-lite-preview-02-05",
         "region": "us-central1",
         "context_window": 128000,
-        "cost": {"prompt": 0, "completion": 0},
+        "cost": {"prompt": 0.075, "completion": 0.3},
     },
     "gemini-2.0-flash": {
         "endpoint": "vertex_ai/gemini-2.0-flash-001",
@@ -136,12 +136,6 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 0.25, "completion": 1.25},
     },
-    "claude-3-sonnet": {
-        "endpoint": "vertex_ai/claude-3-sonnet@20240229",
-        "region": "us-east5",
-        "context_window": 200000,
-        "cost": {"prompt": 3, "completion": 15},
-    },
     "claude-3-opus": {
         "endpoint": "vertex_ai/claude-3-opus@20240229",
         "region": "us-east5",
@@ -166,6 +160,12 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 0.8, "completion": 4},
     },
+    "claude-3.7-sonnet": {
+        "endpoint": "vertex_ai/claude-3-7-sonnet@20250219",
+        "region": "us-east5",
+        "context_window": 200000,
+        "cost": {"prompt": 3, "completion": 15},
+    },
     "llama-3.1-8b-chat": {
         "endpoint": "vertex_ai/meta/llama3-8b-instruct-maas",
         "region": "us-central1",
@@ -182,7 +182,7 @@ supported_models = {
         "endpoint": "vertex_ai/meta/llama3-405b-instruct-maas",
         "region": "us-central1",
         "context_window": 128000,
-        "cost": {"prompt": 5.32, "completion": 16},
+        "cost": {"prompt": 5, "completion": 16},
     },
     "llama-3.2-11b-chat": {
         "endpoint": "vertex_ai/meta/llama-3.2-90b-vision-instruct-maas",
