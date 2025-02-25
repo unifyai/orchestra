@@ -2124,6 +2124,88 @@ reduction_methods = {
 }
 
 
+def compute_group_aggregate(
+    session,
+    log_event_ids: List[int],
+    group_field: str,
+    value_field: str,
+    aggregation_metric: str,
+    log_event_alias,
+) -> Dict[Any, float]:
+    """
+    Compute aggregated values for a given group using SQLAlchemy.
+
+    Args:
+        session: SQLAlchemy session
+        log_event_ids: List of log event IDs to process
+        group_field: Field name to group by
+        value_field: Field name to aggregate
+        aggregation_metric: Metric to use for aggregation (e.g., 'mean', 'sum', 'min', etc.)
+        log_event_alias: Alias for LogEvent to correlate subqueries
+
+    Returns:
+        Dict mapping group values to their aggregated values
+    """
+    # Build subqueries for group and value fields
+    group_subq = _build_subquery_for_identifier(
+        group_field,
+        log_event_alias,
+        log_event_ids=log_event_ids,
+        session=session,
+    )
+    value_subq = _build_subquery_for_identifier(
+        value_field,
+        log_event_alias,
+        log_event_ids=log_event_ids,
+        session=session,
+    )
+
+    # Get the value columns and their types
+    group_val, group_type = _select_value(group_subq, session)
+    value_val, value_type = _select_value(value_subq, session)
+
+    # Cast value column to float for aggregation
+    value_col = cast(value_val, Float)
+
+    # Define the aggregation function based on the metric
+    if aggregation_metric == "mean":
+        agg_func = func.avg(value_col)
+    elif aggregation_metric == "sum":
+        agg_func = func.sum(value_col)
+    elif aggregation_metric == "min":
+        agg_func = func.min(value_col)
+    elif aggregation_metric == "max":
+        agg_func = func.max(value_col)
+    elif aggregation_metric == "count":
+        agg_func = func.count(value_col)
+    elif aggregation_metric == "std":
+        # Standard deviation using PostgreSQL's stddev function
+        agg_func = func.stddev(value_col)
+    elif aggregation_metric == "var":
+        # Variance using PostgreSQL's var_pop function
+        agg_func = func.var_pop(value_col)
+    else:
+        raise ValueError(f"Unsupported aggregation metric: {aggregation_metric}")
+
+    # Build and execute the aggregation query
+    result = (
+        session.query(
+            group_val.label("group_value"),
+            agg_func.label("agg_value"),
+        )
+        .select_from(group_subq)
+        .join(
+            value_subq,
+            group_subq.c.log_event_id == value_subq.c.log_event_id,
+        )
+        .group_by(group_val)
+        .all()
+    )
+
+    # Convert result to dictionary
+    return {row.group_value: row.agg_value for row in result}
+
+
 def _flatten_fields(
     log_fields: List[Tuple[Union[int, List[int]], Union[str, List[str]]]],
 ):
