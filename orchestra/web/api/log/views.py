@@ -228,7 +228,7 @@ def create_logs(
                     field_category="param" if is_param else "entry",
                     context_id=context_id,
                 )
-            elif entered_type != expected_type:
+            elif entered_type != expected_type and entered_type != "NoneType":
                 batch_info = (
                     f" (in batch entry {batch_index})"
                     if batch_index is not None
