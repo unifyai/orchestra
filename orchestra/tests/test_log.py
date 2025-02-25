@@ -6232,6 +6232,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
                     f"{grouped_averages[i]} vs {grouped_averages[i+1]}"
                 )
 
+
 @pytest.mark.anyio
 async def test_sorting_with_grouping(client: AsyncClient):
     """Test sorting functionality within groups and across groups."""
@@ -6470,6 +6471,431 @@ async def test_sorting_edge_cases(client: AsyncClient):
                 assert (
                     v is None
                 ), f"Non-null score {v} found after first null in {actual_scores}"
+
+
+@pytest.mark.anyio
+async def test_nested_group_sorting_with_separate_metrics(client: AsyncClient):
+    """
+    Scenario: We have two grouping fields: ["entries/country", "entries/student"].
+    We also have a 'score' field. We want to:
+       - Sort each 'country' group by the SUM of scores (descending).
+       - Within each country, sort 'student' groups by the MEAN of scores (descending).
+    """
+
+    project_name = "test-nested-separate-metrics"
+    await _create_project(client, project_name)
+
+    # Insert sample data
+    data = [
+        ("USA", "Alice", 95),
+        ("USA", "Alice", 85),
+        ("USA", "Bob", 70),
+        ("USA", "Bob", 72),
+        ("Canada", "Alice", 88),
+        ("Canada", "Charlie", 90),
+        ("Canada", "Charlie", 82),
+        ("Mexico", "Diana", 100),
+        ("Mexico", "Diana", 100),
+        ("Mexico", "Bob", 60),
+    ]
+    for country, student, score in data:
+        r = await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "entries": {"country": country, "student": student, "score": score},
+            },
+            headers=HEADERS,
+        )
+        assert r.status_code == 200
+
+    # group_sorting config:
+    #  - "entries/country": sum of 'score' => descending
+    #  - "entries/student": mean of 'score' => descending
+    group_sorting = {
+        "entries/country": {
+            "field": "score",
+            "direction": "descending",
+            "sort_type": "sort_groups",
+            "metric": "sum",
+        },
+        "entries/student": {
+            "field": "score",
+            "direction": "descending",
+            "sort_type": "sort_groups",
+            "metric": "mean",
+        },
+    }
+
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/country", "entries/student"],
+            "group_sorting": json.dumps(group_sorting),
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+    result = resp.json()
+
+    # Check shape:
+    #   result["logs"] -> { "entries/country": { <country1>: { "entries/student": {...}, "_agg_value": 123.0 },
+    #                                           <country2>: {...},
+    #                                           "group_count": X, "count": Y, "_agg_value": ??? } }
+    logs_section = result["logs"]
+    assert "entries/country" in logs_section
+
+    countries_obj = logs_section["entries/country"]
+    group_keys = [
+        k
+        for k in countries_obj.keys()
+        if k not in ("group_count", "count", "_aggregator_metric")
+    ]
+
+    # We'll compute the sum of scores for each country from `data` to confirm the ordering
+    from collections import defaultdict
+
+    sums_by_country = defaultdict(float)
+    for c, s, sc in data:
+        sums_by_country[c] += sc
+
+    # Sort the countries by their total sum desc
+    expected_country_order = sorted(
+        sums_by_country.keys(),
+        key=lambda c: sums_by_country[c],
+        reverse=True,
+    )
+
+    # e.g. Mexico => 260, USA => 322, Canada => 262
+    # Let's compute them precisely:
+    #  - USA: 95+85+70+72 = 322
+    #  - Canada: 88+90+82 = 260
+    #  - Mexico: 100+100+60 = 260
+    # So actually, USA=322, Canada=260, Mexico=260 (tie between Canada & Mexico).
+    # We'll accept either "Canada, Mexico" or "Mexico, Canada" as valid if they have the same sum.
+
+    actual_country_order = []
+    for k in group_keys:
+        # Each top-level group key is "USA", "Canada", or "Mexico"
+        actual_country_order.append(k)
+
+    # Check that first is "USA" since it definitely has highest sum=322
+    assert (
+        actual_country_order[0] == "USA"
+    ), f"Expected 'USA' first, got {actual_country_order}"
+
+    # The second and third can be "Canada" or "Mexico" in either order if they tie at 260
+    # We'll verify they are just some permutation of ("Canada", "Mexico")
+    assert sorted(actual_country_order[1:3]) == [
+        "Canada",
+        "Mexico",
+    ], f"Unexpected order for {actual_country_order}"
+
+    # Now test each country's child grouping => 'entries/student' with mean sorting
+    for country in actual_country_order:
+        sub_dict = countries_obj[country]
+        assert (
+            "entries/student" in sub_dict
+        ), f"Missing student-level grouping under country={country}"
+        students_obj = sub_dict["entries/student"]
+        student_keys = [
+            k
+            for k in students_obj.keys()
+            if k not in ("group_count", "count", "_aggregator_metric")
+        ]
+        # gather each student's logs => compute mean
+        # sub_dict for each student should be a list or nested structure. In your example, it's typically a leaf.
+
+        # Build a map from student -> (list_of_scores, mean_of_scores)
+        from statistics import mean
+
+        student_score_map = defaultdict(list)
+        for st in student_keys:
+            if st in ("group_count", "count", "_aggregator_metric"):
+                continue
+            # child might be a list of logs or a dict with "_leaf_logs"
+            child_val = students_obj[st]
+            # If it's a leaf, maybe child_val["_leaf_logs"] is the actual logs
+            if isinstance(child_val, dict) and "_leaf_logs" in child_val:
+                logs_list = child_val["_leaf_logs"]
+            elif isinstance(child_val, list):
+                logs_list = child_val  # depends on your actual shape
+            else:
+                raise AssertionError(f"Unexpected shape for {st} => {child_val}")
+
+            scores = [
+                lg["entries"]["score"] for lg in logs_list if "score" in lg["entries"]
+            ]
+            student_score_map[st] = scores
+
+        # Now read them in the actual order they appear
+        actual_student_order = []
+        for st in student_keys:
+            actual_student_order.append(st)
+
+        # They should be sorted descending by mean
+        def get_mean(st):
+            scs = student_score_map[st]
+            return mean(scs) if scs else 0.0
+
+        # Check each consecutive pair
+        for i in range(len(actual_student_order) - 1):
+            m1 = get_mean(actual_student_order[i])
+            m2 = get_mean(actual_student_order[i + 1])
+            assert m1 >= m2, (
+                f"Students not in descending order by mean score. {actual_student_order[i]} has mean={m1}, "
+                f"{actual_student_order[i+1]} has mean={m2}"
+            )
+
+
+@pytest.mark.anyio
+async def test_nested_group_sorting_leaf_only(client: AsyncClient):
+    """
+    Same data, but we only specify 'group_sorting' for the *leaf* 'entries/student'.
+    The top-level 'entries/country' is left unsorted (no aggregator).
+    """
+
+    project_name = "test-nested-leaf-only"
+    await _create_project(client, project_name)
+
+    data = [
+        ("USA", "Alice", 95),
+        ("USA", "Alice", 85),
+        ("Canada", "Charlie", 90),
+        ("Canada", "Alice", 75),
+        ("Mexico", "Bob", 50),
+        ("Mexico", "Bob", 40),
+        ("Mexico", "Diana", 100),
+    ]
+    for country, student, score in data:
+        r = await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "entries": {"country": country, "student": student, "score": score},
+            },
+            headers=HEADERS,
+        )
+        assert r.status_code == 200
+
+    # group_by => 2 levels, but "entries/country" has no aggregator config.
+    # We *only* do aggregator sorting for "entries/student" with mean descending.
+    group_sorting = {
+        "entries/student": {
+            "field": "score",
+            "direction": "descending",
+            "sort_type": "sort_groups",
+            "metric": "mean",
+        },
+    }
+    # No entry for "entries/country": => no sorting across countries
+
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/country", "entries/student"],
+            "group_sorting": json.dumps(group_sorting),
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+    result = resp.json()
+
+    # Because we did NOT specify aggregator for entries/country,
+    # we expect them in the default order (i.e: latest creation time)
+    # (like ["Mexico", "Canada", "USA"] if that’s their insertion order).
+    logs_section = result["logs"]
+    countries_obj = logs_section["entries/country"]
+    top_countries = [
+        k
+        for k in countries_obj.keys()
+        if k not in ("group_count", "count", "_aggregator_metric")
+    ]
+
+    # We might just check that top_countries is exactly the distinct set, ignoring order:
+    expected_countries = {"Mexico", "Canada", "USA"}
+    assert (
+        set(top_countries) == expected_countries
+    ), f"Missing or extra countries: {top_countries}"
+
+    # Now inside each country => we DID specify aggregator for 'entries/student' =>
+    # so the *student* subgroups should be sorted by mean descending.
+    for c in top_countries:
+        sub_obj = countries_obj[c]
+        assert "entries/student" in sub_obj
+        students_obj = sub_obj["entries/student"]
+        child_keys = [
+            x
+            for x in students_obj
+            if x not in ("group_count", "count", "_aggregator_metric")
+        ]
+        # read each child's logs => compute mean
+        from statistics import mean
+
+        student_mean_map = {}
+        for st in child_keys:
+            if st in ("group_count", "count", "_aggregator_metric"):
+                continue
+            val = students_obj[st]
+            # leaf logs
+            if isinstance(val, dict) and "_leaf_logs" in val:
+                logs_list = val["_leaf_logs"]
+            elif isinstance(val, list):
+                logs_list = val
+            else:
+                raise AssertionError(f"Unexpected shape for {st} => {val}")
+            scores = [lg["entries"].get("score", 0) for lg in logs_list]
+            student_mean_map[st] = mean(scores) if scores else 0.0
+
+        # The child_keys themselves have a stable order from the JSON
+        for i in range(len(child_keys) - 1):
+            cur_student = child_keys[i]
+            nxt_student = child_keys[i + 1]
+            cur_mean = student_mean_map[cur_student]
+            nxt_mean = student_mean_map[nxt_student]
+            assert cur_mean >= nxt_mean, (
+                f"Students not sorted by descending mean in {c} group. "
+                f"{cur_student} has mean={cur_mean}, next is {nxt_student} with mean={nxt_mean}"
+            )
+
+
+@pytest.mark.anyio
+async def test_sort_within_and_across_groups_together(client: AsyncClient):
+    """
+    We group by 'student', sorting those groups across by mean(score) descending,
+    but within each group, we sort logs by timestamp ascending.
+    """
+
+    project_name = "test-within-and-across-groups"
+    await _create_project(client, project_name)
+
+    # Data: 7 logs
+    data = [
+        # (student, test, score, timestamp)
+        ("Alice", "Math", 95, "2025-01-02 10:00:00"),
+        ("Alice", "Chem", 92, "2025-01-02 09:59:00"),
+        ("Bob", "Math", 82, "2025-01-01 15:00:00"),
+        ("Bob", "Chem", 85, "2025-01-01 20:30:00"),
+        ("Bob", "Phys", 90, "2025-01-01 21:00:00"),
+        ("Charlie", "Math", 78, "2025-01-03 13:00:00"),
+        ("Charlie", "Chem", 80, "2025-01-03 12:45:00"),
+    ]
+    # Insert logs
+    for i, (stud, subj, sc, ts) in enumerate(data):
+        resp = await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "entries": {
+                    "student": stud,
+                    "test": subj,
+                    "score": sc,
+                    "timestamp": ts,
+                },
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == 200, resp.text
+
+    # We'll do group_by=["entries/student"], with:
+    #   - "sort_type='sort_groups'" on the 'score' aggregator => mean => descending
+    #   - "sorting" for "timestamp" => ascending => applies within groups
+    group_sorting = {
+        "entries/student": {
+            "field": "score",
+            "direction": "descending",
+            "sort_type": "sort_groups",
+            "metric": "mean",
+        },
+    }
+    # Meanwhile "sorting" is just standard JSON for "timestamp" => ascending
+    # e.g. sorting='{"timestamp":"ascending"}'
+    sorting_within = {"timestamp": "ascending"}
+
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/student"],
+            "group_sorting": json.dumps(group_sorting),
+            "sorting": json.dumps(sorting_within),
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+    result = resp.json()
+
+    # The grouped data is in result["logs"]["entries/student"]
+    logs_section = result.get("logs", {})
+    assert "entries/student" in logs_section, "Expected top-level grouping by 'student'"
+    student_obj = logs_section["entries/student"]
+
+    # Let's gather all top-level group keys (the student names)
+    # ignoring "group_count", "count", or aggregator keys
+    group_keys = [
+        k
+        for k in student_obj.keys()
+        if k not in ("group_count", "count", "_aggregator_metric")
+    ]
+
+    # 1) Check the across-groups order => mean(score) descending
+    from statistics import mean
+
+    # We'll build a map from student->(scores, mean_score)
+    stud_scores_map = {}
+    for (stud, subj, sc, ts) in data:
+        stud_scores_map.setdefault(stud, []).append(sc)
+    means_map = {st: mean(vals) for st, vals in stud_scores_map.items()}
+
+    # The order in the JSON is group_keys
+    for i in range(len(group_keys) - 1):
+        cur_st = group_keys[i]
+        nxt_st = group_keys[i + 1]
+        # each should follow means_map[cur_st] >= means_map[nxt_st]
+        assert means_map[cur_st] >= means_map[nxt_st], (
+            f"Groups not sorted by descending mean(score). "
+            f"Student {cur_st} has {means_map[cur_st]}, next student {nxt_st} has {means_map[nxt_st]}"
+        )
+
+    # 2) Check "within-groups" ordering => we said sorting={"timestamp":"ascending"}
+    # so each student's logs must appear from earliest->latest.
+    for st in group_keys:
+        if st in ("group_count", "count", "_aggregator_metric"):
+            continue
+        grp_val = student_obj[st]
+        # if it's a list, we read it directly
+        if isinstance(grp_val, list):
+            logs_list = grp_val
+        elif isinstance(grp_val, dict) and "_leaf_logs" in grp_val:
+            logs_list = grp_val["_leaf_logs"]
+        else:
+            # Single-level grouping might produce a plain list or a dictionary with extra fields
+            raise AssertionError(
+                f"Unexpected shape for grouping of student={st}: {grp_val}",
+            )
+
+        # Extract timestamps in the order they appear
+        from datetime import datetime
+
+        def parse_ts(ts_str):
+            # parse "2025-01-02 10:00:00" for comparison
+            return datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+
+        actual_ts_list = []
+        for log_item in logs_list:
+            # the timestamp might be in log_item["entries"]["timestamp"]
+            # depends on how you stored it
+            ts_val = log_item["entries"]["timestamp"]
+            actual_ts_list.append(parse_ts(ts_val))
+
+        # check ascending
+        for i in range(len(actual_ts_list) - 1):
+            assert actual_ts_list[i] <= actual_ts_list[i + 1], (
+                f"Logs not in ascending timestamp within group {st}. "
+                f"{actual_ts_list[i]} vs {actual_ts_list[i+1]}"
+            )
 
 
 @pytest.mark.anyio
