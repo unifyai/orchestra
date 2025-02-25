@@ -580,13 +580,6 @@ metrics = {
         "input_cost": 0.6,
         "output_cost": 0.6,
     },
-    "mixtral-8x7b-instruct-v0.1@replicate": {
-        "cost": 1,
-        "ttft": 887.903352999956,
-        "itl": 15.394309863636439,
-        "input_cost": 0.3,
-        "output_cost": 1,
-    },
     "mixtral-8x7b-instruct-v0.1@mistral-ai": {
         "cost": 0.7,
         "ttft": 352.0689869999387,
