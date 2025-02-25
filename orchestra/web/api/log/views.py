@@ -3142,12 +3142,18 @@ def get_fields(
     context_id = None
     if context:
         context_obj = context_dao.filter(project_id=project_obj.id, name=context)
+    else:
+        # use the default context
+        context_obj = context_dao.filter(project_id=project_obj.id, name="")
         if not context_obj:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Context '{context}' not found",
-            )
-        context_id = context_obj[0][0].id
+            return {}
+
+    if not context_obj:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Context '{context}' not found",
+        )
+    context_id = context_obj[0][0].id
 
     # Get all field types with mutability info
     types = field_type_dao.get_field_types(
