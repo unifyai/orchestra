@@ -957,6 +957,12 @@ class LogDAO:
                             if field_info and not field_info.get("mutable", False):
                                 raise ImmutableFieldError
 
+                    # Update existing log
+                    existing_log.value = json_value
+                    existing_log.version = version
+                    existing_log.inferred_type = inferred_type
+                    existing_log.updated_at = now
+
                     # Handle versioned history
                     if is_versioned:
                         # Create history entry for current value before updating
@@ -969,17 +975,9 @@ class LogDAO:
                                 "inferred_type": existing_log.inferred_type,
                                 "description": f"Updated entry with key {key}",
                                 "archived_at": now,
-                                "created_at": existing_log.created_at,
-                                "updated_at": existing_log.updated_at,
                             },
                         )
                         contexts_to_update.add(context_id)
-
-                    # Update existing log
-                    existing_log.value = json_value
-                    existing_log.version = version
-                    existing_log.inferred_type = inferred_type
-                    existing_log.updated_at = now
                 else:
                     # Entry doesn't exist, create new log
                     new_log = Log(
@@ -1013,6 +1011,9 @@ class LogDAO:
                     existing_json_log = existing_json_log_map.get(group_key)
 
                     if existing_json_log:
+                        # Update existing JSON log
+                        existing_json_log.value = value
+
                         # Create JSON history if versioned
                         if is_versioned:
                             json_history_entries.append(
@@ -1026,8 +1027,6 @@ class LogDAO:
                                 },
                             )
 
-                        # Update existing JSON log
-                        existing_json_log.value = value
                     else:
                         # Create new JSON log
                         new_json_log = JSONLog(
