@@ -791,19 +791,6 @@ class LogDAO:
                 self.session.bulk_save_objects(logs_to_create)
                 self.session.flush()
 
-                # # Get the IDs of newly created logs
-                # for log in logs_to_create:
-                #     fresh_log = (
-                #         self.session.query(Log)
-                #         .filter_by(
-                #             log_event_id=log.log_event_id,
-                #             key=log.key,
-                #         )
-                #         .first()
-                #     )
-                #     if fresh_log:
-                #         created_ids.append(fresh_log.id)
-
             # Bulk save JSON logs
             if json_logs_to_create:
                 self.session.bulk_save_objects(json_logs_to_create)
@@ -822,13 +809,6 @@ class LogDAO:
                 context = self.session.query(Context).filter_by(id=context_id).first()
                 if context:
                     context.updated_at = now
-
-            # # Update timestamps on log events
-            # log_event_ids = set(entry.get("log_event_id") for entry in entries if entry.get("log_event_id"))
-            # for log_event_id in log_event_ids:
-            #     log_event = self.session.query(LogEvent).filter_by(id=log_event_id).first()
-            #     if log_event:
-            #         log_event.updated_at = now
 
             self.session.commit()
             # return created_ids
