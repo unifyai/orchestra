@@ -77,7 +77,7 @@ class FieldTypeDAO:
         Returns:
             Dictionary mapping field names to their types or metadata
         """
-        query = select(FieldType).order_by(FieldType.created_at)
+        query = select(FieldType).order_by(FieldType.id).order_by(FieldType.created_at)
 
         # Build filters progressively
         if project_id is not None:
@@ -213,7 +213,11 @@ class FieldTypeDAO:
         Returns:
             Dictionary mapping field names to their order index
         """
-        query = select(FieldType.field_name).order_by(FieldType.created_at)
+        query = (
+            select(FieldType.field_name)
+            .order_by(FieldType.id)
+            .order_by(FieldType.created_at)
+        )
 
         # Build filters progressively
         if project_id is not None:
@@ -275,4 +279,59 @@ class FieldTypeDAO:
 
         # Perform the rename
         field_to_rename.field_name = new_field_name
+        self.session.commit()
+
+    def bulk_create_field_types(
+        self,
+        field_types_data: list[dict],
+    ) -> None:
+        """Efficiently insert multiple field types at once using a bulk operation.
+
+        Args:
+            field_types_data: List of dictionaries, each containing:
+                - project_id: The project ID
+                - field_name: The name of the field
+                - value: The value to infer the type from
+                - context_id: The context ID
+                - mutable: Optional, defaults to False
+                - field_category: Optional, defaults to "entry"
+
+        Note:
+            This method uses PostgreSQL's insert with on_conflict_do_nothing to
+            avoid inserting duplicate field types (based on project_id, field_name,
+            and context_id).
+        """
+        if not field_types_data:
+            return
+
+        # Prepare values for bulk insertion
+        values_to_insert = []
+        for data in field_types_data:
+            project_id = data["project_id"]
+            field_name = data["field_name"]
+            value = data["value"]
+            context_id = data["context_id"]
+            mutable = data.get("mutable", False)
+            field_category = data.get("field_category", "entry")
+
+            # Infer type from the value
+            inferred_type = LogDAO.infer_type(field_name, value)
+
+            values_to_insert.append(
+                {
+                    "project_id": project_id,
+                    "field_name": field_name,
+                    "field_type": inferred_type,
+                    "field_category": field_category,
+                    "mutable": mutable,
+                    "context_id": context_id,
+                },
+            )
+
+        # Execute bulk insert with on_conflict_do_nothing
+        stmt = pg_insert(FieldType).values(values_to_insert)
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=["project_id", "field_name", "context_id"],
+        )
+        self.session.execute(stmt)
         self.session.commit()
