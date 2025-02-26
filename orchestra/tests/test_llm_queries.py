@@ -21,7 +21,7 @@ MODELS = [
     "claude-3-haiku@anthropic",
     "llama-3-8b-chat@deepinfra",
     "llama-3-8b-chat@fireworks-ai",
-    "llama-3-8b-chat@lepton-ai",
+    "llama-3.1-8b-chat@lepton-ai",
     # "llama-3-8b-chat@replicate",
     "llama-3-8b-chat@together-ai",
     "llama-3-8b-chat@aws-bedrock",
