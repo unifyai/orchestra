@@ -178,7 +178,7 @@ def update_interface(
                 "application/json": {
                     "example": [
                         {
-                            "name": "interface_1",
+                            "name": "tab1",
                             "project": "my_project",
                             "items": [
                                 {
@@ -245,7 +245,7 @@ def get_interfaces(
         project_id=projects[0][0].id,
     )
     if len(all_interfaces) == 0:
-        name = name if name is not None else "interface_1"
+        name = name if name is not None else "tab1"
     interfaces = dao.get_interfaces(
         request_fastapi.state.user_id,
         project_id=projects[0][0].id,
