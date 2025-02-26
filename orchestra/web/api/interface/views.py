@@ -86,6 +86,7 @@ def create_interface(
         items=json.dumps([item.model_dump() for item in request.items]),
         new_counter=request.new_counter,
         project_id=projects[0][0].id,
+        context=request.context,
     )
     return {"info": "Interface created successfully!"}
 
@@ -162,6 +163,7 @@ def update_interface(
         project_id=projects[0][0].id,
         items=json.dumps([item.model_dump() for item in request.items]),
         new_counter=request.new_counter,
+        context=request.context,
         new_name=request.new_name,
     )
     return {"info": "Interface updated successfully!"}
@@ -277,6 +279,7 @@ def get_interfaces(
             items=json.dumps(items),
             new_counter=new_counter,
             project_id=projects[0][0].id,
+            context=None,
         )
         return [
             {
@@ -297,6 +300,7 @@ def get_interfaces(
             "project": interface.project,
             "items": json.loads(interface.items),
             "new_counter": interface.new_counter,
+            "context": interface.context,
         }
         for interface in interfaces
     ]

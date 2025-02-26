@@ -51,4 +51,3 @@ class InterfaceConfig(BaseModel):
     temporary: bool = False
     new_name: str | None = None
     context: str | None = None
-    column_context: str | None = None
