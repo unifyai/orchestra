@@ -28,7 +28,7 @@ class Item(BaseModel):
     hidden_columns: str | None = None
     sorting: str | None = None
     grouping: str | None = None
-    group_sorting: string | None = None
+    group_sorting: str | None = None
     columns_pin_left: str | None = None
     columns_pin_right: str | None = None
     selected: str | None = None
