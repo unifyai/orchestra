@@ -280,6 +280,11 @@ class BaseCompletionProvider:
                     "vertex_ai",
                 ]:
                     kwargs["extra_body"] = extra_body
+                if (
+                    self.litellm_provider_prefix == "anthropic"
+                    and "thinking" in extra_body
+                ):
+                    kwargs["thinking"] = extra_body["thinking"]
                 drop_params = extra_body.pop("drop_params", True)
 
                 # llm call
