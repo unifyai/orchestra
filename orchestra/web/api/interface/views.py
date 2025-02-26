@@ -287,6 +287,7 @@ def get_interfaces(
                 "project": project,
                 "items": items,
                 "new_counter": new_counter,
+                "context": None,
             },
         ]
     elif len(interfaces) == 0:
