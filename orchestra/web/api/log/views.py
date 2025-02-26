@@ -11,7 +11,7 @@ from enum import Enum
 from json import JSONDecodeError
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import (
     INTEGER,
@@ -105,7 +105,7 @@ class SortConfig(BaseModel):
     field: str = Field(..., description="The field to sort by")
     direction: SortDirection = Field(..., description="Sort direction")
     sort_type: SortType = Field(
-        ...,
+        default=SortType.SORT_GROUPS,
         description="Whether to sort within groups or sort groups themselves",
     )
     metric: Optional[AggregationMetric] = Field(
@@ -206,24 +206,37 @@ def create_logs(
         # get the default context
         context_id = context_dao.get_or_create(project_id, name="")
 
-    # Validate that params and entries lists have equal lengths when both are provided as lists
+    # Validate and normalize params and entries
     if isinstance(request.entries, list) and isinstance(request.params, list):
+        # Case 1: Both are lists - they should have equal lengths
         if len(request.entries) != len(request.params):
             raise HTTPException(
                 status_code=400,
                 detail=f"When both 'params' and 'entries' are provided as lists, they must have equal lengths. "
                 f"Got params length: {len(request.params)}, entries length: {len(request.entries)}",
             )
-    elif isinstance(request.entries, list) and not isinstance(request.params, list):
-        raise HTTPException(
-            status_code=400,
-            detail="If 'entries' is a list, 'params' must also be a list or None.",
-        )
-    elif not isinstance(request.entries, list) and isinstance(request.params, list):
-        raise HTTPException(
-            status_code=400,
-            detail="If 'params' is a list, 'entries' must also be a list or None.",
-        )
+    elif isinstance(request.entries, list) and (
+        request.params is None or request.params == {}
+    ):
+        # Case 2: Entries is a list, params is None/empty - this is allowed
+        params_list = [{}] * len(request.entries)
+    elif isinstance(request.params, list) and (
+        request.entries is None or request.entries == {}
+    ):
+        # Case 2: Params is a list, entries is None/empty - this is allowed
+        entries_list = [{}] * len(request.params)
+    elif isinstance(request.entries, list) and isinstance(request.params, dict):
+        # Case 3: Entries is a list, params is a dict - convert params to a list of the same dict
+        params_list = [
+            {k: v for k, v in request.params.items()}
+            for _ in range(len(request.entries))
+        ]
+    elif isinstance(request.params, list) and isinstance(request.entries, dict):
+        # Case 3: Params is a list, entries is a dict - convert entries to a list of the same dict
+        entries_list = [
+            {k: v for k, v in request.entries.items()}
+            for _ in range(len(request.params))
+        ]
 
     # Get field types once for all operations
     field_types = field_type_dao.get_field_types(
@@ -297,20 +310,25 @@ def create_logs(
                 context_id=context_id,
             )
 
-    # Process each log in the batch
-    log_event_ids = []
+    # Bulk create all log events at once
     entries_len = len(entries_list)
     params_len = len(params_list)
-
     total_logs = max(entries_len, params_len)
 
+    # Bulk create all log events in one operation
+    log_event_ids = log_event_dao.bulk_create(
+        project_id=project_id,
+        context_id=context_id,
+        count=total_logs,
+    )
+
+    # Prepare collections for bulk operations
+    new_field_types = []
+    log_records_to_create = []
+
+    # Process all logs in the batch
     for i in range(total_logs):
-        # Create log_event for each log
-        log_event_id = log_event_dao.create(
-            project_id=project_id,
-            context_id=context_id,
-        )
-        log_event_ids.append(log_event_id)
+        log_event_id = log_event_ids[i]
 
         # Get current entries and params
         # If i exceeds list length, use the last item in the list
@@ -319,19 +337,43 @@ def create_logs(
 
         # Extract explicit types
         entries_explicit_types = (
-            current_entries.pop("explicit_types", None)
+            current_entries.pop("explicit_types", {})
             if isinstance(current_entries, dict)
             else None
         )
         params_explicit_types = (
-            current_params.pop("explicit_types", None)
+            current_params.pop("explicit_types", {})
             if isinstance(current_params, dict)
             else None
         )
-        # Process params
+
+        # Process params - collect them for bulk creation
         for k, v in current_params.items():
-            enforce_types(k, v, i, params_explicit_types, context_id, is_param=True)
-            # see if there is any param with the same value
+            # Check and register new field types if needed
+            if k not in field_types:
+                mutable = (
+                    params_explicit_types.get(k, {}).get("mutable", False)
+                    if params_explicit_types
+                    else False
+                )
+                # If in a versioned context, force mutable=True
+                if context_id and context_dao.is_versioned(context_id):
+                    mutable = True
+                new_field_types.append(
+                    {
+                        "project_id": project_id,
+                        "field_name": k,
+                        "value": v,
+                        "mutable": mutable,
+                        "field_category": "param",
+                        "context_id": context_id,
+                    },
+                )
+            else:
+                # Enforce types for existing fields
+                enforce_types(k, v, i, params_explicit_types, context_id, is_param=True)
+
+            # Determine version for parameter
             existing_param = log_dao.filter(
                 key=k,
                 value=json.dumps(v),
@@ -344,56 +386,89 @@ def create_logs(
                 existing_params = log_dao.filter(key=k, project_id=project_id)
                 highest_version = max([-1] + [e[0].version for e in existing_params])
                 version = highest_version + 1
-            try:
-                log_dao.create_from_raw_k_v(
-                    project_id=project_id,
-                    log_event_id=log_event_id,
-                    raw_k=k,
-                    raw_v=v,
-                    version=version,
-                    explicit_types=params_explicit_types,
-                    context_id=context_id,
-                )
-            except ValueError:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Found different value for log params with same version.",
-                )
 
-        # Process entries
+            # Add to records for bulk creation
+            log_records_to_create.append(
+                {
+                    "project_id": project_id,
+                    "log_event_id": log_event_id,
+                    "key": k,
+                    "value": v,
+                    "version": version,
+                    "explicit_types": params_explicit_types,
+                    "context_id": context_id,
+                },
+            )
+
+        # Process entries - collect them for bulk creation
         for k, v in current_entries.items():
-            enforce_types(k, v, i, entries_explicit_types, context_id, is_param=False)
-            log_dao.create_from_raw_k_v(
-                project_id=project_id,
-                log_event_id=log_event_id,
-                raw_k=k,
-                raw_v=v,
-                explicit_types=entries_explicit_types,
-                context_id=context_id,
+            # Check and register new field types if needed
+            if k not in field_types:
+                mutable = (
+                    entries_explicit_types.get(k, {}).get("mutable", False)
+                    if entries_explicit_types
+                    else False
+                )
+                # If in a versioned context, force mutable=True
+                if context_id and context_dao.is_versioned(context_id):
+                    mutable = True
+                new_field_types.append(
+                    {
+                        "project_id": project_id,
+                        "field_name": k,
+                        "value": v,
+                        "mutable": mutable,
+                        "field_category": "entry",
+                        "context_id": context_id,
+                    },
+                )
+            else:
+                # Enforce types for existing fields
+                enforce_types(
+                    k,
+                    v,
+                    i,
+                    entries_explicit_types,
+                    context_id,
+                    is_param=False,
+                )
+
+            # Add to records for bulk creation (entries don't have version)
+            log_records_to_create.append(
+                {
+                    "project_id": project_id,
+                    "log_event_id": log_event_id,
+                    "key": k,
+                    "value": v,
+                    "explicit_types": entries_explicit_types,
+                    "context_id": context_id,
+                },
             )
 
-        # If context is versioned => do a *single* increment after inserting all fields
-        context_obj = None
-        if context_id:
-            context_obj = (
-                context_dao.session.query(Context).filter_by(id=context_id).first()
-            )
-        if context_obj and context_obj.is_versioned:
-            # archive the new state
-            context_dao.archive_context_state(
-                context_obj,
-                name="create",
-                description=f"Created new LogEvent {log_event_id}",
-            )
-            context_obj.version += 1
-            context_obj.updated_at = datetime.now(timezone.utc)
-            context_dao.session.commit()
+    # Bulk create new field types if any
+    if new_field_types:
+        field_type_dao.bulk_create_field_types(new_field_types)
+
+    # Bulk create all log records
+    log_dao.bulk_create(log_records_to_create)
+
+    # If context is versioned => do a *single* increment after inserting all fields
+    context_obj = None
+    if context_id:
+        context_obj = (
+            context_dao.session.query(Context).filter_by(id=context_id).first()
+        )
+    if context_obj and context_obj.is_versioned:
+        # archive the new state
+        context_dao.archive_context_state(
+            context_obj,
+            name="create",
+            description=f"Created {total_logs} new LogEvents",
+        )
+        context_obj.version += 1
+        context_obj.updated_at = datetime.now(timezone.utc)
+        context_dao.session.commit()
     return log_event_ids
-
-
-from typing import Dict, Set
-
-from fastapi import HTTPException, status
 
 
 def unify_id_sets_by_subset(alias_id_sets: Dict[str, Set[int]]) -> Dict[str, Set[int]]:
@@ -1051,31 +1126,83 @@ def update_logs(
     A dictionary of "explicit_types" can be passed as part of the `entries`.
     If present, it will override the inferred type of any matching key in all logs.
     """
+    # Validate all log IDs upfront
+    not_found_logs = []
+    log_id_to_project = {}  # Maps log_id -> project_id
     updated_ids = set()
-    for data_type in ("params", "entries"):
 
+    for log_id in body.ids:
+        try:
+            project_user_id, project_id = log_event_dao.get_user_and_project_id(
+                id=log_id,
+            )
+            if project_user_id != request_fastapi.state.user_id:
+                raise IndexError(
+                    f"User {request_fastapi.state.user_id} does not have permission for log id {log_id}.",
+                )
+            log_id_to_project[log_id] = project_id
+        except IndexError:
+            not_found_logs.append(log_id)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Unexpected error retrieving project info for log id {log_id}: {e}",
+            )
+
+    if not_found_logs:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"The following log ids were not found or permission was denied: {not_found_logs}. "
+                "No updates were applied."
+            ),
+        )
+
+    # Determine common context and fetch field types
+    if len(set(log_id_to_project.values())) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="All log IDs must belong to the same project for batch update.",
+        )
+
+    # Get the common project_id for all logs
+    project_id = next(iter(log_id_to_project.values()))
+
+    # Get or create context
+    if body.context:
+        ctx_id = context_dao.get_or_create(
+            project_id,
+            name=body.context.name,
+            description=body.context.description,
+            is_versioned=body.context.is_versioned,
+        )
+    else:
+        # get the default context
+        ctx_id = context_dao.get_or_create(project_id, name="")
+
+    # Fetch field types once
+    try:
+        field_types = field_type_dao.get_field_types(
+            project_id,
+            return_mutable=True,
+            context_id=ctx_id,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve field types for project {project_id}: {e}",
+        )
+
+    # Prepare collections for bulk operations
+    all_updates = []
+    new_field_types = []
+    updates_by_log_id = {}  # For context versioning
+
+    # Process both params and entries
+    for data_type in ("params", "entries"):
         data = getattr(body, data_type)
-        not_found_logs = []
 
         for i, log_id in enumerate(body.ids):
-            # Retrieve project and permission details for each log.
-            try:
-                project_user_id, project_id = log_event_dao.get_user_and_project_id(
-                    id=log_id,
-                )
-                if project_user_id != request_fastapi.state.user_id:
-                    raise IndexError(
-                        f"User {request_fastapi.state.user_id} does not have permission for log id {log_id}.",
-                    )
-            except IndexError as ie:
-                not_found_logs.append(log_id)
-                continue
-            except Exception as e:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Unexpected error retrieving project info for log id {log_id}: {e}",
-                )
-
             # Extract the data for this log. Support both dict and list formats.
             try:
                 this_data = data if isinstance(data, dict) else data[i]
@@ -1090,29 +1217,10 @@ def update_logs(
 
             # Remove explicit types if provided, which override inferred types.
             explicit_types = this_data.pop("explicit_types", {})
-            if body.context:
-                ctx_id = context_dao.get_or_create(
-                    project_id,
-                    name=body.context.name,
-                    description=body.context.description,
-                    is_versioned=body.context.is_versioned,
-                )
-            else:
-                # get the default context
-                ctx_id = context_dao.get_or_create(project_id, name="")
-            try:
-                field_types = field_type_dao.get_field_types(
-                    project_id,
-                    return_mutable=True,
-                    context_id=ctx_id,
-                )
-            except Exception as e:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to retrieve field types for project {project_id} for log id {log_id}: {e}",
-                )
 
-            new_field_types = []
+            # Track this log for context versioning
+            updates_by_log_id[log_id] = updates_by_log_id.get(log_id, 0) + 1
+
             # If only explicit_types are provided, update mutability.
             if not this_data:
                 for k, v in explicit_types.items():
@@ -1131,7 +1239,6 @@ def update_logs(
                         )
 
             # Process each field in the provided data.
-            changed_something = False
             for k, v in this_data.items():
                 if k in field_types:
                     expected_type = field_types[k]["field_type"]
@@ -1167,9 +1274,19 @@ def update_logs(
                         else False
                     )
                     category = "entry" if data_type == "entries" else "param"
-                    new_field_types.append((k, v, mutable, category))
+                    new_field_types.append(
+                        {
+                            "project_id": project_id,
+                            "field_name": k,
+                            "value": v,
+                            "mutable": mutable,
+                            "field_category": category,
+                            "context_id": ctx_id,
+                        },
+                    )
 
                 # Compute the version based on whether we're handling params or entries.
+                version = None
                 if data_type == "params":
                     existing = log_dao.filter(
                         key=k,
@@ -1184,113 +1301,63 @@ def update_logs(
                             [-1] + [e[0].version for e in existing_params],
                         )
                         version = highest_version + 1
-                elif data_type == "entries":
-                    version = None
-                else:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"Invalid data_type '{data_type}' encountered for log id {log_id}. "
-                            "Must be either 'params' or 'entries'."
-                        ),
-                    )
 
-                # Attempt to update the log value; if it doesn't exist, create a new entry.
-                try:
-                    log_dao.update_value(
-                        log_event_id=log_id,
-                        raw_k=k,
-                        raw_v=v,
-                        version=version,
-                        explicit_types=explicit_types,
-                        overwrite=body.overwrite,
-                        field_types=field_types,
-                        context_id=ctx_id,
-                    )
-                    updated_ids.add((k, log_id))
-                    changed_something = True
-                except IndexError:
-                    try:
-                        log_dao.create_from_raw_k_v(
-                            project_id=project_id,
-                            log_event_id=log_id,
-                            raw_k=k,
-                            raw_v=v,
-                            version=version,
-                            explicit_types=explicit_types,
-                            context_id=ctx_id,
-                        )
-                        updated_ids.add((k, log_id))
-                        changed_something = True
-                    except Exception as e:
-                        raise HTTPException(
-                            status_code=500,
-                            detail=f"Error creating log entry for field '{k}' in log id {log_id}: {e}",
-                        )
-                except ValueError:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"Found differing log param value for field '{k}' in log id {log_id} "
-                            "with the same version."
-                        ),
-                    )
-                except OverwriteError:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"Existing value for log entry with key '{k}' in log id {log_id} "
-                            "cannot be overwritten because overwrite is set to False."
-                        ),
-                    )
-                except ImmutableFieldError:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"Field '{k}' in log id {log_id} is immutable and cannot be modified."
-                        ),
-                    )
-
-            if changed_something and ctx_id is not None:
-                ctx_obj = (
-                    context_dao.session.query(Context).filter_by(id=ctx_id).first()
+                # Add to the batch update list
+                all_updates.append(
+                    {
+                        "log_event_id": log_id,
+                        "key": k,
+                        "value": v,
+                        "version": version,
+                        "explicit_types": explicit_types,
+                        "field_types": field_types,
+                        "context_id": ctx_id,
+                        "overwrite": body.overwrite,
+                    },
                 )
-                if ctx_obj and ctx_obj.is_versioned:
-                    # final archive & increment
-                    context_dao.archive_context_state(
-                        ctx_obj,
-                        name="update",
-                        description=f"Updated log_id={log_id}",
-                    )
-                    ctx_obj.version += 1
-                    ctx_obj.updated_at = datetime.now(timezone.utc)
-                    context_dao.session.commit()
-        if not_found_logs:
+                updated_ids.add((k, log_id))
+
+    # Bulk create any new field types
+    if new_field_types:
+        field_type_dao.bulk_create_field_types(new_field_types)
+
+    # Bulk update all logs
+    if all_updates:
+        try:
+            log_dao.bulk_update(all_updates, field_types=field_types)
+        except ValueError as e:
             raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"The following log ids were not found or permission was denied: {not_found_logs}. "
-                    "No updates were applied."
-                ),
+                status_code=400,
+                detail=f"Found differing log param value with the same version: {str(e)}",
+            )
+        except OverwriteError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Existing value cannot be overwritten because overwrite is set to False: {str(e)}",
+            )
+        except ImmutableFieldError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Field is immutable and cannot be modified: {str(e)}",
             )
 
-    # Create any new field types collected from the updates.
-    if new_field_types:
-        for k, v, mutable, data_type in new_field_types:
-            try:
-                field_type_dao.create_field_type_if_absent(
-                    project_id,
-                    k,
-                    v,
-                    mutable=mutable,
-                    field_category=data_type,
-                    context_id=ctx_id,
-                )
-            except Exception as e:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Error creating new field type for '{k}' in project id {project_id}: {e}",
-                )
+    # Update context version if needed
+    if ctx_id is not None:
+        ctx_obj = context_dao.session.query(Context).filter_by(id=ctx_id).first()
+        if ctx_obj and ctx_obj.is_versioned and updates_by_log_id:
+            # Generate a summary of updated logs
+            log_count = len(updates_by_log_id)
+            update_desc = f"Updated {log_count} logs"
+
+            # archive state once and increment version
+            context_dao.archive_context_state(
+                ctx_obj,
+                name="update",
+                description=update_desc,
+            )
+            ctx_obj.version += 1
+            ctx_obj.updated_at = datetime.now(timezone.utc)
+            context_dao.session.commit()
 
     # Recompute derived logs that reference any updated base logs.
     if updated_ids:
