@@ -2073,18 +2073,12 @@ def get_logs(
     ),
     group_sorting: Optional[str] = Query(
         None,
-        description="Sorting configuration that can include both within-group and group-level sorting. When grouping is active, each field has two controls: one for sort within groups and one for sort groups (aggregated sorting).",
+        description="Sorting configuration for groups when using group_by. Specifies how to sort groups relative to each other based on aggregated metrics.",
         example={
-            "score": {
+            "entries/student": {
                 "field": "score",
                 "direction": "descending",
-                "sort_type": "sort_groups",
                 "metric": "mean",
-            },
-            "timestamp": {
-                "field": "timestamp",
-                "direction": "ascending",
-                "sort_type": "within_groups",
             },
         },
     ),

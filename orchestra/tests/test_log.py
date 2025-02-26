@@ -6183,7 +6183,6 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
                             "field": "derived_temp",
                             "metric": "mean",
                             "direction": "descending",
-                            "sort_type": "sort_groups",
                         },
                     },
                 ),
@@ -6315,7 +6314,6 @@ async def test_sorting_with_grouping(client: AsyncClient):
                         "field": "score",
                         "metric": "mean",
                         "direction": "descending",
-                        "sort_type": "sort_groups",
                     },
                 },
             ),
@@ -6395,7 +6393,6 @@ async def test_sorting_edge_cases(client: AsyncClient):
                         "field": "score",
                         "metric": "mean",
                         "direction": "descending",
-                        "sort_type": "sort_groups",
                     },
                 },
             ),
@@ -6516,13 +6513,11 @@ async def test_nested_group_sorting_with_separate_metrics(client: AsyncClient):
         "entries/country": {
             "field": "score",
             "direction": "descending",
-            "sort_type": "sort_groups",
             "metric": "sum",
         },
         "entries/student": {
             "field": "score",
             "direction": "descending",
-            "sort_type": "sort_groups",
             "metric": "mean",
         },
     }
@@ -6685,7 +6680,6 @@ async def test_nested_group_sorting_leaf_only(client: AsyncClient):
         "entries/student": {
             "field": "score",
             "direction": "descending",
-            "sort_type": "sort_groups",
             "metric": "mean",
         },
     }
@@ -6806,7 +6800,6 @@ async def test_sort_within_and_across_groups_together(client: AsyncClient):
         "entries/student": {
             "field": "score",
             "direction": "descending",
-            "sort_type": "sort_groups",
             "metric": "mean",
         },
     }
