@@ -29,6 +29,7 @@ def _create_interface(
     project,
     items,
     new_counter,
+    context=None,
     temporary=False,
 ):
     return client.post(
@@ -39,6 +40,7 @@ def _create_interface(
             "project": project,
             "items": items,
             "new_counter": new_counter,
+            "context": context,
             "temporary": temporary,
         },
     )
@@ -70,6 +72,7 @@ async def test_create_interface(client: AsyncClient):
         project,
         items,
         new_counter,
+        context,
     )
     assert response.status_code == 200
     assert response.json()["info"] == "Interface created successfully!"
@@ -105,7 +108,7 @@ async def test_update_interface(client: AsyncClient):
     new_counter = 2
     await _create_project(client, project)
     await _create_context(client, project, context, "")
-    await _create_interface(client, name, project, items[:1], new_counter - 1)
+    await _create_interface(client, name, project, items[:1], new_counter - 1, context)
     response = await client.put(
         "/v0/interface",
         headers=HEADERS,
@@ -115,6 +118,7 @@ async def test_update_interface(client: AsyncClient):
             "items": items,
             "new_counter": new_counter,
             "new_name": "my_new_interface",
+            "context": context,
         },
     )
     assert response.status_code == 200
@@ -141,7 +145,7 @@ async def test_get_interface(client: AsyncClient):
     new_counter = 1
     await _create_project(client, project)
     await _create_context(client, project, context, "")
-    await _create_interface(client, name, project, items, new_counter)
+    await _create_interface(client, name, project, items, new_counter, context)
     response = await client.get(
         f"/v0/interface?name={name}&project={project}",
         headers=HEADERS,
@@ -170,7 +174,7 @@ async def test_delete_interface(client: AsyncClient):
     new_counter = 1
     await _create_project(client, project)
     await _create_context(client, project, context, "")
-    await _create_interface(client, name, project, items, new_counter)
+    await _create_interface(client, name, project, items, new_counter, context)
     response = await client.delete(
         f"/v0/interface?name={name}&project={project}",
         headers=HEADERS,
@@ -204,6 +208,7 @@ async def test_delete_project_deletes_interfaces_and_temp_interfaces(
         project_name,
         items,
         1,
+        context="test-context",
         temporary=True,
     )
     response = await client.delete(f"/v0/project/{project_name}", headers=HEADERS)
