@@ -145,13 +145,33 @@ def _create_log(client, project_name, user=1, params=None, entries=None, context
         entries = log_data["log"]
     if params is None:
         params = {"a/b/param1": "test"}
-    # set all entries and params to be mutable (backwards compatibility)
-    if "explicit_types" not in entries:
-        explicit_types_entries = {k: {"mutable": True} for k in entries.keys()}
-        entries["explicit_types"] = explicit_types_entries
-    if "explicit_types" not in params:
-        explicit_types_params = {k: {"mutable": True} for k in params.keys()}
-        params["explicit_types"] = explicit_types_params
+
+    # Handle both single dict and list of dicts for entries
+    if isinstance(entries, dict):
+        # set all entries to be mutable (backwards compatibility)
+        if "explicit_types" not in entries:
+            explicit_types_entries = {k: {"mutable": True} for k in entries.keys()}
+            entries["explicit_types"] = explicit_types_entries
+    elif isinstance(entries, list):
+        # Handle list of entries
+        for entry in entries:
+            if "explicit_types" not in entry:
+                explicit_types_entries = {k: {"mutable": True} for k in entry.keys()}
+                entry["explicit_types"] = explicit_types_entries
+
+    # Handle both single dict and list of dicts for params
+    if isinstance(params, dict):
+        # set all params to be mutable (backwards compatibility)
+        if "explicit_types" not in params:
+            explicit_types_params = {k: {"mutable": True} for k in params.keys()}
+            params["explicit_types"] = explicit_types_params
+    elif isinstance(params, list):
+        # Handle list of params
+        for param in params:
+            if "explicit_types" not in param:
+                explicit_types_params = {k: {"mutable": True} for k in param.keys()}
+                param["explicit_types"] = explicit_types_params
+
     return client.post(
         "/v0/logs",
         json={
@@ -287,14 +307,20 @@ async def _create_logs_for_group_threshold(client, project_name, user=1):
         assert response.status_code == 200, response.json()
 
 
-async def _create_several_logs(client, project_name, context_name=None, user=1):
+async def _create_several_logs(
+    client,
+    project_name,
+    context_name=None,
+    user=1,
+    batched=True,
+):
     data = log_data["logs_for_various"]
-    for i in range(len(data)):
+    if batched:
         response = await _create_log(
             client,
             project_name,
-            params={"a/b/param1": f"test_{i}"},
-            entries=data[i],
+            params={"a/b/param1": "test"},
+            entries=data,
             context=(
                 {"name": context_name, "description": "test context"}
                 if context_name
@@ -302,6 +328,15 @@ async def _create_several_logs(client, project_name, context_name=None, user=1):
             ),
         )
         assert response.status_code == 200, response.json()
+    else:
+        for i in range(len(data)):
+            response = await _create_log(
+                client,
+                project_name,
+                entries=data[i],
+                params={"a/b/param1": f"test_{i}"},
+            )
+            assert response.status_code == 200, response.json()
 
 
 def _create_project(client, project_name, user=1):
@@ -691,7 +726,7 @@ async def test_get_logs_including_derived(client: AsyncClient):
     await _create_project(client, project_name, user=1)
 
     # 2) Populate base logs
-    await _create_several_logs(client, project_name)
+    await _create_several_logs(client, project_name)  ##
 
     # 3) Create derived logs referencing some subsets
     base_log_ids1 = [1, 2, 3, 4]
@@ -3508,7 +3543,7 @@ async def test_get_logs_w_pagination(client: AsyncClient):
 async def test_get_logs_w_filtering(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
-    _ = await _create_several_logs(client, project_name)
+    _ = await _create_several_logs(client, project_name, batched=False)
 
     # temperature == -210.0
     response = await client.get(
@@ -3914,6 +3949,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     assert len(result["logs"]) == 1
     assert result["logs"][0]["entries"]["_/description"] == "lava"
 
+    # check version
     response = await client.get(
         f"/v0/logs?project={project_name}",
         params={"filter_expr": "version('a/b/param1') == 1"},
@@ -5267,10 +5303,7 @@ async def test_update_field_mutability_only(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 400
-    assert (
-        "Field 'mutable_field' in log id 1 is immutable and cannot be modified."
-        in response.json()["detail"]
-    )
+    assert "Field is immutable and cannot be modified" in response.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -5396,10 +5429,7 @@ async def test_update_mutable_and_immutable_fields(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 400
-    assert (
-        "Field 'immutable_field' in log id 1 is immutable and cannot be modified."
-        in response.json()["detail"]
-    )
+    assert "Field is immutable and cannot be modified" in response.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -5443,10 +5473,7 @@ async def test_create_log_default_immutable(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 400
-    assert (
-        "Field 'default_field' in log id 1 is immutable and cannot be modified."
-        in response.json()["detail"]
-    )
+    assert "Field is immutable and cannot be modified" in response.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -5665,7 +5692,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
     _ = await _create_project(client, project_name)
 
     # 1) Create initial logs using your existing fixture
-    await _create_several_logs(client, project_name)
+    await _create_several_logs(client, project_name, batched=False)
 
     # Create derived logs for testing grouping
     # First derived log: temperature + 10
