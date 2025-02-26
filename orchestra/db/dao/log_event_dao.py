@@ -39,6 +39,50 @@ class LogEventDAO:
 
         return new_log_event.id
 
+    def bulk_create(
+        self,
+        project_id: int,
+        count: int,
+        context_id: Optional[int] = None,
+    ) -> List[int]:
+        """Create multiple LogEvent instances in one operation.
+
+        Args:
+            project_id: The project ID to associate with the log events
+            count: Number of log events to create
+            context_id: Optional context ID to associate with the log events
+
+        Returns:
+            A list of created log event IDs
+        """
+        ts = datetime.now(timezone.utc)
+        log_events = [
+            LogEvent(
+                project_id=project_id,
+                created_at=ts,
+                updated_at=ts,
+            )
+            for _ in range(count)
+        ]
+
+        self.session.add_all(log_events)
+        self.session.commit()
+
+        log_event_ids = [event.id for event in log_events]
+
+        if context_id:
+            associations = [
+                LogEventContext(
+                    log_event_id=log_event_id,
+                    context_id=context_id,
+                )
+                for log_event_id in log_event_ids
+            ]
+            self.session.add_all(associations)
+            self.session.commit()
+
+        return log_event_ids
+
     def filter(
         self,
         id: Optional[int] = None,
