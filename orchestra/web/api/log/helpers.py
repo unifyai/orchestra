@@ -1689,7 +1689,7 @@ def _handle_functions(filter_dict, log_event_alias, session, log_event_ids):
             )
             return version_subq
         # Handle version(BASE(<ids>, <column_name>)) case
-        #TODO(yusha): add test for this!
+        # TODO(yusha): add test for this!
         elif (
             isinstance(filter_dict.get("rhs"), dict)
             and filter_dict["rhs"].get("operand") == "BASE"
