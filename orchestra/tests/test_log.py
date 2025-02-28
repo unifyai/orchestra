@@ -4581,6 +4581,156 @@ async def test_get_logs_metric(
 
 
 @pytest.mark.anyio
+async def test_get_logs_metric_batch(client: AsyncClient):
+    """Test the batch processing functionality of the get_logs_metric endpoint."""
+    # 1. Create a test project and insert logs
+    project_name = "eval-project-batch"
+    _ = await _create_project(client, project_name)
+    _ = await _create_several_logs(client, project_name)
+    data = log_data["logs_for_various"]
+
+    # 2. Create derived logs for testing
+    #    First derived log: temperature + 10
+    derived_conf_temp = {
+        "key": "temp_plus_10",
+        "equation": "{t:_/temperature} + 10",
+        "referenced_logs": {"t": [1, 2, 3, 4]},  # logs that have a _/temperature
+    }
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_temp["key"],
+        derived_conf_temp["equation"],
+        derived_conf_temp["referenced_logs"],
+    )
+    assert response.status_code == 200, response.json()
+
+    #    Second derived log: length of description
+    derived_conf_desc = {
+        "key": "desc_len",
+        "equation": "len({d:_/description})",
+        "referenced_logs": {"d": [1, 2, 3, 4, 5, 6]},
+    }
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_desc["key"],
+        derived_conf_desc["equation"],
+        derived_conf_desc["referenced_logs"],
+    )
+    assert response.status_code == 200, response.json()
+
+    #
+    # 3. Test single-key usage (legacy) to ensure backward compatibility
+    #
+    single_key = "_/temperature"
+    resp = await client.get(
+        f"/v0/logs/metric/mean?project={project_name}&key={single_key}",
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    single_result = resp.json()
+    # Should be a scalar (float, int, etc.), not a dict
+    assert isinstance(
+        single_result,
+        (int, float, str),
+    ), "Expected scalar result for single key usage."
+
+    #
+    # 4. Test multiple-key usage
+    #
+    multiple_keys = ["_/temperature", "_/safe", "temp_plus_10", "desc_len"]
+    resp = await client.get(
+        f"/v0/logs/metric/mean?project={project_name}",
+        params={"key": json.dumps(multiple_keys)},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    multi_result = resp.json()
+    assert isinstance(
+        multi_result,
+        dict,
+    ), "Expected dict result for multiple-key usage."
+    assert set(multi_result.keys()) == set(
+        multiple_keys,
+    ), f"Expected keys {multiple_keys}, got {multi_result.keys()}"
+
+    #
+    # 5. Key-specific filter expressions
+    #    Example: _/temperature > 0, and _/safe == true
+    #
+    filter_expr_dict = {
+        "_/temperature": "_/temperature > 0",  # only positive temps
+        "_/safe": "_/safe == 'true'",  # only logs with safe == true
+    }
+    resp = await client.get(
+        f"/v0/logs/metric/mean?project={project_name}",
+        params={
+            "key": json.dumps(["_/temperature", "_/safe"]),
+            "filter_expr": json.dumps(filter_expr_dict),
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    filtered_result = resp.json()
+    assert set(filtered_result.keys()) == {"_/temperature", "_/safe"}
+
+    # Verify temperature filter
+    positive_temps = [
+        d["_/temperature"]
+        for d in data
+        if "_/temperature" in d and d["_/temperature"] > 0
+    ]
+    if positive_temps:
+        expected_temp_mean = sum(positive_temps) / len(positive_temps)
+        assert abs(float(filtered_result["_/temperature"]) - expected_temp_mean) < 1e-6
+
+    # Verify safe filter
+    safe_vals = [1 for d in data if "_/safe" in d and d["_/safe"] is True]
+    if safe_vals:
+        expected_safe_mean = sum(safe_vals) / len(safe_vals)
+        assert abs(float(filtered_result["_/safe"]) - expected_safe_mean) < 1e-6
+
+    #
+    # 6. Key-specific from_ids
+    #
+    from_ids_dict = {
+        "_/temperature": "1&2",  # Only logs #1 and #2 for temperature
+        "desc_len": "5&6",  # Only logs #5 and #6 for desc_len
+    }
+    resp = await client.get(
+        f"/v0/logs/metric/mean?project={project_name}",
+        params={
+            "key": json.dumps(["_/temperature", "desc_len"]),
+            "from_ids": json.dumps(from_ids_dict),
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    from_ids_result = resp.json()
+    assert set(from_ids_result.keys()) == {"_/temperature", "desc_len"}
+
+    #
+    # 7. Key-specific exclude_ids
+    #
+    exclude_ids_dict = {
+        "_/temperature": "3&4",  # Exclude logs 3 and 4 for temperature
+        "_/safe": "2&3",  # Exclude logs 2 and 3 for safe
+    }
+    resp = await client.get(
+        f"/v0/logs/metric/mean?project={project_name}",
+        params={
+            "key": json.dumps(["_/temperature", "_/safe"]),
+            "exclude_ids": json.dumps(exclude_ids_dict),
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    exclude_ids_result = resp.json()
+    assert set(exclude_ids_result.keys()) == {"_/temperature", "_/safe"}
+
+
+@pytest.mark.anyio
 async def test_get_logs_nested_dict_ordering(client: AsyncClient):
     """Test that nested dictionary key ordering is preserved at multiple levels."""
     project_name = "nested-dict-order-test"
