@@ -11,7 +11,16 @@ from enum import Enum
 from json import JSONDecodeError
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    status,
+)
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import (
     INTEGER,
@@ -56,6 +65,7 @@ from orchestra.web.api.log.schema import (
     CreateDerivedEntriesConfig,
     CreateLogConfig,
     DeleteLogEntryRequest,
+    GetLogsMetricRequest,
     RenameFieldRequest,
     UpdateDerivedEntriesConfig,
     UpdateLogRequest,
@@ -2667,110 +2677,52 @@ def get_logs_latest_timestamp(
     )
 
 
-@router.get(
-    "/logs/metric/{metric}",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": 4.56,
-                },
-            },
-        },
-        404: {
-            "description": "Project Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project <project> not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def get_logs_metric(
-    request_fastapi: Request,
-    metric: str = Path(
-        description="The name of the metric you would like to compute.",
-        example="mean",
-    ),
-    key: str = Query(
-        description="The key you would like to extract the reduction metric for.",
-        example="score",
-    ),
-    project: str = Query(
-        description="Name of the project to get entries from.",
-        example="eval-project",
-    ),
-    context: Optional[str] = Query(
-        "",
-        description="Static context to filter logs by.",
-        example="training",
-    ),
-    filter_expr: Optional[str] = Query(
-        None,
-        description="Boolean string to filter entries. TODO: Detailed page.",
-        example="len(output) > 200 and temperature == 0.5",
-    ),
-    from_ids: Optional[str] = Query(
-        None,
-        description="The log ids which are permitted to be included in the search. "
-        "Each log id listed does not need to be returned, but no logs "
-        "which are not included in this list can be returned. This "
-        "argument *cannot* be set if `exclude_ids` is set.",
-        example="0&1&2",
-    ),
-    exclude_ids: Optional[str] = Query(
-        None,
-        description="The log ids which cannot be returned from the search. "
-        "None of the listed ids will be returned, even if the logs are "
-        "valid as per the filtering expression etc. This argument *cannot* "
-        "be set if `from_ids` is set.",
-        example="0&1&2",
-    ),
-    project_dao: ProjectDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
-    session=Depends(get_db_session),
-) -> Union[float, int, bool, str]:
+def compute_metric_for_key(
+    key: str,
+    metric: str,
+    project_obj,
+    context_id: Optional[int],
+    field_types,
+    key_filter_expr: Optional[str] = None,
+    key_from_ids: Optional[str] = None,
+    key_exclude_ids: Optional[str] = None,
+    session=None,
+) -> Union[float, int, bool, str, None]:
     """
-    Returns the reduction metric for filtered values (base + derived) for a specific key from a project.
-    """
-    try:
-        user_id = request_fastapi.state.user_id
-        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
-    except IndexError:
-        raise not_found(f"Project {project}")
-    # TODO: Deal with organisation IDs
+    Compute a metric for a single key.
 
+    Args:
+        key: The field key to compute the metric for
+        metric: The metric to compute (mean, sum, etc.)
+        project_obj: The project object
+        context_id: The context ID
+        field_types: Dict of field types
+        key_filter_expr: Key-specific filter expression
+        key_from_ids: Key-specific from_ids
+        key_exclude_ids: Key-specific exclude_ids
+        session: Database session
+
+    Returns:
+        The computed metric value
+    """
     # 1) Build initial query to find matching LogEvent IDs
-    #    (i.e. those that pass filter_expr, from_ids, exclude_ids).
     query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
 
-    assert not (from_ids and exclude_ids), (
-        f"Only one of from_ids or exclude_ids can be set, "
-        f"but found values {from_ids} and {exclude_ids}."
+    assert not (key_from_ids and key_exclude_ids), (
+        f"Only one of from_ids or exclude_ids can be set for key '{key}', "
+        f"but found values {key_from_ids} and {key_exclude_ids}."
     )
 
-    if from_ids:
-        query = query.where(LogEvent.id.in_([int(i) for i in from_ids.split("&")]))
-    elif exclude_ids:
+    if key_from_ids:
+        query = query.where(LogEvent.id.in_([int(i) for i in key_from_ids.split("&")]))
+    elif key_exclude_ids:
         query = query.where(
-            LogEvent.id.notin_([int(i) for i in exclude_ids.split("&")]),
+            LogEvent.id.notin_([int(i) for i in key_exclude_ids.split("&")]),
         )
 
-    context_name = "" if not context else context
-    context_obj = context_dao.filter(name=context_name, project_id=project_obj.id)
-    if context_obj:
-        context_id = context_obj[0][0].id
-    else:
-        context_id = None
-    field_types = field_type_dao.get_field_types(project_obj.id, context_id=context_id)
-    if filter_expr:
+    if key_filter_expr:
         filter_dict = str_filter_exp_to_dict(
-            filter_expr,
+            key_filter_expr,
             field_names=list(field_types.keys()),
         )
         if filter_dict:
@@ -2801,7 +2753,6 @@ def get_logs_metric(
     subquery = query.subquery()
 
     # 2) retrieve rows from Log and DerivedLog for the requested `key`.
-    #    We'll unify them into a single subquery that yields (log_event_id, value, inferred_type).
     # Base logs
     log_q = (
         session.query(
@@ -2829,9 +2780,7 @@ def get_logs_metric(
     # Union them
     logs_or_derived_subq = log_q.union_all(derived_q).subquery()
 
-    # 3) Now we have a subquery for (log_event_id, value, inferred_type).
-    #    We only keep those whose log_event_id is in the `subquery` of filter_expr / from_ids / exclude_ids.
-    #    Then we apply the final aggregator (sum, mean, etc.).
+    # 3) Apply the aggregator (sum, mean, etc.)
     reduction_methods = {
         "count": func.count,
         "sum": func.sum,
@@ -2879,7 +2828,6 @@ def get_logs_metric(
     ).label("value_as_float")
 
     # Filter the subquery by the log_event_ids that survived above filters
-    # (subquery).
     metric_query = (
         session.query(
             reduction_methods[metric](cast_expr),
@@ -2891,16 +2839,8 @@ def get_logs_metric(
     reduced_query = metric_query.scalar()
 
     # Post-process based on field type
-    context_name = "" if not context else context
-    context_id = context_dao.filter(name=context_name, project_id=project_obj.id)
-    if context_id:
-        context_id = context_id[0][0].id
-    else:
-        context_id = None
-    field_type = field_type_dao.get_field_types(
-        project_obj.id,
-        context_id=context_id,
-    ).get(key)
+    field_type = field_types.get(key)
+
     if metric == "count":
         return int(reduced_query or 0)
 
@@ -2910,7 +2850,7 @@ def get_logs_metric(
     if not field_type:
         return reduced_query
 
-    # Now do the same final conversions based on the field type:
+    # Convert based on the field type
     if field_type == "timestamp":
         if metric in ("var", "std"):
             return timedelta(seconds=reduced_query).__repr__()
@@ -2924,7 +2864,165 @@ def get_logs_metric(
         if field_type == "bool" and metric in ("min", "max", "median", "mode"):
             return bool(int(reduced_query))
         return int(reduced_query)
+
     return reduced_query
+
+
+@router.get(
+    "/logs/metric/{default_metric}",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {"application/json": {"example": 4.56}},
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Project <project> not found."},
+                },
+            },
+        },
+    },
+)
+def get_logs_metric(
+    request_fastapi: Request,
+    default_metric: str = Path(...),
+    project: str = Query(...),
+    request: Optional[GetLogsMetricRequest] = Body(None),
+    project_dao: ProjectDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    session=Depends(get_db_session),
+) -> Union[Dict[str, Any], float, int, bool, str, None]:
+    """
+    Returns the reduction metric for filtered values (base + derived) for one or more keys from a project.
+    If a single key is provided, returns the metric value directly (for backward compatibility).
+    If multiple keys are provided, returns a dict of {key: metric result}.
+    """
+    # Handle old usage if request body is not provided
+    if request is None:
+        key_param = request_fastapi.query_params.get("key")
+        filter_expr = request_fastapi.query_params.get("filter_expr")
+        from_ids = request_fastapi.query_params.get("from_ids")
+        exclude_ids = request_fastapi.query_params.get("exclude_ids")
+        context = request_fastapi.query_params.get("context")
+
+        if key_param is None:
+            raise HTTPException(status_code=400, detail="Missing 'key' parameter.")
+
+        # Parse JSON array syntax for 'key' or treat as single key
+        if key_param.startswith("["):
+            import json
+
+            parsed_keys = json.loads(key_param)
+            request = GetLogsMetricRequest(
+                key=parsed_keys,
+                filter_expr=filter_expr,
+                from_ids=from_ids,
+                exclude_ids=exclude_ids,
+                context=context,
+                metrics=None,
+            )
+        else:
+            # Single key usage
+            request = GetLogsMetricRequest(
+                key=key_param,
+                filter_expr=filter_expr,
+                from_ids=from_ids,
+                exclude_ids=exclude_ids,
+                context=context,
+                metrics=None,
+            )
+
+    # Get project and context
+    try:
+        user_id = request_fastapi.state.user_id
+        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
+    except IndexError:
+        raise not_found(f"Project {project}")
+
+    context_name = request.context or ""
+    context_obj = context_dao.filter(name=context_name, project_id=project_obj.id)
+    context_id = context_obj[0][0].id if context_obj else None
+    field_types = field_type_dao.get_field_types(project_obj.id, context_id=context_id)
+
+    if isinstance(request.from_ids, str) and isinstance(request.exclude_ids, str):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot set both from_ids and exclude_ids at the top level.",
+        )
+
+    # Determine keys to compute
+    if request.key is None:
+        raise HTTPException(status_code=400, detail="No key(s) provided.")
+
+    # Convert to list for processing
+    if isinstance(request.key, str):
+        all_keys = [request.key]
+        single_key = True
+    else:
+        all_keys = request.key
+        single_key = False
+
+    # Compute metrics for each key
+    results = {}
+    for k in all_keys:
+        # Get metric for this key or use default
+        per_key_metric = default_metric
+        if request.metrics and k in request.metrics:
+            per_key_metric = request.metrics[k]
+
+        # Handle key-specific filters
+        # Parse filter_expr if it's a JSON string
+        if request.filter_expr is not None and isinstance(request.filter_expr, str):
+            if request.filter_expr.strip().startswith("{"):
+                request.filter_expr = json.loads(request.filter_expr)
+
+        key_filter_expr = (
+            request.filter_expr.get(k)
+            if isinstance(request.filter_expr, dict)
+            else request.filter_expr
+        )
+
+        # Parse from_ids if it's a JSON string
+        if request.from_ids is not None and isinstance(request.from_ids, str):
+            if request.from_ids.strip().startswith("{"):
+                request.from_ids = json.loads(request.from_ids)
+
+        key_from_ids = (
+            request.from_ids.get(k)
+            if isinstance(request.from_ids, dict)
+            else request.from_ids
+        )
+
+        # Parse exclude_ids if it's a JSON string
+        if request.exclude_ids is not None and isinstance(request.exclude_ids, str):
+            if request.exclude_ids.strip().startswith("{"):
+                request.exclude_ids = json.loads(request.exclude_ids)
+
+        key_exclude_ids = (
+            request.exclude_ids.get(k)
+            if isinstance(request.exclude_ids, dict)
+            else request.exclude_ids
+        )
+
+        # Compute the metric
+        value = compute_metric_for_key(
+            key=k,
+            metric=per_key_metric,
+            project_obj=project_obj,
+            context_id=context_id,
+            field_types=field_types,
+            key_filter_expr=key_filter_expr,
+            key_from_ids=key_from_ids,
+            key_exclude_ids=key_exclude_ids,
+            session=session,
+        )
+        results[k] = value
+
+    # Return single value or dictionary based on input type
+    return results[all_keys[0]] if single_key else results
 
 
 @router.get(
