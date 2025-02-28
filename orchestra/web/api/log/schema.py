@@ -240,3 +240,32 @@ class RenameFieldRequest(BaseModel):
         description="The new name for the field.",
         example="score_new",
     )
+
+
+class GetLogsMetricRequest(BaseModel):
+    # A single key or multiple keys
+    key: Optional[Union[str, List[str]]] = Field(
+        default=None,
+        description="Single key string or a list of keys.",
+    )
+    # Optional dictionary mapping each key to its metric, e.g. {"score":"mean","runtime":"sum"}
+    metrics: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Optional per-key metrics mapping. If provided, overrides the path metric for those keys.",
+    )
+    filter_expr: Optional[Union[str, Dict[str, str]]] = Field(
+        default=None,
+        description="Expression to filter logs (string or key->expr dict).",
+    )
+    from_ids: Optional[Union[str, Dict[str, str]]] = Field(
+        default=None,
+        description="Log IDs to include (string or key->IDs dict).",
+    )
+    exclude_ids: Optional[Union[str, Dict[str, str]]] = Field(
+        default=None,
+        description="Log IDs to exclude (string or key->IDs dict).",
+    )
+    context: Optional[str] = Field(
+        default=None,
+        description="Context name (string).",
+    )
