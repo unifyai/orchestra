@@ -1668,8 +1668,12 @@ def _handle_functions(filter_dict, log_event_alias, session, log_event_ids):
             )
 
     elif operand == "version":
-        identifier = filter_dict.get("rhs", {}).get("value")
-        if identifier:
+        # Handle direct version(identifier) case
+        if (
+            isinstance(filter_dict.get("rhs"), dict)
+            and filter_dict["rhs"].get("type") == "identifier"
+        ):
+            identifier = filter_dict["rhs"]["value"]
             version_subq = (
                 select(
                     Log.log_event_id.label("log_event_id"),
@@ -1684,6 +1688,58 @@ def _handle_functions(filter_dict, log_event_alias, session, log_event_ids):
                 .subquery()
             )
             return version_subq
+        # Handle version(BASE(<ids>, <column_name>)) case
+        #TODO(yusha): add test for this!
+        elif (
+            isinstance(filter_dict.get("rhs"), dict)
+            and filter_dict["rhs"].get("operand") == "BASE"
+        ):
+            base_args = filter_dict["rhs"].get("rhs", [])
+            if len(base_args) != 2:
+                raise ValueError(
+                    "BASE(...) requires exactly 2 arguments: (event_id, key)",
+                )
+
+            # Extract event IDs from the first argument
+            event_ids_expr = base_args[0]
+            event_ids = None
+            if event_ids_expr.get("type") == "other" and isinstance(
+                event_ids_expr.get("value"),
+                str,
+            ):
+                try:
+                    event_ids = json.loads(event_ids_expr["value"])
+                except json.JSONDecodeError:
+                    raise ValueError(
+                        f"Invalid event IDs format: {event_ids_expr['value']}",
+                    )
+
+            # Extract column name from the second argument
+            if base_args[1].get("type") == "identifier":
+                identifier = base_args[1]["value"]
+            else:
+                raise ValueError(
+                    f"Second argument to BASE must be an identifier, got: {base_args[1]}",
+                )
+
+            # Construct the query with the extracted event IDs and identifier
+            version_subq = (
+                select(
+                    Log.log_event_id.label("log_event_id"),
+                    Log.version.label("value"),
+                    literal("int").label("inferred_type"),
+                )
+                .select_from(Log)
+                .where(
+                    Log.log_event_id.in_(event_ids) if event_ids else True,
+                    Log.key == identifier,
+                )
+                .subquery()
+            )
+            return version_subq
+        else:
+            raise ValueError(f"Invalid argument for 'version' function: {filter_dict}")
+
     elif operand == "BASE":
 
         if len(rhs_expr) != 2:
