@@ -154,7 +154,7 @@ class DeleteLogEntryRequest(BaseModel):
         description="Name of the project the logs belong to.",
         example="eval-project",
     )
-    context: ContextCreateRequest | None = Field(
+    context: str | None = Field(
         default=None,
         description="Optional context path to update for the logs. "
         "Can use '/' for nested contexts (e.g. 'training/batch1').",
