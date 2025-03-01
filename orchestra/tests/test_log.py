@@ -3952,7 +3952,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # check version
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "version('a/b/param1') == 1"},
+        params={"filter_expr": "version(a/b/param1) == 1"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
