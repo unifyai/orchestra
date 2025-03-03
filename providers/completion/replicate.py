@@ -63,4 +63,9 @@ supported_models = {
         "context_window": 16384,
         "cost": {"prompt": 1, "completion": 5},
     },
+    "claude-3.7-sonnet": {
+        "endpoint": "replicate/anthropic/claude-3.7-sonnet",
+        "context_window": 16384,
+        "cost": {"prompt": 3, "completion": 15},
+    },
 }
