@@ -184,8 +184,20 @@ class FieldTypeDAO:
         project_id: int,
         field_name: str,
         context_id: int,
-    ) -> None:
-        """Delete a specific field type for a project."""
+    ) -> bool:
+        """Delete a specific field type for a project.
+
+        Args:
+            project_id: The ID of the project containing the field
+            field_name: The name of the field to delete
+            context_id: The context ID
+
+        Returns:
+            bool: True if a field was deleted, False if no field was found
+
+        Raises:
+            ValueError: If the field doesn't exist and raise_if_missing is True
+        """
         query = select(FieldType).where(
             FieldType.project_id == project_id,
             FieldType.field_name == field_name,
