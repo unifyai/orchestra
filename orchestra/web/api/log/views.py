@@ -1463,25 +1463,108 @@ def delete_logs(
     not_found_logs = []
     not_found_entries = []
     ids_and_fields = _flatten_fields(body.ids_and_fields)
+    deleted_fields = set()  # Track which fields were deleted for cascading deletion
+
+    # Get project info
+    user_id = request_fastapi.state.user_id
+    try:
+        project_id = project_dao.filter(user_id=user_id, name=body.project)[0][0].id
+    except IndexError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{body.project}' not found.",
+        )
+
+    # Get context info if available
+    context_id = None
+    if body.context:
+        context = context_dao.filter(project_id=project_id, name=body.context)
+        if context:
+            context_id = context[0][0].id
+    else:
+        # use the default context
+        context = context_dao.filter(project_id=project_id, name="")
+        if context:
+            context_id = context[0][0].id
+
+    if not context_id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Context '{body.context}' not found for project {body.project}.",
+        )
 
     # Get all matching logs using the unified query mechanism
     for log_id, fields in ids_and_fields.items():
-        # Verify if the log belongs to the user and get project info
+        # Special case: log_id is None means delete field from all logs
+        if log_id is None:
+            if len(fields) == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot delete all logs without specifying fields.",
+                )
+
+            # Get all log events for this project
+            all_log_events = (
+                session.query(LogEvent.id)
+                .filter(
+                    LogEvent.project_id == project_id,
+                )
+                .all()
+            )
+            all_log_ids = [event[0] for event in all_log_events]
+
+            if not all_log_ids:
+                continue  # No logs to process
+
+            # Add fields to the deleted_fields set
+            deleted_fields.update(fields)
+
+            # Process each field for all logs
+            for field in fields:
+                # Delete from base logs
+                if body.source_type in ("all", "base"):
+                    base_logs = log_dao.filter(
+                        project_id=project_id,
+                        key=field,
+                    )
+                    for log in base_logs:
+                        log_dao.delete(id=log[0].id)
+
+                # Delete from derived logs
+                if body.source_type in ("all", "derived"):
+                    for log_event_id in all_log_ids:
+                        derived_logs = derived_log_dao.filter(
+                            log_event_id=log_event_id,
+                            key=field,
+                        )
+                        for derived_log in derived_logs:
+                            derived_log_dao.delete(id=derived_log[0].id)
+
+            # Handle versioned contexts
+            if context_id:
+                context_obj = (
+                    context_dao.session.query(Context).filter_by(id=context_id).first()
+                )
+                if context_obj and context_obj.is_versioned:
+                    context_dao.archive_context_state(
+                        context_obj,
+                        name="delete",
+                        description=f"Deleted field(s) {', '.join(fields)} from all logs",
+                    )
+                    context_obj.version += 1
+                    context_obj.updated_at = datetime.now(timezone.utc)
+                    context_dao.session.commit()
+
+            continue
+
+        # Regular case: specific log_id
+        # Verify if the log belongs to the user
         try:
-            user_id = request_fastapi.state.user_id
-            project_id = project_dao.filter(user_id=user_id, name=body.project)[0][0].id
             if log_event_dao.get_user_id(id=log_id) != user_id:
                 raise IndexError
         except IndexError:
             not_found_logs.append(log_id)
             continue
-
-        # Get context info if available
-        context_id = None
-        if body.context:
-            context = context_dao.filter(project_id=project_id, name=body.context)
-            if context:
-                context_id = context[0][0].id
 
         if len(fields) == 0:
             if body.source_type == "derived":
@@ -1564,6 +1647,8 @@ def delete_logs(
                         context_obj.updated_at = datetime.now(timezone.utc)
                         context_dao.session.commit()
 
+            # Add fields to the deleted_fields set
+            deleted_fields.update(fields)
         except Exception as e:
             raise HTTPException(
                 status_code=500,
@@ -1588,6 +1673,51 @@ def delete_logs(
             status_code=404,
             detail=f"Specified fields not found in logs with ids {not_found_entries}.",
         )
+
+    # Cascading deletion: check if any deleted fields no longer exist in any logs
+    if deleted_fields:
+        for field in deleted_fields:
+            # Check if field still exists in any base logs
+            base_logs_exist = session.query(
+                exists().where(
+                    and_(
+                        Log.key == field,
+                        Log.log_event_id.in_(
+                            session.query(LogEvent.id).filter(
+                                LogEvent.project_id == project_id,
+                            ),
+                        ),
+                    ),
+                ),
+            ).scalar()
+
+            # Check if field still exists in any derived logs
+            derived_logs_exist = session.query(
+                exists().where(
+                    and_(
+                        DerivedLog.key == field,
+                        DerivedLog.log_event_id.in_(
+                            session.query(LogEvent.id).filter(
+                                LogEvent.project_id == project_id,
+                            ),
+                        ),
+                    ),
+                ),
+            ).scalar()
+
+            # If field doesn't exist in any logs, delete the field type
+            if not base_logs_exist and not derived_logs_exist:
+                try:
+                    field_type_dao.delete_field_type(
+                        project_id=project_id,
+                        field_name=field,
+                        context_id=context_id,
+                    )
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Error deleting field type {field}: {str(e)}",
+                    )
 
     return {"info": "Logs and fields deleted successfully!"}
 
