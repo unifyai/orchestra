@@ -312,10 +312,6 @@ def setup_logging(log_level: str = "INFO"):
         json_formatter = CustomJsonFormatter(JSON_LOG_FORMAT)
         trace_filter = TraceUserContextFilter()
 
-        console_handler = logging.StreamHandler(sys.stdout)
-        # console_handler.setFormatter(json_formatter)
-        # console_handler.addFilter(trace_filter)
-        root_logger.addHandler(console_handler)
         logging.info("Configured JSON logging for production")
 
     # Configure Loki handler if available
