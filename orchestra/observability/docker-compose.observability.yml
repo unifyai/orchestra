@@ -1,0 +1,115 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: ./grafana-kpi-dashboard/Dockerfile
+      target: prod
+    image: orchestra:${ORCHESTRA_VERSION:-latest}
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ORCHESTRA_HOST: 0.0.0.0
+      ORCHESTRA_DB_HOST: orchestra-db
+      ORCHESTRA_DB_PORT: 5432
+      ORCHESTRA_DB_USER: orchestra
+      ORCHESTRA_DB_PASS: orchestra
+      ORCHESTRA_DB_BASE: orchestra
+      ORCHESTRA_TEMPO_URL: "tempo:4317"
+      ORCHESTRA_LOKI_URL: "http://loki:3100"
+    ports:
+    - "8000:8000"
+
+  db:
+    image: postgres:15.2-bullseye
+    hostname: orchestra-db
+    environment:
+      POSTGRES_PASSWORD: "orchestra"
+      POSTGRES_USER: "orchestra"
+      POSTGRES_DB: "orchestra"
+    volumes:
+    - orchestra-db-data:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "orchestra"]
+      interval: 2s
+      timeout: 3s
+      retries: 40
+    ports:
+    - "5432:5432"
+
+  migrator:
+    image: orchestra:${ORCHESTRA_VERSION:-latest}
+    restart: "no"
+    command: alembic upgrade head
+    environment:
+      ORCHESTRA_DB_HOST: orchestra-db
+      ORCHESTRA_DB_PORT: 5432
+      ORCHESTRA_DB_USER: orchestra
+      ORCHESTRA_DB_PASS: orchestra
+      ORCHESTRA_DB_BASE: orchestra
+    depends_on:
+      db:
+        condition: service_healthy
+
+  loki:
+    image: grafana/loki:3.0.0
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+    - "3100:3100"
+
+  tempo:
+    image: grafana/tempo:2.4.1
+    command: ["--target=all", "--storage.trace.backend=local", "--storage.trace.local.path=/var/tempo", "--auth.enabled=false"]
+    ports:
+    - "4317:4317"    # OTLP gRPC
+    - "4318:4318"    # OTLP HTTP
+    volumes:
+    - tempo-data:/var/tempo
+    depends_on:
+    - loki
+
+  prometheus:
+    image: prom/prometheus
+    container_name: my_prometheus
+    ports:
+    - "9090:9090"
+    volumes:
+    - ./orchestra/web/prometheus_data/prometheus.yaml:/etc/prometheus/prometheus.yaml
+    command:
+    - '--config.file=/etc/prometheus/prometheus.yaml'
+    depends_on:
+    - loki
+
+  grafana:
+    image: grafana/grafana
+    container_name: my_grafana
+    ports:
+    - "3000:3000"
+    volumes:
+    - ./orchestra/web/grafana_data:/var/lib/grafana
+    depends_on:
+    - loki
+    - prometheus
+
+volumes:
+  prometheus_data:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: ./prometheus_data
+  grafana_data:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: ./grafana_data
+  tempo-data:
+    driver: local
+  loki-data:
+    driver: local
+  orchestra-db-data:
+    name: orchestra-db-data
+    external: true
