@@ -6,6 +6,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.web.api.utils.http_responses import admin_not_authorized, invalid_api_key
+from orchestra.web.api.utils.observability import set_user_context
 
 security = HTTPBearer()
 logger = logging.getLogger(__name__)
@@ -29,6 +30,12 @@ def auth_api_key(
     if db_response:
         request_fastapi.state.user_id = db_response[0][0]
         request_fastapi.state.user_email = db_response[0][1]
+
+        # Update the user context for logging/tracing
+        set_user_context(
+            user_id=request_fastapi.state.user_id,
+            user_email=request_fastapi.state.user_email,
+        )
         return
     raise invalid_api_key
 
