@@ -9,7 +9,6 @@ from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.logging import LoggingIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 
-from orchestra.logging import configure_logging
 from orchestra.settings import settings
 from orchestra.web.api.router import api_router
 from orchestra.web.api.utils.prometheus_middleware import PrometheusMiddleware, metrics
@@ -20,11 +19,10 @@ def get_app() -> FastAPI:
     """
     Get FastAPI application.
 
-    This is the main constructor of an application.
+    This is the main factory function of the application.
 
     :return: application.
     """
-    configure_logging()
     if settings.sentry_dsn:
         # Enables sentry integration.
         sentry_sdk.init(
@@ -34,9 +32,7 @@ def get_app() -> FastAPI:
             integrations=[
                 FastApiIntegration(transaction_style="endpoint"),
                 LoggingIntegration(
-                    level=logging.getLevelName(
-                        settings.log_level.value,
-                    ),
+                    level=logging.INFO,
                     event_level=logging.ERROR,
                 ),
                 SqlalchemyIntegration(),
@@ -50,7 +46,7 @@ def get_app() -> FastAPI:
         swagger_ui_parameters={"defaultModelsExpandDepth": -1},
         default_response_class=UJSONResponse,
     )
-    # Add cors middleware
+    # Set up CORS middleware
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allow_origins,
@@ -58,16 +54,20 @@ def get_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    # Add prometheus metrics middleware
-    app.add_middleware(PrometheusMiddleware, app_name="orchestra")
+    # Add Prometheus metrics middleware
+    app.add_middleware(
+        PrometheusMiddleware,
+        app_name="orchestra",
+    )
 
-    # Adds startup and shutdown events.
+    # Register startup and shutdown events
     register_startup_event(app)
     register_shutdown_event(app)
 
-    # Main router for the API.
+    # Register API router
     app.include_router(router=api_router, prefix="/v0")
-    # Add prometheus metrics endpoint
+
+    # Add Prometheus metrics endpoint
     app.add_api_route("/metrics", metrics)
 
     return app
