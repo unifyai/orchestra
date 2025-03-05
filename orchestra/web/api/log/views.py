@@ -4383,52 +4383,108 @@ def _build_grouped_data(
     # 5) When we have reached the maximum depth,
     # return the counts for each distinct group value instead of recursing further.
     if group_depth is not None and level == group_depth:
-        out_dict = {}
+        # 1) Compute aggregator metrics for each distinct value (and for null if present),
+        # just like in the recursion path. Store them so we can sort by metric.
+        value_to_metric = {}
+        for val in present_values:
+            subset_ids = value_to_ids[val]
+            metric_val = None
+            if (
+                group_sort_config
+                and group_sort_config.sort_type == SortType.SORT_GROUPS
+            ):
+                metric_val = _compute_group_metric(
+                    session=session,
+                    log_event_ids=subset_ids,
+                    field=group_sort_config.field,
+                    metric=group_sort_config.metric,
+                )
+            value_to_metric[val] = metric_val
 
+        null_metric = None
+        if have_null:
+            if (
+                group_sort_config
+                and group_sort_config.sort_type == SortType.SORT_GROUPS
+            ):
+                null_metric = _compute_group_metric(
+                    session=session,
+                    log_event_ids=list(missing_ids),
+                    field=group_sort_config.field,
+                    metric=group_sort_config.metric,
+                )
+
+        # 2) Sort the distinct values if group_sort_config == sort_groups
+        sorted_values = list(present_values)
+        if group_sort_config and group_sort_config.sort_type == SortType.SORT_GROUPS:
+            tmp = [(v, value_to_metric[v]) for v in present_values]
+            tmp.sort(
+                key=lambda x: (
+                    x[0] is None,
+                    x[1] is None,
+                    x[1],
+                ),
+                reverse=(group_sort_config.direction == SortDirection.DESCENDING),
+            )
+            sorted_values = [x[0] for x in tmp]
+
+        # 3) Apply group_offset/group_limit
+        if group_limit is not None:
+            paged_values = sorted_values[group_offset : group_offset + group_limit]
+        else:
+            paged_values = sorted_values
+
+        # 4) Build the final output structure for this level
+        out_dict = {}
         if (level + 1) < len(group_by):
-            # We have a "next" group key
+            # If there's another group_by field after this, return the number of
+            # distinct subgroups that would appear under each value (or under null).
             next_group_key = group_by[level + 1]
             prefix2, raw_key2 = parse_group_key(next_group_key)
+            is_param2 = prefix2 == "params"
 
             for val in paged_values:
-                subset_ids = value_to_ids[
-                    val
-                ]  # The log IDs for the current group value
-
-                # Now we figure out how many distinct *child groups* appear in the next column:
-                next_values = _get_distinct_group_values(
-                    log_event_ids=subset_ids,
-                    group_key=raw_key2,
+                size = _get_distinct_group_values(
                     session=session,
-                    is_param=(prefix2 == "params"),
+                    log_event_ids=value_to_ids[val],
+                    group_key=raw_key2,
+                    is_param=is_param2,
                 )
-                # We only want to show how many *distinct subgroups* are
-                # immediately under val's subtree:
-                out_dict[val] = len(next_values)
+                out_dict[val] = len(size)
 
             if have_null:
-                subset_ids = list(missing_ids)
-                next_values = _get_distinct_group_values(
-                    log_event_ids=subset_ids,
-                    group_key=raw_key2,
+                size = _get_distinct_group_values(
                     session=session,
-                    is_param=(prefix2 == "params"),
+                    log_event_ids=list(missing_ids),
+                    group_key=raw_key2,
+                    is_param=is_param2,
                 )
-                out_dict["null"] = len(next_values)
-
+                out_dict["null"] = len(size)
         else:
-            # If there's no next level to look at,
-            # then fallback to # of logs in each group
+            # No further group_by => just store the count of logs in each group
             for val in paged_values:
                 out_dict[val] = len(value_to_ids[val])
             if have_null:
                 out_dict["null"] = len(missing_ids)
 
-        # Then also fill out group_count and count as usual
-        out_dict["group_count"] = total_distinct + (1 if have_null else 0)
+        # group_count => total distinct values we found (plus null if any)
+        out_dict["group_count"] = len(present_values)
+        if have_null:
+            out_dict["group_count"] += 1
+
+        # count => how many items we returned in paged_values (plus null if present)
         out_dict["count"] = len(paged_values) + (1 if have_null else 0)
 
-        # Return at whichever nesting level we are
+        # Optionally store the aggregator metric for the entire group set
+        if group_sort_config and group_sort_config.sort_type == SortType.SORT_GROUPS:
+            agg_val = _compute_group_metric(
+                session=session,
+                log_event_ids=log_event_ids,
+                field=group_sort_config.field,
+                metric=group_sort_config.metric,
+            )
+            out_dict["_aggregator_metric"] = agg_val
+
         return {current_group_key: out_dict} if level == 0 else out_dict
 
     # Build the data structure that will go inside e.g.  "params/a/b/param2": {...}
@@ -4546,7 +4602,6 @@ def _build_grouped_data(
         value_metrics = [
             (val, value_to_sub_and_metric[val][1]) for val in present_values
         ]
-
         # Sort by metrics
         value_metrics.sort(
             key=lambda x: (
@@ -4556,7 +4611,6 @@ def _build_grouped_data(
             ),
             reverse=(group_sort_config.direction == SortDirection.DESCENDING),
         )
-
         # Extract just the sorted values
         sorted_values = [v[0] for v in value_metrics]
 
