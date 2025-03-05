@@ -1832,7 +1832,6 @@ def _get_logs_query(
 
             validate_filter_dict(filter_dict)
             event_ids = [x[0] for x in log_event_query.all()]
-            print("filter_dict", json.dumps(filter_dict, indent=4))
             condition = build_sql_query(
                 filter_dict,
                 LogEvent,
@@ -2512,7 +2511,7 @@ def get_logs(
     if nested_groups:
         grouped_result = _build_grouped_data(
             request_fastapi=request_fastapi,
-            project=project,
+            project_id=project_id,
             log_event_ids=event_ids,
             field_order_map=field_order_map,
             group_by=group_by,
@@ -2553,6 +2552,7 @@ def get_logs(
         rows, context_len, _ = _fetch_logs_for_event_ids(
             request_fastapi=request_fastapi,
             event_ids=event_ids,
+            project_id=project_id,
             column_context=column_context,
             context=context,
             from_fields=from_fields,
@@ -3964,6 +3964,7 @@ def _get_all_filtered_log_event_ids(
 def _fetch_logs_for_event_ids(
     request_fastapi: Request,
     event_ids: List[int],
+    project_id: int,
     column_context: Optional[str],
     context: Optional[str],
     from_fields: Optional[str],
@@ -3987,16 +3988,6 @@ def _fetch_logs_for_event_ids(
     """
     if not event_ids:
         return ([], 0) if not latest_timestamp else None
-
-    user_id = request_fastapi.state.user_id
-
-    # Quick project check to retrieve field type info
-    # (We assume the user is allowed to see these events.)
-    try:
-        project_obj = project_dao.filter(user_id=user_id)[0][0]
-        project_id = project_obj.id
-    except IndexError:
-        raise HTTPException(status_code=404, detail="Project not found.")
 
     # 1) Build union subquery from base logs + derived logs, for these event IDs
     unified_logs_subq = _build_unified_logs_subquery(
@@ -4186,7 +4177,7 @@ def _fetch_logs_for_event_ids(
 
 def _build_grouped_data(
     request_fastapi: Request,
-    project: str,
+    project_id: int,
     log_event_ids: List[int],
     field_order_map: Dict[str, int],
     group_by: List[str],
@@ -4282,6 +4273,7 @@ def _build_grouped_data(
         rows, context_len, leaf_count = _fetch_logs_for_event_ids(
             request_fastapi=request_fastapi,
             event_ids=log_event_ids,
+            project_id=project_id,
             column_context=column_context,
             context=context,
             from_fields=from_fields,
@@ -4458,7 +4450,7 @@ def _build_grouped_data(
         # Recursively build the child structure
         sub = _build_grouped_data(
             request_fastapi=request_fastapi,
-            project=project,
+            project_id=project_id,
             log_event_ids=list(subset),
             field_order_map=field_order_map,
             group_by=group_by,
@@ -4509,7 +4501,7 @@ def _build_grouped_data(
     if have_null:
         null_sub = _build_grouped_data(
             request_fastapi=request_fastapi,
-            project=project,
+            project_id=project_id,
             log_event_ids=list(missing_ids),
             field_order_map=field_order_map,
             group_by=group_by,
