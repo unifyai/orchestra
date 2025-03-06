@@ -55,8 +55,8 @@ class Settings(BaseSettings):
         os.environ.get("ORCHESTRA_USE_CLOUD_SQL", "false").lower()
         == "true"  # Set to True to use Cloud SQL connector instead of direct connection
     )
-    cloud_sql_instance: str = (
-        os.environ.get("ORCHESTRA_CLOUD_SQL_INSTANCE"),
+    cloud_sql_instance: str = os.environ.get(
+        "ORCHESTRA_CLOUD_SQL_INSTANCE",
         "saas-368716:europe-west1:dev",  # Format: "project:region:instance"
     )
 
