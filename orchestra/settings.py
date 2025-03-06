@@ -43,12 +43,22 @@ class Settings(BaseSettings):
     # Variables for the database
     db_host: str = "localhost"
     db_port: int = 5432
-    db_user: str = "orchestra"
-    db_pass: str = "orchestra"
-    db_base: str = "orchestra"
+    db_user: str = os.environ.get("ORCHESTRA_DB_USER", "orchestra")
+    db_pass: str = os.environ.get("ORCHESTRA_DB_PASS", "orchestra")
+    db_base: str = os.environ.get("ORCHESTRA_DB_BASE", "orchestra")
     db_path_query: str = ""
     db_send_host: bool = True
     db_echo: bool = False
+
+    # Cloud SQL configuration
+    use_cloud_sql: bool = (
+        os.environ.get("ORCHESTRA_USE_CLOUD_SQL", "false").lower()
+        == "true"  # Set to True to use Cloud SQL connector instead of direct connection
+    )
+    cloud_sql_instance: str = (
+        os.environ.get("ORCHESTRA_CLOUD_SQL_INSTANCE"),
+        "saas-368716:europe-west1:dev",  # Format: "project:region:instance"
+    )
 
     # This variable is used to define
     # multiproc_dir. It's required for [uvi|guni]corn projects.
@@ -60,8 +70,41 @@ class Settings(BaseSettings):
 
     # Grpc endpoint for opentelemetry.
     # E.G. http://localhost:4317
-    opentelemetry_endpoint: Optional[str] = None
-    opentelemetry_secure: bool = False
+    opentelemetry_endpoint: Optional[str] = os.environ.get(
+        "ORCHESTRA_OPENTELEMETRY_ENDPOINT",
+    )
+    opentelemetry_secure: bool = (
+        os.environ.get("ORCHESTRA_OPENTELEMETRY_SECURE", "").lower() == "true"
+    )
+
+    # Observability Stack Configuration
+    # Set these to None to disable the respective service
+
+    # Loki URL for log aggregation and storage
+    # Example: http://localhost:3100
+    # Set to None to disable Loki integration
+    loki_url: Optional[str] = os.environ.get(
+        "ORCHESTRA_LOKI_URL",
+        None,
+    )
+    loki_username: Optional[str] = os.environ.get("ORCHESTRA_LOKI_USERNAME")
+    loki_password: Optional[str] = os.environ.get("ORCHESTRA_LOKI_PASSWORD")
+
+    # Tempo URL for distributed tracing backend
+    # Example: http://localhost:4317
+    # Set to None to disable Tempo integration
+    tempo_url: Optional[str] = os.environ.get(
+        "ORCHESTRA_TEMPO_URL",
+        None,
+    )
+
+    # Grafana URL for metrics, logs, and traces visualization
+    # Example: http://localhost:3000
+    # Set to None to disable Grafana integration
+    grafana_url: Optional[str] = os.environ.get(
+        "ORCHESTRA_GRAFANA_URL",
+        None,
+    )
 
     cors_allow_origins: list[str] = []
 
