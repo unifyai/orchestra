@@ -60,7 +60,8 @@ opencv-python = "^4.10.0.84"
 python-json-logger = "^3.2.1"
 python-logging-loki = "^0.3.1"
 
-[tool.poetry.dev-dependencies]
+[tool.poetry.group.dev.dependencies]
+types-requests = "*"
 pytest = "^7.2.1"
 flake8 = "~4.0.1"
 mypy = "^1.1.1"
@@ -73,9 +74,6 @@ pytest-cov = "^4.0.0"
 anyio = "^3.6.2"
 pytest-env = "^0.8.1"
 httpx = "^0.24.0"
-
-[tool.poetry.group.dev.dependencies]
-types-requests = "*"
 
 [tool.isort]
 profile = "black"
