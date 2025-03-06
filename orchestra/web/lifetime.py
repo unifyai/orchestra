@@ -16,9 +16,6 @@ from opentelemetry.sdk.resources import (
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import set_tracer_provider
-from prometheus_fastapi_instrumentator.instrumentation import (
-    PrometheusFastApiInstrumentator,
-)
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -264,13 +261,6 @@ def setup_observability(app: FastAPI) -> None:  # pragma: no cover
         logger.error(f"Failed to setup OpenTelemetry: {e}")
         logger.info("Continuing without distributed tracing")
 
-    # Setup Prometheus for metrics collection
-    try:
-        setup_prometheus(app)
-    except Exception as e:
-        logger.error(f"Failed to setup Prometheus: {e}")
-        logger.info("Continuing without metrics collection")
-
     # Setup SQLAlchemy instrumentation for query tracking
     # Only register DB listeners if the engine is already initialized
     if hasattr(app.state, "db_engine") and app.state.db_engine is not None:
@@ -280,17 +270,6 @@ def setup_observability(app: FastAPI) -> None:  # pragma: no cover
             logger.error(f"Failed to register DB listeners: {e}")
 
     logger.info("Observability stack setup completed")
-
-
-def setup_prometheus(app: FastAPI) -> None:  # pragma: no cover
-    """
-    Enables prometheus integration.
-
-    :param app: current application.
-    """
-    PrometheusFastApiInstrumentator(should_group_status_codes=False).instrument(
-        app,
-    ).expose(app, should_gzip=True, name="prometheus_metrics")
 
 
 def register_startup_event(

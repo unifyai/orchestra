@@ -312,11 +312,6 @@ def after_cursor_execute(conn, cursor, statement, parameters, context, executema
                 f"DB Query: {query_type} on {table} (SLOW)",
                 extra=log_extras,
             )
-        else:
-            structured_logger.info(
-                f"DB Query: {query_type} on {table}",
-                extra=log_extras,
-            )
 
         # End OpenTelemetry span if it exists
         if hasattr(context, "_otel_span"):
