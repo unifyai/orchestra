@@ -2807,6 +2807,101 @@ def get_logs_latest_timestamp(
     )
 
 
+def _resolve_key_specific_filters(
+    request,
+    key: str,
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    Extract key-specific filter_expr, from_ids, and exclude_ids from the request object.
+
+    Args:
+        request: The GetLogsMetricRequest object
+        key: The field key to extract filters for
+
+    Returns:
+        Tuple of (key_filter_expr, key_from_ids, key_exclude_ids)
+    """
+    # Parse filter_expr if it's a JSON string
+    if request.filter_expr is not None and isinstance(request.filter_expr, str):
+        if request.filter_expr.strip().startswith("{"):
+            request.filter_expr = json.loads(request.filter_expr)
+
+    key_filter_expr = (
+        request.filter_expr.get(key)
+        if isinstance(request.filter_expr, dict)
+        else request.filter_expr
+    )
+
+    # Parse from_ids if it's a JSON string
+    if request.from_ids is not None and isinstance(request.from_ids, str):
+        if request.from_ids.strip().startswith("{"):
+            request.from_ids = json.loads(request.from_ids)
+
+    key_from_ids = (
+        request.from_ids.get(key)
+        if isinstance(request.from_ids, dict)
+        else request.from_ids
+    )
+
+    # Parse exclude_ids if it's a JSON string
+    if request.exclude_ids is not None and isinstance(request.exclude_ids, str):
+        if request.exclude_ids.strip().startswith("{"):
+            request.exclude_ids = json.loads(request.exclude_ids)
+
+    key_exclude_ids = (
+        request.exclude_ids.get(key)
+        if isinstance(request.exclude_ids, dict)
+        else request.exclude_ids
+    )
+
+    return key_filter_expr, key_from_ids, key_exclude_ids
+
+
+def _postprocess_aggregator_value(
+    value: Any,
+    metric: str,
+    field_type: Optional[str],
+) -> Union[float, int, bool, str, None]:
+    """
+    Post-process an aggregator value based on field type and metric.
+
+    Args:
+        value: The raw aggregated value
+        metric: The metric that was computed (mean, sum, etc.)
+        field_type: The field type from field_types dict
+
+    Returns:
+        The processed value with appropriate type
+    """
+    if metric == "count":
+        return int(value or 0)
+
+    if value is None:
+        return None
+
+    if not field_type:
+        return value
+
+    # Convert based on the field type
+    if field_type == "timestamp":
+        if metric in ("var", "std"):
+            return timedelta(seconds=value).__repr__()
+        return datetime.fromtimestamp(value).isoformat()
+
+    if (
+        float(value).is_integer()
+        and metric in ("sum", "min", "max", "median", "mode")
+        and field_type in ("int", "bool", "str")
+    ):
+        if field_type == "bool" and metric in ("min", "max", "median", "mode"):
+            return bool(int(value))
+        return int(value)
+
+    return value
+
+
+
+
 def compute_metric_for_key(
     key: str,
     metric: str,
