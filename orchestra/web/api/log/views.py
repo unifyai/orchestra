@@ -4829,19 +4829,6 @@ def _build_grouped_data(
                 )
             value_to_metric[val] = metric_val
 
-        null_metric = None
-        if have_null:
-            if (
-                group_sort_config
-                and group_sort_config.sort_type == SortType.SORT_GROUPS
-            ):
-                null_metric = _compute_group_metric(
-                    session=session,
-                    log_event_ids=list(missing_ids),
-                    field=group_sort_config.field,
-                    metric=group_sort_config.metric,
-                )
-
         # 2) Sort the distinct values if group_sort_config == sort_groups
         sorted_values = list(present_values)
         if group_sort_config and group_sort_config.sort_type == SortType.SORT_GROUPS:
@@ -4903,16 +4890,6 @@ def _build_grouped_data(
         # count => how many items we returned in paged_values (plus null if present)
         out_dict["count"] = len(paged_values) + (1 if have_null else 0)
 
-        # Optionally store the aggregator metric for the entire group set
-        if group_sort_config and group_sort_config.sort_type == SortType.SORT_GROUPS:
-            agg_val = _compute_group_metric(
-                session=session,
-                log_event_ids=log_event_ids,
-                field=group_sort_config.field,
-                metric=group_sort_config.metric,
-            )
-            out_dict["_aggregator_metric"] = agg_val
-
         return {current_group_key: out_dict} if level == 0 else out_dict
 
     # Build the data structure that will go inside e.g.  "params/a/b/param2": {...}
@@ -4967,9 +4944,7 @@ def _build_grouped_data(
         # Potential Optimization could be to instead use SQL GROUPBY (ie: compute_group_aggregate)
         # Extract the child's aggregator metric if it exists
         metric_value = None
-        if isinstance(sub, dict) and "_aggregator_metric" in sub:
-            metric_value = sub["_aggregator_metric"]
-        elif group_sort_config and group_sort_config.sort_type == SortType.SORT_GROUPS:
+        if group_sort_config and group_sort_config.sort_type == SortType.SORT_GROUPS:
             # If no metric from child but we have a sort config, compute the metric directly
             metric_value = _compute_group_metric(
                 session=session,
@@ -4981,7 +4956,6 @@ def _build_grouped_data(
         value_to_sub_and_metric[val] = (sub, metric_value)
 
     # Handle null group similarly
-    null_metric = None
     if have_null:
         null_sub = _build_grouped_data(
             request_fastapi=request_fastapi,
@@ -5010,17 +4984,6 @@ def _build_grouped_data(
             return_timestamps=return_timestamps,
             return_versions=return_versions,
         )
-
-        # Extract null group's metric too
-        if isinstance(null_sub, dict) and "_aggregator_metric" in null_sub:
-            null_metric = null_sub["_aggregator_metric"]
-        elif group_sort_config and group_sort_config.sort_type == SortType.SORT_GROUPS:
-            null_metric = _compute_group_metric(
-                session=session,
-                log_event_ids=list(missing_ids),
-                field=group_sort_config.field,
-                metric=group_sort_config.metric,
-            )
 
     # PHASE 2: Sort values based on metrics if group sorting is configured
     sorted_values = list(present_values)  # Default to original order
@@ -5062,7 +5025,7 @@ def _build_grouped_data(
     # 8) Compute "count" = sum of substructures' counts
     total_count_sub = 0
     for k, sub_val in out_dict.items():
-        if k not in ("group_count", "count", "_aggregator_metric"):
+        if k not in ("group_count", "count"):
             total_count_sub += _get_count_from_substructure(sub_val)
 
     # 9) group_count = # distinct values
@@ -5072,30 +5035,11 @@ def _build_grouped_data(
     out_dict["group_count"] = computed_group_count
     out_dict["count"] = total_count_sub
 
-    # 11) Compute current level's aggregator metric
-    # Either combine child metrics or compute directly on all log_event_ids
-    current_level_metric = None
-    if group_sort_config and group_sort_config.sort_type == SortType.SORT_GROUPS:
-        # For certain metrics like mean, we can compute from child metrics
-        # But for simplicity and correctness, we recompute on all IDs
-        current_level_metric = _compute_group_metric(
-            session=session,
-            log_event_ids=log_event_ids,
-            field=group_sort_config.field,
-            metric=group_sort_config.metric,
-        )
-        # Store the metric in the output dict for parent group's use
-        out_dict["_aggregator_metric"] = current_level_metric
-
     # 12) Finally, wrap this under the current_group_key:
     #     e.g. { "params/a/b/param2": out_dict }
     result = {
         current_group_key: out_dict,
     }
-
-    # For convenience at the top level, also add the aggregator metric directly
-    if current_level_metric is not None and level == 0:
-        result["_aggregator_metric"] = current_level_metric
 
     return result
 
