@@ -271,3 +271,7 @@ class GetLogsMetricRequest(BaseModel):
         default=None,
         description="Context name (string).",
     )
+    group_by: Optional[Union[str, List[str]]] = Field(
+        default=None,
+        description="Field(s) to group by when computing metrics. Can be a single field name or a list of field names for nested grouping.",
+    )
