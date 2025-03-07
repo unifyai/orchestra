@@ -4801,7 +4801,6 @@ async def test_get_logs_metric_grouped(client: AsyncClient):
     # Check that we have the expected state groups
     expected_states = ["liquid->gas", "liquid->solid", "gas"]
     for state in expected_states:
-        state = json.dumps(state)  # group values are strings in the response
         assert state in result, f"Expected state '{state}' in grouped results"
         assert isinstance(
             result[state],
@@ -4810,10 +4809,10 @@ async def test_get_logs_metric_grouped(client: AsyncClient):
 
     # Verify values for specific states
     # For liquid->gas state (boiling water), temperature should be 100.0
-    assert np.isclose(result['"liquid->gas"'], 100.0, atol=1e-6)
+    assert np.isclose(result["liquid->gas"], 100.0, atol=1e-6)
 
     # For liquid->solid state (freezing water and freezing nitrogen), mean should be (-210 + 0) / 2 = -105.0
-    assert np.isclose(result['"liquid->solid"'], -105.0, atol=1e-6)
+    assert np.isclose(result["liquid->solid"], -105.0, atol=1e-6)
 
     # Test 3: Single-level grouping by derived field
     response = await client.get(
@@ -4850,7 +4849,6 @@ async def test_get_logs_metric_grouped(client: AsyncClient):
 
     # First level should be state
     for state in expected_states:
-        state = json.dumps(state)  # group values are strings in the response
         assert (
             state in result
         ), f"Expected state '{state}' in first level of nested grouping"
@@ -4861,22 +4859,22 @@ async def test_get_logs_metric_grouped(client: AsyncClient):
 
         # Second level should be safe (true/false)
         safe_dict = result[state]
-        if state == '"liquid->solid"':
-            assert "true" in safe_dict, "Expected 'true' safety value for liquid->solid"
+        if state == "liquid->solid":
+            assert "True" in safe_dict, "Expected 'True' safety value for liquid->solid"
             assert (
-                "false" in safe_dict
-            ), "Expected 'false' safety value for liquid->solid"
+                "False" in safe_dict
+            ), "Expected 'False' safety value for liquid->solid"
             # freezing water (safe=true) has temp=0, freezing nitrogen (safe=false) has temp=-210
-            assert np.isclose(safe_dict["true"], 0.0, atol=1e-6)
-            assert np.isclose(safe_dict["false"], -210.0, atol=1e-6)
-        elif state == '"liquid->gas"':
-            assert "false" in safe_dict, "Expected 'false' safety value for liquid->gas"
+            assert np.isclose(safe_dict["True"], 0.0, atol=1e-6)
+            assert np.isclose(safe_dict["False"], -210.0, atol=1e-6)
+        elif state == "liquid->gas":
+            assert "False" in safe_dict, "Expected 'False' safety value for liquid->gas"
             # boiling water (safe=false) has temp=100
-            assert np.isclose(safe_dict["false"], 100.0, atol=1e-6)
+            assert np.isclose(safe_dict["False"], 100.0, atol=1e-6)
         elif state == "gas":
-            assert "false" in safe_dict, "Expected 'false' safety value for gas"
+            assert "False" in safe_dict, "Expected 'False' safety value for gas"
             # surface of sun (safe=false) has temp=6000
-            assert np.isclose(safe_dict["false"], 6000.0, atol=1e-6)
+            assert np.isclose(safe_dict["False"], 6000.0, atol=1e-6)
 
     # Test 5: Grouping with filter expression
     response = await client.get(
@@ -4894,13 +4892,13 @@ async def test_get_logs_metric_grouped(client: AsyncClient):
     assert isinstance(result, dict), "Grouped result should be a dictionary"
     # Only freezing water is safe, so only liquid->solid state with temp=0 should be present
     assert (
-        '"liquid->solid"' in result
+        "liquid->solid" in result
     ), "Expected 'liquid->solid' state in filtered results"
-    assert np.isclose(result['"liquid->solid"'], 0.0, atol=1e-6)
+    assert np.isclose(result["liquid->solid"], 0.0, atol=1e-6)
     assert (
-        '"liquid->gas"' not in result
+        "liquid->gas" not in result
     ), "Unsafe 'liquid->gas' state should not be in filtered results"
-    assert '"gas"' not in result, "Unsafe 'gas' state should not be in filtered results"
+    assert "gas" not in result, "Unsafe 'gas' state should not be in filtered results"
 
     # Test 6: Different metrics with grouping
     for metric in ["min", "max", "sum"]:
@@ -4922,11 +4920,11 @@ async def test_get_logs_metric_grouped(client: AsyncClient):
 
         # Check specific values for liquid->solid state
         if metric == "min":
-            assert np.isclose(result['"liquid->solid"'], -210.0, atol=1e-6)
+            assert np.isclose(result["liquid->solid"], -210.0, atol=1e-6)
         elif metric == "max":
-            assert np.isclose(result['"liquid->solid"'], 0.0, atol=1e-6)
+            assert np.isclose(result["liquid->solid"], 0.0, atol=1e-6)
         elif metric == "sum":
-            assert np.isclose(result['"liquid->solid"'], -210.0 + 0.0, atol=1e-6)
+            assert np.isclose(result["liquid->solid"], -210.0 + 0.0, atol=1e-6)
 
 
 @pytest.mark.anyio
@@ -5006,32 +5004,31 @@ async def test_get_logs_metric_batched_with_grouping(client: AsyncClient):
     # Check expected state groups in temperature results
     expected_states = ["liquid->gas", "liquid->solid", "gas"]
     for state in expected_states:
-        state_json = json.dumps(state)  # group values are strings in the response
-        assert state_json in temp_results, f"Expected state '{state}' in temp results"
+        assert state in temp_results, f"Expected state '{state}' in temp results"
         assert (
-            state_json in derived_temp_results
+            state in derived_temp_results
         ), f"Expected state '{state}' in derived_temp results"
 
     # Verify specific values for each metric
     # For liquid->gas state (boiling water), temperature should be 100.0
-    assert np.isclose(temp_results['"liquid->gas"'], 100.0, atol=1e-6)
+    assert np.isclose(temp_results["liquid->gas"], 100.0, atol=1e-6)
     # Derived temp should be 10 more than the original temperature
-    assert np.isclose(derived_temp_results['"liquid->gas"'], 110.0, atol=1e-6)
+    assert np.isclose(derived_temp_results["liquid->gas"], 110.0, atol=1e-6)
 
     # For liquid->solid state (freezing water and freezing nitrogen), mean should be (-210 + 0) / 2 = -105.0
-    assert np.isclose(temp_results['"liquid->solid"'], -105.0, atol=1e-6)
+    assert np.isclose(temp_results["liquid->solid"], -105.0, atol=1e-6)
     # Derived temp should be 10 more than the original temperature
-    assert np.isclose(derived_temp_results['"liquid->solid"'], -95.0, atol=1e-6)
+    assert np.isclose(derived_temp_results["liquid->solid"], -95.0, atol=1e-6)
 
     # For gas state (surface of the sun), temperature should be 6000.0
-    assert np.isclose(temp_results['"gas"'], 6000.0, atol=1e-6)
+    assert np.isclose(temp_results["gas"], 6000.0, atol=1e-6)
     # Derived temp should be 10 more than the original temperature
-    assert np.isclose(derived_temp_results['"gas"'], 6010.0, atol=1e-6)
+    assert np.isclose(derived_temp_results["gas"], 6010.0, atol=1e-6)
 
     # Check state_len values - state_len for "liquid->gas" is 11, "liquid->solid" is 13, "gas" is 3
-    assert np.isclose(state_len_results['"liquid->gas"'], 11.0, atol=1e-6)
-    assert np.isclose(state_len_results['"liquid->solid"'], 13.0, atol=1e-6)
-    assert np.isclose(state_len_results['"gas"'], 3.0, atol=1e-6)
+    assert np.isclose(state_len_results["liquid->gas"], 11.0, atol=1e-6)
+    assert np.isclose(state_len_results["liquid->solid"], 13.0, atol=1e-6)
+    assert np.isclose(state_len_results["gas"], 3.0, atol=1e-6)
 
     # Test 2: Batched metrics with multi-level (nested) grouping
     response = await client.get(
@@ -5057,15 +5054,14 @@ async def test_get_logs_metric_batched_with_grouping(client: AsyncClient):
 
     # First level should be state
     for state in expected_states:
-        state_json = json.dumps(state)  # group values are strings in the response
-        assert state_json in temp_results, f"Expected state '{state}' in temp results"
+        assert state in temp_results, f"Expected state '{state}' in temp results"
         assert (
-            state_json in derived_temp_results
+            state in derived_temp_results
         ), f"Expected state '{state}' in derived_temp results"
 
         # Each state should map to a dictionary with safe values as keys
-        temp_safe_dict = temp_results[state_json]
-        derived_temp_safe_dict = derived_temp_results[state_json]
+        temp_safe_dict = temp_results[state]
+        derived_temp_safe_dict = derived_temp_results[state]
 
         assert isinstance(
             temp_safe_dict,
@@ -5077,44 +5073,44 @@ async def test_get_logs_metric_batched_with_grouping(client: AsyncClient):
         ), f"Expected dict for state '{state}' in derived_temp results"
 
         # Check specific values for each state and safety combination
-        if state == '"liquid->solid"':
+        if state == "liquid->solid":
             # Check both true and false safety values for liquid->solid
             assert (
-                "true" in temp_safe_dict
+                "True" in temp_safe_dict
             ), "Expected 'true' safety value for liquid->solid"
             assert (
-                "false" in temp_safe_dict
+                "False" in temp_safe_dict
             ), "Expected 'false' safety value for liquid->solid"
 
             # freezing water (safe=true) has temp=0, freezing nitrogen (safe=false) has temp=-210
-            assert np.isclose(temp_safe_dict["true"], 0.0, atol=1e-6)
-            assert np.isclose(temp_safe_dict["false"], -210.0, atol=1e-6)
+            assert np.isclose(temp_safe_dict["True"], 0.0, atol=1e-6)
+            assert np.isclose(temp_safe_dict["False"], -210.0, atol=1e-6)
 
             # Derived temp should be 10 more than the original temperature
-            assert np.isclose(derived_temp_safe_dict["true"], 10.0, atol=1e-6)
-            assert np.isclose(derived_temp_safe_dict["false"], -200.0, atol=1e-6)
+            assert np.isclose(derived_temp_safe_dict["True"], 10.0, atol=1e-6)
+            assert np.isclose(derived_temp_safe_dict["False"], -200.0, atol=1e-6)
 
-        elif state == '"liquid->gas"':
+        elif state == "liquid->gas":
             # Only false safety value for liquid->gas
             assert (
-                "false" in temp_safe_dict
+                "False" in temp_safe_dict
             ), "Expected 'false' safety value for liquid->gas"
 
             # boiling water (safe=false) has temp=100
-            assert np.isclose(temp_safe_dict["false"], 100.0, atol=1e-6)
+            assert np.isclose(temp_safe_dict["False"], 100.0, atol=1e-6)
 
             # Derived temp should be 10 more than the original temperature
-            assert np.isclose(derived_temp_safe_dict["false"], 110.0, atol=1e-6)
+            assert np.isclose(derived_temp_safe_dict["False"], 110.0, atol=1e-6)
 
-        elif state == '"gas"':
+        elif state == "gas":
             # Only false safety value for gas
-            assert "false" in temp_safe_dict, "Expected 'false' safety value for gas"
+            assert "False" in temp_safe_dict, "Expected 'false' safety value for gas"
 
             # surface of sun (safe=false) has temp=6000
-            assert np.isclose(temp_safe_dict["false"], 6000.0, atol=1e-6)
+            assert np.isclose(temp_safe_dict["False"], 6000.0, atol=1e-6)
 
             # Derived temp should be 10 more than the original temperature
-            assert np.isclose(derived_temp_safe_dict["false"], 6010.0, atol=1e-6)
+            assert np.isclose(derived_temp_safe_dict["False"], 6010.0, atol=1e-6)
 
 
 @pytest.mark.anyio
