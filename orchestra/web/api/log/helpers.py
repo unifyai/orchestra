@@ -27,7 +27,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
-from sqlalchemy.sql import Subquery, and_, not_, or_
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
@@ -644,12 +643,25 @@ def _build_subquery_for_identifier(
       - id (to allow joining)
       - several casted columns (str_value, int_value, float_value, bool_value, jsonb_value)
     """
-    # TODO(yusha): figure out why empty ids were passed and remove this check once we have a better way to handle it
-    if not log_event_ids:
-        log_event_ids = [
-            x[0] for x in session.execute(select(log_event_alias.id)).fetchall()
-        ]
-
+    log_alias = aliased(Log, name="log_alias")
+    derived_log_alias = aliased(DerivedLog, name="derived_log_alias")
+    if log_event_ids is None:
+        # TODO(yusha): figure out why empty ids were passed and remove this check once we have a better way to handle it
+        log_id_condition = True
+        derived_log_id_condition = True
+    elif isinstance(log_event_ids, list):
+        # For derived logs, we pass reference logs as list of ids
+        log_id_condition = log_alias.log_event_id.in_(log_event_ids)
+        derived_log_id_condition = derived_log_alias.log_event_id.in_(log_event_ids)
+        log_event_condition = log_event_alias.id.in_(log_event_ids)
+    else:
+        # assert that log_event_ids is a subquery
+        assert isinstance(log_event_ids, Subquery)
+        log_id_condition = log_alias.log_event_id.in_(select(log_event_ids))
+        derived_log_id_condition = derived_log_alias.log_event_id.in_(
+            select(log_event_ids),
+        )
+        log_event_condition = log_event_alias.id.in_(select(log_event_ids))
     # Special handling for log_id field
     if key == "log_id":
         subq = (
@@ -663,7 +675,7 @@ def _build_subquery_for_identifier(
                 literal(None).label("bool_value"),
                 literal("int").label("inferred_type"),
             )
-            .where(log_event_alias.id.in_(log_event_ids))
+            .where(log_event_condition)
             .subquery(name=alias)
         )
         return subq
@@ -684,13 +696,10 @@ def _build_subquery_for_identifier(
                 literal(None).label("bool_value"),
                 literal("timestamp").label("inferred_type"),
             )
-            .where(log_event_alias.id.in_(log_event_ids))
+            .where(log_event_condition)
             .subquery(name=alias)
         )
         return subq
-
-    log_alias = aliased(Log)
-    derived_log_alias = aliased(DerivedLog)
 
     # Build base logs subquery
     base_subq = select(
@@ -723,7 +732,7 @@ def _build_subquery_for_identifier(
         ).label("bool_value"),
         log_alias.inferred_type.label("inferred_type"),
     ).where(
-        log_alias.log_event_id.in_(log_event_ids),
+        log_id_condition,
         log_alias.key == key,
     )
 
@@ -778,7 +787,7 @@ def _build_subquery_for_identifier(
         ).label("bool_value"),
         derived_log_alias.inferred_type.label("inferred_type"),
     ).where(
-        derived_log_alias.log_event_id.in_(log_event_ids),
+        derived_log_id_condition,
         derived_log_alias.key == key,
     )
     # print("derived_subq", session.execute(derived_subq).fetchall())
