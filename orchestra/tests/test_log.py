@@ -4731,6 +4731,207 @@ async def test_get_logs_metric_batch(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_logs_metric_grouped(client: AsyncClient):
+    """Test the get_logs_metric endpoint with group_by parameter."""
+    project_name = "test-metric-grouping"
+    _ = await _create_project(client, project_name)
+
+    # Create test data
+    await _create_several_logs(client, project_name)
+
+    # Create derived logs for testing
+    # First derived log: temperature + 10
+    derived_conf_temp = {
+        "key": "derived_temp",
+        "equation": "{t:_/temperature} + 10",
+        "referenced_logs": {"t": [1, 2, 3, 4]},  # logs with temperature field
+    }
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_temp["key"],
+        derived_conf_temp["equation"],
+        derived_conf_temp["referenced_logs"],
+    )
+    assert response.status_code == 200
+
+    # Second derived log: state length
+    derived_conf_state = {
+        "key": "state_len",
+        "equation": "len({s:_/state})",
+        "referenced_logs": {"s": [1, 2, 3, 4]},  # logs with state field
+    }
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_state["key"],
+        derived_conf_state["equation"],
+        derived_conf_state["referenced_logs"],
+    )
+    assert response.status_code == 200
+
+    # Test 1: Simple metric without grouping (baseline)
+    response = await client.get(
+        f"/v0/logs/metric/mean?project={project_name}",
+        params={"key": "_/temperature"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert isinstance(
+        result,
+        (int, float, str),
+    ), "Non-grouped result should be a scalar value"
+
+    # Test 2: Single-level grouping by state
+    response = await client.get(
+        f"/v0/logs/metric/mean?project={project_name}",
+        params={
+            "key": "_/temperature",
+            "group_by": "entries/_/state",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    # Verify structure: should be a dictionary with state values as keys
+    assert isinstance(result, dict), "Grouped result should be a dictionary"
+
+    # Check that we have the expected state groups
+    expected_states = ["liquid->gas", "liquid->solid", "gas"]
+    for state in expected_states:
+        state = json.dumps(state)  # group values are strings in the response
+        assert state in result, f"Expected state '{state}' in grouped results"
+        assert isinstance(
+            result[state],
+            (int, float),
+        ), f"Value for state '{state}' should be numeric"
+
+    # Verify values for specific states
+    # For liquid->gas state (boiling water), temperature should be 100.0
+    assert np.isclose(result['"liquid->gas"'], 100.0, atol=1e-6)
+
+    # For liquid->solid state (freezing water and freezing nitrogen), mean should be (-210 + 0) / 2 = -105.0
+    assert np.isclose(result['"liquid->solid"'], -105.0, atol=1e-6)
+
+    # Test 3: Single-level grouping by derived field
+    response = await client.get(
+        f"/v0/logs/metric/mean?project={project_name}",
+        params={
+            "key": "_/temperature",
+            "group_by": "derived_entries/state_len",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    assert isinstance(result, dict), "Grouped result should be a dictionary"
+    # Check that we have groups based on state length
+    # state_len for "liquid->gas" is 11, "liquid->solid" is 13, "gas" is 3
+    assert "11.0" in result, "Expected state length '11' in grouped results"
+    assert "13.0" in result, "Expected state length '13' in grouped results"
+    assert "3.0" in result, "Expected state length '3' in grouped results"
+
+    # Test 4: Multi-level grouping (nested)
+    response = await client.get(
+        f"/v0/logs/metric/mean?project={project_name}",
+        params={
+            "key": "_/temperature",
+            "group_by": json.dumps(["entries/_/state", "entries/_/safe"]),
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    assert isinstance(result, dict), "Grouped result should be a dictionary"
+
+    # First level should be state
+    for state in expected_states:
+        state = json.dumps(state)  # group values are strings in the response
+        assert (
+            state in result
+        ), f"Expected state '{state}' in first level of nested grouping"
+        assert isinstance(
+            result[state],
+            dict,
+        ), f"Value for state '{state}' should be a dictionary"
+
+        # Second level should be safe (true/false)
+        safe_dict = result[state]
+        if state == '"liquid->solid"':
+            assert "true" in safe_dict, "Expected 'true' safety value for liquid->solid"
+            assert (
+                "false" in safe_dict
+            ), "Expected 'false' safety value for liquid->solid"
+            # freezing water (safe=true) has temp=0, freezing nitrogen (safe=false) has temp=-210
+            assert np.isclose(safe_dict["true"], 0.0, atol=1e-6)
+            assert np.isclose(safe_dict["false"], -210.0, atol=1e-6)
+        elif state == '"liquid->gas"':
+            assert "false" in safe_dict, "Expected 'false' safety value for liquid->gas"
+            # boiling water (safe=false) has temp=100
+            assert np.isclose(safe_dict["false"], 100.0, atol=1e-6)
+        elif state == "gas":
+            assert "false" in safe_dict, "Expected 'false' safety value for gas"
+            # surface of sun (safe=false) has temp=6000
+            assert np.isclose(safe_dict["false"], 6000.0, atol=1e-6)
+
+    # Test 5: Grouping with filter expression
+    response = await client.get(
+        f"/v0/logs/metric/mean?project={project_name}",
+        params={
+            "key": "_/temperature",
+            "group_by": "entries/_/state",
+            "filter_expr": "_/safe is True",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    assert isinstance(result, dict), "Grouped result should be a dictionary"
+    # Only freezing water is safe, so only liquid->solid state with temp=0 should be present
+    assert (
+        '"liquid->solid"' in result
+    ), "Expected 'liquid->solid' state in filtered results"
+    assert np.isclose(result['"liquid->solid"'], 0.0, atol=1e-6)
+    assert (
+        '"liquid->gas"' not in result
+    ), "Unsafe 'liquid->gas' state should not be in filtered results"
+    assert '"gas"' not in result, "Unsafe 'gas' state should not be in filtered results"
+
+    # Test 6: Different metrics with grouping
+    for metric in ["min", "max", "sum"]:
+        response = await client.get(
+            f"/v0/logs/metric/{metric}?project={project_name}",
+            params={
+                "key": "_/temperature",
+                "group_by": "entries/_/state",
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+        result = response.json()
+
+        assert isinstance(
+            result,
+            dict,
+        ), f"Grouped {metric} result should be a dictionary"
+
+        # Check specific values for liquid->solid state
+        if metric == "min":
+            assert np.isclose(result['"liquid->solid"'], -210.0, atol=1e-6)
+        elif metric == "max":
+            assert np.isclose(result['"liquid->solid"'], 0.0, atol=1e-6)
+        elif metric == "sum":
+            assert np.isclose(result['"liquid->solid"'], -210.0 + 0.0, atol=1e-6)
+
+
+
+
+@pytest.mark.anyio
 async def test_get_logs_nested_dict_ordering(client: AsyncClient):
     """Test that nested dictionary key ordering is preserved at multiple levels."""
     project_name = "nested-dict-order-test"
