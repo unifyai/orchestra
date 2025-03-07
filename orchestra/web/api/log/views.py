@@ -762,17 +762,16 @@ def create_derived_entry(
         for key, ids in resolved_ids.items():
             resolved_ids_dict.setdefault(alias_to_key_map[key], []).extend(ids)
         # get the filtered log events
-        log_event_ids = (
+        log_event_ids_subq = (
             session.query(LogEvent.id)
             .filter(project_obj.id == LogEvent.project_id)
-            .all()
+            .subquery(name="log_event_ids_subq")
         )
-        log_event_ids = [id for id, in log_event_ids]
         computed_values = _compute_expression(
             filter_dict,
             LogEvent,
             session,
-            log_event_ids=log_event_ids,
+            log_event_ids=log_event_ids_subq,
         )
 
         # Create a new derived log entry for each computed value
@@ -1831,12 +1830,12 @@ def _get_logs_query(
                             validate_filter_dict(v)
 
             validate_filter_dict(filter_dict)
-            event_ids = [x[0] for x in log_event_query.all()]
+            event_ids_subq = log_event_query.subquery(name="event_ids_subq")
             condition = build_sql_query(
                 filter_dict,
                 LogEvent,
                 session,
-                log_event_ids=event_ids,
+                log_event_ids=event_ids_subq,
             )
             if isinstance(condition, Subquery):
                 # Subquery => we check existence
@@ -2965,12 +2964,12 @@ def _compute_metric_for_key_grouped(
             field_names=list(field_types.keys()),
         )
         if filter_dict:
-            event_ids = [x[0] for x in query.all()]
+            event_ids_subq = query.subquery(name="event_ids_subq")
             condition = build_sql_query(
                 filter_dict,
                 LogEvent,
                 session,
-                log_event_ids=event_ids,
+                log_event_ids=event_ids_subq,
             )
             if isinstance(condition, Subquery):
                 query = query.filter(
@@ -3266,12 +3265,12 @@ def compute_metric_for_key(
             field_names=list(field_types.keys()),
         )
         if filter_dict:
-            event_ids = [x[0] for x in query.all()]
+            event_ids_subq = query.subquery(name="event_ids_subq")
             condition = build_sql_query(
                 filter_dict,
                 LogEvent,
                 session,
-                log_event_ids=event_ids,
+                log_event_ids=event_ids_subq,
             )
             if isinstance(condition, Subquery):
                 query = query.filter(
@@ -4343,12 +4342,12 @@ def _get_all_filtered_log_event_ids(
             field_names=list(field_types.keys()),
         )
         if filter_dict:
-            event_ids = [x[0] for x in log_event_query.all()]
+            event_ids_subq = log_event_query.subquery(name="event_ids_subq")
             condition = build_sql_query(
                 filter_dict,
                 LogEvent,
                 session,
-                log_event_ids=event_ids,
+                log_event_ids=event_ids_subq,
             )
             if isinstance(condition, Subquery):
                 # Subquery => we check existence
