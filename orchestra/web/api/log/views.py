@@ -3437,8 +3437,27 @@ def get_logs_metric(
 ) -> Union[Dict[str, Any], float, int, bool, str, None]:
     """
     Returns the reduction metric for filtered values (base + derived) for one or more keys from a project.
-    If a single key is provided, returns the metric value directly (for backward compatibility).
-    If multiple keys are provided, returns a dict of {key: metric result}.
+
+    This endpoint supports three modes of operation:
+
+    1. Single key, no grouping: Returns a single metric value
+       Example: GET /logs/metric/mean?key=score
+       Response: 4.56
+
+    2. Multiple keys, no grouping: Returns a dict mapping keys to metric values
+       Example: GET /logs/metric/mean?key=["score","length"]
+       Response: {"score": 4.56, "length": 120}
+
+    3. With grouping: Returns metrics grouped by one or more fields
+       Example: GET /logs/metric/mean with body {"key": "score", "group_by": "model"}
+       Response: {"gpt-4": 4.56, "gpt-3.5": 3.78}
+
+       For nested grouping, provide a list of fields:
+       Example: GET /logs/metric/mean with body {"key": "score", "group_by": ["model", "temperature"]}
+       Response: {"gpt-4": {"0.7": 4.56, "0.9": 4.23}, "gpt-3.5": {"0.7": 3.78, "0.9": 3.45}}
+
+    The group_by parameter can be a string for single-level grouping or a list of strings for
+    nested grouping. Each group_by field can be prefixed with "params/" to indicate it's a parameter.
     """
     # Handle old usage if request body is not provided
     if request is None:
@@ -3447,14 +3466,15 @@ def get_logs_metric(
         from_ids = request_fastapi.query_params.get("from_ids")
         exclude_ids = request_fastapi.query_params.get("exclude_ids")
         context = request_fastapi.query_params.get("context")
+        group_by = request_fastapi.query_params.get("group_by")
 
+        if group_by and group_by.startswith("["):
+            group_by = json.loads(group_by)
         if key_param is None:
             raise HTTPException(status_code=400, detail="Missing 'key' parameter.")
 
         # Parse JSON array syntax for 'key' or treat as single key
         if key_param.startswith("["):
-            import json
-
             parsed_keys = json.loads(key_param)
             request = GetLogsMetricRequest(
                 key=parsed_keys,
@@ -3462,6 +3482,7 @@ def get_logs_metric(
                 from_ids=from_ids,
                 exclude_ids=exclude_ids,
                 context=context,
+                group_by=group_by,
                 metrics=None,
             )
         else:
@@ -3472,6 +3493,7 @@ def get_logs_metric(
                 from_ids=from_ids,
                 exclude_ids=exclude_ids,
                 context=context,
+                group_by=group_by,
                 metrics=None,
             )
 
@@ -3505,64 +3527,77 @@ def get_logs_metric(
         all_keys = request.key
         single_key = False
 
-    # Compute metrics for each key
-    results = {}
-    for k in all_keys:
-        # Get metric for this key or use default
-        per_key_metric = default_metric
-        if request.metrics and k in request.metrics:
-            per_key_metric = request.metrics[k]
+    # Check if group_by is provided
+    if hasattr(request, "group_by") and request.group_by:
+        # Compute grouped metrics for each key
+        grouped_results = {}
 
-        # Handle key-specific filters
-        # Parse filter_expr if it's a JSON string
-        if request.filter_expr is not None and isinstance(request.filter_expr, str):
-            if request.filter_expr.strip().startswith("{"):
-                request.filter_expr = json.loads(request.filter_expr)
+        for k in all_keys:
+            # Get metric for this key or use default
+            per_key_metric = default_metric
+            if request.metrics and k in request.metrics:
+                per_key_metric = request.metrics[k]
 
-        key_filter_expr = (
-            request.filter_expr.get(k)
-            if isinstance(request.filter_expr, dict)
-            else request.filter_expr
-        )
+            # Resolve key-specific filters
+            (
+                key_filter_expr,
+                key_from_ids,
+                key_exclude_ids,
+            ) = _resolve_key_specific_filters(request, k)
 
-        # Parse from_ids if it's a JSON string
-        if request.from_ids is not None and isinstance(request.from_ids, str):
-            if request.from_ids.strip().startswith("{"):
-                request.from_ids = json.loads(request.from_ids)
+            # Compute the grouped metric
+            grouped_value = _compute_metric_for_key_grouped(
+                key=k,
+                metric=per_key_metric,
+                project_obj=project_obj,
+                context_id=context_id,
+                field_types=field_types,
+                group_by=request.group_by,
+                key_filter_expr=key_filter_expr,
+                key_from_ids=key_from_ids,
+                key_exclude_ids=key_exclude_ids,
+                session=session,
+            )
 
-        key_from_ids = (
-            request.from_ids.get(k)
-            if isinstance(request.from_ids, dict)
-            else request.from_ids
-        )
+            grouped_results[k] = grouped_value
 
-        # Parse exclude_ids if it's a JSON string
-        if request.exclude_ids is not None and isinstance(request.exclude_ids, str):
-            if request.exclude_ids.strip().startswith("{"):
-                request.exclude_ids = json.loads(request.exclude_ids)
+        # If there's only one key, return just its grouped results
+        if single_key:
+            return grouped_results[all_keys[0]]
 
-        key_exclude_ids = (
-            request.exclude_ids.get(k)
-            if isinstance(request.exclude_ids, dict)
-            else request.exclude_ids
-        )
+        return grouped_results
+    else:
+        # Original non-grouped behavior
+        results = {}
+        for k in all_keys:
+            # Get metric for this key or use default
+            per_key_metric = default_metric
+            if request.metrics and k in request.metrics:
+                per_key_metric = request.metrics[k]
 
-        # Compute the metric
-        value = compute_metric_for_key(
-            key=k,
-            metric=per_key_metric,
-            project_obj=project_obj,
-            context_id=context_id,
-            field_types=field_types,
-            key_filter_expr=key_filter_expr,
-            key_from_ids=key_from_ids,
-            key_exclude_ids=key_exclude_ids,
-            session=session,
-        )
-        results[k] = value
+            # Resolve key-specific filters
+            (
+                key_filter_expr,
+                key_from_ids,
+                key_exclude_ids,
+            ) = _resolve_key_specific_filters(request, k)
 
-    # Return single value or dictionary based on input type
-    return results[all_keys[0]] if single_key else results
+            # Compute the metric
+            value = compute_metric_for_key(
+                key=k,
+                metric=per_key_metric,
+                project_obj=project_obj,
+                context_id=context_id,
+                field_types=field_types,
+                key_filter_expr=key_filter_expr,
+                key_from_ids=key_from_ids,
+                key_exclude_ids=key_exclude_ids,
+                session=session,
+            )
+            results[k] = value
+
+        # Return single value or dictionary based on input type
+        return results[all_keys[0]] if single_key else results
 
 
 @router.get(
