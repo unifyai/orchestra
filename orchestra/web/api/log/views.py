@@ -2900,6 +2900,321 @@ def _postprocess_aggregator_value(
     return value
 
 
+def _compute_metric_for_key_grouped(
+    key: str,
+    metric: str,
+    project_obj,
+    context_id: Optional[int],
+    field_types,
+    group_by: Union[str, List[str]],
+    key_filter_expr: Optional[str] = None,
+    key_from_ids: Optional[str] = None,
+    key_exclude_ids: Optional[str] = None,
+    session=None,
+) -> Dict[str, Any]:
+    """
+    Compute a metric for a single key, grouped by another field.
+
+    Args:
+        key: The field key to compute the metric for
+        metric: The metric to compute (mean, sum, etc.)
+        project_obj: The project object
+        context_id: The context ID
+        field_types: Dict of field types
+        group_by: Field(s) to group by (string or list of strings)
+        key_filter_expr: Key-specific filter expression
+        key_from_ids: Key-specific from_ids
+        key_exclude_ids: Key-specific exclude_ids
+        session: Database session
+
+    Returns:
+        Dict mapping group values to computed metric values
+    """
+    # Handle single string or list of strings for group_by
+    if isinstance(group_by, str):
+        group_by_fields = [group_by]
+    else:
+        group_by_fields = group_by
+
+    # Parse group_by fields to determine if they're params
+    group_by_info = []
+    for field in group_by_fields:
+        parts = field.split("/", 1)
+        is_param = len(parts) > 1 and parts[0] == "params"
+        actual_field = parts[-1]  # Last part is the actual field name
+        group_by_info.append((actual_field, is_param))
+
+    # 1) Build initial query to find matching LogEvent IDs
+    query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
+
+    assert not (key_from_ids and key_exclude_ids), (
+        f"Only one of from_ids or exclude_ids can be set for key '{key}', "
+        f"but found values {key_from_ids} and {key_exclude_ids}."
+    )
+
+    if key_from_ids:
+        query = query.where(LogEvent.id.in_([int(i) for i in key_from_ids.split("&")]))
+    elif key_exclude_ids:
+        query = query.where(
+            LogEvent.id.notin_([int(i) for i in key_exclude_ids.split("&")]),
+        )
+
+    if key_filter_expr:
+        filter_dict = str_filter_exp_to_dict(
+            key_filter_expr,
+            field_names=list(field_types.keys()),
+        )
+        if filter_dict:
+            event_ids = [x[0] for x in query.all()]
+            condition = build_sql_query(
+                filter_dict,
+                LogEvent,
+                session,
+                log_event_ids=event_ids,
+            )
+            if isinstance(condition, Subquery):
+                query = query.filter(
+                    exists(
+                        select(1)
+                        .select_from(condition)
+                        .where(
+                            and_(
+                                condition.c.log_event_id == LogEvent.id,
+                                condition.c.value.is_(True),
+                            ),
+                        ),
+                    ),
+                )
+            else:
+                query = query.filter(condition)
+
+    # Subquery of filtered LogEvents
+    filtered_events_subq = query.subquery()
+
+    # 2) Build subquery for the aggregator key (both base and derived logs)
+    agg_log_q = (
+        session.query(
+            Log.log_event_id.label("log_event_id"),
+            Log.value.label("value"),
+            Log.inferred_type.label("inferred_type"),
+        )
+        .filter(Log.key == key)
+        .join(LogEvent, Log.log_event_id == LogEvent.id)
+        .filter(LogEvent.project_id == project_obj.id)
+    )
+
+    agg_derived_q = (
+        session.query(
+            DerivedLog.log_event_id.label("log_event_id"),
+            DerivedLog.value.label("value"),
+            DerivedLog.inferred_type.label("inferred_type"),
+        )
+        .filter(DerivedLog.key == key)
+        .join(LogEvent, DerivedLog.log_event_id == LogEvent.id)
+        .filter(LogEvent.project_id == project_obj.id)
+    )
+
+    # Union them for the aggregator key
+    agg_logs_subq = agg_log_q.union_all(agg_derived_q).subquery("agg_logs")
+
+    # 3) For each group_by field, build a subquery
+    group_subqueries = []
+
+    for idx, (group_field, is_param) in enumerate(group_by_info):
+        if is_param:
+            # For parameters, use only base logs with version
+            group_q = (
+                session.query(
+                    Log.log_event_id.label("log_event_id"),
+                    Log.version.label("value"),
+                    literal("int").label("inferred_type"),
+                )
+                .filter(Log.key == group_field)
+                .join(LogEvent, Log.log_event_id == LogEvent.id)
+                .filter(LogEvent.project_id == project_obj.id)
+            )
+            group_subq = group_q.subquery(f"group_{idx}")
+        else:
+            # For non-parameters, union base logs and derived logs
+            group_log_q = (
+                session.query(
+                    Log.log_event_id.label("log_event_id"),
+                    Log.value.label("value"),
+                    Log.inferred_type.label("inferred_type"),
+                )
+                .filter(Log.key == group_field)
+                .join(LogEvent, Log.log_event_id == LogEvent.id)
+                .filter(LogEvent.project_id == project_obj.id)
+            )
+
+            group_derived_q = (
+                session.query(
+                    DerivedLog.log_event_id.label("log_event_id"),
+                    DerivedLog.value.label("value"),
+                    DerivedLog.inferred_type.label("inferred_type"),
+                )
+                .filter(DerivedLog.key == group_field)
+                .join(LogEvent, DerivedLog.log_event_id == LogEvent.id)
+                .filter(LogEvent.project_id == project_obj.id)
+            )
+
+            group_subq = group_log_q.union_all(group_derived_q).subquery(f"group_{idx}")
+
+        group_subqueries.append((group_field, group_subq))
+
+    # 4) Build the reduction methods dictionary
+    reduction_methods = {
+        "count": func.count,
+        "sum": func.sum,
+        "mean": func.avg,
+        "var": func.var_pop,
+        "std": func.stddev_pop,
+        "min": func.min,
+        "max": func.max,
+        "median": func.percentile_cont(0.5).within_group,
+        "mode": func.mode().within_group,
+    }
+
+    # 5) Start building the query with the aggregator key
+    X = aliased(agg_logs_subq)
+
+    # Cast expression for the aggregator value
+    cast_expr = case(
+        (
+            X.c.inferred_type == "list",
+            func.jsonb_array_length(cast(X.c.value, JSONB)).cast(Float),
+        ),
+        (
+            X.c.inferred_type == "dict",
+            select(func.count())
+            .select_from(func.jsonb_object_keys(cast(X.c.value, JSONB)))
+            .scalar_subquery()
+            .cast(Float),
+        ),
+        (
+            X.c.inferred_type == "bool",
+            X.c.value.cast(BOOLEAN).cast(INTEGER).cast(Float),
+        ),
+        (
+            X.c.inferred_type == "str",
+            func.length(cast(X.c.value, JSONB)[0].astext).cast(Float),
+        ),
+        (
+            X.c.inferred_type == "timestamp",
+            func.extract("epoch", cast(cast(X.c.value, String), TIMESTAMP)).cast(Float),
+        ),
+        (X.c.inferred_type == "float", X.c.value.cast(Float)),
+        (X.c.inferred_type == "int", X.c.value.cast(Float)),
+        else_=literal(0, type_=Float),
+    ).label("value_as_float")
+
+    # Add group columns
+    group_columns = []
+    group_subqueries_aliases = []
+    for idx, (group_field, group_subq) in enumerate(group_subqueries):
+        G = aliased(group_subq, name=f"group_{idx}")
+        group_subqueries_aliases.append(G)
+
+        # Cast expression for the group value
+        group_cast_expr = case(
+            (G.c.value.is_(None), literal("null")),
+            (
+                G.c.inferred_type == "timestamp",
+                func.to_char(
+                    cast(cast(G.c.value, String), TIMESTAMP),
+                    "YYYY-MM-DD HH24:MI:SS",
+                ),
+            ),
+            (
+                or_(
+                    G.c.inferred_type == "dict",
+                    G.c.inferred_type == "list",
+                ),
+                cast(G.c.value, String),
+            ),
+            else_=cast(G.c.value, String),
+        ).label(f"group_{idx}_val")
+
+        # Add to query
+        group_columns.append(group_cast_expr)
+
+    # 6 i) build the base query with the aggregator key
+    query = session.query(
+        # group columns
+        *[group_cast_expr for group_cast_expr in group_columns],
+        # aggregator
+        reduction_methods[metric](cast_expr).label("agg_value"),
+    ).select_from(
+        X,
+    )  # anchor to aggregator subquery X
+
+    # ii) outerjoin with each group subquery
+    for G in group_subqueries_aliases:
+        query = query.outerjoin(
+            G,
+            and_(
+                G.c.log_event_id == X.c.log_event_id,
+                X.c.log_event_id.in_(select(filtered_events_subq.c.id)),
+            ),
+        )
+    # iii) filter by the filtered events
+    query = query.filter(
+        X.c.log_event_id.in_(select(filtered_events_subq.c.id)),
+    )
+
+    # iv) GROUPBY all group columns
+    query = query.group_by(*group_columns)
+
+    # 7) Execute the query and build the result dictionary
+    rows = query.all()
+
+    # Get the field type for post-processing
+    field_type = field_types.get(key)
+
+    # Build the result dictionary
+    result = {}
+
+    # For single-level grouping
+    if len(group_by_fields) == 1:
+        for row in rows:
+            group_val = row[0]  # First column is the group value
+            agg_value = row[-1]  # Last column is the aggregated value
+
+            # Post-process the aggregated value
+            processed_value = _postprocess_aggregator_value(
+                agg_value,
+                metric,
+                field_type,
+            )
+
+            # Add to result
+            result[group_val] = processed_value
+    else:
+        # For multi-level grouping, build a nested dictionary
+        for row in rows:
+            # Get all group values except the last one
+            current_dict = result
+            for i in range(len(group_by_fields) - 1):
+                group_val = row[i]
+                if group_val not in current_dict:
+                    current_dict[group_val] = {}
+                current_dict = current_dict[group_val]
+
+            # Add the leaf value with the last group
+            last_group_val = row[len(group_by_fields) - 1]
+            agg_value = row[-1]
+
+            # Post-process the aggregated value
+            processed_value = _postprocess_aggregator_value(
+                agg_value,
+                metric,
+                field_type,
+            )
+
+            # Add to the nested dictionary
+            current_dict[last_group_val] = processed_value
+
+    return result
 
 
 def compute_metric_for_key(
