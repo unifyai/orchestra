@@ -3115,33 +3115,16 @@ def _compute_metric_for_key_grouped(
         G = aliased(group_subq, name=f"group_{idx}")
         group_subqueries_aliases.append(G)
 
-        # Cast expression for the group value
-        group_cast_expr = case(
-            (G.c.value.is_(None), literal("null")),
-            (
-                G.c.inferred_type == "timestamp",
-                func.to_char(
-                    cast(cast(G.c.value, String), TIMESTAMP),
-                    "YYYY-MM-DD HH24:MI:SS",
-                ),
-            ),
-            (
-                or_(
-                    G.c.inferred_type == "dict",
-                    G.c.inferred_type == "list",
-                ),
-                cast(G.c.value, String),
-            ),
-            else_=cast(G.c.value, String),
-        ).label(f"group_{idx}_val")
+        # Use the original value without casting
+        group_expr = G.c.value.label(f"group_{idx}_val")
 
         # Add to query
-        group_columns.append(group_cast_expr)
+        group_columns.append(group_expr)
 
     # 6 i) build the base query with the aggregator key
     query = session.query(
         # group columns
-        *[group_cast_expr for group_cast_expr in group_columns],
+        *group_columns,
         # aggregator
         reduction_methods[metric](cast_expr).label("agg_value"),
     ).select_from(
@@ -3188,7 +3171,7 @@ def _compute_metric_for_key_grouped(
             )
 
             # Add to result
-            result[group_val] = processed_value
+            result[str(group_val)] = processed_value
     else:
         # For multi-level grouping, build a nested dictionary
         for row in rows:
@@ -3197,8 +3180,8 @@ def _compute_metric_for_key_grouped(
             for i in range(len(group_by_fields) - 1):
                 group_val = row[i]
                 if group_val not in current_dict:
-                    current_dict[group_val] = {}
-                current_dict = current_dict[group_val]
+                    current_dict[str(group_val)] = {}
+                current_dict = current_dict[str(group_val)]
 
             # Add the leaf value with the last group
             last_group_val = row[len(group_by_fields) - 1]
@@ -3212,7 +3195,7 @@ def _compute_metric_for_key_grouped(
             )
 
             # Add to the nested dictionary
-            current_dict[last_group_val] = processed_value
+            current_dict[str(last_group_val)] = processed_value
 
     return result
 
