@@ -547,7 +547,6 @@ def prepare_resolved_ids(
     5) Return a dict of shape: { alias -> sorted_list_of_ids }
     """
     placeholders = _extract_placeholders(equation)
-
     # Step 1: Group placeholders by alias
     # e.g. "Table:gender" => alias="Table", subfield="gender"
     #      "Table:nationality" => alias="Table", subfield="nationality"
@@ -785,6 +784,7 @@ def create_derived_entry(
                     return obj.strftime("%H:%M:%S.%f")
                 return super().default(obj)
 
+        new_derived_logs = []
         # Iterate over the computed values and resolved IDs
         for i, (_, value) in enumerate(computed_values):
             # Create a dictionary for the current set of referenced logs
@@ -798,16 +798,22 @@ def create_derived_entry(
             for log_event_id in involved_log_ids:
                 val = json.loads(json.dumps(value, cls=DecimalEncoder))
                 inferred_type = LogDAO.infer_type("", val)
-                new_derived_id = derived_log_dao.create(
-                    log_event_id=log_event_id,
-                    key=body.key,
-                    equation=body.equation,
-                    referenced_logs=current_referenced_logs,
-                    value=val,
-                    inferred_type=inferred_type,
+                new_derived_logs.append(
+                    DerivedLog(
+                        log_event_id=log_event_id,
+                        key=body.key,
+                        equation=body.equation,
+                        referenced_logs=current_referenced_logs,
+                        value=val,
+                        inferred_type=inferred_type,
+                        created_at=datetime.now(timezone.utc),
+                        updated_at=datetime.now(timezone.utc),
+                    ),
                 )
-                created_derived_ids.append(new_derived_id)
 
+        # Bulk insert all new derived logs in one go
+        session.bulk_save_objects(new_derived_logs)
+        session.commit()
         # Create or update field type record for derived entry
         field_type_dao.create_field_type_if_absent(
             project_id=project_obj.id,
@@ -822,6 +828,7 @@ def create_derived_entry(
             status_code=500,
             detail=f"Failed to create derived logs with key='{body.key}'. Error: {e}",
         )
+    created_derived_ids = [log.id for log in new_derived_logs]
     return {
         "info": f"Created {len(created_derived_ids)} derived logs with key='{body.key}'.",
         "derived_log_ids": created_derived_ids,
