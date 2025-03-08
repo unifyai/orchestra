@@ -5,7 +5,9 @@ Includes endpoints related to entries.
 
 import json
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from datetime import time as dt_time
+from datetime import timedelta, timezone
 from decimal import Decimal
 from enum import Enum
 from json import JSONDecodeError
@@ -779,6 +781,8 @@ def create_derived_entry(
             def default(self, obj):
                 if isinstance(obj, Decimal):
                     return float(obj)
+                elif isinstance(obj, dt_time):
+                    return obj.strftime("%H:%M:%S.%f")
                 return super().default(obj)
 
         # Iterate over the computed values and resolved IDs
