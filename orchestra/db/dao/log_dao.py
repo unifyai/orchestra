@@ -30,6 +30,44 @@ class ImmutableFieldError(Exception):
     pass
 
 
+def _is_time_string(value: str) -> bool:
+    """
+    Check if a string can be parsed as a time in various formats including:
+    - HH:MM:SS[.ffffff]
+    - HH:MM
+    - H:MM AM/PM
+    - HH:MM:SS AM/PM
+
+    Args:
+        value (str): The string to check
+
+    Returns:
+        bool: True if the string can be parsed as a time, False otherwise
+    """
+    try:
+        # Try to parse the string as a time
+        if isinstance(value, str):
+            # Remove quotes if present
+            clean_value = value.strip("\"'")
+            # Try different time formats
+            for fmt in (
+                "%H:%M:%S",  # 24-hour with seconds: 14:30:45
+                "%H:%M:%S.%f",  # 24-hour with seconds and microseconds: 14:30:45.123
+                "%H:%M",  # 24-hour without seconds: 14:30
+                "%I:%M %p",  # 12-hour without seconds: 2:30 PM
+                "%I:%M:%S %p",  # 12-hour with seconds: 02:30:45 PM
+                "%I:%M:%S.%f %p",  # 12-hour with seconds and microseconds: 02:30:45.123 PM
+            ):
+                try:
+                    datetime.strptime(clean_value, fmt)
+                    return True
+                except ValueError:
+                    continue
+        return False
+    except Exception:
+        return False
+
+
 # noinspection PyBroadException
 class LogDAO:
     def __init__(
@@ -262,29 +300,23 @@ class LogDAO:
                 datetime.fromisoformat(raw_v)
                 return "timestamp"
             except:
-                try:
-                    datetime.strptime(raw_v, "%H:%M:%S")
+                if _is_time_string(raw_v):
                     return "time"
-                except ValueError:
-                    try:
-                        datetime.strptime(raw_v, "%H:%M")
-                        return "time"
-                    except ValueError:
-                        if not maybe_img:
-                            return "str"
-                        binary = raw_v.encode("utf-8")
-                        try:
-                            assert base64.b64encode(base64.b64decode(binary)) == binary
-                            return "image"
-                        except:
-                            lower = raw_v.lower()
-                            if lower.startswith("http") and (
-                                lower.endswith(".png")
-                                or lower.endswith(".jpg")
-                                or lower.endswith(".jpeg")
-                            ):
-                                return "image"
-                            return "str"
+                if not maybe_img:
+                    return "str"
+                binary = raw_v.encode("utf-8")
+                try:
+                    assert base64.b64encode(base64.b64decode(binary)) == binary
+                    return "image"
+                except:
+                    lower = raw_v.lower()
+                    if lower.startswith("http") and (
+                        lower.endswith(".png")
+                        or lower.endswith(".jpg")
+                        or lower.endswith(".jpeg")
+                    ):
+                        return "image"
+                    return "str"
         return type(raw_v).__name__
 
     def create_from_raw_k_v(
