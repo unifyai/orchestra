@@ -15,6 +15,8 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
+    Time,
     and_,
     case,
     cast,
@@ -43,6 +45,7 @@ STR_TO_SQL_TYPES = {
     "float": Float,
     "str": String,
     "timestamp": DateTime,
+    "time": Time,
     "dict": JSONB,
     "list": JSONB,
 }
@@ -200,7 +203,7 @@ def _tokenize(s):
         ("ROUND_TIMESTAMP", r"(?<!\w)round_timestamp(?!\w)"),
         (
             "FUNC",
-            r"(?<!\w)(?:len|exists|version|str(?=\()|to_str|isNone)(?!\w)",
+            r"(?<!\w)(?:len|exists|version|str(?=\()|to_str|isNone|time)(?!\w)",
         ),
         ("BASEFUNC", r"(?<!\w)BASE(?!\w)"),
         # 5) Operators. Note we catch 'not in', 'is not' first:
@@ -553,6 +556,7 @@ def _select_value(subq, session, is_collection=False):
             "bool": subq.c.bool_value,
             "str": subq.c.str_value,
             "timestamp": subq.c.timestamp_value,
+            "time": subq.c.time_value,
             "list": subq.c.jsonb_value,
             "dict": subq.c.jsonb_value,
             "NoneType": subq.c.int_value,
@@ -577,6 +581,7 @@ def unify_inferred_types(t1: str, t2: str) -> str:
         "float",
         "str",
         "timestamp",
+        "time",
         "list",
         "dict",
         "tuple",
@@ -625,6 +630,8 @@ def cast_expr(expr, from_type: str, to_type: str):
         return cast(expr, Integer)
     elif final_type == "bool":
         return cast(expr, Boolean)
+    elif final_type == "time":
+        return cast(expr, Time)
     else:
         # If neither side is recognized or is "NoneType", just return expr uncasted
         return expr
@@ -669,6 +676,7 @@ def _build_subquery_for_identifier(
                 log_event_alias.id.label("log_event_id"),
                 literal(None).label("jsonb_value"),
                 literal(None).label("timestamp_value"),
+                literal(None).label("time_value"),
                 literal(None).label("str_value"),
                 log_event_alias.id.label("int_value"),
                 literal(None).label("float_value"),
@@ -690,6 +698,7 @@ def _build_subquery_for_identifier(
                     (True, cast(getattr(log_event_alias, key), TIMESTAMP)),
                     else_=None,
                 ).label("timestamp_value"),
+                literal(None).label("time_value"),
                 literal(None).label("str_value"),
                 literal(None).label("int_value"),
                 literal(None).label("float_value"),
@@ -713,6 +722,10 @@ def _build_subquery_for_identifier(
             (log_alias.inferred_type == "timestamp", cast(log_alias.value, JSONB)),
             else_=None,
         ).label("timestamp_value"),
+        case(
+            (log_alias.inferred_type == "time", cast(log_alias.value, JSONB)),
+            else_=None,
+        ).label("time_value"),
         case(
             (log_alias.inferred_type == "str", cast(log_alias.value, String)),
             (log_alias.inferred_type == "image", cast(log_alias.value, String)),
@@ -757,6 +770,13 @@ def _build_subquery_for_identifier(
             ),
             else_=None,
         ).label("timestamp_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "time",
+                cast(derived_log_alias.value, JSONB),
+            ),
+            else_=None,
+        ).label("time_value"),
         case(
             (
                 derived_log_alias.inferred_type == "str",
@@ -1394,9 +1414,48 @@ def _parse_rhs_list_or_dict_if_needed(rhs_dict, rhs_val):
 
 
 # Helper function for functions (len, to_str, type, round, round_timestamp, exists, version, isNone)
+def _is_time_string(value: str) -> bool:
+    """
+    Check if a string can be parsed as a time in various formats including:
+    - HH:MM:SS[.ffffff]
+    - HH:MM
+    - H:MM AM/PM
+    - HH:MM:SS AM/PM
+
+    Args:
+        value (str): The string to check
+
+    Returns:
+        bool: True if the string can be parsed as a time, False otherwise
+    """
+    try:
+        # Try to parse the string as a time
+        if isinstance(value, str):
+            # Remove quotes if present
+            clean_value = value.strip("\"'")
+            # Try different time formats
+            for fmt in (
+                "%H:%M:%S",  # 24-hour with seconds: 14:30:45
+                "%H:%M:%S.%f",  # 24-hour with seconds and microseconds: 14:30:45.123
+                "%H:%M",  # 24-hour without seconds: 14:30
+                "%I:%M %p",  # 12-hour without seconds: 2:30 PM
+                "%I:%M:%S %p",  # 12-hour with seconds: 02:30:45 PM
+                "%I:%M:%S.%f %p",  # 12-hour with seconds and microseconds: 02:30:45.123 PM
+            ):
+                try:
+                    datetime.strptime(clean_value, fmt)
+                    return True
+                except ValueError:
+                    continue
+        return False
+    except Exception:
+        return False
+
+
 def _handle_functions(filter_dict, log_event_alias, session, log_event_ids):
     """
-    Handles function-based operations ('len', 'to_str', 'type', 'round', 'round_timestamp', 'exists', 'version', 'isNone') in the filter dictionary.
+    Handles function-based operations ('len', 'to_str', 'type', 'round', 'round_timestamp',
+    'exists', 'version', 'isNone', 'time') in the filter dictionary.
 
     Args:
         filter_dict (dict): The filter dictionary containing the function and its arguments.
@@ -1800,6 +1859,76 @@ def _handle_functions(filter_dict, log_event_alias, session, log_event_ids):
         else:
             # For non-subquery cases, simply return the boolean expression
             return rhs_expr.is_(None)
+
+    elif operand == "time":
+        # Handle the time function: extract time component from a datetime or parse a time string
+        if isinstance(rhs_expr, Subquery):
+            val, val_type = _select_value(rhs_expr, session)
+
+            # Create a CASE expression to handle different input types
+            expr = case(
+                (
+                    val_type == "timestamp",
+                    func.cast(
+                        func.date_trunc("second", cast(cast(val, Text), DateTime)),
+                        Time,
+                    ),
+                ),
+                (val_type == "str", func.cast(cast(val, Text), Time)),
+                (val_type == "time", func.cast(cast(val, Text), Time)),
+                else_=None,
+            )
+
+            return (
+                select(
+                    rhs_expr.c.log_event_id.label("log_event_id"),
+                    expr.label("value"),
+                    literal("time").label("inferred_type"),
+                )
+                .select_from(rhs_expr)
+                .subquery()
+            )
+        else:
+            # Handle literal values
+            if isinstance(rhs_expr, BindParameter):
+                val = rhs_expr.value
+                if isinstance(val, datetime):
+                    # Extract time from datetime
+                    return literal(val.time().isoformat(), type_=Time)
+                elif isinstance(val, str) and _is_time_string(val):
+                    # Parse time string - handle 12-hour format
+                    clean_val = val.strip("\"'")
+                    try:
+                        # Try 12-hour format first
+                        if " PM" in clean_val or " AM" in clean_val:
+                            # Try different 12-hour formats
+                            for fmt in ("%I:%M %p", "%I:%M:%S %p", "%I:%M:%S.%f %p"):
+                                try:
+                                    dt = datetime.strptime(clean_val, fmt)
+                                    return literal(dt.time().isoformat(), type_=Time)
+                                except ValueError:
+                                    continue
+
+                        # Try 24-hour formats
+                        for fmt in ("%H:%M:%S", "%H:%M:%S.%f", "%H:%M"):
+                            try:
+                                dt = datetime.strptime(clean_val, fmt)
+                                return literal(dt.time().isoformat(), type_=Time)
+                            except ValueError:
+                                continue
+
+                        # If we can't parse it, just pass it as is
+                        return literal(clean_val, type_=Time)
+                    except Exception:
+                        # If all parsing fails, just pass the string as is
+                        return literal(clean_val, type_=Time)
+                else:
+                    raise ValueError(
+                        f"Cannot convert {val} to time. Expected datetime or time string.",
+                    )
+            else:
+                # Try to cast the expression to Time
+                return cast(rhs_expr, Time)
     else:
         raise ValueError(f"Unknown function operand: {operand}")
 
@@ -2041,7 +2170,7 @@ def build_sql_query(filter_dict, log_event_alias, session, log_event_ids):
             log_event_ids,
         )
 
-    # Handle functions (len, to_str, type, round, round_timestamp, exists, version, isNone)
+    # Handle functions (len, to_str, type, round, round_timestamp, exists, version, isNone, time)
     elif operand in (
         "len",
         "to_str",
@@ -2052,6 +2181,7 @@ def build_sql_query(filter_dict, log_event_alias, session, log_event_ids):
         "version",
         "BASE",
         "isNone",
+        "time",
     ):
         return _handle_functions(filter_dict, log_event_alias, session, log_event_ids)
 
