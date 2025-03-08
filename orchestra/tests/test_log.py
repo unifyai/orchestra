@@ -1763,6 +1763,21 @@ def test_parser_nested_indexing():
     assert ast == expected_ast
 
 
+def _extract_time(x):
+    # Try 24-hour formats first, then 12-hour formats.
+    for fmt in ("%H:%M:%S", "%H:%M", "%I:%M %p", "%I:%M:%S %p", "%I:%M:%S.%f %p"):
+        try:
+            return datetime.strptime(x, fmt).time().isoformat()
+        except Exception:
+            continue
+    # If x is a datetime string (ISO format), try to convert it directly.
+    try:
+        dt = datetime.fromisoformat(x)
+        return dt.time().isoformat()
+    except Exception:
+        raise ValueError(f"Cannot parse time from {x}")
+
+
 @pytest.mark.parametrize(
     "expression, values",
     [
@@ -1891,6 +1906,14 @@ def test_parser_nested_indexing():
         ("not isNone(field2)", {"field2": "non-null"}),
         ("isNone(field3)", {"field3": None}),
         ("not isNone(field4)", {"field4": 0}),
+        # 1. datetime object.
+        ("time(a) == '14:30:00'", {"a": datetime(2023, 5, 4, 14, 30, 0).isoformat()}),
+        # 2. 24-hour formatted time string.
+        ("time(a) == '14:30:00'", {"a": "14:30:00"}),
+        # 3. 12-hour formatted time string.
+        ("time(a) == '14:30:00'", {"a": "2:30 PM"}),
+        # 4.the time does not match.
+        ("time(a) != '14:30:00'", {"a": "15:00:00"}),
     ],
 )
 async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, values):
@@ -1933,6 +1956,13 @@ async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, v
         expected = eval(eval_expression.split("isNone(")[-1].split(")")[0]) is not None
     elif "isNone" in eval_expression:
         expected = eval(eval_expression.split("isNone(")[-1].split(")")[0]) is None
+    elif "time(" in eval_expression:
+        # Handle time() function evaluation
+        time_arg = eval_expression.split("time(")[-1].split(")")[0].strip()
+        time_str = _extract_time(eval(time_arg))
+        # Replace the time() function call with the actual time string
+        eval_expression = eval_expression.replace(f"time({time_arg})", f"'{time_str}'")
+        expected = eval(eval_expression)
     elif "round_timestamp" in eval_expression:
         ts_expr, sec_expr = (
             eval_expression.split("round_timestamp(")[-1].split(")")[0].split(",")
