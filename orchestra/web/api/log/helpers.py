@@ -31,7 +31,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.selectable import Subquery
 
-from orchestra.db.dao.log_dao import LogDAO
+from orchestra.db.dao.log_dao import LogDAO, _is_time_string
 from orchestra.db.models.orchestra_models import (
     DerivedLog,
     JSONLog,
@@ -1414,44 +1414,6 @@ def _parse_rhs_list_or_dict_if_needed(rhs_dict, rhs_val):
 
 
 # Helper function for functions (len, to_str, type, round, round_timestamp, exists, version, isNone)
-def _is_time_string(value: str) -> bool:
-    """
-    Check if a string can be parsed as a time in various formats including:
-    - HH:MM:SS[.ffffff]
-    - HH:MM
-    - H:MM AM/PM
-    - HH:MM:SS AM/PM
-
-    Args:
-        value (str): The string to check
-
-    Returns:
-        bool: True if the string can be parsed as a time, False otherwise
-    """
-    try:
-        # Try to parse the string as a time
-        if isinstance(value, str):
-            # Remove quotes if present
-            clean_value = value.strip("\"'")
-            # Try different time formats
-            for fmt in (
-                "%H:%M:%S",  # 24-hour with seconds: 14:30:45
-                "%H:%M:%S.%f",  # 24-hour with seconds and microseconds: 14:30:45.123
-                "%H:%M",  # 24-hour without seconds: 14:30
-                "%I:%M %p",  # 12-hour without seconds: 2:30 PM
-                "%I:%M:%S %p",  # 12-hour with seconds: 02:30:45 PM
-                "%I:%M:%S.%f %p",  # 12-hour with seconds and microseconds: 02:30:45.123 PM
-            ):
-                try:
-                    datetime.strptime(clean_value, fmt)
-                    return True
-                except ValueError:
-                    continue
-        return False
-    except Exception:
-        return False
-
-
 def _handle_functions(filter_dict, log_event_alias, session, log_event_ids):
     """
     Handles function-based operations ('len', 'to_str', 'type', 'round', 'round_timestamp',
