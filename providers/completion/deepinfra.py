@@ -138,4 +138,9 @@ supported_models = {
         "context_window": 32000,
         "cost": {"prompt": 0.13, "completion": 0.40},
     },
+    "qwen-qwq-32b": {
+        "endpoint": "deepinfra/Qwen/QwQ-32B",
+        "context_window": 128000,
+        "cost": {"prompt": 0.12, "completion": 0.18},
+    },
 }
