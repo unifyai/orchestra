@@ -1493,7 +1493,6 @@ def delete_logs(
         )
     context_id = context[0][0].id
 
-
     # Track if we need to update the versioned context
     context_obj = None
     context_updated = False
