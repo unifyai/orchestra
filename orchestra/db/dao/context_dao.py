@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
 
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,26 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
 )
 from orchestra.web.api.context.schema import ContextCreateRequest
+
+
+def delete_orphaned_log_events(session: Session) -> None:
+    # Using a Common Table Expression (CTE) for bulk deletion.
+    # This statement deletes log events that have no association rows in log_event_context.
+    session.execute(
+        text(
+            """
+        WITH orphaned AS (
+            SELECT le.id
+            FROM log_event le
+            LEFT JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.log_event_id IS NULL
+        )
+        DELETE FROM log_event
+        WHERE id IN (SELECT id FROM orphaned);
+        """,
+        ),
+    )
+    session.commit()
 
 
 class ContextDAO:
@@ -118,22 +138,14 @@ class ContextDAO:
         try:
             context = self.session.query(Context).filter_by(id=id).one()
             self.session.delete(context)
-            self.session.flush()
-            # Find orphaned LogEvents
-            orphaned_events = (
-                self.session.query(LogEvent)
-                .filter(~LogEvent.contexts.any())  # no associated contexts
-                .all()
-            )
-            # Delete the orphaned log events
-            for orphan in orphaned_events:
-                self.session.delete(orphan)
-
+            self.session.flush()  # Ensure the context deletion cascades.
+            # then remove all orphaned log events
+            delete_orphaned_log_events(self.session)
             self.session.commit()
         except Exception as e:
             print(e)
             self.session.rollback()
-            raise ValueError(f"Failed to delete context with id {id}")
+            raise ValueError(f"Failed to delete context with id {id}", e)
 
     def get_or_create(
         self,
