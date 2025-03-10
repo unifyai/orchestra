@@ -1448,8 +1448,6 @@ def delete_logs(
         example=True,
     ),
     log_event_dao: LogEventDAO = Depends(),
-    log_dao: LogDAO = Depends(),
-    derived_log_dao: DerivedLogDAO = Depends(),
     context_dao: ContextDAO = Depends(),
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
@@ -1475,7 +1473,7 @@ def delete_logs(
     ids_and_fields = _flatten_fields(body.ids_and_fields)
     deleted_fields = set()  # Track which fields were deleted for cascading deletion
 
-    # Get project info
+    # Validate project existence
     user_id = request_fastapi.state.user_id
     try:
         project_id = project_dao.filter(user_id=user_id, name=body.project)[0][0].id
@@ -1485,89 +1483,114 @@ def delete_logs(
             detail=f"Project '{body.project}' not found.",
         )
 
-    # Get context info if available
-    context_id = None
-    if body.context:
-        context = context_dao.filter(project_id=project_id, name=body.context)
-        if context:
-            context_id = context[0][0].id
-    else:
-        # use the default context
-        context = context_dao.filter(project_id=project_id, name="")
-        if context:
-            context_id = context[0][0].id
-
-    if not context_id:
+    # Validate context
+    context_name = body.context if body.context else ""
+    context = context_dao.filter(project_id=project_id, name=context_name)
+    if not context:
         raise HTTPException(
             status_code=404,
-            detail=f"Context '{body.context}' not found for project {body.project}.",
+            detail=f"Context '{context_name}' not found for project '{body.project}'.",
+        )
+    context_id = context[0][0].id
+
+
+    # Track if we need to update the versioned context
+    context_obj = None
+    context_updated = False
+    context_description = []
+
+    # Group 1: Global field deletions (log_id is None)
+    global_field_deletions = {k: v for k, v in ids_and_fields.items() if k is None}
+    for log_id, fields in global_field_deletions.items():
+        if len(fields) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete all logs without specifying fields.",
+            )
+
+        # Get all log events for this project
+        all_log_events_subq = select(
+            session.query(LogEvent.id)
+            .filter(LogEvent.project_id == project_id)
+            .subquery(name="all_log_events"),
         )
 
-    # Get all matching logs using the unified query mechanism
-    for log_id, fields in ids_and_fields.items():
-        # Special case: log_id is None means delete field from all logs
-        if log_id is None:
-            if len(fields) == 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Cannot delete all logs without specifying fields.",
-                )
+        # Add fields to the deleted_fields set
+        deleted_fields.update(fields)
 
-            # Get all log events for this project
-            all_log_events = (
-                session.query(LogEvent.id)
-                .filter(
-                    LogEvent.project_id == project_id,
-                )
-                .all()
+        # Bulk delete from base logs with a single query
+        if body.source_type in ("all", "base"):
+            # Use a single DELETE statement for all fields
+            deleted_count = (
+                session.query(Log)
+                .filter(Log.log_event_id.in_(all_log_events_subq), Log.key.in_(fields))
+                .delete(synchronize_session=False)
             )
-            all_log_ids = [event[0] for event in all_log_events]
-
-            if not all_log_ids:
-                continue  # No logs to process
-
-            # Add fields to the deleted_fields set
-            deleted_fields.update(fields)
-
-            # Process each field for all logs
-            for field in fields:
-                # Delete from base logs
-                if body.source_type in ("all", "base"):
-                    base_logs = log_dao.filter(
-                        project_id=project_id,
-                        key=field,
-                    )
-                    for log in base_logs:
-                        log_dao.delete(id=log[0].id)
-
-                # Delete from derived logs
-                if body.source_type in ("all", "derived"):
-                    for log_event_id in all_log_ids:
-                        derived_logs = derived_log_dao.filter(
-                            log_event_id=log_event_id,
-                            key=field,
-                        )
-                        for derived_log in derived_logs:
-                            derived_log_dao.delete(id=derived_log[0].id)
-
-            # Handle versioned contexts
-            if context_id:
-                context_obj = (
-                    context_dao.session.query(Context).filter_by(id=context_id).first()
+            if deleted_count > 0:
+                context_description.append(
+                    f"Deleted {len(fields)} fields from {deleted_count} base logs",
                 )
-                if context_obj and context_obj.is_versioned:
-                    context_dao.archive_context_state(
-                        context_obj,
-                        name="delete",
-                        description=f"Deleted field(s) {', '.join(fields)} from all logs",
-                    )
-                    context_obj.version += 1
-                    context_obj.updated_at = datetime.now(timezone.utc)
-                    context_dao.session.commit()
 
-            continue
+        # Bulk delete from derived logs with a single query
+        if body.source_type in ("all", "derived"):
+            # Use a single DELETE statement for all fields
+            deleted_count = (
+                session.query(DerivedLog)
+                .filter(
+                    DerivedLog.log_event_id.in_(all_log_events_subq),
+                    DerivedLog.key.in_(fields),
+                )
+                .delete(synchronize_session=False)
+            )
+            if deleted_count > 0:
+                context_description.append(
+                    f"Deleted {len(fields)} fields from {deleted_count} derived logs",
+                )
 
-        # Regular case: specific log_id
+        # Mark that we need to update the context
+        if context_description:
+            context_updated = True
+
+    # Group 2: Entire log event deletions (fields is empty)
+    entire_log_deletions = []
+    for log_id, fields in ids_and_fields.items():
+        if log_id is not None and len(fields) == 0:
+            # Verify if the log belongs to the user
+            try:
+                if log_event_dao.get_user_id(id=log_id) != user_id:
+                    raise IndexError
+                entire_log_deletions.append(log_id)
+            except IndexError:
+                not_found_logs.append(log_id)
+
+    if entire_log_deletions:
+        if body.source_type == "derived":
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete derived logs without specifying fields.",
+            )
+
+        # # Then delete the log events themselves
+        deleted_count = (
+            session.query(LogEvent)
+            .filter(LogEvent.id.in_(entire_log_deletions))
+            .delete(synchronize_session=False)
+        )
+        if deleted_count > 0:
+            context_description.append(f"Deleted {deleted_count} log events")
+            context_updated = True
+
+    # Group 3: Partial field deletions (specific fields for specific log events)
+    partial_deletions = {
+        k: v for k, v in ids_and_fields.items() if k is not None and len(v) > 0
+    }
+
+    # Collect all log_event_id, field pairs for bulk deletion
+    base_log_deletions = []
+    derived_log_deletions = []
+    potential_empty_logs = []
+
+    for log_id, fields in partial_deletions.items():
         # Verify if the log belongs to the user
         try:
             if log_event_dao.get_user_id(id=log_id) != user_id:
@@ -1576,100 +1599,122 @@ def delete_logs(
             not_found_logs.append(log_id)
             continue
 
-        if len(fields) == 0:
-            if body.source_type == "derived":
-                raise HTTPException(
-                    status_code=400,
-                    detail="Cannot delete derived logs without specifying fields.",
+        # Add to potential empty logs list for later checking
+        potential_empty_logs.append(log_id)
+
+        # Add fields to the deleted_fields set
+        deleted_fields.update(fields)
+
+        # Add all field/log_id combinations directly without querying
+        for field in fields:
+            if body.source_type in ("all", "base"):
+                base_log_deletions.append((log_id, field))
+            if body.source_type in ("all", "derived"):
+                derived_log_deletions.append((log_id, field))
+
+        # Mark that we need to update the context
+        context_updated = True
+        context_description.append(f"Deleted fields from log_event_id={log_id}")
+
+    # Perform bulk deletions for base logs
+    if base_log_deletions and body.source_type in ("all", "base"):
+        # Group by key for more efficient deletion
+        key_to_event_ids = defaultdict(list)
+        for event_id, key in base_log_deletions:
+            key_to_event_ids[key].append(event_id)
+
+        for key, event_ids in key_to_event_ids.items():
+            try:
+                deleted_count = (
+                    session.query(Log)
+                    .filter(
+                        Log.key == key,
+                        Log.log_event_id.in_(event_ids),
+                    )
+                    .delete(synchronize_session=False)
                 )
-            # Delete entire log event if no fields specified
-            log_event_dao.delete(log_id)
-            continue
-
-        # Use _get_logs_query to get all matching logs with their source types
-        try:
-            matching_logs, _, _ = _get_logs_query(
-                request_fastapi=request_fastapi,
-                project=body.project,
-                column_context=None,
-                context=body.context,
-                filter_expr=None,
-                sorting=None,
-                from_ids=str(log_id),
-                exclude_ids=None,
-                from_fields="&".join(fields),
-                exclude_fields=None,
-                limit=None,
-                offset=0,
-                project_dao=project_dao,
-                field_type_dao=field_type_dao,
-                context_dao=context_dao,
-                session=session,
-            )
-
-            if not matching_logs:
-                not_found_entries.append(log_id)
+            except:
+                not_found_entries.append((event_ids, key))
                 continue
 
-            # Process each matching log based on its source type
-            for row in matching_logs:
-                row_key = row[0]  # key
-                row_source_type = row[5]  # source_type
-                row_event_id = row[7]  # log_event_id
+            if deleted_count > 0:
+                context_description.append(
+                    f"Deleted field '{key}' from {deleted_count} base logs",
+                )
 
-                # Skip if source_type doesn't match filter
-                if body.source_type != "all":
-                    if body.source_type == "base" and row_source_type == "derived":
-                        continue
-                    if body.source_type == "derived" and row_source_type != "derived":
-                        continue
+    # Perform bulk deletions for derived logs
+    if derived_log_deletions and body.source_type in ("all", "derived"):
+        # Group by key for more efficient deletion
+        key_to_event_ids = defaultdict(list)
+        for event_id, key in derived_log_deletions:
+            key_to_event_ids[key].append(event_id)
 
-                # Delete the appropriate type of log
-                if row_source_type == "derived":
-                    derived_log = derived_log_dao.filter(
-                        log_event_id=row_event_id,
-                        key=row_key,
+        for key, event_ids in key_to_event_ids.items():
+            try:
+                deleted_count = (
+                    session.query(DerivedLog)
+                    .filter(
+                        DerivedLog.key == key,
+                        DerivedLog.log_event_id.in_(event_ids),
                     )
-                    if derived_log:
-                        derived_log_dao.delete(id=derived_log[0][0].id)
-                else:
-                    log = log_dao.filter(
-                        log_event_id=row_event_id,
-                        key=row_key,
-                    )
-                    if log:
-                        log_dao.delete(id=log[0][0].id)
+                    .delete(synchronize_session=False)
+                )
+            except:
+                not_found_entries.append((event_ids, key))
+                continue
 
-                # Handle versioned contexts
-                if context_id:
-                    context_obj = (
-                        context_dao.session.query(Context)
-                        .filter_by(id=context_id)
-                        .first()
-                    )
-                    if context_obj and context_obj.is_versioned:
-                        context_dao.archive_context_state(
-                            context_obj,
-                            name="delete",
-                            description=f"Deleted log entries for log_event_id={row_event_id}",
-                        )
-                        context_obj.version += 1
-                        context_obj.updated_at = datetime.now(timezone.utc)
-                        context_dao.session.commit()
+            if deleted_count > 0:
+                context_description.append(
+                    f"Deleted field '{key}' from {deleted_count} derived logs",
+                )
 
-            # Add fields to the deleted_fields set
-            deleted_fields.update(fields)
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error processing log {log_id}: {str(e)}",
+    # Delete empty log events if requested
+    if delete_empty_logs and potential_empty_logs:
+        # Get all log_event_ids that still have logs in a single query
+        still_used_base_ids = set(
+            row[0]
+            for row in session.query(Log.log_event_id)
+            .filter(Log.log_event_id.in_(potential_empty_logs))
+            .distinct()
+        )
+
+        still_used_derived_ids = set(
+            row[0]
+            for row in session.query(DerivedLog.log_event_id)
+            .filter(DerivedLog.log_event_id.in_(potential_empty_logs))
+            .distinct()
+        )
+
+        # Combine both sets
+        still_used_ids = still_used_base_ids.union(still_used_derived_ids)
+
+        # Find truly empty log events
+        empty_log_ids = set(potential_empty_logs) - still_used_ids
+
+        # Bulk delete empty log events
+        if empty_log_ids:
+            deleted_count = (
+                session.query(LogEvent)
+                .filter(LogEvent.id.in_(empty_log_ids))
+                .delete(synchronize_session=False)
             )
+            if deleted_count > 0:
+                context_description.append(f"Deleted {deleted_count} empty log events")
+                context_updated = True
 
-        # Delete empty log events if requested
-        if delete_empty_logs:
-            base_logs = log_dao.filter(log_event_id=log_id)
-            if not base_logs:
-                log_event_dao.delete(id=log_id)
+    # Handle versioned contexts - do this only once after all deletions
+    if context_updated and context_id:
+        context_obj = (
+            context_dao.session.query(Context).filter_by(id=context_id).first()
+        )
+        if context_obj and context_obj.is_versioned:
+            context_dao.archive_context_state(
+                context_obj,
+                name="delete",
+                description="; ".join(context_description),
+            )
+            context_obj.version += 1
+            context_obj.updated_at = datetime.now(timezone.utc)
 
     # Handle cases where some logs or entries were not found
     if not_found_logs:
@@ -1686,37 +1731,33 @@ def delete_logs(
 
     # Cascading deletion: check if any deleted fields no longer exist in any logs
     if deleted_fields:
-        for field in deleted_fields:
-            # Check if field still exists in any base logs
-            base_logs_exist = session.query(
-                exists().where(
-                    and_(
-                        Log.key == field,
-                        Log.log_event_id.in_(
-                            session.query(LogEvent.id).filter(
-                                LogEvent.project_id == project_id,
-                            ),
-                        ),
-                    ),
-                ),
-            ).scalar()
+        # Get all fields that still exist in any logs with two efficient queries
+        existing_base_fields = (
+            session.query(Log.key)
+            .join(LogEvent, LogEvent.id == Log.log_event_id)
+            .filter(LogEvent.project_id == project_id)
+            .distinct()
+            .all()
+        )
+        existing_derived_fields = (
+            session.query(DerivedLog.key)
+            .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
+            .filter(LogEvent.project_id == project_id)
+            .distinct()
+            .all()
+        )
 
-            # Check if field still exists in any derived logs
-            derived_logs_exist = session.query(
-                exists().where(
-                    and_(
-                        DerivedLog.key == field,
-                        DerivedLog.log_event_id.in_(
-                            session.query(LogEvent.id).filter(
-                                LogEvent.project_id == project_id,
-                            ),
-                        ),
-                    ),
-                ),
-            ).scalar()
+        # Combine all existing fields in one set operation
+        all_existing_fields = set(
+            [f[0] for f in existing_base_fields + existing_derived_fields],
+        )
 
-            # If field doesn't exist in any logs, delete the field type
-            if not base_logs_exist and not derived_logs_exist:
+        # Find fields that no longer exist with a set difference operation
+        fields_to_delete = deleted_fields - all_existing_fields
+
+        # Bulk delete field types that are no longer used
+        if fields_to_delete:
+            for field in fields_to_delete:
                 try:
                     field_type_dao.delete_field_type(
                         project_id=project_id,
