@@ -123,8 +123,8 @@ supported_models = {
         "context_window": 131072,
         "cost": {"prompt": 0.8, "completion": 0.8},
     },
-    "qwen-qwq-32b-preview": {
-        "endpoint": "together_ai/Qwen/QwQ-32B-Preview",
+    "qwen-qwq-32b": {
+        "endpoint": "together_ai/Qwen/QwQ-32B",
         "context_window": 32768,
         "cost": {"prompt": 1.2, "completion": 1.2},
     },

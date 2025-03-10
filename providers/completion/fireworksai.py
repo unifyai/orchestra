@@ -103,9 +103,9 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.9, "completion": 0.9},
     },
-    "qwen-qwq-32b-preview": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/qwen-qwq-32b-preview",
-        "context_window": 32768,
+    "qwen-qwq-32b": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/qwq-32b",
+        "context_window": 128000,
         "cost": {"prompt": 0.9, "completion": 0.9},
     },
     "qwen-2.5-72b-instruct": {

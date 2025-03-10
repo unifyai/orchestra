@@ -29,7 +29,7 @@ class XAI(BaseCompletionProvider):
 supported_models = {
     "grok-2-vision": {
         "endpoint": "xai/grok-2-vision-latest",
-        "context_window": 8192,
+        "context_window": 32768,
         "cost": {"prompt": 2, "completion": 10},
     },
     "grok-2": {
