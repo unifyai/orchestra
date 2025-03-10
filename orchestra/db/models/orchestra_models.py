@@ -512,7 +512,7 @@ class LogEventContext(Base):
 
     log_event_id = Column(
         Integer,
-        ForeignKey("log_event.id"),
+        ForeignKey("log_event.id", ondelete="CASCADE"),
         primary_key=True,
     )
     context_id = Column(
@@ -638,7 +638,6 @@ class LogEvent(Base):
         "Context",
         secondary="log_event_context",
         back_populates="log_events",
-        passive_deletes="all",
     )
     # Relationships
     derived_logs = relationship(
