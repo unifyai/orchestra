@@ -5,10 +5,8 @@ Includes endpoints related to log projects.
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 
 from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.db.dao.temp_interface_dao import TempInterfaceDAO
 from orchestra.web.api.project.schema import ProjectConfig
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -105,10 +103,6 @@ def delete_project(
         example="eval-project",
     ),
     project_dao: ProjectDAO = Depends(),
-    log_event_dao: LogEventDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
-    interface_dao: InterfaceDAO = Depends(),
-    temp_interface_dao: TempInterfaceDAO = Depends(),
 ):
     """
     Deletes a project from your account.
@@ -118,25 +112,9 @@ def delete_project(
         project = project_dao.filter(user_id=request_fastapi.state.user_id, name=name)[
             0
         ][0]
-
-        # Get all contexts for this project and delete them
-        # This will cascade delete log_event_context associations
-        contexts = context_dao.filter(project_id=project.id)
-        for context in contexts:
-            context_dao.delete(context[0].id)
-
-        # Now get and delete any remaining log events
-        # This will cascade delete logs and derived logs
-        log_events = log_event_dao.filter(project_id=project.id)
-        for event in log_events:
-            log_event_dao.delete(event[0].id)
-
-        # Finally delete the project
-        # This will cascade delete interfaces and temp_interfaces
         project_dao.delete(id=project.id)
 
     except (IndexError, ValueError) as e:
-        print(e)
         raise not_found(f"Project {name}")
 
     return {"info": "Project deleted successfully"}

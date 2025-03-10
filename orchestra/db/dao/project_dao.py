@@ -82,6 +82,6 @@ class ProjectDAO:
             project = self.session.query(Project).filter_by(id=id).one()
             self.session.delete(project)
             self.session.commit()
-        except:
+        except Exception as e:
             self.session.rollback()
-            raise ValueError
+            raise ValueError(f"Failed to delete project with id {id}", e)
