@@ -5144,6 +5144,285 @@ async def test_get_logs_metric_batched_with_grouping(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_logs_metric_shared_value_reduction(client: AsyncClient):
+    """
+    Test that the get_metrics endpoint correctly handles shared value reduction.
+
+    When all values for a given key within a group are identical, the endpoint
+    should return that shared value directly without performing any metric reduction.
+    """
+    project_name = "test-shared-value-reduction"
+    _ = await _create_project(client, project_name)
+
+    # Create logs with different groups
+    # Group A: Three logs with the same 'score' value (10)
+    group_a_logs = [
+        {
+            "group": "A",
+            "score": 10,
+            "text": "identical text for A",
+            "is_valid": True,
+            "config": {"mode": "test", "retry": 3},
+        },
+        {
+            "group": "A",
+            "score": 10,
+            "text": "identical text for A",
+            "is_valid": True,
+            "config": {"mode": "test", "retry": 3},
+        },
+        {
+            "group": "A",
+            "score": 10,
+            "text": "identical text for A",
+            "is_valid": True,
+            "config": {"mode": "test", "retry": 3},
+        },
+    ]
+
+    # Group B: Three logs with different 'score' values that average to 10
+    group_b_logs = [
+        {
+            "group": "B",
+            "score": 5,
+            "text": "identical text for B",
+            "is_valid": True,
+            "config": {"mode": "test", "retry": 3},
+        },
+        {
+            "group": "B",
+            "score": 10,
+            "text": "identical text for B",
+            "is_valid": True,
+            "config": {"mode": "test", "retry": 3},
+        },
+        {
+            "group": "B",
+            "score": 15,
+            "text": "identical text for B",
+            "is_valid": True,
+            "config": {"mode": "test", "retry": 3},
+        },
+    ]
+
+    # Group C: Three logs with the same 'text' value
+    group_c_logs = [
+        {
+            "group": "C",
+            "score": 20,
+            "text": "identical text",
+            "is_valid": True,
+            "config": {"mode": "test", "retry": 3},
+        },
+        {
+            "group": "C",
+            "score": 30,
+            "text": "identical text",
+            "is_valid": True,
+            "config": {"mode": "test", "retry": 3},
+        },
+        {
+            "group": "C",
+            "score": 40,
+            "text": "identical text",
+            "is_valid": True,
+            "config": {"mode": "test", "retry": 3},
+        },
+    ]
+
+    # Group D: Three logs with different 'text' values
+    group_d_logs = [
+        {
+            "group": "D",
+            "score": 50,
+            "text": "text 1",
+            "is_valid": True,
+            "config": {"mode": "test", "retry": 3},
+        },
+        {
+            "group": "D",
+            "score": 50,
+            "text": "text 2",
+            "is_valid": True,
+            "config": {"mode": "test", "retry": 3},
+        },
+        {
+            "group": "D",
+            "score": 50,
+            "text": "text 3",
+            "is_valid": True,
+            "config": {"mode": "test", "retry": 3},
+        },
+    ]
+
+    # Group E: Three logs with identical boolean value for 'is_valid'
+    group_e_logs = [
+        {
+            "group": "E",
+            "score": 60,
+            "text": "text for E1",
+            "is_valid": True,
+            "config": {"mode": "test", "retry": 3},
+        },
+        {
+            "group": "E",
+            "score": 70,
+            "text": "text for E2",
+            "is_valid": True,
+            "config": {"mode": "test", "retry": 3},
+        },
+        {
+            "group": "E",
+            "score": 80,
+            "text": "text for E3",
+            "is_valid": True,
+            "config": {"mode": "test", "retry": 3},
+        },
+    ]
+
+    # Group F: Three logs with identical object value for 'config'
+    group_f_logs = [
+        {
+            "group": "F",
+            "score": 90,
+            "text": "text for F1",
+            "is_valid": True,
+            "config": {"mode": "test", "retry": 3},
+        },
+        {
+            "group": "F",
+            "score": 100,
+            "text": "text for F2",
+            "is_valid": False,
+            "config": {"mode": "test", "retry": 3},
+        },
+        {
+            "group": "F",
+            "score": 110,
+            "text": "text for F3",
+            "is_valid": True,
+            "config": {"mode": "test", "retry": 3},
+        },
+    ]
+
+    # Create all logs
+    all_logs = (
+        group_a_logs
+        + group_b_logs
+        + group_c_logs
+        + group_d_logs
+        + group_e_logs
+        + group_f_logs
+    )
+    for entry in all_logs:
+        response = await _create_log(client, project_name, entries=entry)
+        assert response.status_code == 200, response.json()
+
+    # Test 1: Numeric field with shared values (Group A) vs. different values (Group B)
+    response = await client.get(
+        f"/v0/logs/metric/mean?project={project_name}",
+        params={
+            "key": "score",
+            "group_by": "entries/group",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    # Verify structure: should be a dictionary with group values as keys
+    assert isinstance(result, dict), "Grouped result should be a dictionary"
+
+    # For Group A, all scores are 10, so the result should be exactly 10 (shared value)
+    assert result["A"] == 10, "Group A should return the shared value 10 directly"
+
+    # For Group B, scores are 5, 10, 15, so the mean is 10
+    assert np.isclose(
+        result["B"],
+        10.0,
+        atol=1e-6,
+    ), "Group B should compute the mean as 10.0"
+
+    # Test 2: String field with shared values (Group C) vs. different values (Group D)
+    response = await client.get(
+        f"/v0/logs/metric/mean?project={project_name}",
+        params={
+            "key": "text",
+            "group_by": "entries/group",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    # For Group C, all texts are "identical text", so the result should be that exact string
+    assert (
+        result["C"] == "identical text"
+    ), "Group C should return the shared text value directly"
+
+    # For Group D, texts are different, so the result should be numeric
+    assert isinstance(result["D"], float), "Group D should return a numeric value"
+
+    # Test 3: Boolean field with shared values (Group E)
+    response = await client.get(
+        f"/v0/logs/metric/mean?project={project_name}",
+        params={
+            "key": "is_valid",
+            "group_by": "entries/group",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    # For Group E, all is_valid values are True, so the result should be True
+    assert (
+        result["E"] is True
+    ), "Group E should return the shared boolean value True directly"
+
+    # For Group F, is_valid values are mixed (True, False, True), so no shared value
+    assert (
+        result["F"] is not True
+    ), "Group F should not return True for mixed boolean values"
+
+    # Test 4: Object field with shared values (Group F)
+    response = await client.get(
+        f"/v0/logs/metric/mean?project={project_name}",
+        params={
+            "key": "config",
+            "group_by": "entries/group",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    # For Group F, all config objects are identical, so the result should be that object
+    expected_config = {"mode": "test", "retry": 3}
+    assert (
+        result["F"] == expected_config
+    ), "Group F should return the shared config object directly"
+
+    # Test 5: Verify shared value reduction works for all metrics on Group A's score
+    for metric in ["sum", "min", "max", "median"]:
+        response = await client.get(
+            f"/v0/logs/metric/{metric}?project={project_name}",
+            params={
+                "key": "score",
+                "group_by": "entries/group",
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+        result = response.json()
+
+        # For Group A, all scores are 10, so all metrics should return 10
+        assert (
+            result["A"] == 10
+        ), f"Group A should return the shared value 10 directly for metric {metric}"
+
+
+@pytest.mark.anyio
 async def test_get_logs_nested_dict_ordering(client: AsyncClient):
     """Test that nested dictionary key ordering is preserved at multiple levels."""
     project_name = "nested-dict-order-test"
