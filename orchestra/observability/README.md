@@ -6,6 +6,8 @@ This document provides instructions for setting up, accessing, and effectively u
 
 - [Architecture Overview](#architecture-overview)
 - [Getting Started](#getting-started)
+  - [Local Development](#local-development)
+  - [Production Environment](#production-environment)
 - [Accessing Grafana Dashboards](#accessing-grafana-dashboards)
 - [Correlating Metrics, Logs, and Traces](#correlating-metrics-logs-and-traces)
 - [Example Investigation Workflow](#example-investigation-workflow)
@@ -25,12 +27,14 @@ These components work together to provide a unified view of the system's behavio
 
 ## Getting Started
 
-### Prerequisites
+### Local Development
+
+#### Prerequisites
 
 - Docker and Docker Compose installed on your system
 - Orchestra codebase checked out
 
-### Starting the Observability Stack
+#### Starting the Observability Stack
 
 1. Navigate to the Orchestra project root directory:
 
@@ -54,7 +58,24 @@ docker-compose -f docker-compose.observability.yml ps
 
 All services should show as "Up" in the status column.
 
+### Production Environment
+
+In production, we have a dedicated GCP Compute Engine VM running the observability stack with the following components:
+
+- **Prometheus**: Collects metrics from production and staging environments
+- **Loki**: Aggregates logs from all services
+- **Tempo**: Stores distributed traces with OTLP receivers
+- **Grafana**: Provides dashboards and visualizations
+
+The production observability stack is accessible at:
+
+- **Grafana**: https://grafana.saas.unify.ai
+  - Authentication: Google OAuth (requires @unify.ai email)
+  - Admin access can be granted through the Grafana UI
+
 ## Accessing Grafana Dashboards
+
+### Local Environment
 
 1. Open your web browser and navigate to:
 
@@ -68,11 +89,25 @@ http://localhost:3000
 
 3. You'll be prompted to change the password on first login.
 
-4. Access the Orchestra dashboards from the Dashboards menu:
-   - **Orchestra Overview**: High-level system metrics
-   - **Service Performance**: Detailed service-level metrics
-   - **Request Tracing**: Distributed tracing visualization
-   - **Log Explorer**: Centralized log viewing and analysis
+### Production Environment
+
+1. Open your web browser and navigate to:
+
+```
+https://grafana.saas.unify.ai
+```
+
+2. Click "Sign in with Google" and use your @unify.ai email address.
+
+3. If you need admin access, contact an existing admin to grant you the appropriate permissions.
+
+### Available Dashboards
+
+Access the Orchestra dashboards from the Dashboards menu:
+- **Orchestra Overview**: High-level system metrics
+- **Service Performance**: Detailed service-level metrics
+- **Request Tracing**: Distributed tracing visualization
+- **Log Explorer**: Centralized log viewing and analysis
 
 ## Correlating Metrics, Logs, and Traces
 
@@ -146,6 +181,12 @@ Here's a typical workflow for investigating a performance issue:
 
 - Verify data source connections in Grafana: Settings → Data Sources
 - Check for any error messages in the Grafana logs: `docker-compose -f docker-compose.observability.yml logs grafana`
+
+#### Production Access Issues
+
+- Ensure you're using your @unify.ai email address for Google OAuth
+- If you can't access specific dashboards, contact an admin to check your permissions
+- For SSL certificate issues, verify that your browser trusts the certificate
 
 ## Additional Resources
 

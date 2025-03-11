@@ -14,7 +14,7 @@ This repo includes the code for orchestra, the server in charge of the model hub
 - [Running orchestra](#running-orchestra)
 - TODO: Tests (unit, integration, load testing, manual)
 - TODO: Adding model, providers, and model endpoints
-- TODO: [Telemetry](./Telemetry.md)
+- [Observability](./orchestra/observability/README.md): Monitoring, logging, and tracing setup.
 - [Google Cloud](./GCP.md): GCP services being used.
 - [CI/CD](./.github/workflows/README.md)
 - [Pub/Sub](./PubSub.md): How to set up and interact with Pub/Sub message queues.
@@ -30,12 +30,12 @@ orchestra
 ├── tests  # Tests for project.
 ├── db  # module contains db configurations
 │   ├── migrations  # Files related to alembic migrations.
-│   ├── dao  # Data Access Objects. Contains different classes to interact with database.
-│   └── models  # Package contains different models for ORMs.
+│   ├── dao  # Data Access Objects. Contains different classes to interact with database.
+│   └── models  # Package contains different models for ORMs.
 └── web  # Package contains web server. Handlers, startup config.
     ├── api  # Package with all handlers.
-    │   └── dependencies.py  # Contains utilities and helpers for v0/router.
-    │   └── router.py  # Main router.
+    │   └── dependencies.py  # Contains utilities and helpers for v0/router.
+    │   └── router.py  # Main router.
     ├── application.py  # FastAPI application configuration.
     └── lifetime.py  # Contains actions to perform on startup and shutdown.
 ```
@@ -147,9 +147,34 @@ To run orchestra in debug mode (in VSCode / Codespaces), your `launch.json` file
 
 Once the service is running, you can send requests to http://127.0.0.1:8000/v0
 
------------------------
+## Observability
 
-TODO: Clean below
+Orchestra uses a comprehensive observability stack for monitoring, logging, and tracing.
+
+### Local Development Setup
+
+For local development, you can run the observability stack using Docker Compose:
+
+```bash
+docker-compose -f docker-compose.observability.yml up -d
+```
+
+This will start Prometheus, Loki, Tempo, and Grafana containers locally. You can access Grafana at http://localhost:3000.
+
+### Production Setup
+
+In production, we have a dedicated monitoring infrastructure with:
+
+- **Grafana Dashboard**: https://grafana.saas.unify.ai
+  - Secured with Google OAuth authentication
+  - Only accessible to users with @unify.ai email addresses
+
+- **Monitoring Components**:
+  - Prometheus for metrics collection
+  - Loki for log aggregation
+  - Tempo for distributed tracing
+
+For more details on how to use the observability stack, refer to the [Observability README](./orchestra/observability/README.md).
 
 ## Configuration
 
