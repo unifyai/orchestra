@@ -7,7 +7,7 @@ from typing import Any, Dict, Generator
 
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
@@ -258,54 +258,238 @@ def after_cursor_execute(conn, cursor, statement, parameters, context, executema
             log_extras["query_text"] = statement
             log_extras["query_params"] = str(parameters)
 
-            # For slow queries, try to detect locks
-            try:
-                # Check for locks in pg_stat_activity
-                lock_check_query = """
-                SELECT count(*) as lock_count
-                FROM pg_stat_activity
-                WHERE wait_event_type = 'Lock'
-                """
-                lock_result = conn.execute(lock_check_query)
-                lock_count = lock_result.scalar() or 0
-
-                if lock_count > 0:
-                    log_extras["locks_detected"] = True
-                    log_extras["locks_count"] = lock_count
-
-                    # Get more details about locks if they exist
-                    lock_details_query = """
-                    SELECT blocked_statement, blocking_statement,
-                           blocked_duration
-                    FROM pg_stat_activity a
-                    JOIN pg_locks blocked_locks ON a.pid = blocked_locks.pid
-                    JOIN pg_locks blocking_locks ON blocked_locks.transactionid = blocking_locks.transactionid
-                        AND blocked_locks.pid != blocking_locks.pid
-                    JOIN pg_stat_activity blocking_activity ON blocking_activity.pid = blocking_locks.pid
-                    WHERE NOT blocked_locks.granted
-                    LIMIT 5
-                    """
-                    try:
-                        lock_details = conn.execute(lock_details_query)
-                        lock_info = [dict(row) for row in lock_details]
-                        if lock_info:
-                            log_extras["lock_details"] = lock_info
-                    except Exception as e:
-                        log_extras["lock_details_error"] = str(e)
-            except Exception as e:
-                log_extras["lock_check_error"] = str(e)
-
-            # For very slow queries (>500ms), capture EXPLAIN plan
+            # For very slow queries (>500ms), capture detailed performance information
             if duration > 0.5 and query_type == "select":
                 try:
-                    explain_query = (
-                        f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {statement}"
-                    )
-                    explain_cursor = conn.execute(explain_query, parameters)
-                    explain_plan = explain_cursor.scalar()
-                    log_extras["explain_plan"] = explain_plan
+                    # 1. Log the original query and parameters (sanitized)
+                    log_extras["query_text"] = statement
+                    # Sanitize parameters to avoid sensitive data in logs
+                    if parameters:
+                        if isinstance(parameters, (list, tuple)):
+                            # For positional parameters, just log the count
+                            log_extras["param_count"] = len(parameters)
+                        elif isinstance(parameters, dict):
+                            # For named parameters, log the keys
+                            log_extras["param_keys"] = list(parameters.keys())
+
+                    # 2. Get table statistics
+                    if table != "unknown":
+                        try:
+                            # Use text() for proper parameter binding
+                            stats_query = text(
+                                "SELECT * FROM pg_stat_user_tables WHERE relname = :table_name",
+                            )
+                            stats_result = conn.execute(
+                                stats_query,
+                                {"table_name": table},
+                            )
+                            stats_row = stats_result.fetchone()
+                            if stats_row:
+                                # Convert row to dict
+                                table_stats = dict(zip(stats_result.keys(), stats_row))
+                                log_extras["table_stats"] = {
+                                    "total_rows": table_stats.get("n_live_tup", 0),
+                                    "dead_rows": table_stats.get("n_dead_tup", 0),
+                                    "sequential_scans": table_stats.get("seq_scan", 0),
+                                    "index_scans": table_stats.get("idx_scan", 0),
+                                    "sequential_rows_read": table_stats.get(
+                                        "seq_tup_read",
+                                        0,
+                                    ),
+                                    "index_rows_fetched": table_stats.get(
+                                        "idx_tup_fetch",
+                                        0,
+                                    ),
+                                    "inserts": table_stats.get("n_tup_ins", 0),
+                                    "updates": table_stats.get("n_tup_upd", 0),
+                                    "deletes": table_stats.get("n_tup_del", 0),
+                                    "last_vacuum": table_stats.get("last_vacuum"),
+                                    "last_analyze": table_stats.get("last_analyze"),
+                                }
+                        except Exception as stats_error:
+                            print(f"Error getting table stats: {stats_error}")
+                            log_extras["table_stats_error"] = str(stats_error)
+
+                    # 3. Get index information
+                    if table != "unknown":
+                        try:
+                            # Use text() for proper parameter binding
+                            index_query = text(
+                                """
+                            SELECT
+                                i.relname as index_name,
+                                a.attname as column_name,
+                                ix.indisunique as is_unique,
+                                ix.indisprimary as is_primary
+                            FROM
+                                pg_class t,
+                                pg_class i,
+                                pg_index ix,
+                                pg_attribute a
+                            WHERE
+                                t.oid = ix.indrelid
+                                AND i.oid = ix.indexrelid
+                                AND a.attrelid = t.oid
+                                AND a.attnum = ANY(ix.indkey)
+                                AND t.relkind = 'r'
+                                AND t.relname = :table_name
+                            ORDER BY
+                                t.relname,
+                                i.relname;
+                            """,
+                            )
+                            index_result = conn.execute(
+                                index_query,
+                                {"table_name": table},
+                            )
+                            indexes = []
+                            for row in index_result:
+                                indexes.append(
+                                    {
+                                        "index_name": row[0],
+                                        "column_name": row[1],
+                                        "is_unique": row[2],
+                                        "is_primary": row[3],
+                                    },
+                                )
+                            log_extras["table_indexes"] = indexes
+                        except Exception as index_error:
+                            print(f"Error getting index info: {index_error}")
+                            log_extras["index_info_error"] = str(index_error)
+
+                    # 4. Check for missing indexes based on query pattern
+                    try:
+                        # Extract WHERE conditions to suggest potential indexes
+                        where_pattern = re.search(
+                            r"WHERE\s+(.+?)(?:ORDER BY|GROUP BY|LIMIT|$)",
+                            statement,
+                            re.IGNORECASE | re.DOTALL,
+                        )
+                        if where_pattern:
+                            where_clause = where_pattern.group(1).strip()
+                            # Extract column names from WHERE clause
+                            column_pattern = re.findall(
+                                r"([a-zA-Z0-9_\.]+)\s*(?:=|>|<|LIKE|IN)",
+                                where_clause,
+                                re.IGNORECASE,
+                            )
+                            potential_index_columns = []
+                            for col in column_pattern:
+                                if "." in col:
+                                    # Handle table.column format
+                                    potential_index_columns.append(col.split(".")[1])
+                                else:
+                                    potential_index_columns.append(col)
+
+                            if potential_index_columns:
+                                log_extras[
+                                    "potential_index_columns"
+                                ] = potential_index_columns
+                    except Exception as pattern_error:
+                        log_extras["pattern_analysis_error"] = str(pattern_error)
+
+                    # 5. Check for table bloat (tables that need VACUUM)
+                    try:
+                        # Use text() for proper parameter binding
+                        bloat_query = text(
+                            """
+                        SELECT
+                            current_database(), schemaname, tablename,
+                            ROUND(CASE WHEN otta=0 THEN 0.0 ELSE sml.relpages/otta::numeric END,1) AS bloat_ratio,
+                            CASE WHEN relpages < otta THEN 0 ELSE relpages::bigint - otta::bigint END AS bloat_pages
+                        FROM (
+                            SELECT
+                                schemaname, tablename, cc.reltuples, cc.relpages, bs,
+                                CEIL((cc.reltuples*((datahdr+ma-
+                                    (CASE WHEN datahdr%ma=0 THEN ma ELSE datahdr%ma END))+nullhdr2+4))/(bs-20::float)) AS otta
+                            FROM (
+                                SELECT
+                                    ma,bs,schemaname,tablename,
+                                    (datawidth+(hdr+ma-(case when hdr%ma=0 THEN ma ELSE hdr%ma END)))::numeric AS datahdr,
+                                    (maxfracsum*(nullhdr+ma-(case when nullhdr%ma=0 THEN ma ELSE nullhdr%ma END))) AS nullhdr2
+                                FROM (
+                                    SELECT
+                                        schemaname, tablename, hdr, ma, bs,
+                                        SUM((1-null_frac)*avg_width) AS datawidth,
+                                        MAX(null_frac) AS maxfracsum,
+                                        hdr+(
+                                            SELECT 1+count(*)/8
+                                            FROM pg_stats s2
+                                            WHERE null_frac<>0 AND s2.schemaname = s.schemaname AND s2.tablename = s.tablename
+                                        ) AS nullhdr
+                                    FROM pg_stats s, (
+                                        SELECT
+                                            (SELECT current_setting('block_size')::numeric) AS bs,
+                                            CASE WHEN substring(v,12,3) IN ('8.0','8.1','8.2') THEN 27 ELSE 23 END AS hdr,
+                                            CASE WHEN v ~ 'mingw32' THEN 8 ELSE 4 END AS ma
+                                        FROM (SELECT version() AS v) AS foo
+                                    ) AS constants
+                                    GROUP BY 1,2,3,4,5
+                                ) AS foo
+                            ) AS foo
+                            JOIN pg_class cc ON cc.relname = tablename
+                            JOIN pg_namespace nn ON cc.relnamespace = nn.oid AND nn.nspname = schemaname
+                            WHERE schemaname = 'public'
+                        ) AS sml
+                        WHERE sml.tablename = :table_name
+                        """,
+                        )
+                        try:
+                            bloat_result = conn.execute(
+                                bloat_query,
+                                {"table_name": table},
+                            )
+                            bloat_row = bloat_result.fetchone()
+                            if bloat_row:
+                                log_extras["table_bloat"] = {
+                                    "bloat_ratio": bloat_row[3],
+                                    "bloat_pages": bloat_row[4],
+                                }
+                        except Exception as e:
+                            # This query might fail on some PostgreSQL versions, so we'll silently ignore errors
+                            pass
+                    except Exception as bloat_error:
+                        log_extras["bloat_analysis_error"] = str(bloat_error)
+
+                    # 6. Performance recommendations based on collected data
+                    recommendations = []
+
+                    # Check if we're doing sequential scans on large tables
+                    if (
+                        log_extras.get("table_stats", {}).get("sequential_scans", 0) > 0
+                        and log_extras.get("table_stats", {}).get("total_rows", 0)
+                        > 1000
+                    ):
+                        recommendations.append(
+                            "Consider adding indexes to avoid sequential scans on large tables",
+                        )
+
+                    # Check for high bloat ratio
+                    if log_extras.get("table_bloat", {}).get("bloat_ratio", 0) > 3:
+                        recommendations.append(
+                            f"Table has high bloat ratio ({log_extras['table_bloat']['bloat_ratio']}). Consider running VACUUM FULL",
+                        )
+
+                    # Check for potential missing indexes
+                    if (
+                        "potential_index_columns" in log_extras
+                        and "table_indexes" in log_extras
+                    ):
+                        indexed_columns = set()
+                        for idx in log_extras["table_indexes"]:
+                            indexed_columns.add(idx["column_name"])
+
+                        for col in log_extras["potential_index_columns"]:
+                            if col not in indexed_columns:
+                                recommendations.append(
+                                    f"Consider adding index on column '{col}'",
+                                )
+
+                    if recommendations:
+                        log_extras["performance_recommendations"] = recommendations
+
                 except Exception as e:
-                    log_extras["explain_error"] = str(e)
+                    log_extras["analysis_error"] = str(e)
 
         if is_slow_query:
             structured_logger.warning(
