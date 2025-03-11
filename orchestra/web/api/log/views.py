@@ -2950,6 +2950,31 @@ def _postprocess_aggregator_value(
     return value
 
 
+def _reduce_shared_value(values: List[Any]) -> Optional[Any]:
+    """
+    Check if all values in the list are identical, and if so, return that value.
+    Otherwise, return None.
+
+    Args:
+        values: List of values to check
+
+    Returns:
+        The shared value if all values are identical, otherwise None
+    """
+    if not values:
+        return None
+
+    # Convert all values to their string representation for comparison
+    # This handles complex types like dicts and lists
+    first_value = values[0]
+
+    # Check if all values are identical to the first value
+    if all(v == first_value for v in values):
+        return first_value
+
+    return None
+
+
 def _compute_metric_for_key_grouped(
     key: str,
     metric: str,
@@ -3158,6 +3183,9 @@ def _compute_metric_for_key_grouped(
         else_=literal(0, type_=Float),
     ).label("value_as_float")
 
+    # Also include the raw value for shared value reduction
+    raw_value_expr = X.c.value.label("raw_value")
+
     # Add group columns
     group_columns = []
     group_subqueries_aliases = []
@@ -3177,6 +3205,8 @@ def _compute_metric_for_key_grouped(
         *group_columns,
         # aggregator
         reduction_methods[metric](cast_expr).label("agg_value"),
+        # Include raw values for shared value reduction
+        func.array_agg(raw_value_expr).label("raw_values"),
     ).select_from(
         X,
     )  # anchor to aggregator subquery X
@@ -3211,17 +3241,25 @@ def _compute_metric_for_key_grouped(
     if len(group_by_fields) == 1:
         for row in rows:
             group_val = row[0]  # First column is the group value
-            agg_value = row[-1]  # Last column is the aggregated value
+            agg_value = row[-2]  # Second-to-last column is the aggregated value
+            raw_values = row[-1]  # Last column is the array of raw values
 
-            # Post-process the aggregated value
-            processed_value = _postprocess_aggregator_value(
-                agg_value,
-                metric,
-                field_type,
-            )
+            # First check if all values are identical (shared value reduction)
+            shared_value = _reduce_shared_value(raw_values)
 
-            # Add to result
-            result[str(group_val)] = processed_value
+            if shared_value is not None:
+                # If we have a shared value, use it directly
+                result[str(group_val)] = shared_value
+            else:
+                # Otherwise, use the aggregated value
+                # Post-process the aggregated value
+                processed_value = _postprocess_aggregator_value(
+                    agg_value,
+                    metric,
+                    field_type,
+                )
+                # Add to result
+                result[str(group_val)] = processed_value
     else:
         # For multi-level grouping, build a nested dictionary
         for row in rows:
@@ -3235,17 +3273,25 @@ def _compute_metric_for_key_grouped(
 
             # Add the leaf value with the last group
             last_group_val = row[len(group_by_fields) - 1]
-            agg_value = row[-1]
+            agg_value = row[-2]  # Second-to-last column is the aggregated value
+            raw_values = row[-1]  # Last column is the array of raw values
 
-            # Post-process the aggregated value
-            processed_value = _postprocess_aggregator_value(
-                agg_value,
-                metric,
-                field_type,
-            )
+            # First check if all values are identical (shared value reduction)
+            shared_value = _reduce_shared_value(raw_values)
 
-            # Add to the nested dictionary
-            current_dict[str(last_group_val)] = processed_value
+            if shared_value is not None:
+                # If we have a shared value, use it directly
+                current_dict[str(last_group_val)] = shared_value
+            else:
+                # Otherwise, use the aggregated value
+                # Post-process the aggregated value
+                processed_value = _postprocess_aggregator_value(
+                    agg_value,
+                    metric,
+                    field_type,
+                )
+                # Add to the nested dictionary
+                current_dict[str(last_group_val)] = processed_value
 
     return result
 
