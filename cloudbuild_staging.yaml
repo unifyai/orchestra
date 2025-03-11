@@ -69,7 +69,7 @@ steps:
   - '--region=$_DEPLOY_REGION'
   - '--quiet'
   - >-
-    --set-env-vars=ORCHESTRA_TEMPO_URL=,ORCHESTRA_LOKI_URL=,ORCHESTRA_GRAFANA_URL=https://grafana.saas.unify.ai
+    --set-env-vars=ORCHESTRA_TEMPO_URL=http://10.132.0.51:4317,ORCHESTRA_LOKI_URL=http://10.132.0.51:3100,ORCHESTRA_GRAFANA_URL=https://grafana.saas.unify.ai
   id: Deploy Orchestra
   entrypoint: gcloud
   waitFor:
