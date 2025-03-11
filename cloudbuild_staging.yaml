@@ -68,6 +68,8 @@ steps:
     --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID,gcb-trigger-id=$_TRIGGER_ID
   - '--region=$_DEPLOY_REGION'
   - '--quiet'
+  - >-
+    --set-env-vars=ORCHESTRA_TEMPO_URL=http://34.22.232.112:4317,ORCHESTRA_LOKI_URL=http://34.22.232.112:3100,ORCHESTRA_GRAFANA_URL=https://grafana.saas.unify.ai
   id: Deploy Orchestra
   entrypoint: gcloud
   waitFor:
