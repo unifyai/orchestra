@@ -68,8 +68,7 @@ steps:
     --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID,gcb-trigger-id=$_TRIGGER_ID
   - '--region=$_DEPLOY_REGION'
   - '--quiet'
-  - >-
-    --update-env-vars=ORCHESTRA_HOST=0.0.0.0,ORCHESTRA_DB_HOST=10.14.160.14,ORCHESTRA_DB_PORT=5432,ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON=/secrets/application_default_credentials.json,ORCHESTRA_VERTEXAI_GCLOUD_PATH=/app/src/google-cloud-sdk/bin/gcloud,ORCHESTRA_VERTEXAI_PROJECT=saas-368716,ORCHESTRA_VERTEXAI_LOCATION=europe-west1,ORCHESTRA_CLOUD_DB_GATEWAY=https://cloud-db-staging-gateway-94jg94af.ew.gateway.dev,ORCHESTRA_CORS_ALLOW_ORIGINS='["http://localhost","http://localhost:3000","http://localhost:3001","http://localhost:3002","https://modelhub.staging.internal.saas.unify.ai","https://chat.modelhub.staging.internal.saas.unify.ai"]',OTEL_SERVICE_NAME=orchestra_staging,ORCHESTRA_OPENTELEMETRY_ENDPOINT=https://jaeger-lz5fmz6i7q-ew.a.run.app/v1/traces,ORCHESTRA_OPENTELEMETRY_SECURE=True,ORCHESTRA_VERTEXAI_ROUTER_ENDPOINT_ID=7393085398840246272,ORCHESTRA_BASE_URL=http://localhost:8000,EVAL_SERVER_URL=https://34.34.131.92,EVAL_SERVER_PASSWORD='46zSZ,M.7$$^pZO0jZY@NxX[b,3f4;y=%SRY',STAGING=True,ORCHESTRA_TEMPO_URL=http://10.132.0.51:4317,ORCHESTRA_LOKI_URL=http://10.132.0.51:3100,ORCHESTRA_GRAFANA_URL=https://grafana.saas.unify.ai
+  - >
   - '--vpc-connector=orchestra-connector'
   - '--vpc-egress=all-traffic'
   - '--timeout=300s'
