@@ -36,10 +36,10 @@ These components work together to provide a unified view of the system's behavio
 
 #### Starting the Observability Stack
 
-1. Navigate to the Orchestra project root directory:
+1. Navigate to the Orchestra observability directory:
 
 ```bash
-cd /path/to/orchestra
+cd /path/to/orchestra/orchestra/observability
 ```
 
 2. Start the observability stack using Docker Compose:
@@ -170,6 +170,7 @@ Here's a typical workflow for investigating a performance issue:
 - Verify all containers are running: `docker-compose -f docker-compose.observability.yml ps`
 - Check Prometheus targets: Navigate to `http://localhost:9090/targets`
 - Ensure Orchestra services have the correct Prometheus configuration
+- Verify that the configuration files in the `prometheus_data`, `loki`, `tempo`, and `grafana` directories are correctly set up
 
 #### Missing Correlation Between Data Sources
 
@@ -181,6 +182,7 @@ Here's a typical workflow for investigating a performance issue:
 
 - Verify data source connections in Grafana: Settings → Data Sources
 - Check for any error messages in the Grafana logs: `docker-compose -f docker-compose.observability.yml logs grafana`
+- Ensure that the Grafana configuration files in the `grafana` directory are properly set up
 
 #### Production Access Issues
 
