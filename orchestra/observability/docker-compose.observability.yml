@@ -1,8 +1,8 @@
 services:
   api:
     build:
-      context: .
-      dockerfile: ./Dockerfile
+      context: ../..
+      dockerfile: ./orchestra/observability/Dockerfile
       target: prod
     image: orchestra:${ORCHESTRA_VERSION:-latest}
     restart: always
