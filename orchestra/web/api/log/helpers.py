@@ -31,7 +31,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.selectable import Subquery
 
-from orchestra.db.dao.log_dao import LogDAO, _is_time_string
+from orchestra.db.dao.log_dao import LogDAO, _is_time_string, normalize_timestamp
 from orchestra.db.models.orchestra_models import (
     DerivedLog,
     JSONLog,
@@ -246,15 +246,18 @@ def _tokenize(s):
             )
             tokens.append(("NUMBER", value))
         elif kind == "STRING":
+            # Remove the surrounding quotes and unescape
+            unquoted_value = value[1:-1]
+            unquoted_value = bytes(unquoted_value, "utf-8").decode("unicode_escape")
+
             # check if is datetime
             try:
-                timestamp = datetime.fromisoformat(value).timestamp()
-                tokens.append(("NUMBER", timestamp))
+                # First try to normalize the timestamp if it's in a non-standard format
+                normalized_value = normalize_timestamp(unquoted_value)
+                tokens.append(("STRING", normalized_value))
             except:
-                # Remove the surrounding quotes and unescape
-                value = value[1:-1]
-                value = bytes(value, "utf-8").decode("unicode_escape")
-                tokens.append(("STRING", value))
+                # If it's not a valid timestamp, just use the unquoted value
+                tokens.append(("STRING", unquoted_value))
         elif kind == "BOOLEAN":
             value = True if value == "True" else False
             tokens.append(("BOOLEAN", value))
@@ -2167,7 +2170,10 @@ def build_sql_query(filter_dict, log_event_alias, session, log_event_ids):
 # noinspection PyBroadException
 def _is_timestamp(v: Any):
     try:
-        datetime.fromisoformat(v)
+        # First normalize the timestamp if it's in a non-standard format
+        normalized = normalize_timestamp(v)
+        # Then try to parse it
+        datetime.fromisoformat(normalized)
         return True
     except:
         return False
