@@ -4463,47 +4463,47 @@ async def test_get_logs_w_date_sorting(client: AsyncClient):
     assert len(result["logs"]) == 7
     assert result["logs"][0]["entries"] == {
         "_/_data": {"a": 8, "b": 10},
-        "_/timestamp": dates[-1],
+        "_/timestamp": datetime.fromisoformat(dates[-1]).isoformat(),
     }
     assert result["logs"][1]["entries"] == {
         "_/description": "air",
         "_/metadata": [3, 8, 5],
         "_/_data": {"a": 6, "b": 12, "c": 8, "d": 11},
-        "_/timestamp": dates[-2],
+        "_/timestamp": datetime.fromisoformat(dates[-2]).isoformat(),
     }
     assert result["logs"][2]["entries"] == {
         "_/description": "lava",
         "_/metadata": [1, 5, 6],
         "_/_data": {"a": 2, "b": 4},
-        "_/timestamp": dates[-3],
+        "_/timestamp": datetime.fromisoformat(dates[-3]).isoformat(),
     }
     assert result["logs"][3]["entries"] == {
         "_/description": "freezing nitrogen",
         "_/temperature": -210.0,
         "_/state": "liquid->solid",
         "_/safe": False,
-        "_/timestamp": dates[-4],
+        "_/timestamp": datetime.fromisoformat(dates[-4]).isoformat(),
     }
     assert result["logs"][4]["entries"] == {
         "_/description": "surface of the sun",
         "_/temperature": 6000.0,
         "_/state": "gas",
         "_/safe": False,
-        "_/timestamp": dates[-5],
+        "_/timestamp": datetime.fromisoformat(dates[-5]).isoformat(),
     }
     assert result["logs"][5]["entries"] == {
         "_/description": "freezing water",
         "_/temperature": 0.0,
         "_/state": "liquid->solid",
         "_/safe": True,
-        "_/timestamp": dates[-6],
+        "_/timestamp": datetime.fromisoformat(dates[-6]).isoformat(),
     }
     assert result["logs"][6]["entries"] == {
         "_/description": "boiling water",
         "_/temperature": 100.0,
         "_/state": "liquid->gas",
         "_/safe": False,
-        "_/timestamp": dates[-7],
+        "_/timestamp": datetime.fromisoformat(dates[-7]).isoformat(),
     }
 
 
@@ -7897,19 +7897,9 @@ async def test_sort_within_and_across_groups_together(client: AsyncClient):
                 f"Unexpected shape for grouping of student={st}: {grp_val}",
             )
 
-        # Extract timestamps in the order they appear
-        from datetime import datetime
-
-        def parse_ts(ts_str):
-            # parse "2025-01-02 10:00:00" for comparison
-            return datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-
         actual_ts_list = []
         for log_item in logs_list:
-            # the timestamp might be in log_item["entries"]["timestamp"]
-            # depends on how you stored it
-            ts_val = log_item["entries"]["timestamp"]
-            actual_ts_list.append(parse_ts(ts_val))
+            actual_ts_list.append(log_item["entries"]["timestamp"])
 
         # check ascending
         for i in range(len(actual_ts_list) - 1):
