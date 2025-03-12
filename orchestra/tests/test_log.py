@@ -4070,6 +4070,86 @@ async def test_get_logs_w_str_filtering(client: AsyncClient):
     assert len(result["logs"]) == 1
 
 
+@pytest.mark.parametrize(
+    "timestamp_format,filter_format,should_match",
+    [
+        # Test ISO format with T in both log and filter
+        ("2025-03-11T11:56:46.392", "2025-03-11T11:56:46.392", True),
+        # Test ISO format with T in log but space in filter
+        ("2025-03-11T11:56:46.392", "2025-03-11 11:56:46.392", True),
+        # Test space format in log but T in filter
+        ("2025-03-11 11:56:46.392", "2025-03-11T11:56:46.392", True),
+        # Test space format in both log and filter
+        ("2025-03-11 11:56:46.392", "2025-03-11 11:56:46.392", True),
+        # Test different timestamps that shouldn't match
+        ("2025-03-11T12:56:46.392", "2025-03-11T11:56:46.392", False),
+    ],
+)
+async def test_get_logs_w_timestamp_filtering(
+    client: AsyncClient,
+    timestamp_format,
+    filter_format,
+    should_match,
+):
+    """
+    Test that timestamp filtering works correctly with different timestamp formats.
+
+    This test verifies that the normalize_timestamp function correctly handles
+    timestamps with and without the 'T' separator in ISO 8601 format.
+    """
+    project_name = "test_timestamp_normalization"
+    _ = await _create_project(client, project_name, user=1)
+
+    # Create a log with a timestamp in the specified format
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "student/timestamp": timestamp_format,
+                "test_field": "test_value",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+
+    # Filter logs using the specified filter format
+    filter_expr = f'student/timestamp == "{filter_format}"'
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+
+    logs = response.json()["logs"]
+    if should_match:
+        assert (
+            len(logs) == 1
+        ), f"Expected 1 log for filter: {filter_expr}, got {len(logs)}"
+    else:
+        assert (
+            len(logs) == 0
+        ), f"Expected 0 logs for filter: {filter_expr}, got {len(logs)}"
+
+    # Also test greater-than comparison
+    filter_expr = f'student/timestamp > "{filter_format}"'
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+
+    # For greater-than, if the log timestamp equals the filter it should return 0 logs
+    expected_count = 0 if should_match else 1
+    logs = response.json()["logs"]
+    assert (
+        len(logs) == expected_count
+    ), f"Expected {expected_count} logs for filter: {filter_expr}, got {len(logs)}"
+
+
 @pytest.mark.anyio
 async def test_get_logs_w_sorting(client: AsyncClient):
     project_name = "eval-project"
