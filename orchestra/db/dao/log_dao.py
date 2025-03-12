@@ -68,6 +68,30 @@ def _is_time_string(value: str) -> bool:
         return False
 
 
+def normalize_timestamp(ts_str: str) -> str:
+    """
+    Attempts to parse the provided timestamp string and return an ISO formatted string.
+
+    This function tries to convert various timestamp formats to the ISO 8601 format
+    with the 'T' separator, which is the standard format used in the database.
+    """
+    try:
+        # First try direct ISO format; if it fails, try common alternative formats
+        dt = datetime.fromisoformat(ts_str)
+    except ValueError:
+        # Try alternative formats without 'T', e.g. '%Y-%m-%d %H:%M:%S.%f' or '%Y-%m-%d %H:%M:%S'
+        for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+            try:
+                dt = datetime.strptime(ts_str, fmt)
+                break
+            except ValueError:
+                continue
+        else:
+            # If no format matches, return the original string
+            return ts_str
+    return dt.isoformat()
+
+
 # noinspection PyBroadException
 class LogDAO:
     def __init__(
@@ -488,7 +512,8 @@ class LogDAO:
                     and not value.lower().startswith("http")
                 ):
                     value = self.upload_image_to_bucket(value)
-
+                if inferred_type == "timestamp" and isinstance(value, str):
+                    value = normalize_timestamp(value)
                 # Handle versioned history
                 if context_id is not None:
                     context = (
