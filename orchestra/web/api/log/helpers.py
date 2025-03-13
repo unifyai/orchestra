@@ -1,7 +1,7 @@
 import json
 import re
 import statistics
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Tuple, Union
 
 from fastapi import HTTPException
@@ -33,7 +33,13 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.selectable import Subquery
 
-from orchestra.db.dao.log_dao import LogDAO, _is_time_string, normalize_timestamp
+from orchestra.db.dao.log_dao import (
+    LogDAO,
+    _is_date_string,
+    _is_time_string,
+    _is_timedelta_string,
+    normalize_timestamp,
+)
 from orchestra.db.models.orchestra_models import (
     DerivedLog,
     JSONLog,
@@ -207,7 +213,7 @@ def _tokenize(s):
         ("ROUND_TIMESTAMP", r"(?<!\w)round_timestamp(?!\w)"),
         (
             "FUNC",
-            r"(?<!\w)(?:len|exists|version|str(?=\()|to_str|isNone|time)(?!\w)",
+            r"(?<!\w)(?:len|exists|version|str(?=\()|to_str|isNone|time|date|now)(?!\w)",
         ),
         ("BASEFUNC", r"(?<!\w)BASE(?!\w)"),
         # 5) Operators. Note we catch 'not in', 'is not' first:
@@ -414,7 +420,7 @@ class _Parser:
             self.advance()
             if self.current_token[0] == "LPAREN":
                 self.advance()
-                expr = self.expr()
+                expr = {} if fn == "now" else self.expr()
                 if self.current_token[0] == "RPAREN":
                     self.advance()
                 else:
@@ -1547,7 +1553,7 @@ def _handle_functions(filter_dict, log_event_alias, session, log_event_ids):
         SQLAlchemy condition or expression based on the provided function.
     """
     operand = filter_dict.get("operand")
-    if isinstance(filter_dict.get("rhs"), dict):
+    if isinstance(filter_dict.get("rhs"), dict) and filter_dict.get("rhs"):
         rhs_expr = build_sql_query(
             filter_dict.get("rhs"),
             log_event_alias,
@@ -2014,6 +2020,46 @@ def _handle_functions(filter_dict, log_event_alias, session, log_event_ids):
     elif operand == "date":
         # Handle the date function: extract date component from a datetime
         return _handle_date_function(rhs_expr, session)
+    elif operand == "now":
+        # Handle the now function: return current timestamp with timezone
+        # Create a subquery that returns the current timestamp for each log_event_id
+        if log_event_ids is None or log_event_ids == []:
+            # If no log_event_ids provided, return a literal timestamp
+            return literal(datetime.now(timezone.utc).isoformat(), type_=TIMESTAMP)
+
+        # Create a subquery with the current timestamp for each log_event_id
+        if isinstance(log_event_ids, list):
+            # For a list of IDs, create a subquery with those IDs
+            ids_subq = select(
+                literal(id).label("log_event_id") for id in log_event_ids
+            ).subquery()
+            now_subq = (
+                select(
+                    ids_subq.c.log_event_id.label("log_event_id"),
+                    func.timezone("UTC", func.now()).label(
+                        "value",
+                    ),  # Use timezone-aware timestamp
+                    literal("timestamp").label("inferred_type"),
+                )
+                .select_from(ids_subq)
+                .subquery()
+            )
+        else:
+            # For a subquery of IDs, use it directly
+            ids_subq = log_event_ids
+            # Return a subquery with current timestamp for each log_event_id
+            now_subq = (
+                select(
+                    log_event_ids.c.id.label("log_event_id"),
+                    func.timezone("UTC", func.now()).label(
+                        "value",
+                    ),  # Use timezone-aware timestamp
+                    literal("timestamp").label("inferred_type"),
+                )
+                .select_from(ids_subq)
+                .subquery()
+            )
+        return now_subq
     else:
         raise ValueError(f"Unknown function operand: {operand}")
 
@@ -2255,7 +2301,7 @@ def build_sql_query(filter_dict, log_event_alias, session, log_event_ids):
             log_event_ids,
         )
 
-    # Handle functions (len, to_str, type, round, round_timestamp, exists, version, isNone, time)
+    # Handle functions (len, to_str, type, round, round_timestamp, exists, version, isNone, time, date, now)
     elif operand in (
         "len",
         "to_str",
@@ -2267,6 +2313,8 @@ def build_sql_query(filter_dict, log_event_alias, session, log_event_ids):
         "BASE",
         "isNone",
         "time",
+        "date",
+        "now",
     ):
         return _handle_functions(filter_dict, log_event_alias, session, log_event_ids)
 
