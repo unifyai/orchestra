@@ -192,6 +192,14 @@ class UpdateDerivedEntriesConfig(BaseModel):
         description="Name of the project these derived logs belong to.",
         example="eval-project",
     )
+    context: ContextCreateRequest | None = Field(
+        default=None,
+        description="Optional context path to update for the logs. "
+        "Can use '/' for nested contexts (e.g. 'training/batch1').",
+        json_schema_extra={
+            "example": "experiment1/trial1",
+        },
+    )
     target_derived_logs: Union[List[int], Dict[str, Any]] = Field(
         description="The derived logs to update, either as a list of derived_log IDs or as a set of arguments for the get_logs endpoint.",
         example={"log0": [0, 1, 2], "log1": {"filter_expr": "derived_score > 0.5"}},
