@@ -1957,7 +1957,10 @@ def _handle_functions(filter_dict, log_event_alias, session, log_event_ids):
                 (
                     val_type == "timestamp",
                     func.cast(
-                        func.date_trunc("second", cast(cast(val, Text), DateTime)),
+                        func.date_trunc(
+                            "microseconds",
+                            cast(cast(val, Text), DateTime(timezone=True)),
+                        ),
                         Time,
                     ),
                 ),
