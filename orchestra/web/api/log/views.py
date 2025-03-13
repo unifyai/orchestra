@@ -3298,7 +3298,7 @@ def _compute_metric_for_key_grouped(
 
             if shared_value is not None:
                 # If we have a shared value, use it directly
-                result[str(group_val)] = shared_value
+                result[str(group_val)] = {"shared_value": shared_value}
             else:
                 # Otherwise, use the aggregated value
                 # Post-process the aggregated value
@@ -3308,7 +3308,7 @@ def _compute_metric_for_key_grouped(
                     field_type,
                 )
                 # Add to result
-                result[str(group_val)] = processed_value
+                result[str(group_val)] = {metric: processed_value}
     else:
         # For multi-level grouping, build a nested dictionary
         for row in rows:
@@ -3330,7 +3330,7 @@ def _compute_metric_for_key_grouped(
 
             if shared_value is not None:
                 # If we have a shared value, use it directly
-                current_dict[str(last_group_val)] = shared_value
+                current_dict[str(last_group_val)] = {"shared_value": shared_value}
             else:
                 # Otherwise, use the aggregated value
                 # Post-process the aggregated value
@@ -3340,7 +3340,7 @@ def _compute_metric_for_key_grouped(
                     field_type,
                 )
                 # Add to the nested dictionary
-                current_dict[str(last_group_val)] = processed_value
+                current_dict[str(last_group_val)] = {metric: processed_value}
 
     return result
 
@@ -3508,32 +3508,13 @@ def compute_metric_for_key(
 
     # Post-process based on field type
     field_type = field_types.get(key)
+    processed_value = _postprocess_aggregator_value(
+        reduced_query,
+        metric,
+        field_type,
+    )
 
-    if metric == "count":
-        return int(reduced_query or 0)
-
-    if reduced_query is None:
-        return None
-
-    if not field_type:
-        return reduced_query
-
-    # Convert based on the field type
-    if field_type == "timestamp":
-        if metric in ("var", "std"):
-            return timedelta(seconds=reduced_query).__repr__()
-        return datetime.fromtimestamp(reduced_query).isoformat()
-
-    if (
-        float(reduced_query).is_integer()
-        and metric in ("sum", "min", "max", "median", "mode")
-        and field_type in ("int", "bool", "str")
-    ):
-        if field_type == "bool" and metric in ("min", "max", "median", "mode"):
-            return bool(int(reduced_query))
-        return int(reduced_query)
-
-    return reduced_query
+    return processed_value
 
 
 @router.get(
