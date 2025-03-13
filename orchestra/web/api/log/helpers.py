@@ -1936,9 +1936,12 @@ def _handle_functions(filter_dict, log_event_alias, session, log_event_ids):
                 )
 
             # Construct the query with the extracted event IDs and identifier
+            row_number = (
+                func.row_number().over(order_by=Log.log_event_id).label("log_event_id")
+            )
             version_subq = (
                 select(
-                    Log.log_event_id.label("log_event_id"),
+                    row_number.label("log_event_id"),
                     Log.version.label("value"),
                     literal("int").label("inferred_type"),
                 )
