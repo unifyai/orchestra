@@ -566,3 +566,282 @@ async def test_delete_derived_logs(client: AsyncClient):
     logs = response.json()["logs"]
     for log in logs:
         assert len(log["derived_entries"]) == 0
+
+
+@pytest.mark.anyio
+async def test_derived_entry_datetime_arithmetic(client: AsyncClient):
+    """
+    Test datetime, time, and timedelta arithmetic in derived log entries.
+
+    This test verifies that derived entries can:
+    1. Perform basic datetime arithmetic (add/subtract time periods)
+    2. Calculate time differences between timestamps
+    3. Extract date and time components
+    4. Handle timezone-aware timestamps
+    5. Calculate midpoints between timestamps
+    6. Work with fractional seconds
+    7. Perform complex chained datetime operations
+    """
+    project_name = "test_derived_datetime_arithmetic"
+    await _create_project(client, project_name)
+
+    # Create logs with various datetime values
+    logs_data = [
+        # Basic timestamp for simple operations
+        {
+            "entries": {
+                "dt/timestamp": "2023-06-15T14:30:45+00:00",
+                "dt/name": "basic_timestamp",
+            },
+        },
+        # Two timestamps for interval calculation
+        {
+            "entries": {
+                "dt/start": "2023-06-15T10:00:00+00:00",
+                "dt/end": "2023-06-15T16:00:00+00:00",
+                "dt/name": "interval_calculation",
+            },
+        },
+        # Timestamps with fractional seconds
+        {
+            "entries": {
+                "dt/precise_ts": "2023-06-15T14:30:45.123456+00:00",
+                "dt/name": "fractional_seconds",
+            },
+        },
+        # Timestamps in different timezones
+        {
+            "entries": {
+                "dt/utc_time": "2023-06-15T12:00:00+00:00",
+                "dt/est_time": "2023-06-15T12:00:00-05:00",
+                "dt/name": "timezone_aware",
+            },
+        },
+        # Month boundary timestamps
+        {
+            "entries": {
+                "dt/month_end": "2023-06-30T23:59:59.999+00:00",
+                "dt/next_month": "2023-07-01T00:00:00.001+00:00",
+                "dt/name": "month_boundary",
+            },
+        },
+    ]
+
+    # Create the logs and store their IDs
+    log_ids = []
+    for log_data in logs_data:
+        response = await client.post(
+            "/v0/logs",
+            json={"project": project_name, "entries": log_data["entries"]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        log_ids.append(response.json()[0])
+
+    # 1. Test adding time to a timestamp
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="timestamp_plus_1hour",
+        equation="{log:dt/timestamp} + 'PT1H'",
+        referenced_logs={"log": [log_ids[0]]},
+    )
+    assert response.status_code == 200, response.text
+
+    # 2. Test subtracting time from a timestamp
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="timestamp_minus_30min",
+        equation="{log:dt/timestamp} - 'PT30M'",
+        referenced_logs={"log": [log_ids[0]]},
+    )
+    assert response.status_code == 200, response.text
+
+    # 3. Test calculating duration between timestamps
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="duration_hours",
+        equation="({log:dt/end} - {log:dt/start}) == 'PT6H'",
+        referenced_logs={"log": [log_ids[1]]},
+    )
+    assert response.status_code == 200, response.text
+
+    # 4. Test calculating midpoint between timestamps
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="midpoint_timestamp",
+        equation="{log:dt/start} + (({log:dt/end} - {log:dt/start}) / 2)",
+        referenced_logs={"log": [log_ids[1]]},
+    )
+    assert response.status_code == 200, response.text
+
+    # 5. Test extracting date component
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="extracted_date",
+        equation="date({log:dt/timestamp})",
+        referenced_logs={"log": [log_ids[0]]},
+    )
+    assert response.status_code == 200, response.text
+
+    # 6. Test extracting time component
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="extracted_time",
+        equation="time({log:dt/timestamp})",
+        referenced_logs={"log": [log_ids[0]]},
+    )
+    assert response.status_code == 200, response.text
+
+    # 7. Test timezone-aware comparison
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="timezone_difference",
+        equation="{log:dt/utc_time} != {log:dt/est_time}",
+        referenced_logs={"log": [log_ids[3]]},
+    )
+    assert response.status_code == 200, response.text
+
+    # 8. Test timezone-aware duration calculation
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="timezone_duration",
+        equation="{log:dt/est_time} - {log:dt/utc_time}",
+        referenced_logs={"log": [log_ids[3]]},
+    )
+    assert response.status_code == 200, response.text
+
+    # 9. Test fractional seconds handling
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="precise_plus_500ms",
+        equation="{log:dt/precise_ts} + 'PT0.5S'",
+        referenced_logs={"log": [log_ids[2]]},
+    )
+    assert response.status_code == 200, response.text
+
+    # 10. Test month boundary duration
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="month_boundary_diff",
+        equation="{log:dt/next_month} - {log:dt/month_end}",
+        referenced_logs={"log": [log_ids[4]]},
+    )
+    assert response.status_code == 200, response.text
+
+    # 11. Test complex chained operation
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="complex_operation",
+        equation="date({log:dt/timestamp} + 'P1D') != date({log:dt/timestamp})",
+        referenced_logs={"log": [log_ids[0]]},
+    )
+    assert response.status_code == 200, response.text
+
+    # Verify the derived entries
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    logs = response.json()["logs"]
+
+    # Check each log for its derived entries
+    for log in logs:
+        if log["entries"].get("dt/name") == "basic_timestamp":
+            # Check timestamp arithmetic
+            assert "timestamp_plus_1hour" in log["derived_entries"]
+            assert (
+                log["derived_entries"]["timestamp_plus_1hour"]
+                == "2023-06-15T15:30:45+00:00"
+            )
+
+            assert "timestamp_minus_30min" in log["derived_entries"]
+            assert (
+                log["derived_entries"]["timestamp_minus_30min"]
+                == "2023-06-15T14:00:45+00:00"
+            )
+
+            # Check date/time extraction
+            assert "extracted_date" in log["derived_entries"]
+            assert log["derived_entries"]["extracted_date"] == "2023-06-15"
+
+            assert "extracted_time" in log["derived_entries"]
+            assert log["derived_entries"]["extracted_time"] == "14:30:45.000000"
+
+            # Check complex operation
+            assert "complex_operation" in log["derived_entries"]
+            assert log["derived_entries"]["complex_operation"] is True
+
+        elif log["entries"].get("dt/name") == "interval_calculation":
+            # Check duration calculation
+            assert "duration_hours" in log["derived_entries"]
+            assert log["derived_entries"]["duration_hours"] is True
+
+            # Check midpoint calculation
+            assert "midpoint_timestamp" in log["derived_entries"]
+            assert (
+                log["derived_entries"]["midpoint_timestamp"]
+                == "2023-06-15T13:00:00+00:00"
+            )
+
+        elif log["entries"].get("dt/name") == "fractional_seconds":
+            # Check fractional seconds handling
+            assert "precise_plus_500ms" in log["derived_entries"]
+            assert (
+                log["derived_entries"]["precise_plus_500ms"]
+                == "2023-06-15T14:30:45.623456+00:00"
+            )
+
+        elif log["entries"].get("dt/name") == "timezone_aware":
+            # Check timezone-aware comparison
+            assert "timezone_difference" in log["derived_entries"]
+            assert log["derived_entries"]["timezone_difference"] is True
+
+            # Check timezone-aware duration
+            assert "timezone_duration" in log["derived_entries"]
+            assert log["derived_entries"]["timezone_duration"] == "PT0S"
+
+        elif log["entries"].get("dt/name") == "month_boundary":
+            # Check month boundary duration
+            assert "month_boundary_diff" in log["derived_entries"]
+            assert log["derived_entries"]["month_boundary_diff"] == "PT0.002S"
+
+    # Test updating a derived entry with datetime arithmetic
+    response = await client.put(
+        "/v0/logs/derived",
+        json={
+            "project": project_name,
+            "target_derived_logs": {"from_fields": "timestamp_plus_1hour"},
+            "equation": "{log:dt/timestamp} + 'PT2H'",  # Change from +1h to +2h
+            "referenced_logs": {"log": [log_ids[0]]},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+
+    # Verify the update
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    logs = response.json()["logs"]
+
+    for log in logs:
+        if log["entries"].get("dt/name") == "basic_timestamp":
+            assert "timestamp_plus_1hour" in log["derived_entries"]
+            assert (
+                log["derived_entries"]["timestamp_plus_1hour"]
+                == "2023-06-15T16:30:45+00:00"
+            )
