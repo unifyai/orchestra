@@ -1030,10 +1030,122 @@ def _handle_logical_operator(filter_dict, log_event_alias, session, log_event_id
     raise ValueError(f"Unknown logical operand: {operand}")
 
 
+def _arithmetic_expr(lval, rval, operand, lval_type, rval_type):
+    # Special handling for date/time/timestamp and timedelta arithmetic
+    if operand == "+" and lval_type == "timestamp" and rval_type == "timedelta":
+        lval = cast(cast(lval, Text), TIMESTAMP)
+        rval = cast(cast(rval, Text), Interval)
+        expr = lval + rval
+        result_type = "timestamp"
+    elif operand == "-" and lval_type == "timestamp" and rval_type == "timedelta":
+        lval = cast(cast(lval, Text), TIMESTAMP)
+        rval = cast(cast(rval, Text), Interval)
+        expr = lval - rval
+        result_type = "timestamp"
+    elif operand == "-" and lval_type == "timestamp" and rval_type == "timestamp":
+        lval = cast(cast(lval, Text), TIMESTAMP)
+        rval = cast(cast(rval, Text), TIMESTAMP)
+        expr = lval - rval
+        result_type = "timedelta"
+    elif operand == "-" and lval_type == "date" and rval_type == "date":
+        lval = cast(cast(lval, Text), Date)
+        rval = cast(cast(rval, Text), Date)
+        expr = cast(lval, TIMESTAMP) - cast(rval, TIMESTAMP)
+        result_type = "timedelta"
+    elif operand == "+" and lval_type == "date" and rval_type == "timedelta":
+        lval = cast(cast(lval, Text), Date)
+        rval = cast(rval, Interval)
+        expr = lval + rval
+        result_type = "date"
+    elif operand == "-" and lval_type == "date" and rval_type == "timedelta":
+        lval = cast(cast(lval, Text), Date)
+        rval = cast(cast(rval, Text), Interval)
+        expr = lval - rval
+        result_type = "date"
+    elif operand == "+" and lval_type == "time" and rval_type == "timedelta":
+        lval = cast(cast(lval, Text), Time)
+        rval = cast(cast(rval, Text), Interval)
+        expr = lval + rval
+        result_type = "time"
+    elif operand == "-" and lval_type == "time" and rval_type == "timedelta":
+        lval = cast(cast(lval, Text), Time)
+        rval = cast(cast(rval, Text), Interval)
+        expr = lval - rval
+        result_type = "time"
+    elif (
+        operand == "+"
+        and lval_type == "timedelta"
+        and rval_type in ("timestamp", "date", "time")
+    ):
+        lval = cast(lval, Interval)
+        if rval_type == "timestamp":
+            rval = cast(cast(rval, Text), TIMESTAMP)
+        elif rval_type == "date":
+            rval = cast(cast(rval, Text), Date)
+        else:  # time
+            rval = cast(cast(rval, Text), Time)
+        expr = lval + rval
+        result_type = rval_type
+    elif operand == "+" and lval_type == "timedelta" and rval_type == "timedelta":
+        lval = cast(cast(lval, Text), Interval)
+        rval = cast(cast(rval, Text), Interval)
+        expr = lval + rval
+        result_type = "timedelta"
+    elif operand == "-" and lval_type == "timedelta" and rval_type == "timedelta":
+        lval = cast(cast(lval, Text), Interval)
+        rval = cast(cast(rval, Text), Interval)
+        expr = lval - rval
+        result_type = "timedelta"
+    elif operand == "*" and lval_type == "timedelta" and rval_type in ("int", "float"):
+        lval = cast(cast(lval, Text), Interval)
+        rval = cast(rval, Float)
+        expr = lval * rval
+        result_type = "timedelta"
+    elif operand == "*" and lval_type in ("int", "float") and rval_type == "timedelta":
+        lval = cast(lval, Float)
+        rval = cast(cast(rval, Text), Interval)
+        expr = lval * rval
+        result_type = "timedelta"
+    elif operand == "/" and lval_type == "timedelta" and rval_type in ("int", "float"):
+        lval = cast(cast(lval, Text), Interval)
+        rval = cast(rval, Float)
+        expr = lval / rval
+        result_type = "timedelta"
+    elif operand == "/" and lval_type == "timedelta" and rval_type == "timedelta":
+        lval = cast(cast(lval, Text), Interval)
+        rval = cast(cast(rval, Text), Interval)
+        expr = func.extract("epoch", lval) / func.extract("epoch", rval)
+        result_type = "float"
+    else:
+        lval = cast_expr(lval, lval_type, rval_type)
+        rval = cast_expr(rval, rval_type, lval_type)
+        if operand == "+":
+            if lval_type == "str" and rval_type == "str":
+                lval = func.replace(cast(lval, String), '"', "")
+                rval = func.replace(cast(rval, String), '"', "")
+                expr = func.concat(lval, rval)
+            else:
+                expr = lval + rval
+        elif operand == "-":
+            expr = lval - rval
+        elif operand == "*":
+            expr = lval * rval
+        elif operand == "/":
+            expr = lval / rval
+        elif operand == "%":
+            expr = lval % rval
+        elif operand == "**":
+            expr = func.power(lval, rval)
+        elif operand == "//":
+            expr = func.floor(lval / rval)
+        result_type = unify_inferred_types(lval_type, rval_type)
+    return expr, result_type
+
+
 # Helper function for arithmetic operators (+, -, *, /, %)
 def _handle_arithmetic_operator(filter_dict, log_event_alias, session, log_event_ids):
     """
-    Handles arithmetic operators ('+', '-', '*', '/', '%') in the filter dictionary.
+    Handles arithmetic operators ('+', '-', '*', '**', '//', '/', '%') in the filter dictionary.
 
     Args:
         filter_dict (dict): The filter dictionary containing the arithmetic operator and operands.
@@ -1063,55 +1175,17 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session, log_event
     if lhs_is_sub and rhs_is_sub:
         lval, lval_type = _select_value(lhs, session)
         rval, rval_type = _select_value(rhs, session)
-        lval = cast_expr(lval, lval_type, rval_type)
-        rval = cast_expr(rval, rval_type, lval_type)
-        if operand == "+":
-            if lval_type == "str" and rval_type == "str":
-                lval = func.replace(cast(lval, String), '"', "")
-                rval = func.replace(cast(rval, String), '"', "")
-                expr = func.concat(lval, rval)
-            else:
-                expr = lval + rval
-        elif operand == "-":
-            expr = lval - rval
-        elif operand == "*":
-            expr = lval * rval
-        elif operand == "/":
-            expr = lval / rval
-        elif operand == "%":
-            expr = lval % rval
-        elif operand == "**":
-            expr = func.power(lval, rval)
-        elif operand == "//":
-            expr = func.floor(lval / rval)
-        return _join_subqueries(lhs, rhs, expr, lval_type, session=session)
+        expr, result_type = _arithmetic_expr(lval, rval, operand, lval_type, rval_type)
+        return _join_subqueries(lhs, rhs, expr, result_type, session=session)
     elif lhs_is_sub:
         lval, lval_type = _select_value(lhs, session)
         rval, rval_type = _select_value(rhs, session)
-        lval = cast_expr(lval, lval_type, rval_type)
-        rhs = cast_expr(rhs, rval_type, lval_type)
-        if operand == "+":
-            if lval_type == "str":
-                expr = func.concat(lval, rhs)
-            else:
-                expr = lval + rhs
-        elif operand == "-":
-            expr = lval - rhs
-        elif operand == "*":
-            expr = lval * rhs
-        elif operand == "/":
-            expr = lval / rhs
-        elif operand == "%":
-            expr = lval % rhs
-        elif operand == "**":
-            expr = func.power(lval, rhs)
-        elif operand == "//":
-            expr = func.floor(lval / rhs)
+        expr, result_type = _arithmetic_expr(lval, rval, operand, lval_type, rval_type)
         return (
             select(
                 lhs.c.log_event_id.label("log_event_id"),
                 expr.label("value"),
-                literal(lval_type).label("inferred_type"),
+                literal(result_type).label("inferred_type"),
             )
             .select_from(lhs)
             .subquery()
@@ -1119,35 +1193,19 @@ def _handle_arithmetic_operator(filter_dict, log_event_alias, session, log_event
     elif rhs_is_sub:
         rval, rval_type = _select_value(rhs, session)
         lval, lval_type = _select_value(lhs, session)
-        rval = cast_expr(rval, rval_type, lval_type)
-        lhs = cast_expr(lhs, lval_type, rval_type)
-        if operand == "+":
-            if rval_type == "str":
-                expr = func.concat(lhs, rval)
-            else:
-                expr = lhs + rval
-        elif operand == "-":
-            expr = lhs - rval
-        elif operand == "*":
-            expr = lhs * rval
-        elif operand == "/":
-            expr = lhs / rval
-        elif operand == "%":
-            expr = lhs % rval
-        elif operand == "**":
-            expr = func.power(lhs, rval)
-        elif operand == "//":
-            expr = func.floor(lhs / rval)
+        expr, result_type = _arithmetic_expr(lval, rval, operand, lval_type, rval_type)
         return (
             select(
                 rhs.c.log_event_id.label("log_event_id"),
                 expr.label("value"),
-                literal(rval_type).label("inferred_type"),
+                literal(result_type).label("inferred_type"),
             )
             .select_from(rhs)
             .subquery()
         )
     else:
+        # For direct expressions (not subqueries), we can't easily determine types
+        # So we'll just use the standard SQLAlchemy operators and let PostgreSQL handle the casting
         if operand == "+":
             return lhs + rhs
         elif operand == "-":
