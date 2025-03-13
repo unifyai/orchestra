@@ -10,9 +10,11 @@ from sqlalchemy import (
     TIMESTAMP,
     BindParameter,
     Boolean,
+    Date,
     DateTime,
     Float,
     Integer,
+    Interval,
     Numeric,
     String,
     Text,
@@ -46,6 +48,8 @@ STR_TO_SQL_TYPES = {
     "str": String,
     "timestamp": DateTime,
     "time": Time,
+    "date": Date,
+    "timedelta": Interval,
     "dict": JSONB,
     "list": JSONB,
 }
@@ -250,14 +254,22 @@ def _tokenize(s):
             unquoted_value = value[1:-1]
             unquoted_value = bytes(unquoted_value, "utf-8").decode("unicode_escape")
 
-            # check if is datetime
-            try:
-                # First try to normalize the timestamp if it's in a non-standard format
-                normalized_value = normalize_timestamp(unquoted_value)
-                tokens.append(("STRING", normalized_value))
-            except:
-                # If it's not a valid timestamp, just use the unquoted value
-                tokens.append(("STRING", unquoted_value))
+            # Check for special string types
+            if _is_date_string(unquoted_value):
+                tokens.append(("OTHER", unquoted_value))
+            elif _is_time_string(unquoted_value):
+                tokens.append(("OTHER", unquoted_value))
+            elif _is_timedelta_string(unquoted_value):
+                tokens.append(("OTHER", unquoted_value))
+            else:
+                # check if is timestamp
+                try:
+                    # First try to normalize the timestamp if it's in a non-standard format
+                    normalized_value = normalize_timestamp(unquoted_value)
+                    tokens.append(("STRING", normalized_value))
+                except:
+                    # If it's not a valid timestamp, just use the unquoted value
+                    tokens.append(("STRING", unquoted_value))
         elif kind == "BOOLEAN":
             value = True if value == "True" else False
             tokens.append(("BOOLEAN", value))
@@ -525,7 +537,6 @@ def str_filter_exp_to_dict(s, field_names=None):
         tokens = _tokenize(s)
         if field_names is not None:
             tokens = _relabel_identifiers(tokens, field_names)
-        # print("tokens", tokens)
         parser = _Parser(tokens)
         result = parser.parse()
         return result
@@ -585,6 +596,8 @@ def unify_inferred_types(t1: str, t2: str) -> str:
         "str",
         "timestamp",
         "time",
+        "date",
+        "timedelta",
         "list",
         "dict",
         "tuple",
@@ -625,7 +638,7 @@ def cast_expr(expr, from_type: str, to_type: str):
     final_type = unify_inferred_types(from_type, to_type)
 
     if final_type == "str":
-        # Strings in your DB might still have quotes, so remove them via `replace()`
+        # Strings might still have quotes, so remove them via `replace()`
         return func.replace(cast(expr, String), '"', "")
     elif final_type == "float":
         return cast(expr, Float)
@@ -633,8 +646,14 @@ def cast_expr(expr, from_type: str, to_type: str):
         return cast(expr, Integer)
     elif final_type == "bool":
         return cast(expr, Boolean)
+    elif final_type == "timestamp":
+        return cast(cast(expr, Text), DateTime(timezone=True))
     elif final_type == "time":
-        return cast(expr, Time)
+        return cast(cast(expr, Text), Time)
+    elif final_type == "date":
+        return cast(cast(expr, Text), Date)
+    elif final_type == "timedelta":
+        return cast(cast(expr, Text), Interval)
     else:
         # If neither side is recognized or is "NoneType", just return expr uncasted
         return expr
@@ -702,6 +721,8 @@ def _build_subquery_for_identifier(
                     else_=None,
                 ).label("timestamp_value"),
                 literal(None).label("time_value"),
+                literal(None).label("date_value"),
+                literal(None).label("timedelta_value"),
                 literal(None).label("str_value"),
                 literal(None).label("int_value"),
                 literal(None).label("float_value"),
@@ -729,6 +750,14 @@ def _build_subquery_for_identifier(
             (log_alias.inferred_type == "time", cast(log_alias.value, JSONB)),
             else_=None,
         ).label("time_value"),
+        case(
+            (log_alias.inferred_type == "date", cast(log_alias.value, JSONB)),
+            else_=None,
+        ).label("date_value"),
+        case(
+            (log_alias.inferred_type == "timedelta", cast(log_alias.value, JSONB)),
+            else_=None,
+        ).label("timedelta_value"),
         case(
             (log_alias.inferred_type == "str", cast(log_alias.value, String)),
             (log_alias.inferred_type == "image", cast(log_alias.value, String)),
@@ -780,6 +809,20 @@ def _build_subquery_for_identifier(
             ),
             else_=None,
         ).label("time_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "date",
+                cast(derived_log_alias.value, JSONB),
+            ),
+            else_=None,
+        ).label("date_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "timedelta",
+                cast(derived_log_alias.value, JSONB),
+            ),
+            else_=None,
+        ).label("timedelta_value"),
         case(
             (
                 derived_log_alias.inferred_type == "str",
