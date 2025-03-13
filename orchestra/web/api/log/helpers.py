@@ -571,6 +571,8 @@ def _select_value(subq, session, is_collection=False):
             "str": subq.c.str_value,
             "timestamp": subq.c.timestamp_value,
             "time": subq.c.time_value,
+            "date": subq.c.date_value,
+            "timedelta": subq.c.timedelta_value,
             "list": subq.c.jsonb_value,
             "dict": subq.c.jsonb_value,
             "NoneType": subq.c.int_value,
@@ -699,6 +701,8 @@ def _build_subquery_for_identifier(
                 literal(None).label("jsonb_value"),
                 literal(None).label("timestamp_value"),
                 literal(None).label("time_value"),
+                literal(None).label("date_value"),
+                literal(None).label("timedelta_value"),
                 literal(None).label("str_value"),
                 log_event_alias.id.label("int_value"),
                 literal(None).label("float_value"),
@@ -1460,10 +1464,79 @@ def _parse_rhs_list_or_dict_if_needed(rhs_dict, rhs_val):
 
 
 # Helper function for functions (len, to_str, type, round, round_timestamp, exists, version, isNone)
+def _handle_date_function(rhs_expr, session):
+    """
+    Handles the date() function which extracts the date component from a datetime value.
+
+    Args:
+        rhs_expr: The expression to extract the date from (datetime or string)
+        session: SQLAlchemy session for executing subqueries
+
+    Returns:
+        SQLAlchemy expression that extracts the date component
+    """
+    if isinstance(rhs_expr, Subquery):
+        val, val_type = _select_value(rhs_expr, session)
+
+        # Create a CASE expression to handle different input types
+        expr = case(
+            (
+                val_type == "timestamp",
+                func.cast(
+                    func.date_trunc(
+                        "day",
+                        cast(cast(val, Text), DateTime(timezone=True)),
+                    ),
+                    Date,
+                ),
+            ),
+            (val_type == "str", func.cast(cast(val, Text), Date)),
+            else_=None,
+        )
+
+        return (
+            select(
+                rhs_expr.c.log_event_id.label("log_event_id"),
+                expr.label("value"),
+                literal("date").label("inferred_type"),
+            )
+            .select_from(rhs_expr)
+            .subquery()
+        )
+    else:
+        # Handle literal values
+        if isinstance(rhs_expr, BindParameter):
+            val = rhs_expr.value
+            if isinstance(val, datetime):
+                # Extract date from datetime
+                return literal(val.date().isoformat(), type_=Date)
+            elif isinstance(val, str):
+                # Try to parse as datetime first
+                try:
+                    dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+                    return literal(dt.date().isoformat(), type_=Date)
+                except ValueError:
+                    # If it's already a date string, just pass it as is
+                    if _is_date_string(val):
+                        clean_val = val.strip("\"'")
+                        return literal(clean_val, type_=Date)
+                    else:
+                        raise ValueError(
+                            f"Cannot convert {val} to date. Expected datetime or date string.",
+                        )
+            else:
+                raise ValueError(
+                    f"Cannot convert {val} to date. Expected datetime or date string.",
+                )
+        else:
+            # Try to cast the expression to Date
+            return cast(rhs_expr, Date)
+
+
 def _handle_functions(filter_dict, log_event_alias, session, log_event_ids):
     """
     Handles function-based operations ('len', 'to_str', 'type', 'round', 'round_timestamp',
-    'exists', 'version', 'isNone', 'time') in the filter dictionary.
+    'exists', 'version', 'isNone', 'time', 'date') in the filter dictionary.
 
     Args:
         filter_dict (dict): The filter dictionary containing the function and its arguments.
@@ -1937,6 +2010,10 @@ def _handle_functions(filter_dict, log_event_alias, session, log_event_ids):
             else:
                 # Try to cast the expression to Time
                 return cast(rhs_expr, Time)
+
+    elif operand == "date":
+        # Handle the date function: extract date component from a datetime
+        return _handle_date_function(rhs_expr, session)
     else:
         raise ValueError(f"Unknown function operand: {operand}")
 
