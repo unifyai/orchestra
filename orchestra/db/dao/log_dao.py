@@ -1,5 +1,6 @@
 import base64
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends
@@ -28,6 +29,100 @@ class OverwriteError(Exception):
 
 class ImmutableFieldError(Exception):
     pass
+
+
+def _is_date_string(value: str) -> bool:
+    """
+    Check if a string can be parsed as a date in various formats including:
+    - YYYY-MM-DD (ISO 8601)
+    - MM/DD/YYYY
+    - DD/MM/YYYY
+    - DD-MM-YYYY
+    - Month DD, YYYY
+
+    Args:
+        value (str): The string to check
+
+    Returns:
+        bool: True if the string can be parsed as a date, False otherwise
+    """
+    try:
+        if isinstance(value, str):
+            # Remove quotes if present
+            clean_value = value.strip("\"'")
+
+            # Try different date formats
+            for fmt in (
+                "%Y-%m-%d",  # ISO 8601: 2023-01-31
+                "%m/%d/%Y",  # US format: 01/31/2023
+                "%d/%m/%Y",  # UK format: 31/01/2023
+                "%d-%m-%Y",  # European format: 31-01-2023
+                "%B %d, %Y",  # Month name: January 31, 2023
+                "%b %d, %Y",  # Abbreviated month: Jan 31, 2023
+            ):
+                try:
+                    parsed_date = datetime.strptime(clean_value, fmt).date()
+                    # Ensure it's just a date (no time component)
+                    if isinstance(parsed_date, date):
+                        return True
+                except ValueError:
+                    continue
+
+            # Check for ISO format with regex
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", clean_value):
+                try:
+                    date.fromisoformat(clean_value)
+                    return True
+                except ValueError:
+                    pass
+        return False
+    except Exception:
+        return False
+
+
+def _is_timedelta_string(value: str) -> bool:
+    """
+    Check if a string represents a timedelta in ISO 8601 duration format.
+
+    ISO 8601 duration format: P[n]Y[n]M[n]DT[n]H[n]M[n]S
+    Examples:
+    - P1Y2M3DT4H5M6S (1 year, 2 months, 3 days, 4 hours, 5 minutes, 6 seconds)
+    - P1D (1 day)
+    - PT1H (1 hour)
+
+    Also checks for simple duration formats like:
+    - HH:MM:SS
+    - MM:SS
+    - [n] days, [n] hours, etc.
+
+    Args:
+        value (str): The string to check
+
+    Returns:
+        bool: True if the string represents a timedelta, False otherwise
+    """
+    try:
+        if isinstance(value, str):
+            clean_value = value.strip("\"'")
+
+            # Check ISO 8601 duration format
+            iso_duration_pattern = r"^P(?:\d+Y)?(?:\d+M)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$"
+            if re.match(iso_duration_pattern, clean_value):
+                return True
+
+            # Check for PostgreSQL interval format: 1 day 2 hours 3 minutes 4 seconds
+            pg_interval_pattern = r"^(\d+\s+(?:day|days|hour|hours|minute|minutes|second|seconds)(?:\s+|$))+$"
+            if re.match(pg_interval_pattern, clean_value, re.IGNORECASE):
+                return True
+
+            # Check for simple time duration format: HH:MM:SS
+            if re.match(r"^\d+:\d{2}(:\d{2})?$", clean_value):
+                # Make sure it's not a valid time (which would be caught by _is_time_string)
+                if not _is_time_string(clean_value):
+                    return True
+        return False
+    except Exception:
+        return False
 
 
 def _is_time_string(value: str) -> bool:
@@ -231,6 +326,10 @@ class LogDAO:
             except:
                 if _is_time_string(raw_v):
                     return "time"
+                if _is_date_string(raw_v):
+                    return "date"
+                if _is_timedelta_string(raw_v):
+                    return "timedelta"
                 if not maybe_img:
                     return "str"
                 binary = raw_v.encode("utf-8")
