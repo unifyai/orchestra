@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
 
@@ -124,6 +125,7 @@ class DerivedLogDAO:
     def recompute_derived_logs(
         self,
         logs_to_recompute: List[DerivedLog],
+        json_encoder: json.JSONEncoder,
         session: Session,
     ) -> None:
         """
@@ -150,7 +152,7 @@ class DerivedLogDAO:
                     session,
                     log_event_ids,
                 )[0][1]
-                dlog.value = new_val
+                dlog.value = json.loads(json.dumps(new_val, cls=json_encoder))
                 dlog.updated_at = datetime.now(timezone.utc)
 
             session.commit()
