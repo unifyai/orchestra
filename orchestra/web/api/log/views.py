@@ -581,7 +581,7 @@ def prepare_resolved_ids(
                 column_context=base_dict.get("column_context"),
                 context=base_dict.get("context"),
                 filter_expr=base_dict.get("filter_expr"),
-                sorting=base_dict.get("sort"),
+                sorting=base_dict.get("sorting"),
                 from_ids=base_dict.get("from_ids"),
                 exclude_ids=base_dict.get("exclude_ids"),
                 from_fields=base_dict.get("from_fields"),
@@ -928,14 +928,26 @@ def update_derived_log(
     """
     user_id = request_fastapi.state.user_id
 
-    # 1) Validate the project for this user
+    # 1) Validate the project
     try:
         project_obj = project_dao.filter(name=body.project, user_id=user_id)[0][0]
+        project_id = project_obj.id
     except IndexError:
         raise HTTPException(
             status_code=404,
             detail=f"Project '{body.project}' not found.",
         )
+    # Get or create context_id
+    if body.context:
+        context_id = context_dao.get_or_create(
+            project_obj.id,
+            name=body.context.name,
+            description=body.context.description,
+            is_versioned=body.context.is_versioned,
+        )
+    else:
+        # get the default context
+        context_id = context_dao.get_or_create(project_obj.id, name="")
 
     # 2) Resolve which DerivedLog IDs to update
     if isinstance(body.target_derived_logs, list):
@@ -1036,7 +1048,7 @@ def update_derived_log(
         )
         return {"info": f"Updated {len(updated_objs)} derived logs successfully."}
 
-    # 6) If new_refs *is* provided, do the "delete & re-insert" approach
+    # 6) If new_refs *is* provided, do the "compute & insert" approach
     if new_refs:
         # Use updated_key/equation if provided; otherwise, take them from one of the matched logs.
         final_key = updated_key if updated_key else valid_logs[0].key
@@ -1051,91 +1063,114 @@ def update_derived_log(
         )
         session.flush()  # flush the deletion so that new insertions do not conflict
 
-        # Resolve the new referenced logs (this is similar to the create_derived_entry code)
-        resolved_ids = {}
-        for alias_name, val in new_refs.items():
-            if isinstance(val, list):
-                resolved_ids[alias_name] = val
-            elif isinstance(val, dict):
-                # Reuse _get_logs_query to resolve the dict reference
-                rows, _, _ = _get_logs_query(
-                    request_fastapi=request_fastapi,
-                    project=body.project,
-                    column_context=val.get("column_context"),
-                    context=val.get("context"),
-                    filter_expr=val.get("filter_expr"),
-                    sorting=val.get("sort"),
-                    from_ids=val.get("from_ids"),
-                    exclude_ids=val.get("exclude_ids"),
-                    from_fields=val.get("from_fields"),
-                    exclude_fields=val.get("exclude_fields"),
-                    limit=val.get("limit"),
-                    offset=val.get("offset", 0),
-                    project_dao=project_dao,
-                    field_type_dao=field_type_dao,
-                    context_dao=context_dao,
-                    session=session,
-                )
-                found_ids = list({r[7] for r in rows})  # r[7] is the log_event_id
-                resolved_ids[alias_name] = found_ids
-            else:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Unrecognized reference for '{alias_name}': {val}",
-                )
+        # Resolve the new referenced logs using prepare_resolved_ids
+        resolved_ids = prepare_resolved_ids(
+            equation=final_equation,
+            referenced_logs=new_refs,
+            request_fastapi=request_fastapi,
+            project_name=body.project,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+        )
 
-        # If any referenced list is provided, they all must have the same length.
+        # If none found, short-circuit
+        if not any(len(v) for v in resolved_ids.values()):
+            return {"info": "No references found. Nothing to update."}
+
+        # Get the common length of all resolved ID lists
         lengths = [len(lst) for lst in resolved_ids.values()]
         if lengths and len(set(lengths)) != 1:
             raise HTTPException(
                 status_code=400,
                 detail=f"All referenced log lists must have the same length. Found lengths: {lengths}",
             )
-        common_length = lengths[0] if lengths else 0
 
-        # Substitute placeholders in the equation (to get the mapping from alias to actual field key)
+        # Compute derived values directly instead of creating empty logs and recomputing later
+        # 1. Substitute placeholders to get filter expression and alias mapping
         filter_expr, alias_to_key_map = _substitute_placeholders(
             final_equation,
             resolved_ids,
         )
 
-        now = datetime.now(timezone.utc)
-        new_derived_logs = []
+        # 2. Get field types for the project
+        field_types = field_type_dao.get_field_types(
+            project_id,
+            context_id=context_id,
+        )
 
-        for i in range(common_length):
-            # For each alias, get the base log id for this derived log candidate.
-            # To enforce the 1:1 relationship, ensure that all alias lists yield the same log_event_id.
-            base_ids = [resolved_ids[alias][i] for alias in resolved_ids]
-            if len(set(base_ids)) > 1:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Inconsistent referenced log IDs across aliases for index {i}: {base_ids}",
-                )
-            new_log_event_id = base_ids[0]
-            single_refs = {
-                alias_to_key_map[alias]: resolved_ids[alias][i]
-                for alias in resolved_ids
+        # 3. Build filter dictionary from the filter expression
+        filter_dict = str_filter_exp_to_dict(
+            filter_expr,
+            field_names=list(field_types.keys()),
+        )
+
+        # 4. Create a dictionary mapping field keys to their resolved IDs
+        resolved_ids_dict = {}
+        for key, ids in resolved_ids.items():
+            resolved_ids_dict.setdefault(alias_to_key_map[key], []).extend(ids)
+
+        # 5. Get the filtered log events for this project
+        log_event_ids_subq = (
+            session.query(LogEvent.id)
+            .filter(project_id == LogEvent.project_id)
+            .subquery(name="log_event_ids_subq")
+        )
+
+        # 6. Compute the values directly using the filter dictionary
+        computed_values = _compute_expression(
+            filter_dict,
+            LogEvent,
+            session,
+            log_event_ids=log_event_ids_subq,
+        )
+
+        # Create new derived logs with computed values
+        new_derived_logs = []
+        now = datetime.now(timezone.utc)
+
+        # Iterate over the computed values and resolved IDs
+        for i, (_, value) in enumerate(computed_values):
+            # Create a dictionary for the current set of referenced logs
+            current_referenced_logs = {
+                alias_to_key_map[key]: ids[i] for key, ids in resolved_ids.items()
             }
 
-            new_d = DerivedLog(
-                log_event_id=new_log_event_id,
-                key=final_key,
-                equation=final_equation,
-                referenced_logs=single_refs,
-                value=None,  # to be computed later
-                created_at=now,
-                updated_at=now,
-            )
-            session.add(new_d)
-            new_derived_logs.append(new_d)
+            # Get all log IDs involved in this specific computation
+            involved_log_ids = list(set(ids[i] for ids in resolved_ids.values()))
 
+            # Create a derived entry for each log ID involved in this computation
+            for log_event_id in involved_log_ids:
+                # Convert value using DecimalEncoder for proper JSON serialization
+                val = json.loads(json.dumps(value, cls=DecimalEncoder))
+                inferred_type = LogDAO.infer_type("", val)
+
+                new_derived_logs.append(
+                    DerivedLog(
+                        log_event_id=log_event_id,
+                        key=final_key,
+                        equation=final_equation,
+                        referenced_logs=current_referenced_logs,
+                        value=val,
+                        inferred_type=inferred_type,
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                )
+
+        # Bulk insert all new derived logs in one go
+        session.bulk_save_objects(new_derived_logs)
         session.commit()
 
-        # Recompute values for all newly inserted derived logs
-        derived_log_dao.recompute_derived_logs(
-            logs_to_recompute=new_derived_logs,
-            session=session,
-            json_encoder=DecimalEncoder,
+        # Update the field type record for the derived entry
+        field_type_dao.create_field_type_if_absent(
+            project_id=project_id,
+            context_id=context_id,
+            field_name=final_key,
+            mutable=True,
+            value=val,  # Using the last computed value
+            field_category="derived_entry",
         )
 
         return {
