@@ -2040,6 +2040,350 @@ async def test_now_function_in_filter_expressions(client: AsyncClient):
     assert result["logs"][0]["entries"]["dt/name"] == "past_event"
 
 
+@pytest.mark.anyio
+async def test_timezone_aware_datetime_filtering(client: AsyncClient):
+    """
+    Test datetime filtering with timezone differences.
+
+    This test verifies that:
+    1. Datetime comparisons respect timezone information
+    2. Datetimes with different timezone offsets are correctly compared
+    3. Timezone information is preserved in arithmetic operations
+    4. now() function returns timezone-aware datetime
+    """
+    project_name = "test_timezone_filtering"
+    await _create_project(client, project_name)
+
+    # Create logs with timestamps in different timezones
+    utc_time = datetime.now(timezone.utc)
+    est_offset = timedelta(hours=-5)  # EST is UTC-5
+    est_timezone = timezone(est_offset)
+    est_time = utc_time.astimezone(est_timezone)
+
+    # Create a time that's the same wall clock time but in different zones
+    # For example, 10:00 UTC and 10:00 EST (which is actually 15:00 UTC)
+    base_time = datetime(2023, 6, 15, 10, 0, 0, tzinfo=timezone.utc)
+    same_wall_time_est = datetime(2023, 6, 15, 10, 0, 0, tzinfo=est_timezone)
+
+    logs_data = [
+        {
+            "entries": {
+                "dt/utc_time": utc_time.isoformat(),
+                "dt/est_time": est_time.isoformat(),
+                "dt/name": "same_instant_different_zones",
+            },
+        },
+        {
+            "entries": {
+                "dt/utc_time": base_time.isoformat(),
+                "dt/est_time": same_wall_time_est.isoformat(),
+                "dt/name": "same_wall_time_different_zones",
+            },
+        },
+    ]
+
+    for log_data in logs_data:
+        response = await client.post(
+            "/v0/logs",
+            json={"project": project_name, "entries": log_data["entries"]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.text
+
+    # 1. Test equality of same instant in different timezones
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "dt/utc_time == dt/est_time and dt/name == 'same_instant_different_zones'",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["dt/name"] == "same_instant_different_zones"
+
+    # 2. Test inequality of same wall time in different timezones
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "dt/utc_time != dt/est_time and dt/name == 'same_wall_time_different_zones'",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["dt/name"] == "same_wall_time_different_zones"
+
+    # 3. Test that UTC time is earlier than EST time with same wall clock time
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "dt/utc_time < dt/est_time and dt/name == 'same_wall_time_different_zones'",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["dt/name"] == "same_wall_time_different_zones"
+
+    # 4. Test timezone-aware arithmetic with now()
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "now() - dt/utc_time > 'PT0.000001S'",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 2
+
+    # 5. Test that now() preserves timezone information in comparisons
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": "dt/est_time < now()"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 2
+
+
+async def test_advanced_datetime_arithmetic(client: AsyncClient):
+    """
+    Test advanced datetime arithmetic with fractional seconds and complex operations.
+
+    This test focuses on:
+    1. Timestamps with fractional seconds (milliseconds, microseconds)
+    2. Timezone-aware comparisons with fractional precision
+    3. Mixed date/time/timestamp operations
+    4. Fractional timedeltas (adding 2.5 hours, etc.)
+    5. Chained operations (calculating midpoint between timestamps)
+    6. Month boundary calculations with fractional seconds
+    7. Complex filtering expressions combining multiple operations
+    """
+    project_name = "test_advanced_datetime"
+    await _create_project(client, project_name)
+
+    # Create logs with various datetime values including fractional seconds
+    logs_data = [
+        # Timestamp with milliseconds precision
+        {
+            "entries": {
+                "dt/precise_ts": "2023-06-15T14:30:45.123+00:00",
+                "dt/name": "millisecond_precision",
+            },
+        },
+        # Timestamp with microseconds precision
+        {
+            "entries": {
+                "dt/precise_ts": "2023-06-15T14:30:45.123456+00:00",
+                "dt/name": "microsecond_precision",
+            },
+        },
+        # Two timestamps with fractional seconds for interval calculation
+        {
+            "entries": {
+                "dt/start_ts": "2023-06-15T10:15:30.500+00:00",
+                "dt/end_ts": "2023-06-15T12:45:45.750+00:00",
+                "dt/name": "fractional_interval",
+            },
+        },
+        # Timestamps in different timezones with fractional seconds
+        {
+            "entries": {
+                "dt/utc_ts": "2023-06-15T12:30:45.500+00:00",
+                "dt/est_ts": "2023-06-15T17:30:45.500-05:00",
+                "dt/name": "timezone_fractional",
+            },
+        },
+        # Mixed date, time and timestamp for combined operations
+        {
+            "entries": {
+                "dt/date": "2023-06-15",
+                "dt/time": "14:30:45.500",
+                "dt/timestamp": "2023-06-15T14:30:45.500+00:00",
+                "dt/name": "mixed_types_fractional",
+            },
+        },
+        # Three timestamps for midpoint calculation
+        {
+            "entries": {
+                "dt/start": "2023-06-15T08:00:00.000+00:00",
+                "dt/middle": "2023-06-15T12:00:00.000+00:00",
+                "dt/end": "2023-06-15T16:00:00.000+00:00",
+                "dt/name": "midpoint_calculation",
+            },
+        },
+        # Month boundary with fractional seconds
+        {
+            "entries": {
+                "dt/jan31": "2023-01-31T23:59:59.999+00:00",
+                "dt/feb01": "2023-02-01T00:00:00.001+00:00",
+                "dt/name": "month_boundary_fractional",
+            },
+        },
+    ]
+
+    for log_data in logs_data:
+        response = await client.post(
+            "/v0/logs",
+            json={"project": project_name, "entries": log_data["entries"]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.text
+
+    # 1. Test fractional seconds precision in timestamp comparison
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "dt/precise_ts == '2023-06-15T14:30:45.123+00:00'",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["dt/name"] == "millisecond_precision"
+
+    # 2. Test microsecond precision
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "dt/precise_ts == '2023-06-15T14:30:45.123456+00:00'",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["dt/name"] == "microsecond_precision"
+
+    # 3. Test adding fractional timedelta (2.5 hours = 2 hours 30 minutes)
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "dt/start_ts + 'PT2H30M' == '2023-06-15T12:45:30.500+00:00'",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["dt/name"] == "fractional_interval"
+
+    # 4. Test fractional interval calculation
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "dt/end_ts - dt/start_ts == 'PT2H30M15.25S'",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["dt/name"] == "fractional_interval"
+
+    # 5. Test timezone-aware comparison with fractional seconds
+    # TODO: fix this test. seems like a timezone issue.
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "dt/est_ts - dt/utc_ts == 'PT5H'",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["dt/name"] == "timezone_fractional"
+
+    # 6. Test extracting date and time parts from timestamp with fractional seconds
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "date(dt/timestamp) == dt/date and time(dt/timestamp) == dt/time",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["dt/name"] == "mixed_types_fractional"
+
+    # 7. Test midpoint calculation (complex chained operation)
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "dt/middle == (dt/start + ((dt/end - dt/start) / 2))",
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["dt/name"] == "midpoint_calculation"
+
+    # 8. Test month boundary with fractional seconds
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "dt/feb01 - dt/jan31 == 'PT0.002S'",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["dt/name"] == "month_boundary_fractional"
+
+    # 9. Test complex filtering with multiple conditions
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "(dt/precise_ts > '2023-06-15T00:00:00.000+00:00') and (date(dt/precise_ts) == '2023-06-15')",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert (
+        len(result["logs"]) == 2
+    )  # Should match both millisecond and microsecond precision logs
+
+    # 10. Test adding fractional seconds directly
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "dt/precise_ts + 'PT0.877S' == '2023-06-15T14:30:46.000+00:00'",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["dt/name"] == "millisecond_precision"
+
+
 async def test_get_logs_w_str_filtering(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
