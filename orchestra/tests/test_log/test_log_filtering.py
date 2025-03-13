@@ -1954,6 +1954,92 @@ async def test_get_logs_w_filtering(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_now_function_in_filter_expressions(client: AsyncClient):
+    """
+    Test the now() function in filter expressions.
+
+    This test verifies that:
+    1. The now() function returns the current time
+    2. It can be used in datetime comparisons
+    3. It works with different operators (>, <, ==, etc.)
+    4. It maintains timezone awareness
+    """
+    project_name = "test_now_function"
+    await _create_project(client, project_name)
+
+    # Create logs with timestamps in the past, present (approximately), and future
+    past_time = datetime.now(timezone.utc) - timedelta(days=1)
+    future_time = datetime.now(timezone.utc) + timedelta(days=1)
+
+    logs_data = [
+        {"entries": {"dt/timestamp": past_time.isoformat(), "dt/name": "past_event"}},
+        {
+            "entries": {
+                "dt/timestamp": future_time.isoformat(),
+                "dt/name": "future_event",
+            },
+        },
+    ]
+
+    for log_data in logs_data:
+        response = await client.post(
+            "/v0/logs",
+            json={"project": project_name, "entries": log_data["entries"]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.text
+
+    # 1. Test now() > past timestamp
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": "now() > dt/timestamp"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["dt/name"] == "past_event"
+
+    # 2. Test now() < future timestamp
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": "now() < dt/timestamp"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["dt/name"] == "future_event"
+
+    # 3. Test complex expression with now()
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "(now() - dt/timestamp) > 'PT12H'",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["dt/name"] == "past_event"
+
+    # 4. Test now() with date extraction
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "date(now()) >= date(dt/timestamp)",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["logs"]) == 1
+    assert result["logs"][0]["entries"]["dt/name"] == "past_event"
+
+
 async def test_get_logs_w_str_filtering(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
