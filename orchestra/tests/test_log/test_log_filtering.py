@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from httpx import AsyncClient
@@ -669,49 +669,34 @@ def test_parser_nested_indexing():
     assert ast == expected_ast
 
 
-def _extract_time(x):
-    # Try 24-hour formats first, then 12-hour formats.
-    for fmt in ("%H:%M:%S", "%H:%M", "%I:%M %p", "%I:%M:%S %p", "%I:%M:%S.%f %p"):
-        try:
-            return datetime.strptime(x, fmt).time().isoformat()
-        except Exception:
-            continue
-    # If x is a datetime string (ISO format), try to convert it directly.
-    try:
-        dt = datetime.fromisoformat(x)
-        return dt.time().isoformat()
-    except Exception:
-        raise ValueError(f"Cannot parse time from {x}")
-
-
 @pytest.mark.parametrize(
-    "expression, values",
+    "expression, values, expected",
     [
         # Arithmetic
-        ("(a + b) > 10", {"a": 5, "b": 8}),
-        ("(a - b) == 2", {"a": 5, "b": 3}),
-        ("(a * b) == 15", {"a": 3, "b": 5}),
-        ("(a / b) == 2", {"a": 10, "b": 5}),
-        ("(a % b) == 1", {"a": 10, "b": 3}),
-        ("((a**2 + b**2)**0.5) == 10", {"a": 6.0, "b": 8.0}),
+        ("(a + b) > 10", {"a": 5, "b": 8}, True),
+        ("(a - b) == 2", {"a": 5, "b": 3}, True),
+        ("(a * b) == 15", {"a": 3, "b": 5}, True),
+        ("(a / b) == 2", {"a": 10, "b": 5}, True),
+        ("(a % b) == 1", {"a": 10, "b": 3}, True),
+        ("((a**2 + b**2)**0.5) == 10", {"a": 6.0, "b": 8.0}, True),
         # String arithmetic
-        ("(a + b) == 'apple banana'", {"a": "apple", "b": " banana"}),
+        ("(a + b) == 'apple banana'", {"a": "apple", "b": " banana"}, True),
         # Logical
-        ("(a > 5) and (b < 10)", {"a": 6, "b": 9}),
-        ("(a < 5) or (b > 10)", {"a": 4, "b": 11}),
-        ("not (a == 5)", {"a": 4}),
+        ("(a > 5) and (b < 10)", {"a": 6, "b": 9}, True),
+        ("(a < 5) or (b > 10)", {"a": 4, "b": 11}, True),
+        ("not (a == 5)", {"a": 4}, True),
         # Comparison
-        ("a == 5", {"a": 5}),
-        ("a != 5", {"a": 4}),
-        ("a < 5", {"a": 4}),
-        ("a > 5", {"a": 6}),
-        ("a <= 5", {"a": 5}),
-        ("a >= 5", {"a": 5}),
+        ("a == 5", {"a": 5}, True),
+        ("a != 5", {"a": 4}, True),
+        ("a < 5", {"a": 4}, True),
+        ("a > 5", {"a": 6}, True),
+        ("a <= 5", {"a": 5}, True),
+        ("a >= 5", {"a": 5}, True),
         # Membership
-        ("a in [1, 2, 3]", {"a": 2}),
-        ("a not in [1, 2, 3]", {"a": 4}),
+        ("a in [1, 2, 3]", {"a": 2}, True),
+        ("a not in [1, 2, 3]", {"a": 4}, True),
         # Indexing + Rounding
-        ("round(x['some_key'], 2) >= 100.44", {"x": {"some_key": 100.4479}}),
+        ("round(x['some_key'], 2) >= 100.44", {"x": {"some_key": 100.4479}}, True),
         (
             "round_timestamp(x['_timestamp'], 5) == '1993-03-23T00:00:02+00:00'",
             {
@@ -727,6 +712,7 @@ def _extract_time(x):
                     ).isoformat(),
                 },
             },
+            False,
         ),
         # Round to nearest 5 seconds - should round down
         (
@@ -744,6 +730,7 @@ def _extract_time(x):
                     ).isoformat(),
                 },
             },
+            True,
         ),
         # Round to nearest minute (60 seconds)
         (
@@ -761,6 +748,7 @@ def _extract_time(x):
                     ).isoformat(),
                 },
             },
+            True,
         ),
         # Round to nearest 15 minutes (900 seconds)
         (
@@ -778,6 +766,7 @@ def _extract_time(x):
                     ).isoformat(),
                 },
             },
+            True,
         ),
         (
             "x['timestamps'][0]['time1'] >= '1993-03-25T00:00:00+00:00'",
@@ -797,33 +786,80 @@ def _extract_time(x):
                     ],
                 },
             },
+            False,
         ),
         # Nested Logical and Arithmetic
-        ("((a + b) > 10) and ((c * d) < 20)", {"a": 5, "b": 8, "c": 2, "d": 3}),
-        ("((a - b) == 2) or ((e / f) == 3)", {"a": 5, "b": 3, "e": 9, "f": 3}),
+        ("((a + b) > 10) and ((c * d) < 20)", {"a": 5, "b": 8, "c": 2, "d": 3}, True),
+        ("((a - b) == 2) or ((e / f) == 3)", {"a": 5, "b": 3, "e": 9, "f": 3}, True),
         # More Complex Nested Expressions
-        ("(len(a) == 3) and ((b + c) > 10)", {"a": [1, 2, 3], "b": 5, "c": 6}),
-        ("(to_str(a) == 'abc') or (len(b) == 2)", {"a": "abc", "b": [1, 2]}),
+        ("(len(a) == 3) and ((b + c) > 10)", {"a": [1, 2, 3], "b": 5, "c": 6}, True),
+        ("(to_str(a) == 'abc') or (len(b) == 2)", {"a": "abc", "b": [1, 2]}, True),
         # Using exists with nested conditions
-        ("exists(a) and (b > 5)", {"a": 5, "b": 6}),
-        ("not exists(c) or (d < 10)", {"d": 9}),
+        ("exists(a) and (b > 5)", {"a": 5, "b": 6}, True),
+        ("not exists(c) or (d < 10)", {"d": 9}, True),
         # Testing isNone function
-        ("isNone(field1)", {"field1": None}),
-        ("not isNone(field2)", {"field2": "non-null"}),
-        ("isNone(field3)", {"field3": None}),
-        ("not isNone(field4)", {"field4": 0}),
+        ("isNone(field1)", {"field1": None}, True),
+        ("not isNone(field2)", {"field2": "non-null"}, True),
+        ("isNone(field3)", {"field3": None}, True),
+        ("not isNone(field4)", {"field4": 0}, True),
         # 1. datetime object.
-        ("time(a) == '14:30:00'", {"a": datetime(2023, 5, 4, 14, 30, 0).isoformat()}),
+        (
+            "time(a) == '14:30:00'",
+            {"a": datetime(2023, 5, 4, 14, 30, 0).isoformat()},
+            True,
+        ),
         # 2. 24-hour formatted time string.
-        ("time(a) == '14:30:00'", {"a": "14:30:00"}),
+        ("time(a) == '14:30:00'", {"a": "14:30:00"}, True),
         # 3. 12-hour formatted time string.
-        ("time(a) == '14:30:00'", {"a": "2:30 PM"}),
+        ("time(a) == '14:30:00'", {"a": "2:30 PM"}, True),
         # 4.the time does not match.
-        ("time(a) != '14:30:00'", {"a": "15:00:00"}),
+        ("time(a) != '14:30:00'", {"a": "15:00:00"}, True),
+        # 5. Date extraction from timestamp
+        ("date(ts) == '2023-01-01'", {"ts": "2023-01-01T12:00:00"}, True),
+        # 6. Date comparison (less than)
+        ("date(ts) < '2023-01-02'", {"ts": "2023-01-01T23:59:59"}, True),
+        # 7. Date comparison (greater than)
+        ("date(ts) > '2022-12-31'", {"ts": "2023-01-01T00:00:01"}, True),
+        # 8. Date comparison (not equal)
+        ("date(ts) != '2023-01-02'", {"ts": "2023-01-01T12:00:00"}, True),
+        # 9. Timedelta arithmetic - adding hours to timestamp
+        ("ts + 'PT1H' == '2023-01-01T13:00:00'", {"ts": "2023-01-01T12:00:00"}, True),
+        # 10. Timedelta arithmetic - adding days to timestamp
+        ("ts + 'P1D' == '2023-01-02T12:00:00'", {"ts": "2023-01-01T12:00:00"}, True),
+        # 11. Timedelta arithmetic - subtracting hours from timestamp
+        ("ts - 'PT2H' == '2023-01-01T10:00:00'", {"ts": "2023-01-01T12:00:00"}, True),
+        # 12. Date subtraction resulting in timedelta
+        (
+            "date2 - date1 == 'P1D'",
+            {"date1": "2023-01-01", "date2": "2023-01-02"},
+            True,
+        ),
+        # 13. Time difference between two timestamps
+        (
+            "time2 - time1 == 'PT1H'",
+            {"time1": "2023-01-01T12:00:00", "time2": "2023-01-01T13:00:00"},
+            True,
+        ),
+        # 14. Complex date arithmetic with multiple operations
+        (
+            "(date1 + 'P1D') - date2 == 'P0D'",
+            {"date1": "2023-01-01", "date2": "2023-01-02"},
+            True,
+        ),
+        # 15. Comparing date with extracted date from timestamp
+        (
+            "date(ts) == date1",
+            {"ts": "2023-01-01T12:00:00", "date1": "2023-01-01"},
+            True,
+        ),
     ],
 )
-async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, values):
-
+async def test_log_filter_helper_w_arithmetic(
+    client: AsyncClient,
+    expression,
+    values,
+    expected,
+):
     project_name = "test_filter_helper"
     _ = await _create_project(client, project_name, user=1)
     response = await client.post(
@@ -839,56 +875,6 @@ async def test_log_filter_helper_w_arithmetic(client: AsyncClient, expression, v
     )
     assert response.status_code == 200, response.text
     result = len(response.json()["logs"]) == 1
-    for key, value in values.items():
-        exec(
-            key
-            + "="
-            + (
-                str(value)
-                if isinstance(value, bool) or value is None
-                else json.dumps(value)
-            ),
-        )
-
-    # Replace to_str with str in the expression for evaluation
-    eval_expression = expression.replace("to_str", "str")
-
-    # Handle exists checks
-    if "not exists" in eval_expression:
-        expected = eval_expression.split("exists(")[-1].split(")")[0] not in values
-    elif "exists" in eval_expression:
-        expected = eval_expression.split("exists(")[-1].split(")")[0] in values
-    elif "not isNone" in eval_expression:
-        expected = eval(eval_expression.split("isNone(")[-1].split(")")[0]) is not None
-    elif "isNone" in eval_expression:
-        expected = eval(eval_expression.split("isNone(")[-1].split(")")[0]) is None
-    elif "time(" in eval_expression:
-        # Handle time() function evaluation
-        time_arg = eval_expression.split("time(")[-1].split(")")[0].strip()
-        time_str = _extract_time(eval(time_arg))
-        # Replace the time() function call with the actual time string
-        eval_expression = eval_expression.replace(f"time({time_arg})", f"'{time_str}'")
-        expected = eval(eval_expression)
-    elif "round_timestamp" in eval_expression:
-        ts_expr, sec_expr = (
-            eval_expression.split("round_timestamp(")[-1].split(")")[0].split(",")
-        )
-        ts_expr = ts_expr.strip()
-        sec_expr = int(sec_expr.strip())
-        ts_value = datetime.fromisoformat(eval(ts_expr))
-        rounded_ts = datetime.fromtimestamp(
-            round(ts_value.timestamp() / sec_expr) * sec_expr,
-            tz=ts_value.tzinfo,
-        )
-        rounded_ts_iso = rounded_ts.isoformat()
-        eval_expression = eval_expression.replace(
-            "round_timestamp({}, {})".format(ts_expr, sec_expr),
-            "'{}'".format(rounded_ts_iso),
-        )
-        expected = eval(eval_expression)
-    else:
-        expected = eval(eval_expression)
-
     assert result == expected
 
 
