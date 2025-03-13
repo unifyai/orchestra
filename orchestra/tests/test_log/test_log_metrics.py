@@ -341,17 +341,17 @@ async def test_get_logs_metric_grouped(client: AsyncClient):
     expected_states = ["liquid->gas", "liquid->solid", "gas"]
     for state in expected_states:
         assert state in result, f"Expected state '{state}' in grouped results"
-        assert isinstance(
-            result[state],
-            (int, float),
-        ), f"Value for state '{state}' should be numeric"
+        # Check that result[state] is a dict with numeric values
+        assert all(
+            isinstance(value, (int, float)) for value in result[state].values()
+        ), f"All values for state '{state}' should be numeric"
 
     # Verify values for specific states
     # For liquid->gas state (boiling water), temperature should be 100.0
-    assert np.isclose(result["liquid->gas"], 100.0, atol=1e-6)
+    assert np.isclose(result["liquid->gas"]["shared_value"], 100.0, atol=1e-6)
 
     # For liquid->solid state (freezing water and freezing nitrogen), mean should be (-210 + 0) / 2 = -105.0
-    assert np.isclose(result["liquid->solid"], -105.0, atol=1e-6)
+    assert np.isclose(result["liquid->solid"]["mean"], -105.0, atol=1e-6)
 
     # Test 3: Single-level grouping by derived field
     response = await client.get(
@@ -404,16 +404,16 @@ async def test_get_logs_metric_grouped(client: AsyncClient):
                 "False" in safe_dict
             ), "Expected 'False' safety value for liquid->solid"
             # freezing water (safe=true) has temp=0, freezing nitrogen (safe=false) has temp=-210
-            assert np.isclose(safe_dict["True"], 0.0, atol=1e-6)
-            assert np.isclose(safe_dict["False"], -210.0, atol=1e-6)
+            assert np.isclose(safe_dict["True"]["shared_value"], 0.0, atol=1e-6)
+            assert np.isclose(safe_dict["False"]["shared_value"], -210.0, atol=1e-6)
         elif state == "liquid->gas":
             assert "False" in safe_dict, "Expected 'False' safety value for liquid->gas"
             # boiling water (safe=false) has temp=100
-            assert np.isclose(safe_dict["False"], 100.0, atol=1e-6)
+            assert np.isclose(safe_dict["False"]["shared_value"], 100.0, atol=1e-6)
         elif state == "gas":
             assert "False" in safe_dict, "Expected 'False' safety value for gas"
             # surface of sun (safe=false) has temp=6000
-            assert np.isclose(safe_dict["False"], 6000.0, atol=1e-6)
+            assert np.isclose(safe_dict["False"]["shared_value"], 6000.0, atol=1e-6)
 
     # Test 5: Grouping with filter expression
     response = await client.get(
@@ -433,7 +433,7 @@ async def test_get_logs_metric_grouped(client: AsyncClient):
     assert (
         "liquid->solid" in result
     ), "Expected 'liquid->solid' state in filtered results"
-    assert np.isclose(result["liquid->solid"], 0.0, atol=1e-6)
+    assert np.isclose(result["liquid->solid"]["shared_value"], 0.0, atol=1e-6)
     assert (
         "liquid->gas" not in result
     ), "Unsafe 'liquid->gas' state should not be in filtered results"
@@ -459,11 +459,11 @@ async def test_get_logs_metric_grouped(client: AsyncClient):
 
         # Check specific values for liquid->solid state
         if metric == "min":
-            assert np.isclose(result["liquid->solid"], -210.0, atol=1e-6)
+            assert np.isclose(result["liquid->solid"][metric], -210.0, atol=1e-6)
         elif metric == "max":
-            assert np.isclose(result["liquid->solid"], 0.0, atol=1e-6)
+            assert np.isclose(result["liquid->solid"][metric], 0.0, atol=1e-6)
         elif metric == "sum":
-            assert np.isclose(result["liquid->solid"], -210.0 + 0.0, atol=1e-6)
+            assert np.isclose(result["liquid->solid"][metric], -210.0 + 0.0, atol=1e-6)
 
 
 @pytest.mark.anyio
@@ -550,24 +550,32 @@ async def test_get_logs_metric_batched_with_grouping(client: AsyncClient):
 
     # Verify specific values for each metric
     # For liquid->gas state (boiling water), temperature should be 100.0
-    assert np.isclose(temp_results["liquid->gas"], 100.0, atol=1e-6)
+    assert np.isclose(temp_results["liquid->gas"]["shared_value"], 100.0, atol=1e-6)
     # Derived temp should be 10 more than the original temperature
-    assert np.isclose(derived_temp_results["liquid->gas"], 110.0, atol=1e-6)
+    assert np.isclose(
+        derived_temp_results["liquid->gas"]["shared_value"],
+        110.0,
+        atol=1e-6,
+    )
 
     # For liquid->solid state (freezing water and freezing nitrogen), mean should be (-210 + 0) / 2 = -105.0
-    assert np.isclose(temp_results["liquid->solid"], -105.0, atol=1e-6)
+    assert np.isclose(temp_results["liquid->solid"]["mean"], -105.0, atol=1e-6)
     # Derived temp should be 10 more than the original temperature
-    assert np.isclose(derived_temp_results["liquid->solid"], -95.0, atol=1e-6)
+    assert np.isclose(derived_temp_results["liquid->solid"]["mean"], -95.0, atol=1e-6)
 
     # For gas state (surface of the sun), temperature should be 6000.0
-    assert np.isclose(temp_results["gas"], 6000.0, atol=1e-6)
+    assert np.isclose(temp_results["gas"]["shared_value"], 6000.0, atol=1e-6)
     # Derived temp should be 10 more than the original temperature
-    assert np.isclose(derived_temp_results["gas"], 6010.0, atol=1e-6)
+    assert np.isclose(derived_temp_results["gas"]["shared_value"], 6010.0, atol=1e-6)
 
     # Check state_len values - state_len for "liquid->gas" is 11, "liquid->solid" is 13, "gas" is 3
-    assert np.isclose(state_len_results["liquid->gas"], 11.0, atol=1e-6)
-    assert np.isclose(state_len_results["liquid->solid"], 13.0, atol=1e-6)
-    assert np.isclose(state_len_results["gas"], 3.0, atol=1e-6)
+    assert np.isclose(state_len_results["liquid->gas"]["shared_value"], 11.0, atol=1e-6)
+    assert np.isclose(
+        state_len_results["liquid->solid"]["shared_value"],
+        13.0,
+        atol=1e-6,
+    )
+    assert np.isclose(state_len_results["gas"]["shared_value"], 3.0, atol=1e-6)
 
     # Test 2: Batched metrics with multi-level (nested) grouping
     response = await client.get(
@@ -622,12 +630,24 @@ async def test_get_logs_metric_batched_with_grouping(client: AsyncClient):
             ), "Expected 'false' safety value for liquid->solid"
 
             # freezing water (safe=true) has temp=0, freezing nitrogen (safe=false) has temp=-210
-            assert np.isclose(temp_safe_dict["True"], 0.0, atol=1e-6)
-            assert np.isclose(temp_safe_dict["False"], -210.0, atol=1e-6)
+            assert np.isclose(temp_safe_dict["True"]["shared_value"], 0.0, atol=1e-6)
+            assert np.isclose(
+                temp_safe_dict["False"]["shared_value"],
+                -210.0,
+                atol=1e-6,
+            )
 
             # Derived temp should be 10 more than the original temperature
-            assert np.isclose(derived_temp_safe_dict["True"], 10.0, atol=1e-6)
-            assert np.isclose(derived_temp_safe_dict["False"], -200.0, atol=1e-6)
+            assert np.isclose(
+                derived_temp_safe_dict["True"]["shared_value"],
+                10.0,
+                atol=1e-6,
+            )
+            assert np.isclose(
+                derived_temp_safe_dict["False"]["shared_value"],
+                -200.0,
+                atol=1e-6,
+            )
 
         elif state == "liquid->gas":
             # Only false safety value for liquid->gas
@@ -636,20 +656,32 @@ async def test_get_logs_metric_batched_with_grouping(client: AsyncClient):
             ), "Expected 'false' safety value for liquid->gas"
 
             # boiling water (safe=false) has temp=100
-            assert np.isclose(temp_safe_dict["False"], 100.0, atol=1e-6)
+            assert np.isclose(temp_safe_dict["False"]["shared_value"], 100.0, atol=1e-6)
 
             # Derived temp should be 10 more than the original temperature
-            assert np.isclose(derived_temp_safe_dict["False"], 110.0, atol=1e-6)
+            assert np.isclose(
+                derived_temp_safe_dict["False"]["shared_value"],
+                110.0,
+                atol=1e-6,
+            )
 
         elif state == "gas":
             # Only false safety value for gas
             assert "False" in temp_safe_dict, "Expected 'false' safety value for gas"
 
             # surface of sun (safe=false) has temp=6000
-            assert np.isclose(temp_safe_dict["False"], 6000.0, atol=1e-6)
+            assert np.isclose(
+                temp_safe_dict["False"]["shared_value"],
+                6000.0,
+                atol=1e-6,
+            )
 
             # Derived temp should be 10 more than the original temperature
-            assert np.isclose(derived_temp_safe_dict["False"], 6010.0, atol=1e-6)
+            assert np.isclose(
+                derived_temp_safe_dict["False"]["shared_value"],
+                6010.0,
+                atol=1e-6,
+            )
 
 
 @pytest.mark.anyio
@@ -843,11 +875,17 @@ async def test_get_logs_metric_shared_value_reduction(client: AsyncClient):
     assert isinstance(result, dict), "Grouped result should be a dictionary"
 
     # For Group A, all scores are 10, so the result should be exactly 10 (shared value)
-    assert result["A"] == 10, "Group A should return the shared value 10 directly"
+    assert (
+        "shared_value" in result["A"]
+    ), "Group A should return the shared value 10 directly"
+    assert (
+        result["A"]["shared_value"] == 10
+    ), "Group A should return the shared value 10 directly"
 
     # For Group B, scores are 5, 10, 15, so the mean is 10
+    assert "mean" in result["B"], "Group B should return the mean value"
     assert np.isclose(
-        result["B"],
+        result["B"]["mean"],
         10.0,
         atol=1e-6,
     ), "Group B should compute the mean as 10.0"
@@ -866,11 +904,19 @@ async def test_get_logs_metric_shared_value_reduction(client: AsyncClient):
 
     # For Group C, all texts are "identical text", so the result should be that exact string
     assert (
-        result["C"] == "identical text"
+        "shared_value" in result["C"]
+    ), "Group C should return the shared text value directly"
+    assert (
+        result["C"]["shared_value"] == "identical text"
     ), "Group C should return the shared text value directly"
 
     # For Group D, texts are different, so the result should be numeric
-    assert isinstance(result["D"], float), "Group D should return a numeric value"
+    assert "mean" in result["D"], "Group D should return the mean value"
+    assert np.isclose(
+        result["D"]["mean"],
+        6.0,
+        atol=1e-6,
+    ), "Group D should compute the mean as 6.0"
 
     # Test 3: Boolean field with shared values (Group E)
     response = await client.get(
@@ -886,10 +932,14 @@ async def test_get_logs_metric_shared_value_reduction(client: AsyncClient):
 
     # For Group E, all is_valid values are True, so the result should be True
     assert (
-        result["E"] is True
+        "shared_value" in result["E"]
+    ), "Group E should return the shared boolean value True directly"
+    assert (
+        result["E"]["shared_value"] is True
     ), "Group E should return the shared boolean value True directly"
 
     # For Group F, is_valid values are mixed (True, False, True), so no shared value
+    assert "mean" in result["F"], "Group F should return the mean value"
     assert (
         result["F"] is not True
     ), "Group F should not return True for mixed boolean values"
@@ -909,7 +959,10 @@ async def test_get_logs_metric_shared_value_reduction(client: AsyncClient):
     # For Group F, all config objects are identical, so the result should be that object
     expected_config = {"mode": "test", "retry": 3}
     assert (
-        result["F"] == expected_config
+        "shared_value" in result["F"]
+    ), "Group F should return the shared config object directly"
+    assert (
+        result["F"]["shared_value"] == expected_config
     ), "Group F should return the shared config object directly"
 
     # Test 5: Verify shared value reduction works for all metrics on Group A's score
@@ -927,5 +980,5 @@ async def test_get_logs_metric_shared_value_reduction(client: AsyncClient):
 
         # For Group A, all scores are 10, so all metrics should return 10
         assert (
-            result["A"] == 10
+            result["A"]["shared_value"] == 10
         ), f"Group A should return the shared value 10 directly for metric {metric}"
