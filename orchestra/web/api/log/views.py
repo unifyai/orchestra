@@ -5,9 +5,7 @@ Includes endpoints related to entries.
 
 import json
 from collections import defaultdict
-from datetime import datetime
-from datetime import time as dt_time
-from datetime import timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
 from json import JSONDecodeError
@@ -658,6 +656,56 @@ def prepare_resolved_ids(
     return resolved_ids
 
 
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        elif isinstance(obj, time):
+            return obj.strftime("%H:%M:%S.%f")
+        elif isinstance(obj, date):
+            # Handle both datetime and date objects
+            if isinstance(obj, datetime):
+                # Return ISO format with timezone info if available
+                if obj.tzinfo is not None:
+                    return obj.isoformat()
+                return obj.replace(tzinfo=timezone.utc).isoformat()
+            # For plain date objects
+            return obj.isoformat()
+        elif isinstance(obj, timedelta):
+            # Convert to ISO 8601 duration format
+            # Format: P[n]Y[n]M[n]DT[n]H[n]M[n]S
+            total_seconds = obj.total_seconds()
+            hours = int(total_seconds // 3600)
+            minutes = int((total_seconds % 3600) // 60)
+            seconds = total_seconds % 60
+
+            # Build duration string
+            duration = "P"
+            if obj.days:
+                duration += f"{obj.days}D"
+
+            # Add time part if there are hours, minutes, or seconds
+            if hours or minutes or seconds:
+                duration += "T"
+                if hours:
+                    duration += f"{hours}H"
+                if minutes:
+                    duration += f"{minutes}M"
+                if seconds:
+                    # Handle fractional seconds
+                    if seconds == int(seconds):
+                        duration += f"{int(seconds)}S"
+                    else:
+                        duration += f"{seconds:g}S"  # :g removes trailing zeros
+
+            # Handle zero duration edge case
+            if duration == "P":
+                duration = "PT0S"
+
+            return duration
+        return super().default(obj)
+
+
 @router.post(
     "/logs/derived",
     responses={
@@ -776,14 +824,6 @@ def create_derived_entry(
         )
 
         # Create a new derived log entry for each computed value
-        class DecimalEncoder(json.JSONEncoder):
-            def default(self, obj):
-                if isinstance(obj, Decimal):
-                    return float(obj)
-                elif isinstance(obj, dt_time):
-                    return obj.strftime("%H:%M:%S.%f")
-                return super().default(obj)
-
         new_derived_logs = []
         # Iterate over the computed values and resolved IDs
         for i, (_, value) in enumerate(computed_values):
@@ -989,7 +1029,11 @@ def update_derived_log(
             session.query(DerivedLog).filter(DerivedLog.id.in_(updated_log_ids)).all()
         )
         # recompute
-        derived_log_dao.recompute_derived_logs(updated_objs, session)
+        derived_log_dao.recompute_derived_logs(
+            logs_to_recompute=updated_objs,
+            session=session,
+            json_encoder=DecimalEncoder,
+        )
         return {"info": f"Updated {len(updated_objs)} derived logs successfully."}
 
     # 6) If new_refs *is* provided, do the "delete & re-insert" approach
@@ -1088,7 +1132,11 @@ def update_derived_log(
         session.commit()
 
         # Recompute values for all newly inserted derived logs
-        derived_log_dao.recompute_derived_logs(new_derived_logs, session)
+        derived_log_dao.recompute_derived_logs(
+            logs_to_recompute=new_derived_logs,
+            session=session,
+            json_encoder=DecimalEncoder,
+        )
 
         return {
             "info": f"Updated references and replaced {len(valid_logs)} old derived logs with {len(new_derived_logs)} new ones.",
@@ -1401,8 +1449,9 @@ def update_logs(
             )
             if derived_logs_to_recompute:
                 derived_log_dao.recompute_derived_logs(
-                    derived_logs_to_recompute,
-                    session,
+                    logs_to_recompute=derived_logs_to_recompute,
+                    session=session,
+                    json_encoder=DecimalEncoder,
                 )
         except Exception as e:
             raise HTTPException(
