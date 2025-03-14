@@ -2424,3 +2424,99 @@ async def test_get_logs_w_str_filtering(client: AsyncClient):
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result["logs"]) == 1
+
+
+@pytest.mark.anyio
+async def test_complex_string_filter_expressions(client: AsyncClient):
+    """
+    Test that filter expressions correctly match complex strings with special characters,
+    multi-line content, and various formatting.
+    """
+    project_name = "test_complex_string_filters"
+    user_id = 1
+
+    # Create project
+    await _create_project(client, project_name, user=user_id)
+
+    # Example 1: Math problem with special characters and formatting
+    math_question = """
+        5 The table below shows the number of tonnes of rice produced in a year in five countries:
+
+        Country   | Rice produced (tonnes)
+        ----------------------------------
+        China     | 1.43 × 10⁸
+        India     | 9.9 × 10⁷
+        Vietnam   | 2.71 × 10⁷
+        Thailand  | 2.05 × 10⁷
+        Brazil    | 7.82 × 10⁶
+
+        (a) Which country produced the most rice?
+        (a) …………………………………… [1]
+
+        (b) Write 2.71 × 10⁷ as an ordinary number.
+        (b) …………………………………… [1]
+
+        (c) One tonne is equal to 1000 kilograms.
+        Change 7.82 × 10⁶ tonnes to kilograms.
+        Give your answer in standard form.
+        (c) …………………………………… kg [2]
+
+        (d) How many more tonnes of rice did India produce than Thailand?
+        Give your answer in standard form.
+        (d) …………………………………… tonnes [2]
+        """
+
+    # Example 2: Probability problem with bullet points
+    probability_question = """21. Louise travels to work and home again by train.
+            • The probability that her train to work is late is 0.7.
+            • The probability that her train home is late is 0.4.
+
+            What is the probability that at least one of her trains is late?"""
+    # Create logs with these complex strings
+    math_log_id = (
+        await _create_log(
+            client,
+            project_name,
+            user=user_id,
+            entries={"content": math_question},
+        )
+    ).json()[0]
+
+    probability_log_id = (
+        await _create_log(
+            client,
+            project_name,
+            user=user_id,
+            entries={"content": probability_question},
+        )
+    ).json()[0]
+
+    # Test 1: Filter for the math question
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": f"content == '{math_question}'",
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert len(data["logs"]) == 1, "Expected exactly 1 log matching the math question"
+    assert data["logs"][0]["id"] == math_log_id
+
+    # Test 2: Filter for the probability question
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": f"content == '{probability_question}'",
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert (
+        len(data["logs"]) == 1
+    ), "Expected exactly 1 log matching the probability question"
+    assert data["logs"][0]["id"] == probability_log_id
