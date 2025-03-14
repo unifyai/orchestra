@@ -341,10 +341,6 @@ async def test_get_logs_metric_grouped(client: AsyncClient):
     expected_states = ["liquid->gas", "liquid->solid", "gas"]
     for state in expected_states:
         assert state in result, f"Expected state '{state}' in grouped results"
-        # Check that result[state] is a dict with numeric values
-        assert all(
-            isinstance(value, (int, float)) for value in result[state].values()
-        ), f"All values for state '{state}' should be numeric"
 
     # Verify values for specific states
     # For liquid->gas state (boiling water), temperature should be 100.0

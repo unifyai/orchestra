@@ -3295,10 +3295,10 @@ def _compute_metric_for_key_grouped(
 
             # First check if all values are identical (shared value reduction)
             shared_value = _reduce_shared_value(raw_values)
-
+            result[str(group_val)] = {"shared_value": None, metric: None}
             if shared_value is not None:
                 # If we have a shared value, use it directly
-                result[str(group_val)] = {"shared_value": shared_value}
+                result[str(group_val)]["shared_value"] = shared_value
             else:
                 # Otherwise, use the aggregated value
                 # Post-process the aggregated value
@@ -3308,7 +3308,7 @@ def _compute_metric_for_key_grouped(
                     field_type,
                 )
                 # Add to result
-                result[str(group_val)] = {metric: processed_value}
+                result[str(group_val)][metric] = processed_value
     else:
         # For multi-level grouping, build a nested dictionary
         for row in rows:
@@ -3327,10 +3327,10 @@ def _compute_metric_for_key_grouped(
 
             # First check if all values are identical (shared value reduction)
             shared_value = _reduce_shared_value(raw_values)
-
+            current_dict[str(last_group_val)] = {"shared_value": None, metric: None}
             if shared_value is not None:
                 # If we have a shared value, use it directly
-                current_dict[str(last_group_val)] = {"shared_value": shared_value}
+                current_dict[str(last_group_val)]["shared_value"] = shared_value
             else:
                 # Otherwise, use the aggregated value
                 # Post-process the aggregated value
@@ -3340,7 +3340,7 @@ def _compute_metric_for_key_grouped(
                     field_type,
                 )
                 # Add to the nested dictionary
-                current_dict[str(last_group_val)] = {metric: processed_value}
+                current_dict[str(last_group_val)][metric] = processed_value
 
     return result
 
