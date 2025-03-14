@@ -73,7 +73,7 @@ groupings = {
         "Custom API keys",
         "Endpoint Metrics",
     ],
-    "Interfaces": [
+    "Logging": [
         "Datasets",
         "Dataset Artifacts",
         "Projects",
