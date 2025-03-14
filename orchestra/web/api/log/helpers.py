@@ -1304,13 +1304,13 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session, log_event
             expr = lval >= rhs
         elif operand == "is":
             expr = (
-                lval.is_(rhs)
+                lval.is_(None)
                 if rhs is None or isinstance(rhs, BindParameter) and rhs.value is None
                 else lval == rhs
             )
         elif operand == "is not":
             expr = (
-                lval.isnot(rhs)
+                lval.isnot(None)
                 if rhs is None or isinstance(rhs, BindParameter) and rhs.value is None
                 else lval != rhs
             )
@@ -1342,7 +1342,7 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session, log_event
             expr = lhs >= rval
         elif operand == "is":
             expr = (
-                lhs.is_(rval)
+                lhs.is_(None)
                 if rval is None
                 or isinstance(rval, BindParameter)
                 and rval.value is None
@@ -1350,7 +1350,7 @@ def _handle_comparison_operator(filter_dict, log_event_alias, session, log_event
             )
         elif operand == "is not":
             expr = (
-                lhs.isnot(rval)
+                lhs.isnot(None)
                 if rval is None
                 or isinstance(rval, BindParameter)
                 and rval.value is None
