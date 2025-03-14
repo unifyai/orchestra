@@ -25,6 +25,7 @@ from sqlalchemy import (
     exists,
     func,
     literal,
+    literal_column,
     not_,
     or_,
     select,
@@ -680,6 +681,11 @@ def _build_subquery_for_identifier(
       - id (to allow joining)
       - several casted columns (str_value, int_value, float_value, bool_value, jsonb_value)
     """
+
+    def extract_json_text(col):
+        # This uses the PostgreSQL operator ->> to extract the JSON scalar as text.
+        return col.op("#>>")(literal_column("'{}'"))
+
     log_alias = aliased(Log, name="log_alias")
     derived_log_alias = aliased(DerivedLog, name="derived_log_alias")
     if log_event_ids is None:
@@ -769,8 +775,8 @@ def _build_subquery_for_identifier(
             else_=None,
         ).label("timedelta_value"),
         case(
-            (log_alias.inferred_type == "str", cast(log_alias.value, String)),
-            (log_alias.inferred_type == "image", cast(log_alias.value, String)),
+            (log_alias.inferred_type == "str", extract_json_text(log_alias.value)),
+            (log_alias.inferred_type == "image", extract_json_text(log_alias.value)),
             else_=None,
         ).label("str_value"),
         case(
@@ -836,7 +842,7 @@ def _build_subquery_for_identifier(
         case(
             (
                 derived_log_alias.inferred_type == "str",
-                cast(derived_log_alias.value, String),
+                extract_json_text(derived_log_alias.value),
             ),
             else_=None,
         ).label("str_value"),
