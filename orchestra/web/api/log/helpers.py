@@ -259,7 +259,12 @@ def _tokenize(s):
         elif kind == "STRING":
             # Remove the surrounding quotes and unescape
             unquoted_value = value[1:-1]
-            unquoted_value = bytes(unquoted_value, "utf-8").decode("unicode_escape")
+            # If you want to allow embedded quotes or backslashes:
+            unquoted_value = (
+                unquoted_value.replace(r"\"", '"')
+                .replace(r"\'", "'")
+                .replace(r"\\", "\\")
+            )
 
             # Check for special string types
             if _is_date_string(unquoted_value):
@@ -2207,11 +2212,15 @@ def _handle_index_operator(filter_dict, log_event_alias, session, log_event_ids)
                 if isinstance(rhs_expr, BindParameter):
                     # get the actual python value
                     key_or_idx = rhs_expr.value
-                    key_or_idx = (
-                        json.loads(key_or_idx)
-                        if isinstance(key_or_idx, str)
-                        else key_or_idx
-                    )
+                    # We need to handle string keys properly for dictionary indexing
+                    # but we don't want to use json.loads which can cause issues with special characters
+                    if (
+                        isinstance(key_or_idx, str)
+                        and key_or_idx.startswith("'")
+                        and key_or_idx.endswith("'")
+                    ):
+                        # This is a string key in quotes, extract the actual key
+                        key_or_idx = key_or_idx[1:-1]
                     extracted = lhs_valcol[key_or_idx]
                 else:
                     # fallback
@@ -2328,11 +2337,8 @@ def build_sql_query(filter_dict, log_event_alias, session, log_event_ids):
             )
         elif filter_dict["type"] == "type_literal":
             return literal(filter_dict["value"])
-        elif filter_dict["type"] in ("int", "float", "bool", "other"):
+        elif filter_dict["type"] in ("int", "float", "bool", "string", "other"):
             return literal(filter_dict["value"])
-        elif filter_dict["type"] == "string":
-            return literal(json.dumps(filter_dict["value"]))  # convert to json string
-
     operand = filter_dict.get("operand")
 
     # Handle logical operators (and, or, not)
