@@ -128,3 +128,76 @@ async def test_update_logs_multi_values(client: AsyncClient):
     response = await _get_log(client, project_name, log_id2)
     assert response.status_code == 200, response.json()
     assert response.json()["logs"][0]["entries"]["new_entry"] == "Second updated value"
+
+
+@pytest.mark.anyio
+async def test_update_logs_with_context_string(client: AsyncClient):
+    """Test updating logs with context provided as a string."""
+    project_name = "context-string-project"
+    _ = await _create_project(client, project_name)
+
+    # Create a context
+    context_name = "test-context"
+    # Create a log
+    response = await _create_log(client, project_name, context=context_name)
+    assert response.status_code == 200, response.json()
+    log_id = response.json()[0]
+
+    # Update log with context as string
+    entries = {
+        "new_entry": "Updated with string context",
+        "explicit_types": {"new_entry": {"type": "str", "mutable": True}},
+    }
+    response = await _update_logs(client, [log_id], entries, context=context_name)
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs updated successfully!"
+
+    # Verify update
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    assert len(response.json()["logs"]) == 1
+    assert (
+        response.json()["logs"][0]["entries"]["new_entry"]
+        == "Updated with string context"
+    )
+
+
+@pytest.mark.anyio
+async def test_update_logs_with_context_list(client: AsyncClient):
+    """Test updating logs with context provided as a list of strings."""
+    project_name = "context-list-project"
+    _ = await _create_project(client, project_name)
+
+    # Create multiple contexts
+    log_ids = []
+    context_names = ["context1", "context2"]
+    for context_name in context_names:
+        # Create a log
+        response = await _create_log(client, project_name, context=context_name)
+        assert response.status_code == 200, response.json()
+        log_ids.append(response.json()[0])
+
+    # Update log with context as list of strings
+    entries = {
+        "new_entry": "Updated with list of contexts",
+        "explicit_types": {"new_entry": {"type": "str", "mutable": True}},
+    }
+    response = await _update_logs(client, log_ids, entries, context=context_names)
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs updated successfully!"
+
+    # Verify update in both contexts
+    for context_name in context_names:
+        response = await client.get(
+            f"/v0/logs?project={project_name}&context={context_name}",
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+        assert len(response.json()["logs"]) == 1
+        assert (
+            response.json()["logs"][0]["entries"]["new_entry"]
+            == "Updated with list of contexts"
+        )
