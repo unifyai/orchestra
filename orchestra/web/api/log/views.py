@@ -170,6 +170,10 @@ def create_logs(
     and mutable. The context version will be incremented automatically when
     logs are added, updated, or removed.
 
+    The context parameter can be:
+    - A string: Uses the string as the context name with default values (description=None, is_versioned=False)
+    - An object: Uses the object's name, description, and is_versioned properties
+
     An "explicit_types" dictionary can be passed as part of the `entries`.
     If present, any matching key inside this dictionary will override the
     inferred type of that particular entry. The explicit_types dictionary
@@ -206,12 +210,21 @@ def create_logs(
     )
     # Get or create context_id
     if request.context:
-        context_id = context_dao.get_or_create(
-            project_id,
-            name=request.context.name,
-            description=request.context.description,
-            is_versioned=request.context.is_versioned,
-        )
+        # Check if context is a string
+        if isinstance(request.context, str):
+            context_id = context_dao.get_or_create(
+                project_id,
+                name=request.context,
+                description=None,
+                is_versioned=False,
+            )
+        else:
+            context_id = context_dao.get_or_create(
+                project_id,
+                name=request.context.name,
+                description=request.context.description,
+                is_versioned=request.context.is_versioned,
+            )
     else:
         # get the default context
         context_id = context_dao.get_or_create(project_id, name="")
@@ -754,6 +767,10 @@ def create_derived_entry(
     """
     Creates one or more derived-log entries based on `body.equation` and `body.referenced_logs`.
     Eagerly computes each derived value and stores it in DerivedLog.value.
+
+    The context parameter can be:
+    - A string: Uses the string as the context name with default values (description=None, is_versioned=False)
+    - An object: Uses the object's name, description, and is_versioned properties
     """
     user_id = request_fastapi.state.user_id
 
@@ -767,12 +784,21 @@ def create_derived_entry(
         )
     # Get or create context_id
     if body.context:
-        context_id = context_dao.get_or_create(
-            project_obj.id,
-            name=body.context.name,
-            description=body.context.description,
-            is_versioned=body.context.is_versioned,
-        )
+        # Check if context is a string
+        if isinstance(body.context, str):
+            context_id = context_dao.get_or_create(
+                project_obj.id,
+                name=body.context,
+                description=None,
+                is_versioned=False,
+            )
+        else:
+            context_id = context_dao.get_or_create(
+                project_obj.id,
+                name=body.context.name,
+                description=body.context.description,
+                is_versioned=body.context.is_versioned,
+            )
     else:
         # get the default context
         context_id = context_dao.get_or_create(project_obj.id, name="")
@@ -939,12 +965,21 @@ def update_derived_log(
         )
     # Get or create context_id
     if body.context:
-        context_id = context_dao.get_or_create(
-            project_obj.id,
-            name=body.context.name,
-            description=body.context.description,
-            is_versioned=body.context.is_versioned,
-        )
+        # Check if context is a string
+        if isinstance(body.context, str):
+            context_id = context_dao.get_or_create(
+                project_obj.id,
+                name=body.context,
+                description=None,
+                is_versioned=False,
+            )
+        else:
+            context_id = context_dao.get_or_create(
+                project_obj.id,
+                name=body.context.name,
+                description=body.context.description,
+                is_versioned=body.context.is_versioned,
+            )
     else:
         # get the default context
         context_id = context_dao.get_or_create(project_obj.id, name="")
