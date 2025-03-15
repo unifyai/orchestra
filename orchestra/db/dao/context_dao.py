@@ -154,13 +154,100 @@ class ContextDAO:
         description: Optional[str] = None,
         is_versioned: bool = False,
     ) -> int:
-        """Get or create a context using upsert."""
-        return self.create(
-            project_id=project_id,
-            name=name,
-            description=description,
-            is_versioned=is_versioned,
-        )
+        """
+        Get or create a context using upsert.
+
+        If the context doesn't exist, it will be created with the provided parameters.
+        This method ensures a context is always returned, creating one implicitly if needed.
+
+        Args:
+            project_id: ID of the project to associate the context with
+            name: Name of the context
+            description: Optional description of the context
+            is_versioned: Whether the context should be versioned
+
+        Returns:
+            The ID of the existing or newly created context
+        """
+        try:
+            # First try to find the context
+            contexts = self.filter(project_id=project_id, name=name)
+            if contexts:
+                # Context exists, return its ID
+                return contexts[0][0].id
+
+            # Context doesn't exist, create it
+            ts = datetime.now(timezone.utc)
+
+            # Use description if provided, otherwise use a default
+            actual_description = (
+                description if description is not None else "default context"
+            )
+
+            # Create the context
+            stmt = pg_insert(Context).values(
+                project_id=project_id,
+                name=name,
+                description=actual_description,
+                created_at=ts,
+                updated_at=ts,
+                is_versioned=is_versioned,
+                version=1,
+            )
+
+            # On conflict, do nothing and return the existing context's id
+            stmt = stmt.on_conflict_do_nothing(
+                index_elements=["project_id", "name"],
+            ).returning(Context.id)
+
+            result = self.session.execute(stmt)
+            context_id = result.scalar()
+
+            if context_id is None:
+                # If insert failed due to conflict, retrieve the existing context
+                # This handles race conditions where the context was created between our check and insert
+                contexts = self.filter(project_id=project_id, name=name)
+                if contexts:
+                    context_id = contexts[0][0].id
+                else:
+                    # This should rarely happen, but we'll create a default context as a fallback
+                    fallback_stmt = (
+                        pg_insert(Context)
+                        .values(
+                            project_id=project_id,
+                            name=name,
+                            description="default context",
+                            created_at=ts,
+                            updated_at=ts,
+                            is_versioned=False,
+                            version=1,
+                        )
+                        .returning(Context.id)
+                    )
+
+                    fallback_result = self.session.execute(fallback_stmt)
+                    context_id = fallback_result.scalar()
+
+                    if context_id is None:
+                        raise ValueError(f"Failed to create or retrieve context {name}")
+
+            self.session.commit()
+            return context_id
+
+        except Exception as e:
+            self.session.rollback()
+            # As a last resort, try to create the default context
+            try:
+                return self.create(
+                    project_id=project_id,
+                    name=name,
+                    description="default context",
+                    is_versioned=False,
+                )
+            except Exception:
+                raise ValueError(
+                    f"Failed to create or retrieve context {name}: {str(e)}",
+                )
 
     def add_logs(self, context_id: int, log_ids: List[int]) -> None:
         """Associate LogEvent instances with the specified context.
