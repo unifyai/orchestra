@@ -95,6 +95,13 @@ def create_context(
             context_description = None
             context_is_versioned = False
 
+        # Validate context name
+        if not re.match(r"^[a-zA-Z0-9\_\-/]+$", context_name) or "//" in context_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid context name. Names can only contain alphanumeric characters, underscores, dashes, and forward slashes. Consecutive slashes are not allowed.",
+            )
+
         existing_context = context_dao.filter(
             project_id=project_id,
             name=context_name,
