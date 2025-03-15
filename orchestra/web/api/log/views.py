@@ -951,6 +951,10 @@ def update_derived_log(
     get_logs–style filters. If 'referenced_logs' is provided, we delete all existing
     derived logs for each (log_event_id, key) group and re-insert new ones referencing
     the new base logs. Finally, we recompute them.
+
+    The context parameter can be:
+    - A string: Uses the string as the context name with default values (description=None, is_versioned=False)
+    - An object: Uses the object's name, description, and is_versioned properties
     """
     user_id = request_fastapi.state.user_id
 
@@ -1306,17 +1310,54 @@ def update_logs(
     # Get the common project_id for all logs
     project_id = next(iter(log_id_to_project.values()))
 
-    # Get or create context
+    # Get or create context - support string, object, or list of strings
     if body.context:
-        ctx_id = context_dao.get_or_create(
-            project_id,
-            name=body.context.name,
-            description=body.context.description,
-            is_versioned=body.context.is_versioned,
-        )
+        # Case 1: context is a list of strings
+        if isinstance(body.context, list):
+            # Create a list of context IDs
+            ctx_ids = []
+            for ctx in body.context:
+                if isinstance(ctx, str):
+                    # String context - get or create with default values
+                    ctx_id = context_dao.get_or_create(
+                        project_id,
+                        name=ctx,
+                        description=None,
+                        is_versioned=False,
+                    )
+                    ctx_ids.append(ctx_id)
+                else:
+                    # Object context - use provided values
+                    ctx_id = context_dao.get_or_create(
+                        project_id,
+                        name=ctx.name,
+                        description=ctx.description,
+                        is_versioned=ctx.is_versioned,
+                    )
+                    ctx_ids.append(ctx_id)
+
+            # Use the first context for field types, but we'll update all contexts
+            ctx_id = ctx_ids[0] if ctx_ids else None
+        # Case 2: context is a string
+        elif isinstance(body.context, str):
+            ctx_id = context_dao.get_or_create(
+                project_id,
+                name=body.context,
+                description=None,
+                is_versioned=False,
+            )
+        # Case 3: context is an object (original behavior)
+        else:
+            ctx_id = context_dao.get_or_create(
+                project_id,
+                name=body.context.name,
+                description=body.context.description,
+                is_versioned=body.context.is_versioned,
+            )
     else:
         # get the default context
         ctx_id = context_dao.get_or_create(project_id, name="")
+        ctx_ids = [ctx_id] if ctx_id else []
 
     # Fetch field types once
     try:
@@ -1441,18 +1482,34 @@ def update_logs(
                         version = highest_version + 1
 
                 # Add to the batch update list
-                all_updates.append(
-                    {
-                        "log_event_id": log_id,
-                        "key": k,
-                        "value": v,
-                        "version": version,
-                        "explicit_types": explicit_types,
-                        "field_types": field_types,
-                        "context_id": ctx_id,
-                        "overwrite": body.overwrite,
-                    },
-                )
+                # If we have multiple contexts, create an update for each context
+                if "ctx_ids" in locals() and ctx_ids:
+                    for context_id in ctx_ids:
+                        all_updates.append(
+                            {
+                                "log_event_id": log_id,
+                                "key": k,
+                                "value": v,
+                                "version": version,
+                                "explicit_types": explicit_types,
+                                "field_types": field_types,
+                                "context_id": context_id,
+                                "overwrite": body.overwrite,
+                            },
+                        )
+                else:
+                    all_updates.append(
+                        {
+                            "log_event_id": log_id,
+                            "key": k,
+                            "value": v,
+                            "version": version,
+                            "explicit_types": explicit_types,
+                            "field_types": field_types,
+                            "context_id": ctx_id,
+                            "overwrite": body.overwrite,
+                        },
+                    )
                 updated_ids.add((k, log_id))
 
     # Bulk create any new field types
@@ -1480,7 +1537,31 @@ def update_logs(
             )
 
     # Update context version if needed
-    if ctx_id is not None:
+    if "ctx_ids" in locals() and ctx_ids:
+        # Handle multiple contexts if we have a list
+        for context_id in ctx_ids:
+            if context_id is not None:
+                ctx_obj = (
+                    context_dao.session.query(Context).filter_by(id=context_id).first()
+                )
+                if ctx_obj and ctx_obj.is_versioned and updates_by_log_id:
+                    # Generate a summary of updated logs
+                    log_count = len(updates_by_log_id)
+                    update_desc = f"Updated {log_count} logs"
+
+                    # archive state once and increment version
+                    context_dao.archive_context_state(
+                        ctx_obj,
+                        name="update",
+                        description=update_desc,
+                    )
+                    ctx_obj.version += 1
+                    ctx_obj.updated_at = datetime.now(timezone.utc)
+        # Commit all changes at once
+        if updates_by_log_id:
+            context_dao.session.commit()
+    elif ctx_id is not None:
+        # Original single context behavior
         ctx_obj = context_dao.session.query(Context).filter_by(id=ctx_id).first()
         if ctx_obj and ctx_obj.is_versioned and updates_by_log_id:
             # Generate a summary of updated logs
