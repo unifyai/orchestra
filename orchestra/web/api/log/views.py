@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import (
     INTEGER,
     TIMESTAMP,
+    Date,
     DateTime,
     Float,
     Integer,
@@ -3016,22 +3017,116 @@ def _postprocess_aggregator_value(
     if not field_type:
         return value
 
-    # Convert based on the field type
-    if field_type == "timestamp":
-        if metric in ("var", "std"):
-            return timedelta(seconds=value).__repr__()
-        return datetime.fromtimestamp(value).isoformat()
+    try:
+        # Convert based on the field type
+        if field_type == "timestamp":
+            if metric in ("var", "std"):
+                try:
+                    return timedelta(seconds=value).__repr__()
+                except (OverflowError, ValueError):
+                    # Fallback if timedelta overflow occurs
+                    return f"{value} seconds"
+            try:
+                return datetime.fromtimestamp(value).isoformat()
+            except (OverflowError, ValueError, OSError):
+                # Fallback if timestamp is out of range
+                return f"timestamp({value})"
 
-    if (
-        float(value).is_integer()
-        and metric in ("sum", "min", "max", "median", "mode")
-        and field_type in ("int", "bool", "str")
-    ):
-        if field_type == "bool" and metric in ("min", "max", "median", "mode"):
-            return bool(int(value))
-        return int(value)
+        # Handle new data types: time, date, and timedelta
+        elif field_type == "time":
+            if metric in ("var", "std"):
+                # For variance and standard deviation, return as seconds
+                return f"{value} seconds"
 
-    return value
+            # Convert seconds since midnight to time (with validation)
+            try:
+                seconds = int(value % 86400)  # Ensure within a day
+                hours = seconds // 3600
+                minutes = (seconds % 3600) // 60
+                secs = seconds % 60
+                return time(hours, minutes, secs).strftime("%H:%M:%S")
+            except (ValueError, OverflowError, TypeError):
+                # Fallback if time conversion fails
+                return f"{value % 86400 if isinstance(value, (int, float)) else value} seconds"
+
+        elif field_type == "date":
+            if metric in ("var", "std"):
+                # For variance and standard deviation, return days
+                return f"{value} days"
+
+            # Try converting to date with validation
+            try:
+                # If it's a timestamp in seconds
+                return date.fromtimestamp(value).isoformat()
+            except (ValueError, OverflowError, OSError, TypeError):
+                # Calculate days since epoch as fallback
+                try:
+                    days = value / 86400  # seconds to days
+                    return f"{days:.2f} days since epoch"
+                except (TypeError, ValueError):
+                    return f"date({value})"
+
+        elif field_type == "timedelta":
+            # Handle potential extremely large values
+            try:
+                total_seconds = float(value)
+
+                # For very large values, use a simple representation
+                if abs(total_seconds) > 100000000:  # ~3 years in seconds
+                    days = total_seconds / 86400
+                    return f"{days:.2f} days"
+
+                # Otherwise, build ISO 8601 duration
+                hours = int(total_seconds // 3600)
+                minutes = int((total_seconds % 3600) // 60)
+                seconds = total_seconds % 60
+
+                # Build ISO 8601 duration string
+                duration = "P"
+                days = hours // 24
+                if days:
+                    duration += f"{days}D"
+                    hours %= 24
+
+                # Add time part if there are hours, minutes, or seconds
+                if hours or minutes or seconds:
+                    duration += "T"
+                    if hours:
+                        duration += f"{hours}H"
+                    if minutes:
+                        duration += f"{minutes}M"
+                    if seconds:
+                        # Handle fractional seconds
+                        if seconds == int(seconds):
+                            duration += f"{int(seconds)}S"
+                        else:
+                            duration += f"{seconds:.6g}S"  # :g removes trailing zeros
+
+                # Handle zero duration edge case
+                if duration == "P":
+                    duration = "PT0S"
+
+                return duration
+
+            except (TypeError, ValueError, OverflowError):
+                # If all else fails, return the raw value with units
+                return f"{value} seconds"
+
+        if (
+            isinstance(value, (int, float))
+            and float(value).is_integer()
+            and metric in ("sum", "min", "max", "median", "mode")
+            and field_type in ("int", "bool", "str")
+        ):
+            if field_type == "bool" and metric in ("min", "max", "median", "mode"):
+                return bool(int(value))
+            return int(value)
+
+        return value
+
+    except Exception as e:
+        # Final fallback - if any error occurs, return the raw value with type annotation
+        return f"{field_type}({value})"
 
 
 def _reduce_shared_value(values: List[Any]) -> Optional[Any]:
@@ -3261,6 +3356,88 @@ def _compute_metric_for_key_grouped(
         (
             X.c.inferred_type == "timestamp",
             func.extract("epoch", cast(cast(X.c.value, String), TIMESTAMP)).cast(Float),
+        ),
+        (
+            X.c.inferred_type == "time",
+            # Extract seconds using time-specific casting
+            func.mod(
+                func.extract(
+                    "epoch",
+                    func.cast(
+                        func.concat(
+                            "2000-01-01 ",
+                            func.trim(func.cast(X.c.value, String), '"'),
+                        ),
+                        TIMESTAMP,
+                    ),
+                ),
+                86400,
+            ).cast(Float),
+        ),
+        (
+            X.c.inferred_type == "date",
+            # Extract epoch using date-specific casting
+            func.extract(
+                "epoch",
+                func.cast(func.trim(func.cast(X.c.value, String), '"'), Date),
+            ).cast(Float),
+        ),
+        (
+            X.c.inferred_type == "timedelta",
+            # Parse ISO 8601 duration format (e.g., "P1DT6H") to seconds
+            # This extracts days, hours, minutes, seconds separately and converts to total seconds
+            (
+                # Days component (86400 seconds per day)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(X.c.value, String), '"'),
+                            "P([0-9]+)D",
+                        ),
+                        Float,
+                    )
+                    * 86400,
+                    0,
+                )
+                +
+                # Hours component (3600 seconds per hour)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(X.c.value, String), '"'),
+                            "T([0-9]+)H",
+                        ),
+                        Float,
+                    )
+                    * 3600,
+                    0,
+                )
+                +
+                # Minutes component (60 seconds per minute)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(X.c.value, String), '"'),
+                            "T[0-9]*H?([0-9]+)M",
+                        ),
+                        Float,
+                    )
+                    * 60,
+                    0,
+                )
+                +
+                # Seconds component
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(X.c.value, String), '"'),
+                            "T[0-9]*H?[0-9]*M?([0-9.]+)S",
+                        ),
+                        Float,
+                    ),
+                    0,
+                )
+            ).cast(Float),
         ),
         (X.c.inferred_type == "float", X.c.value.cast(Float)),
         (X.c.inferred_type == "int", X.c.value.cast(Float)),
@@ -3524,6 +3701,88 @@ def compute_metric_for_key(
         (
             X.c.inferred_type == "timestamp",
             func.extract("epoch", cast(cast(X.c.value, String), TIMESTAMP)).cast(Float),
+        ),
+        (
+            X.c.inferred_type == "time",
+            # Extract seconds using time-specific casting
+            func.mod(
+                func.extract(
+                    "epoch",
+                    func.cast(
+                        func.concat(
+                            "2000-01-01 ",
+                            func.trim(func.cast(X.c.value, String), '"'),
+                        ),
+                        TIMESTAMP,
+                    ),
+                ),
+                86400,
+            ).cast(Float),
+        ),
+        (
+            X.c.inferred_type == "date",
+            # Extract epoch using date-specific casting
+            func.extract(
+                "epoch",
+                func.cast(func.trim(func.cast(X.c.value, String), '"'), Date),
+            ).cast(Float),
+        ),
+        (
+            X.c.inferred_type == "timedelta",
+            # Parse ISO 8601 duration format (e.g., "P1DT6H") to seconds
+            # This extracts days, hours, minutes, seconds separately and converts to total seconds
+            (
+                # Days component (86400 seconds per day)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(X.c.value, String), '"'),
+                            "P([0-9]+)D",
+                        ),
+                        Float,
+                    )
+                    * 86400,
+                    0,
+                )
+                +
+                # Hours component (3600 seconds per hour)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(X.c.value, String), '"'),
+                            "T([0-9]+)H",
+                        ),
+                        Float,
+                    )
+                    * 3600,
+                    0,
+                )
+                +
+                # Minutes component (60 seconds per minute)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(X.c.value, String), '"'),
+                            "T[0-9]*H?([0-9]+)M",
+                        ),
+                        Float,
+                    )
+                    * 60,
+                    0,
+                )
+                +
+                # Seconds component
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(X.c.value, String), '"'),
+                            "T[0-9]*H?[0-9]*M?([0-9.]+)S",
+                        ),
+                        Float,
+                    ),
+                    0,
+                )
+            ).cast(Float),
         ),
         (X.c.inferred_type == "float", X.c.value.cast(Float)),
         (X.c.inferred_type == "int", X.c.value.cast(Float)),
@@ -5394,6 +5653,88 @@ def _compute_group_metric(
                 func.extract("epoch", cast(cast(X.c.value, String), TIMESTAMP)).cast(
                     Float,
                 ),
+            ),
+            (
+                X.c.inferred_type == "time",
+                # Extract seconds using time-specific casting
+                func.mod(
+                    func.extract(
+                        "epoch",
+                        func.cast(
+                            func.concat(
+                                "2000-01-01 ",
+                                func.trim(func.cast(X.c.value, String), '"'),
+                            ),
+                            TIMESTAMP,
+                        ),
+                    ),
+                    86400,
+                ).cast(Float),
+            ),
+            (
+                X.c.inferred_type == "date",
+                # Extract epoch using date-specific casting
+                func.extract(
+                    "epoch",
+                    func.cast(func.trim(func.cast(X.c.value, String), '"'), Date),
+                ).cast(Float),
+            ),
+            (
+                X.c.inferred_type == "timedelta",
+                # Parse ISO 8601 duration format (e.g., "P1DT6H") to seconds
+                # This extracts days, hours, minutes, seconds separately and converts to total seconds
+                (
+                    # Days component (86400 seconds per day)
+                    func.coalesce(
+                        func.cast(
+                            func.substring(
+                                func.trim(func.cast(X.c.value, String), '"'),
+                                "P([0-9]+)D",
+                            ),
+                            Float,
+                        )
+                        * 86400,
+                        0,
+                    )
+                    +
+                    # Hours component (3600 seconds per hour)
+                    func.coalesce(
+                        func.cast(
+                            func.substring(
+                                func.trim(func.cast(X.c.value, String), '"'),
+                                "T([0-9]+)H",
+                            ),
+                            Float,
+                        )
+                        * 3600,
+                        0,
+                    )
+                    +
+                    # Minutes component (60 seconds per minute)
+                    func.coalesce(
+                        func.cast(
+                            func.substring(
+                                func.trim(func.cast(X.c.value, String), '"'),
+                                "T[0-9]*H?([0-9]+)M",
+                            ),
+                            Float,
+                        )
+                        * 60,
+                        0,
+                    )
+                    +
+                    # Seconds component
+                    func.coalesce(
+                        func.cast(
+                            func.substring(
+                                func.trim(func.cast(X.c.value, String), '"'),
+                                "T[0-9]*H?[0-9]*M?([0-9.]+)S",
+                            ),
+                            Float,
+                        ),
+                        0,
+                    )
+                ).cast(Float),
             ),
             (X.c.inferred_type == "float", X.c.value.cast(Float)),
             (X.c.inferred_type == "int", X.c.value.cast(Float)),
