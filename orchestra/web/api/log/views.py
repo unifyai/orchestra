@@ -1656,6 +1656,10 @@ def delete_logs(
     """
     Deletes log entries based on specified criteria. Can delete both base logs and derived logs.
 
+    If a context is provided, logs will be removed from that context instead of being entirely
+    deleted, unless it is the last context associated with the log. This allows logs to be
+    shared across multiple contexts and only removed from specific contexts when needed.
+
     Args:
         source_type: Controls which type of logs to delete:
             - 'all': Delete both base and derived logs (default)
@@ -1769,15 +1773,56 @@ def delete_logs(
                 detail="Cannot delete derived logs without specifying fields.",
             )
 
-        # # Then delete the log events themselves
-        deleted_count = (
-            session.query(LogEvent)
-            .filter(LogEvent.id.in_(entire_log_deletions))
-            .delete(synchronize_session=False)
-        )
-        if deleted_count > 0:
-            context_description.append(f"Deleted {deleted_count} log events")
-            context_updated = True
+        # Check which logs exist in other contexts
+        logs_in_other_contexts = []
+        logs_to_delete = []
+
+        for log_id in entire_log_deletions:
+            # Check if this log exists in any other context
+            other_contexts = (
+                session.query(LogEventContext.context_id)
+                .filter(
+                    LogEventContext.log_event_id == log_id,
+                    LogEventContext.context_id != context_id,
+                )
+                .all()
+            )
+
+            if other_contexts:
+                # Log exists in other contexts, just remove from this context
+                logs_in_other_contexts.append(log_id)
+            else:
+                # Log doesn't exist in other contexts, delete it entirely
+                logs_to_delete.append(log_id)
+
+        # Remove logs from this context only
+        if logs_in_other_contexts:
+            removed_count = (
+                session.query(LogEventContext)
+                .filter(
+                    LogEventContext.log_event_id.in_(logs_in_other_contexts),
+                    LogEventContext.context_id == context_id,
+                )
+                .delete(synchronize_session=False)
+            )
+            if removed_count > 0:
+                context_description.append(
+                    f"Removed {removed_count} log events from context '{context_name}'",
+                )
+                context_updated = True
+
+        # Delete logs that don't exist in other contexts
+        if logs_to_delete:
+            deleted_count = (
+                session.query(LogEvent)
+                .filter(LogEvent.id.in_(logs_to_delete))
+                .delete(synchronize_session=False)
+            )
+            if deleted_count > 0:
+                context_description.append(
+                    f"Deleted {deleted_count} log events completely",
+                )
+                context_updated = True
 
     # Group 3: Partial field deletions (specific fields for specific log events)
     partial_deletions = {
@@ -1890,16 +1935,57 @@ def delete_logs(
         # Find truly empty log events
         empty_log_ids = set(potential_empty_logs) - still_used_ids
 
-        # Bulk delete empty log events
+        # For empty logs, check which ones exist in other contexts
         if empty_log_ids:
-            deleted_count = (
-                session.query(LogEvent)
-                .filter(LogEvent.id.in_(empty_log_ids))
-                .delete(synchronize_session=False)
-            )
-            if deleted_count > 0:
-                context_description.append(f"Deleted {deleted_count} empty log events")
-                context_updated = True
+            logs_in_other_contexts = []
+            logs_to_delete = []
+
+            for log_id in empty_log_ids:
+                # Check if this log exists in any other context
+                other_contexts = (
+                    session.query(LogEventContext.context_id)
+                    .filter(
+                        LogEventContext.log_event_id == log_id,
+                        LogEventContext.context_id != context_id,
+                    )
+                    .all()
+                )
+
+                if other_contexts:
+                    # Log exists in other contexts, just remove from this context
+                    logs_in_other_contexts.append(log_id)
+                else:
+                    # Log doesn't exist in other contexts, delete it entirely
+                    logs_to_delete.append(log_id)
+
+            # Remove logs from this context only
+            if logs_in_other_contexts:
+                removed_count = (
+                    session.query(LogEventContext)
+                    .filter(
+                        LogEventContext.log_event_id.in_(logs_in_other_contexts),
+                        LogEventContext.context_id == context_id,
+                    )
+                    .delete(synchronize_session=False)
+                )
+                if removed_count > 0:
+                    context_description.append(
+                        f"Removed {removed_count} empty log events from context '{context_name}'",
+                    )
+                    context_updated = True
+
+            # Delete logs that don't exist in other contexts
+            if logs_to_delete:
+                deleted_count = (
+                    session.query(LogEvent)
+                    .filter(LogEvent.id.in_(logs_to_delete))
+                    .delete(synchronize_session=False)
+                )
+                if deleted_count > 0:
+                    context_description.append(
+                        f"Deleted {deleted_count} empty log events completely",
+                    )
+                    context_updated = True
 
     # Handle versioned contexts - do this only once after all deletions
     if context_updated and context_id:
