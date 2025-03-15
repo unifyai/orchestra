@@ -225,13 +225,22 @@ def _update_multiple_logs_w_overwrite(client, log_ids, overwrite, user=1):
 
 
 # Helper function to delete multiple logs
-def _delete_logs(client, log_ids, user=1, source_type=None, project_name=None):
+def _delete_logs(
+    client,
+    log_ids,
+    user=1,
+    source_type=None,
+    project_name=None,
+    context=None,
+):
     _headers = HEADERS if user == 1 else HEADERS_2
     json_data = {"ids_and_fields": log_ids}
     if source_type:
         json_data["source_type"] = source_type
     if project_name:
         json_data["project"] = project_name
+    if context:
+        json_data["context"] = context
     request = Request(
         "DELETE",
         str(client.base_url) + "/v0/logs",

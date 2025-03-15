@@ -281,6 +281,105 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_delete_logs_from_specific_context(client: AsyncClient):
+    """Test deleting logs from a specific context while preserving them in other contexts."""
+    project_name = "context-specific-deletion"
+    _ = await _create_project(client, project_name)
+
+    # Create two contexts
+    context1 = "TestSet"
+    context2 = "TestSetSmall"
+
+    # Create a log (in context1)
+    response = await _create_log(client, project_name, context=context1)
+    assert response.status_code == 200, response.json()
+    log_id = response.json()[0]
+
+    assert response.status_code == 200, response.json()
+
+    # Create second context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context2},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Add log to the second context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts/add_logs",
+        json={"context_name": context2, "log_ids": [log_id]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify log is in both contexts
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"context": context1},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    assert log_id in [log["id"] for log in response.json()["logs"]]
+
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"context": context2},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    assert log_id in [log["id"] for log in response.json()["logs"]]
+
+    # Delete the log from the first context only
+    ids_and_fields = [([log_id], None)]
+    response = await _delete_logs(
+        client,
+        ids_and_fields,
+        project_name=project_name,
+        context=context1,
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs and fields deleted successfully!"
+
+    # Verify log is removed from first context
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"context": context1},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    assert log_id not in [log["id"] for log in response.json()["logs"]]
+
+    # Verify log is still in second context
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"context": context2},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    assert log_id in [log["id"] for log in response.json()["logs"]]
+
+    # Delete the log from the second context
+    response = await _delete_logs(
+        client,
+        ids_and_fields,
+        project_name=project_name,
+        context=context2,
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs and fields deleted successfully!"
+
+    # Verify log is also removed from second context
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"context": context2},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    assert log_id not in [log["id"] for log in response.json()["logs"]]
+
+
+@pytest.mark.anyio
 async def test_delete_project_deletes_logs(client: AsyncClient):
     url = "/v0/project/test-project"
     project_name = "test-project"
