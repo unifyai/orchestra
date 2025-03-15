@@ -978,3 +978,165 @@ async def test_get_logs_metric_shared_value_reduction(client: AsyncClient):
         assert (
             result["A"]["shared_value"] == 10
         ), f"Group A should return the shared value 10 directly for metric {metric}"
+
+
+@pytest.mark.anyio
+async def test_get_logs_metric_time_date_timedelta(client: AsyncClient):
+    """
+    Test the get_logs_metric endpoint with time, date, and timedelta data types.
+
+    This test creates logs with time, date, and timedelta fields and verifies that
+    the endpoint correctly processes and formats these special data types.
+    """
+    project_name = "test-time-date-timedelta"
+    _ = await _create_project(client, project_name)
+
+    # Create logs with time, date, and timedelta values
+    time_logs = [
+        {
+            "time_value": "08:30:00",  # Morning time
+            "group": "A",
+        },
+        {
+            "time_value": "12:00:00",  # Noon
+            "group": "A",
+        },
+        {
+            "time_value": "17:45:30",  # Evening time
+            "group": "B",
+        },
+        {
+            "time_value": "23:59:59",  # Late night
+            "group": "B",
+        },
+    ]
+
+    date_logs = [
+        {
+            "date_value": "2025-01-15",  # January
+            "group": "A",
+        },
+        {
+            "date_value": "2025-02-28",  # February
+            "group": "A",
+        },
+        {
+            "date_value": "2025-03-15",  # March
+            "group": "B",
+        },
+        {
+            "date_value": "2025-12-31",  # December
+            "group": "B",
+        },
+    ]
+
+    timedelta_logs = [
+        {
+            "timedelta_value": "P1DT6H",  # 1 day, 6 hours
+            "group": "A",
+        },
+        {
+            "timedelta_value": "P2DT12H",  # 2 days, 12 hours
+            "group": "A",
+        },
+        {
+            "timedelta_value": "PT12H30M",  # 12 hours, 30 minutes
+            "group": "B",
+        },
+        {
+            "timedelta_value": "P5DT8H15M",  # 5 days, 8 hours, 15 minutes
+            "group": "B",
+        },
+    ]
+
+    # Create all logs
+    for entry in time_logs + date_logs + timedelta_logs:
+        response = await _create_log(client, project_name, entries=entry)
+        assert response.status_code == 200, response.json()
+
+    # Test time values with different metrics
+    for metric in ["mean", "min", "max", "var", "std"]:  # "sum",
+        response = await client.get(
+            f"/v0/logs/metric/{metric}?project={project_name}",
+            params={"key": "time_value"},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+        result = response.json()
+
+        # For time values, result should contain colons (HH:MM:SS format)
+        if metric in ["mean", "min", "max", "sum"]:
+            assert ":" in result, f"Time result for {metric} should contain colons"
+
+        # For statistical metrics, the result might be a numeric value
+        # but we still expect some formatting to indicate it's a time
+        if metric in ["var", "std"]:
+            assert isinstance(
+                result,
+                (int, float, str),
+            ), f"Expected numeric or string result for {metric}"
+            if isinstance(result, str):
+                assert (
+                    ":" in result or "seconds" in result.lower()
+                ), f"Time variance/std result should contain colons or mention seconds"
+
+    # Test date values with different metrics
+    for metric in ["mean", "min", "max", "sum", "var", "std"]:
+        response = await client.get(
+            f"/v0/logs/metric/{metric}?project={project_name}",
+            params={"key": "date_value"},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+        result = response.json()
+
+        # For date values, result should contain hyphens (YYYY-MM-DD format)
+        if metric in ["mean", "min", "max", "sum"]:
+            assert "-" in result, f"Date result for {metric} should contain hyphens"
+
+        # For statistical metrics, the result might be a numeric value
+        # but we still expect some formatting to indicate it's a date
+        if metric in ["var", "std"]:
+            assert isinstance(
+                result,
+                (int, float, str),
+            ), f"Expected numeric or string result for {metric}"
+            if isinstance(result, str):
+                assert (
+                    "-" in result
+                    or "days" in result.lower()
+                    or "seconds" in result.lower()
+                ), f"Date variance/std result should contain hyphens or mention days"
+
+    # Test timedelta values with different metrics
+    for metric in ["mean", "min", "max", "sum", "var", "std"]:
+        response = await client.get(
+            f"/v0/logs/metric/{metric}?project={project_name}",
+            params={"key": "timedelta_value"},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+        result = response.json()
+
+        # For timedelta values, result should follow ISO 8601 duration format
+        if metric in ["mean", "min", "max", "sum"]:
+            assert (
+                "P" in result
+            ), f"Timedelta result for {metric} should contain 'P' (ISO 8601 format)"
+            assert (
+                "T" in result
+            ), f"Timedelta result for {metric} should contain 'T' (ISO 8601 format)"
+
+        # For statistical metrics, the result might be a numeric value
+        # but we still expect some formatting to indicate it's a duration
+        if metric in ["var", "std"]:
+            assert isinstance(
+                result,
+                (int, float, str),
+            ), f"Expected numeric or string result for {metric}"
+            if isinstance(result, str):
+                assert (
+                    "P" in result
+                    or "days" in result.lower()
+                    or "seconds" in result.lower()
+                ), f"Timedelta variance/std result should follow ISO format or mention time units"
