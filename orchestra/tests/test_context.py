@@ -1223,3 +1223,57 @@ async def test_context_prefix_filtering(client: AsyncClient):
     )
     assert response.status_code == 200
     assert len(response.json()) == 0  # Should return empty list
+
+
+@pytest.mark.anyio
+async def test_context_name_validation(client: AsyncClient):
+    """Test that context names are properly validated"""
+    project_name = "test-context-validation"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Test valid context names
+    valid_names = [
+        "valid-context",
+        "valid_context",
+        "valid/context",
+        "valid123",
+        "123valid",
+        "UPPERCASE",
+        "a" * 50,
+    ]
+
+    for name in valid_names:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": name, "description": f"Test context {name}"},
+            headers=HEADERS,
+        )
+        assert (
+            response.status_code == 200
+        ), f"Expected 200 for name '{name}', got {response.status_code}: {response.json()}"
+        assert "Context created successfully" in response.json()["info"]
+
+    # Test invalid context names
+    invalid_names = [
+        "",  # Empty string
+        " ",  # Just whitespace
+        "invalid@context",  # Invalid character @
+        "invalid#context",  # Invalid character #
+        "invalid%context",  # Invalid character %
+        "invalid.context",  # Invalid character .
+        "invalid\ncontext",  # Newline
+        "invalid\tcontext",  # Tab
+    ]
+
+    for name in invalid_names:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": name, "description": f"Test context {name}"},
+            headers=HEADERS,
+        )
+        assert (
+            response.status_code == 400
+        ), f"Expected 400 for name '{name}', got {response.status_code}"
+        assert "Invalid context name" in response.json()["detail"]
