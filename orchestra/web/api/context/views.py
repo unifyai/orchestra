@@ -168,6 +168,11 @@ def get_contexts(
         description="Name of the project to create context in.",
         example="my_project",
     ),
+    prefix: Optional[str] = Query(
+        None,
+        description="Optional prefix to filter contexts by name",
+        example="experiment1/",
+    ),
     project_dao: ProjectDAO = Depends(),
     context_dao: ContextDAO = Depends(),
 ):
@@ -187,7 +192,8 @@ def get_contexts(
         # filter out default context
         if not existing_contexts:
             return []
-        return [
+
+        contexts = [
             {
                 "name": context[0].name,
                 "description": context[0].description,
@@ -195,6 +201,14 @@ def get_contexts(
             for context in existing_contexts
             if context[0].name != ""
         ]
+
+        # Filter by prefix if provided
+        if prefix:
+            contexts = [
+                context for context in contexts if context["name"].startswith(prefix)
+            ]
+
+        return contexts
     except IndexError:
         raise not_found("Project")
 
