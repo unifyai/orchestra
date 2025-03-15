@@ -176,6 +176,53 @@ async def test_add_log_to_context(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_implicit_context_creation(client: AsyncClient):
+    """Test that a context is implicitly created when adding logs to a non-existent context"""
+    project_name = "test-implicit-context"
+    context_name = "implicit-context"
+
+    # Create project first
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+
+    # Create log without context
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "params": {"param1": "test"},
+            "entries": {
+                "metric": 0.95,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    log_ids = response.json()
+
+    # Add logs to a context that doesn't exist yet - should create it implicitly
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts/add_logs",
+        json={"context_name": context_name, "log_ids": log_ids},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert "Logs added to context successfully!" in response.json()["info"]
+
+    # Verify the context was created
+    response = await client.get(
+        f"/v0/project/{project_name}/contexts/{context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["name"] == context_name
+
+
+@pytest.mark.anyio
 async def test_get_logs_by_context(client: AsyncClient):
     project_name = "test-project"
     context_name = "test-context"
@@ -233,6 +280,56 @@ async def test_get_logs_by_context(client: AsyncClient):
     logs = response.json()["logs"]
     assert len(logs) == 1
     assert logs[0]["entries"]["metric"] == 1.5
+
+
+@pytest.mark.anyio
+async def test_context_as_string(client: AsyncClient):
+    """Test that context can be provided as a string instead of an object"""
+    project_name = "test-string-context"
+    context_name = "string-context"
+
+    # Create project first
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+
+    # Create context using string name
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name},  # No description provided
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert "Context created successfully" in response.json()["info"]
+
+    # Create log with context as string
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "params": {"param1": "test"},
+            "entries": {
+                "metric": 0.95,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+            "context": context_name,  # Provide context as string
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    log_id = response.json()[0]
+
+    # Get logs by context string
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+    assert len(logs) == 1
+    assert logs[0]["entries"]["metric"] == 0.95
 
 
 async def test_get_logs_no_context(client: AsyncClient):
@@ -503,6 +600,50 @@ async def test_versioned_context_behavior(client: AsyncClient):
     assert len(log["versions"]["field1"]) == 2
     assert "value1" in log["versions"]["field1"].values()
     assert "value2" in log["versions"]["field1"].values()
+
+
+@pytest.mark.anyio
+async def test_update_logs_with_string_context(client: AsyncClient):
+    """Test that update_logs endpoint accepts context as a string"""
+    project_name = "test-update-string-context"
+    context_name = "update-string-context"
+
+    # Create project and context
+    await _create_project(client, project_name)
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Test context"},
+        headers=HEADERS,
+    )
+
+    # Create log with context
+    log_response = await _create_log(
+        client,
+        project_name,
+        entries={"field1": "value1"},
+        context=context_name,  # Provide context as string
+    )
+    assert log_response.status_code == 200
+    log_id = log_response.json()[0]
+
+    # Update log with context as string
+    update_response = await _update_logs(
+        client,
+        [log_id],
+        {"field1": "value2"},
+        context=context_name,  # Provide context as string
+        overwrite=True,
+    )
+    assert update_response.status_code == 200
+
+    # Verify log was updated
+    logs = await fetch_logs(
+        client,
+        project_name,
+        context=context_name,
+    )
+    assert len(logs) == 1
+    assert logs[0]["entries"]["field1"] == "value2"
 
 
 @pytest.mark.anyio
@@ -864,3 +1005,58 @@ async def test_versioned_ids_only(client: AsyncClient):
     )
     assert response.status_code == 400
     assert "Invalid from_ids format for versioned logs" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_update_logs_with_multiple_contexts(client: AsyncClient):
+    """Test that update_logs endpoint accepts a list of contexts"""
+    project_name = "test-multiple-contexts"
+    contexts = ["context1", "context2", "context3"]
+
+    # Create project and contexts
+    await _create_project(client, project_name)
+    for context in contexts:
+        await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": context, "description": f"Test {context}"},
+            headers=HEADERS,
+        )
+
+    # Create log with first context
+    log_response = await _create_log(
+        client,
+        project_name,
+        entries={"field1": "value1"},
+        context=contexts[0],
+    )
+    assert log_response.status_code == 200
+    log_id = log_response.json()[0]
+
+    # Add log to other contexts
+    for context in contexts[1:]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": context, "log_ids": [log_id]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Update log with multiple contexts as a list
+    update_response = await _update_logs(
+        client,
+        [log_id],
+        {"field1": "updated-value"},
+        context=contexts,  # Provide contexts as a list
+        overwrite=True,
+    )
+    assert update_response.status_code == 200
+
+    # Verify log was updated in all contexts
+    for context in contexts:
+        logs = await fetch_logs(
+            client,
+            project_name,
+            context=context,
+        )
+        assert len(logs) == 1
+        assert logs[0]["entries"]["field1"] == "updated-value"
