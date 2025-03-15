@@ -12,10 +12,12 @@ class CreateLogConfig(BaseModel):
             "example": "eval-project",
         },
     )
-    context: ContextCreateRequest | None = Field(
+    context: Union[ContextCreateRequest, str, None] = Field(
         default=None,
         description="Optional context path to update for the logs. "
-        "Can use '/' for nested contexts (e.g. 'training/batch1').",
+        "Can use '/' for nested contexts (e.g. 'training/batch1'). "
+        "Can be a string (which will be interpreted with description=None and is_versioned=False) "
+        "or a ContextCreateRequest object.",
         json_schema_extra={
             "example": "experiment1/trial1",
         },
@@ -74,10 +76,12 @@ class CreateDerivedEntriesConfig(BaseModel):
             "example": "eval-project",
         },
     )
-    context: ContextCreateRequest | None = Field(
+    context: Union[ContextCreateRequest, str, None] = Field(
         default=None,
         description="Optional context path to update for the logs. "
-        "Can use '/' for nested contexts (e.g. 'training/batch1').",
+        "Can use '/' for nested contexts (e.g. 'training/batch1'). "
+        "Can be a string (which will be interpreted with description=None and is_versioned=False) "
+        "or a ContextCreateRequest object.",
         json_schema_extra={
             "example": "experiment1/trial1",
         },
@@ -104,10 +108,17 @@ class UpdateLogRequest(BaseModel):
         example=[123, 456, 789],
         min_items=1,
     )
-    context: ContextCreateRequest | None = Field(
+    context: Union[
+        ContextCreateRequest,
+        str,
+        List[Union[ContextCreateRequest, str]],
+        None,
+    ] = Field(
         default=None,
         description="Optional context path to update for the logs. "
-        "Can use '/' for nested contexts (e.g. 'training/batch1').",
+        "Can use '/' for nested contexts (e.g. 'training/batch1'). "
+        "Can be a string (which will be interpreted with description=None and is_versioned=False) "
+        "or a ContextCreateRequest object.",
         json_schema_extra={
             "example": "experiment1/trial1",
         },
@@ -192,10 +203,12 @@ class UpdateDerivedEntriesConfig(BaseModel):
         description="Name of the project these derived logs belong to.",
         example="eval-project",
     )
-    context: ContextCreateRequest | None = Field(
+    context: Union[ContextCreateRequest, str, None] = Field(
         default=None,
         description="Optional context path to update for the logs. "
-        "Can use '/' for nested contexts (e.g. 'training/batch1').",
+        "Can use '/' for nested contexts (e.g. 'training/batch1'). "
+        "Can be a string (which will be interpreted with description=None and is_versioned=False) "
+        "or a ContextCreateRequest object.",
         json_schema_extra={
             "example": "experiment1/trial1",
         },
