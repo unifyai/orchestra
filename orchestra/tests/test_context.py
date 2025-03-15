@@ -1060,3 +1060,98 @@ async def test_update_logs_with_multiple_contexts(client: AsyncClient):
         )
         assert len(logs) == 1
         assert logs[0]["entries"]["field1"] == "updated-value"
+
+
+@pytest.mark.anyio
+async def test_implicit_field_creation(client: AsyncClient):
+    """Test that field types are created implicitly when adding logs to a context"""
+    project_name = "test-implicit-fields"
+    context_name = "implicit-fields-context"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create a log with several fields
+    log_response = await _create_log(
+        client,
+        project_name,
+        params={},
+        entries={
+            "metric1": 0.95,
+            "metric2": 1.5,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    assert log_response.status_code == 200
+    log_id = log_response.json()[0]
+
+    # Create a context and add the log to it
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Test context for implicit fields"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Add log to the context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts/add_logs",
+        json={"context_name": context_name, "log_ids": [log_id]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Check that field types were created for the context
+    response = await client.get(
+        f"/v0/logs/fields?project={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    fields = response.json()
+    assert len(fields) == 3
+    assert "metric1" in fields
+    assert "metric2" in fields
+    assert "timestamp" in fields
+
+    # Create a new log with some overlapping and some new fields
+    log_response = await _create_log(
+        client,
+        project_name,
+        params={},
+        entries={
+            "metric1": 0.85,  # Existing field
+            "metric3": 2.5,  # New field
+            "text": "test",  # New field
+        },
+    )
+    assert log_response.status_code == 200
+    new_log_id = log_response.json()[0]
+
+    # Add the new log to the context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts/add_logs",
+        json={"context_name": context_name, "log_ids": [new_log_id]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Check that only new field types were created
+    response = await client.get(
+        f"/v0/logs/fields?project={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    fields = response.json()
+    assert len(fields) == 5  # Should now have 5 fields total
+    assert "metric1" in fields  # Existing field
+    assert "metric2" in fields  # Existing field
+    assert "timestamp" in fields  # Existing field
+    assert "metric3" in fields  # New field
+    assert "text" in fields  # New field
+
+    # Verify the types are correct
+    assert fields["metric1"]["data_type"] == "float"
+    assert fields["metric3"]["data_type"] == "float"
+    assert fields["text"]["data_type"] == "str"
+
+
