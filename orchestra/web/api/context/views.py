@@ -2,6 +2,8 @@
 Includes endpoints related to context management within projects.
 """
 
+from typing import Union
+
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 
 from orchestra.db.dao.context_dao import ContextDAO
@@ -55,7 +57,7 @@ router = APIRouter()
 )
 def create_context(
     request_fastapi: Request,
-    request: ContextCreateRequest,
+    request: Union[ContextCreateRequest, str],
     project_name: str = Path(
         description="Name of the project to create context in.",
         example="my_project",
@@ -69,6 +71,9 @@ def create_context(
 
     If is_versioned=True, all logs in this context will be versioned and mutable.
     The context version will increment automatically when logs are added, updated, or removed.
+
+    The context can be provided as a string (which will be used as the name with no description)
+    or as an object with name and description fields.
     """
     try:
         project = project_dao.filter(
@@ -79,18 +84,29 @@ def create_context(
             raise IndexError
         project_id = project[0][0].id
 
+        # Handle string input for context name
+        context_name = request.name
+        context_description = request.description
+        context_is_versioned = getattr(request, "is_versioned", False)
+
+        # If request is a string, use it as the name with no description
+        if isinstance(request, str):
+            context_name = request
+            context_description = None
+            context_is_versioned = False
+
         existing_context = context_dao.filter(
             project_id=project_id,
-            name=request.name,
+            name=context_name,
         )
         if existing_context:
             raise ValueError("Context already exists")
 
         context_dao.create(
             project_id=project_id,
-            name=request.name,
-            description=request.description,
-            is_versioned=request.is_versioned,
+            name=context_name,
+            description=context_description,
+            is_versioned=context_is_versioned,
         )
 
         return {"info": "Context created successfully."}
@@ -345,6 +361,9 @@ def add_logs_to_context(
     Adds existing logs to a context within a project. The logs must already exist
     in the project and can be specified by their IDs.
     The same logs can be associated with multiple contexts.
+
+    The context_name can be provided as a string or as an object with a name field.
+    If the context doesn't exist, it will be created automatically.
     """
     try:
         project = project_dao.filter(
@@ -355,15 +374,32 @@ def add_logs_to_context(
             raise IndexError("Project not found")
         project_id = project[0][0].id
 
+        # Try to get the context, or create it if it doesn't exist
+        context_name = request.context_name
+        # Handle string or object input for context
+        if isinstance(context_name, str):
+            context_name_value = context_name
+        else:
+            context_name_value = context_name.get("name")
+
         context = context_dao.filter(
             project_id=project_id,
-            name=request.context_name,
+            name=context_name_value,
         )
+
+        # Implicitly create the context if it doesn't exist
         if not context:
-            raise IndexError("Context not found")
+            context_id = context_dao.create(
+                project_id=project_id,
+                name=context_name_value,
+                description=None,  # Default description to None for implicitly created contexts
+                is_versioned=False,  # Default to non-versioned
+            )
+        else:
+            context_id = context[0][0].id
 
         context_dao.add_logs(
-            context_id=context[0][0].id,
+            context_id=context_id,
             log_ids=request.log_ids,
         )
         return {"info": "Logs added to context successfully!"}
