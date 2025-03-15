@@ -1155,3 +1155,71 @@ async def test_implicit_field_creation(client: AsyncClient):
     assert fields["text"]["data_type"] == "str"
 
 
+@pytest.mark.anyio
+async def test_context_prefix_filtering(client: AsyncClient):
+    """Test that contexts can be filtered by prefix"""
+    project_name = "test-prefix-filtering"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create contexts with different prefixes
+    prefixes = ["Datasets/", "Experiments/", "Models/"]
+    contexts = []
+
+    for prefix in prefixes:
+        # Create multiple contexts for each prefix
+        for i in range(3):
+            context_name = f"{prefix}context-{i}"
+            contexts.append(context_name)
+            response = await client.post(
+                f"/v0/project/{project_name}/contexts",
+                json={
+                    "name": context_name,
+                    "description": f"Test context {context_name}",
+                },
+                headers=HEADERS,
+            )
+            assert response.status_code == 200
+
+    # Create some contexts without prefixes
+    for i in range(2):
+        context_name = f"no-prefix-{i}"
+        contexts.append(context_name)
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": context_name, "description": f"Test context {context_name}"},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Get all contexts (no prefix filter)
+    response = await client.get(
+        f"/v0/project/{project_name}/contexts",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    all_contexts = response.json()
+    assert len(all_contexts) == len(contexts)
+
+    # Test filtering by each prefix
+    for prefix in prefixes:
+        response = await client.get(
+            f"/v0/project/{project_name}/contexts?prefix={prefix}",
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+        filtered_contexts = response.json()
+        assert len(filtered_contexts) == 3  # Each prefix has 3 contexts
+
+        # Verify all returned contexts have the correct prefix
+        for context in filtered_contexts:
+            assert context["name"].startswith(prefix)
+
+    # Test with a non-existent prefix
+    response = await client.get(
+        f"/v0/project/{project_name}/contexts?prefix=NonExistent/",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert len(response.json()) == 0  # Should return empty list
