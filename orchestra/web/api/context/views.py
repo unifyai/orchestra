@@ -2,11 +2,14 @@
 Includes endpoints related to context management within projects.
 """
 
-from typing import Union
+import re
+from typing import Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
 from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
+from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.web.api.context.schema import (
     AddLogsToContextRequest,
@@ -377,6 +380,8 @@ def add_logs_to_context(
     ),
     project_dao: ProjectDAO = Depends(),
     context_dao: ContextDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    log_dao: LogDAO = Depends(),
 ):
     """
     Adds existing logs to a context within a project. The logs must already exist
@@ -419,10 +424,43 @@ def add_logs_to_context(
         else:
             context_id = context[0][0].id
 
+        # Add logs to context
         context_dao.add_logs(
             context_id=context_id,
             log_ids=request.log_ids,
         )
+
+        # Implicitly create field types for any fields in the logs
+        # First, get existing field types for this context to avoid redundant creation
+        existing_fields = field_type_dao.get_field_types(
+            project_id=project_id,
+            context_id=context_id,
+        )
+        existing_field_names = set(existing_fields)
+        logs = log_dao.filter(
+            project_id=project_id,
+            log_event_id=request.log_ids,
+        )
+
+        # Create field types for each field found, but only if not already existing
+        for row in logs:
+            field_name = row[0].key
+            value = row[0].value
+            version = row[0].version
+
+            # Skip if field already exists in this context
+            if field_name not in existing_field_names:
+                field_type_dao.create_field_type_if_absent(
+                    project_id=project_id,
+                    field_name=field_name,
+                    value=value,
+                    context_id=context_id,
+                    mutable=False,
+                    field_category="param" if version is not None else "entry",
+                )
+                # Add to set to prevent duplicate creation in this batch
+                existing_field_names.add(field_name)
+
         return {"info": "Logs added to context successfully!"}
     except IndexError as e:
         raise not_found(str(e))
