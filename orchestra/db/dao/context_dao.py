@@ -47,6 +47,7 @@ class ContextDAO:
         name: str,
         description: Optional[str] = None,
         is_versioned: bool = False,
+        allow_duplicates: bool = True,
     ) -> int:
         """Create a new context using upsert to handle race conditions."""
         ts = datetime.now(timezone.utc)
@@ -59,6 +60,7 @@ class ContextDAO:
             updated_at=ts,
             is_versioned=is_versioned,
             version=1,
+            allow_duplicates=allow_duplicates,
         )
 
         # On conflict, do nothing and return the existing context's id
@@ -153,6 +155,7 @@ class ContextDAO:
         name: str,
         description: Optional[str] = None,
         is_versioned: bool = False,
+        allow_duplicates: bool = True,
     ) -> int:
         """
         Get or create a context using upsert.
@@ -193,6 +196,7 @@ class ContextDAO:
                 updated_at=ts,
                 is_versioned=is_versioned,
                 version=1,
+                allow_duplicates=allow_duplicates,
             )
 
             # On conflict, do nothing and return the existing context's id
@@ -221,6 +225,7 @@ class ContextDAO:
                             updated_at=ts,
                             is_versioned=False,
                             version=1,
+                            allow_duplicates=allow_duplicates,
                         )
                         .returning(Context.id)
                     )
@@ -243,6 +248,7 @@ class ContextDAO:
                     name=name,
                     description="default context",
                     is_versioned=False,
+                    allow_duplicates=allow_duplicates,
                 )
             except Exception:
                 raise ValueError(
@@ -258,8 +264,14 @@ class ContextDAO:
 
         Raises:
             ValueError: If context_id doesn't exist or any log_ids don't exist
+            ValueError: If duplicates are found and context doesn't allow duplicates
         """
         try:
+            # Get the context to check if duplicates are allowed
+            context = self.session.query(Context).filter_by(id=context_id).one_or_none()
+            if not context:
+                raise ValueError(f"Context with id {context_id} not found")
+
             # Get all log events
             log_events = (
                 self.session.query(LogEvent).filter(LogEvent.id.in_(log_ids)).all()
@@ -269,6 +281,14 @@ class ContextDAO:
 
             if missing_ids:
                 raise ValueError(f"Log events with ids {missing_ids} not found")
+
+            # Check for duplicates if the context doesn't allow them
+            if not context.allow_duplicates:
+                for log_event in log_events:
+                    if self.check_for_duplicates(context_id, log_event.id):
+                        raise ValueError(
+                            f"Duplicate log entry detected. Context '{context.name}' does not allow duplicates.",
+                        )
 
             # Create associations between log events and context
             for log_event in log_events:
@@ -292,11 +312,13 @@ class ContextDAO:
 
     def get_context_id(self, project_id: int, body: Union[ContextCreateRequest, None]):
         if body:
+            allow_duplicates = getattr(body, "allow_duplicates", True)
             return self.get_or_create(
                 project_id=project_id,
                 name=body.name,
                 description=body.description,
                 is_versioned=body.is_versioned,
+                allow_duplicates=allow_duplicates,
             )
         else:
             # Create or get default context using upsert
@@ -331,6 +353,56 @@ class ContextDAO:
                 result[str(le.id)] = row_map
 
         return result
+
+    def check_for_duplicates(self, context_id: int, log_event_id: int) -> bool:
+        """
+        Check if a log event would create duplicates in the context using a single SQL query.
+
+        Args:
+            context_id: ID of the context to check
+            log_event_id: ID of the log event to check for duplicates
+
+        Returns:
+            True if duplicates are found, False otherwise
+        """
+        query = """
+        WITH new_log_pairs AS (
+            SELECT key, value FROM log WHERE log_event_id = :log_event_id
+        ),
+        context_log_events AS (
+            SELECT le.id
+            FROM log_event le
+            JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id AND le.id != :log_event_id
+        ),
+        potential_duplicates AS (
+            SELECT
+                cle.id,
+                COUNT(*) as pair_count
+            FROM context_log_events cle
+            JOIN log l ON cle.id = l.log_event_id
+            GROUP BY cle.id
+            HAVING COUNT(*) = (SELECT COUNT(*) FROM new_log_pairs)
+        ),
+        matching_pairs AS (
+            SELECT
+                pd.id,
+                COUNT(*) as matching_count
+            FROM potential_duplicates pd
+            JOIN log l ON pd.id = l.log_event_id
+            JOIN new_log_pairs nlp ON l.key = nlp.key AND l.value = nlp.value
+            GROUP BY pd.id
+        )
+        SELECT EXISTS (
+            SELECT 1 FROM matching_pairs mp
+            JOIN potential_duplicates pd ON mp.id = pd.id
+            WHERE mp.matching_count = pd.pair_count
+        ) as has_duplicate
+        """
+        result = self.session.execute(
+            text(query), {"context_id": context_id, "log_event_id": log_event_id},
+        )
+        return result.scalar()
 
     def archive_context_state(
         self,
