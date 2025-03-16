@@ -476,12 +476,22 @@ def create_logs(
     # Bulk create all log records
     log_dao.bulk_create(log_records_to_create)
 
-    # If context is versioned => do a *single* increment after inserting all fields
+    # Check for duplicates if context doesn't allow duplicates
     context_obj = None
     if context_id:
         context_obj = (
             context_dao.session.query(Context).filter_by(id=context_id).first()
         )
+        # Check if context doesn't allow duplicates
+        if context_obj and not context_obj.allow_duplicates:
+            for log_event_id in log_event_ids:
+                # Check for duplicates
+                duplicate = context_dao.check_for_duplicates(context_id, log_event_id)
+                if duplicate:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Duplicate log detected in context '{context_obj.name}' which doesn't allow duplicates. Log event ID: {log_event_id}",
+                    )
     if context_obj and context_obj.is_versioned:
         # archive the new state
         context_dao.archive_context_state(
@@ -1521,6 +1531,42 @@ def update_logs(
     if all_updates:
         try:
             log_dao.bulk_update(all_updates, field_types=field_types)
+
+            # Check for duplicates if context doesn't allow duplicates
+            if "ctx_ids" in locals() and ctx_ids:
+                # Check each context
+                for context_id in ctx_ids:
+                    if context_id is not None:
+                        ctx_obj = (
+                            context_dao.session.query(Context)
+                            .filter_by(id=context_id)
+                            .first()
+                        )
+                        if ctx_obj and not ctx_obj.allow_duplicates:
+                            # Check each log ID for duplicates
+                            for log_id in body.ids:
+                                duplicate = context_dao.check_for_duplicates(
+                                    context_id, log_id,
+                                )
+                                if duplicate:
+                                    raise HTTPException(
+                                        status_code=400,
+                                        detail=f"Update would create a duplicate in context '{ctx_obj.name}' which doesn't allow duplicates. Log ID: {log_id}",
+                                    )
+            elif ctx_id is not None:
+                # Single context case
+                ctx_obj = (
+                    context_dao.session.query(Context).filter_by(id=ctx_id).first()
+                )
+                if ctx_obj and not ctx_obj.allow_duplicates:
+                    # Check each log ID for duplicates
+                    for log_id in body.ids:
+                        duplicate = context_dao.check_for_duplicates(ctx_id, log_id)
+                        if duplicate:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Update would create a duplicate in context '{ctx_obj.name}' which doesn't allow duplicates. Log ID: {log_id}",
+                            )
         except ValueError as e:
             raise HTTPException(
                 status_code=400,
