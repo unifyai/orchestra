@@ -1546,7 +1546,8 @@ def update_logs(
                             # Check each log ID for duplicates
                             for log_id in body.ids:
                                 duplicate = context_dao.check_for_duplicates(
-                                    context_id, log_id,
+                                    context_id,
+                                    log_id,
                                 )
                                 if duplicate:
                                     raise HTTPException(

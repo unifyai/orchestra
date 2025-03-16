@@ -400,7 +400,8 @@ class ContextDAO:
         ) as has_duplicate
         """
         result = self.session.execute(
-            text(query), {"context_id": context_id, "log_event_id": log_event_id},
+            text(query),
+            {"context_id": context_id, "log_event_id": log_event_id},
         )
         return result.scalar()
 
