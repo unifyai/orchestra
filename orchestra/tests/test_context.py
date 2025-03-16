@@ -1277,3 +1277,110 @@ async def test_context_name_validation(client: AsyncClient):
             response.status_code == 400
         ), f"Expected 400 for name '{name}', got {response.status_code}"
         assert "Invalid context name" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_context_allow_duplicates(client: AsyncClient):
+    """Test that contexts with allow_duplicates=False reject duplicate log entries"""
+    project_name = "test-duplicate-prevention"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create a context with allow_duplicates=False
+    no_duplicates_context = "no-duplicates-context"
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": no_duplicates_context,
+            "description": "Context that doesn't allow duplicates",
+            "allow_duplicates": False,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create a default context (allow_duplicates=True by default)
+    default_context = "default-context"
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": default_context,
+            "description": "Default context that allows duplicates",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create a log with specific entries in the no-duplicates context
+    log_data = {
+        "project": project_name,
+        "params": {"model": "gpt-4", "temperature": 0.7},
+        "entries": {
+            "accuracy": 0.95,
+            "latency": 120,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
+        "context": no_duplicates_context,
+    }
+
+    response = await client.post(
+        "/v0/logs",
+        json=log_data,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Try to create another log with identical key-value pairs - should be rejected
+    response = await client.post(
+        "/v0/logs",
+        json=log_data,  # Same exact data
+        headers=HEADERS,
+    )
+    assert response.status_code == 400
+    assert "Duplicate log detected" in response.json()["detail"]
+
+    # Create a log with different values - should be accepted
+    different_log = log_data.copy()
+    different_log["entries"] = {
+        "accuracy": 0.92,  # Different value
+        "latency": 150,  # Different value
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    response = await client.post(
+        "/v0/logs",
+        json=different_log,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create a log with same values but in the default context - should be accepted
+    default_log = log_data.copy()
+    default_log["context"] = default_context
+
+    response = await client.post(
+        "/v0/logs",
+        json=default_log,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create another identical log in the default context - should still be accepted
+    response = await client.post(
+        "/v0/logs",
+        json=default_log,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Test with different params but same entries - should be accepted
+    different_params_log = log_data.copy()
+    different_params_log["params"] = {"model": "gpt-3.5", "temperature": 0.5}
+
+    response = await client.post(
+        "/v0/logs",
+        json=different_params_log,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
