@@ -540,6 +540,7 @@ class Context(Base):
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     is_versioned = Column(Boolean, nullable=False, server_default="f")
     version = Column(Integer, nullable=False, server_default="1")
+    allow_duplicates = Column(Boolean, nullable=False, server_default="t")
 
     project = relationship("Project", back_populates="contexts")
     artifacts = relationship("ContextArtifact", back_populates="context")
