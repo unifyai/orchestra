@@ -91,12 +91,14 @@ def create_context(
         context_name = request.name
         context_description = request.description
         context_is_versioned = getattr(request, "is_versioned", False)
+        context_allow_duplicates = getattr(request, "allow_duplicates", True)
 
         # If request is a string, use it as the name with no description
         if isinstance(request, str):
             context_name = request
             context_description = None
             context_is_versioned = False
+            context_allow_duplicates = True
 
         # Validate context name
         if not re.match(r"^[a-zA-Z0-9\_\-/]+$", context_name) or "//" in context_name:
@@ -117,6 +119,7 @@ def create_context(
             name=context_name,
             description=context_description,
             is_versioned=context_is_versioned,
+            allow_duplicates=context_allow_duplicates,
         )
 
         return {"info": "Context created successfully."}
@@ -281,6 +284,7 @@ def get_context(
             "description": context[0][0].description,
             "is_versioned": context[0][0].is_versioned,
             "version": context[0][0].version,
+            "allow_duplicates": context[0][0].allow_duplicates,
         }
     except IndexError as e:
         raise not_found(str(e))
@@ -420,15 +424,24 @@ def add_logs_to_context(
                 name=context_name_value,
                 description=None,  # Default description to None for implicitly created contexts
                 is_versioned=False,  # Default to non-versioned
+                allow_duplicates=True,  # Default to allowing duplicates
             )
         else:
             context_id = context[0][0].id
 
         # Add logs to context
-        context_dao.add_logs(
-            context_id=context_id,
-            log_ids=request.log_ids,
-        )
+        try:
+            context_dao.add_logs(
+                context_id=context_id,
+                log_ids=request.log_ids,
+            )
+        except ValueError as e:
+            if "duplicate" in str(e).lower():
+                raise HTTPException(
+                    status_code=400,
+                    detail=str(e),
+                )
+            raise
 
         # Implicitly create field types for any fields in the logs
         # First, get existing field types for this context to avoid redundant creation
