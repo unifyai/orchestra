@@ -26,6 +26,11 @@ class ContextCreateRequest(BaseModel):
         description="Whether the context should be versioned. If True, the context will be versioned and mutable. ",
         example=True,
     )
+    allow_duplicates: bool = Field(
+        default=True,
+        description="Whether duplicate log entries are allowed in this context. If False, attempts to add duplicate logs will be ignored.",
+        example=True,
+    )
 
 
 class AddLogsToContextRequest(BaseModel):
