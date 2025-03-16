@@ -488,6 +488,7 @@ def create_logs(
                 # Check for duplicates
                 duplicate = context_dao.check_for_duplicates(context_id, log_event_id)
                 if duplicate:
+                    log_event_dao.delete(log_event_id)
                     raise HTTPException(
                         status_code=400,
                         detail=f"Duplicate log detected in context '{context_obj.name}' which doesn't allow duplicates. Log event ID: {log_event_id}",
