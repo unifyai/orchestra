@@ -29,7 +29,9 @@ from sqlalchemy import (
     DateTime,
     Float,
     Integer,
+    Interval,
     String,
+    Time,
     and_,
     asc,
     case,
@@ -2496,7 +2498,7 @@ def _get_logs_query(
                         cast(key_subq.c.raw_value, String),
                         cast_type,
                     )
-                    if cast_type == DateTime
+                    if cast_type in (DateTime, Date, Time, Interval)
                     else cast(key_subq.c.raw_value, cast_type)
                 )
             else:
