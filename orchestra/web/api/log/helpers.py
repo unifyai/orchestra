@@ -663,13 +663,13 @@ def cast_expr(expr, from_type: str, to_type: str):
     elif final_type == "bool":
         return cast(expr, Boolean)
     elif final_type == "timestamp":
-        return cast(cast(expr, Text), DateTime(timezone=True))
+        return cast(func.replace(cast(expr, Text), '"', ""), DateTime(timezone=True))
     elif final_type == "time":
-        return cast(cast(expr, Text), Time)
+        return cast(func.replace(cast(expr, Text), '"', ""), Time)
     elif final_type == "date":
-        return cast(cast(expr, Text), Date)
+        return cast(func.replace(cast(expr, Text), '"', ""), Date)
     elif final_type == "timedelta":
-        return cast(cast(expr, Text), Interval)
+        return cast(func.replace(cast(expr, Text), '"', ""), Interval)
     else:
         # If neither side is recognized or is "NoneType", just return expr uncasted
         return expr
