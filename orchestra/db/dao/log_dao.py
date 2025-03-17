@@ -321,15 +321,16 @@ class LogDAO:
         maybe_img = LogDAO.possible_img(raw_k)
         if isinstance(raw_v, str):
             try:
-                datetime.fromisoformat(raw_v)
-                return "timestamp"
-            except:
                 if _is_time_string(raw_v):
                     return "time"
                 if _is_date_string(raw_v):
                     return "date"
                 if _is_timedelta_string(raw_v):
                     return "timedelta"
+
+                datetime.fromisoformat(raw_v)
+                return "timestamp"
+            except:
                 if not maybe_img:
                     return "str"
                 binary = raw_v.encode("utf-8")
