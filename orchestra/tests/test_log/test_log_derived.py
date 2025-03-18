@@ -845,3 +845,94 @@ async def test_derived_entry_datetime_arithmetic(client: AsyncClient):
                 log["derived_entries"]["timestamp_plus_1hour"]
                 == "2023-06-15T16:30:45+00:00"
             )
+
+
+@pytest.mark.anyio
+async def test_active_derived_logs_processing(client: AsyncClient):
+    """
+    Test the admin endpoint for processing active derived logs.
+    This test verifies that after calling the admin endpoint, the new log gets the derived entry
+    """
+    # Set up project and create base logs
+    project_name = "test_admin_derived_processing"
+    await _create_project(client, project_name, user=1)
+    # Create base logs with different scores
+    log_ids = []
+    for score in [10, 30, 50, 70, 90, 100]:
+        response = await _create_log(
+            client,
+            project_name,
+            entries={"score": score, "average_score": score * 0.5},
+            params={},
+        )
+        assert response.status_code == 200
+        log_ids.append(response.json()[0])
+
+    # Create a derived log with filter_expr to select logs with score > 40
+    key = "high_score_flag"
+    equation = "{log:score} ** {log:average_score}"
+    referenced_logs = {"log": {"filter_expr": ""}}
+
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        equation,
+        referenced_logs,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "derived_log_ids" in data
+
+    # Verify only logs with score > 40 have the derived entry
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+
+    for log in logs:
+        assert "high_score_flag" in log["derived_entries"]
+
+    # Create a new log that should match the filter but doesn't have the derived entry yet
+    new_log_score = 60
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"score": new_log_score, "average_score": new_log_score * 0.5},
+        params={},
+    )
+    assert response.status_code == 200
+    new_log_id = response.json()[0]
+
+    # Verify the new log doesn't have the derived entry yet
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"from_ids": new_log_id},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    new_log = response.json()["logs"][0]
+    assert "high_score_flag" not in new_log["derived_entries"]
+
+    # Call the admin endpoint to process active derived logs
+    # Create admin headers with auth_admin_key
+    admin_headers = HEADERS.copy()
+    admin_headers["Authorization"] = "Bearer abc"
+
+    response = await client.post(
+        "/v0/admin/update_active_derived_logs",
+        headers=admin_headers,
+    )
+    assert response.status_code == 200
+
+    # Verify the new log now has the derived entry
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"from_ids": new_log_id},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    updated_log = response.json()["logs"][0]
+    assert "high_score_flag" in updated_log["derived_entries"]
