@@ -853,6 +853,8 @@ async def test_active_derived_logs_processing(client: AsyncClient):
     Test the admin endpoint for processing active derived logs.
     This test verifies that after calling the admin endpoint, the new log gets the derived entry
     """
+    import os
+
     # Set up project and create base logs
     project_name = "test_admin_derived_processing"
     await _create_project(client, project_name, user=1)
@@ -917,9 +919,8 @@ async def test_active_derived_logs_processing(client: AsyncClient):
     assert "high_score_flag" not in new_log["derived_entries"]
 
     # Call the admin endpoint to process active derived logs
-    # Create admin headers with auth_admin_key
     admin_headers = HEADERS.copy()
-    admin_headers["Authorization"] = "Bearer abc"
+    admin_headers["Authorization"] = f"Bearer {os.environ['ORCHESTRA_ADMIN_KEY']}"
 
     response = await client.post(
         "/v0/admin/update_active_derived_logs",
