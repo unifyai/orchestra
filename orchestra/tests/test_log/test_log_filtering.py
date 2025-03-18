@@ -214,11 +214,11 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
             ],
         ),
         (
-            "'new-var' in to_str(field-1)",
+            "'new-var' in str(field-1)",
             [
                 ("STRING", "new-var"),
                 ("OP", "in"),
-                ("FUNC", "to_str"),
+                ("FUNC", "str"),
                 ("LPAREN", "("),
                 ("IDENTIFIER", "field-1"),
                 ("RPAREN", ")"),
@@ -539,11 +539,11 @@ def test_parser_basic():
         ),
         # 7) Membership with a string + function call
         (
-            "'new-var' in to_str(field-1)",
+            "'new-var' in str(field-1)",
             [
                 ("STRING", "new-var"),
                 ("OP", "in"),
-                ("FUNC", "to_str"),
+                ("FUNC", "str"),
                 ("LPAREN", "("),
                 ("IDENTIFIER", "field-1"),
                 ("RPAREN", ")"),
@@ -553,7 +553,7 @@ def test_parser_basic():
                 "lhs": {"type": "string", "value": "new-var"},
                 "operand": "in",
                 "rhs": {
-                    "operand": "to_str",
+                    "operand": "str",
                     "rhs": {"type": "identifier", "value": "field-1"},
                 },
             },
@@ -793,7 +793,7 @@ def test_parser_nested_indexing():
         ("((a - b) == 2) or ((e / f) == 3)", {"a": 5, "b": 3, "e": 9, "f": 3}, True),
         # More Complex Nested Expressions
         ("(len(a) == 3) and ((b + c) > 10)", {"a": [1, 2, 3], "b": 5, "c": 6}, True),
-        ("(to_str(a) == 'abc') or (len(b) == 2)", {"a": "abc", "b": [1, 2]}, True),
+        ("(str(a) == 'abc') or (len(b) == 2)", {"a": "abc", "b": [1, 2]}, True),
         # Using exists with nested conditions
         ("exists(a) and (b > 5)", {"a": 5, "b": 6}, True),
         ("not exists(c) or (d < 10)", {"d": 9}, True),
@@ -2391,7 +2391,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient):
 
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "'2' in to_str(_/_data)"},
+        params={"filter_expr": "'2' in str(_/_data)"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2400,7 +2400,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient):
 
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": "to_str('2') in to_str(_/_data)"},
+        params={"filter_expr": "str('2') in str(_/_data)"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2409,7 +2409,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient):
 
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": """'{"a": 2' in to_str(_/_data)"""},
+        params={"filter_expr": """'{"a": 2' in str(_/_data)"""},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2418,7 +2418,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient):
 
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"filter_expr": """to_str('{"a": 2') in to_str(_/_data)"""},
+        params={"filter_expr": """str('{"a": 2') in str(_/_data)"""},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
