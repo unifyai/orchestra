@@ -304,7 +304,11 @@ def _tokenize(s):
             # We found a [ or {, so let's parse the entire bracketed substring
             # with parse_nested, and store it as an "OTHER" token
             nested_content, new_pos = parse_nested(line, mo.start())
-            tokens.append(("OTHER", nested_content))
+            try:
+                nested_content = json.loads(nested_content)
+                tokens.append(("OTHER", nested_content))
+            except:
+                tokens.append(("OTHER", nested_content))
             pos = new_pos
             mo = get_token(line, pos)
             continue
@@ -1469,6 +1473,38 @@ def _handle_membership_operator(
     # Only LHS is a subquery
     elif lhs_is_sub and not rhs_is_sub:
         lval, lval_type = _select_value(lhs, session)
+
+        # Check if we're trying to do membership test on a boolean column
+        if lval_type == "bool" and not isinstance(lval, list):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid membership test on a boolean column. Use equality check (==) instead of 'in'.",
+            )
+
+        # Handle JSONB array containment for list columns
+        if lval_type == "list":
+            # If RHS is a BindParameter or literal, we can use the @> operator
+            if isinstance(rhs, BindParameter) or not isinstance(
+                rhs,
+                (list, dict, Subquery),
+            ):
+                # Create a JSON array with the single value for the containment check
+                rhs_value = rhs.value if isinstance(rhs, BindParameter) else rhs
+
+                # Use PostgreSQL's @> operator for array containment
+                containment_expr = lval.op("@>")(literal([rhs_value], type_=JSONB))
+                expr = containment_expr if is_in else ~containment_expr
+                return (
+                    select(
+                        lhs.c.log_event_id.label("log_event_id"),
+                        expr.label("value"),
+                        literal("bool").label("inferred_type"),
+                    )
+                    .select_from(lhs)
+                    .subquery()
+                )
+
+        # Fall back to standard handling for non-array types
         rhs_list = _parse_rhs_list_or_dict_if_needed(filter_dict.get("rhs"), rhs)
 
         if rhs_list and isinstance(rhs_list, list):
@@ -1490,11 +1526,36 @@ def _handle_membership_operator(
     # Only RHS is a subquery
     elif rhs_is_sub and not lhs_is_sub:
         rval, rval_type = _select_value(rhs, session)
+
+        # Check if we're trying to do membership test on a boolean column
+        if rval_type == "bool" and not isinstance(rval, list):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid membership test on a boolean column. Use equality check (==) instead of 'in'.",
+            )
+
+        # Handle the case where RHS is a JSONB array and LHS is a scalar value to check for containment
+        if rval_type == "list":
+            # If LHS is a scalar value (not a list or subquery), we can use the @> operator
+            if not isinstance(lhs, (list, dict, Subquery)):
+                lhs_value = lhs.value if isinstance(lhs, BindParameter) else lhs
+                # Use PostgreSQL's @> operator for array containment
+                containment_expr = rval.op("@>")(literal([lhs_value], type_=JSONB))
+                cond = containment_expr if is_in else ~containment_expr
+                return (
+                    select(
+                        rhs.c.log_event_id.label("log_event_id"),
+                        cond.label("value"),
+                        literal("bool").label("inferred_type"),
+                    )
+                    .select_from(rhs)
+                    .subquery()
+                )
+
         lhs_list = _parse_rhs_list_or_dict_if_needed(filter_dict.get("lhs"), lhs)
 
         if lhs_list is not None and isinstance(lhs_list, list):
             cond = rval.in_(lhs_list) if is_in else ~rval.in_(lhs_list)
-
         else:
             # Substring check. We'll check: "lhs in to_str(rval)" => substring.
             substring_cond = _substring_expr(lhs, rval)
@@ -1651,7 +1712,7 @@ def _handle_functions(
 ):
     """
     Handles function-based operations ('len', 'to_str', 'type', 'round', 'round_timestamp',
-    'exists', 'version', 'isNone', 'time', 'date') in the filter dictionary.
+    'exists', 'version', 'isNone', 'time', 'date', 'now') in the filter dictionary.
 
     Args:
         filter_dict (dict): The filter dictionary containing the function and its arguments.
