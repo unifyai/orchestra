@@ -304,11 +304,7 @@ def _tokenize(s):
             # We found a [ or {, so let's parse the entire bracketed substring
             # with parse_nested, and store it as an "OTHER" token
             nested_content, new_pos = parse_nested(line, mo.start())
-            try:
-                nested_content = json.loads(nested_content)
-                tokens.append(("OTHER", nested_content))
-            except:
-                tokens.append(("OTHER", nested_content))
+            tokens.append(("OTHER", nested_content))
             pos = new_pos
             mo = get_token(line, pos)
             continue
@@ -1539,6 +1535,11 @@ def _handle_membership_operator(
             # If LHS is a scalar value (not a list or subquery), we can use the @> operator
             if not isinstance(lhs, (list, dict, Subquery)):
                 lhs_value = lhs.value if isinstance(lhs, BindParameter) else lhs
+                # TODO: this can be avoided with more robust parsing/tokenization (AST based)
+                try:
+                    lhs_value = json.loads(lhs_value)
+                except:
+                    pass
                 # Use PostgreSQL's @> operator for array containment
                 containment_expr = rval.op("@>")(literal([lhs_value], type_=JSONB))
                 cond = containment_expr if is_in else ~containment_expr
