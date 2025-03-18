@@ -2427,6 +2427,125 @@ async def test_get_logs_w_str_filtering(client: AsyncClient):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "array_field, test_value, should_match",
+    [
+        # Test scalar value in array
+        ([1, 2, 3], 1, True),
+        ([1, 2, 3], 4, False),
+        # Test string value in array
+        (["a", "b", "c"], "a", True),
+        (["a", "b", "c"], "d", False),
+        # Test mixed type array
+        ([1, "two", 3.0], "two", True),
+        ([1, "two", 3.0], 1, True),
+        ([1, "two", 3.0], 3.0, True),
+        ([1, "two", 3.0], 2, False),
+        # Test nested arrays
+        ([[1, 2], [3, 4]], [1, 2], True),
+        ([[1, 2], [3, 4]], [5, 6], False),
+        # Test empty array
+        ([], 1, False),
+        # Test with boolean values
+        ([True, False], True, True),
+        ([True, False], False, True),
+        ([True, False], 1, False),  # 1 is not True in PostgreSQL array containment
+        # Test with null values
+        ([None, 1, 2], None, True),
+        ([1, 2, 3], None, False),
+    ],
+)
+@pytest.mark.anyio
+async def test_array_membership_operator(
+    client: AsyncClient,
+    array_field,
+    test_value,
+    should_match,
+):
+    """
+    Test that the membership operator correctly handles the case when a literal
+    is checked against a JSON array column using PostgreSQL's array containment operator (@>).
+    """
+    project_name = "test_array_membership"
+    await _create_project(client, project_name)
+
+    # Create a log with the test array
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"test_array": array_field},
+    )
+    assert response.status_code == 200
+    log_id = response.json()[0]
+
+    # Test the membership operator
+    filter_expr = f"{test_value!r} in test_array"
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": filter_expr,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    if should_match:
+        assert len(data["logs"]) == 1, f"Expected 1 log for expression: {filter_expr}"
+        assert data["logs"][0]["id"] == log_id
+    else:
+        assert len(data["logs"]) == 0, f"Expected 0 logs for expression: {filter_expr}"
+
+
+@pytest.mark.parametrize(
+    "bool_field, test_value, expected_error",
+    [
+        (True, True, True),  # Should raise error: True in True is invalid
+        (False, False, True),  # Should raise error: False in False is invalid
+        (True, False, True),  # Should raise error: False in True is invalid
+        (True, "True", True),  # Should raise error: "True" in True is invalid
+    ],
+)
+@pytest.mark.anyio
+async def test_boolean_membership_operator_error(
+    client: AsyncClient,
+    bool_field,
+    test_value,
+    expected_error,
+):
+    """
+    Test that the membership operator correctly handles the case when a literal
+    is checked against a boolean column. This should raise an error since
+    membership tests on single boolean columns are invalid.
+    """
+    project_name = "test_bool_membership"
+    await _create_project(client, project_name)
+
+    # Create a log with the test boolean
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"test_bool": bool_field},
+    )
+    assert response.status_code == 200
+
+    # Test the membership operator
+    filter_expr = f"{test_value!r} in test_bool"
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": filter_expr,
+        },
+        headers=HEADERS,
+    )
+
+    # Should return an error or empty result
+    if expected_error:
+        assert response.status_code != 200 or len(response.json()["logs"]) == 0
+
+
 async def test_complex_string_filter_expressions(client: AsyncClient):
     """
     Test that filter expressions correctly match complex strings with special characters,
