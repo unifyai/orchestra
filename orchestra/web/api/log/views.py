@@ -510,7 +510,7 @@ def create_logs(
 
 def unify_id_sets_by_subset(alias_id_sets: Dict[str, Set[int]]) -> Dict[str, Set[int]]:
     """
-    Applies your 3-step logic:
+    Applies a 3-step logic:
       1) If all sets are the same size, do nothing.
       2) Else, pick the smallest set S_min. If S_min is a subset of every other set,
          then reduce every alias to S_min. Otherwise, raise HTTP 400 error.
@@ -865,12 +865,15 @@ def create_derived_entry(
 
         # Create a new derived log entry for each computed value
         new_derived_logs = []
+        placeholders = _extract_placeholders(body.equation)
+        referenced_logs = {
+            ph.split(":")[1]: v
+            for ph in placeholders
+            for k, v in body.referenced_logs.items()
+            if k in ph
+        }
         # Iterate over the computed values and resolved IDs
         for i, (_, value) in enumerate(computed_values):
-            # Create a dictionary for the current set of referenced logs
-            current_referenced_logs = {
-                alias_to_key_map[key]: ids[i] for key, ids in resolved_ids.items()
-            }
             # Get all log IDs involved in this specific computation
             involved_log_ids = list(set(ids[i] for ids in resolved_ids.values()))
 
@@ -883,7 +886,7 @@ def create_derived_entry(
                         log_event_id=log_event_id,
                         key=body.key,
                         equation=body.equation,
-                        referenced_logs=current_referenced_logs,
+                        referenced_logs=referenced_logs,
                         value=val,
                         inferred_type=inferred_type,
                         created_at=datetime.now(timezone.utc),
@@ -1182,14 +1185,15 @@ def update_derived_log(
         # Create new derived logs with computed values
         new_derived_logs = []
         now = datetime.now(timezone.utc)
-
+        placeholders = _extract_placeholders(body.equation)
+        referenced_logs = {
+            ph.split(":")[1]: v
+            for ph in placeholders
+            for k, v in body.referenced_logs.items()
+            if k in ph
+        }
         # Iterate over the computed values and resolved IDs
         for i, (_, value) in enumerate(computed_values):
-            # Create a dictionary for the current set of referenced logs
-            current_referenced_logs = {
-                alias_to_key_map[key]: ids[i] for key, ids in resolved_ids.items()
-            }
-
             # Get all log IDs involved in this specific computation
             involved_log_ids = list(set(ids[i] for ids in resolved_ids.values()))
 
@@ -1204,7 +1208,7 @@ def update_derived_log(
                         log_event_id=log_event_id,
                         key=final_key,
                         equation=final_equation,
-                        referenced_logs=current_referenced_logs,
+                        referenced_logs=referenced_logs,
                         value=val,
                         inferred_type=inferred_type,
                         created_at=now,
@@ -1632,20 +1636,13 @@ def update_logs(
     # Recompute derived logs that reference any updated base logs.
     if updated_ids:
         try:
-            updated_ids_jsonb = [
-                cast({key: value}, JSONB) for (key, value) in updated_ids
-            ]
+            event_ids = [value for (_, value) in updated_ids]
             derived_logs_to_recompute = (
                 session.query(DerivedLog)
                 .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
-                .filter(LogEvent.project_id == project_id)
                 .filter(
-                    or_(
-                        *[
-                            DerivedLog.referenced_logs.op("@>")(jsonb_obj)
-                            for jsonb_obj in updated_ids_jsonb
-                        ],
-                    ),
+                    LogEvent.project_id == project_id,
+                    DerivedLog.log_event_id.in_(event_ids),
                 )
                 .all()
             )
