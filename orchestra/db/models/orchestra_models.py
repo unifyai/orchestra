@@ -738,6 +738,36 @@ class DerivedLog(Base):
     __table_args__ = (UniqueConstraint("log_event_id", "key"),)
 
 
+class ActiveDerivedLog(Base):
+    """Model class for storing filter-based derived logs that are applied to future base logs."""
+
+    __tablename__ = "active_derived_log_template"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key = Column(String, nullable=False, index=True)
+    equation = Column(String, nullable=False)
+    referenced_logs = Column(JSONB, nullable=False)
+    filter_expression = Column(JSONB, nullable=False)
+    inferred_type = Column(String)
+    is_active = Column(Boolean, nullable=False, server_default="t")
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+
+    __table_args__ = (UniqueConstraint("project_id", "context_id", "key"),)
+
+
 class DashboardView(Base):
     __tablename__ = "dashboard_view"
 
