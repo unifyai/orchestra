@@ -40,7 +40,6 @@ from sqlalchemy import (
     exists,
     func,
     literal,
-    or_,
     select,
     tuple_,
 )
@@ -57,6 +56,7 @@ from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
+    ActiveDerivedLog,
     Context,
     DerivedLog,
     Log,
@@ -64,6 +64,7 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
     LogHistory,
 )
+from orchestra.web.api.dependencies import auth_admin_key
 from orchestra.web.api.log.schema import (
     CreateDerivedEntriesConfig,
     CreateLogConfig,
@@ -89,6 +90,9 @@ from .helpers import (
 )
 
 router = APIRouter()
+
+# Admin router for protected endpoints
+admin_router = APIRouter()
 
 
 # Sorting configuration modes
@@ -817,6 +821,17 @@ def create_derived_entry(
         # get the default context
         context_id = context_dao.get_or_create(project_obj.id, name="")
 
+    # Check if this is a filter-based derived log
+    is_filter_based = False
+    filter_expression = None
+    if isinstance(body.referenced_logs, dict):
+        # Check if any value in referenced_logs is a dict with filter_expr
+        for key, value in body.referenced_logs.items():
+            if isinstance(value, dict) and "filter_expr" in value:
+                is_filter_based = True
+                filter_expression = body.referenced_logs
+                break
+
     resolved_ids = prepare_resolved_ids(
         equation=body.equation,
         referenced_logs=body.referenced_logs,
@@ -896,7 +911,45 @@ def create_derived_entry(
 
         # Bulk insert all new derived logs in one go
         session.bulk_save_objects(new_derived_logs)
+
+        # If this is a filter-based derived log, create an ActiveDerivedLog
+        if is_filter_based:
+            # Check if a template already exists for this project and key
+            existing_template = (
+                session.query(ActiveDerivedLog)
+                .filter(
+                    ActiveDerivedLog.project_id == project_obj.id,
+                    ActiveDerivedLog.key == body.key,
+                )
+                .first()
+            )
+
+            if not existing_template:
+                # Create a new template
+                template = ActiveDerivedLog(
+                    project_id=project_obj.id,
+                    context_id=context_id,
+                    key=body.key,
+                    equation=body.equation,
+                    referenced_logs=referenced_logs,
+                    filter_expression=filter_expression,
+                    inferred_type=inferred_type,
+                    is_active=True,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+                session.add(template)
+            else:
+                # Update existing template
+                existing_template.equation = body.equation
+                existing_template.referenced_logs = referenced_logs
+                existing_template.filter_expression = filter_expression
+                existing_template.inferred_type = inferred_type
+                existing_template.is_active = True
+                existing_template.updated_at = datetime.now(timezone.utc)
+
         session.commit()
+
         # Create or update field type record for derived entry
         field_type_dao.create_field_type_if_absent(
             project_id=project_obj.id,
@@ -6005,3 +6058,233 @@ def _compute_group_metric(
 
     except Exception:
         return None
+
+
+@admin_router.post(
+    "/update_active_derived_logs",
+    responses={
+        200: {
+            "description": "Active derived logs updated successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Processed 5 templates and created 42 derived logs",
+                    },
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Error processing active derived log templates",
+                    },
+                },
+            },
+        },
+    },
+)
+def update_active_derived_logs(
+    session=Depends(get_db_session),
+    field_type_dao: FieldTypeDAO = Depends(),
+    _=Depends(auth_admin_key),
+):
+    """
+    Admin endpoint to process active derived logs and create new derived logs
+    for new log events that match the filter criteria.
+    This endpoint  is designed to be calledby internal processes (e.g., Cloud Scheduler) or administrators.
+    """
+
+    try:
+        # Get all active templates
+        active_templates = (
+            session.query(ActiveDerivedLog)
+            .filter(ActiveDerivedLog.is_active == True)
+            .all()
+        )
+
+        if not active_templates:
+            return {"info": "No active templates found"}
+
+        total_derived_logs_created = 0
+
+        # Process each template
+        for template in active_templates:
+            # Get field types for the project
+            field_types = field_type_dao.get_field_types(
+                template.project_id,
+                context_id=template.context_id,
+            )
+
+            # Find log events that don't already have this derived log
+            # First, get all log events for this project
+            all_log_events = (
+                session.query(LogEvent.id)
+                .filter(LogEvent.project_id == template.project_id)
+                .subquery(name="all_log_events")
+            )
+
+            # Then, get log events that already have this derived log
+            existing_derived_logs = (
+                session.query(DerivedLog.log_event_id)
+                .filter(
+                    DerivedLog.key == template.key,
+                    DerivedLog.log_event_id.in_(select(all_log_events.c.id)),
+                )
+                .subquery(name="existing_derived_logs")
+            )
+
+            # Find log events that don't have this derived log yet
+            new_log_events = (
+                session.query(LogEvent.id)
+                .filter(
+                    LogEvent.id.in_(select(all_log_events.c.id)),
+                    ~LogEvent.id.in_(select(existing_derived_logs.c.log_event_id)),
+                )
+                .subquery(name="new_log_events")
+            )
+
+            # If there are no new log events, skip this template
+            if session.query(new_log_events).count() == 0:
+                continue
+
+            # Prepare the filter expression
+            try:
+                # Get all log events that match the filter expression
+                log_event_ids_subq = (
+                    session.query(LogEvent.id)
+                    .filter(
+                        LogEvent.project_id == template.project_id,
+                        LogEvent.id.in_(select(new_log_events.c.id)),
+                    )
+                    .subquery(name="log_event_ids_subq")
+                )
+
+                # Apply the filter expression to find matching log events
+                filter_dict = None
+                resolved_ids = {}
+                matching_log_event_ids = log_event_ids_subq
+                # If we have a filter expression in the template
+                if template.filter_expression:
+                    # For each alias in the filter expression
+                    for alias, filter_config in template.filter_expression.items():
+                        if (
+                            isinstance(filter_config, dict)
+                            and "filter_expr" in filter_config
+                        ):
+                            try:
+                                # Convert the filter expression to a filter dict
+                                filter_dict = str_filter_exp_to_dict(
+                                    filter_config["filter_expr"],
+                                    field_names=list(field_types.keys()),
+                                )
+
+                                # Apply the filter to find matching log events
+                                condition = build_sql_query(
+                                    filter_dict,
+                                    LogEvent,
+                                    session,
+                                    log_event_ids=log_event_ids_subq,
+                                )
+                            except Exception as e:
+                                condition = None  # If the filter expression is empty (eg: filter_expr: '')
+
+                            # Get the log event IDs that match the filter
+                            if isinstance(condition, Subquery):
+                                matching_log_events = (
+                                    session.query(LogEvent.id)
+                                    .filter(
+                                        LogEvent.id.in_(
+                                            select(log_event_ids_subq.c.id),
+                                        ),
+                                        exists(
+                                            select(1)
+                                            .select_from(condition)
+                                            .where(
+                                                and_(
+                                                    condition.c.log_event_id
+                                                    == LogEvent.id,
+                                                    condition.c.value.is_(True),
+                                                ),
+                                            ),
+                                        ),
+                                    )
+                                    .all()
+                                )
+                            else:
+                                matching_log_events = session.query(
+                                    log_event_ids_subq.c.id,
+                                ).all()
+
+                            # Extract the log event IDs
+                            matching_log_event_ids = [
+                                row[0] for row in matching_log_events
+                            ]
+
+                            # If no matching log events, skip this template
+                            if not matching_log_event_ids:
+                                continue
+
+                            resolved_ids[alias] = matching_log_event_ids
+                    # Compute the derived values for each matching log event
+                    filter_expr, alias_to_key_map = _substitute_placeholders(
+                        template.equation,
+                        resolved_ids,
+                    )
+                    filter_dict = str_filter_exp_to_dict(
+                        filter_expr,
+                        field_names=list(field_types.keys()),
+                    )
+                    computed_values = _compute_expression(
+                        filter_dict,
+                        LogEvent,
+                        session,
+                        log_event_ids=matching_log_event_ids,
+                    )
+
+                    # Create derived logs for each matching log event
+                    new_derived_logs = []
+
+                    for log_event_id, (_, value) in zip(
+                        matching_log_event_ids,
+                        computed_values,
+                    ):
+                        val = json.loads(json.dumps(value, cls=DecimalEncoder))
+                        inferred_type = LogDAO.infer_type("", val)
+
+                        new_derived_logs.append(
+                            DerivedLog(
+                                log_event_id=log_event_id,
+                                key=template.key,
+                                equation=template.equation,
+                                referenced_logs=template.referenced_logs,
+                                value=val,
+                                inferred_type=inferred_type,
+                                created_at=datetime.now(timezone.utc),
+                                updated_at=datetime.now(timezone.utc),
+                            ),
+                        )
+
+                    # Bulk insert the new derived logs
+                    if new_derived_logs:
+                        session.bulk_save_objects(new_derived_logs)
+                        total_derived_logs_created += len(new_derived_logs)
+
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Error processing template {template.id}: {str(e)}",
+                )
+        # Commit all changes
+        session.commit()
+
+        return {
+            "info": f"Created {total_derived_logs_created} new derived logs",
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing active derived log templates: {str(e)}",
+        )
