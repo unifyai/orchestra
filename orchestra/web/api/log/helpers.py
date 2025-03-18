@@ -216,7 +216,7 @@ def _tokenize(s):
         ("ROUND_TIMESTAMP", r"(?<!\w)round_timestamp(?!\w)"),
         (
             "FUNC",
-            r"(?<!\w)(?:len|exists|version|str(?=\()|to_str|isNone|time|date|now)(?!\w)",
+            r"(?<!\w)(?:len|exists|version|str(?=\()|isNone|time|date|now)(?!\w)",
         ),
         ("BASEFUNC", r"(?<!\w)BASE(?!\w)"),
         # 5) Operators. Note we catch 'not in', 'is not' first:
@@ -1558,7 +1558,7 @@ def _handle_membership_operator(
         if lhs_list is not None and isinstance(lhs_list, list):
             cond = rval.in_(lhs_list) if is_in else ~rval.in_(lhs_list)
         else:
-            # Substring check. We'll check: "lhs in to_str(rval)" => substring.
+            # Substring check. We'll check: "lhs in str(rval)" => substring.
             substring_cond = _substring_expr(lhs, rval)
             cond = substring_cond if is_in else ~substring_cond
 
@@ -1634,7 +1634,7 @@ def _parse_rhs_list_or_dict_if_needed(rhs_dict, rhs_val):
     return None
 
 
-# Helper function for functions (len, to_str, type, round, round_timestamp, exists, version, isNone)
+# Helper function for functions (len, str, type, round, round_timestamp, exists, version, isNone)
 def _handle_date_function(rhs_expr, session):
     """
     Handles the date() function which extracts the date component from a datetime value.
@@ -1712,7 +1712,7 @@ def _handle_functions(
     is_derived=False,
 ):
     """
-    Handles function-based operations ('len', 'to_str', 'type', 'round', 'round_timestamp',
+    Handles function-based operations ('len', 'str', 'type', 'round', 'round_timestamp',
     'exists', 'version', 'isNone', 'time', 'date', 'now') in the filter dictionary.
 
     Args:
@@ -1784,7 +1784,7 @@ def _handle_functions(
         else:
             return len(rhs_expr)
 
-    elif operand == "to_str":
+    elif operand == "str":
         if isinstance(rhs_expr, Subquery):
             val, val_type = _select_value(rhs_expr, session)
             expr = func.cast(val, String)
@@ -2517,10 +2517,10 @@ def build_sql_query(
             is_derived=is_derived,
         )
 
-    # Handle functions (len, to_str, type, round, round_timestamp, exists, version, isNone, time, date, now)
+    # Handle functions (len, str, type, round, round_timestamp, exists, version, isNone, time, date, now)
     elif operand in (
         "len",
-        "to_str",
+        "str",
         "type",
         "round",
         "round_timestamp",
