@@ -134,30 +134,29 @@ class DerivedLogDAO:
         """
         try:
             for dlog in logs_to_recompute:
+                reference_log = {
+                    k: dlog.log_event_id for k in dlog.referenced_logs.keys()
+                }
                 transformed_logs = _transform_referenced_logs(
                     dlog.equation,
-                    dlog.referenced_logs,
+                    reference_log,
                 )
                 filter_expr, alias_to_key_map = _substitute_placeholders(
                     dlog.equation,
                     transformed_logs,
                 )
-                log_event_ids = {
-                    alias_to_key_map[k]: [v] for k, v in transformed_logs.items()
-                }
                 filter_dict = str_filter_exp_to_dict(filter_expr)
                 new_val = _compute_expression(
                     filter_dict,
                     LogEvent,
                     session,
-                    log_event_ids,
+                    [dlog.log_event_id],
                 )[0][1]
                 dlog.value = json.loads(json.dumps(new_val, cls=json_encoder))
                 dlog.updated_at = datetime.now(timezone.utc)
 
             session.commit()
         except Exception as e:
-            session.rollback()
             raise e
 
     def update(
