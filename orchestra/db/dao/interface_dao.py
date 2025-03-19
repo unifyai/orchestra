@@ -55,8 +55,7 @@ class InterfaceDAO:
             setattr(entry, "project_id", project_id)
             if new_name is not None:
                 setattr(entry, "name", new_name)
-            if context is not None:
-                setattr(entry, "context", context)
+            setattr(entry, "context", context)
 
     def get_interfaces(
         self,
