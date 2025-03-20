@@ -5572,7 +5572,7 @@ def _build_grouped_data(
             paged_values = sorted_values
 
         # 4) Build the final output structure for this level
-        out_dict = {}
+        group_array = []
         if (level + 1) < len(group_by):
             # If there's another group_by field after this, return the number of
             # distinct subgroups that would appear under each value (or under null).
@@ -5587,7 +5587,7 @@ def _build_grouped_data(
                     group_key=raw_key2,
                     is_param=is_param2,
                 )
-                out_dict[val] = len(size)
+                group_array.append({"key": str(val), "value": len(size)})
 
             if have_null:
                 size = _get_distinct_group_values(
@@ -5596,23 +5596,24 @@ def _build_grouped_data(
                     group_key=raw_key2,
                     is_param=is_param2,
                 )
-                out_dict["null"] = len(size)
+                group_array.append({"key": "null", "value": len(size)})
         else:
             # No further group_by => just store the count of logs in each group
             for val in paged_values:
-                out_dict[val] = len(value_to_ids[val])
+                group_array.append({"key": str(val), "value": len(value_to_ids[val])})
             if have_null:
-                out_dict["null"] = len(missing_ids)
+                group_array.append({"key": "null", "value": len(missing_ids)})
 
-        # group_count => total distinct values we found (plus null if any)
-        out_dict["group_count"] = len(present_values)
+        # Calculate metadata
+        group_count = len(present_values)
         if have_null:
-            out_dict["group_count"] += 1
+            group_count += 1
+        count = len(paged_values) + (1 if have_null else 0)
 
-        # count => how many items we returned in paged_values (plus null if present)
-        out_dict["count"] = len(paged_values) + (1 if have_null else 0)
+        # Return the result with the array structure
+        result_dict = {"group": group_array, "group_count": group_count, "count": count}
 
-        return {current_group_key: out_dict} if level == 0 else out_dict
+        return {current_group_key: result_dict} if level == 0 else result_dict
 
     # Build the data structure that will go inside e.g.  "params/a/b/param2": {...}
     out_dict = {}
@@ -5733,22 +5734,21 @@ def _build_grouped_data(
     else:
         paged_values = sorted_values
 
-    # PHASE 3: Build output dict with sorted child structures
-    out_dict = {}
+    # PHASE 3: Build output array with sorted child structures
+    group_array = []
 
     # Add all child structures in sorted order
     for val in paged_values:
-        out_dict[val] = value_to_sub_and_metric[val][0]
+        group_array.append({"key": str(val), "value": value_to_sub_and_metric[val][0]})
 
     # Add null group if present
     if have_null:
-        out_dict["null"] = null_sub
+        group_array.append({"key": "null", "value": null_sub})
 
     # 8) Compute "count" = sum of substructures' counts
     total_count_sub = 0
-    for k, sub_val in out_dict.items():
-        if k not in ("group_count", "count"):
-            total_count_sub += _get_count_from_substructure(sub_val)
+    for sub_val in group_array:
+        total_count_sub += _get_count_from_substructure(sub_val["value"])
 
     # 9) group_count = # distinct values
     computed_group_count = total_distinct
@@ -5760,7 +5760,11 @@ def _build_grouped_data(
     # 12) Finally, wrap this under the current_group_key:
     #     e.g. { "params/a/b/param2": out_dict }
     result = {
-        current_group_key: out_dict,
+        current_group_key: {
+            "group": group_array,
+            "group_count": computed_group_count,
+            "count": total_count_sub,
+        },
     }
 
     return result
