@@ -88,6 +88,11 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 15, "completion": 60},
     },
+    "o1-pro": {
+        "endpoint": "o1-pro",
+        "context_window": 200000,
+        "cost": {"prompt": 150, "completion": 600},
+    },
     "o3-mini": {
         "endpoint": "o3-mini",
         "context_window": 200000,
