@@ -31,12 +31,12 @@ supported_models = {
     "deepseek-r1": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-R1",
         "context_window": 15000,
-        "cost": {"prompt": 0.75, "completion": 2.4},
+        "cost": {"prompt": 0.55, "completion": 2.19},
     },
     "deepseek-v3": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3",
         "context_window": 15000,
-        "cost": {"prompt": 0.49, "completion": 0.89},
+        "cost": {"prompt": 0.40, "completion": 0.89},
     },
     "llama-3.3-70b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.3-70B-Instruct",
@@ -92,6 +92,11 @@ supported_models = {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3-70B-Instruct",
         "context_window": 8000,
         "cost": {"prompt": 0.23, "completion": 0.4},
+    },
+    "gemma-3-27b-it": {
+        "endpoint": "deepinfra/google/gemma-3-27b-it",
+        "context_window": 128000,
+        "cost": {"prompt": 0.1, "completion": 0.2},
     },
     "gemma-2-9b-it": {
         "endpoint": "deepinfra/google/gemma-2-9b-it",

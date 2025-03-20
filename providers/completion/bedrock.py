@@ -66,6 +66,11 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
 
 
 supported_models = {
+    "deepseek-r1": {
+        "endpoint": "bedrock/us.deepseek.r1-v1:0",
+        "context_window": 128000,
+        "cost": {"prompt": 1.35, "completion": 5.4},
+    },
     "llama-3.3-70b-chat": {
         "endpoint": "bedrock/us.meta.llama3-3-70b-instruct-v1:0",
         "context_window": 128000,
