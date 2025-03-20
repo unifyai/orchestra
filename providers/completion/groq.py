@@ -78,4 +78,9 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.79, "completion": 0.79},
     },
+    "qwen-qwq-32b": {
+        "endpoint": "groq/qwen-qwq-32b",
+        "context_window": 128000,
+        "cost": {"prompt": 0.29, "completion": 0.39},
+    },
 }
