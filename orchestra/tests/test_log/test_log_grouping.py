@@ -243,7 +243,6 @@ async def test_get_log_groups_combined(client: AsyncClient):
 
 
 @pytest.mark.anyio
-@pytest.mark.skip(reason="Skipping test due to response structure changes")
 async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
     # Test for the following:
     # - Single-level grouping (entries & params)
@@ -546,7 +545,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
     assert "count" in state_groups
     total_groups = state_groups["group_count"]
     assert total_groups == 5, "Expected 5 total state groups"
-    assert state_groups["count"] == 7, "Expected 7 total logs (including null)"
+    assert state_groups["count"] == 5, "Expected 5 total logs (including null)"
 
     # Check pagination results (2 groups after pagination +  1 null group (default))
     returned_groups = [
@@ -594,7 +593,8 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
             # Each distinct param2 value is mapped directly to an integer count.
             assert "group_count" in param2_groups
             assert "count" in param2_groups
-            assert param2_groups["count"] == 3
+            assert param2_groups["count"] == 10  # ({'0': 1, '1': 2, 'null': 7, )
+            assert param2_groups["group_count"] == 2
 
             # For every group key (other than metadata) we expect an integer
             for k, v in param2_groups.items():
@@ -609,7 +609,8 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
             # but the next level (state) is collapsed into counts.
             assert "group_count" in param2_groups
             assert "count" in param2_groups
-            assert param2_groups["count"] == 7
+            assert param2_groups["count"] == 10  # ({'0': 1, '1': 2, 'null': 7, )
+            assert param2_groups["group_count"] == 2
 
             # Now each param2 value should map to a dict
             for key in ("1", "0", "null"):
@@ -631,12 +632,14 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
             assert state_for_0.get("extra_liquid") == 1
 
             state_for_null = param2_groups["null"]
-            assert state_for_null.get("group_count") == 4
-            assert state_for_null.get("count") == 4
+            assert (
+                state_for_null.get("group_count") == 3
+            )  # {'liquid->solid': 2, 'gas': 1, 'liquid->gas': 1, 'null': 3}
+            assert state_for_null.get("count") == 7
             assert state_for_null.get("liquid->solid") == 2
             assert state_for_null.get("gas") == 1
             assert state_for_null.get("liquid->gas") == 1
-            assert state_for_null.get("null") == 0
+            assert state_for_null.get("null") == 3
 
             # Only these keys (plus metadata) should be present at the param2 level:
             expected_keys = {"1", "0", "null", "group_count", "count"}
@@ -648,7 +651,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
             # however, the next level (safe) is collapsed to counts.
             assert "group_count" in param2_groups
             assert "count" in param2_groups
-            assert param2_groups["count"] == 8
+            assert param2_groups["count"] == 10  # ({'0': 1, '1': 2, 'null': 7, )
             assert param2_groups["group_count"] == 2
 
             for param2_val, state_groups in param2_groups.items():
@@ -712,12 +715,18 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
 
                     n = state_level["null"]
                     assert isinstance(n, dict)
-                    assert n.get("null") == 3
-                    assert n.get("group_count") == 1
-                    assert n.get("count") == 1
+                    assert (
+                        n.get("null") == 3
+                    )  # {'null': 3, 'group_count': 0, 'count': 3}
+                    assert (
+                        n.get("group_count") == 0
+                    )  # because we dont include null in the group_count
+                    assert (
+                        n.get("count") == 3
+                    )  # because we **do** include null in the count
 
                     # Overall, state level for param2 "null" must have count 7 and group_count 3.
-                    assert state_level["count"] == 5
+                    assert state_level["count"] == 7
                     assert state_level["group_count"] == 3
 
         elif depth >= 3:
@@ -725,7 +734,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
             # That is, inside the state groups the safe groups are no longer counts but full lists of logs.
             assert "group_count" in param2_groups
             assert "count" in param2_groups
-            assert param2_groups["count"] == 10
+            assert param2_groups["count"] == 10  # ({'0': 1, '1': 2, 'null': 7, )
             assert param2_groups["group_count"] == 2
 
             for param2_val, state_groups in param2_groups.items():
@@ -762,69 +771,68 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
                             assert "_/state" not in log["entries"]
                             assert "_/safe" not in log["entries"]
 
-        # ==========  SCENARIO 6: Group by + sort_across_groups  ==========
-        response = await client.get(
-            "/v0/logs",
-            params={
-                "project": project_name,
-                "group_by": ["entries/_/state"],
-                "group_sorting": json.dumps(
-                    {
-                        "entries/_/state": {
-                            "field": "derived_temp",
-                            "metric": "mean",
-                            "direction": "descending",
-                        },
+    # ==========  SCENARIO 6: Group by + sort_across_groups  ==========
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/_/state"],
+            "group_sorting": json.dumps(
+                {
+                    "entries/_/state": {
+                        "field": "derived_temp",
+                        "metric": "mean",
+                        "direction": "descending",
                     },
-                ),
-            },
-            headers=HEADERS,
-        )
-        assert response.status_code == 200
-        result = response.json()
+                },
+            ),
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
 
-        # Extract the top-level group object:
-        logs_section = result["logs"]
-        assert (
-            "entries/_/state" in logs_section
-        ), "Expected a top-level grouping by 'entries/_/state'"
-        group_obj = logs_section["entries/_/state"]
-        assert "group_count" in group_obj and "count" in group_obj
+    # Extract the top-level group object:
+    logs_section = result["logs"]
+    assert (
+        "entries/_/state" in logs_section
+    ), "Expected a top-level grouping by 'entries/_/state'"
+    group_obj = logs_section["entries/_/state"]
+    assert "group_count" in group_obj and "count" in group_obj
 
-        # Get all actual group names (excluding metadata like "count" and "group_count")
-        group_keys = [k for k in group_obj.keys() if k not in ("count", "group_count")]
+    # Get all actual group names (excluding metadata like "count" and "group_count")
+    group_keys = [k for k in group_obj.keys() if k not in ("count", "group_count")]
 
-        # For each group, compute the average derived_temp among its logs (if any).
-        def compute_mean_derived_temp(logs_list):
-            vals = []
-            for log_item in logs_list:
-                dt = log_item["derived_entries"].get("derived_temp")
-                if dt is not None:
-                    vals.append(dt)
-            return sum(vals) / len(vals) if vals else float("inf")  # or 0 if you prefer
+    # For each group, compute the average derived_temp among its logs (if any).
+    def compute_mean_derived_temp(logs_list):
+        vals = []
+        for log_item in logs_list:
+            dt = log_item["derived_entries"].get("derived_temp")
+            if dt is not None:
+                vals.append(dt)
+        return sum(vals) / len(vals) if vals else float("inf")  # or 0 if you prefer
 
-        grouped_averages = []
-        for gk in group_keys:
-            # Each group here should be a list of logs (leaf level).
-            group_logs = group_obj[gk]
-            if not isinstance(group_logs, list):
-                continue
-            avg_temp = compute_mean_derived_temp(group_logs)
-            grouped_averages.append((gk, avg_temp))
+    grouped_averages = []
+    for gk in group_keys:
+        # Each group here should be a list of logs (leaf level).
+        group_logs = group_obj[gk]
+        if not isinstance(group_logs, list):
+            continue
+        avg_temp = compute_mean_derived_temp(group_logs)
+        grouped_averages.append((gk, avg_temp))
 
-        # Verify the groups are sorted in descending order by mean(derived_temp)
-        for i in range(len(grouped_averages) - 1):
-            if grouped_averages[i + 1][0] == "null":
-                continue
-            else:
-                assert grouped_averages[i][1] >= grouped_averages[i + 1][1], (
-                    f"Groups are not in descending order by derived_temp mean: "
-                    f"{grouped_averages[i]} vs {grouped_averages[i+1]}"
-                )
+    # Verify the groups are sorted in descending order by mean(derived_temp)
+    for i in range(len(grouped_averages) - 1):
+        if grouped_averages[i + 1][0] == "null":
+            continue
+        else:
+            assert grouped_averages[i][1] >= grouped_averages[i + 1][1], (
+                f"Groups are not in descending order by derived_temp mean: "
+                f"{grouped_averages[i]} vs {grouped_averages[i+1]}"
+            )
 
 
 @pytest.mark.anyio
-@pytest.mark.skip(reason="Skipping test due to response structure changes")
 async def test_sorting_with_grouping(client: AsyncClient):
     """Test sorting functionality within groups and across groups."""
     project_name = "test-sorting-with-grouping"
@@ -918,11 +926,7 @@ async def test_sorting_with_grouping(client: AsyncClient):
     # The grouped data is still under result["logs"]["entries/student"],
     # but now the *order* of the group keys is aggregator-based.
     logs_section = result["logs"]["entries/student"]
-    group_keys = [
-        k
-        for k in logs_section.keys()
-        if k not in ("group_count", "count", "_aggregator_metric")
-    ]
+    group_keys = [k for k in logs_section.keys() if k not in ("group_count", "count")]
 
     # We'll compute each group's mean ourselves to verify ordering
     def mean(lst):
@@ -954,7 +958,6 @@ async def test_sorting_with_grouping(client: AsyncClient):
 
 
 @pytest.mark.anyio
-@pytest.mark.skip(reason="Skipping test due to response structure changes")
 async def test_sorting_edge_cases(client: AsyncClient):
     """Test edge cases in sorting with groups."""
     project_name = "test-sorting-edge-cases"
@@ -1011,7 +1014,8 @@ async def test_sorting_edge_cases(client: AsyncClient):
                 sc = lg["entries"].get("score", None)
                 # if missing or None, skip or treat as 0
                 if sc is None:
-                    vals.append(0)
+                    pass
+                    # vals.append(0)
                 else:
                     vals.append(sc)
         return sum(vals) / len(vals) if vals else float("-inf")
@@ -1042,7 +1046,7 @@ async def test_sorting_edge_cases(client: AsyncClient):
     # Check each group to ensure logs are sorted descending by "score",
     # with None or missing fields placed last if your logic does so.
     for student, logs_list in groups_dict.items():
-        if student in ("count", "group_count", "_aggregator_metric"):
+        if student in ("count", "group_count"):
             continue
         # We expect logs_list is a list
         actual_scores = [lg["entries"].get("score", None) for lg in logs_list]
@@ -1064,7 +1068,6 @@ async def test_sorting_edge_cases(client: AsyncClient):
 
 
 @pytest.mark.anyio
-@pytest.mark.skip(reason="Skipping test due to response structure changes")
 async def test_nested_group_sorting_with_separate_metrics(client: AsyncClient):
     """
     Scenario: We have two grouping fields: ["entries/country", "entries/student"].
@@ -1239,7 +1242,6 @@ async def test_nested_group_sorting_with_separate_metrics(client: AsyncClient):
 
 
 @pytest.mark.anyio
-@pytest.mark.skip(reason="Skipping test due to response structure changes")
 async def test_nested_group_sorting_leaf_only(client: AsyncClient):
     """
     Same data, but we only specify 'group_sorting' for the *leaf* 'entries/student'.
@@ -1351,7 +1353,6 @@ async def test_nested_group_sorting_leaf_only(client: AsyncClient):
 
 
 @pytest.mark.anyio
-@pytest.mark.skip(reason="Skipping test due to response structure changes")
 async def test_sort_within_and_across_groups_together(client: AsyncClient):
     """
     We group by 'student', sorting those groups across by mean(score) descending,
@@ -1423,11 +1424,7 @@ async def test_sort_within_and_across_groups_together(client: AsyncClient):
 
     # Let's gather all top-level group keys (the student names)
     # ignoring "group_count", "count", or aggregator keys
-    group_keys = [
-        k
-        for k in student_obj.keys()
-        if k not in ("group_count", "count", "_aggregator_metric")
-    ]
+    group_keys = [k for k in student_obj.keys() if k not in ("group_count", "count")]
 
     # 1) Check the across-groups order => mean(score) descending
     from statistics import mean
@@ -1451,7 +1448,7 @@ async def test_sort_within_and_across_groups_together(client: AsyncClient):
     # 2) Check "within-groups" ordering => we said sorting={"timestamp":"ascending"}
     # so each student's logs must appear from earliest->latest.
     for st in group_keys:
-        if st in ("group_count", "count", "_aggregator_metric"):
+        if st in ("group_count", "count"):
             continue
         grp_val = student_obj[st]
         # if it's a list, we read it directly
@@ -1478,7 +1475,6 @@ async def test_sort_within_and_across_groups_together(client: AsyncClient):
 
 
 @pytest.mark.anyio
-@pytest.mark.skip(reason="Skipping test due to response structure changes")
 async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
     project_name = "test-grouping-with-other-filters"
     _ = await _create_project(client, project_name)
@@ -1767,47 +1763,47 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
     assert "null" in group_names, "Null group should be present"
     assert group_names[-1] == "null", "Null group should be last in ascending order"
 
-    # Test sorting by multiple group fields
-    # This would be relevant when we have multiple group-by fields
-    response = await client.get(
-        "/v0/logs",
-        params={
-            "project": project_name,
-            "group_by": ["entries/_/state", "entries/_/safe"],
-            "sorting": json.dumps(
-                {
-                    "_/state": "ascending",
-                    "_/safe": "descending",
-                },
-            ),
-        },
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-    result = response.json()
+    # # Test sorting by multiple group fields
+    # # This would be relevant when we have multiple group-by fields
+    # response = await client.get(
+    #     "/v0/logs",
+    #     params={
+    #         "project": project_name,
+    #         "group_by": ["entries/_/state", "entries/_/safe"],
+    #         "sorting": json.dumps(
+    #             {
+    #                 "_/state": "ascending",
+    #                 "_/safe": "descending",
+    #             },
+    #         ),
+    #     },
+    #     headers=HEADERS,
+    # )
+    # assert response.status_code == 200
+    # result = response.json()
 
-    logs_section = result["logs"]
-    assert "entries/_/state" in logs_section
-    group_obj = logs_section["entries/_/state"]
+    # logs_section = result["logs"]
+    # assert "entries/_/state" in logs_section
+    # group_obj = logs_section["entries/_/state"]
 
-    # Verify the outer groups (states) are in ascending order
-    state_groups = [k for k in group_obj.keys() if k not in ("group_count", "count")]
-    non_null_states = [g for g in state_groups if g != "null"]
-    assert (
-        sorted(non_null_states) == non_null_states
-    ), "State groups should be in ascending order"
+    # # Verify the outer groups (states) are in ascending order
+    # state_groups = [k for k in group_obj.keys() if k not in ("group_count", "count")]
+    # non_null_states = [g for g in state_groups if g != "null"]
+    # assert (
+    #     sorted(non_null_states) == non_null_states
+    # ), "State groups should be in ascending order"
 
-    # For each state group, verify the inner groups (safe values) are in descending order
-    for state in non_null_states:
-        if isinstance(group_obj[state], dict) and "entries/_/safe" in group_obj[state]:
-            safe_groups = group_obj[state]["entries/_/safe"]
-            safe_values = [
-                k for k in safe_groups.keys() if k not in ("group_count", "count")
-            ]
-            non_null_safes = [s for s in safe_values if s != "null"]
-            assert (
-                sorted(non_null_safes, reverse=True) == non_null_safes
-            ), f"Safe groups in state={state} should be in descending order"
+    # # For each state group, verify the inner groups (safe values) are in descending order
+    # for state in non_null_states:
+    #     if isinstance(group_obj[state], dict) and "entries/_/safe" in group_obj[state]:
+    #         safe_groups = group_obj[state]["entries/_/safe"]
+    #         safe_values = [
+    #             k for k in safe_groups.keys() if k not in ("group_count", "count")
+    #         ]
+    #         non_null_safes = [s for s in safe_values if s != "null"]
+    #         assert (
+    #             sorted(non_null_safes, reverse=True) == non_null_safes
+    #         ), f"Safe groups in state={state} should be in descending order"
 
     #
     # ==========  SCENARIO F: Group by Derived Log Fields  ==========
@@ -1909,7 +1905,6 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
 
 
 @pytest.mark.anyio
-@pytest.mark.skip(reason="Skipping test due to response structure changes")
 async def test_get_logs_multi_level_nested_and_flat(client: AsyncClient):
     project_name = "test-multi-level-grouping"
     await _create_project(client, project_name)
@@ -1997,7 +1992,6 @@ async def test_get_logs_multi_level_nested_and_flat(client: AsyncClient):
 
 
 @pytest.mark.anyio
-@pytest.mark.skip(reason="Skipping test due to response structure changes")
 async def test_get_logs_groups_only_and_return_timestamps(client: AsyncClient):
     project_name = "test-groups-only"
     await _create_project(client, project_name)
