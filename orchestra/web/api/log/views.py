@@ -5341,6 +5341,157 @@ def parse_group_key(key: str) -> Tuple[str, str]:
     return (parts[0], parts[1]) if len(parts) == 2 else ("", key)
 
 
+def _get_reduction_expr(metric, inferred_type, aggCol, label):
+    # Reuse the get_logs_metric logic but for a specific set of log IDs
+    reduction_methods = {
+        AggregationMetric.COUNT: func.count,
+        AggregationMetric.SUM: func.sum,
+        AggregationMetric.MEAN: func.avg,
+        AggregationMetric.VAR: func.var_pop,
+        AggregationMetric.STD: func.stddev_pop,
+        AggregationMetric.MIN: func.min,
+        AggregationMetric.MAX: func.max,
+        AggregationMetric.MEDIAN: func.percentile_cont(0.5).within_group,
+        AggregationMetric.MODE: func.mode().within_group,
+    }
+
+    # interpret X.c.value depending on X.c.inferred_type.
+    cast_expr = case(
+        # Handle NULL values first
+        (aggCol.is_(None), literal(None, type_=Float)),
+        (
+            inferred_type == "list",
+            func.jsonb_array_length(cast(aggCol, JSONB)).cast(Float),
+        ),
+        (
+            inferred_type == "dict",
+            select(func.count())
+            .select_from(func.jsonb_object_keys(cast(aggCol, JSONB)))
+            .scalar_subquery()
+            .cast(Float),
+        ),
+        (
+            inferred_type == "bool",
+            aggCol.cast(BOOLEAN).cast(INTEGER).cast(Float),
+        ),
+        (
+            inferred_type == "str",
+            func.length(cast(aggCol, JSONB)[0].astext).cast(Float),
+        ),
+        (
+            inferred_type == "timestamp",
+            func.extract("epoch", cast(cast(aggCol, String), TIMESTAMP)).cast(
+                Float,
+            ),
+        ),
+        (
+            inferred_type == "time",
+            # Extract seconds using time-specific casting
+            func.mod(
+                func.extract(
+                    "epoch",
+                    func.cast(
+                        func.concat(
+                            "2000-01-01 ",
+                            func.trim(func.cast(aggCol, String), '"'),
+                        ),
+                        TIMESTAMP,
+                    ),
+                ),
+                86400,
+            ).cast(Float),
+        ),
+        (
+            inferred_type == "date",
+            # Extract epoch using date-specific casting
+            func.extract(
+                "epoch",
+                func.cast(func.trim(func.cast(aggCol, String), '"'), Date),
+            ).cast(Float),
+        ),
+        (
+            inferred_type == "timedelta",
+            # Parse ISO 8601 duration format (e.g., "P1DT6H") to seconds
+            # This extracts days, hours, minutes, seconds separately and converts to total seconds
+            (
+                # Days component (86400 seconds per day)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(aggCol, String), '"'),
+                            "P([0-9]+)D",
+                        ),
+                        Float,
+                    )
+                    * 86400,
+                    0,
+                )
+                +
+                # Hours component (3600 seconds per hour)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(aggCol, String), '"'),
+                            "T([0-9]+)H",
+                        ),
+                        Float,
+                    )
+                    * 3600,
+                    0,
+                )
+                +
+                # Minutes component (60 seconds per minute)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(aggCol, String), '"'),
+                            "T[0-9]*H?([0-9]+)M",
+                        ),
+                        Float,
+                    )
+                    * 60,
+                    0,
+                )
+                +
+                # Seconds component
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(aggCol, String), '"'),
+                            "T[0-9]*H?[0-9]*M?([0-9.]+)S",
+                        ),
+                        Float,
+                    ),
+                    0,
+                )
+            ).cast(Float),
+        ),
+        (
+            inferred_type == "int",
+            func.coalesce(
+                func.nullif(cast(aggCol.op("->>")(0), String), "null").cast(Float),
+                None,
+            ).cast(Float),
+        ),
+        (
+            inferred_type == "float",
+            func.coalesce(
+                func.nullif(cast(aggCol.op("->>")(0), String), "null").cast(Float),
+                None,
+            ).cast(Float),
+        ),
+        else_=literal(0, type_=Float),
+    )
+
+    if metric in [
+        AggregationMetric.SUM,
+        AggregationMetric.MEAN,
+        AggregationMetric.VAR,
+        AggregationMetric.STD,
+    ]:
+        return func.coalesce(reduction_methods[metric](cast_expr), 0).label(label)
+    else:
+        return reduction_methods[metric](cast_expr).label(label)
 
 
 def _build_grouped_data(
