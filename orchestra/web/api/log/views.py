@@ -5650,12 +5650,15 @@ def _handle_group_depth_level(
     # Execute the query
     group_rows = base_q.all()
 
-    # Build the result dictionary
+    # Build the result dictionary with the new structure
     out_dict = {}
+    group_list = []
+
+    # Convert rows to array of objects with key/value pairs
     for row in group_rows:
         group_val = row.group_value
         log_count = row.log_count
-        out_dict[group_val] = log_count
+        group_list.append({"key": str(group_val), "value": log_count})
 
     # Find missing IDs (logs that don't have this key)
     missing_ids_q = session.query(LogEvent.id).filter(
@@ -5668,13 +5671,14 @@ def _handle_group_depth_level(
 
     # Add null group if there are missing IDs
     if missing_ids:
-        out_dict["null"] = len(missing_ids)
+        group_list.append({"key": "null", "value": len(missing_ids)})
+
+    # Add the group list to the output dictionary
+    out_dict["group"] = group_list
 
     # Add metadata
-    out_dict["group_count"] = total_distinct_groups  # + (1 if missing_ids else 0)
-    out_dict["count"] = sum(
-        count for key, count in out_dict.items() if key not in ("group_count", "count")
-    )
+    out_dict["group_count"] = total_distinct_groups
+    out_dict["count"] = sum(item["value"] for item in group_list)
 
     # Wrap in current_group_key if at top level
     if level == 0:
@@ -5907,6 +5911,8 @@ def _build_grouped_data(
 
     group_rows = base_q.all()
     result_dict = {}
+    group_list = []
+
     for row in group_rows:
         group_val = row.group_value
         if prefix == "params":
@@ -5954,7 +5960,8 @@ def _build_grouped_data(
             else raw_key,
         )
 
-        result_dict[group_val] = substructure
+        # Add to group list instead of directly to result_dict
+        group_list.append({"key": str(group_val), "value": substructure})
     # find missing IDs (logs that don't have this key)
     missing_ids_q = session.query(LogEvent.id).filter(
         LogEvent.id.in_(select(event_ids_cte.c.id)),
@@ -5995,7 +6002,11 @@ def _build_grouped_data(
             if parent_group_key
             else raw_key,
         )
-        result_dict["null"] = null_sub
+        # Add null group to the group list
+        group_list.append({"key": "null", "value": null_sub})
+    # Add the group list to the result dictionary
+    result_dict["group"] = group_list
+
     # Use the pre-calculated total distinct groups count
     result_dict["group_count"] = total_distinct_groups
     sub_total = 0
@@ -6012,16 +6023,24 @@ def _build_grouped_data(
                 return sub_val["count"]
             # Otherwise sum up counts from all non-metadata fields
             total = 0
-            for k, v in sub_val.items():
-                if k not in ("group_count", "count"):
-                    total += _get_count_from_substructure(v)
+            # Handle new structure with 'group' field
+            if "group" in sub_val and isinstance(sub_val["group"], list):
+                for item in sub_val["group"]:
+                    if isinstance(item, dict) and "value" in item:
+                        total += _get_count_from_substructure(item["value"])
+            else:
+                # Legacy structure - iterate through keys
+                for k, v in sub_val.items():
+                    if k not in ("group_count", "count", "group"):
+                        total += _get_count_from_substructure(v)
             return total
         else:
             return 0
 
-    for k, sub in result_dict.items():
-        if k not in ("group_count", "count"):
-            sub_total += _get_count_from_substructure(sub)
+    # Calculate total count from the group items
+    for item in group_list:
+        sub_total += _get_count_from_substructure(item["value"])
+
     result_dict["count"] = sub_total
     # For the top level, include the prefix in the result key
     return {current_group_key: result_dict}
