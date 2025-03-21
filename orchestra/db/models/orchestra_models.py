@@ -647,6 +647,8 @@ class LogEvent(Base):
         backref="log_event",
     )
 
+    __table_args__ = (Index("idx_log_event_project_id_id", "project_id", "id"),)
+
 
 class JSONLog(Base):
     __tablename__ = "json_log"
@@ -673,7 +675,7 @@ class Log(Base):
         nullable=False,
         index=True,
     )
-    key = Column(String, nullable=False)
+    key = Column(String, nullable=False, index=True)
     value = Column(JSONB)
     version = Column(Integer)
     inferred_type = Column(String)
