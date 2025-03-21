@@ -5494,6 +5494,183 @@ def _get_reduction_expr(metric, inferred_type, aggCol, label):
         return reduction_methods[metric](cast_expr).label(label)
 
 
+def _handle_group_depth_level(
+    session,
+    log_event_ids,
+    field_types,
+    group_by,
+    group_sorting,
+    group_limit,
+    group_offset,
+    level,
+    return_versions,
+):
+
+    current_group_key = group_by[level]
+    prefix, raw_key = parse_group_key(current_group_key)
+
+    event_ids_cte = (
+        session.query(LogEvent.id.label("id"))
+        .filter(LogEvent.id.in_(log_event_ids))
+        .cte("event_ids_cte")
+    )
+
+    # Build unified logs subquery for the current log_event_ids
+    unified = _build_unified_logs_subquery(
+        session=session,
+        relevant_log_events=event_ids_cte,
+        return_versions=return_versions,
+    )
+
+    # Group by value and filter on the raw key
+    field_to_compare = (
+        unified.c.param_version if prefix == "params" else unified.c.value
+    )
+    base_q = (
+        session.query(
+            field_to_compare.label("group_value"),
+            func.count(func.distinct(unified.c.log_event_id)).label("log_count"),
+        )
+        .filter(
+            unified.c.log_event_id.in_(log_event_ids),
+            unified.c.key == raw_key,
+        )
+        .group_by(field_to_compare)
+    )
+
+    # Handle aggregator sorting if configured
+    group_sort_config = None
+
+    if group_sorting:
+        try:
+            parsed_sorting = json.loads(group_sorting)
+            group_sort_config = SortConfig(**parsed_sorting[current_group_key])
+        except (JSONDecodeError, ValidationError, KeyError):
+            pass
+
+        # Apply sorting based on aggregation metric
+        if group_sort_config and group_sort_config.sort_type == SortType.SORT_GROUPS:
+            # Create a subquery to get the field to aggregate on
+            if group_sort_config.field != current_group_key:
+                # Parse the aggregator field to get the raw key
+                _, agg_field_raw_key = parse_group_key(group_sort_config.field)
+
+                # Create aliases for the unified logs subquery
+                base_alias = aliased(unified, name="base_alias")
+                agg_alias = aliased(unified, name="agg_alias")
+
+                # Build a sub-subquery that combines the group field and aggregator field
+                # This ensures we're properly joining the group key with its corresponding aggregator value
+                sub_subq = (
+                    session.query(
+                        base_alias.c.log_event_id.label("log_event_id"),
+                        base_alias.c.inferred_type.label("inferred_type"),
+                        base_alias.c.value.label("group_key_value")
+                        if prefix != "params"
+                        else base_alias.c.param_version.label("group_key_value"),
+                        agg_alias.c.value.label("agg_val"),
+                    )
+                    .join(
+                        agg_alias,
+                        and_(
+                            base_alias.c.log_event_id == agg_alias.c.log_event_id,
+                            agg_alias.c.key == agg_field_raw_key,
+                        ),
+                    )
+                    .filter(
+                        base_alias.c.log_event_id.in_(log_event_ids),
+                        base_alias.c.key == raw_key,
+                    )
+                    .subquery("sub_subq")
+                )
+
+                # Build the outer query that groups by the group key value and applies aggregation
+                base_q = session.query(
+                    sub_subq.c.group_key_value.label("group_value"),
+                    func.count(func.distinct(sub_subq.c.log_event_id)).label(
+                        "group_count",
+                    ),
+                ).group_by(sub_subq.c.group_key_value)
+
+                # Apply the appropriate aggregation function to the aggregator field
+                agg_expr = _get_reduction_expr(
+                    group_sort_config.metric,
+                    field_types[agg_field_raw_key],
+                    sub_subq.c.agg_val,
+                    label="agg",
+                )
+                # Add the aggregation expression to the query
+                base_q = base_q.add_columns(agg_expr)
+
+                # Apply sorting direction with null handling
+                if group_sort_config.direction == SortDirection.ASCENDING:
+                    base_q = base_q.order_by(asc("agg").nulls_last())
+                else:
+                    base_q = base_q.order_by(desc("agg").nulls_last())
+            else:
+                # If sorting on the same field we're grouping by
+                agg_expr = _get_reduction_expr(
+                    group_sort_config.metric,
+                    field_types[raw_key],
+                    unified.c.value,
+                    label="agg",
+                )
+                # Add the aggregation expression to the query
+                base_q = base_q.add_columns(agg_expr)
+
+            # Apply sorting direction with null handling
+            if group_sort_config.direction == SortDirection.ASCENDING:
+                base_q = base_q.order_by(asc("agg").nulls_last())
+            else:
+                base_q = base_q.order_by(desc("agg").nulls_last())
+    else:
+        # Default sorting on group value
+        base_q = base_q.order_by(asc("group_value").nulls_last())
+
+    # Calculate total distinct group count before applying pagination
+    total_distinct_groups = session.query(
+        func.count(base_q.subquery().c.group_value),
+    ).scalar()
+
+    # Apply pagination to the query
+    if group_limit is not None:
+        base_q = base_q.offset(group_offset).limit(group_limit)
+
+    # Execute the query
+    group_rows = base_q.all()
+
+    # Build the result dictionary
+    out_dict = {}
+    for row in group_rows:
+        group_val = row.group_value
+        log_count = row.log_count
+        out_dict[group_val] = log_count
+
+    # Find missing IDs (logs that don't have this key)
+    missing_ids_q = session.query(LogEvent.id).filter(
+        LogEvent.id.in_(select(event_ids_cte.c.id)),
+        ~exists().where(
+            and_(unified.c.log_event_id == LogEvent.id, unified.c.key == raw_key),
+        ),
+    )
+    missing_ids = [row[0] for row in missing_ids_q.all()]
+
+    # Add null group if there are missing IDs
+    if missing_ids:
+        out_dict["null"] = len(missing_ids)
+
+    # Add metadata
+    out_dict["group_count"] = total_distinct_groups  # + (1 if missing_ids else 0)
+    out_dict["count"] = sum(
+        count for key, count in out_dict.items() if key not in ("group_count", "count")
+    )
+
+    # Wrap in current_group_key if at top level
+    if level == 0:
+        return {current_group_key: out_dict}
+    return out_dict
+
+
 def _build_grouped_data(
     request_fastapi: Request,
     project_id: int,
