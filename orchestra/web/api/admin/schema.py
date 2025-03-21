@@ -347,3 +347,8 @@ class CustomEndpointModelResponse(BaseModel):
 class CreditCardFingerprintModelResponse(BaseModel):
     user_id: str
     fingerprint: str
+
+
+class DemoModelRequest(BaseModel):
+    user_id: str
+    code: str
