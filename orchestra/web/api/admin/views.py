@@ -1,9 +1,14 @@
+import os
+import subprocess
+import sys
+import tempfile
 from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.param_functions import Depends
 
+from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.beta_list_dao import BetaListDAO
 from orchestra.db.dao.credit_card_fingerprint import CreditCardFingerprintDAO
@@ -37,6 +42,7 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     DatapointModelRequest,
     DatapointModelResponse,
     DatasetEvaluationModelRequest,
+    DemoModelRequest,
     EndpointModelRequest,
     EndpointModelResponse,
     MetricModelRequest,
@@ -847,3 +853,48 @@ def get_credit_card_fingerprint(
     Returns the credit card fingerprints entry in the database matching a user id.
     """
     return credit_card_fingerprint_dao.filter(user_id=user_id)
+
+
+@router.post("/run_demo")
+def run_demo(
+    demo_object: DemoModelRequest,
+    api_key_dao: ApiKeyDAO = Depends(),
+) -> None:
+    """
+    Run a given demo for the user in an isolated process.
+    """
+    api_key = api_key_dao.filter(user_id=demo_object.user_id)
+    if not api_key:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    try:
+        # Create a temporary file with the demo code
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py") as tf:
+            tf.write(demo_object.code)
+            tf.flush()
+
+            # Run the code in a separate process with its own environment
+            env = dict(os.environ)
+            env["UNIFY_KEY"] = api_key[0].key
+
+            # This will block until the subprocess completes
+            subprocess.run(
+                [sys.executable, tf.name],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,  # Raises CalledProcessError if return code != 0
+            )
+
+            return {"info": "Demo run successfully"}
+
+    except subprocess.TimeoutExpired as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Demo timed out after {e.timeout} seconds",
+        )
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to run demo. Error: {e}",
+        )
