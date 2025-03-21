@@ -2934,6 +2934,12 @@ def get_logs(
         ].id,
         context_id=context_id,
     )
+    field_map = field_type_dao.get_field_types(
+        project_dao.filter(name=project, user_id=request_fastapi.state.user_id)[0][
+            0
+        ].id,
+        context_id=context_id,
+    )
     if return_ids_only:
         return list(dict.fromkeys(event_ids))
 
@@ -2951,6 +2957,7 @@ def get_logs(
             project_id=project_id,
             log_event_ids=event_ids,
             field_order_map=field_order_map,
+            field_types=field_map,
             group_by=group_by,
             group_depth=group_depth,
             group_limit=group_limit,
@@ -5139,10 +5146,15 @@ def _fetch_logs_for_event_ids(
     if not event_ids:
         return ([], 0) if not latest_timestamp else None
 
+    event_ids_cte = (
+        session.query(LogEvent.id.label("id"))
+        .filter(LogEvent.id.in_(event_ids))
+        .cte("event_ids_cte")
+    )
     # 1) Build union subquery from base logs + derived logs, for these event IDs
     unified_logs_subq = _build_unified_logs_subquery(
         session=session,
-        event_ids=event_ids,
+        relevant_log_events=event_ids_cte,
         return_versions=return_versions,
     )
 
