@@ -865,7 +865,7 @@ def str_filter_exp_to_dict(s, field_names=None):
             # If both parsers fail, raise the original error
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid filter expression: {e}",
+                detail=f"Invalid filter expression: {fallback_e}",
             )
 
 
@@ -2600,10 +2600,12 @@ def _handle_index_operator(
     )
 
     if isinstance(lhs_expr, Subquery):
+        input_type = session.execute(select(lhs_expr.c.inferred_type)).first()[0]
+        is_collection = input_type in ["list", "dict"]
         lhs_valcol, lhs_type = _select_value(
             lhs_expr,
             session,
-            is_collection=True,
+            is_collection=is_collection,
         )
         if isinstance(rhs_expr, Subquery):
             # Potentially advanced scenario: the user wrote x[y], where y is a subquery.
