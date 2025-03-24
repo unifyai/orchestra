@@ -78,16 +78,6 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 0.9, "completion": 0.9},
     },
-    "llama-3-8b-chat": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3-8b-instruct",
-        "context_window": 8192,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
-    "mistral-small": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/mistral-small-24b-instruct-2501",
-        "context_window": 32000,
-        "cost": {"prompt": 0.9, "completion": 0.9},
-    },
     "mixtral-8x22b-instruct-v0.1": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct",
         "context_window": 65536,
