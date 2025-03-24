@@ -2117,7 +2117,8 @@ def _handle_functions(
                 .subquery()
             )
         else:
-            return cast(rhs_expr, String)
+            expr = rhs_expr[0] if isinstance(rhs_expr, list) else rhs_expr
+            return cast(expr, String)
 
     elif operand == "round":
         # 1) Normalize the "rhs_expr" into a list of length 1 or 2
@@ -2353,18 +2354,7 @@ def _handle_functions(
                 )
 
             # Extract event IDs from the first argument
-            event_ids_expr = base_args[0]
-            event_ids = None
-            if event_ids_expr.get("type") == "other" and isinstance(
-                event_ids_expr.get("value"),
-                str,
-            ):
-                try:
-                    event_ids = json.loads(event_ids_expr["value"])
-                except json.JSONDecodeError:
-                    raise ValueError(
-                        f"Invalid event IDs format: {event_ids_expr['value']}",
-                    )
+            event_ids = base_args[0]
 
             # Extract column name from the second argument
             if base_args[1].get("type") == "identifier":
