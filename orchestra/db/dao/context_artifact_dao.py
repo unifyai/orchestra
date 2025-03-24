@@ -5,23 +5,22 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import DatasetArtifact
+from orchestra.db.models.orchestra_models import ContextArtifact
 
 
-class DatasetArtifactDAO:
+class ContextArtifactDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    def create(  # noqa: WPS211
+    def create(
         self,
-        dataset_id: int,
+        context_id: int,
         key: str,
         value: Optional[str] = None,
     ) -> None:
-
         self.session.add(
-            DatasetArtifact(
-                dataset_id=dataset_id,
+            ContextArtifact(
+                context_id=context_id,
                 key=key,
                 value=value,
             ),
@@ -30,19 +29,19 @@ class DatasetArtifactDAO:
     def filter(
         self,
         id: Optional[int] = None,
-        dataset_id: Optional[int] = None,
+        context_id: Optional[int] = None,
         key: Optional[str] = None,
         value: Optional[str] = None,
-    ) -> List[DatasetArtifact]:
-        query = select(DatasetArtifact)
+    ) -> List[ContextArtifact]:
+        query = select(ContextArtifact)
         if id:
-            query = query.where(DatasetArtifact.id == id)
-        if dataset_id:
-            query = query.where(DatasetArtifact.dataset_id == dataset_id)
+            query = query.where(ContextArtifact.id == id)
+        if context_id:
+            query = query.where(ContextArtifact.context_id == context_id)
         if key:
-            query = query.where(DatasetArtifact.key == key)
+            query = query.where(ContextArtifact.key == key)
         if value:
-            query = query.where(DatasetArtifact.value == value)
+            query = query.where(ContextArtifact.value == value)
         rows = self.session.execute(query)
         return rows.fetchall()
 
@@ -51,10 +50,10 @@ class DatasetArtifactDAO:
         id: int,
         key: Optional[str] = None,
         value: Optional[str] = None,
-        dataset_id: Optional[int] = None,
+        context_id: Optional[int] = None,
     ) -> None:
-        query = select(DatasetArtifact)
-        query = query.where(DatasetArtifact.id == id)
+        query = select(ContextArtifact)
+        query = query.where(ContextArtifact.id == id)
         raw = self.session.execute(query)
         entry = raw.scalars().first()
         if entry is not None:
@@ -62,15 +61,13 @@ class DatasetArtifactDAO:
                 setattr(entry, "key", key)
             if value:
                 setattr(entry, "value", value)
-            if dataset_id:
-                setattr(entry, "dataset_id", dataset_id)
+            if context_id:
+                setattr(entry, "context_id", context_id)
 
     def delete(self, id: int):
         try:
-            dataset_artifact = (
-                self.session.query(DatasetArtifact).filter_by(id=id).one()
-            )
-            self.session.delete(dataset_artifact)
+            artifact = self.session.query(ContextArtifact).filter_by(id=id).one()
+            self.session.delete(artifact)
             self.session.commit()
         except:
             self.session.rollback()

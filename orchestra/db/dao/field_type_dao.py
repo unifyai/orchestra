@@ -1,7 +1,8 @@
-from typing import Dict
+from typing import Dict, Optional, Union
 
 from fastapi import Depends
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.log_dao import LogDAO
@@ -13,45 +14,194 @@ class FieldTypeDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    def create_field_type(self, project_id: int, field_name: str, value) -> None:
-        """Create a new field type for a project."""
-        field_type = LogDAO.infer_type(value)
-        new_field_type = FieldType(
+    def create_field_type_if_absent(
+        self,
+        project_id: int,
+        field_name: str,
+        value,
+        context_id: int,
+        mutable: bool = False,
+        field_category: str = "entry",
+    ) -> None:
+        """Upsert approach: insert or do nothing if it exists."""
+        # First check if a field with this name exists but with a different category
+        existing = (
+            self.session.query(FieldType)
+            .filter(
+                FieldType.project_id == project_id,
+                FieldType.field_name == field_name,
+                FieldType.context_id == context_id,
+            )
+            .first()
+        )
+        if existing:
+            if existing.field_category != field_category:
+                new_article = "an" if field_category == "entry" else "a"
+                existing_article = "an" if existing.field_category == "entry" else "a"
+                raise ValueError(
+                    f"Field '{field_name}' already exists as {existing_article} {existing.field_category}. "
+                    f"Cannot create it as {new_article} {field_category}.",
+                )
+            return
+
+        inferred_type = LogDAO.infer_type(field_name, value)
+
+        stmt = pg_insert(FieldType).values(
             project_id=project_id,
             field_name=field_name,
-            field_type=field_type,
+            field_type=inferred_type,
+            field_category=field_category,
+            mutable=mutable,
+            context_id=context_id,
         )
-        self.session.add(new_field_type)
+        # "on_conflict_do_nothing" will skip insertion if (project_id, field_name, context_id) already exists:
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=["project_id", "field_name", "context_id"],
+        )
+        self.session.execute(stmt)
         self.session.commit()
 
-    def get_field_types(self, project_id: int) -> Dict[str, str]:
-        """Retrieve field types for a specific project."""
-        query = select(FieldType).where(FieldType.project_id == project_id)
+    def get_field_types(
+        self,
+        project_id: Optional[int] = None,
+        context_id: Optional[int] = None,
+        return_mutable: bool = False,
+    ) -> Dict[str, Union[str, Dict[str, Union[str, bool]]]]:
+        """Retrieve field types for a specific project ordered by creation time.
+
+        Args:
+            project_id: Optional project ID filter
+            context_id: Optional context ID filter
+            return_mutable: Whether to return additional field metadata
+
+        Returns:
+            Dictionary mapping field names to their types or metadata
+        """
+        query = select(FieldType).order_by(FieldType.id).order_by(FieldType.created_at)
+
+        # Build filters progressively
+        if project_id is not None:
+            query = query.where(FieldType.project_id == project_id)
+        if context_id is not None:
+            query = query.where(FieldType.context_id == context_id)
+
         field_types = self.session.execute(query).scalars().all()
-        return {
-            field_type.field_name: field_type.field_type for field_type in field_types
-        }
-
-    def update_field_type(self, project_id: int, field_name: str, value) -> None:
-        """Update the type for a specific field in a project."""
-        field_type = LogDAO.infer_type(value)
-        query = select(FieldType).where(
-            FieldType.project_id == project_id,
-            FieldType.field_name == field_name,
-        )
-        existing_field_type = self.session.execute(query).scalars().first()
-
-        if existing_field_type:
-            existing_field_type.field_type = field_type
-            self.session.commit()
+        if return_mutable:
+            return {
+                field_type.field_name: {
+                    "field_type": field_type.field_type,
+                    "field_category": field_type.field_category,
+                    "mutable": field_type.mutable,
+                    "created_at": (
+                        field_type.created_at.isoformat()
+                        if field_type.created_at
+                        else None
+                    ),
+                }
+                for field_type in field_types
+            }
         else:
-            raise ValueError("Field type does not exist.")
+            return {
+                field_type.field_name: field_type.field_type
+                for field_type in field_types
+            }
 
-    def delete_field_type(self, project_id: int, field_name: str) -> None:
-        """Delete a specific field type for a project."""
+    def upsert_field_type(
+        self,
+        project_id: int,
+        field_name: str,
+        value,
+        context_id: int,
+        mutable: bool = False,
+        field_category: str = "entry",
+    ) -> None:
+        """Upsert approach: insert or overwrite the existing field_type."""
+        # First check if a field with this name exists but with a different category
+        existing = (
+            self.session.query(FieldType)
+            .filter(
+                FieldType.project_id == project_id,
+                FieldType.field_name == field_name,
+                FieldType.context_id == context_id,
+            )
+            .first()
+        )
+        if existing and existing.field_category != field_category:
+            raise ValueError(
+                f"Field '{field_name}' already exists as a {existing.field_category}. "
+                f"Cannot update it to a {field_category}.",
+            )
+
+        inferred_type = LogDAO.infer_type(field_name, value)
+
+        stmt = pg_insert(FieldType).values(
+            project_id=project_id,
+            field_name=field_name,
+            field_type=inferred_type,
+            field_category=field_category,
+            mutable=mutable,
+            context_id=context_id,
+        )
+        # "on_conflict_do_update" to update existing row if it already exists
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["project_id", "field_name", "context_id"],
+            set_={
+                "field_type": inferred_type,
+                "field_category": field_category,
+                "mutable": mutable,
+            },
+        )
+        self.session.execute(stmt)
+        self.session.commit()
+
+    def update_field_mutability(
+        self,
+        project_id: int,
+        field_name: str,
+        mutable: bool,
+        context_id: int,
+    ) -> None:
+        """Update only the mutability attribute of a field type using an upsert approach."""
+        # First get the existing field type if it exists
+        existing = (
+            self.session.query(FieldType)
+            .filter(
+                FieldType.project_id == project_id,
+                FieldType.field_name == field_name,
+                FieldType.context_id == context_id,
+            )
+            .first()
+        )
+
+        if not existing:
+            raise ValueError(f"Field type {field_name} does not exist")
+
+        existing.mutable = mutable
+        self.session.commit()
+
+    def delete_field_type(
+        self,
+        project_id: int,
+        field_name: str,
+        context_id: int,
+    ) -> bool:
+        """Delete a specific field type for a project.
+
+        Args:
+            project_id: The ID of the project containing the field
+            field_name: The name of the field to delete
+            context_id: The context ID
+
+        Returns:
+            bool: True if a field was deleted, False if no field was found
+
+        Raises:
+            ValueError: If the field doesn't exist and raise_if_missing is True
+        """
         query = select(FieldType).where(
             FieldType.project_id == project_id,
             FieldType.field_name == field_name,
+            FieldType.context_id == context_id,
         )
         field_type = self.session.execute(query).scalars().first()
 
@@ -60,3 +210,140 @@ class FieldTypeDAO:
             self.session.commit()
         else:
             raise ValueError("Field type does not exist.")
+
+    def get_ordered_field_names(
+        self,
+        project_id: Optional[int] = None,
+        context_id: Optional[int] = None,
+    ) -> Dict[str, int]:
+        """Retrieve field names ordered by creation time.
+
+        Args:
+            project_id: Optional project ID filter
+            context_id: Optional context ID filter
+
+        Returns:
+            Dictionary mapping field names to their order index
+        """
+        query = (
+            select(FieldType.field_name)
+            .order_by(FieldType.id)
+            .order_by(FieldType.created_at)
+        )
+
+        # Build filters progressively
+        if project_id is not None:
+            query = query.where(FieldType.project_id == project_id)
+        if context_id is not None:
+            query = query.where(FieldType.context_id == context_id)
+
+        result = self.session.execute(query).scalars().all()
+        return {field: i for i, field in enumerate(result)}
+
+    def rename_field(
+        self,
+        project_id: int,
+        old_field_name: str,
+        new_field_name: str,
+        context_id: int,
+    ) -> None:
+        """Rename a field type for a given project.
+
+        Args:
+            project_id: The ID of the project containing the field
+            old_field_name: The current name of the field to rename
+            new_field_name: The new name to assign to the field
+
+        Raises:
+            ValueError: If the field doesn't exist or if the new name conflicts with an existing field
+        """
+        # First check if the old field exists
+        field_to_rename = (
+            self.session.query(FieldType)
+            .filter(
+                FieldType.project_id == project_id,
+                FieldType.field_name == old_field_name,
+                FieldType.context_id == context_id,
+            )
+            .first()
+        )
+
+        if not field_to_rename:
+            raise ValueError(
+                f"Field '{old_field_name}' does not exist in project {project_id}",
+            )
+
+        # Check if the new name would conflict with an existing field
+        existing_field = (
+            self.session.query(FieldType)
+            .filter(
+                FieldType.project_id == project_id,
+                FieldType.field_name == new_field_name,
+                FieldType.context_id == context_id,
+            )
+            .first()
+        )
+
+        if existing_field:
+            raise ValueError(
+                f"Cannot rename field to '{new_field_name}' as it already exists in project {project_id}",
+            )
+
+        # Perform the rename
+        field_to_rename.field_name = new_field_name
+        self.session.commit()
+
+    def bulk_create_field_types(
+        self,
+        field_types_data: list[dict],
+    ) -> None:
+        """Efficiently insert multiple field types at once using a bulk operation.
+
+        Args:
+            field_types_data: List of dictionaries, each containing:
+                - project_id: The project ID
+                - field_name: The name of the field
+                - value: The value to infer the type from
+                - context_id: The context ID
+                - mutable: Optional, defaults to False
+                - field_category: Optional, defaults to "entry"
+
+        Note:
+            This method uses PostgreSQL's insert with on_conflict_do_nothing to
+            avoid inserting duplicate field types (based on project_id, field_name,
+            and context_id).
+        """
+        if not field_types_data:
+            return
+
+        # Prepare values for bulk insertion
+        values_to_insert = []
+        for data in field_types_data:
+            project_id = data["project_id"]
+            field_name = data["field_name"]
+            value = data["value"]
+            context_id = data["context_id"]
+            mutable = data.get("mutable", False)
+            field_category = data.get("field_category", "entry")
+
+            # Infer type from the value
+            inferred_type = LogDAO.infer_type(field_name, value)
+
+            values_to_insert.append(
+                {
+                    "project_id": project_id,
+                    "field_name": field_name,
+                    "field_type": inferred_type,
+                    "field_category": field_category,
+                    "mutable": mutable,
+                    "context_id": context_id,
+                },
+            )
+
+        # Execute bulk insert with on_conflict_do_nothing
+        stmt = pg_insert(FieldType).values(values_to_insert)
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=["project_id", "field_name", "context_id"],
+        )
+        self.session.execute(stmt)
+        self.session.commit()

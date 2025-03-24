@@ -10,21 +10,80 @@ class InterfaceDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
-    def create_interface(self, user_id: str, items: str, new_counter: int):
+    def create_interface(
+        self,
+        user_id: str,
+        name: str,
+        items: str,
+        new_counter: int,
+        project_id: int,
+        context: str | None = None,
+    ):
         self.session.add(
-            Interface(user_id=user_id, items=items, new_counter=new_counter),
+            Interface(
+                user_id=user_id,
+                name=name,
+                items=items,
+                new_counter=new_counter,
+                project_id=project_id,
+                context=context,
+            ),
         )
+        self.session.commit()
 
-    def update_interface(self, user_id: str, items: str, new_counter: int):
+    def update_interface(
+        self,
+        user_id: str,
+        name: str,
+        project_id: int,
+        items: str,
+        new_counter: int,
+        context: str | None = None,
+        new_name: str = None,
+    ):
         query = select(Interface)
-        query = query.where(Interface.user_id == user_id)
+        query = (
+            query.where(Interface.user_id == user_id)
+            .where(Interface.project_id == project_id)
+            .where(Interface.name == name)
+        )
         raw = self.session.execute(query)
         entry = raw.scalars().first()
         if entry is not None:
             setattr(entry, "items", items)  # noqa: B010
             setattr(entry, "new_counter", new_counter)
+            setattr(entry, "project_id", project_id)
+            if new_name is not None:
+                setattr(entry, "name", new_name)
+            setattr(entry, "context", context)
 
-    def get_interface(self, user_id: str):
+    def get_interfaces(
+        self,
+        user_id: str,
+        project_id: int = None,
+        name: str = None,
+    ) -> list[Interface]:
         query = select(Interface).where(Interface.user_id == user_id)
-        interface = self.session.execute(query).scalars().first()
-        return interface
+        if project_id is not None:
+            query = query.where(Interface.project_id == project_id)
+        if name is not None:
+            query = query.where(Interface.name == name)
+        interfaces = self.session.execute(query).scalars().all()
+        return interfaces
+
+    def delete_interface(self, user_id: str, project_id: int, name: str):
+        try:
+            interface = (
+                self.session.query(Interface)
+                .filter(
+                    Interface.user_id == user_id,
+                    Interface.project_id == project_id,
+                    Interface.name == name,
+                )
+                .first()
+            )
+            self.session.delete(interface)
+            self.session.commit()
+        except:
+            self.session.rollback()
+            raise ValueError

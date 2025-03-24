@@ -28,10 +28,15 @@ class Deepinfra(BaseCompletionProvider):
 
 
 supported_models = {
+    "deepseek-r1": {
+        "endpoint": "deepinfra/deepseek-ai/DeepSeek-R1",
+        "context_window": 15000,
+        "cost": {"prompt": 0.55, "completion": 2.19},
+    },
     "deepseek-v3": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3",
-        "context_window": 32000,
-        "cost": {"prompt": 1, "completion": 2},
+        "context_window": 15000,
+        "cost": {"prompt": 0.40, "completion": 0.89},
     },
     "llama-3.3-70b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.3-70B-Instruct",
@@ -41,7 +46,7 @@ supported_models = {
     "llama-3.2-1b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-1B-Instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.01, "completion": 0.02},
+        "cost": {"prompt": 0.01, "completion": 0.01},
     },
     "llama-3.2-3b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-3B-Instruct",
@@ -88,6 +93,11 @@ supported_models = {
         "context_window": 8000,
         "cost": {"prompt": 0.23, "completion": 0.4},
     },
+    "gemma-3-27b-it": {
+        "endpoint": "deepinfra/google/gemma-3-27b-it",
+        "context_window": 128000,
+        "cost": {"prompt": 0.1, "completion": 0.2},
+    },
     "gemma-2-9b-it": {
         "endpoint": "deepinfra/google/gemma-2-9b-it",
         "context_window": 8000,
@@ -97,6 +107,11 @@ supported_models = {
         "endpoint": "deepinfra/google/gemma-2-27b-it",
         "context_window": 8000,
         "cost": {"prompt": 0.27, "completion": 0.27},
+    },
+    "mistral-small": {
+        "endpoint": "mistralai/Mistral-Small-24B-Instruct-2501",
+        "context_window": 32000,
+        "cost": {"prompt": 0.07, "completion": 0.14},
     },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "deepinfra/mistralai/Mixtral-8x7B-Instruct-v0.1",
@@ -118,14 +133,19 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.07, "completion": 0.16},
     },
-    "qwen-qwq-32b-preview": {
-        "endpoint": "deepinfra/Qwen/QwQ-32B-Preview",
-        "context_window": 32768,
-        "cost": {"prompt": 0.12, "completion": 0.18},
+    "qwen-2.5-7b-instruct": {
+        "endpoint": "deepinfra/Qwen/Qwen2.5-7B-Instruct",
+        "context_window": 32000,
+        "cost": {"prompt": 0.025, "completion": 0.05},
     },
     "qwen-2.5-72b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-72B-Instruct",
         "context_window": 32000,
-        "cost": {"prompt": 0.23, "completion": 0.40},
+        "cost": {"prompt": 0.13, "completion": 0.40},
+    },
+    "qwen-qwq-32b": {
+        "endpoint": "deepinfra/Qwen/QwQ-32B",
+        "context_window": 128000,
+        "cost": {"prompt": 0.12, "completion": 0.18},
     },
 }

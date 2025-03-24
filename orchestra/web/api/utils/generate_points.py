@@ -538,27 +538,6 @@ metrics = {
         "input_cost": 0.9,
         "output_cost": 0.9,
     },
-    "llama-3-70b-chat@together-ai": {
-        "cost": 0.9,
-        "ttft": 466.28,
-        "itl": 5.38,
-        "input_cost": 0.9,
-        "output_cost": 0.9,
-    },
-    "llama-3-8b-chat@fireworks-ai": {
-        "cost": 0.2,
-        "ttft": 355.48,
-        "itl": 3.06,
-        "input_cost": 0.2,
-        "output_cost": 0.2,
-    },
-    "llama-3-8b-chat@together-ai": {
-        "cost": 0.2,
-        "ttft": 1035.13,
-        "itl": 3.98,
-        "input_cost": 0.2,
-        "output_cost": 0.2,
-    },
     "mistral-large@mistral-ai": {
         "cost": 24,
         "ttft": 439.49507400009225,
@@ -579,13 +558,6 @@ metrics = {
         "itl": 4.174361656626742,
         "input_cost": 0.6,
         "output_cost": 0.6,
-    },
-    "mixtral-8x7b-instruct-v0.1@replicate": {
-        "cost": 1,
-        "ttft": 887.903352999956,
-        "itl": 15.394309863636439,
-        "input_cost": 0.3,
-        "output_cost": 1,
     },
     "mixtral-8x7b-instruct-v0.1@mistral-ai": {
         "cost": 0.7,

@@ -1,7 +1,7 @@
 import datetime
 from typing import Optional
 
-from pydantic import BaseModel, PositiveFloat
+from pydantic import BaseModel
 
 
 class DatapointModelRequest(BaseModel):
@@ -109,7 +109,7 @@ class RechargeModelRequest(BaseModel):
     """
 
     user_id: str
-    quantity: PositiveFloat
+    quantity: float
     type: str
     transaction_id: Optional[str] = None
 
@@ -347,3 +347,8 @@ class CustomEndpointModelResponse(BaseModel):
 class CreditCardFingerprintModelResponse(BaseModel):
     user_id: str
     fingerprint: str
+
+
+class DemoModelRequest(BaseModel):
+    user_id: str
+    code: str

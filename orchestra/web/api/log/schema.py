@@ -1,6 +1,8 @@
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from orchestra.web.api.context.schema import ContextCreateRequest
 
 
 class CreateLogConfig(BaseModel):
@@ -10,38 +12,93 @@ class CreateLogConfig(BaseModel):
             "example": "eval-project",
         },
     )
-    params: Dict[str, Any] = Field(
-        default=dict(),
-        description="Dictionary containing one or more key:value pairs that "
-        "will be logged into the platform. Parameters will be automatically "
-        "versioned based on their values. Values must be JSON serializable. "
-        "If a `explicit_types` dictionary is present, its values "
-        "will override the inferred types of the entries.",
+    context: Union[ContextCreateRequest, str, None] = Field(
+        default=None,
+        description="Optional context path to update for the logs. "
+        "Can use '/' for nested contexts (e.g. 'training/batch1'). "
+        "Can be a string (which will be interpreted with description=None and is_versioned=False) "
+        "or a ContextCreateRequest object.",
         json_schema_extra={
-            "example": {
-                "system-prompt": "...",
-                "function_definition": "...",
-                "explicit_types": {"system-prompt": "str"},
-            },
+            "example": "experiment1/trial1",
         },
     )
-    entries: Dict[str, Any] = Field(
+    params: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(
         default=dict(),
         description="Dictionary containing one or more key:value pairs that "
-        "will be logged into the platform. Values must be JSON serializable. "
-        "If a `explicit_types` dictionary is present, its values "
-        "will override the inferred types of the entries.",
+        "will be logged into the platform. Can be either a single dictionary or a list of dictionaries "
+        "for batch processing. When using lists for both params and entries, their lengths must match. "
+        "Parameters will be automatically versioned based on their values. "
+        "Values must be JSON serializable. If a `explicit_types` dictionary is present, its values "
+        "will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag.",
         json_schema_extra={
-            "example": {
-                "input": "...",
-                "score-test-1": "...",
-                "explicit_types": {"input": "Image"},
-            },
+            "examples": [
+                {
+                    "system-prompt": "...",
+                    "function_definition": "...",
+                    "explicit_types": {
+                        "system-prompt": {"type": "str", "mutable": True},
+                    },
+                },
+                [
+                    {"system-prompt": "prompt1"},
+                    {"system-prompt": "prompt2"},
+                ],
+            ],
         },
     )
-    strongly_typed: Union[bool, List[str]] = Field(
-        default=True,
-        description="Enforce strong typing for fields.",
+    entries: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(
+        default=dict(),
+        description="Dictionary containing one or more key:value pairs that "
+        "will be logged into the platform. Can be either a single dictionary or a list of dictionaries "
+        "for batch processing. When using lists for both params and entries, their lengths must match. "
+        "Values must be JSON serializable. If a `explicit_types` dictionary is present, "
+        "its values will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag.",
+        json_schema_extra={
+            "examples": [
+                {
+                    "input": "...",
+                    "score-test-1": "...",
+                    "explicit_types": {"input": {"type": "Image", "mutable": True}},
+                },
+                [
+                    {"input": "test1", "score": 0.8},
+                    {"input": "test2", "score": 0.9},
+                ],
+            ],
+        },
+    )
+
+
+class CreateDerivedEntriesConfig(BaseModel):
+    project: str = Field(
+        description="Name of the project the stored entries will be associated to.",
+        json_schema_extra={
+            "example": "eval-project",
+        },
+    )
+    context: Union[ContextCreateRequest, str, None] = Field(
+        default=None,
+        description="Optional context path to update for the logs. "
+        "Can use '/' for nested contexts (e.g. 'training/batch1'). "
+        "Can be a string (which will be interpreted with description=None and is_versioned=False) "
+        "or a ContextCreateRequest object.",
+        json_schema_extra={
+            "example": "experiment1/trial1",
+        },
+    )
+    key: str = Field(
+        description="The name of the entry.",
+        example="score_diff",
+    )
+    equation: str = Field(
+        description="The equation for computing the value of each derived entry.",
+        example="{log0:score} - {log1:score}",
+    )
+    referenced_logs: Dict[str, Union[List[int], Dict[str, Any]]] = Field(
+        description="The logs to use for each newly created derived entry, either as "
+        "a list of log ids or as a set of arguments for the get_logs "
+        "endpoint.",
+        example={"log0": [0, 1, 2], "log1": {"filter_expr": "score > 0.5"}},
     )
 
 
@@ -51,6 +108,21 @@ class UpdateLogRequest(BaseModel):
         example=[123, 456, 789],
         min_items=1,
     )
+    context: Union[
+        ContextCreateRequest,
+        str,
+        List[Union[ContextCreateRequest, str]],
+        None,
+    ] = Field(
+        default=None,
+        description="Optional context path to update for the logs. "
+        "Can use '/' for nested contexts (e.g. 'training/batch1'). "
+        "Can be a string (which will be interpreted with description=None and is_versioned=False) "
+        "or a ContextCreateRequest object.",
+        json_schema_extra={
+            "example": "experiment1/trial1",
+        },
+    )
     params: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(
         default=dict(),
         description="Dictionary or list of dictionaries of key-value parameter pairs to add or update in the logs.",
@@ -58,7 +130,7 @@ class UpdateLogRequest(BaseModel):
             "example": {
                 "system-prompt": "...",
                 "function_definition": "...",
-                "explicit_types": {"system-prompt": "str"},
+                "explicit_types": {"system-prompt": {"type": "str", "mutable": True}},
             },
         },
     )
@@ -69,7 +141,7 @@ class UpdateLogRequest(BaseModel):
             "example": {
                 "input": "...",
                 "score-test-1": "...",
-                "explicit_types": {"input": "Image"},
+                "explicit_types": {"input": {"type": "Image", "mutable": True}},
             },
         },
     )
@@ -77,10 +149,6 @@ class UpdateLogRequest(BaseModel):
         default=False,
         description="Whether to overwrite existing logs",
         example=False,
-    )
-    strongly_typed: Union[bool, List[str]] = Field(
-        default=True,
-        description="Enforce strong typing for fields.",
     )
 
 
@@ -93,20 +161,138 @@ class DeleteLogsRequest(BaseModel):
 
 
 class DeleteLogEntryRequest(BaseModel):
-    fields: List[Tuple[Union[int, List[int]], Union[str, List[str]]]] = Field(
-        description="List of lists of log ID(s) and field(s) to delete, "
-        "either as an individual item or a list of items.",
+    project: str = Field(
+        description="Name of the project the logs belong to.",
+        example="eval-project",
+    )
+    context: str | None = Field(
+        default=None,
+        description="Optional context path to update for the logs. "
+        "Can use '/' for nested contexts (e.g. 'training/batch1').",
+        json_schema_extra={
+            "example": "experiment1/trial1",
+        },
+    )
+    ids_and_fields: List[
+        Tuple[Union[int, List[int], None], Union[None, str, List[str]]]
+    ] = Field(
+        description="List of tuples of log ID(s) and field(s) to delete, "
+        "either as an individual item or a list of items. A log ID of None indicates "
+        "that the field should be deleted from all logs.",
         example=[
             (123, "score"),
             ([456, 457], ["score", "response"]),
             ([458, 459, 460], "response"),
+            (None, "score"),
         ],
         min_items=1,
     )
+    source_type: str = Field(
+        default="all",
+        description="Specifies which type of logs to delete. Can be 'base' for base logs only, "
+        "'derived' for derived logs only, or 'all' to delete from both types.",
+        json_schema_extra={
+            "example": "all",
+            "enum": ["base", "derived", "all"],
+        },
+    )
 
 
-class SetFieldTypingRequest(BaseModel):
-    types: Dict[str, bool] = Field(
-        ...,
-        description="Dict of field names and booleans as to whether the field should be typed.",
+class UpdateDerivedEntriesConfig(BaseModel):
+    project: str = Field(
+        description="Name of the project these derived logs belong to.",
+        example="eval-project",
+    )
+    context: Union[ContextCreateRequest, str, None] = Field(
+        default=None,
+        description="Optional context path to update for the logs. "
+        "Can use '/' for nested contexts (e.g. 'training/batch1'). "
+        "Can be a string (which will be interpreted with description=None and is_versioned=False) "
+        "or a ContextCreateRequest object.",
+        json_schema_extra={
+            "example": "experiment1/trial1",
+        },
+    )
+    target_derived_logs: Union[List[int], Dict[str, Any]] = Field(
+        description="The derived logs to update, either as a list of derived_log IDs or as a set of arguments for the get_logs endpoint.",
+        example={"log0": [0, 1, 2], "log1": {"filter_expr": "derived_score > 0.5"}},
+    )
+    key: Optional[str] = Field(
+        default=None,
+        description="New key name for the derived entries",
+        example="temp_plus_20",
+    )
+    equation: Optional[str] = Field(
+        default=None,
+        description="New equation for computing derived values",
+        example="{t:temperature} + 20",
+    )
+    referenced_logs: Optional[Dict[str, Union[List[int], Dict[str, Any]]]] = Field(
+        default=None,
+        description="Optional new referenced logs to use for computation. Can be specified either as "
+        "a list of log IDs or as a set of arguments for the get_logs endpoint.",
+        example={"t": [1, 2, 3], "other": {"filter_expr": "score > 0.5"}},
+    )
+
+    @model_validator(mode="before")
+    def validate_params(cls, values):
+        if not values.get("target_derived_logs"):
+            raise ValueError(
+                "target_derived_logs must be provided. Either as a list of derived_log IDs or as a set of arguments for the get_logs endpoint.",
+            )
+        if not values.get("key") and not values.get("equation"):
+            raise ValueError("At least one of key or equation must be provided")
+        return values
+
+
+class RenameFieldRequest(BaseModel):
+    project: str = Field(
+        description="Name of the project the field belongs to.",
+        example="eval-project",
+    )
+    context: Optional[str] = Field(
+        default="",
+        description="The context of the field to rename.",
+        example="test-context",
+    )
+    old_field_name: str = Field(
+        description="The current name of the field to rename.",
+        example="score",
+    )
+    new_field_name: str = Field(
+        description="The new name for the field.",
+        example="score_new",
+    )
+
+
+class GetLogsMetricRequest(BaseModel):
+    # A single key or multiple keys
+    key: Optional[Union[str, List[str]]] = Field(
+        default=None,
+        description="Single key string or a list of keys.",
+    )
+    # Optional dictionary mapping each key to its metric, e.g. {"score":"mean","runtime":"sum"}
+    metrics: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Optional per-key metrics mapping. If provided, overrides the path metric for those keys.",
+    )
+    filter_expr: Optional[Union[str, Dict[str, str]]] = Field(
+        default=None,
+        description="Expression to filter logs (string or key->expr dict).",
+    )
+    from_ids: Optional[Union[str, Dict[str, str]]] = Field(
+        default=None,
+        description="Log IDs to include (string or key->IDs dict).",
+    )
+    exclude_ids: Optional[Union[str, Dict[str, str]]] = Field(
+        default=None,
+        description="Log IDs to exclude (string or key->IDs dict).",
+    )
+    context: Optional[str] = Field(
+        default=None,
+        description="Context name (string).",
+    )
+    group_by: Optional[Union[str, List[str]]] = Field(
+        default=None,
+        description="Field(s) to group by when computing metrics. Can be a single field name or a list of field names for nested grouping.",
     )

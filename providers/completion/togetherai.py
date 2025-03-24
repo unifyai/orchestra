@@ -28,6 +28,16 @@ class TogetherAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "deepseek-r1": {
+        "endpoint": "together_ai/deepseek-ai/DeepSeek-R1",
+        "context_window": 64000,
+        "cost": {"prompt": 3, "completion": 7},
+    },
+    "deepseek-v3": {
+        "endpoint": "together_ai/deepseek-ai/DeepSeek-V3",
+        "context_window": 131072,
+        "cost": {"prompt": 1.25, "completion": 1.25},
+    },
     "llama-3.3-70b-chat": {
         "endpoint": "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
         "context_window": 131072,
@@ -63,24 +73,14 @@ supported_models = {
         "context_window": 130815,
         "cost": {"prompt": 3.5, "completion": 3.5},
     },
-    "llama-3-70b-chat": {
-        "endpoint": "together_ai/meta-llama/Meta-Llama-3-70B-Instruct-Turbo",
-        "context_window": 8192,
-        "cost": {"prompt": 0.88, "completion": 0.88},
-    },
-    "llama-3-8b-chat": {
-        "endpoint": "together_ai/meta-llama/Meta-Llama-3-8B-Instruct-Turbo",
-        "context_window": 8192,
-        "cost": {"prompt": 0.18, "completion": 0.18},
-    },
-    "gemma-2-9b-it": {
-        "endpoint": "together_ai/google/gemma-2-9b-it",
-        "context_window": 8192,
-        "cost": {"prompt": 0.3, "completion": 0.3},
-    },
     "gemma-2-27b-it": {
         "endpoint": "together_ai/google/gemma-2-27b-it",
         "context_window": 8192,
+        "cost": {"prompt": 0.8, "completion": 0.8},
+    },
+    "mistral-small": {
+        "endpoint": "mistralai/Mistral-Small-24B-Instruct-2501",
+        "context_window": 32000,
         "cost": {"prompt": 0.8, "completion": 0.8},
     },
     "mixtral-8x22b-instruct-v0.1": {
@@ -108,8 +108,8 @@ supported_models = {
         "context_window": 131072,
         "cost": {"prompt": 0.8, "completion": 0.8},
     },
-    "qwen-qwq-32b-preview": {
-        "endpoint": "together_ai/Qwen/QwQ-32B-Preview",
+    "qwen-qwq-32b": {
+        "endpoint": "together_ai/Qwen/QwQ-32B",
         "context_window": 32768,
         "cost": {"prompt": 1.2, "completion": 1.2},
     },

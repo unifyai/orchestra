@@ -12,7 +12,9 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     func,
+    text,
 )
+from sqlalchemy.dialects.postgresql import JSON, JSONB
 from sqlalchemy.orm import relationship
 
 from orchestra.db.base import Base
@@ -241,8 +243,8 @@ class LatestBenchmark(Base):
     seq_len = Column(String(), primary_key=True)
     input_cost = Column(Numeric())
     output_cost = Column(Numeric())
-    time_to_first_token = Column(Numeric())
-    inter_token_latency = Column(Numeric())
+    ttft = Column(Numeric())
+    itl = Column(Numeric())
     measured_at = Column(TIMESTAMP, nullable=False)
 
 
@@ -338,41 +340,6 @@ class Query(Base):
     __table_args__ = (Index("ix_user_endpoint", "user_id", "endpoint_id"),)
 
 
-class Dataset(Base):
-    """Model class for the dataset table."""
-
-    __tablename__ = "dataset"
-
-    id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), index=True)
-    name = Column(String(), nullable=False)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_userid_name"),)
-
-
-class DatasetEntry(Base):
-    """Model class for the dataset entries table."""
-
-    __tablename__ = "dataset_entry"
-
-    id = Column(String(10), primary_key=True)
-    dataset_id = Column(
-        Integer(),
-        ForeignKey("dataset.id", ondelete="CASCADE"),
-        index=True,
-    )
-    entry = Column(String(), nullable=False)  # JSON serialised
-    entry_hash = Column(String(64), nullable=False)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    __table_args__ = (
-        UniqueConstraint(
-            "dataset_id",
-            "entry_hash",
-            name="uq_dataset_entry_hash",
-        ),
-    )
-
-
 class Router(Base):
     """Model class for the router table."""
 
@@ -406,6 +373,20 @@ class AuthUser(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
 
+    # Relationships
+    interfaces = relationship(
+        "Interface",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    temp_interfaces = relationship(
+        "TempInterface",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
 
 # Account table (for external providers like Google, GitHub)
 # Each user can have multiple accounts
@@ -436,6 +417,20 @@ class Organization(Base):
     )
     name = Column(String, unique=True, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
+
+    # Relationships
+    interfaces = relationship(
+        "Interface",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    temp_interfaces = relationship(
+        "TempInterface",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class OrganizationMember(Base):
@@ -489,11 +484,126 @@ class Project(Base):
     name = Column(String, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
+    contexts = relationship("Context", back_populates="project", passive_deletes=True)
+    interfaces = relationship(
+        "Interface",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    temp_interfaces = relationship(
+        "TempInterface",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     # we want sql nulls to be distinct in the unique constraints
     # (postgresql_nulls_not_distinct=False)
     __table_args__ = (
         UniqueConstraint("user_id", "name"),
         UniqueConstraint("organization_id", "name"),
+    )
+
+
+class LogEventContext(Base):
+    """Association table for the many-to-many relationship between LogEvent and Context."""
+
+    __tablename__ = "log_event_context"
+
+    log_event_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+
+class Context(Base):
+    """Model class for organizing logs and artifacts within projects."""
+
+    __tablename__ = "context"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name = Column(String, nullable=False)
+    description = Column(String)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+    is_versioned = Column(Boolean, nullable=False, server_default="f")
+    version = Column(Integer, nullable=False, server_default="1")
+    allow_duplicates = Column(Boolean, nullable=False, server_default="t")
+
+    project = relationship("Project", back_populates="contexts")
+    artifacts = relationship("ContextArtifact", back_populates="context")
+    log_events = relationship(
+        "LogEvent",
+        secondary="log_event_context",
+        back_populates="contexts",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_project_context_name"),
+    )
+
+
+class ContextHistory(Base):
+    """Model class for storing historical versions of contexts."""
+
+    __tablename__ = "context_history"
+
+    id = Column(Integer, primary_key=True)
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    version = Column(Integer, nullable=False)
+    log_versions = Column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'"),
+        comment="Stores {log_event_id: {field_key: version_int}}",
+    )
+    name = Column(String, nullable=True)
+    description = Column(String, nullable=True)
+    archived_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class ContextArtifact(Base):
+    """Model class for storing artifacts within contexts."""
+
+    __tablename__ = "context_artifact"
+
+    id = Column(Integer, primary_key=True)
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key = Column(String, nullable=False)
+    value = Column(String)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+
+    context = relationship("Context", back_populates="artifacts")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "context_id",
+            "key",
+            name="uq_context_artifact_key",
+        ),
     )
 
 
@@ -504,22 +614,6 @@ class Artifact(Base):
     project_id = Column(
         Integer,
         ForeignKey("project.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    key = Column(String, nullable=False)
-    value = Column(String)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    updated_at = Column(TIMESTAMP, onupdate=func.now())
-
-
-class DatasetArtifact(Base):
-    __tablename__ = "dataset_artifact"
-
-    id = Column(Integer, primary_key=True)
-    dataset_id = Column(
-        Integer,
-        ForeignKey("dataset.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -541,6 +635,32 @@ class LogEvent(Base):
     )
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
+    contexts = relationship(
+        "Context",
+        secondary="log_event_context",
+        back_populates="log_events",
+    )
+    # Relationships
+    derived_logs = relationship(
+        "DerivedLog",
+        cascade="all, delete-orphan",
+        backref="log_event",
+    )
+
+
+class JSONLog(Base):
+    __tablename__ = "json_log"
+
+    id = Column(Integer, primary_key=True)
+    log_event_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key = Column(String, nullable=False)
+    value = Column(JSON)
+    __table_args__ = (UniqueConstraint("log_event_id", "key"),)
 
 
 class Log(Base):
@@ -554,12 +674,98 @@ class Log(Base):
         index=True,
     )
     key = Column(String, nullable=False)
-    value = Column(String)
+    value = Column(JSONB)
     version = Column(Integer)
     inferred_type = Column(String)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
+    __table_args__ = (UniqueConstraint("log_event_id", "key", "version"),)
+
+
+class LogHistory(Base):
+    __tablename__ = "log_history"
+
+    id = Column(Integer, primary_key=True)
+    log_event_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key = Column(String, nullable=False)
+    value = Column(JSONB)
+    version = Column(Integer, nullable=False)
+    inferred_type = Column(String)
+    description = Column(String)
+    archived_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class JSONLogHistory(Base):
+    __tablename__ = "json_log_history"
+
+    id = Column(Integer, primary_key=True)
+    log_event_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key = Column(String, nullable=False)
+    value = Column(JSON)
+    version = Column(Integer, nullable=False)
+    description = Column(String)
+    archived_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class DerivedLog(Base):
+    __tablename__ = "derived_log"
+
+    id = Column(Integer, primary_key=True)
+    log_event_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key = Column(String, nullable=False, index=True)
+    equation = Column(String)
+    referenced_logs = Column(JSONB)
+    value = Column(JSONB)
+    inferred_type = Column(String)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+
     __table_args__ = (UniqueConstraint("log_event_id", "key"),)
+
+
+class ActiveDerivedLog(Base):
+    """Model class for storing filter-based derived logs that are applied to future base logs."""
+
+    __tablename__ = "active_derived_log_template"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key = Column(String, nullable=False, index=True)
+    equation = Column(String, nullable=False)
+    referenced_logs = Column(JSONB, nullable=False)
+    filter_expression = Column(JSONB, nullable=False)
+    inferred_type = Column(String)
+    is_active = Column(Boolean, nullable=False, server_default="t")
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+
+    __table_args__ = (UniqueConstraint("project_id", "context_id", "key"),)
 
 
 class DashboardView(Base):
@@ -580,7 +786,7 @@ class DashboardView(Base):
 class Interface(Base):
     __tablename__ = "interface"
 
-    id = Column(Integer, primary_key=True)
+    id = Column(String, primary_key=True, default=uuid.uuid4)
     user_id = Column(
         String,
         ForeignKey("auth_user.id", ondelete="CASCADE"),
@@ -591,8 +797,24 @@ class Interface(Base):
         ForeignKey("organization.id", ondelete="CASCADE"),
         index=True,
     )
-    new_counter = Column(Integer)
+    name = Column(String(), nullable=False)
+    new_counter = Column(Integer, nullable=False)
     items = Column(String(), nullable=False)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    context = Column(String(), nullable=True)
+    # Relationships
+    project = relationship("Project", back_populates="interfaces")
+    user = relationship("AuthUser", back_populates="interfaces")
+    organization = relationship("Organization", back_populates="interfaces")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "project_id", "name", name="it_uq_project_name"),
+    )
 
 
 class FieldType(Base):
@@ -606,9 +828,64 @@ class FieldType(Base):
         ForeignKey("project.id", ondelete="CASCADE"),
         nullable=False,
     )
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     field_name = Column(String, nullable=False)
     field_type = Column(String, nullable=False)
+    field_category = Column(
+        String,
+        nullable=False,
+        server_default="entry",
+    )  # entry, param, derived_entry
+    mutable = Column(Boolean(), nullable=False, server_default="f")  # type: ignore
+    created_at = Column(TIMESTAMP, server_default=func.now())
 
     __table_args__ = (
-        UniqueConstraint("project_id", "field_name", name="uq_project_field_name"),
+        UniqueConstraint(
+            "project_id",
+            "field_name",
+            "context_id",
+            name="uq_project_field_name_context_id",
+        ),
+    )
+
+
+class TempInterface(Base):
+    __tablename__ = "temp_interface"
+
+    id = Column(String, primary_key=True, default=uuid.uuid4)
+    user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        index=True,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        index=True,
+    )
+    name = Column(String(), nullable=False)
+    new_counter = Column(Integer, nullable=False)
+    items = Column(String(), nullable=False)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    context = Column(String(), nullable=True)
+    # Relationships
+    project = relationship("Project", back_populates="temp_interfaces")
+    user = relationship("AuthUser", back_populates="temp_interfaces")
+    organization = relationship("Organization", back_populates="temp_interfaces")
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "project_id",
+            "name",
+            name="temp_it_uq_project_name",
+        ),
     )

@@ -1,3 +1,5 @@
+import logging
+import os
 from typing import Callable
 
 from fastapi import FastAPI
@@ -14,13 +16,17 @@ from opentelemetry.sdk.resources import (
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import set_tracer_provider
-from prometheus_fastapi_instrumentator.instrumentation import (
-    PrometheusFastApiInstrumentator,
-)
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from orchestra.db.dependencies import register_db_listeners
+from orchestra.logging import setup_logging
 from orchestra.settings import settings
+
+logger = logging.getLogger(__name__)
+
+# Global variable to store the engine instance
+_engine = None
 
 
 def _setup_db(app: FastAPI) -> None:  # pragma: no cover
@@ -33,18 +39,78 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
 
     :param app: fastAPI application.
     """
-    engine = create_engine(
-        str(settings.db_url),
-        echo=settings.db_echo,
-        pool_size=35,
-        max_overflow=70,  # noqa: WPS432, E501
-    )
+    global _engine
+
+    # Use standard SQLAlchemy connection if not using Cloud SQL
+    if not settings.use_cloud_sql:
+        engine = create_engine(
+            str(settings.db_url),
+            echo=settings.db_echo,
+            pool_size=700,
+            max_overflow=100,  # noqa: WPS432, E501
+        )
+    else:
+        # Use Cloud SQL connector for GCP deployment
+        from google.cloud.sql.connector import Connector
+
+        # Get connection details from environment or settings
+        instance_connection_name = os.environ.get(
+            "INSTANCE_CONNECTION_NAME",
+            getattr(settings, "cloud_sql_instance", ""),
+        )
+        db_user = os.environ.get("DB_USER", settings.db_user)
+        db_pass = os.environ.get("DB_PASS", settings.db_pass)
+        db_name = os.environ.get("DB_NAME", settings.db_base)
+
+        # Validate required connection information
+        if not instance_connection_name:
+            raise ValueError("Missing Cloud SQL instance connection name")
+
+        connector = Connector()
+
+        def get_conn():
+            return connector.connect(
+                instance_connection_name,
+                "pg8000",
+                user=db_user,
+                password=db_pass,
+                db=db_name,
+            )
+
+        engine = create_engine(
+            "postgresql+pg8000://",
+            creator=get_conn,
+        )
+
     session_factory = sessionmaker(
         engine,
         expire_on_commit=False,
     )
+
+    # Store engine and session_factory in app state
     app.state.db_engine = engine
     app.state.db_session_factory = session_factory
+
+    # Store engine in global variable for access from other modules
+    _engine = engine
+
+
+def get_engine():
+    """
+    Get the SQLAlchemy engine.
+
+    This function returns the global engine instance that was created
+    during application startup.
+
+    Returns:
+        The SQLAlchemy engine instance.
+    """
+    global _engine
+
+    if _engine is None:
+        raise RuntimeError("Database engine not initialized")
+
+    return _engine
 
 
 def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
@@ -53,27 +119,86 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
 
     :param app: current application.
     """
-    if not settings.opentelemetry_endpoint:
+    if not settings.opentelemetry_endpoint and not settings.tempo_url:
         return
 
-    tracer_provider = TracerProvider(
-        resource=Resource.create(
-            {
-                SERVICE_NAME: "orchestra",
-                TELEMETRY_SDK_LANGUAGE: "python",
-                DEPLOYMENT_ENVIRONMENT: settings.environment,
-            },
-        ),
+    # Create resource with service information
+    resource = Resource.create(
+        {
+            SERVICE_NAME: "orchestra",
+            TELEMETRY_SDK_LANGUAGE: "python",
+            DEPLOYMENT_ENVIRONMENT: settings.environment,
+        },
     )
 
-    tracer_provider.add_span_processor(
-        BatchSpanProcessor(
-            OTLPSpanExporter(
-                endpoint=settings.opentelemetry_endpoint,
-                insecure=not settings.opentelemetry_secure,
-            ),
-        ),
-    )
+    tracer_provider = TracerProvider(resource=resource)
+
+    # Add OTLP exporter if configured
+    if settings.opentelemetry_endpoint:
+        try:
+            tracer_provider.add_span_processor(
+                BatchSpanProcessor(
+                    OTLPSpanExporter(
+                        endpoint=settings.opentelemetry_endpoint,
+                        insecure=not settings.opentelemetry_secure,
+                        timeout=5,  # Add timeout to prevent hanging
+                    ),
+                ),
+            )
+            logger.info(
+                f"Configured OTLP exporter at {settings.opentelemetry_endpoint}",
+            )
+        except Exception as e:
+            logger.warning(f"Failed to configure OTLP exporter: {e}")
+
+    # Add Tempo exporter if configured
+    if settings.tempo_url:
+        try:
+            # Determine if we're using HTTP or gRPC based on the port
+            if ":4318" in settings.tempo_url:
+                # Use HTTP exporter for port 4318
+                from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+                    OTLPSpanExporter as HTTPSpanExporter,
+                )
+
+                # For HTTP, use the /v1/traces endpoint
+                tempo_endpoint = f"{settings.tempo_url}/v1/traces"
+                tempo_exporter = HTTPSpanExporter(
+                    endpoint=tempo_endpoint,
+                    timeout=5,  # Add timeout to prevent hanging
+                )
+                logger.info(f"Configured Tempo HTTP exporter at {tempo_endpoint}")
+            elif ":4317" in settings.tempo_url:
+                # Use gRPC exporter for port 4317
+                tempo_exporter = OTLPSpanExporter(
+                    endpoint=settings.tempo_url,
+                    insecure=True,  # Most Tempo deployments don't use TLS internally
+                    timeout=5,  # Add timeout to prevent hanging
+                )
+                logger.info(f"Configured Tempo gRPC exporter at {settings.tempo_url}")
+            else:
+                # Default to HTTP if port not specified
+                from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+                    OTLPSpanExporter as HTTPSpanExporter,
+                )
+
+                # For HTTP, use the /v1/traces endpoint
+                tempo_endpoint = f"{settings.tempo_url}/v1/traces"
+                tempo_exporter = HTTPSpanExporter(
+                    endpoint=tempo_endpoint,
+                    timeout=5,  # Add timeout to prevent hanging
+                )
+                logger.info(f"Configured Tempo HTTP exporter at {tempo_endpoint}")
+
+            # Add the exporter to the tracer provider
+            tracer_provider.add_span_processor(BatchSpanProcessor(tempo_exporter))
+
+        except Exception as e:
+            logger.warning(f"Failed to configure Tempo exporter: {e}")
+            logger.warning(
+                "Continuing without Tempo tracing. Make sure Tempo is running at the configured URL.",
+            )
+            # Continue without Tempo tracing
 
     excluded_endpoints = [
         app.url_path_for("health_check"),
@@ -109,15 +234,42 @@ def stop_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
     SQLAlchemyInstrumentor().uninstrument()
 
 
-def setup_prometheus(app: FastAPI) -> None:  # pragma: no cover
+def setup_observability(app: FastAPI) -> None:  # pragma: no cover
     """
-    Enables prometheus integration.
+    Initializes the full observability stack including OpenTelemetry,
+    Prometheus metrics, Loki logging configuration, and database query tracking.
 
     :param app: current application.
     """
-    PrometheusFastApiInstrumentator(should_group_status_codes=False).instrument(
-        app,
-    ).expose(app, should_gzip=True, name="prometheus_metrics")
+    # Setup logging with JSON formatting and Loki integration first
+    log_level = getattr(settings, "log_level", "INFO")
+    try:
+        setup_logging(log_level)
+    except Exception as e:
+        logger.error(f"Error setting up logging: {e}")
+        # Continue with basic logging if advanced setup fails
+        logging.basicConfig(level=getattr(logging, log_level.upper(), logging.INFO))
+
+    # Add this before OpenTelemetry setup
+    if settings.grafana_url:
+        logger.info(f"Grafana dashboard available at {settings.grafana_url}")
+
+    # Setup OpenTelemetry for distributed tracing
+    try:
+        setup_opentelemetry(app)
+    except Exception as e:
+        logger.error(f"Failed to setup OpenTelemetry: {e}")
+        logger.info("Continuing without distributed tracing")
+
+    # Setup SQLAlchemy instrumentation for query tracking
+    # Only register DB listeners if the engine is already initialized
+    if hasattr(app.state, "db_engine") and app.state.db_engine is not None:
+        try:
+            register_db_listeners()
+        except Exception as e:
+            logger.error(f"Failed to register DB listeners: {e}")
+
+    logger.info("Observability stack setup completed")
 
 
 def register_startup_event(
@@ -137,8 +289,7 @@ def register_startup_event(
     def _startup() -> None:  # noqa: WPS430
         app.middleware_stack = None
         _setup_db(app)
-        setup_opentelemetry(app)
-        # setup_prometheus(app)
+        setup_observability(app)
         aiplatform.init(
             project=settings.vertexai_project,
             location=settings.vertexai_location,

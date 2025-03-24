@@ -69,21 +69,6 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.07, "completion": 0.07},
     },
-    "llama-3.1-70b-chat": {
-        "endpoint": "llama3-1-70b",
-        "context_window": 128000,
-        "cost": {"prompt": 0.8, "completion": 0.8},
-    },
-    "llama-3-8b-chat": {
-        "endpoint": "llama3-8b",
-        "context_window": 8192,
-        "cost": {"prompt": 0.07, "completion": 0.07},
-    },
-    "llama-3-70b-chat": {
-        "endpoint": "llama3-70b",
-        "context_window": 8192,
-        "cost": {"prompt": 0.8, "completion": 0.8},
-    },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "mixtral-8x7b",
         "context_window": 32768,
@@ -98,15 +83,5 @@ supported_models = {
         "endpoint": "mistral-nemo",
         "context_window": 128000,
         "cost": {"prompt": 0.18, "completion": 0.18},
-    },
-    "qwen-qwq-32b-preview": {
-        "endpoint": "qwen-qwq-32b",
-        "context_window": 32768,
-        "cost": {"prompt": 0.8, "completion": 0.8},
-    },
-    "qwen-2-72b-instruct": {
-        "endpoint": "qwen2-72b",
-        "context_window": 128000,
-        "cost": {"prompt": 0.8, "completion": 0.8},
     },
 }

@@ -32,4 +32,9 @@ supported_models = {
         "context_window": 64000,
         "cost": {"prompt": 0.27, "completion": 1.1},
     },
+    "deepseek-r1": {
+        "endpoint": "deepseek/deepseek-reasoner",
+        "context_window": 64000,
+        "cost": {"prompt": 0.55, "completion": 2.19},
+    },
 }

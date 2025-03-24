@@ -28,6 +28,11 @@ class FireworksAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "deepseek-r1": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-r1",
+        "context_window": 160000,
+        "cost": {"prompt": 3, "completion": 8},
+    },
     "deepseek-v3": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-v3",
         "context_window": 128000,
@@ -73,11 +78,6 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 0.9, "completion": 0.9},
     },
-    "llama-3-8b-chat": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3-8b-instruct",
-        "context_window": 8192,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
     "mixtral-8x22b-instruct-v0.1": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct",
         "context_window": 65536,
@@ -93,9 +93,9 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.9, "completion": 0.9},
     },
-    "qwen-qwq-32b-preview": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/qwen-qwq-32b-preview",
-        "context_window": 32768,
+    "qwen-qwq-32b": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/qwq-32b",
+        "context_window": 128000,
         "cost": {"prompt": 0.9, "completion": 0.9},
     },
     "qwen-2.5-72b-instruct": {

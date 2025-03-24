@@ -33,11 +33,6 @@ class Replicate(BaseCompletionProvider):
 
 
 supported_models = {
-    "mixtral-8x7b-instruct-v0.1": {
-        "endpoint": "replicate/mistralai/mixtral-8x7b-instruct-v0.1",
-        "context_window": 16384,
-        "cost": {"prompt": 0.3, "completion": 1},
-    },
     "llama-3-8b-chat": {
         "endpoint": "replicate/meta/meta-llama-3-8b-instruct",
         "context_window": 8192,
@@ -52,5 +47,25 @@ supported_models = {
         "endpoint": "replicate/meta/meta-llama-3.1-405b-instruct",
         "context_window": 131072,
         "cost": {"prompt": 9.5, "completion": 9.5},
+    },
+    "deepseek-r1": {
+        "endpoint": "replicate/deepseek-ai/deepseek-r1",
+        "context_window": 64000,
+        "cost": {"prompt": 3.75, "completion": 10},
+    },
+    "claude-3.5-sonnet": {
+        "endpoint": "replicate/anthropic/claude-3.5-sonnet",
+        "context_window": 16384,
+        "cost": {"prompt": 3.75, "completion": 18.75},
+    },
+    "claude-3.5-haiku": {
+        "endpoint": "replicate/anthropic/claude-3.5-haiku",
+        "context_window": 16384,
+        "cost": {"prompt": 1, "completion": 5},
+    },
+    "claude-3.7-sonnet": {
+        "endpoint": "replicate/anthropic/claude-3.7-sonnet",
+        "context_window": 16384,
+        "cost": {"prompt": 3, "completion": 15},
     },
 }

@@ -68,6 +68,15 @@ steps:
     --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID,gcb-trigger-id=$_TRIGGER_ID
   - '--region=$_DEPLOY_REGION'
   - '--quiet'
+  - '--vpc-connector=orchestra-connector'
+  - '--vpc-egress=all-traffic'
+  - '--timeout=300s'
+  - '--cpu=1'
+  - '--memory=1024Mi'
+  - '--min-instances=1'
+  - '--max-instances=10'
+  - '--no-cpu-throttling'
+  - '--cpu-boost'
   id: Deploy Orchestra
   entrypoint: gcloud
   waitFor:

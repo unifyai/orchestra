@@ -11,6 +11,8 @@ from typing import Dict, List, Optional, Union
 import requests
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
+from providers.completion import PROVIDER_CLASSES
+from providers.completion.base_completion_provider import BaseCompletionProvider
 
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.custom_endpoint_benchmark_dao import CustomEndpointBenchmarkDAO
@@ -24,8 +26,8 @@ router = APIRouter()
 ALLOWED_METRICS = [
     "input_cost",
     "output_cost",
-    "time_to_first_token",
-    "inter_token_latency",
+    "ttft",
+    "itl",
 ]
 ALLOWED_METRICS_STR = ""
 for metric in ALLOWED_METRICS:
@@ -388,8 +390,8 @@ def get_endpoint_metrics(
             ]
             results = [
                 {
-                    "ttft": result["benchmark"][0].time_to_first_token,
-                    "itl": result["benchmark"][0].inter_token_latency,
+                    "ttft": result["benchmark"][0].ttft,
+                    "itl": result["benchmark"][0].itl,
                     "input_cost": result["benchmark"][0].input_cost,
                     "output_cost": result["benchmark"][0].output_cost,
                     "measured_at": result["benchmark"][0].measured_at,
@@ -485,3 +487,50 @@ def delete_endpoint_metrics(
         timestamps,
     )
     return {"info": "Metrics deleted successfully!"}
+
+
+@router.get(
+    "/endpoint-details",
+    response_model=Dict[str, Union[str, float]],
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "endpoint": "claude-3.5-haiku@anthropic",
+                        "context_window": 200000,
+                        "input_cost": 0.8,
+                        "output_cost": 4,
+                    },
+                },
+            },
+        },
+    },
+)
+def get_endpoint_details(
+    endpoint: str = Query(
+        default=None,
+        description="Name of the endpoint.",
+        example="claude-3.5-haiku@anthropic",
+    ),
+):
+    """
+    Extracts cost and context window data for the provided endpoint .
+
+    The `endpoint` is the endpoint name in the form \<model\>@\<provider\>.
+    """
+    try:
+        model, provider = endpoint.split("@")
+        provider: BaseCompletionProvider = PROVIDER_CLASSES[provider](model)
+        details = provider.supported_models[model]
+    except:
+        raise not_found(
+            f"Endpoint {endpoint} not found. "
+            "Please make sure you're passing it in the correct format.",
+        )
+    return {
+        "input_cost": details["cost"]["prompt"],
+        "output_cost": details["cost"]["completion"],
+        "context_window": details["context_window"],
+    }

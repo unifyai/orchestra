@@ -66,6 +66,11 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
 
 
 supported_models = {
+    "deepseek-r1": {
+        "endpoint": "bedrock/us.deepseek.r1-v1:0",
+        "context_window": 128000,
+        "cost": {"prompt": 1.35, "completion": 5.4},
+    },
     "llama-3.3-70b-chat": {
         "endpoint": "bedrock/us.meta.llama3-3-70b-instruct-v1:0",
         "context_window": 128000,
@@ -119,7 +124,7 @@ supported_models = {
     "mistral-large": {
         "endpoint": "bedrock/mistral.mistral-large-2407-v1:0",
         "context_window": 128000,
-        "cost": {"prompt": 2, "completion": 6},
+        "cost": {"prompt": 4, "completion": 12},
     },
     "command-r-plus": {
         "endpoint": "bedrock/cohere.command-r-plus-v1:0",
@@ -155,5 +160,10 @@ supported_models = {
         "endpoint": "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0",
         "context_window": 200000,
         "cost": {"prompt": 0.8, "completion": 4},
+    },
+    "claude-3.7-sonnet": {
+        "endpoint": "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "context_window": 200000,
+        "cost": {"prompt": 3, "completion": 15},
     },
 }

@@ -1,84 +1,352 @@
-import json
-from datetime import datetime, timezone
+import base64
+import re
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import cast, literal, select
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from orchestra.db.dao.bucket_service import BucketService
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Log, LogEvent
+from orchestra.db.models.orchestra_models import (
+    Context,
+    JSONLog,
+    JSONLogHistory,
+    Log,
+    LogEvent,
+    LogEventContext,
+    LogHistory,
+)
 
 
 class OverwriteError(Exception):
     pass
 
 
+class ImmutableFieldError(Exception):
+    pass
+
+
+def _is_date_string(value: str) -> bool:
+    """
+    Check if a string can be parsed as a date in various formats including:
+    - YYYY-MM-DD (ISO 8601)
+    - MM/DD/YYYY
+    - DD/MM/YYYY
+    - DD-MM-YYYY
+    - Month DD, YYYY
+
+    Args:
+        value (str): The string to check
+
+    Returns:
+        bool: True if the string can be parsed as a date, False otherwise
+    """
+    try:
+        if isinstance(value, str):
+            # Remove quotes if present
+            clean_value = value.strip("\"'")
+
+            # Try different date formats
+            for fmt in (
+                "%Y-%m-%d",  # ISO 8601: 2023-01-31
+                "%m/%d/%Y",  # US format: 01/31/2023
+                "%d/%m/%Y",  # UK format: 31/01/2023
+                "%d-%m-%Y",  # European format: 31-01-2023
+                "%B %d, %Y",  # Month name: January 31, 2023
+                "%b %d, %Y",  # Abbreviated month: Jan 31, 2023
+            ):
+                try:
+                    parsed_date = datetime.strptime(clean_value, fmt).date()
+                    # Ensure it's just a date (no time component)
+                    if isinstance(parsed_date, date):
+                        return True
+                except ValueError:
+                    continue
+
+            # Check for ISO format with regex
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", clean_value):
+                try:
+                    date.fromisoformat(clean_value)
+                    return True
+                except ValueError:
+                    pass
+        return False
+    except Exception:
+        return False
+
+
+def _is_timedelta_string(value: str) -> bool:
+    """
+    Check if a string represents a timedelta in ISO 8601 duration format.
+
+    ISO 8601 duration format: P[n]Y[n]M[n]DT[n]H[n]M[n]S
+    Examples:
+    - P1Y2M3DT4H5M6S (1 year, 2 months, 3 days, 4 hours, 5 minutes, 6 seconds)
+    - P1D (1 day)
+    - PT1H (1 hour)
+
+    Also checks for simple duration formats like:
+    - HH:MM:SS
+    - MM:SS
+    - [n] days, [n] hours, etc.
+
+    Args:
+        value (str): The string to check
+
+    Returns:
+        bool: True if the string represents a timedelta, False otherwise
+    """
+    try:
+        if isinstance(value, str):
+            clean_value = value.strip("\"'")
+
+            # Check ISO 8601 duration format
+            iso_duration_pattern = r"^P(?:\d+Y)?(?:\d+M)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$"
+            if re.match(iso_duration_pattern, clean_value):
+                return True
+
+            # Check for PostgreSQL interval format: 1 day 2 hours 3 minutes 4 seconds
+            pg_interval_pattern = r"^(\d+\s+(?:day|days|hour|hours|minute|minutes|second|seconds)(?:\s+|$))+$"
+            if re.match(pg_interval_pattern, clean_value, re.IGNORECASE):
+                return True
+
+            # Check for simple time duration format: HH:MM:SS
+            if re.match(r"^\d+:\d{2}(:\d{2})?$", clean_value):
+                # Make sure it's not a valid time (which would be caught by _is_time_string)
+                if not _is_time_string(clean_value):
+                    return True
+        return False
+    except Exception:
+        return False
+
+
+def _is_time_string(value: str) -> bool:
+    """
+    Check if a string can be parsed as a time in various formats including:
+    - HH:MM:SS[.ffffff]
+    - HH:MM
+    - H:MM AM/PM
+    - HH:MM:SS AM/PM
+
+    Args:
+        value (str): The string to check
+
+    Returns:
+        bool: True if the string can be parsed as a time, False otherwise
+    """
+    try:
+        # Try to parse the string as a time
+        if isinstance(value, str):
+            # Remove quotes if present
+            clean_value = value.strip("\"'")
+            # Try different time formats
+            for fmt in (
+                "%H:%M:%S",  # 24-hour with seconds: 14:30:45
+                "%H:%M:%S.%f",  # 24-hour with seconds and microseconds: 14:30:45.123
+                "%H:%M",  # 24-hour without seconds: 14:30
+                "%I:%M %p",  # 12-hour without seconds: 2:30 PM
+                "%I:%M:%S %p",  # 12-hour with seconds: 02:30:45 PM
+                "%I:%M:%S.%f %p",  # 12-hour with seconds and microseconds: 02:30:45.123 PM
+            ):
+                try:
+                    datetime.strptime(clean_value, fmt)
+                    return True
+                except ValueError:
+                    continue
+        return False
+    except Exception:
+        return False
+
+
+def normalize_timestamp(ts_str: str) -> str:
+    """
+    Attempts to parse the provided timestamp string and return an ISO formatted string.
+
+    This function tries to convert various timestamp formats to the ISO 8601 format
+    with the 'T' separator, which is the standard format used in the database.
+    """
+    try:
+        # First try direct ISO format; if it fails, try common alternative formats
+        dt = datetime.fromisoformat(ts_str)
+    except ValueError:
+        # Try alternative formats without 'T', e.g. '%Y-%m-%d %H:%M:%S.%f' or '%Y-%m-%d %H:%M:%S'
+        for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+            try:
+                dt = datetime.strptime(ts_str, fmt)
+                break
+            except ValueError:
+                continue
+        else:
+            # If no format matches, return the original string
+            return ts_str
+    return dt.isoformat()
+
+
 # noinspection PyBroadException
 class LogDAO:
-    def __init__(self, session: Session = Depends(get_db_session)):
-        self.session = session
-
-    def create(
+    def __init__(
         self,
-        project_id: int,
+        session: Session = Depends(get_db_session),
+        context_dao: ContextDAO = Depends(ContextDAO),
+    ):
+        self.session = session
+        self.bucket_service = BucketService()
+        self.context_dao = context_dao
+
+    def _create_log_history(
+        self,
         log_event_id: int,
         key: str,
-        value: Optional[str] = None,  # JSON serialised
-        version: Optional[int] = None,
-        inferred_type: Optional[str] = None,
-    ) -> int:
-
-        if version and not self.correct_key_version(project_id, key, version, value):
-            raise ValueError
-
-        ts = datetime.now(timezone.utc)
-
-        new_log = Log(
+        value: Any,
+        version: int,
+        inferred_type: Optional[str],
+        description: str,
+        created_at: Optional[datetime] = None,
+        updated_at: Optional[datetime] = None,
+    ) -> LogHistory:
+        """Helper method to create a LogHistory entry."""
+        log_history = LogHistory(
             log_event_id=log_event_id,
             key=key,
             value=value,
             version=version,
             inferred_type=inferred_type,
-            created_at=ts,
-            updated_at=ts,
+            description=description,
+            archived_at=datetime.now(timezone.utc),
+        )
+        if created_at:
+            log_history.created_at = created_at
+        if updated_at:
+            log_history.updated_at = updated_at
+        self.session.add(log_history)
+        return log_history
+
+    def _create_json_log_history(
+        self,
+        log_event_id: int,
+        key: str,
+        value: Any,
+        version: int,
+        description: str,
+    ) -> JSONLogHistory:
+        """Helper method to create a JSONLogHistory entry."""
+        json_log_history = JSONLogHistory(
+            log_event_id=log_event_id,
+            key=key,
+            value=value,
+            version=version,
+            description=description,
+            archived_at=datetime.now(timezone.utc),
+        )
+        self.session.add(json_log_history)
+        return json_log_history
+
+    def _handle_versioned_history(
+        self,
+        context_id: Optional[int],
+        log_event_id: int,
+        key: str,
+        value: Any,
+        inferred_type: Optional[str] = None,
+        description: str = "",
+        json_value: Any = None,
+    ) -> Optional[Context]:
+        """Helper method to handle versioned history creation for both Log and JSONLog entries."""
+        if context_id is None:
+            return None
+
+        context = self.session.query(Context).filter_by(id=context_id).first()
+        if not context or not context.is_versioned:
+            return None
+
+        # Create regular log history
+        self._create_log_history(
+            log_event_id=log_event_id,
+            key=key,
+            value=value,
+            version=context.version,
+            inferred_type=inferred_type,
+            description=description,
         )
 
-        self.session.add(new_log)
-        self.session.commit()
-        return new_log.id
+        # Create JSON log history if json_value is provided
+        if json_value is not None:
+            self._create_json_log_history(
+                log_event_id=log_event_id,
+                key=key,
+                value=json_value,
+                version=context.version,
+                description=description,
+            )
+
+        context.updated_at = datetime.now(timezone.utc)
+        return context
+
+    def upload_image_to_bucket(self, image_base64: str) -> str:
+        """Upload image to bucket and return the URL."""
+        try:
+            url, _ = self.bucket_service.upload_image(image_base64)
+            return url
+        except Exception as e:
+            raise ValueError(f"Failed to upload image to bucket: {str(e)}")
+
+    def get_image_from_bucket(self, url: str) -> Optional[str]:
+        """Retrieve image from bucket and return as base64."""
+        try:
+            # Extract filename from URL
+            filename = url.split("/")[-1]
+            base64_content = self.bucket_service.get_image(filename)
+            return base64_content
+        except Exception as e:
+            raise ValueError(f"Failed to retrieve image from bucket: {str(e)}")
 
     @staticmethod
-    def infer_type(raw_v):
+    def possible_img(raw_k):
+        lower = raw_k.lower()
+        return (
+            "img" in lower
+            or "image" in lower
+            or "photo" in lower
+            or "diagram" in lower
+            or "pic" in lower
+        )
+
+    @staticmethod
+    def infer_type(raw_k, raw_v):
+        maybe_img = LogDAO.possible_img(raw_k)
         if isinstance(raw_v, str):
             try:
+                if _is_time_string(raw_v):
+                    return "time"
+                if _is_date_string(raw_v):
+                    return "date"
+                if _is_timedelta_string(raw_v):
+                    return "timedelta"
+
                 datetime.fromisoformat(raw_v)
                 return "timestamp"
             except:
-                return "str"
+                if not maybe_img:
+                    return "str"
+                binary = raw_v.encode("utf-8")
+                try:
+                    assert base64.b64encode(base64.b64decode(binary)) == binary
+                    return "image"
+                except:
+                    lower = raw_v.lower()
+                    if lower.startswith("http") and (
+                        lower.endswith(".png")
+                        or lower.endswith(".jpg")
+                        or lower.endswith(".jpeg")
+                    ):
+                        return "image"
+                    return "str"
         return type(raw_v).__name__
-
-    def create_from_raw_k_v(
-        self,
-        project_id: int,
-        log_event_id: int,
-        raw_k: str,
-        version: Optional[int] = None,
-        raw_v: Optional[Any] = None,
-        explicit_types: Optional[Dict] = None,
-    ) -> Optional[str]:
-
-        json_v = json.dumps(raw_v)
-        explicit_types = explicit_types if isinstance(explicit_types, dict) else {}
-
-        return self.create(
-            project_id=project_id,
-            log_event_id=log_event_id,
-            key=raw_k,
-            value=json_v,
-            version=version,
-            inferred_type=explicit_types.get(raw_k, self.infer_type(raw_v)),
-        )
 
     def filter(
         self,
@@ -89,6 +357,7 @@ class LogDAO:
         version: Optional[Union[int, List[int]]] = None,
         inferred_type: Optional[Union[str, List[str]]] = None,
         project_id: Optional[int] = None,
+        defer: bool = False,
     ) -> List[Log]:
         def normalize_input(value):
             if value is None or isinstance(value, list):
@@ -123,7 +392,8 @@ class LogDAO:
         if key:
             query = query.where(Log.key.in_(key))
         if value:
-            query = query.where(Log.value.in_(value))
+            cast_values = [cast(literal(val), JSONB) for val in value]
+            query = query.where(Log.value.in_(cast_values))
         if version:
             query = query.where(Log.version.in_(version))
         if inferred_type:
@@ -133,90 +403,625 @@ class LogDAO:
 
         query = query.order_by(Log.created_at)
         rows = self.session.execute(query)
-
+        if defer:
+            return rows
         return rows.fetchall()
 
-    def update(
+    def rename_field_in_logs(
         self,
-        id: int,
-        key: Optional[str] = None,
-        value: Optional[str] = None,
-        version: Optional[int] = None,
-        inferred_type: Optional[str] = None,
-        log_event_id: Optional[int] = None,
+        project_id: int,
+        old_field_name: str,
+        new_field_name: str,
+        context_id: Optional[int] = None,
     ) -> None:
-        query = select(Log)
-        query = query.where(Log.id == id)
-        raw = self.session.execute(query)
-        entry = raw.scalars().first()
-        if entry is not None:
-            if key:
-                setattr(entry, "key", key)
-            if value:
-                setattr(entry, "value", value)
-            if version:
-                setattr(entry, "version", version)
-            if inferred_type:
-                setattr(entry, "inferred_type", inferred_type)
-            if log_event_id:
-                setattr(entry, "log_event_id", log_event_id)
+        """
+        Rename a field across all log tables while maintaining data consistency.
 
-    def update_value(
-        self,
-        log_event_id: int,
-        raw_k: str,
-        raw_v: Optional[Any] = None,
-        version: Optional[int] = None,
-        explicit_types: Optional[Dict] = None,
-        overwrite: bool = False,
-    ):
+        Args:
+            project_id: The project ID to scope the rename operation
+            old_field_name: The current field name to be renamed
+            new_field_name: The new field name
+            context_id: Optional context ID to scope the rename operation
 
-        inferred_type = type(raw_v).__name__
-        json_v = json.dumps(raw_v)
-
-        if explicit_types and isinstance(explicit_types, Dict):
-            if raw_k in explicit_types:
-                inferred_type = explicit_types[raw_k]
-
-        query = select(Log)
-        query = query.where(Log.log_event_id == log_event_id)
-        query = query.where(Log.key == raw_k)
-        raw = self.session.execute(query)
-        entry = raw.scalars().first()
-        if entry is not None:
-            if not overwrite and hasattr(entry, "value"):
-                raise OverwriteError
-            setattr(entry, "value", json_v)
-            setattr(entry, "version", version)
-            setattr(
-                entry,
-                "inferred_type",
-                inferred_type,
+        Raises:
+            ValueError: If the field names are invalid or if the rename operation fails
+        """
+        try:
+            # Start by finding all relevant log events for the project
+            log_event_query = select(LogEvent.id).where(
+                LogEvent.project_id == project_id,
             )
-        else:
-            raise IndexError
+            if context_id:
+                log_event_query = log_event_query.join(
+                    LogEventContext,
+                    LogEventContext.log_event_id == LogEvent.id,
+                ).where(LogEventContext.context_id == context_id)
+
+            log_event_ids = [row[0] for row in self.session.execute(log_event_query)]
+
+            if not log_event_ids:
+                raise ValueError(f"No log events found for project_id {project_id}")
+
+            # Update Log table
+            log_update = (
+                self.session.query(Log)
+                .filter(
+                    Log.log_event_id.in_(log_event_ids),
+                    Log.key == old_field_name,
+                )
+                .update(
+                    {"key": new_field_name, "updated_at": datetime.now(timezone.utc)},
+                    synchronize_session=False,
+                )
+            )
+
+            # Update JSONLog table
+            json_log_update = (
+                self.session.query(JSONLog)
+                .filter(
+                    JSONLog.log_event_id.in_(log_event_ids),
+                    JSONLog.key == old_field_name,
+                )
+                .update({"key": new_field_name}, synchronize_session=False)
+            )
+
+            # Update LogHistory table
+            log_history_update = (
+                self.session.query(LogHistory)
+                .filter(
+                    LogHistory.log_event_id.in_(log_event_ids),
+                    LogHistory.key == old_field_name,
+                )
+                .update({"key": new_field_name}, synchronize_session=False)
+            )
+
+            # Update JSONLogHistory table
+            json_log_history_update = (
+                self.session.query(JSONLogHistory)
+                .filter(
+                    JSONLogHistory.log_event_id.in_(log_event_ids),
+                    JSONLogHistory.key == old_field_name,
+                )
+                .update({"key": new_field_name}, synchronize_session=False)
+            )
+
+            # If this is a versioned context, create history entries for the rename
+            if context_id:
+                context = self.session.query(Context).filter_by(id=context_id).first()
+                if context and context.is_versioned:
+                    # Get all affected logs to create history entries
+                    affected_logs = (
+                        self.session.query(Log)
+                        .filter(
+                            Log.log_event_id.in_(log_event_ids),
+                            Log.key == new_field_name,
+                        )
+                        .all()
+                    )
+
+                    for log in affected_logs:
+                        self._create_log_history(
+                            log_event_id=log.log_event_id,
+                            key=new_field_name,
+                            value=log.value,
+                            version=context.version,
+                            inferred_type=log.inferred_type,
+                            description=f"Renamed field from {old_field_name} to {new_field_name}",
+                            created_at=log.created_at,
+                            updated_at=log.updated_at,
+                        )
+
+            self.session.commit()
+
+        except Exception as e:
+            self.session.rollback()
+            raise ValueError(f"Failed to rename field: {str(e)}")
 
     def delete(self, id: int):
         try:
+            # First get the log and check if it belongs to a versioned context
             log = self.session.query(Log).filter_by(id=id).one()
+
+            # Check if this log is part of a versioned context
+            log_event_context = (
+                self.session.query(LogEventContext)
+                .filter_by(
+                    log_event_id=log.log_event_id,
+                )
+                .first()
+            )
+
+            if log_event_context:
+                # Handle versioned history
+                self._handle_versioned_history(
+                    context_id=log_event_context.context_id,
+                    log_event_id=log.log_event_id,
+                    key=log.key,
+                    value=log.value,
+                    inferred_type=log.inferred_type,
+                    description=f"Deleted entry with key {log.key}",
+                )
+
+            # Proceed with log deletion
+            json_log = (
+                self.session.query(JSONLog)
+                .filter_by(log_event_id=log.log_event_id, key=log.key)
+                .first()
+            )
+            if json_log:
+                self.session.delete(json_log)
             self.session.delete(log)
             self.session.commit()
         except:
             self.session.rollback()
             raise ValueError
 
-    def correct_key_version(self, project_id: int, key: str, version: str, value: str):
-        query = (
-            select(Log.value)
-            .join(LogEvent, Log.log_event_id == LogEvent.id)
-            .where(
-                LogEvent.project_id == project_id,
-                Log.key == key,
-                Log.version == version,
+    def bulk_create(
+        self,
+        entries: List[Dict[str, Any]],
+    ) -> List[int]:
+        """
+        Create multiple Log entries in a single database transaction.
+
+        Args:
+            entries: List of dictionaries with the following keys:
+                - project_id: int
+                - log_event_id: int
+                - key: str
+                - value: Any (optional)
+                - version: int (optional)
+                - explicit_types: Dict (optional)
+                - context_id: int (optional)
+
+        Returns:
+            List of created log IDs
+        """
+        if not entries:
+            return []
+
+        # Start transaction
+        # created_ids = []
+        logs_to_create = []
+        json_logs_to_create = []
+        history_entries = []
+        json_history_entries = []
+        contexts_to_update = set()
+
+        try:
+            now = datetime.now(timezone.utc)
+
+            # Process each entry
+            for entry in entries:
+                project_id = entry.get("project_id")
+                log_event_id = entry.get("log_event_id")
+                key = entry.get("key")
+                value = entry.get("value")
+                version = entry.get("version")
+                inferred_type = entry.get("explicit_types", {}).get(key, {}).get("type")
+                if inferred_type is None:
+                    inferred_type = self.infer_type(key, value)
+                context_id = entry.get("context_id")
+
+                if not all([log_event_id, key]):
+                    continue
+
+                # Handle image uploads
+                if (
+                    inferred_type == "image"
+                    and isinstance(value, str)
+                    and not value.lower().startswith("http")
+                ):
+                    value = self.upload_image_to_bucket(value)
+                if inferred_type == "timestamp" and isinstance(value, str):
+                    value = normalize_timestamp(value)
+                # Handle versioned history
+                if context_id is not None:
+                    context = (
+                        self.session.query(Context).filter_by(id=context_id).first()
+                    )
+                    if context and context.is_versioned:
+                        # Create history entry
+                        history_entries.append(
+                            {
+                                "log_event_id": log_event_id,
+                                "key": key,
+                                "value": value,
+                                "version": context.version,
+                                "inferred_type": inferred_type,
+                                "description": f"Created entry with key {key}",
+                                "archived_at": now,
+                            },
+                        )
+
+                        # If JSON, also create JSON history
+                        if isinstance(value, (dict, list)):
+                            json_history_entries.append(
+                                {
+                                    "log_event_id": log_event_id,
+                                    "key": key,
+                                    "value": value,
+                                    "version": context.version,
+                                    "description": f"Created entry with key {key}",
+                                    "archived_at": now,
+                                },
+                            )
+
+                        # Mark context for update
+                        contexts_to_update.add(context.id)
+
+                # Create JSON log for dict/list values
+                if isinstance(value, (dict, list)):
+                    json_logs_to_create.append(
+                        JSONLog(
+                            log_event_id=log_event_id,
+                            key=key,
+                            value=value,
+                        ),
+                    )
+
+                # Create Log entry
+                if version is not None:
+                    # For versioned logs, use upsert to handle concurrency
+                    insert_stmt = (
+                        pg_insert(Log)
+                        .values(
+                            log_event_id=log_event_id,
+                            key=key,
+                            version=version,
+                            value=value,
+                            inferred_type=inferred_type,
+                            created_at=now,
+                            updated_at=now,
+                        )
+                        .on_conflict_do_nothing(
+                            index_elements=["log_event_id", "key", "version"],
+                        )
+                    )
+                    result = self.session.execute(insert_stmt)
+
+                    # Check if inserted or if conflict existed
+                    if result.rowcount == 1:
+                        # Get the ID of the new row
+                        new_log = (
+                            self.session.query(Log)
+                            .filter_by(
+                                log_event_id=log_event_id,
+                                key=key,
+                                version=version,
+                            )
+                            .one()
+                        )
+                        # created_ids.append(new_log.id)
+                    else:
+                        # Check if existing row has the same value
+                        existing_log = (
+                            self.session.query(Log)
+                            .filter_by(
+                                log_event_id=log_event_id,
+                                key=key,
+                                version=version,
+                            )
+                            .one()
+                        )
+                        if existing_log.value != value:
+                            raise ValueError(
+                                f"Version mismatch: Attempted to insert (log_event_id={log_event_id}, "
+                                f"key='{key}', version={version}) with a different value.\n"
+                                f"Existing: {existing_log.value}\nNew: {value}",
+                            )
+                        # created_ids.append(existing_log.id)
+                else:
+                    # For non-versioned logs, add to bulk create list
+                    log = Log(
+                        log_event_id=log_event_id,
+                        key=key,
+                        value=value,
+                        version=None,
+                        inferred_type=inferred_type,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    logs_to_create.append(log)
+
+            # Bulk save non-versioned logs
+            if logs_to_create:
+                self.session.bulk_save_objects(logs_to_create)
+                self.session.flush()
+
+            # Bulk save JSON logs
+            if json_logs_to_create:
+                self.session.bulk_save_objects(json_logs_to_create)
+
+            # Create history entries for versioned contexts
+            for entry in history_entries:
+                log_history = LogHistory(**entry)
+                self.session.add(log_history)
+
+            for entry in json_history_entries:
+                json_log_history = JSONLogHistory(**entry)
+                self.session.add(json_log_history)
+
+            # Update timestamps on contexts
+            for context_id in contexts_to_update:
+                context = self.session.query(Context).filter_by(id=context_id).first()
+                if context:
+                    context.updated_at = now
+
+            self.session.commit()
+            # return created_ids
+
+        except Exception as e:
+            raise e
+
+    def bulk_update(
+        self,
+        updates: List[Dict[str, Any]],
+        overwrite: bool = False,
+        field_types: Optional[Dict] = None,
+    ) -> None:
+        """
+        Update multiple Log entries in a single database transaction.
+
+        Args:
+            updates: List of dictionaries with the following keys:
+                - log_event_id: int
+                - key: str
+                - value: Any
+                - version: int (optional)
+                - explicit_types: Dict (optional)
+                - context_id: int (optional)
+            overwrite: Whether to allow overwriting existing values
+            field_types: Dictionary of field types with mutable flags
+
+        Raises:
+            OverwriteError: If overwrite=False and a value already exists
+            ImmutableFieldError: If a field is marked as immutable in field_types
+            ValueError: If any other error occurs during update
+        """
+        if not updates:
+            return
+
+        field_types = field_types or {}
+
+        try:
+            now = datetime.now(timezone.utc)
+
+            # Group updates by log_event_id and key for efficient querying
+            update_groups = {}
+            for update in updates:
+                log_event_id = update.get("log_event_id")
+                key = update.get("key")
+                if not log_event_id or not key:
+                    continue
+
+                group_key = (log_event_id, key)
+                update_groups[group_key] = update
+
+            if not update_groups:
+                return
+
+            # Query all existing logs in one go
+            log_event_ids = [k[0] for k in update_groups.keys()]
+            keys = [k[1] for k in update_groups.keys()]
+            existing_logs = (
+                self.session.query(Log)
+                .filter(Log.log_event_id.in_(log_event_ids))
+                .filter(Log.key.in_(keys))
+                .all()
             )
-            .limit(1)  # We only need one entry since we assume consistency
-        )
 
-        result = self.session.execute(query).fetchone()
+            # Create a lookup for existing logs
+            existing_log_map = {
+                (log.log_event_id, log.key): log for log in existing_logs
+            }
 
-        return result is None or result[0] == value
+            # Query all existing JSON logs in one go
+            existing_json_logs = (
+                self.session.query(JSONLog)
+                .filter(JSONLog.log_event_id.in_(log_event_ids))
+                .filter(JSONLog.key.in_(keys))
+                .all()
+            )
+
+            # Create a lookup for existing JSON logs
+            existing_json_log_map = {
+                (json_log.log_event_id, json_log.key): json_log
+                for json_log in existing_json_logs
+            }
+
+            # Process all context IDs at once
+            context_ids = [
+                update.get("context_id")
+                for update in update_groups.values()
+                if update.get("context_id") is not None
+            ]
+            context_map = {}
+            if context_ids:
+                contexts = (
+                    self.session.query(Context)
+                    .filter(Context.id.in_(context_ids))
+                    .all()
+                )
+                context_map = {context.id: context for context in contexts}
+
+            # Collect history entries to create and JSON logs to create/update
+            history_entries = []
+            json_history_entries = []
+            json_logs_to_create = []
+            contexts_to_update = set()
+            log_event_ids_to_update = set()
+
+            # Process each update
+            for group_key, update in update_groups.items():
+                log_event_id, key = group_key
+                value = update.get("value")
+                version = update.get("version")
+                explicit_types = update.get("explicit_types", {})
+                context_id = update.get("context_id")
+
+                # Determine inferred type
+                inferred_type = explicit_types.get(key, {}).get("type")
+                if inferred_type is None:
+                    inferred_type = self.infer_type(key, value)
+
+                # Handle image uploads
+                json_value = value
+                if (
+                    inferred_type == "image"
+                    and isinstance(value, str)
+                    and not value.lower().startswith("http")
+                ):
+                    json_value = self.upload_image_to_bucket(value)
+
+                # Check if log exists
+                existing_log = existing_log_map.get(group_key)
+
+                # Check for context versioning
+                context = (
+                    context_map.get(context_id) if context_id is not None else None
+                )
+                is_versioned = context and context.is_versioned
+
+                if existing_log:
+                    # Check if overwrite is allowed
+                    if not update.get("overwrite", False):
+                        raise OverwriteError
+
+                    # Check if field is immutable
+                    if key in field_types and context_id is not None:
+                        if not is_versioned:
+                            field_info = field_types.get(key)
+                            if field_info and not field_info.get("mutable", False):
+                                raise ImmutableFieldError
+
+                    # Update existing log
+                    existing_log.value = json_value
+                    existing_log.version = version
+                    existing_log.inferred_type = inferred_type
+                    existing_log.updated_at = now
+
+                    # Handle versioned history
+                    if is_versioned:
+                        # Create history entry for current value before updating
+                        history_entries.append(
+                            {
+                                "log_event_id": log_event_id,
+                                "key": key,
+                                "value": existing_log.value,
+                                "version": context.version,
+                                "inferred_type": existing_log.inferred_type,
+                                "description": f"Updated entry with key {key}",
+                                "archived_at": now,
+                            },
+                        )
+                        contexts_to_update.add(context_id)
+                else:
+                    # Entry doesn't exist, create new log
+                    new_log = Log(
+                        log_event_id=log_event_id,
+                        key=key,
+                        value=json_value,
+                        version=version,
+                        inferred_type=inferred_type,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    self.session.add(new_log)
+
+                    # Handle versioned history for new logs
+                    if is_versioned:
+                        history_entries.append(
+                            {
+                                "log_event_id": log_event_id,
+                                "key": key,
+                                "value": json_value,
+                                "version": context.version,
+                                "inferred_type": inferred_type,
+                                "description": f"Created entry with key {key}",
+                                "archived_at": now,
+                            },
+                        )
+                        contexts_to_update.add(context_id)
+
+                # Handle JSON logs for dict/list values
+                if isinstance(value, (dict, list)):
+                    existing_json_log = existing_json_log_map.get(group_key)
+
+                    if existing_json_log:
+                        # Update existing JSON log
+                        existing_json_log.value = value
+
+                        # Create JSON history if versioned
+                        if is_versioned:
+                            json_history_entries.append(
+                                {
+                                    "log_event_id": log_event_id,
+                                    "key": key,
+                                    "value": existing_json_log.value,
+                                    "version": context.version,
+                                    "description": f"Updated JSON entry with key {key}",
+                                    "archived_at": now,
+                                },
+                            )
+
+                    else:
+                        # Create new JSON log
+                        new_json_log = JSONLog(
+                            log_event_id=log_event_id,
+                            key=key,
+                            value=value,
+                        )
+                        json_logs_to_create.append(new_json_log)
+
+                        # Create JSON history if versioned
+                        if is_versioned:
+                            json_history_entries.append(
+                                {
+                                    "log_event_id": log_event_id,
+                                    "key": key,
+                                    "value": value,
+                                    "version": context.version,
+                                    "description": f"Created JSON entry with key {key}",
+                                    "archived_at": now,
+                                },
+                            )
+
+                # Track log events to update timestamps
+                log_event_ids_to_update.add(log_event_id)
+
+            # Create history entries
+            for entry in history_entries:
+                log_history = LogHistory(**entry)
+                self.session.add(log_history)
+
+            for entry in json_history_entries:
+                json_log_history = JSONLogHistory(**entry)
+                self.session.add(json_log_history)
+
+            # Bulk save JSON logs
+            if json_logs_to_create:
+                self.session.bulk_save_objects(json_logs_to_create)
+
+            # Update context timestamps
+            for context_id in contexts_to_update:
+                context = context_map.get(context_id)
+                if context:
+                    context.updated_at = now
+
+            # Update log event timestamps
+            for log_event_id in log_event_ids_to_update:
+                log_event = (
+                    self.session.query(LogEvent)
+                    .filter_by(id=log_event_id)
+                    .with_for_update()
+                    .first()
+                )
+                if log_event:
+                    log_event.updated_at = now
+
+            self.session.commit()
+
+        except (OverwriteError, ImmutableFieldError):
+            raise
+        except Exception as e:
+            raise ValueError(f"Failed to perform bulk update: {str(e)}")

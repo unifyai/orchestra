@@ -33,16 +33,6 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
-    "gemma-7b-it": {
-        "endpoint": "groq/gemma-7b-it",
-        "context_window": 8192,
-        "cost": {"prompt": 0.07, "completion": 0.07},
-    },
-    "mixtral-8x7b-instruct-v0.1": {
-        "endpoint": "groq/mixtral-8x7b-32768",
-        "context_window": 32768,
-        "cost": {"prompt": 0.24, "completion": 0.24},
-    },
     "llama-3-8b-chat": {
         "endpoint": "groq/llama3-8b-8192",
         "context_window": 8192,
@@ -82,5 +72,15 @@ supported_models = {
         "endpoint": "groq/llama-3.3-70b-versatile",
         "context_window": 128000,
         "cost": {"prompt": 0.59, "completion": 0.79},
+    },
+    "qwen-2.5-coder-32b-instruct": {
+        "endpoint": "groq/qwen-2.5-coder-32b",
+        "context_window": 32768,
+        "cost": {"prompt": 0.79, "completion": 0.79},
+    },
+    "qwen-qwq-32b": {
+        "endpoint": "groq/qwen-qwq-32b",
+        "context_window": 128000,
+        "cost": {"prompt": 0.29, "completion": 0.39},
     },
 }

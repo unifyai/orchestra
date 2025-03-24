@@ -4,6 +4,8 @@ Includes endpoints related to log projects.
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.web.api.project.schema import ProjectConfig
 from orchestra.web.api.utils.http_responses import not_found
@@ -106,15 +108,15 @@ def delete_project(
     Deletes a project from your account.
     """
     try:
-        project_id = project_dao.filter(
-            user_id=request_fastapi.state.user_id,
-            # TODO: Deal with org when appropriate
-            name=name,
-        )[0][0].id
-        project_dao.delete(id=project_id)
-    except (IndexError, ValueError):
+        # Get the project
+        project = project_dao.filter(user_id=request_fastapi.state.user_id, name=name)[
+            0
+        ][0]
+        project_dao.delete(id=project.id)
+
+    except (IndexError, ValueError) as e:
         raise not_found(f"Project {name}")
-    # TODO: Deal with organisation IDs
+
     return {"info": "Project deleted successfully"}
 
 
@@ -194,3 +196,117 @@ def list_projects(
         # TODO: Deal with organization id properly
     )
     return [p[0].name for p in raw_projects]
+
+
+@router.delete(
+    "/project/{name}/logs",
+    responses={
+        200: {
+            "description": "Project logs deleted.",
+            "content": {
+                "application/json": {
+                    "example": {"info": "All logs in project deleted successfully"},
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <name> not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def delete_project_logs(
+    request_fastapi: Request,
+    name: str,
+    project_dao: ProjectDAO = Depends(),
+    log_event_dao: LogEventDAO = Depends(),
+):
+    """
+    Deletes all logs in a project.
+    """
+    # Verify project exists and user has access
+    projects = project_dao.filter(
+        user_id=request_fastapi.state.user_id,
+        name=name,
+    )
+    if len(projects) == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {name} not found.",
+        )
+
+    project_id = projects[0][0].id
+
+    # Get all log events for the project
+    log_events = log_event_dao.filter(project_id=project_id)
+
+    # Delete each log event (cascade delete will handle related logs)
+    for event in log_events:
+        log_event_dao.delete(event[0].id)
+
+    return {"info": "All logs in project deleted successfully"}
+
+
+@router.delete(
+    "/project/{name}/contexts",
+    responses={
+        200: {
+            "description": "Project contexts and logs deleted.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Project contexts and logs deleted successfully!",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <name> not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def delete_project_contexts(
+    request_fastapi: Request,
+    name: str = Path(
+        description="Name of the project to delete contexts from.",
+        example="test-project",
+    ),
+    project_dao: ProjectDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+):
+    """
+    Deletes all contexts and their associated logs from a project.
+    The project's interfaces remain untouched.
+    """
+    # Verify project exists and user has access
+    projects = project_dao.filter(
+        user_id=request_fastapi.state.user_id,
+        name=name,
+    )
+    if len(projects) == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {name} not found.",
+        )
+
+    project_id = projects[0][0].id
+
+    # Get all contexts for the project
+    contexts = context_dao.filter(project_id=project_id)
+    for context in contexts:
+        context_dao.delete(context[0].id)
+
+    return {"info": "Project contexts and logs deleted successfully!"}

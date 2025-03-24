@@ -78,19 +78,39 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 5, "completion": 15},
     },
-    "o1-preview": {
-        "endpoint": "o1-preview",
-        "context_window": 128000,
-        "cost": {"prompt": 15, "completion": 60},
-    },
     "o1-mini": {
         "endpoint": "o1-mini",
         "context_window": 128000,
-        "cost": {"prompt": 3, "completion": 12},
+        "cost": {"prompt": 1.1, "completion": 4.4},
     },
     "o1": {
         "endpoint": "o1",
         "context_window": 200000,
         "cost": {"prompt": 15, "completion": 60},
+    },
+    "o1-pro": {
+        "endpoint": "o1-pro",
+        "context_window": 200000,
+        "cost": {"prompt": 150, "completion": 600},
+    },
+    "o3-mini": {
+        "endpoint": "o3-mini",
+        "context_window": 200000,
+        "cost": {"prompt": 1.1, "completion": 4.4},
+    },
+    "gpt-4.5-preview": {
+        "endpoint": "gpt-4.5-preview",
+        "context_window": 128000,
+        "cost": {"prompt": 75, "completion": 150},
+    },
+    "gpt-4o-search-preview": {
+        "endpoint": "gpt-4o-search-preview",
+        "context_window": 128000,
+        "cost": {"prompt": 2.5, "completion": 10},
+    },
+    "gpt-4o-mini-search-preview": {
+        "endpoint": "gpt-4o-mini-search-preview",
+        "context_window": 128000,
+        "cost": {"prompt": 0.15, "completion": 0.6},
     },
 }

@@ -1,10 +1,10 @@
 -- Users
 INSERT INTO users VALUES (:user_id, 10, null, False, -1, 0);
 INSERT INTO users VALUES ('stripe_autorecharge', 10, null, False, -1, 0);
-INSERT INTO users VALUES ('recharge_simple', 1, null, False, -1, 0);
-INSERT INTO users VALUES ('recharge_limited', 9.99, null, False, -1, 0);
-INSERT INTO users VALUES ('recharge_not_needed_a', 10, null, False, -1, 0);
-INSERT INTO users VALUES ('recharge_not_needed_b', 20, null, False, -1, 0);
+INSERT INTO users VALUES ('user1', 1, null, False, -1, 0);
+INSERT INTO users VALUES ('user2', 9.99, null, False, -1, 0);
+INSERT INTO users VALUES ('user3', 10, null, False, -1, 0);
+INSERT INTO users VALUES ('user4', 20, null, False, -1, 0);
 
 INSERT INTO auth_user("id", "email") VALUES (:user_id, 'test@debug.com');
 INSERT INTO auth_user("id", "email") VALUES ('seconday_user', '2nd@user.com');
@@ -70,10 +70,10 @@ INSERT INTO model VALUES (14, 'deepseek-v3', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (15, 'grok-2', NOW(), 'dummy_task', true);
 
 INSERT INTO endpoint VALUES (1, 9, 3, NOW(), true);
-INSERT INTO endpoint VALUES (3, 9, 4, NOW(), true);
-INSERT INTO endpoint VALUES (4, 9, 5, NOW(), true);
+INSERT INTO endpoint VALUES (3, 13, 4, NOW(), true);
+INSERT INTO endpoint VALUES (4, 13, 5, NOW(), true);
 INSERT INTO endpoint VALUES (5, 9, 6, NOW(), true);
-INSERT INTO endpoint VALUES (6, 9, 7, NOW(), true);
+INSERT INTO endpoint VALUES (6, 13, 7, NOW(), true);
 INSERT INTO endpoint VALUES (7, 11, 8, NOW(), true);
 INSERT INTO endpoint VALUES (10, 6, 11, NOW(), true);
 INSERT INTO endpoint VALUES (11, 9, 11, NOW(), true);
