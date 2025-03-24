@@ -73,21 +73,6 @@ supported_models = {
         "context_window": 130815,
         "cost": {"prompt": 3.5, "completion": 3.5},
     },
-    "llama-3-70b-chat": {
-        "endpoint": "together_ai/meta-llama/Meta-Llama-3-70B-Instruct-Turbo",
-        "context_window": 8192,
-        "cost": {"prompt": 0.88, "completion": 0.88},
-    },
-    "llama-3-8b-chat": {
-        "endpoint": "together_ai/meta-llama/Meta-Llama-3-8B-Instruct-Turbo",
-        "context_window": 8192,
-        "cost": {"prompt": 0.18, "completion": 0.18},
-    },
-    "gemma-2-9b-it": {
-        "endpoint": "together_ai/google/gemma-2-9b-it",
-        "context_window": 8192,
-        "cost": {"prompt": 0.3, "completion": 0.3},
-    },
     "gemma-2-27b-it": {
         "endpoint": "together_ai/google/gemma-2-27b-it",
         "context_window": 8192,
