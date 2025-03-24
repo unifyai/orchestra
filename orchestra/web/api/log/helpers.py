@@ -2599,15 +2599,12 @@ def _handle_index_operator(
         is_derived=is_derived,
     )
 
-    # If LHS is a subquery => we pull out its .c.log_event_id plus the "value" column
-    # If RHS is a subquery => that implies the index key is dynamic; in practice, we may or may not want to handle that
-    # For simplicity, let's assume RHS is literal or a direct bind param.
     if isinstance(lhs_expr, Subquery):
         lhs_valcol, lhs_type = _select_value(
             lhs_expr,
             session,
             is_collection=True,
-        )  # JSONB column with the parent object/array
+        )
         if isinstance(rhs_expr, Subquery):
             # Potentially advanced scenario: the user wrote x[y], where y is a subquery.
             # We'll pick the .value from y, interpret it as a string or integer, and then do -> or ->> extraction.
@@ -2631,39 +2628,56 @@ def _handle_index_operator(
             )
             return subq
         else:
-            # RHS is a literal or direct expression. Could be an int or string:
-            # If it's an int, we do valcol->'<idx>'. If string, we do valcol->'some_key'.
-            if isinstance(rhs_expr, int):
-                # For PG JSONB, array index is valcol -> idx as text
-                idx_str = str(rhs_expr)
-                extracted = lhs_valcol[idx_str]  # Postgres expression
-            elif isinstance(rhs_expr, str):
-                extracted = lhs_valcol[rhs_expr]
-            else:
-                # Possibly a BindParam. You can do .value
-                if isinstance(rhs_expr, BindParameter):
-                    # get the actual python value
-                    key_or_idx = rhs_expr.value
-                    # We need to handle string keys properly for dictionary indexing
-                    # but we don't want to use json.loads which can cause issues with special characters
-                    if (
-                        isinstance(key_or_idx, str)
-                        and key_or_idx.startswith("'")
-                        and key_or_idx.endswith("'")
-                    ):
-                        # This is a string key in quotes, extract the actual key
-                        key_or_idx = key_or_idx[1:-1]
-                    extracted = lhs_valcol[key_or_idx]
+            rhs_expr = (
+                rhs_expr.value if isinstance(rhs_expr, BindParameter) else rhs_expr
+            )
+            if lhs_type == "str":
+                # For strings, we need to use PostgreSQL's substring function
+                # PostgreSQL is 1-indexed, so we need to adjust the index
+                if isinstance(rhs_expr, int):
+                    # Convert 0-indexed to 1-indexed for PostgreSQL
+                    pg_index = rhs_expr + 1
+                    extracted = func.substring(
+                        func.replace(cast(lhs_valcol, String), '"', ""),
+                        literal(pg_index),
+                        literal(1),
+                    )
+                elif isinstance(rhs_expr, BindParameter) and isinstance(
+                    rhs_expr.value,
+                    int,
+                ):
+                    # Convert 0-indexed to 1-indexed for PostgreSQL
+                    pg_index = rhs_expr.value + 1
+                    extracted = func.substring(
+                        func.replace(cast(lhs_valcol, String), '"', ""),
+                        literal(pg_index),
+                        literal(1),
+                    )
                 else:
-                    # fallback
-                    extracted = lhs_valcol[rhs_expr]
+                    # If it's not a simple integer index, try to cast it
+                    extracted = func.substring(
+                        func.replace(cast(lhs_valcol, String), '"', ""),
+                        cast(rhs_expr, Integer) + 1,
+                        literal(1),
+                    )
+            # Standard JSONB indexing for non-string types
+            elif isinstance(rhs_expr, int):
+                extracted = lhs_valcol[rhs_expr]  # Postgres list indexing
+            elif isinstance(rhs_expr, str):
+                extracted = lhs_valcol[rhs_expr]  # Postgres dict indexing
+            else:
+                # fallback
+                extracted = lhs_valcol[rhs_expr]
 
             # Build the subquery
+            # TODO: add strong typing for lists/dicts to reason about the inferred_type when indexing.
+            result = session.execute(select(extracted)).first()[0]
+            inferred_type = LogDAO.infer_type("", result)
             subq = (
                 select(
                     lhs_expr.c.log_event_id.label("log_event_id"),
                     extracted.label("value"),
-                    literal(lhs_type).label("inferred_type"),
+                    literal(inferred_type).label("inferred_type"),
                 )
                 .select_from(lhs_expr)
                 .subquery()
@@ -2672,8 +2686,6 @@ def _handle_index_operator(
 
     else:
         # If LHS is not a subquery => e.g. LHS is a python dict or list literal
-        # Then we can do python-level extraction. Or if LHS is a direct SQL expression (rare), do something else.
-        # For simplicity, treat LHS as python literal:
         if isinstance(lhs_expr, (dict, list)):
             # Then we do a python-level extraction if the rhs is also python-literal
             if isinstance(rhs_expr, (int, str)):
