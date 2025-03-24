@@ -875,7 +875,7 @@ def run_demo(
 
             # Run the code in a separate process with its own environment
             env = dict(os.environ)
-            env["UNIFY_KEY"] = api_key[0].key
+            env["UNIFY_KEY"] = api_key[0][0].key
 
             # This will block until the subprocess completes
             subprocess.run(
