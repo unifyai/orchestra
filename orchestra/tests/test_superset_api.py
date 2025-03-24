@@ -39,7 +39,7 @@ async def test_extra_body(client: AsyncClient):
 
     # but togetherai does (but we don't actually return the echo ...)
     res = await oai_client.chat.completions.create(
-        model="llama-3-8b-chat@together-ai",
+        model="llama-3.1-8b-chat@together-ai",
         messages=[{"role": "user", "content": "Who made you?"}],
         extra_body={"echo": True},
     )

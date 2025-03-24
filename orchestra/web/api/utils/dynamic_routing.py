@@ -575,8 +575,6 @@ metrics = {
         "itl": 20.05,
     },
     "llama-3-70b-chat@fireworks-ai": {"cost": 0.9, "ttft": 469.78, "itl": 6.58},
-    "llama-3-8b-chat@fireworks-ai": {"cost": 0.2, "ttft": 355.48, "itl": 3.06},
-    "llama-3-8b-chat@together-ai": {"cost": 0.2, "ttft": 1035.13, "itl": 3.98},
     "mistral-large@mistral-ai": {
         "cost": 24,
         "ttft": 439.49507400009225,
@@ -746,27 +744,6 @@ baked_router_endpoints = [
         model_id=141,
         provider="fireworks-ai",
         provider_id=10,
-    ),
-    Endpoint(
-        id=1427,
-        model="llama-3-8b-chat",
-        model_id=142,
-        provider="together-ai",
-        provider_id=8,
-    ),
-    Endpoint(
-        id=1428,
-        model="llama-3-8b-chat",
-        model_id=142,
-        provider="fireworks-ai",
-        provider_id=10,
-    ),
-    Endpoint(
-        id=1429,
-        model="llama-3-70b-chat",
-        model_id=143,
-        provider="together-ai",
-        provider_id=8,
     ),
     Endpoint(
         id=1430,
