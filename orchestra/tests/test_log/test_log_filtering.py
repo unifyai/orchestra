@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from httpx import AsyncClient
 
-from ...web.api.log.helpers import _Parser, _tokenize
+from ...web.api.log.helpers import str_filter_exp_to_dict_using_ast
 from . import (
     HEADERS,
     _create_derived_entry,
@@ -119,262 +119,13 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
         # We'll assume the API handled it correctly
 
 
+# Tests for the new AST-based parser implementation
 @pytest.mark.parametrize(
-    "expression, expected_tokens",
-    [
-        (
-            "score > 20",
-            [
-                ("IDENTIFIER", "score"),
-                ("OP", ">"),
-                ("NUMBER", 20),
-                ("EOF", ""),
-            ],
-        ),
-        (
-            "((a + b) > 10) and ((c * d) < 20)",
-            [
-                ("LPAREN", "("),
-                ("LPAREN", "("),
-                ("IDENTIFIER", "a"),
-                ("OP", "+"),
-                ("IDENTIFIER", "b"),
-                ("RPAREN", ")"),
-                ("OP", ">"),
-                ("NUMBER", 10),
-                ("RPAREN", ")"),
-                ("OP", "and"),
-                ("LPAREN", "("),
-                ("LPAREN", "("),
-                ("IDENTIFIER", "c"),
-                ("OP", "*"),
-                ("IDENTIFIER", "d"),
-                ("RPAREN", ")"),
-                ("OP", "<"),
-                ("NUMBER", 20),
-                ("RPAREN", ")"),
-                ("EOF", ""),
-            ],
-        ),
-        (
-            "BASE([4, 5],score)/2",
-            [
-                ("BASEFUNC", "BASE"),
-                ("LPAREN", "("),
-                ("OTHER", "[4, 5]"),  # from BRACKET_OPEN + parse_nested
-                ("COMMA", ","),
-                ("IDENTIFIER", "score"),
-                ("RPAREN", ")"),
-                ("OP", "/"),
-                ("NUMBER", 2),
-                ("EOF", ""),
-            ],
-        ),
-        (
-            "(len(a) == 3) and ((b + c) > 10)",
-            [
-                ("LPAREN", "("),
-                ("FUNC", "len"),
-                ("LPAREN", "("),
-                ("IDENTIFIER", "a"),
-                ("RPAREN", ")"),
-                ("OP", "=="),
-                ("NUMBER", 3),
-                ("RPAREN", ")"),
-                ("OP", "and"),
-                ("LPAREN", "("),
-                ("LPAREN", "("),
-                ("IDENTIFIER", "b"),
-                ("OP", "+"),
-                ("IDENTIFIER", "c"),
-                ("RPAREN", ")"),
-                ("OP", ">"),
-                ("NUMBER", 10),
-                ("RPAREN", ")"),
-                ("EOF", ""),
-            ],
-        ),
-        (
-            "new-var + 3",
-            [
-                ("IDENTIFIER", "new-var"),
-                ("OP", "+"),
-                ("NUMBER", 3),
-                ("EOF", ""),
-            ],
-        ),
-        (
-            "length > 2.",
-            # tricky because 'len' is a function, but 'length' shouldn't match 'len'
-            [
-                ("IDENTIFIER", "length"),
-                ("OP", ">"),
-                ("NUMBER", 2.0),  # the trailing '.' => float
-                ("EOF", ""),
-            ],
-        ),
-        (
-            "'new-var' in str(field-1)",
-            [
-                ("STRING", "new-var"),
-                ("OP", "in"),
-                ("FUNC", "str"),
-                ("LPAREN", "("),
-                ("IDENTIFIER", "field-1"),
-                ("RPAREN", ")"),
-                ("EOF", ""),
-            ],
-        ),
-    ],
-)
-def test_tokenizer(expression, expected_tokens):
-    tokens = _tokenize(expression)
-    assert tokens == expected_tokens
-
-
-@pytest.mark.parametrize(
-    "expression, expected_tokens",
-    [
-        # 1) Negative number directly after operator
-        (
-            "x > -3.5",
-            [
-                ("IDENTIFIER", "x"),
-                ("OP", ">"),
-                ("NUMBER", -3.5),
-                ("EOF", ""),
-            ],
-        ),
-        # 2) No space between tokens
-        (
-            "score>.5",
-            [
-                ("IDENTIFIER", "score"),
-                ("OP", ">"),
-                ("NUMBER", 0.5),
-                ("EOF", ""),
-            ],
-        ),
-        # 3) 'is not' operator usage
-        (
-            "score is not None",
-            [
-                ("IDENTIFIER", "score"),
-                ("OP", "is not"),
-                ("NUMBER", None),  # from `None` match
-                ("EOF", ""),
-            ],
-        ),
-        # 4) decimal with no leading zero
-        (
-            "a < .55",
-            [
-                ("IDENTIFIER", "a"),
-                ("OP", "<"),
-                ("NUMBER", 0.55),
-                ("EOF", ""),
-            ],
-        ),
-        # 5) Double minus as separate operators (score - - value)
-        (
-            "score - - value",
-            [
-                ("IDENTIFIER", "score"),
-                ("OP", "-"),
-                ("OP", "-"),
-                ("IDENTIFIER", "value"),
-                ("EOF", ""),
-            ],
-        ),
-        # 6) Hyphen in identifiers adjacent to operators
-        (
-            "field-1==other-field",
-            [
-                ("IDENTIFIER", "field-1"),
-                ("OP", "=="),
-                ("IDENTIFIER", "other-field"),
-                ("EOF", ""),
-            ],
-        ),
-        # 7) Operator chain: "not in" with no space => the tokenizer
-        #    won't match "not in" if there's no space, so let's check how it handles "notin"
-        #    We expect it to be be treated as an IDENTIFIER.
-        (
-            "x notin y",
-            [
-                ("IDENTIFIER", "x"),
-                (
-                    "IDENTIFIER",
-                    "notin",
-                ),  # Because "not in" is specifically matched with a space
-                ("IDENTIFIER", "y"),
-                ("EOF", ""),
-            ],
-        ),
-    ],
-)
-def test_tokenizer_corner_cases_success(expression, expected_tokens):
-    tokens = _tokenize(expression)
-    assert (
-        tokens == expected_tokens
-    ), f"\nExpression: {expression}\nGot     : {tokens}\nExpected: {expected_tokens}"
-
-
-@pytest.mark.parametrize(
-    "expression, error_regex",
-    [
-        # 1) Mismatched parentheses
-        ("((score + 3)", "Unbalanced parentheses"),
-        # 2) Unclosed string
-        (
-            "a == 'unfinished",
-            "Unmatched brackets|Unbalanced parentheses|Unexpected character|Invalid filter expression",
-        ),
-        # Depending on how your tokenizer raises for unclosed quotes
-        # you can narrow the regex to match your actual error message.
-        # 3) Mismatched bracket
-        ("a['key'", "Unmatched brackets"),
-        # 4) Partial operator "a =" => could produce MISMATCH or raise
-        ("a =", "Unexpected character|MISMATCH|Invalid filter expression"),
-        # 5) Junk characters (like a dollar sign in the identifier)
-        ("score$ > 3", "Unexpected character|MISMATCH"),
-        # 6) Extra closing parenthesis
-        ("score) + 2", "Unmatched closing parenthesis|Invalid filter expression"),
-    ],
-)
-def test_tokenizer_corner_cases_fail(expression, error_regex):
-    """
-    These expressions are expected to cause tokenizer failures due to
-    mismatched parentheses, invalid operators, unclosed strings, etc.
-    """
-    with pytest.raises(Exception, match=error_regex):
-        _ = _tokenize(expression)
-
-
-def test_parser_basic():
-    expr = "score > 20"
-    tokens = _tokenize(expr)
-    parser = _Parser(tokens)
-    tree = parser.parse()
-    assert tree == {
-        "lhs": {"type": "identifier", "value": "score"},
-        "operand": ">",
-        "rhs": 20,
-    }
-
-
-@pytest.mark.parametrize(
-    "expr, expected_tokens, expected_ast",
+    "expression, expected_dict",
     [
         # 1) Basic comparison
         (
             "score > 20",
-            [
-                ("IDENTIFIER", "score"),
-                ("OP", ">"),
-                ("NUMBER", 20),
-                ("EOF", ""),
-            ],
             {
                 "lhs": {"type": "identifier", "value": "score"},
                 "operand": ">",
@@ -384,16 +135,6 @@ def test_parser_basic():
         # 2) Parenthesized arithmetic + comparison
         (
             "(a + b) > 10",
-            [
-                ("LPAREN", "("),
-                ("IDENTIFIER", "a"),
-                ("OP", "+"),
-                ("IDENTIFIER", "b"),
-                ("RPAREN", ")"),
-                ("OP", ">"),
-                ("NUMBER", 10),
-                ("EOF", ""),
-            ],
             {
                 "lhs": {
                     "lhs": {"type": "identifier", "value": "a"},
@@ -407,28 +148,6 @@ def test_parser_basic():
         # 3) Double-nested parentheses with "and"
         (
             "((a + b) > 10) and ((c * d) < 20)",
-            [
-                ("LPAREN", "("),
-                ("LPAREN", "("),
-                ("IDENTIFIER", "a"),
-                ("OP", "+"),
-                ("IDENTIFIER", "b"),
-                ("RPAREN", ")"),
-                ("OP", ">"),
-                ("NUMBER", 10),
-                ("RPAREN", ")"),
-                ("OP", "and"),
-                ("LPAREN", "("),
-                ("LPAREN", "("),
-                ("IDENTIFIER", "c"),
-                ("OP", "*"),
-                ("IDENTIFIER", "d"),
-                ("RPAREN", ")"),
-                ("OP", "<"),
-                ("NUMBER", 20),
-                ("RPAREN", ")"),
-                ("EOF", ""),
-            ],
             {
                 "lhs": {
                     "lhs": {
@@ -454,27 +173,6 @@ def test_parser_basic():
         # 4) Function calls: len(a)
         (
             "(len(a) == 3) and ((b + c) > 10)",
-            [
-                ("LPAREN", "("),
-                ("FUNC", "len"),
-                ("LPAREN", "("),
-                ("IDENTIFIER", "a"),
-                ("RPAREN", ")"),
-                ("OP", "=="),
-                ("NUMBER", 3),
-                ("RPAREN", ")"),
-                ("OP", "and"),
-                ("LPAREN", "("),
-                ("LPAREN", "("),
-                ("IDENTIFIER", "b"),
-                ("OP", "+"),
-                ("IDENTIFIER", "c"),
-                ("RPAREN", ")"),
-                ("OP", ">"),
-                ("NUMBER", 10),
-                ("RPAREN", ")"),
-                ("EOF", ""),
-            ],
             {
                 "lhs": {
                     "lhs": {
@@ -496,40 +194,14 @@ def test_parser_basic():
                 },
             },
         ),
-        # 5) A dash in identifier
+        # 5) BASE function call
         (
-            "new-var + 3",
-            [
-                ("IDENTIFIER", "new-var"),
-                ("OP", "+"),
-                ("NUMBER", 3),
-                ("EOF", ""),
-            ],
-            {
-                "lhs": {"type": "identifier", "value": "new-var"},
-                "operand": "+",
-                "rhs": 3,
-            },
-        ),
-        # 6) "BASE([4, 5],score)/2"
-        (
-            "BASE([4, 5],score)/2",
-            [
-                ("BASEFUNC", "BASE"),
-                ("LPAREN", "("),
-                ("OTHER", "[4, 5]"),
-                ("COMMA", ","),
-                ("IDENTIFIER", "score"),
-                ("RPAREN", ")"),
-                ("OP", "/"),
-                ("NUMBER", 2),
-                ("EOF", ""),
-            ],
+            "BASE([4, 5], score) / 2",
             {
                 "lhs": {
                     "operand": "BASE",
                     "rhs": [
-                        {"type": "other", "value": "[4, 5]"},
+                        [4, 5],
                         {"type": "identifier", "value": "score"},
                     ],
                 },
@@ -537,64 +209,33 @@ def test_parser_basic():
                 "rhs": 2,
             },
         ),
-        # 7) Membership with a string + function call
+        # 6) Membership with a string + function call
         (
-            "'new-var' in str(field-1)",
-            [
-                ("STRING", "new-var"),
-                ("OP", "in"),
-                ("FUNC", "str"),
-                ("LPAREN", "("),
-                ("IDENTIFIER", "field-1"),
-                ("RPAREN", ")"),
-                ("EOF", ""),
-            ],
+            "'new-var' in str(field_1)",
             {
-                "lhs": {"type": "string", "value": "new-var"},
+                "lhs": "new-var",
                 "operand": "in",
                 "rhs": {
                     "operand": "str",
-                    "rhs": {"type": "identifier", "value": "field-1"},
+                    "rhs": {"type": "identifier", "value": "field_1"},
                 },
             },
         ),
-        # 8) Not operator
+        # 7) Not operator
         (
             "not (x in [1, 2, 3])",
-            [
-                ("OP", "not"),
-                ("LPAREN", "("),
-                ("IDENTIFIER", "x"),
-                ("OP", "in"),
-                ("OTHER", "[1, 2, 3]"),
-                ("RPAREN", ")"),
-                ("EOF", ""),
-            ],
             {
                 "operand": "not",
                 "rhs": {
                     "lhs": {"type": "identifier", "value": "x"},
                     "operand": "in",
-                    "rhs": {"type": "other", "value": "[1, 2, 3]"},
+                    "rhs": [1, 2, 3],
                 },
             },
         ),
-        # 9) round_timestamp, plus an arithmetic comparison
+        # 8) round_timestamp, plus an arithmetic comparison
         (
             "round_timestamp(a, b) + 2 >= c",
-            [
-                ("ROUND_TIMESTAMP", "round_timestamp"),
-                ("LPAREN", "("),
-                ("IDENTIFIER", "a"),
-                ("COMMA", ","),
-                ("IDENTIFIER", "b"),
-                ("RPAREN", ")"),
-                ("OP", "+"),
-                ("NUMBER", 2),
-                ("OP", ">="),
-                ("IDENTIFIER", "c"),
-                ("EOF", ""),
-            ],
             {
                 "lhs": {
                     "lhs": {
@@ -611,62 +252,54 @@ def test_parser_basic():
                 "rhs": {"type": "identifier", "value": "c"},
             },
         ),
-        # 10) isNone(d)
+        # 9) isNone(d)
         (
             "isNone(d)",
-            [
-                ("FUNC", "isNone"),
-                ("LPAREN", "("),
-                ("IDENTIFIER", "d"),
-                ("RPAREN", ")"),
-                ("EOF", ""),
-            ],
             {
                 "operand": "isNone",
                 "rhs": {"type": "identifier", "value": "d"},
             },
         ),
+        # 10) Nested indexing
+        (
+            "x['a'][0] == 10",
+            {
+                "lhs": {
+                    "lhs": {
+                        "lhs": {"type": "identifier", "value": "x"},
+                        "operand": "INDEX",
+                        "rhs": "a",
+                    },
+                    "operand": "INDEX",
+                    "rhs": 0,
+                },
+                "operand": "==",
+                "rhs": 10,
+            },
+        ),
+        # 11) ambiguous identifer (eg: date > date(...))
+        (
+            "date > date(a)",
+            {
+                "lhs": {"type": "identifier", "value": "date"},
+                "operand": ">",
+                "rhs": {
+                    "operand": "date",
+                    "rhs": {"type": "identifier", "value": "a"},
+                },
+            },
+        ),
     ],
 )
-def test_parser_comprehensive(expr, expected_tokens, expected_ast):
-    # 1) Tokenize
-    tokens = _tokenize(expr)
-    # Compare tokens
+def test_ast_parser(expression, expected_dict):
+    """
+    Test that the new AST-based parser correctly converts filter expressions
+    to the expected dictionary structure.
+    """
+    result_dict = str_filter_exp_to_dict_using_ast(expression)
     assert (
-        tokens == expected_tokens
-    ), f"Token mismatch.\nGot: {tokens}\nExpected: {expected_tokens}"
-
-    # 2) Parse
-    parser = _Parser(tokens)
-    ast = parser.parse()
-    # Compare final AST
-    assert ast == expected_ast, f"AST mismatch.\nGot: {ast}\nExpected: {expected_ast}"
-
-
-def test_parser_nested_indexing():
-    """
-    A special test for deeply nested indexing like x['a'][0].b
-    #TODO: Add dot-access to the grammar to test it.
-    """
-    expr = "x['a'][0] == 10"
-    tokens = _tokenize(expr)
-    parser = _Parser(tokens)
-    ast = parser.parse()
-
-    expected_ast = {
-        "lhs": {
-            "lhs": {
-                "lhs": {"type": "identifier", "value": "x"},
-                "operand": "INDEX",
-                "rhs": {"type": "string", "value": "a"},
-            },
-            "operand": "INDEX",
-            "rhs": 0,
-        },
-        "operand": "==",
-        "rhs": 10,
-    }
-    assert ast == expected_ast
+        result_dict == expected_dict
+    ), f"AST mismatch.\nGot: {result_dict}\nExpected: {expected_dict}"
 
 
 @pytest.mark.parametrize(
@@ -695,6 +328,16 @@ def test_parser_nested_indexing():
         # Membership
         ("a in [1, 2, 3]", {"a": 2}, True),
         ("a not in [1, 2, 3]", {"a": 4}, True),
+        ("1 in a", {"a": [1, 2, 3]}, True),
+        ("b1 in a", {"a": [1, 2, 3], "b1": 1}, True),
+        ("b2 in a", {"a": [[1, 2], [3, 4]], "b2": [1, 2]}, True),
+        ("[1,2] in a", {"a": [[1, 2], [3, 4]]}, True),
+        ("'hello' in a", {"a": "hello world"}, True),
+        ("s in a", {"a": "hello world", "s": "hello"}, True),
+        # Indexing
+        ("x[0] + y[1] == 5", {"x": [1, 2], "y": [3, 4]}, True),
+        ("'hell' + x[4] == 'hello'", {"x": "hello"}, True),
+        ("x['a'][0] + 2 == 12", {"x": {"a": [10, 20, 30]}}, True),
         # Indexing + Rounding
         ("round(x['some_key'], 2) >= 100.44", {"x": {"some_key": 100.4479}}, True),
         (
