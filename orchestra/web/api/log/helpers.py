@@ -1,3 +1,4 @@
+import ast
 import json
 import re
 import statistics
@@ -192,6 +193,8 @@ def _relabel_identifiers(tokens, field_names):
     return new_tokens
 
 
+# DEPRECATED: The following tokenizer and parser are kept for backward compatibility
+# New code should use str_filter_exp_to_dict_using_ast() instead
 def _tokenize(s):
     paren_count = 0
     for c in s:
@@ -320,6 +323,8 @@ def _tokenize(s):
     return tokens
 
 
+# DEPRECATED: The following parser class is kept for backward compatibility
+# New code should use str_filter_exp_to_dict_using_ast() instead
 class _Parser:
     def __init__(self, tokens):
         self.tokens = tokens
@@ -829,15 +834,40 @@ def str_filter_exp_to_dict_using_ast(expr: str, field_names=None) -> Dict:
 
 
 def str_filter_exp_to_dict(s, field_names=None):
+    """
+    Converts a string filter expression to a filter dictionary.
+
+    This function now uses the AST-based parser for more robust parsing.
+    The old tokenizer-based parser is kept for backward compatibility.
+
+    Args:
+        s: The filter expression string
+        field_names: Optional list of field names for validation
+
+    Returns:
+        A filter dictionary that can be used with build_sql_query
+
+    Raises:
+        HTTPException: If the expression is invalid or cannot be parsed
+    """
     try:
-        tokens = _tokenize(s)
-        if field_names is not None:
-            tokens = _relabel_identifiers(tokens, field_names)
-        parser = _Parser(tokens)
-        result = parser.parse()
-        return result
+        # Use the new AST-based parser
+        return str_filter_exp_to_dict_using_ast(s, field_names)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid filter expression: {e}")
+        # Fall back to the old tokenizer-based parser
+        try:
+            tokens = _tokenize(s)
+            if field_names is not None:
+                tokens = _relabel_identifiers(tokens, field_names)
+            parser = _Parser(tokens)
+            result = parser.parse()
+            return result
+        except Exception as fallback_e:
+            # If both parsers fail, raise the original error
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid filter expression: {e}",
+            )
 
 
 def _select_value(subq, session, is_collection=False):
