@@ -283,6 +283,8 @@ class BaseCompletionProvider:
                     and "thinking" in extra_body
                 ):
                     kwargs["thinking"] = extra_body["thinking"]
+                if "search-preview" in model:
+                    kwargs.pop("temperature", None)
                 drop_params = extra_body.pop("drop_params", True)
 
                 # llm call
