@@ -70,10 +70,10 @@ INSERT INTO model VALUES (14, 'deepseek-v3', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (15, 'grok-2', NOW(), 'dummy_task', true);
 
 INSERT INTO endpoint VALUES (1, 9, 3, NOW(), true);
-INSERT INTO endpoint VALUES (3, 9, 4, NOW(), true);
+INSERT INTO endpoint VALUES (3, 13, 4, NOW(), true);
 INSERT INTO endpoint VALUES (4, 13, 5, NOW(), true);
 INSERT INTO endpoint VALUES (5, 9, 6, NOW(), true);
-INSERT INTO endpoint VALUES (6, 9, 7, NOW(), true);
+INSERT INTO endpoint VALUES (6, 13, 7, NOW(), true);
 INSERT INTO endpoint VALUES (7, 11, 8, NOW(), true);
 INSERT INTO endpoint VALUES (10, 6, 11, NOW(), true);
 INSERT INTO endpoint VALUES (11, 9, 11, NOW(), true);
