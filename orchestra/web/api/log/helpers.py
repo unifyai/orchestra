@@ -23,7 +23,6 @@ from sqlalchemy import (
     and_,
     case,
     cast,
-    exists,
     func,
     literal,
     literal_column,
@@ -1766,16 +1765,21 @@ def _handle_membership_operator(
     if lhs_is_sub and rhs_is_sub:
         lval, lval_type = _select_value(lhs, session)
         rval, rval_type = _select_value(rhs, session)
-        condition = _substring_expr(lval, rval)
-        if not is_in:
-            condition = ~condition
 
-        expr = exists().where(
-            and_(
-                lhs.c.log_event_id == rhs.c.log_event_id,
-                condition,
-            ),
-        )
+        # Check if RHS is a JSONB list for containment check
+        if rval_type == "list" and is_in:
+            # Use PostgreSQL's @> operator for array containment
+            condition = rval.op("@>")(func.jsonb_build_array(lval))
+            expr = ~condition if not is_in else condition
+        elif lval_type == "list" and is_in:
+            # Use PostgreSQL's @> operator for array containment
+            condition = lval.op("@>")(func.jsonb_build_array(rval))
+            expr = ~condition if not is_in else condition
+        else:
+            # Fall back to substring check for non-list types
+            condition = _substring_expr(lval, rval)
+            expr = ~condition if not is_in else condition
+
         return _join_subqueries(lhs, rhs, expr, "bool", session=session)
 
     # Only LHS is a subquery
@@ -1800,7 +1804,7 @@ def _handle_membership_operator(
                 rhs_value = rhs.value if isinstance(rhs, BindParameter) else rhs
 
                 # Use PostgreSQL's @> operator for array containment
-                containment_expr = lval.op("@>")(literal([rhs_value], type_=JSONB))
+                containment_expr = lval.op("@>")(func.jsonb_build_array(rhs_value))
                 expr = containment_expr if is_in else ~containment_expr
                 return (
                     select(
@@ -1852,8 +1856,10 @@ def _handle_membership_operator(
                     lhs_value = json.loads(lhs_value)
                 except:
                     pass
+
                 # Use PostgreSQL's @> operator for array containment
-                containment_expr = rval.op("@>")(literal([lhs_value], type_=JSONB))
+                # Create a JSONB array with the single value for the containment check
+                containment_expr = rval.op("@>")(func.jsonb_build_array(lhs_value))
                 cond = containment_expr if is_in else ~containment_expr
                 return (
                     select(
