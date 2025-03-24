@@ -1927,27 +1927,21 @@ def _parse_rhs_list_or_dict_if_needed(rhs_dict, rhs_val):
     if not rhs_dict:
         return None
 
-    possible_str = rhs_dict.get("value")
-    if isinstance(possible_str, str) and possible_str.strip():
+    if isinstance(rhs_val, BindParameter):
+        val = rhs_val.value
+    else:
+        val = rhs_val
+
+    if isinstance(val, str) and val.strip():
         try:
-            parsed = json.loads(possible_str)
+            parsed = json.loads(val)
             if isinstance(parsed, (list, dict)):
                 return parsed
         except Exception:
             pass
 
-    if isinstance(rhs_val, BindParameter):
-        val = rhs_val.value
-        if isinstance(val, str):
-            try:
-                parsed = json.loads(val)
-                if isinstance(parsed, (list, dict)):
-                    return parsed
-            except Exception:
-                pass
-
-    if isinstance(rhs_val, (list, dict)):
-        return rhs_val
+    if isinstance(val, (list, dict)):
+        return val
 
     return None
 
