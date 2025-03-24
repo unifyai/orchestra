@@ -2934,6 +2934,12 @@ def get_logs(
         ].id,
         context_id=context_id,
     )
+    field_map = field_type_dao.get_field_types(
+        project_dao.filter(name=project, user_id=request_fastapi.state.user_id)[0][
+            0
+        ].id,
+        context_id=context_id,
+    )
     if return_ids_only:
         return list(dict.fromkeys(event_ids))
 
@@ -2951,6 +2957,7 @@ def get_logs(
             project_id=project_id,
             log_event_ids=event_ids,
             field_order_map=field_order_map,
+            field_types=field_map,
             group_by=group_by,
             group_depth=group_depth,
             group_limit=group_limit,
@@ -5139,10 +5146,15 @@ def _fetch_logs_for_event_ids(
     if not event_ids:
         return ([], 0) if not latest_timestamp else None
 
+    event_ids_cte = (
+        session.query(LogEvent.id.label("id"))
+        .filter(LogEvent.id.in_(event_ids))
+        .cte("event_ids_cte")
+    )
     # 1) Build union subquery from base logs + derived logs, for these event IDs
     unified_logs_subq = _build_unified_logs_subquery(
         session=session,
-        event_ids=event_ids,
+        relevant_log_events=event_ids_cte,
         return_versions=return_versions,
     )
 
@@ -5325,11 +5337,361 @@ def _fetch_logs_for_event_ids(
     return results, context_len, total_count
 
 
+def parse_group_key(key: str) -> Tuple[str, str]:
+    """
+    Parse a group key into prefix and raw key components.
+
+    Args:
+        key: The full group key (e.g., "entries/score", "params/temperature")
+
+    Returns:
+        Tuple of (prefix, raw_key) where prefix is one of ["entries", "params", "derived_entries"]
+        and raw_key is the actual field name stored in the database.
+    """
+    parts = key.split("/", 1)
+    return (parts[0], parts[1]) if len(parts) == 2 else ("", key)
+
+
+def _get_reduction_expr(metric, inferred_type, aggCol, label):
+    # Reuse the get_logs_metric logic but for a specific set of log IDs
+    reduction_methods = {
+        AggregationMetric.COUNT: func.count,
+        AggregationMetric.SUM: func.sum,
+        AggregationMetric.MEAN: func.avg,
+        AggregationMetric.VAR: func.var_pop,
+        AggregationMetric.STD: func.stddev_pop,
+        AggregationMetric.MIN: func.min,
+        AggregationMetric.MAX: func.max,
+        AggregationMetric.MEDIAN: func.percentile_cont(0.5).within_group,
+        AggregationMetric.MODE: func.mode().within_group,
+    }
+
+    # interpret X.c.value depending on X.c.inferred_type.
+    cast_expr = case(
+        # Handle NULL values first
+        (aggCol.is_(None), literal(None, type_=Float)),
+        (
+            inferred_type == "list",
+            func.jsonb_array_length(cast(aggCol, JSONB)).cast(Float),
+        ),
+        (
+            inferred_type == "dict",
+            select(func.count())
+            .select_from(func.jsonb_object_keys(cast(aggCol, JSONB)))
+            .scalar_subquery()
+            .cast(Float),
+        ),
+        (
+            inferred_type == "bool",
+            aggCol.cast(BOOLEAN).cast(INTEGER).cast(Float),
+        ),
+        (
+            inferred_type == "str",
+            func.length(cast(aggCol, JSONB)[0].astext).cast(Float),
+        ),
+        (
+            inferred_type == "timestamp",
+            func.extract("epoch", cast(cast(aggCol, String), TIMESTAMP)).cast(
+                Float,
+            ),
+        ),
+        (
+            inferred_type == "time",
+            # Extract seconds using time-specific casting
+            func.mod(
+                func.extract(
+                    "epoch",
+                    func.cast(
+                        func.concat(
+                            "2000-01-01 ",
+                            func.trim(func.cast(aggCol, String), '"'),
+                        ),
+                        TIMESTAMP,
+                    ),
+                ),
+                86400,
+            ).cast(Float),
+        ),
+        (
+            inferred_type == "date",
+            # Extract epoch using date-specific casting
+            func.extract(
+                "epoch",
+                func.cast(func.trim(func.cast(aggCol, String), '"'), Date),
+            ).cast(Float),
+        ),
+        (
+            inferred_type == "timedelta",
+            # Parse ISO 8601 duration format (e.g., "P1DT6H") to seconds
+            # This extracts days, hours, minutes, seconds separately and converts to total seconds
+            (
+                # Days component (86400 seconds per day)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(aggCol, String), '"'),
+                            "P([0-9]+)D",
+                        ),
+                        Float,
+                    )
+                    * 86400,
+                    0,
+                )
+                +
+                # Hours component (3600 seconds per hour)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(aggCol, String), '"'),
+                            "T([0-9]+)H",
+                        ),
+                        Float,
+                    )
+                    * 3600,
+                    0,
+                )
+                +
+                # Minutes component (60 seconds per minute)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(aggCol, String), '"'),
+                            "T[0-9]*H?([0-9]+)M",
+                        ),
+                        Float,
+                    )
+                    * 60,
+                    0,
+                )
+                +
+                # Seconds component
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(aggCol, String), '"'),
+                            "T[0-9]*H?[0-9]*M?([0-9.]+)S",
+                        ),
+                        Float,
+                    ),
+                    0,
+                )
+            ).cast(Float),
+        ),
+        (
+            inferred_type == "int",
+            func.coalesce(
+                func.nullif(cast(aggCol.op("->>")(0), String), "null").cast(Float),
+                None,
+            ).cast(Float),
+        ),
+        (
+            inferred_type == "float",
+            func.coalesce(
+                func.nullif(cast(aggCol.op("->>")(0), String), "null").cast(Float),
+                None,
+            ).cast(Float),
+        ),
+        else_=literal(0, type_=Float),
+    )
+
+    if metric in [
+        AggregationMetric.SUM,
+        AggregationMetric.MEAN,
+        AggregationMetric.VAR,
+        AggregationMetric.STD,
+    ]:
+        return func.coalesce(reduction_methods[metric](cast_expr), 0).label(label)
+    else:
+        return reduction_methods[metric](cast_expr).label(label)
+
+
+def _handle_group_depth_level(
+    session,
+    log_event_ids,
+    field_types,
+    group_by,
+    group_sorting,
+    group_limit,
+    group_offset,
+    level,
+    return_versions,
+):
+
+    current_group_key = group_by[level]
+    prefix, raw_key = parse_group_key(current_group_key)
+
+    event_ids_cte = (
+        session.query(LogEvent.id.label("id"))
+        .filter(LogEvent.id.in_(log_event_ids))
+        .cte("event_ids_cte")
+    )
+
+    # Build unified logs subquery for the current log_event_ids
+    unified = _build_unified_logs_subquery(
+        session=session,
+        relevant_log_events=event_ids_cte,
+        return_versions=return_versions,
+    )
+
+    # Group by value and filter on the raw key
+    field_to_compare = (
+        unified.c.param_version if prefix == "params" else unified.c.value
+    )
+    base_q = (
+        session.query(
+            field_to_compare.label("group_value"),
+            func.count(func.distinct(unified.c.log_event_id)).label("log_count"),
+        )
+        .filter(
+            unified.c.log_event_id.in_(log_event_ids),
+            unified.c.key == raw_key,
+        )
+        .group_by(field_to_compare)
+    )
+
+    # Handle aggregator sorting if configured
+    group_sort_config = None
+
+    if group_sorting:
+        try:
+            parsed_sorting = json.loads(group_sorting)
+            group_sort_config = SortConfig(**parsed_sorting[current_group_key])
+        except (JSONDecodeError, ValidationError, KeyError):
+            pass
+
+        # Apply sorting based on aggregation metric
+        if group_sort_config and group_sort_config.sort_type == SortType.SORT_GROUPS:
+            # Create a subquery to get the field to aggregate on
+            if group_sort_config.field != current_group_key:
+                # Parse the aggregator field to get the raw key
+                _, agg_field_raw_key = parse_group_key(group_sort_config.field)
+
+                # Create aliases for the unified logs subquery
+                base_alias = aliased(unified, name="base_alias")
+                agg_alias = aliased(unified, name="agg_alias")
+
+                # Build a sub-subquery that combines the group field and aggregator field
+                # This ensures we're properly joining the group key with its corresponding aggregator value
+                sub_subq = (
+                    session.query(
+                        base_alias.c.log_event_id.label("log_event_id"),
+                        base_alias.c.inferred_type.label("inferred_type"),
+                        base_alias.c.value.label("group_key_value")
+                        if prefix != "params"
+                        else base_alias.c.param_version.label("group_key_value"),
+                        agg_alias.c.value.label("agg_val"),
+                    )
+                    .join(
+                        agg_alias,
+                        and_(
+                            base_alias.c.log_event_id == agg_alias.c.log_event_id,
+                            agg_alias.c.key == agg_field_raw_key,
+                        ),
+                    )
+                    .filter(
+                        base_alias.c.log_event_id.in_(log_event_ids),
+                        base_alias.c.key == raw_key,
+                    )
+                    .subquery("sub_subq")
+                )
+
+                # Build the outer query that groups by the group key value and applies aggregation
+                base_q = session.query(
+                    sub_subq.c.group_key_value.label("group_value"),
+                    func.count(func.distinct(sub_subq.c.log_event_id)).label(
+                        "group_count",
+                    ),
+                ).group_by(sub_subq.c.group_key_value)
+
+                # Apply the appropriate aggregation function to the aggregator field
+                agg_expr = _get_reduction_expr(
+                    group_sort_config.metric,
+                    field_types[agg_field_raw_key],
+                    sub_subq.c.agg_val,
+                    label="agg",
+                )
+                # Add the aggregation expression to the query
+                base_q = base_q.add_columns(agg_expr)
+
+                # Apply sorting direction with null handling
+                if group_sort_config.direction == SortDirection.ASCENDING:
+                    base_q = base_q.order_by(asc("agg").nulls_last())
+                else:
+                    base_q = base_q.order_by(desc("agg").nulls_last())
+            else:
+                # If sorting on the same field we're grouping by
+                agg_expr = _get_reduction_expr(
+                    group_sort_config.metric,
+                    field_types[raw_key],
+                    unified.c.value,
+                    label="agg",
+                )
+                # Add the aggregation expression to the query
+                base_q = base_q.add_columns(agg_expr)
+
+            # Apply sorting direction with null handling
+            if group_sort_config.direction == SortDirection.ASCENDING:
+                base_q = base_q.order_by(asc("agg").nulls_last())
+            else:
+                base_q = base_q.order_by(desc("agg").nulls_last())
+    else:
+        # Default sorting on group value
+        base_q = base_q.order_by(asc("group_value").nulls_last())
+
+    # Calculate total distinct group count before applying pagination
+    total_distinct_groups = session.query(
+        func.count(base_q.subquery().c.group_value),
+    ).scalar()
+
+    # Apply pagination to the query
+    if group_limit is not None:
+        base_q = base_q.offset(group_offset).limit(group_limit)
+
+    # Execute the query
+    group_rows = base_q.all()
+
+    # Build the result dictionary with the new structure
+    out_dict = {}
+    group_list = []
+
+    # Convert rows to array of objects with key/value pairs
+    for row in group_rows:
+        group_val = row.group_value
+        log_count = row.log_count
+        group_list.append({"key": str(group_val), "value": log_count})
+
+    # Find missing IDs (logs that don't have this key)
+    missing_ids_q = session.query(LogEvent.id).filter(
+        LogEvent.id.in_(select(event_ids_cte.c.id)),
+        ~exists().where(
+            and_(unified.c.log_event_id == LogEvent.id, unified.c.key == raw_key),
+        ),
+    )
+    missing_ids = [row[0] for row in missing_ids_q.all()]
+
+    # Add null group if there are missing IDs
+    if missing_ids:
+        group_list.append({"key": "null", "value": len(missing_ids)})
+
+    # Add the group list to the output dictionary
+    out_dict["group"] = group_list
+
+    # Add metadata
+    out_dict["group_count"] = total_distinct_groups
+    out_dict["count"] = sum(item["value"] for item in group_list)
+
+    # Wrap in current_group_key if at top level
+    if level == 0:
+        return {current_group_key: out_dict}
+    return out_dict
+
+
 def _build_grouped_data(
     request_fastapi: Request,
     project_id: int,
     log_event_ids: List[int],
     field_order_map: Dict[str, int],
+    field_types: Dict[str, str],
     group_by: List[str],
     group_depth: Optional[int],
     group_limit: Optional[int],
@@ -5354,75 +5716,16 @@ def _build_grouped_data(
     parent_group_key: Optional[str] = "",
 ) -> Dict[str, Any]:
     """
-    Returns a dict shaped like:
-      {
-        "<current_group_key>": {
-          <group_value1 or "null">: <substructure or leaf logs>,
-          <group_value2>: <substructure or leaf logs>,
-          ...
-          "group_count": int,
-          "count": int
-        }
-      }
-
-    If level >= group_depth or we've exhausted group_by, we return the leaf logs (list).
+    SQL-first implementation of multi-level grouping.
+    At each level, a SQL query groups the logs, and for each group a subquery retrieves matching log_event_ids.
+    At the leaf level, final logs are fetched.
+    Performance is improved by minimizing in-memory processing.
     """
 
-    def _get_count_from_substructure(sub_val: Union[List, Dict, int]) -> int:
-        """Helper to recursively get count from a substructure."""
-        if isinstance(sub_val, int):
-            return sub_val
-        elif isinstance(sub_val, list):
-            return len(sub_val)
-        elif isinstance(sub_val, dict):
-            # First check if this dict has a direct count
-            if "count" in sub_val:
-                return sub_val["count"]
-            # Otherwise sum up counts from all non-metadata fields
-            total = 0
-            for k, v in sub_val.items():
-                if k not in ("group_count", "count"):
-                    total += _get_count_from_substructure(v)
-            return total
-        else:
-            return 0
-
-    def parse_group_key(key: str) -> Tuple[str, str]:
-        """Returns (prefix, actual_field). e.g. 'entries/i' -> ('entries','i')."""
-        parts = key.split("/", 1)
-        if len(parts) == 1:
-            return ("", key)
-        return (parts[0], parts[1])
-
-    def _fetch_log_timestamps_for_event_ids(
-        event_ids: List[int],
-        session,
-    ) -> Dict[int, str]:
-        if not event_ids:
-            return {}
-        rows = (
-            session.query(LogEvent.id, LogEvent.created_at)
-            .filter(LogEvent.id.in_(event_ids))
-            .all()
-        )
-        return {row[0]: row[1].isoformat() for row in rows if row[1] is not None}
-
-    total_logs_in_group = len(log_event_ids)
-    # If no logs, return empty
-    if total_logs_in_group == 0:
-        return {}
-
-    # If we've run out of group_by keys OR group_depth
-    # => fetch the actual logs (leaf)
-    if level >= len(group_by):
-        if groups_only:
-            if return_timestamps:
-                return _fetch_log_timestamps_for_event_ids(log_event_ids, session)
-            else:
-                return log_event_ids
-        rows, context_len, leaf_count = _fetch_logs_for_event_ids(
+    def _fetch_leaf_logs(ids: List[int]) -> Any:
+        rows, ctx_len, leaf_count = _fetch_logs_for_event_ids(
             request_fastapi=request_fastapi,
-            event_ids=log_event_ids,
+            event_ids=ids,
             project_id=project_id,
             column_context=column_context,
             context=context,
@@ -5438,43 +5741,50 @@ def _build_grouped_data(
             context_dao=context_dao,
             session=session,
         )
-        logs_out, _ = _format_flat_logs(
-            rows,
-            context_len,
-            value_limit,
-            field_order_map,
+        logs_out, _ = _format_flat_logs(rows, ctx_len, value_limit, field_order_map)
+        return logs_out
+
+    total_logs_in_group = len(log_event_ids)
+    if total_logs_in_group == 0:
+        return {}
+
+    if level >= len(group_by):
+        if groups_only:
+            if return_timestamps:
+                rows = (
+                    session.query(LogEvent.id, LogEvent.created_at)
+                    .filter(LogEvent.id.in_(log_event_ids))
+                    .all()
+                )
+                return {
+                    row[0]: row[1].isoformat() for row in rows if row[1] is not None
+                }
+            else:
+                return log_event_ids
+        return _fetch_leaf_logs(log_event_ids)
+
+    # Special branch for when we've reached the requested group_depth (we simply return the group counts)
+    if group_depth is not None and level == group_depth:
+        return _handle_group_depth_level(
+            session=session,
+            log_event_ids=log_event_ids,
+            field_types=field_types,
+            group_by=group_by,
+            group_sorting=group_sorting,
+            group_limit=group_limit,
+            group_offset=group_offset,
+            level=level,
+            return_versions=return_versions,
         )
-        return logs_out  # A list of logs
 
     current_group_key = group_by[level]
-    prefix, raw_key = parse_group_key(current_group_key)
-    is_param = prefix == "params"
-    # 1) Distinguish logs that *have* this group_key vs. logs that are missing it
-    #    (We put missing ones in the "null" group).
-    sort_config = None
     group_sort_config = None
-    if sorting:
-        if isinstance(sorting, str):
-            try:
-                sort_dict = json.loads(sorting)
-                if raw_key in sort_dict:
-                    direction = sort_dict[raw_key].lower()
-                    if direction in ("ascending", "descending"):
-                        sort_config = SortConfig(
-                            field=raw_key,
-                            direction=direction,
-                            sort_type=SortType.WITHIN_GROUPS,
-                        )
-            except (json.JSONDecodeError, AttributeError):
-                pass
-    # New GroupSortingConfig
     if group_sorting:
         try:
             parsed_sorting = json.loads(group_sorting)
             group_sort_config = SortConfig(**parsed_sorting[current_group_key])
         except (JSONDecodeError, ValidationError, KeyError):
             pass
-        # Validate that metric is provided when sort_type is sort_groups
         if (
             group_sort_config
             and group_sort_config.sort_type == SortType.SORT_GROUPS
@@ -5482,160 +5792,148 @@ def _build_grouped_data(
         ):
             raise HTTPException(
                 status_code=400,
-                detail=f"metric is required when sort_type is 'sort_groups' for field '{raw_key}'",
+                detail=f"metric is required when sort_type is 'sort_groups' for field '{current_group_key}'",
             )
+    # Parse the group key to get prefix and raw key
+    prefix, raw_key = parse_group_key(current_group_key)
 
-    # Get distinct values first (without sorting yet)
-    sort_direction = sort_config.direction if sort_config else None
-    present_values = _get_distinct_group_values(
-        session=session,
-        log_event_ids=log_event_ids,
-        group_key=raw_key,
-        is_param=is_param,
-        sort_direction=sort_direction,
+    event_ids_cte = (
+        session.query(LogEvent.id.label("id"))
+        .filter(LogEvent.id.in_(log_event_ids))
+        .cte("event_ids_cte")
     )
 
-    # This is a list of distinct values that exist.
-    # check if the number of distinct values is too large
-    if len(present_values) > GROUP_THRESHOLD:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Grouping by {raw_key} would result in {len(present_values)} groups. This is too many. Please use a more specific group_by key.",
+    unified = _build_unified_logs_subquery(
+        session=session,
+        relevant_log_events=event_ids_cte,
+        return_versions=return_versions,
+    )
+
+    # Group by value and filter on the raw key
+    field_to_compare = (
+        unified.c.param_version if prefix == "params" else unified.c.value
+    )
+    base_q = (
+        session.query(
+            field_to_compare.label("group_value"),
+            func.count(func.distinct(unified.c.log_event_id)).label("group_count"),
         )
-    # 2) Build subsets for each distinct value
-    #    But also compute the set of all IDs that appear in these subsets
-    #    so we can figure out which are missing
-    used_ids = set()
-    value_to_ids = {}
-
-    for val in present_values:
-        subset_ids = _get_log_event_ids_for_group_value(
-            session=session,
-            log_event_ids=log_event_ids,
-            group_key=raw_key,
-            group_value=val,
-            is_param=is_param,
+        .filter(
+            unified.c.log_event_id.in_(select(event_ids_cte.c.id)),
+            unified.c.key == raw_key,
         )
-        value_to_ids[val] = subset_ids
-        used_ids.update(subset_ids)
+        .group_by(field_to_compare)
+    )
+    # group sorting
+    if group_sort_config and group_sort_config.sort_type == SortType.SORT_GROUPS:
+        # Create a subquery to get the field to aggregate on
+        if group_sort_config.field != current_group_key:
+            # Parse the aggregator field to get the raw key
+            _, agg_field_raw_key = parse_group_key(group_sort_config.field)
 
-    # 3) "null" group => all log IDs that do not have the group_key
-    missing_ids = set(log_event_ids) - used_ids
-    have_null = len(missing_ids) > 0
-
-    # 4) Apply group_offset & group_limit to the distinct values (but not to "null")
-    total_distinct = len(present_values)
-    if group_limit is not None:
-        paged_values = present_values[group_offset : group_offset + group_limit]
-    else:
-        paged_values = present_values
-
-    # 5) When we have reached the maximum depth,
-    # return the counts for each distinct group value instead of recursing further.
-    if group_depth is not None and level == group_depth:
-        # 1) Compute aggregator metrics for each distinct value (and for null if present),
-        # just like in the recursion path. Store them so we can sort by metric.
-        value_to_metric = {}
-        for val in present_values:
-            subset_ids = value_to_ids[val]
-            metric_val = None
-            if (
-                group_sort_config
-                and group_sort_config.sort_type == SortType.SORT_GROUPS
-            ):
-                metric_val = _compute_group_metric(
-                    session=session,
-                    log_event_ids=subset_ids,
-                    field=group_sort_config.field,
-                    metric=group_sort_config.metric,
+            # Create aliases for the unified logs subquery
+            base_alias = aliased(unified, name="base_alias")
+            agg_alias = aliased(unified, name="agg_alias")
+            # field_type = field_type_dao.get_field_types(project_id, context_id)
+            # Build a sub-subquery that combines the group field and aggregator field
+            # This ensures we're properly joining the group key with its corresponding aggregator value
+            sub_subq = (
+                session.query(
+                    base_alias.c.log_event_id.label("log_event_id"),
+                    base_alias.c.inferred_type.label("inferred_type"),
+                    base_alias.c.value.label("group_key_value")
+                    if prefix != "params"
+                    else base_alias.c.param_version.label("group_key_value"),
+                    agg_alias.c.value.label("agg_val"),
                 )
-            value_to_metric[val] = metric_val
-
-        # 2) Sort the distinct values if group_sort_config == sort_groups
-        sorted_values = list(present_values)
-        if group_sort_config and group_sort_config.sort_type == SortType.SORT_GROUPS:
-            tmp = [(v, value_to_metric[v]) for v in present_values]
-            tmp.sort(
-                key=lambda x: (
-                    x[0] is None,
-                    x[1] is None,
-                    x[1],
-                ),
-                reverse=(group_sort_config.direction == SortDirection.DESCENDING),
+                .join(
+                    agg_alias,
+                    and_(
+                        base_alias.c.log_event_id == agg_alias.c.log_event_id,
+                        agg_alias.c.key == agg_field_raw_key,
+                    ),
+                )
+                .filter(
+                    base_alias.c.log_event_id.in_(select(event_ids_cte.c.id)),
+                    base_alias.c.key == raw_key,
+                )
+                .subquery("sub_subq")
             )
-            sorted_values = [x[0] for x in tmp]
 
-        # 3) Apply group_offset/group_limit
-        if group_limit is not None:
-            paged_values = sorted_values[group_offset : group_offset + group_limit]
+            # Build the outer query that groups by the group key value and applies aggregation
+            base_q = session.query(
+                sub_subq.c.group_key_value.label("group_value"),
+                func.count(func.distinct(sub_subq.c.log_event_id)).label("group_count"),
+            ).group_by(sub_subq.c.group_key_value)
+
+            agg_expr = _get_reduction_expr(
+                group_sort_config.metric,
+                field_types[agg_field_raw_key],
+                sub_subq.c.agg_val,
+                label="agg",
+            )
+            # Add the aggregation expression to the query
+            base_q = base_q.add_columns(agg_expr)
+
+            # Apply sorting direction with null handling
+            if group_sort_config.direction == SortDirection.ASCENDING:
+                base_q = base_q.order_by(asc("agg").nulls_last())
+            else:
+                base_q = base_q.order_by(desc("agg").nulls_last())
         else:
-            paged_values = sorted_values
+            # If sorting on the same field we're grouping by
+            agg_expr = _get_reduction_expr(
+                group_sort_config.metric,
+                field_types[raw_key],
+                unified.c.value,
+                label="agg",
+            )
+            # Add the aggregation expression to the query
+            base_q = base_q.add_columns(agg_expr)
 
-        # 4) Build the final output structure for this level
-        out_dict = {}
-        if (level + 1) < len(group_by):
-            # If there's another group_by field after this, return the number of
-            # distinct subgroups that would appear under each value (or under null).
-            next_group_key = group_by[level + 1]
-            prefix2, raw_key2 = parse_group_key(next_group_key)
-            is_param2 = prefix2 == "params"
+            # Apply sorting direction with null handling
+            if group_sort_config.direction == SortDirection.ASCENDING:
+                base_q = base_q.order_by(asc("agg").nulls_last())
+            else:
+                base_q = base_q.order_by(desc("agg").nulls_last())
+    else:
+        # Default sorting on group value  (#TODO sort by desc log event id if no metric is provided)
+        base_q = base_q.order_by(asc("group_value").nulls_last())
+    # Calculate total distinct group count before applying pagination
+    # This ensures group_count is accurate regardless of pagination
+    total_distinct_groups = session.query(
+        func.count(base_q.subquery().c.group_value),
+    ).scalar()
 
-            for val in paged_values:
-                size = _get_distinct_group_values(
-                    session=session,
-                    log_event_ids=value_to_ids[val],
-                    group_key=raw_key2,
-                    is_param=is_param2,
-                )
-                out_dict[val] = len(size)
+    # Apply pagination to the query
+    if group_limit is not None:
+        base_q = base_q.offset(group_offset).limit(group_limit)
 
-            if have_null:
-                size = _get_distinct_group_values(
-                    session=session,
-                    log_event_ids=list(missing_ids),
-                    group_key=raw_key2,
-                    is_param=is_param2,
-                )
-                out_dict["null"] = len(size)
+    group_rows = base_q.all()
+    result_dict = {}
+    group_list = []
+
+    for row in group_rows:
+        group_val = row.group_value
+        if prefix == "params":
+            field_to_compare = unified.c.param_version
+            value_to_compare = group_val
         else:
-            # No further group_by => just store the count of logs in each group
-            for val in paged_values:
-                out_dict[val] = len(value_to_ids[val])
-            if have_null:
-                out_dict["null"] = len(missing_ids)
-
-        # group_count => total distinct values we found (plus null if any)
-        out_dict["group_count"] = len(present_values)
-        if have_null:
-            out_dict["group_count"] += 1
-
-        # count => how many items we returned in paged_values (plus null if present)
-        out_dict["count"] = len(paged_values) + (1 if have_null else 0)
-
-        return {current_group_key: out_dict} if level == 0 else out_dict
-
-    # Build the data structure that will go inside e.g.  "params/a/b/param2": {...}
-    out_dict = {}
-    # We will fill out_dict[<value>] = substructure or logs
-    # then compute out_dict["count"] and out_dict["group_count"]
-
-    # PHASE 1: First collect metrics from child groups (bottom-up approach)
-    # We'll map each value to (child structure, aggregator metric) for sorting later
-    value_to_sub_and_metric = {}
-
-    # Implementation note: We're using a two-phase approach here:
-    # 1. First recurse down to build all child groups and collect their metrics bubbling up
-    # 2. Then use those metrics to sort the current level's groups
-
-    # 6) Recurse on each distinct value to build child structures
-    for val in present_values:
-        subset = value_to_ids[val]
-        # Recursively build the child structure
-        sub = _build_grouped_data(
+            field_to_compare = unified.c.value
+            value_to_compare = cast(group_val, JSONB)
+        # Get log event IDs for this group value using the raw key
+        ids_q = session.query(unified.c.log_event_id).filter(
+            unified.c.log_event_id.in_(select(event_ids_cte.c.id)),
+            unified.c.key == raw_key,
+            field_to_compare == value_to_compare,
+        )
+        subset_ids = [r[0] for r in ids_q.all()]
+        substructure = _build_grouped_data(
             request_fastapi=request_fastapi,
             project_id=project_id,
-            log_event_ids=list(subset),
+            log_event_ids=subset_ids,
             field_order_map=field_order_map,
+            field_types=field_types,
             group_by=group_by,
             group_depth=group_depth,
             group_limit=group_limit,
@@ -5657,33 +5955,28 @@ def _build_grouped_data(
             groups_only=groups_only,
             return_timestamps=return_timestamps,
             return_versions=return_versions,
-            parent_group_key=(
-                "&".join([parent_group_key, raw_key]) if parent_group_key else raw_key
-            ),
+            parent_group_key="&".join([parent_group_key, raw_key])
+            if parent_group_key
+            else raw_key,
         )
 
-        # TODO(yusha): computing reduction metric in a plain for-loop is inefficient.
-        # Potential Optimization could be to instead use SQL GROUPBY (ie: compute_group_aggregate)
-        # Extract the child's aggregator metric if it exists
-        metric_value = None
-        if group_sort_config and group_sort_config.sort_type == SortType.SORT_GROUPS:
-            # If no metric from child but we have a sort config, compute the metric directly
-            metric_value = _compute_group_metric(
-                session=session,
-                log_event_ids=list(subset),
-                field=group_sort_config.field,
-                metric=group_sort_config.metric,
-            )
-
-        value_to_sub_and_metric[val] = (sub, metric_value)
-
-    # Handle null group similarly
-    if have_null:
+        # Add to group list instead of directly to result_dict
+        group_list.append({"key": str(group_val), "value": substructure})
+    # find missing IDs (logs that don't have this key)
+    missing_ids_q = session.query(LogEvent.id).filter(
+        LogEvent.id.in_(select(event_ids_cte.c.id)),
+        ~exists().where(
+            and_(unified.c.log_event_id == LogEvent.id, unified.c.key == raw_key),
+        ),
+    )
+    missing_ids = [row[0] for row in missing_ids_q.all()]
+    if missing_ids:
         null_sub = _build_grouped_data(
             request_fastapi=request_fastapi,
             project_id=project_id,
-            log_event_ids=list(missing_ids),
+            log_event_ids=missing_ids,
             field_order_map=field_order_map,
+            field_types=field_types,
             group_by=group_by,
             group_depth=group_depth,
             group_limit=group_limit,
@@ -5705,65 +5998,52 @@ def _build_grouped_data(
             groups_only=groups_only,
             return_timestamps=return_timestamps,
             return_versions=return_versions,
+            parent_group_key="&".join([parent_group_key, raw_key])
+            if parent_group_key
+            else raw_key,
         )
+        # Add null group to the group list
+        group_list.append({"key": "null", "value": null_sub})
+    # Add the group list to the result dictionary
+    result_dict["group"] = group_list
 
-    # PHASE 2: Sort values based on metrics if group sorting is configured
-    sorted_values = list(present_values)  # Default to original order
+    # Use the pre-calculated total distinct groups count
+    result_dict["group_count"] = total_distinct_groups
+    sub_total = 0
 
-    if group_sort_config and group_sort_config.sort_type == SortType.SORT_GROUPS:
-        # Create list of (val, metric) pairs for sorting
-        value_metrics = [
-            (val, value_to_sub_and_metric[val][1]) for val in present_values
-        ]
-        # Sort by metrics
-        value_metrics.sort(
-            key=lambda x: (
-                x[0] is None,  # None values last
-                x[1] is None,  # None metrics after None values
-                x[1],  # Sort by metric value
-            ),
-            reverse=(group_sort_config.direction == SortDirection.DESCENDING),
-        )
-        # Extract just the sorted values
-        sorted_values = [v[0] for v in value_metrics]
+    def _get_count_from_substructure(sub_val: Union[List, Dict, int]) -> int:
+        """Helper to recursively get count from a substructure."""
+        if isinstance(sub_val, int):
+            return sub_val
+        elif isinstance(sub_val, list):
+            return len(sub_val)
+        elif isinstance(sub_val, dict):
+            # First check if this dict has a direct count
+            if "count" in sub_val:
+                return sub_val["count"]
+            # Otherwise sum up counts from all non-metadata fields
+            total = 0
+            # Handle new structure with 'group' field
+            if "group" in sub_val and isinstance(sub_val["group"], list):
+                for item in sub_val["group"]:
+                    if isinstance(item, dict) and "value" in item:
+                        total += _get_count_from_substructure(item["value"])
+            else:
+                # Legacy structure - iterate through keys
+                for k, v in sub_val.items():
+                    if k not in ("group_count", "count", "group"):
+                        total += _get_count_from_substructure(v)
+            return total
+        else:
+            return 0
 
-    # Now apply pagination to sorted values
-    if group_limit is not None:
-        paged_values = sorted_values[group_offset : group_offset + group_limit]
-    else:
-        paged_values = sorted_values
+    # Calculate total count from the group items
+    for item in group_list:
+        sub_total += _get_count_from_substructure(item["value"])
 
-    # PHASE 3: Build output dict with sorted child structures
-    out_dict = {}
-
-    # Add all child structures in sorted order
-    for val in paged_values:
-        out_dict[val] = value_to_sub_and_metric[val][0]
-
-    # Add null group if present
-    if have_null:
-        out_dict["null"] = null_sub
-
-    # 8) Compute "count" = sum of substructures' counts
-    total_count_sub = 0
-    for k, sub_val in out_dict.items():
-        if k not in ("group_count", "count"):
-            total_count_sub += _get_count_from_substructure(sub_val)
-
-    # 9) group_count = # distinct values
-    computed_group_count = total_distinct
-
-    # 10) Put them into out_dict
-    out_dict["group_count"] = computed_group_count
-    out_dict["count"] = total_count_sub
-
-    # 12) Finally, wrap this under the current_group_key:
-    #     e.g. { "params/a/b/param2": out_dict }
-    result = {
-        current_group_key: out_dict,
-    }
-
-    return result
+    result_dict["count"] = sub_total
+    # For the top level, include the prefix in the result key
+    return {current_group_key: result_dict}
 
 
 #########################
@@ -5874,190 +6154,6 @@ def _build_unified_logs_subquery(
         unified_logs_subq.c[unified_logs_subq.c.keys()[8]].label("created_at"),
         unified_logs_subq.c[unified_logs_subq.c.keys()[9]].label("source_type"),
     ).subquery("unified_logs")
-
-
-def _compute_group_metric(
-    session,
-    log_event_ids: List[int],
-    field: str,
-    metric: AggregationMetric,
-) -> Optional[float]:
-    """
-    Compute an aggregation metric for a group of logs.
-    Uses the reduction methods from the get_logs_metric endpoint.
-    """
-    # TODO(yusha): this is a duplicate of get_logs_metric
-    try:
-        # Reuse the get_logs_metric logic but for a specific set of log IDs
-        reduction_methods = {
-            AggregationMetric.COUNT: func.count,
-            AggregationMetric.SUM: func.sum,
-            AggregationMetric.MEAN: func.avg,
-            AggregationMetric.VAR: func.var_pop,
-            AggregationMetric.STD: func.stddev_pop,
-            AggregationMetric.MIN: func.min,
-            AggregationMetric.MAX: func.max,
-            AggregationMetric.MEDIAN: func.percentile_cont(0.5).within_group,
-            AggregationMetric.MODE: func.mode().within_group,
-        }
-
-        log_q = (
-            session.query(
-                Log.log_event_id.label("log_event_id"),
-                Log.value.label("value"),
-                Log.inferred_type.label("inferred_type"),
-            )
-            .filter(Log.key == field)
-            .join(LogEvent, Log.log_event_id == LogEvent.id)
-        )
-
-        # Derived logs
-        derived_q = (
-            session.query(
-                DerivedLog.log_event_id.label("log_event_id"),
-                DerivedLog.value.label("value"),
-                DerivedLog.inferred_type.label("inferred_type"),
-            )
-            .filter(DerivedLog.key == field)
-            .join(LogEvent, DerivedLog.log_event_id == LogEvent.id)
-        )
-
-        # Union them
-        logs_or_derived_subq = log_q.union_all(derived_q).subquery()
-
-        # alias logs_or_derived_subq as "X"
-        X = aliased(logs_or_derived_subq)
-        # columns: X.c.log_event_id, X.c.value, X.c.inferred_type
-
-        # interpret X.c.value depending on X.c.inferred_type.
-        cast_expr = case(
-            (
-                X.c.inferred_type == "list",
-                func.jsonb_array_length(cast(X.c.value, JSONB)).cast(Float),
-            ),
-            (
-                X.c.inferred_type == "dict",
-                select(func.count())
-                .select_from(func.jsonb_object_keys(cast(X.c.value, JSONB)))
-                .scalar_subquery()
-                .cast(Float),
-            ),
-            (
-                X.c.inferred_type == "bool",
-                X.c.value.cast(BOOLEAN).cast(INTEGER).cast(Float),
-            ),
-            (
-                X.c.inferred_type == "str",
-                func.length(cast(X.c.value, JSONB)[0].astext).cast(Float),
-            ),
-            (
-                X.c.inferred_type == "timestamp",
-                func.extract("epoch", cast(cast(X.c.value, String), TIMESTAMP)).cast(
-                    Float,
-                ),
-            ),
-            (
-                X.c.inferred_type == "time",
-                # Extract seconds using time-specific casting
-                func.mod(
-                    func.extract(
-                        "epoch",
-                        func.cast(
-                            func.concat(
-                                "2000-01-01 ",
-                                func.trim(func.cast(X.c.value, String), '"'),
-                            ),
-                            TIMESTAMP,
-                        ),
-                    ),
-                    86400,
-                ).cast(Float),
-            ),
-            (
-                X.c.inferred_type == "date",
-                # Extract epoch using date-specific casting
-                func.extract(
-                    "epoch",
-                    func.cast(func.trim(func.cast(X.c.value, String), '"'), Date),
-                ).cast(Float),
-            ),
-            (
-                X.c.inferred_type == "timedelta",
-                # Parse ISO 8601 duration format (e.g., "P1DT6H") to seconds
-                # This extracts days, hours, minutes, seconds separately and converts to total seconds
-                (
-                    # Days component (86400 seconds per day)
-                    func.coalesce(
-                        func.cast(
-                            func.substring(
-                                func.trim(func.cast(X.c.value, String), '"'),
-                                "P([0-9]+)D",
-                            ),
-                            Float,
-                        )
-                        * 86400,
-                        0,
-                    )
-                    +
-                    # Hours component (3600 seconds per hour)
-                    func.coalesce(
-                        func.cast(
-                            func.substring(
-                                func.trim(func.cast(X.c.value, String), '"'),
-                                "T([0-9]+)H",
-                            ),
-                            Float,
-                        )
-                        * 3600,
-                        0,
-                    )
-                    +
-                    # Minutes component (60 seconds per minute)
-                    func.coalesce(
-                        func.cast(
-                            func.substring(
-                                func.trim(func.cast(X.c.value, String), '"'),
-                                "T[0-9]*H?([0-9]+)M",
-                            ),
-                            Float,
-                        )
-                        * 60,
-                        0,
-                    )
-                    +
-                    # Seconds component
-                    func.coalesce(
-                        func.cast(
-                            func.substring(
-                                func.trim(func.cast(X.c.value, String), '"'),
-                                "T[0-9]*H?[0-9]*M?([0-9.]+)S",
-                            ),
-                            Float,
-                        ),
-                        0,
-                    )
-                ).cast(Float),
-            ),
-            (X.c.inferred_type == "float", X.c.value.cast(Float)),
-            (X.c.inferred_type == "int", X.c.value.cast(Float)),
-            else_=literal(0, type_=Float),
-        ).label("value_as_float")
-
-        # Filter the subquery by the log_event_ids that survived above filters
-        # (subquery).
-        metric_query = (
-            session.query(
-                reduction_methods[metric](cast_expr),
-            )
-            .select_from(X)
-            .filter(X.c.log_event_id.in_(log_event_ids))
-        )
-
-        reduced_query = metric_query.scalar()
-        return reduced_query
-
-    except Exception:
-        return None
 
 
 @admin_router.post(

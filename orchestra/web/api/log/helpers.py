@@ -1,3 +1,4 @@
+import ast
 import json
 import re
 import statistics
@@ -22,7 +23,6 @@ from sqlalchemy import (
     and_,
     case,
     cast,
-    exists,
     func,
     literal,
     literal_column,
@@ -192,6 +192,8 @@ def _relabel_identifiers(tokens, field_names):
     return new_tokens
 
 
+# DEPRECATED: The following tokenizer and parser are kept for backward compatibility
+# New code should use str_filter_exp_to_dict_using_ast() instead
 def _tokenize(s):
     paren_count = 0
     for c in s:
@@ -320,6 +322,8 @@ def _tokenize(s):
     return tokens
 
 
+# DEPRECATED: The following parser class is kept for backward compatibility
+# New code should use str_filter_exp_to_dict_using_ast() instead
 class _Parser:
     def __init__(self, tokens):
         self.tokens = tokens
@@ -542,20 +546,327 @@ class _Parser:
         return node
 
 
-# Filtering #
-# ----------#
+# AST-based Filtering #
+# -------------------#
+
+
+def _ast_op_to_str(op: ast.AST) -> str:
+    """
+    Converts AST operator nodes to string representations used by the filter dictionary.
+
+    Args:
+        op: An AST operator node (e.g., ast.Add, ast.Sub, etc.)
+
+    Returns:
+        String representation of the operator
+    """
+    # Binary operators
+    if isinstance(op, ast.Add):
+        return "+"
+    elif isinstance(op, ast.Sub):
+        return "-"
+    elif isinstance(op, ast.Mult):
+        return "*"
+    elif isinstance(op, ast.Div):
+        return "/"
+    elif isinstance(op, ast.FloorDiv):
+        return "//"
+    elif isinstance(op, ast.Mod):
+        return "%"
+    elif isinstance(op, ast.Pow):
+        return "**"
+
+    # Comparison operators
+    elif isinstance(op, ast.Eq):
+        return "=="
+    elif isinstance(op, ast.NotEq):
+        return "!="
+    elif isinstance(op, ast.Lt):
+        return "<"
+    elif isinstance(op, ast.LtE):
+        return "<="
+    elif isinstance(op, ast.Gt):
+        return ">"
+    elif isinstance(op, ast.GtE):
+        return ">="
+    elif isinstance(op, ast.Is):
+        return "is"
+    elif isinstance(op, ast.IsNot):
+        return "is not"
+    elif isinstance(op, ast.In):
+        return "in"
+    elif isinstance(op, ast.NotIn):
+        return "not in"
+
+    # Boolean operators
+    elif isinstance(op, ast.And):
+        return "and"
+    elif isinstance(op, ast.Or):
+        return "or"
+    elif isinstance(op, ast.Not):
+        return "not"
+
+    # Unary operators
+    elif isinstance(op, ast.USub):
+        return "-"
+    elif isinstance(op, ast.UAdd):
+        return "+"
+
+    # Default case
+    else:
+        raise ValueError(f"Unsupported operator type: {type(op)}")
+
+
+def _transform_ast(node: ast.AST) -> Dict:
+    """
+    Recursively transforms an AST node into a filter dictionary.
+
+    Args:
+        node: An AST node
+
+    Returns:
+        A dictionary representation of the node in the format expected by build_sql_query
+    """
+    # Handle literals (constants)
+    if isinstance(node, ast.Constant):
+        try:
+            # First try to normalize the timestamp if it's in a non-standard format
+            normalized_value = normalize_timestamp(node.value)
+        except Exception as e:
+            normalized_value = node.value
+        return normalized_value
+
+    # Handle variable names (identifiers)
+    elif isinstance(node, ast.Name):
+        return {"type": "identifier", "value": node.id}
+
+    # Handle unary operations (not, +, -)
+    elif isinstance(node, ast.UnaryOp):
+        if isinstance(node.op, ast.Not):
+            return {"operand": "not", "rhs": _transform_ast(node.operand)}
+        elif isinstance(node.op, ast.USub):
+            # Handle negative numbers
+            if isinstance(node.operand, ast.Constant):
+                return -node.operand.value
+            else:
+                # For more complex expressions, use a binary operation with 0
+                return {"operand": "-", "lhs": 0, "rhs": _transform_ast(node.operand)}
+        elif isinstance(node.op, ast.UAdd):
+            # Positive sign, just return the operand
+            return _transform_ast(node.operand)
+
+    # Handle binary operations (+, -, *, /, etc.)
+    elif isinstance(node, ast.BinOp):
+        return {
+            "lhs": _transform_ast(node.left),
+            "operand": _ast_op_to_str(node.op),
+            "rhs": _transform_ast(node.right),
+        }
+
+    # Handle boolean operations (and, or)
+    elif isinstance(node, ast.BoolOp):
+        # For multiple operands (a and b and c), we need to nest them
+        result = _transform_ast(node.values[0])
+        for value in node.values[1:]:
+            result = {
+                "lhs": result,
+                "operand": _ast_op_to_str(node.op),
+                "rhs": _transform_ast(value),
+            }
+        return result
+
+    # Handle comparisons (==, !=, <, >, etc.)
+    elif isinstance(node, ast.Compare):
+        # For multiple comparisons (a < b < c), we need to handle each pair
+        result = _transform_ast(node.left)
+        for op, comparator in zip(node.ops, node.comparators):
+            result = {
+                "lhs": result,
+                "operand": _ast_op_to_str(op),
+                "rhs": _transform_ast(comparator),
+            }
+        return result
+
+    # Handle function calls
+    elif isinstance(node, ast.Call):
+        func_name = node.func.id if isinstance(node.func, ast.Name) else None
+
+        # Handle special functions
+        if func_name in (
+            "len",
+            "exists",
+            "version",
+            "str",
+            "isNone",
+            "time",
+            "date",
+            "now",
+            "round",
+            "round_timestamp",
+        ):
+            # For functions with a single argument
+            if len(node.args) == 1:
+                return {"operand": func_name, "rhs": _transform_ast(node.args[0])}
+            # For functions with multiple arguments (like round with precision)
+            else:
+                return {
+                    "operand": func_name,
+                    "rhs": [_transform_ast(arg) for arg in node.args],
+                }
+        # Handle BASE function
+        elif func_name == "BASE":
+            # BASE takes exactly 2 arguments: event_ids and key
+            if len(node.args) != 2:
+                raise ValueError("BASE function requires exactly 2 arguments")
+            return {
+                "operand": "BASE",
+                "rhs": [_transform_ast(arg) for arg in node.args],
+            }
+        # Handle other function calls
+        else:
+            # Default handling for other functions
+            return {
+                "operand": func_name,
+                "rhs": [_transform_ast(arg) for arg in node.args],
+            }
+
+    # Handle subscripts (indexing with [] or {})
+    elif isinstance(node, ast.Subscript):
+        return {
+            "operand": "INDEX",
+            "lhs": _transform_ast(node.value),
+            "rhs": _transform_ast(node.slice),
+        }
+
+    # Handle lists and tuples
+    elif isinstance(node, (ast.List, ast.Tuple)):
+        return [_transform_ast(elt) for elt in node.elts]
+
+    # Handle dictionaries
+    elif isinstance(node, ast.Dict):
+        return {
+            _transform_ast(k): _transform_ast(v) for k, v in zip(node.keys, node.values)
+        }
+
+    # Handle string literals that might be parsed as Expr nodes
+    elif isinstance(node, ast.Expr):
+        return _transform_ast(node.value)
+
+    # Handle the root Expression node from ast.parse(mode='eval')
+    elif isinstance(node, ast.Expression):
+        return _transform_ast(node.body)
+
+    # Default case for unsupported nodes
+    else:
+        raise ValueError(f"Unsupported AST node type: {type(node)}")
+
+
+def str_filter_exp_to_dict_using_ast(expr: str, field_names=None) -> Dict:
+    """
+    Converts a string filter expression to a filter dictionary using Python's AST.
+    Args:
+        expr: The filter expression string
+        field_names: Optional dictionary of field names from get_field_types
+
+    Returns:
+        A filter dictionary that can be used with build_sql_query
+
+    Raises:
+        HTTPException: If the expression is invalid or cannot be parsed
+    """
+    try:
+        # Handle problematic field names by creating placeholders
+        special_fields = {}
+        problematic_chars = {"-", "/", "+", "*", "&", "|", "^"}
+        processed_expr = expr
+
+        if field_names:
+            # Replace problematic field names with placeholders
+            for field_name in field_names:
+                if any(char in field_name for char in problematic_chars):
+                    placeholder = f"__FIELD_PLACEHOLDER_{len(special_fields)}__"
+                    special_fields[field_name] = placeholder
+
+                    # Replace the field name with its placeholder
+                    escaped_field = re.escape(field_name)
+                    processed_expr = re.sub(
+                        r"\b" + escaped_field + r"\b",
+                        placeholder,
+                        processed_expr,
+                    )
+
+        # Parse the preprocessed expression
+        tree = ast.parse(processed_expr, mode="eval")
+
+        # Transform the AST into a filter dictionary
+        filter_dict = _transform_ast(tree)
+
+        # Restore original field names if needed
+        if special_fields:
+            # Create reverse mapping
+            reverse_mapping = {
+                placeholder: field_name
+                for field_name, placeholder in special_fields.items()
+            }
+
+            # Helper function to restore field names
+            def restore_field_names(obj):
+                if isinstance(obj, dict):
+                    if (
+                        obj.get("type") == "identifier"
+                        and obj.get("value") in reverse_mapping
+                    ):
+                        obj["value"] = reverse_mapping[obj["value"]]
+                    else:
+                        for k, v in obj.items():
+                            obj[k] = restore_field_names(v)
+                elif isinstance(obj, list):
+                    for i, item in enumerate(obj):
+                        obj[i] = restore_field_names(item)
+                return obj
+
+            filter_dict = restore_field_names(filter_dict)
+
+        return filter_dict
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid filter expression: {e}")
 
 
 def str_filter_exp_to_dict(s, field_names=None):
+    """
+    Converts a string filter expression to a filter dictionary.
+
+    This function now uses the AST-based parser for more robust parsing.
+    The old tokenizer-based parser is kept for backward compatibility.
+
+    Args:
+        s: The filter expression string
+        field_names: Optional list of field names for validation
+
+    Returns:
+        A filter dictionary that can be used with build_sql_query
+
+    Raises:
+        HTTPException: If the expression is invalid or cannot be parsed
+    """
     try:
-        tokens = _tokenize(s)
-        if field_names is not None:
-            tokens = _relabel_identifiers(tokens, field_names)
-        parser = _Parser(tokens)
-        result = parser.parse()
-        return result
+        # Use the new AST-based parser
+        return str_filter_exp_to_dict_using_ast(s, field_names)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid filter expression: {e}")
+        # Fall back to the old tokenizer-based parser
+        try:
+            tokens = _tokenize(s)
+            if field_names is not None:
+                tokens = _relabel_identifiers(tokens, field_names)
+            parser = _Parser(tokens)
+            result = parser.parse()
+            return result
+        except Exception as fallback_e:
+            # If both parsers fail, raise the original error
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid filter expression: {e}",
+            )
 
 
 def _select_value(subq, session, is_collection=False):
@@ -1454,16 +1765,21 @@ def _handle_membership_operator(
     if lhs_is_sub and rhs_is_sub:
         lval, lval_type = _select_value(lhs, session)
         rval, rval_type = _select_value(rhs, session)
-        condition = _substring_expr(lval, rval)
-        if not is_in:
-            condition = ~condition
 
-        expr = exists().where(
-            and_(
-                lhs.c.log_event_id == rhs.c.log_event_id,
-                condition,
-            ),
-        )
+        # Check if RHS is a JSONB list for containment check
+        if rval_type == "list" and is_in:
+            # Use PostgreSQL's @> operator for array containment
+            condition = rval.op("@>")(func.jsonb_build_array(lval))
+            expr = ~condition if not is_in else condition
+        elif lval_type == "list" and is_in:
+            # Use PostgreSQL's @> operator for array containment
+            condition = lval.op("@>")(func.jsonb_build_array(rval))
+            expr = ~condition if not is_in else condition
+        else:
+            # Fall back to substring check for non-list types
+            condition = _substring_expr(lval, rval)
+            expr = ~condition if not is_in else condition
+
         return _join_subqueries(lhs, rhs, expr, "bool", session=session)
 
     # Only LHS is a subquery
@@ -1488,7 +1804,7 @@ def _handle_membership_operator(
                 rhs_value = rhs.value if isinstance(rhs, BindParameter) else rhs
 
                 # Use PostgreSQL's @> operator for array containment
-                containment_expr = lval.op("@>")(literal([rhs_value], type_=JSONB))
+                containment_expr = lval.op("@>")(func.jsonb_build_array(rhs_value))
                 expr = containment_expr if is_in else ~containment_expr
                 return (
                     select(
@@ -1540,8 +1856,10 @@ def _handle_membership_operator(
                     lhs_value = json.loads(lhs_value)
                 except:
                     pass
+
                 # Use PostgreSQL's @> operator for array containment
-                containment_expr = rval.op("@>")(literal([lhs_value], type_=JSONB))
+                # Create a JSONB array with the single value for the containment check
+                containment_expr = rval.op("@>")(func.jsonb_build_array(lhs_value))
                 cond = containment_expr if is_in else ~containment_expr
                 return (
                     select(
@@ -1609,27 +1927,21 @@ def _parse_rhs_list_or_dict_if_needed(rhs_dict, rhs_val):
     if not rhs_dict:
         return None
 
-    possible_str = rhs_dict.get("value")
-    if isinstance(possible_str, str) and possible_str.strip():
+    if isinstance(rhs_val, BindParameter):
+        val = rhs_val.value
+    else:
+        val = rhs_val
+
+    if isinstance(val, str) and val.strip():
         try:
-            parsed = json.loads(possible_str)
+            parsed = json.loads(val)
             if isinstance(parsed, (list, dict)):
                 return parsed
         except Exception:
             pass
 
-    if isinstance(rhs_val, BindParameter):
-        val = rhs_val.value
-        if isinstance(val, str):
-            try:
-                parsed = json.loads(val)
-                if isinstance(parsed, (list, dict)):
-                    return parsed
-            except Exception:
-                pass
-
-    if isinstance(rhs_val, (list, dict)):
-        return rhs_val
+    if isinstance(val, (list, dict)):
+        return val
 
     return None
 
@@ -1724,15 +2036,12 @@ def _handle_functions(
         SQLAlchemy condition or expression based on the provided function.
     """
     operand = filter_dict.get("operand")
-    if isinstance(filter_dict.get("rhs"), dict) and filter_dict.get("rhs"):
-        rhs_expr = build_sql_query(
-            filter_dict.get("rhs"),
-            log_event_alias,
-            session,
-            log_event_ids=log_event_ids,
-            is_derived=is_derived,
-        )
-    else:
+    no_arg_functions = ["now"]
+    two_arg_functions = ["BASE", "round", "round_timestamp"]
+
+    if operand in no_arg_functions:
+        rhs_expr = None
+    elif operand in two_arg_functions:
         rhs_expr = [
             build_sql_query(
                 expr,
@@ -1743,6 +2052,16 @@ def _handle_functions(
             )
             for expr in filter_dict.get("rhs")
         ]
+    else:
+        # one_arg_functions
+        rhs_expr = build_sql_query(
+            filter_dict.get("rhs"),
+            log_event_alias,
+            session,
+            log_event_ids=log_event_ids,
+            is_derived=is_derived,
+        )
+
     if operand == "len":
         rval, rval_type = _select_value(rhs_expr, session)
         if isinstance(rhs_expr, Subquery):
@@ -1798,7 +2117,8 @@ def _handle_functions(
                 .subquery()
             )
         else:
-            return cast(rhs_expr, String)
+            expr = rhs_expr[0] if isinstance(rhs_expr, list) else rhs_expr
+            return cast(expr, String)
 
     elif operand == "round":
         # 1) Normalize the "rhs_expr" into a list of length 1 or 2
@@ -2034,18 +2354,7 @@ def _handle_functions(
                 )
 
             # Extract event IDs from the first argument
-            event_ids_expr = base_args[0]
-            event_ids = None
-            if event_ids_expr.get("type") == "other" and isinstance(
-                event_ids_expr.get("value"),
-                str,
-            ):
-                try:
-                    event_ids = json.loads(event_ids_expr["value"])
-                except json.JSONDecodeError:
-                    raise ValueError(
-                        f"Invalid event IDs format: {event_ids_expr['value']}",
-                    )
+            event_ids = base_args[0]
 
             # Extract column name from the second argument
             if base_args[1].get("type") == "identifier":
@@ -2290,15 +2599,12 @@ def _handle_index_operator(
         is_derived=is_derived,
     )
 
-    # If LHS is a subquery => we pull out its .c.log_event_id plus the "value" column
-    # If RHS is a subquery => that implies the index key is dynamic; in practice, we may or may not want to handle that
-    # For simplicity, let's assume RHS is literal or a direct bind param.
     if isinstance(lhs_expr, Subquery):
         lhs_valcol, lhs_type = _select_value(
             lhs_expr,
             session,
             is_collection=True,
-        )  # JSONB column with the parent object/array
+        )
         if isinstance(rhs_expr, Subquery):
             # Potentially advanced scenario: the user wrote x[y], where y is a subquery.
             # We'll pick the .value from y, interpret it as a string or integer, and then do -> or ->> extraction.
@@ -2322,39 +2628,56 @@ def _handle_index_operator(
             )
             return subq
         else:
-            # RHS is a literal or direct expression. Could be an int or string:
-            # If it's an int, we do valcol->'<idx>'. If string, we do valcol->'some_key'.
-            if isinstance(rhs_expr, int):
-                # For PG JSONB, array index is valcol -> idx as text
-                idx_str = str(rhs_expr)
-                extracted = lhs_valcol[idx_str]  # Postgres expression
-            elif isinstance(rhs_expr, str):
-                extracted = lhs_valcol[rhs_expr]
-            else:
-                # Possibly a BindParam. You can do .value
-                if isinstance(rhs_expr, BindParameter):
-                    # get the actual python value
-                    key_or_idx = rhs_expr.value
-                    # We need to handle string keys properly for dictionary indexing
-                    # but we don't want to use json.loads which can cause issues with special characters
-                    if (
-                        isinstance(key_or_idx, str)
-                        and key_or_idx.startswith("'")
-                        and key_or_idx.endswith("'")
-                    ):
-                        # This is a string key in quotes, extract the actual key
-                        key_or_idx = key_or_idx[1:-1]
-                    extracted = lhs_valcol[key_or_idx]
+            rhs_expr = (
+                rhs_expr.value if isinstance(rhs_expr, BindParameter) else rhs_expr
+            )
+            if lhs_type == "str":
+                # For strings, we need to use PostgreSQL's substring function
+                # PostgreSQL is 1-indexed, so we need to adjust the index
+                if isinstance(rhs_expr, int):
+                    # Convert 0-indexed to 1-indexed for PostgreSQL
+                    pg_index = rhs_expr + 1
+                    extracted = func.substring(
+                        func.replace(cast(lhs_valcol, String), '"', ""),
+                        literal(pg_index),
+                        literal(1),
+                    )
+                elif isinstance(rhs_expr, BindParameter) and isinstance(
+                    rhs_expr.value,
+                    int,
+                ):
+                    # Convert 0-indexed to 1-indexed for PostgreSQL
+                    pg_index = rhs_expr.value + 1
+                    extracted = func.substring(
+                        func.replace(cast(lhs_valcol, String), '"', ""),
+                        literal(pg_index),
+                        literal(1),
+                    )
                 else:
-                    # fallback
-                    extracted = lhs_valcol[rhs_expr]
+                    # If it's not a simple integer index, try to cast it
+                    extracted = func.substring(
+                        func.replace(cast(lhs_valcol, String), '"', ""),
+                        cast(rhs_expr, Integer) + 1,
+                        literal(1),
+                    )
+            # Standard JSONB indexing for non-string types
+            elif isinstance(rhs_expr, int):
+                extracted = lhs_valcol[rhs_expr]  # Postgres list indexing
+            elif isinstance(rhs_expr, str):
+                extracted = lhs_valcol[rhs_expr]  # Postgres dict indexing
+            else:
+                # fallback
+                extracted = lhs_valcol[rhs_expr]
 
             # Build the subquery
+            # TODO: add strong typing for lists/dicts to reason about the inferred_type when indexing.
+            result = session.execute(select(extracted)).first()[0]
+            inferred_type = LogDAO.infer_type("", result)
             subq = (
                 select(
                     lhs_expr.c.log_event_id.label("log_event_id"),
                     extracted.label("value"),
-                    literal(lhs_type).label("inferred_type"),
+                    literal(inferred_type).label("inferred_type"),
                 )
                 .select_from(lhs_expr)
                 .subquery()
@@ -2363,8 +2686,6 @@ def _handle_index_operator(
 
     else:
         # If LHS is not a subquery => e.g. LHS is a python dict or list literal
-        # Then we can do python-level extraction. Or if LHS is a direct SQL expression (rare), do something else.
-        # For simplicity, treat LHS as python literal:
         if isinstance(lhs_expr, (dict, list)):
             # Then we do a python-level extraction if the rhs is also python-literal
             if isinstance(rhs_expr, (int, str)):
