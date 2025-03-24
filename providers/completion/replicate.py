@@ -51,7 +51,7 @@ supported_models = {
     "deepseek-r1": {
         "endpoint": "replicate/deepseek-ai/deepseek-r1",
         "context_window": 64000,
-        "cost": {"prompt": 10, "completion": 10},
+        "cost": {"prompt": 3.75, "completion": 10},
     },
     "claude-3.5-sonnet": {
         "endpoint": "replicate/anthropic/claude-3.5-sonnet",

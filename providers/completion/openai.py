@@ -103,4 +103,14 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 75, "completion": 150},
     },
+    "gpt-4o-search-preview": {
+        "endpoint": "gpt-4o-search-preview",
+        "context_window": 128000,
+        "cost": {"prompt": 2.5, "completion": 10},
+    },
+    "gpt-4o-mini-search-preview": {
+        "endpoint": "gpt-4o-mini-search-preview",
+        "context_window": 128000,
+        "cost": {"prompt": 0.15, "completion": 0.6},
+    },
 }
