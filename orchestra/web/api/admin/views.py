@@ -893,8 +893,8 @@ def run_demo(
             status_code=500,
             detail=f"Demo timed out after {e.timeout} seconds",
         )
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to run demo. Error: {e}",
-        )
+    # except subprocess.CalledProcessError as e:
+    #     raise HTTPException(
+    #         status_code=500,
+    #         detail=f"Failed to run demo. Error: {e}",
+    #     )
