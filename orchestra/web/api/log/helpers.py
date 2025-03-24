@@ -2036,15 +2036,12 @@ def _handle_functions(
         SQLAlchemy condition or expression based on the provided function.
     """
     operand = filter_dict.get("operand")
-    if isinstance(filter_dict.get("rhs"), dict) and filter_dict.get("rhs"):
-        rhs_expr = build_sql_query(
-            filter_dict.get("rhs"),
-            log_event_alias,
-            session,
-            log_event_ids=log_event_ids,
-            is_derived=is_derived,
-        )
-    else:
+    no_arg_functions = ["now"]
+    two_arg_functions = ["BASE", "round", "round_timestamp"]
+
+    if operand in no_arg_functions:
+        rhs_expr = None
+    elif operand in two_arg_functions:
         rhs_expr = [
             build_sql_query(
                 expr,
@@ -2055,6 +2052,16 @@ def _handle_functions(
             )
             for expr in filter_dict.get("rhs")
         ]
+    else:
+        # one_arg_functions
+        rhs_expr = build_sql_query(
+            filter_dict.get("rhs"),
+            log_event_alias,
+            session,
+            log_event_ids=log_event_ids,
+            is_derived=is_derived,
+        )
+
     if operand == "len":
         rval, rval_type = _select_value(rhs_expr, session)
         if isinstance(rhs_expr, Subquery):
