@@ -542,8 +542,290 @@ class _Parser:
         return node
 
 
-# Filtering #
-# ----------#
+# AST-based Filtering #
+# -------------------#
+
+
+def _ast_op_to_str(op: ast.AST) -> str:
+    """
+    Converts AST operator nodes to string representations used by the filter dictionary.
+
+    Args:
+        op: An AST operator node (e.g., ast.Add, ast.Sub, etc.)
+
+    Returns:
+        String representation of the operator
+    """
+    # Binary operators
+    if isinstance(op, ast.Add):
+        return "+"
+    elif isinstance(op, ast.Sub):
+        return "-"
+    elif isinstance(op, ast.Mult):
+        return "*"
+    elif isinstance(op, ast.Div):
+        return "/"
+    elif isinstance(op, ast.FloorDiv):
+        return "//"
+    elif isinstance(op, ast.Mod):
+        return "%"
+    elif isinstance(op, ast.Pow):
+        return "**"
+
+    # Comparison operators
+    elif isinstance(op, ast.Eq):
+        return "=="
+    elif isinstance(op, ast.NotEq):
+        return "!="
+    elif isinstance(op, ast.Lt):
+        return "<"
+    elif isinstance(op, ast.LtE):
+        return "<="
+    elif isinstance(op, ast.Gt):
+        return ">"
+    elif isinstance(op, ast.GtE):
+        return ">="
+    elif isinstance(op, ast.Is):
+        return "is"
+    elif isinstance(op, ast.IsNot):
+        return "is not"
+    elif isinstance(op, ast.In):
+        return "in"
+    elif isinstance(op, ast.NotIn):
+        return "not in"
+
+    # Boolean operators
+    elif isinstance(op, ast.And):
+        return "and"
+    elif isinstance(op, ast.Or):
+        return "or"
+    elif isinstance(op, ast.Not):
+        return "not"
+
+    # Unary operators
+    elif isinstance(op, ast.USub):
+        return "-"
+    elif isinstance(op, ast.UAdd):
+        return "+"
+
+    # Default case
+    else:
+        raise ValueError(f"Unsupported operator type: {type(op)}")
+
+
+def _transform_ast(node: ast.AST) -> Dict:
+    """
+    Recursively transforms an AST node into a filter dictionary.
+
+    Args:
+        node: An AST node
+
+    Returns:
+        A dictionary representation of the node in the format expected by build_sql_query
+    """
+    # Handle literals (constants)
+    if isinstance(node, ast.Constant):
+        try:
+            # First try to normalize the timestamp if it's in a non-standard format
+            normalized_value = normalize_timestamp(node.value)
+        except Exception as e:
+            normalized_value = node.value
+        return normalized_value
+
+    # Handle variable names (identifiers)
+    elif isinstance(node, ast.Name):
+        return {"type": "identifier", "value": node.id}
+
+    # Handle unary operations (not, +, -)
+    elif isinstance(node, ast.UnaryOp):
+        if isinstance(node.op, ast.Not):
+            return {"operand": "not", "rhs": _transform_ast(node.operand)}
+        elif isinstance(node.op, ast.USub):
+            # Handle negative numbers
+            if isinstance(node.operand, ast.Constant):
+                return -node.operand.value
+            else:
+                # For more complex expressions, use a binary operation with 0
+                return {"operand": "-", "lhs": 0, "rhs": _transform_ast(node.operand)}
+        elif isinstance(node.op, ast.UAdd):
+            # Positive sign, just return the operand
+            return _transform_ast(node.operand)
+
+    # Handle binary operations (+, -, *, /, etc.)
+    elif isinstance(node, ast.BinOp):
+        return {
+            "lhs": _transform_ast(node.left),
+            "operand": _ast_op_to_str(node.op),
+            "rhs": _transform_ast(node.right),
+        }
+
+    # Handle boolean operations (and, or)
+    elif isinstance(node, ast.BoolOp):
+        # For multiple operands (a and b and c), we need to nest them
+        result = _transform_ast(node.values[0])
+        for value in node.values[1:]:
+            result = {
+                "lhs": result,
+                "operand": _ast_op_to_str(node.op),
+                "rhs": _transform_ast(value),
+            }
+        return result
+
+    # Handle comparisons (==, !=, <, >, etc.)
+    elif isinstance(node, ast.Compare):
+        # For multiple comparisons (a < b < c), we need to handle each pair
+        result = _transform_ast(node.left)
+        for op, comparator in zip(node.ops, node.comparators):
+            result = {
+                "lhs": result,
+                "operand": _ast_op_to_str(op),
+                "rhs": _transform_ast(comparator),
+            }
+        return result
+
+    # Handle function calls
+    elif isinstance(node, ast.Call):
+        func_name = node.func.id if isinstance(node.func, ast.Name) else None
+
+        # Handle special functions
+        if func_name in (
+            "len",
+            "exists",
+            "version",
+            "str",
+            "isNone",
+            "time",
+            "date",
+            "now",
+            "round",
+            "round_timestamp",
+        ):
+            # For functions with a single argument
+            if len(node.args) == 1:
+                return {"operand": func_name, "rhs": _transform_ast(node.args[0])}
+            # For functions with multiple arguments (like round with precision)
+            else:
+                return {
+                    "operand": func_name,
+                    "rhs": [_transform_ast(arg) for arg in node.args],
+                }
+        # Handle BASE function
+        elif func_name == "BASE":
+            # BASE takes exactly 2 arguments: event_ids and key
+            if len(node.args) != 2:
+                raise ValueError("BASE function requires exactly 2 arguments")
+            return {
+                "operand": "BASE",
+                "rhs": [_transform_ast(arg) for arg in node.args],
+            }
+        # Handle other function calls
+        else:
+            # Default handling for other functions
+            return {
+                "operand": func_name,
+                "rhs": [_transform_ast(arg) for arg in node.args],
+            }
+
+    # Handle subscripts (indexing with [] or {})
+    elif isinstance(node, ast.Subscript):
+        return {
+            "operand": "INDEX",
+            "lhs": _transform_ast(node.value),
+            "rhs": _transform_ast(node.slice),
+        }
+
+    # Handle lists and tuples
+    elif isinstance(node, (ast.List, ast.Tuple)):
+        return [_transform_ast(elt) for elt in node.elts]
+
+    # Handle dictionaries
+    elif isinstance(node, ast.Dict):
+        return {
+            _transform_ast(k): _transform_ast(v) for k, v in zip(node.keys, node.values)
+        }
+
+    # Handle string literals that might be parsed as Expr nodes
+    elif isinstance(node, ast.Expr):
+        return _transform_ast(node.value)
+
+    # Handle the root Expression node from ast.parse(mode='eval')
+    elif isinstance(node, ast.Expression):
+        return _transform_ast(node.body)
+
+    # Default case for unsupported nodes
+    else:
+        raise ValueError(f"Unsupported AST node type: {type(node)}")
+
+
+def str_filter_exp_to_dict_using_ast(expr: str, field_names=None) -> Dict:
+    """
+    Converts a string filter expression to a filter dictionary using Python's AST.
+    Args:
+        expr: The filter expression string
+        field_names: Optional dictionary of field names from get_field_types
+
+    Returns:
+        A filter dictionary that can be used with build_sql_query
+
+    Raises:
+        HTTPException: If the expression is invalid or cannot be parsed
+    """
+    try:
+        # Handle problematic field names by creating placeholders
+        special_fields = {}
+        problematic_chars = {"-", "/", "+", "*", "&", "|", "^"}
+        processed_expr = expr
+
+        if field_names:
+            # Replace problematic field names with placeholders
+            for field_name in field_names:
+                if any(char in field_name for char in problematic_chars):
+                    placeholder = f"__FIELD_PLACEHOLDER_{len(special_fields)}__"
+                    special_fields[field_name] = placeholder
+
+                    # Replace the field name with its placeholder
+                    escaped_field = re.escape(field_name)
+                    processed_expr = re.sub(
+                        r"\b" + escaped_field + r"\b",
+                        placeholder,
+                        processed_expr,
+                    )
+
+        # Parse the preprocessed expression
+        tree = ast.parse(processed_expr, mode="eval")
+
+        # Transform the AST into a filter dictionary
+        filter_dict = _transform_ast(tree)
+
+        # Restore original field names if needed
+        if special_fields:
+            # Create reverse mapping
+            reverse_mapping = {
+                placeholder: field_name
+                for field_name, placeholder in special_fields.items()
+            }
+
+            # Helper function to restore field names
+            def restore_field_names(obj):
+                if isinstance(obj, dict):
+                    if (
+                        obj.get("type") == "identifier"
+                        and obj.get("value") in reverse_mapping
+                    ):
+                        obj["value"] = reverse_mapping[obj["value"]]
+                    else:
+                        for k, v in obj.items():
+                            obj[k] = restore_field_names(v)
+                elif isinstance(obj, list):
+                    for i, item in enumerate(obj):
+                        obj[i] = restore_field_names(item)
+                return obj
+
+            filter_dict = restore_field_names(filter_dict)
+
+        return filter_dict
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid filter expression: {e}")
 
 
 def str_filter_exp_to_dict(s, field_names=None):
