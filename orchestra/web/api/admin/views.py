@@ -878,7 +878,7 @@ def run_demo(
             env["UNIFY_KEY"] = api_key[0][0].key
 
             # This will block until the subprocess completes
-            subprocess.run(
+            result = subprocess.run(
                 [sys.executable, tf.name],
                 env=env,
                 capture_output=True,
@@ -886,15 +886,42 @@ def run_demo(
                 check=True,  # Raises CalledProcessError if return code != 0
             )
 
-            return {"info": "Demo run successfully"}
+            return {
+                "info": "Demo run successfully",
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
 
     except subprocess.TimeoutExpired as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Demo timed out after {e.timeout} seconds",
+            detail={
+                "error": "Timeout",
+                "timeout": e.timeout,
+                "stdout": e.stdout.decode() if e.stdout else None,
+                "stderr": e.stderr.decode() if e.stderr else None,
+            },
         )
-    # except subprocess.CalledProcessError as e:
-    #     raise HTTPException(
-    #         status_code=500,
-    #         detail=f"Failed to run demo. Error: {e}",
-    #     )
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Process Error",
+                "return_code": e.returncode,
+                "stdout": e.stdout,
+                "stderr": e.stderr,
+                "cmd": e.cmd,
+            },
+        )
+    except Exception as e:
+        # Catch any other exceptions and include full traceback
+        import traceback
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "traceback": traceback.format_exc(),
+            },
+        )
