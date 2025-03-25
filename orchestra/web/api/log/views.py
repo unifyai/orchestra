@@ -201,11 +201,13 @@ def create_logs(
     """
     # check if the project exists
     try:
-        # TODO: Add organization id
         user_id = request_fastapi.state.user_id
-        project = project_dao.filter(user_id=user_id, name=request.project)
-        project_id = project[0][0].id
-    except IndexError:
+        project = project_dao.get_by_user_and_name(
+            user_id=user_id,
+            name=request.project,
+        )
+        project_id = project.id
+    except (IndexError, AttributeError):
         raise not_found("Project")
 
     # Convert single entries/params to list format for uniform processing
@@ -794,8 +796,12 @@ def create_derived_entry(
 
     # 1) Validate the project
     try:
-        project_obj = project_dao.filter(name=body.project, user_id=user_id)[0][0]
-    except IndexError:
+        project_obj = project_dao.get_by_user_and_name(
+            name=body.project,
+            user_id=user_id,
+        )
+        project_id = project_obj.id
+    except (IndexError, AttributeError):
         raise HTTPException(
             status_code=404,
             detail=f"Project '{body.project}' not found.",
@@ -1030,9 +1036,12 @@ def update_derived_log(
 
     # 1) Validate the project
     try:
-        project_obj = project_dao.filter(name=body.project, user_id=user_id)[0][0]
+        project_obj = project_dao.get_by_user_and_name(
+            name=body.project,
+            user_id=user_id,
+        )
         project_id = project_obj.id
-    except IndexError:
+    except (IndexError, AttributeError):
         raise HTTPException(
             status_code=404,
             detail=f"Project '{body.project}' not found.",
@@ -1325,6 +1334,7 @@ def update_derived_log(
 def update_logs(
     request_fastapi: Request,
     body: UpdateLogRequest,
+    project_dao: ProjectDAO = Depends(),
     log_dao: LogDAO = Depends(),
     log_event_dao: LogEventDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
@@ -1349,10 +1359,18 @@ def update_logs(
             project_user_id, project_id = log_event_dao.get_user_and_project_id(
                 id=log_id,
             )
-            if project_user_id != request_fastapi.state.user_id:
-                raise IndexError(
-                    f"User {request_fastapi.state.user_id} does not have permission for log id {log_id}.",
+            if (
+                project_user_id != request_fastapi.state.user_id
+            ):  # user is not the owner of the project
+                # check if the user is a member of the organization this project belongs to
+                project_obj = project_dao.filter_by_user_access(
+                    user_id=request_fastapi.state.user_id,
+                    id=project_id,
                 )
+                if not project_obj:
+                    raise IndexError(
+                        f"User {request_fastapi.state.user_id} does not have permission for log id {log_id}.",
+                    )
             log_id_to_project[log_id] = project_id
         except IndexError:
             not_found_logs.append(log_id)
@@ -1781,8 +1799,11 @@ def delete_logs(
     # Validate project existence
     user_id = request_fastapi.state.user_id
     try:
-        project_id = project_dao.filter(user_id=user_id, name=body.project)[0][0].id
-    except IndexError:
+        project_id = project_dao.get_by_user_and_name(
+            user_id=user_id,
+            name=body.project,
+        ).id
+    except (IndexError, AttributeError):
         raise HTTPException(
             status_code=404,
             detail=f"Project '{body.project}' not found.",
@@ -2222,10 +2243,9 @@ def _get_logs_query(
 
     # 1) Validate the project
     try:
-        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
-    except IndexError:
+        project_id = project_dao.get_by_user_and_name(name=project, user_id=user_id).id
+    except (IndexError, AttributeError):
         raise not_found(f"Project {project}")
-    project_id = project_obj.id
 
     # 2) Build initial query for relevant LogEvent rows
     #    (filter_expr, from_ids, exclude_ids, plus optional static context)
@@ -2821,10 +2841,10 @@ def get_logs(
     - from_ids and exclude_ids should be strings of '&'-separated log event IDs
     """
     try:
-        project_id = project_dao.filter(
+        project_id = project_dao.get_by_user_and_name(
             name=project,
             user_id=request_fastapi.state.user_id,
-        )[0][0].id
+        ).id
     except Exception as e:
         raise HTTPException(
             status_code=404,
@@ -4212,8 +4232,9 @@ def get_logs_metric(
     # Get project and context
     try:
         user_id = request_fastapi.state.user_id
-        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
-    except IndexError:
+        project_obj = project_dao.get_by_user_and_name(name=project, user_id=user_id)
+        project_id = project_obj.id
+    except (IndexError, AttributeError):
         raise not_found(f"Project {project}")
 
     context_name = request.context or ""
@@ -4491,14 +4512,17 @@ def rename_field(
     try:
         # Validate project and permissions
         user_id = request_fastapi.state.user_id
-        project = project_dao.filter(user_id=user_id, name=request.project)
+        project = project_dao.get_by_user_and_name(
+            user_id=user_id,
+            name=request.project,
+        )
 
         if not project:
             raise HTTPException(
                 status_code=404,
                 detail=f"Project '{request.project}' not found",
             )
-        project_id = project[0][0].id
+        project_id = project.id
 
         context_name = request.context if request.context else ""
         context = context_dao.filter(project_id=project_id, name=context_name)
@@ -4638,8 +4662,9 @@ def get_fields(
     """
     try:
         user_id = request_fastapi.state.user_id
-        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
-    except IndexError:
+        project_obj = project_dao.get_by_user_and_name(name=project, user_id=user_id)
+        project_id = project_obj.id
+    except (IndexError, AttributeError):
         raise not_found(f"Project {project}")
 
     # Get context_id if context is provided
@@ -4953,10 +4978,10 @@ def _get_all_filtered_log_event_ids(
 
     # Validate project
     try:
-        project_obj = project_dao.filter(name=project, user_id=user_id)[0][0]
-    except IndexError:
+        project_obj = project_dao.get_by_user_and_name(name=project, user_id=user_id)
+        project_id = project_obj.id
+    except (IndexError, AttributeError):
         raise HTTPException(status_code=404, detail=f"Project {project} not found.")
-    project_id = project_obj.id
 
     # Start from LogEvent table
     log_event_query = session.query(LogEvent.id).filter(
