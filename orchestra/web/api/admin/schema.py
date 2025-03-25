@@ -352,3 +352,4 @@ class CreditCardFingerprintModelResponse(BaseModel):
 class DemoModelRequest(BaseModel):
     user_id: str
     code: str
+    staging: bool = False
