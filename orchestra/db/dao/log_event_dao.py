@@ -162,7 +162,6 @@ class LogEventDAO:
             select(Project.user_id, Project.id)
             .join(LogEvent, Project.id == LogEvent.project_id)
             .where(LogEvent.id == id)
-            .with_for_update()
         )
         rows = self.session.execute(query).fetchone()
         return rows if rows is not None else (None, None)
