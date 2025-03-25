@@ -33,7 +33,6 @@ class TempInterfaceDAO:
 
     def update_interface(
         self,
-        user_id: str,
         name: str,
         project_id: int,
         items: str,
@@ -42,10 +41,8 @@ class TempInterfaceDAO:
         context: str | None = None,
     ):
         query = select(TempInterface)
-        query = (
-            query.where(TempInterface.user_id == user_id)
-            .where(TempInterface.project_id == project_id)
-            .where(TempInterface.name == name)
+        query = query.where(TempInterface.project_id == project_id).where(
+            TempInterface.name == name,
         )
         raw = self.session.execute(query)
         entry = raw.scalars().first()
@@ -59,11 +56,10 @@ class TempInterfaceDAO:
 
     def get_interfaces(
         self,
-        user_id: str,
         project_id: int = None,
         name: str = None,
     ) -> list[TempInterface]:
-        query = select(TempInterface).where(TempInterface.user_id == user_id)
+        query = select(TempInterface)
         if project_id is not None:
             query = query.where(TempInterface.project_id == project_id)
         if name is not None:
@@ -71,12 +67,11 @@ class TempInterfaceDAO:
         interfaces = self.session.execute(query).scalars().all()
         return interfaces
 
-    def delete_interface(self, user_id: str, project_id: int, name: str):
+    def delete_interface(self, project_id: int, name: str):
         try:
             interface = (
                 self.session.query(TempInterface)
                 .filter(
-                    TempInterface.user_id == user_id,
                     TempInterface.project_id == project_id,
                     TempInterface.name == name,
                 )
