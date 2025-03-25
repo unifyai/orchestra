@@ -15,3 +15,12 @@ class ShareProjectRequest(BaseModel):
     from_user_id: str
     to_user_id: str
     project_name: str
+
+
+class DuplicateProjectRequest(BaseModel):
+    """Request model for duplicating a project."""
+
+    from_user_id: str
+    from_project_name: str
+    to_user_id: str
+    new_project_name: str
