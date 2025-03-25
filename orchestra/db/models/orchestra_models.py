@@ -789,6 +789,7 @@ class Interface(Base):
     __tablename__ = "interface"
 
     id = Column(String, primary_key=True, default=uuid.uuid4)
+    # TODO: remove both <user_id> and <organization_id>
     user_id = Column(
         String,
         ForeignKey("auth_user.id", ondelete="CASCADE"),
