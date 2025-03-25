@@ -12,7 +12,6 @@ class TempInterfaceDAO:
 
     def create_interface(
         self,
-        user_id: str,
         name: str,
         items: str,
         new_counter: int,
@@ -21,7 +20,6 @@ class TempInterfaceDAO:
     ):
         self.session.add(
             TempInterface(
-                user_id=user_id,
                 name=name,
                 items=items,
                 new_counter=new_counter,
