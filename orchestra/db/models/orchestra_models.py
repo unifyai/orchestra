@@ -635,12 +635,12 @@ class LogEvent(Base):
     )
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
+    # Relationships
     contexts = relationship(
         "Context",
         secondary="log_event_context",
         back_populates="log_events",
     )
-    # Relationships
     derived_logs = relationship(
         "DerivedLog",
         cascade="all, delete-orphan",

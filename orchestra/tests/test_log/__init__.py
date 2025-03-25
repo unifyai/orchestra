@@ -177,7 +177,15 @@ def _create_log(client, project_name, user=1, params=None, entries=None, context
     )
 
 
-def _create_derived_entry(client, project_name, key, equation, referenced_logs, user=1):
+def _create_derived_entry(
+    client,
+    project_name,
+    key,
+    equation,
+    referenced_logs,
+    context=None,
+    user=1,
+):
     _headers = HEADERS if user == 1 else HEADERS_2
     return client.post(
         "/v0/logs/derived",
@@ -186,6 +194,7 @@ def _create_derived_entry(client, project_name, key, equation, referenced_logs, 
             "key": key,
             "equation": equation,
             "referenced_logs": referenced_logs,
+            "context": context,
         },
         headers=_headers,
     )
