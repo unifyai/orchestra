@@ -4,10 +4,13 @@ Includes endpoints related to log projects.
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 
+from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
+from orchestra.db.dao.organization_dao import OrganizationDAO
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.web.api.project.schema import ProjectConfig
+from orchestra.web.api.project.schema import ProjectConfig, ShareProjectRequest
 from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
@@ -52,9 +55,8 @@ def create_project(
     """
 
     try:
-        existing_project = project_dao.filter(
+        existing_project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
-            # TODO: Add organization id
             name=request.name,
         )
         if existing_project:
@@ -108,13 +110,15 @@ def delete_project(
     Deletes a project from your account.
     """
     try:
-        # Get the project
-        project = project_dao.filter(user_id=request_fastapi.state.user_id, name=name)[
-            0
-        ][0]
-        project_dao.delete(id=project.id)
+        # Get the project using the new access-aware method
+        project = project_dao.get_by_user_and_name(
+            user_id=request_fastapi.state.user_id,
+            name=name,
+        )
+        project_id = project.id
+        project_dao.delete(id=project_id)
 
-    except (IndexError, ValueError) as e:
+    except:
         raise not_found(f"Project {name}")
 
     return {"info": "Project deleted successfully"}
@@ -156,13 +160,21 @@ def rename_project(
     Renames a project from `name` to `new_name` in your account.
     """
     try:
-        project_dao.rename(
-            user_id=request_fastapi.state.user_id,
-            # TODO: Deal with organization id properly
-            name=name,
-            new_name=request.name,
-        )
-    except ValueError as e:
+        # First verify the project exists and user has access
+        try:
+            project = project_dao.get_by_user_and_name(
+                user_id=request_fastapi.state.user_id,
+                name=name,
+            ).id
+            # Now rename it
+            project_dao.rename(
+                user_id=request_fastapi.state.user_id,
+                name=name,
+                new_name=request.name,
+            )
+        except:
+            raise ValueError("Project not found")
+    except:
         raise not_found(f"Project {name}")
     return {"info": "Project renamed successfully!"}
 
@@ -191,9 +203,8 @@ def list_projects(
     """
     Returns the names of all projects stored in your account.
     """
-    raw_projects = project_dao.filter(
+    raw_projects = project_dao.filter_by_user_access(
         user_id=request_fastapi.state.user_id,
-        # TODO: Deal with organization id properly
     )
     return [p[0].name for p in raw_projects]
 
@@ -231,17 +242,17 @@ def delete_project_logs(
     Deletes all logs in a project.
     """
     # Verify project exists and user has access
-    projects = project_dao.filter(
-        user_id=request_fastapi.state.user_id,
-        name=name,
-    )
-    if len(projects) == 0:
+    try:
+        project = project_dao.get_by_user_and_name(
+            user_id=request_fastapi.state.user_id,
+            name=name,
+        )
+        project_id = project.id
+    except HTTPException:
         raise HTTPException(
             status_code=404,
             detail=f"Project {name} not found.",
         )
-
-    project_id = projects[0][0].id
 
     # Get all log events for the project
     log_events = log_event_dao.filter(project_id=project_id)
@@ -292,17 +303,17 @@ def delete_project_contexts(
     The project's interfaces remain untouched.
     """
     # Verify project exists and user has access
-    projects = project_dao.filter(
-        user_id=request_fastapi.state.user_id,
-        name=name,
-    )
-    if len(projects) == 0:
+    try:
+        project = project_dao.get_by_user_and_name(
+            user_id=request_fastapi.state.user_id,
+            name=name,
+        )
+        project_id = project.id
+    except HTTPException:
         raise HTTPException(
             status_code=404,
             detail=f"Project {name} not found.",
         )
-
-    project_id = projects[0][0].id
 
     # Get all contexts for the project
     contexts = context_dao.filter(project_id=project_id)
