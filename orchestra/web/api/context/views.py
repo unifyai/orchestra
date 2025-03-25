@@ -79,13 +79,13 @@ def create_context(
     or as an object with name and description fields.
     """
     try:
-        project = project_dao.filter(
+        project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project_name,
         )
         if not project:
             raise IndexError
-        project_id = project[0][0].id
+        project_id = project.id
 
         # Handle string input for context name
         context_name = request.name
@@ -187,13 +187,13 @@ def get_contexts(
     Returns information about each context including its versioning status and current version.
     """
     try:
-        project = project_dao.filter(
+        project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project_name,
         )
         if not project:
             raise IndexError
-        project_id = project[0][0].id
+        project_id = project.id
         existing_contexts = context_dao.filter(project_id=project_id)
         # filter out default context
         if not existing_contexts:
@@ -264,13 +264,13 @@ def get_context(
     Get information about a specific context including its versioning status and current version.
     """
     try:
-        project = project_dao.filter(
+        project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project_name,
         )
         if not project:
             raise IndexError("Project not found")
-        project_id = project[0][0].id
+        project_id = project.id
 
         context = context_dao.filter(
             project_id=project_id,
@@ -331,13 +331,13 @@ def delete_context(
     within the context, but will remove their association with this context.
     """
     try:
-        project = project_dao.filter(
+        project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project_name,
         )
         if not project:
             raise IndexError("Project not found")
-        project_id = project[0][0].id
+        project_id = project.id
 
         context = context_dao.filter(
             project_id=project_id,
@@ -396,13 +396,13 @@ def add_logs_to_context(
     If the context doesn't exist, it will be created automatically.
     """
     try:
-        project = project_dao.filter(
+        project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project_name,
         )
         if not project:
             raise IndexError("Project not found")
-        project_id = project[0][0].id
+        project_id = project.id
 
         # Try to get the context, or create it if it doesn't exist
         context_name = request.context_name
