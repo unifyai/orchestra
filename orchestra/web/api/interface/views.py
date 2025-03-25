@@ -71,7 +71,6 @@ def create_interface(
         )
     dao = temp_interface_dao if request.temporary else interface_dao
     interfaces = dao.get_interfaces(
-        request_fastapi.state.user_id,
         project_id=projects[0][0].id,
         name=request.name,
     )
@@ -81,7 +80,6 @@ def create_interface(
             detail="Interface already exists, update the interface instead.",
         )
     dao.create_interface(
-        user_id=request_fastapi.state.user_id,
         name=request.name,
         items=json.dumps([item.model_dump() for item in request.items]),
         new_counter=request.new_counter,
@@ -148,7 +146,6 @@ def update_interface(
         )
     dao = temp_interface_dao if request.temporary else interface_dao
     interfaces = dao.get_interfaces(
-        request_fastapi.state.user_id,
         project_id=projects[0][0].id,
         name=request.name,
     )
@@ -158,7 +155,6 @@ def update_interface(
             detail="Interface not added yet. Create it first.",
         )
     dao.update_interface(
-        user_id=request_fastapi.state.user_id,
         name=request.name,
         project_id=projects[0][0].id,
         items=json.dumps([item.model_dump() for item in request.items]),
@@ -241,13 +237,11 @@ def get_interfaces(
         )
     dao = temp_interface_dao if temporary else interface_dao
     all_interfaces = dao.get_interfaces(
-        request_fastapi.state.user_id,
         project_id=projects[0][0].id,
     )
     if len(all_interfaces) == 0:
         name = name if name is not None else "tab1"
     interfaces = dao.get_interfaces(
-        request_fastapi.state.user_id,
         project_id=projects[0][0].id,
         name=name,
     )
@@ -274,7 +268,6 @@ def get_interfaces(
         ]
         new_counter = len(items)
         dao.create_interface(
-            user_id=request_fastapi.state.user_id,
             name=name,
             items=json.dumps(items),
             new_counter=new_counter,
@@ -345,7 +338,6 @@ def delete_interface(
         )
     dao = temp_interface_dao if temporary else interface_dao
     interfaces = dao.get_interfaces(
-        request_fastapi.state.user_id,
         project_id=projects[0][0].id,
         name=name,
     )
@@ -355,7 +347,6 @@ def delete_interface(
             detail="Interface not added yet. Create it first.",
         )
     dao.delete_interface(
-        user_id=request_fastapi.state.user_id,
         project_id=projects[0][0].id,
         name=name,
     )
