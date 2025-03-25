@@ -5806,6 +5806,18 @@ pygments = ">=2.4,<3.0"
 typing_extensions = ">=4.0,<5.0"
 
 [[package]]
+name = "wget"
+version = "3.2"
+description = "pure python download utility"
+optional = false
+python-versions = "*"
+groups = ["main"]
+markers = "platform_system == \"Linux\" and platform_machine == \"aarch64\""
+files = [
+    {file = "wget-3.2.zip", hash = "sha256:35e630eca2aa50ce998b9b1a127bb26b30dfee573702782aa982f875e3f16061"},
+]
+
+[[package]]
 name = "win32-setctime"
 version = "1.2.0"
 description = "A small Python utility to set file creation time on Windows"
@@ -6147,4 +6159,4 @@ cffi = ["cffi (>=1.11)"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.9"
-content-hash = "db7dd2887830992440199eb1e0b5656f33afc0554bef648f9c438e74b4728091"
+content-hash = "2e6b40d94dadcb4bb2b0fcb19a562e806128e9d72f773c316a94dcf1ca56a4f0"
