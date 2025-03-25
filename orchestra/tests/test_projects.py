@@ -4,7 +4,7 @@ import pytest
 from httpx import AsyncClient
 
 from .test_interface import _create_context, _create_interface, _create_project
-from .test_log import _create_log
+from .test_log import _create_log, _update_logs
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 
@@ -273,6 +273,159 @@ async def test_delete_project_contexts(client: AsyncClient):
     interfaces = interface_response.json()
     assert len(interfaces) > 0
     assert interfaces[0]["name"] == interface_name
+
+
+@pytest.mark.anyio
+async def test_share_project(client: AsyncClient):
+    """
+    Test the admin endpoint for sharing a project between users.
+    This test verifies that an admin can share a project from one user to another.
+    It also verifies that changes to the project are reflected to the new user.
+    """
+    # Set up admin headers with admin API key
+    admin_api_key = str(os.getenv("ORCHESTRA_ADMIN_KEY"))
+    admin_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {admin_api_key}",
+    }
+
+    # create a new user
+    response = await client.post(
+        "v0/admin/auth-user",
+        json={
+            "email": "test_recipient_user@example.com",
+            "name": "test_recipient_user",
+        },
+        headers=admin_headers,
+    )
+    data = response.json()
+    to_user_id = data["id"]
+    from_user_id = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
+
+    # Create a test project first (owned by the current user)
+    project_name = "shared_test_project"
+    interface_name = "shared_test_interface"
+    context_name = "shared_test_context"
+    _ = await _create_project(client, project_name)
+
+    # create a new context in the project
+    _ = await _create_context(client, project_name, context_name, "test description")
+    # create a new interface in the project
+    items = [
+        {
+            "i": "n0",
+            "x": 0,
+            "y": 0,
+            "w": 3,
+            "h": 3,
+            "tab": None,
+            "moved": False,
+            "static": False,
+        },
+    ]
+    new_counter = 1
+    _ = await _create_interface(
+        client,
+        interface_name,
+        project_name,
+        items,
+        new_counter,
+    )
+    # create a new log in the project
+    _ = await _create_log(
+        client,
+        project_name,
+        context={"name": context_name},
+        entries={"test_key": "value1"},
+    )
+
+    # Call the share project endpoint
+    url = "v0/admin/share-project"
+    share_data = {
+        "from_user_id": from_user_id,
+        "to_user_id": to_user_id,
+        "project_name": project_name,
+    }
+
+    response = await client.post(url, json=share_data, headers=admin_headers)
+
+    # Verify the response
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Project shared successfully!"
+
+    # get the api key for the new user
+    response = await client.get(
+        f"/v0/admin/auth-user/by-user-id?user_id={to_user_id}",
+        headers=admin_headers,
+    )
+    data = response.json()
+    to_user_api_key = data["apiKey"]
+    new_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {to_user_api_key}",
+    }
+
+    # 1) Verify the new user can acces the project
+    response = await client.get(
+        f"/v0/projects",
+        headers=new_headers,
+    )
+    assert response.status_code == 200, response.json()
+    assert project_name in response.json()
+
+    # 2) Verify the new user can access the project's contexts
+    response = await client.get(
+        f"/v0/project/{project_name}/contexts",
+        headers=new_headers,
+    )
+    assert response.status_code == 200, response.json()
+    contexts = response.json()
+    assert len(contexts) > 0
+    assert context_name in [context["name"] for context in contexts]
+
+    # 3) Verify the new user can access the project's interfaces
+    response = await client.get(
+        f"/v0/interface",
+        params={"project": project_name},
+        headers=new_headers,
+    )
+    assert response.status_code == 200, response.json()
+    interfaces = response.json()
+    assert len(interfaces) > 0
+    assert interface_name in [interface["name"] for interface in interfaces]
+
+    # 4) Verify the new user can access the project's logs
+    response = await client.get(
+        f"/v0/logs",
+        params={"project": project_name, "context": context_name},
+        headers=new_headers,
+    )
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    assert len(data["logs"]) > 0
+    assert "test_key" in data["logs"][0]["entries"]
+
+    # 5) Update the logs and verify the new user can access the updated logs
+    response = await _update_logs(
+        client,
+        log_ids=[1],
+        context={"name": context_name},
+        entries={"new_key": "value2"},
+    )
+    assert response.status_code == 200, response.json()
+
+    # get the logs from the new user
+    response = await client.get(
+        f"/v0/logs",
+        params={"project": project_name, "context": context_name},
+        headers=new_headers,
+    )
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    assert len(data["logs"]) > 0
+    entries = data["logs"][0]["entries"]
+    assert "test_key" in entries
+    assert "new_key" in entries
 
 
 if __name__ == "__main__":
