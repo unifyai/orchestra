@@ -43,6 +43,11 @@ class AuthUserDAO:
         rows = self.session.execute(query)
         return rows.fetchall()
 
+    def get_by_id(self, user_id: str) -> Optional[AuthUser]:
+        """Return a single AuthUser object or None given a user_id."""
+        found = self.filter(id=user_id)
+        return found[0] if found else None
+
     def update(  # noqa: WPS211, WPS213, WPS231, C901
         self,
         id: int,  # noqa: WPS125
