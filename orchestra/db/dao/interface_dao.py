@@ -12,7 +12,6 @@ class InterfaceDAO:
 
     def create_interface(
         self,
-        user_id: str,
         name: str,
         items: str,
         new_counter: int,
@@ -21,7 +20,6 @@ class InterfaceDAO:
     ):
         self.session.add(
             Interface(
-                user_id=user_id,
                 name=name,
                 items=items,
                 new_counter=new_counter,
@@ -33,7 +31,6 @@ class InterfaceDAO:
 
     def update_interface(
         self,
-        user_id: str,
         name: str,
         project_id: int,
         items: str,
@@ -42,10 +39,8 @@ class InterfaceDAO:
         new_name: str = None,
     ):
         query = select(Interface)
-        query = (
-            query.where(Interface.user_id == user_id)
-            .where(Interface.project_id == project_id)
-            .where(Interface.name == name)
+        query = query.where(Interface.project_id == project_id).where(
+            Interface.name == name,
         )
         raw = self.session.execute(query)
         entry = raw.scalars().first()
@@ -59,11 +54,10 @@ class InterfaceDAO:
 
     def get_interfaces(
         self,
-        user_id: str,
         project_id: int = None,
         name: str = None,
     ) -> list[Interface]:
-        query = select(Interface).where(Interface.user_id == user_id)
+        query = select(Interface)
         if project_id is not None:
             query = query.where(Interface.project_id == project_id)
         if name is not None:
@@ -71,12 +65,11 @@ class InterfaceDAO:
         interfaces = self.session.execute(query).scalars().all()
         return interfaces
 
-    def delete_interface(self, user_id: str, project_id: int, name: str):
+    def delete_interface(self, project_id: int, name: str):
         try:
             interface = (
                 self.session.query(Interface)
                 .filter(
-                    Interface.user_id == user_id,
                     Interface.project_id == project_id,
                     Interface.name == name,
                 )
