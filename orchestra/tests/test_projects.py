@@ -4,7 +4,7 @@ import pytest
 from httpx import AsyncClient
 
 from .test_interface import _create_context, _create_interface, _create_project
-from .test_log import _create_log, _update_logs
+from .test_log import _create_derived_entry, _create_log, _update_logs
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 
@@ -426,6 +426,210 @@ async def test_share_project(client: AsyncClient):
     entries = data["logs"][0]["entries"]
     assert "test_key" in entries
     assert "new_key" in entries
+
+
+@pytest.mark.anyio
+async def test_duplicate_project(client: AsyncClient):
+    """
+    Test the admin endpoint for duplicating a project.
+    This test verifies that an admin can create a deep copy of a project from one user to another.
+    It also verifies that changes to the original project do not affect the duplicate.
+    """
+    # Set up admin headers with admin API key
+    admin_api_key = str(os.getenv("ORCHESTRA_ADMIN_KEY"))
+    admin_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {admin_api_key}",
+    }
+
+    # Create a new target user
+    response = await client.post(
+        "v0/admin/auth-user",
+        json={
+            "email": "test_duplicate_target@example.com",
+            "name": "test_duplicate_target",
+        },
+        headers=admin_headers,
+    )
+    data = response.json()
+    target_user_id = data["id"]
+    source_user_id = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
+
+    # Create a source project with contexts, interfaces, and logs
+    source_project_name = "source_project_for_duplication"
+    target_project_name = "duplicated_project"
+    context_name = "source_test_context"
+    interface_name = "source_test_interface"
+
+    # Create project and its components
+    await _create_project(client, source_project_name)
+    await _create_context(client, source_project_name, context_name, "test description")
+    await _create_context(client, source_project_name, "dummy-context", None)
+
+    # Create interface
+    items = [
+        {
+            "i": "n0",
+            "x": 0,
+            "y": 0,
+            "w": 3,
+            "h": 3,
+            "tab": None,
+            "moved": False,
+            "static": False,
+        },
+    ]
+    new_counter = 1
+    await _create_interface(
+        client,
+        interface_name,
+        source_project_name,
+        items,
+        new_counter,
+    )
+
+    # Create logs
+    log_id = await _create_log(
+        client,
+        source_project_name,
+        context={"name": context_name},
+        entries={"source_key": "source_value"},
+    )
+
+    # create a derived log
+    key = "derived_key"
+    equation = "{Table:source_key} + ' hello'"
+    referenced_logs = {"Table": {"filter_expr": "", "context": context_name}}
+    response = await _create_derived_entry(
+        client,
+        source_project_name,
+        context=context_name,
+        key=key,
+        equation=equation,
+        referenced_logs=referenced_logs,
+    )
+    assert response.status_code == 200, response.json()
+
+    key = "derived_key2"
+    equation = "{Table:source_key} + ' world'"
+    referenced_logs = {"Table": [1]}
+    response = await _create_derived_entry(
+        client,
+        source_project_name,
+        context=context_name,
+        key=key,
+        equation=equation,
+        referenced_logs=referenced_logs,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Call the duplicate project endpoint
+    url = "v0/admin/duplicate-project"
+    duplicate_data = {
+        "from_user_id": source_user_id,
+        "from_project_name": source_project_name,
+        "to_user_id": target_user_id,
+        "new_project_name": target_project_name,
+    }
+
+    response = await client.post(url, json=duplicate_data, headers=admin_headers)
+
+    # Verify the response
+    assert response.status_code == 200, response.json()
+    assert (
+        f"Project '{source_project_name}' duplicated successfully"
+        in response.json()["info"]
+    )
+
+    # Verify the counts of duplicated resources
+    result = response.json()["details"]
+    assert result["contexts_copied"] >= 1
+    assert result["field_types_copied"] >= 1
+    assert result["interfaces_copied"] >= 1
+    assert result["logs_copied"] >= 1
+    assert result["derived_logs_copied"] >= 1
+
+    # Get the API key for the target user
+    response = await client.get(
+        f"/v0/admin/auth-user/by-user-id?user_id={target_user_id}",
+        headers=admin_headers,
+    )
+    data = response.json()
+    target_user_api_key = data["apiKey"]
+    target_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {target_user_api_key}",
+    }
+
+    # 1) Verify the target user can access the duplicated project
+    response = await client.get(
+        f"/v0/projects",
+        headers=target_headers,
+    )
+    assert response.status_code == 200, response.json()
+    assert target_project_name in response.json()
+
+    # 2) Verify the target user can access the project's contexts
+    response = await client.get(
+        f"/v0/project/{target_project_name}/contexts",
+        headers=target_headers,
+    )
+    assert response.status_code == 200, response.json()
+    contexts = response.json()
+    assert len(contexts) > 0
+    assert context_name in [context["name"] for context in contexts]
+
+    # 3) Verify the target user can access the project's interfaces
+    response = await client.get(
+        f"/v0/interface",
+        params={"project": target_project_name},
+        headers=target_headers,
+    )
+    assert response.status_code == 200, response.json()
+    interfaces = response.json()
+    assert len(interfaces) > 0
+    assert interface_name in [interface["name"] for interface in interfaces]
+
+    # 4) Verify the target user can access the project's logs
+    response = await client.get(
+        f"/v0/logs",
+        params={"project": target_project_name, "context": context_name},
+        headers=target_headers,
+    )
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    assert len(data["logs"]) > 0
+    assert "source_key" in data["logs"][0]["entries"]
+    assert data["logs"][0]["entries"]["source_key"] == "source_value"
+
+    # 5) Update the source project logs and verify the changes don't affect the duplicate
+    response = await _update_logs(
+        client,
+        log_ids=[1],
+        context={"name": context_name},
+        entries={"updated_key": "updated_value"},
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify the source project has the updated log
+    response = await client.get(
+        f"/v0/logs",
+        params={"project": source_project_name, "context": context_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    source_logs = response.json()["logs"]
+    assert "updated_key" in source_logs[0]["entries"]
+
+    # Verify the duplicated project does NOT have the updated log
+    response = await client.get(
+        f"/v0/logs",
+        params={"project": target_project_name, "context": context_name},
+        headers=target_headers,
+    )
+    assert response.status_code == 200, response.json()
+    target_logs = response.json()["logs"]
+    assert "updated_key" not in target_logs[0]["entries"]
 
 
 if __name__ == "__main__":
