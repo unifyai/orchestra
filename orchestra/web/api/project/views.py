@@ -2,15 +2,39 @@
 Includes endpoints related to log projects.
 """
 
+from datetime import datetime, timezone
+
+import sqlalchemy
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.derived_log_dao import DerivedLogDAO
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
+from orchestra.db.dao.interface_dao import InterfaceDAO
+from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.web.api.project.schema import ProjectConfig, ShareProjectRequest
+from orchestra.db.dao.temp_interface_dao import TempInterfaceDAO
+from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.orchestra_models import (
+    Context,
+    DerivedLog,
+    FieldType,
+    Interface,
+    JSONLog,
+    Log,
+    LogEvent,
+    LogEventContext,
+    TempInterface,
+)
+from orchestra.web.api.project.schema import (
+    DuplicateProjectRequest,
+    ProjectConfig,
+    ShareProjectRequest,
+)
 from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
@@ -422,3 +446,425 @@ def admin_share_project(
     project_dao.session.commit()
 
     return {"info": "Project shared successfully!"}
+
+
+@admin_router.post(
+    "/duplicate-project",
+    responses={
+        200: {
+            "description": "Project duplicated successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Project duplicated successfully!",
+                        "details": {
+                            "project_id": 123,
+                            "contexts_copied": 5,
+                            "field_types_copied": 10,
+                            "log_events_copied": 20,
+                            "logs_copied": 100,
+                            "json_logs_copied": 50,
+                            "derived_logs_copied": 15,
+                            "interfaces_copied": 3,
+                            "temp_interfaces_copied": 2,
+                        },
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "User or Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "User or Project not found.",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Project Already Exists",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "A project with this name already exists for the target user.",
+                    },
+                },
+            },
+        },
+    },
+)
+def admin_duplicate_project(
+    request: DuplicateProjectRequest,
+    project_dao: ProjectDAO = Depends(),
+    auth_user_dao: AuthUserDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    log_event_dao: LogEventDAO = Depends(),
+    log_dao: LogDAO = Depends(),
+    derived_log_dao: DerivedLogDAO = Depends(),
+    interface_dao: InterfaceDAO = Depends(),
+    temp_interface_dao: TempInterfaceDAO = Depends(),
+    session=Depends(get_db_session),
+):
+    """
+    Admin endpoint to deep-copy (duplicate) a project from one user to another.
+
+    This creates a complete clone of a project, copying all sub-resources:
+    - Contexts
+    - Field Types
+    - Log Events
+    - Logs
+    - JSON Logs
+    - Derived Logs
+    - Interfaces
+    - Temp Interfaces
+
+    The duplicate is a separate project where changes in one do not affect the other.
+    """
+    # 1. Validate users exist
+    from_user = auth_user_dao.get_by_id(request.from_user_id)
+    to_user = auth_user_dao.get_by_id(request.to_user_id)
+
+    if not from_user or not to_user:
+        raise not_found("User")
+
+    # 2. Retrieve the source project
+    try:
+        source_project = project_dao.get_by_user_and_name(
+            user_id=request.from_user_id,
+            name=request.from_project_name,
+        )
+    except HTTPException:
+        raise not_found(f"Project {request.from_project_name}")
+
+    # 3. Check if a project with the new name already exists for the target user
+    existing_project = project_dao.get_by_user_and_name(
+        user_id=request.to_user_id,
+        name=request.new_project_name,
+    )
+
+    if existing_project:
+        raise HTTPException(
+            status_code=400,
+            detail="A project with this name already exists for the target user.",
+        )
+
+    # 4. Create a new project for the target user
+    project_dao.create(
+        user_id=request.to_user_id,
+        name=request.new_project_name,
+    )
+    session.flush()  # Flush to get the new project ID
+
+    # Get the new project to ensure we have all fields
+    new_project = project_dao.get_by_user_and_name(
+        user_id=request.to_user_id,
+        name=request.new_project_name,
+    )
+
+    # Initialize counters for the response
+    stats = {
+        "project_id": new_project.id,
+        "contexts_copied": 0,
+        "field_types_copied": 0,
+        "log_events_copied": 0,
+        "logs_copied": 0,
+        "json_logs_copied": 0,
+        "derived_logs_copied": 0,
+        "interfaces_copied": 0,
+        "temp_interfaces_copied": 0,
+    }
+
+    # Create mappings to track old IDs to new IDs
+    context_id_map = {}
+    log_event_id_map = {}
+
+    # 5. Duplicate Contexts using bulk insert with RETURNING
+    contexts = context_dao.filter(project_id=source_project.id)
+    context_values = []
+    old_context_ids = []
+
+    for ctx_tuple in contexts:
+        ctx = ctx_tuple[0]
+        old_context_ids.append(ctx.id)
+        context_values.append(
+            {
+                "project_id": new_project.id,
+                "name": ctx.name,
+                "description": ctx.description,
+                "is_versioned": ctx.is_versioned,
+                "version": ctx.version,
+                "allow_duplicates": ctx.allow_duplicates,
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+                "old_id": ctx.id,  # Temporary field to track old ID
+            },
+        )
+
+    if context_values:
+        # Bulk insert contexts and get back the new IDs
+        stmt = (
+            sqlalchemy.insert(Context)
+            .values(
+                [
+                    {k: v for k, v in ctx.items() if k != "old_id"}
+                    for ctx in context_values
+                ],
+            )
+            .returning(Context.id)
+        )
+
+        result = session.execute(stmt)
+        new_context_ids = [row[0] for row in result]
+
+        # Build the context ID mapping
+        for i, old_id in enumerate(old_context_ids):
+            context_id_map[old_id] = new_context_ids[i]
+
+        stats["contexts_copied"] = len(context_values)
+
+    # 6. Duplicate Field Types using bulk insert
+    if context_id_map:
+        field_types = (
+            session.query(FieldType)
+            .filter(
+                FieldType.context_id.in_(list(context_id_map.keys())),
+            )
+            .all()
+        )
+
+        field_type_values = []
+        for ft in field_types:
+            field_type_values.append(
+                {
+                    "project_id": new_project.id,
+                    "context_id": context_id_map[ft.context_id],
+                    "field_name": ft.field_name,
+                    "field_type": ft.field_type,
+                    "mutable": ft.mutable,
+                    "field_category": ft.field_category,
+                },
+            )
+
+        if field_type_values:
+            stmt = sqlalchemy.insert(FieldType).values(field_type_values)
+            session.execute(stmt)
+            stats["field_types_copied"] = len(field_type_values)
+
+    # 7. Duplicate Log Events using bulk insert with RETURNING
+    log_events = log_event_dao.filter(project_id=source_project.id)
+    log_event_values = []
+    old_log_event_ids = []
+
+    for le_tuple in log_events:
+        le = le_tuple[0]
+        old_log_event_ids.append(le.id)
+        log_event_values.append(
+            {
+                "project_id": new_project.id,
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            },
+        )
+
+    if log_event_values:
+        # Bulk insert log events and get back the new IDs
+        stmt = (
+            sqlalchemy.insert(LogEvent).values(log_event_values).returning(LogEvent.id)
+        )
+        result = session.execute(stmt)
+        new_log_event_ids = [row[0] for row in result]
+
+        # Build the log event ID mapping
+        for i, old_id in enumerate(old_log_event_ids):
+            log_event_id_map[old_id] = new_log_event_ids[i]
+
+        stats["log_events_copied"] = len(log_event_values)
+
+    # 8. Duplicate Log Event Context relationships using bulk insert
+    if log_event_id_map and context_id_map:
+        log_event_contexts = (
+            session.query(LogEventContext)
+            .filter(
+                LogEventContext.log_event_id.in_(list(log_event_id_map.keys())),
+            )
+            .all()
+        )
+
+        lec_values = []
+        for lec in log_event_contexts:
+            # Only create if both mappings exist
+            if (
+                lec.log_event_id in log_event_id_map
+                and lec.context_id in context_id_map
+            ):
+                lec_values.append(
+                    {
+                        "log_event_id": log_event_id_map[lec.log_event_id],
+                        "context_id": context_id_map[lec.context_id],
+                    },
+                )
+
+        if lec_values:
+            stmt = sqlalchemy.insert(LogEventContext).values(lec_values)
+            session.execute(stmt)
+
+    # 9. Duplicate Logs using batched bulk insert
+    if log_event_id_map:
+        # Query for Log objects directly
+        logs = (
+            session.query(Log)
+            .filter(
+                Log.log_event_id.in_(list(log_event_id_map.keys())),
+            )
+            .all()
+        )
+
+        log_values = []
+        for log in logs:
+            log_values.append(
+                {
+                    "log_event_id": log_event_id_map[log.log_event_id],
+                    "key": log.key,
+                    "value": log.value,
+                    "version": log.version,
+                    "inferred_type": log.inferred_type,
+                    "created_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc),
+                },
+            )
+
+        # Process logs in batches to avoid memory issues
+        batch_size = 5000
+        for i in range(0, len(log_values), batch_size):
+            batch = log_values[i : i + batch_size]
+            if batch:
+                stmt = sqlalchemy.insert(Log).values(batch)
+                session.execute(stmt)
+
+        stats["logs_copied"] = len(log_values)
+
+    # 10. Duplicate JSON Logs using batched bulk insert
+    if log_event_id_map:
+        # Query for JSONLog objects directly
+        json_logs = (
+            session.query(JSONLog)
+            .filter(
+                JSONLog.log_event_id.in_(list(log_event_id_map.keys())),
+            )
+            .all()
+        )
+
+        json_log_values = []
+        for jl in json_logs:
+            json_log_values.append(
+                {
+                    "log_event_id": log_event_id_map[jl.log_event_id],
+                    "key": jl.key,
+                    "value": jl.value,
+                },
+            )
+
+        # Process JSON logs in batches to avoid memory issues
+        batch_size = 5000
+        for i in range(0, len(json_log_values), batch_size):
+            batch = json_log_values[i : i + batch_size]
+            if batch:
+                stmt = sqlalchemy.insert(JSONLog).values(batch)
+                session.execute(stmt)
+
+        stats["json_logs_copied"] = len(json_log_values)
+
+    # 11. Duplicate Derived Logs using bulk insert
+    if log_event_id_map:
+        derived_log_values = []
+
+        for old_log_event_id, new_log_event_id in log_event_id_map.items():
+            derived_logs = derived_log_dao.filter(log_event_id=old_log_event_id)
+
+            for dl_tuple in derived_logs:
+                dl = dl_tuple[0]
+
+                # Update referenced_logs to use new log_event IDs
+                referenced_logs = dl.referenced_logs
+                new_referenced_logs = {}
+
+                for ref_key, ref_log in referenced_logs.items():
+                    if isinstance(ref_log, list):
+                        new_referenced_logs[ref_key] = [
+                            log_event_id_map.get(lg_id, lg_id) for lg_id in ref_log
+                        ]
+                    else:
+                        new_referenced_logs[ref_key] = ref_log
+
+                derived_log_values.append(
+                    {
+                        "log_event_id": new_log_event_id,
+                        "key": dl.key,
+                        "equation": dl.equation,
+                        "referenced_logs": new_referenced_logs,
+                        "value": dl.value,
+                        "inferred_type": dl.inferred_type,
+                        "created_at": datetime.now(timezone.utc),
+                        "updated_at": datetime.now(timezone.utc),
+                    },
+                )
+
+        # Process derived logs in batches
+        batch_size = 1000
+        for i in range(0, len(derived_log_values), batch_size):
+            batch = derived_log_values[i : i + batch_size]
+            if batch:
+                stmt = sqlalchemy.insert(DerivedLog).values(batch)
+                session.execute(stmt)
+
+        stats["derived_logs_copied"] = len(derived_log_values)
+
+    # 12. Duplicate Interfaces using bulk insert
+    interfaces = interface_dao.get_interfaces(project_id=source_project.id)
+    interface_values = []
+
+    for intf in interfaces:
+        interface_values.append(
+            {
+                "project_id": new_project.id,
+                "name": intf.name,
+                "items": intf.items,
+                "new_counter": intf.new_counter,
+                "context": intf.context,
+            },
+        )
+
+    if interface_values:
+        stmt = sqlalchemy.insert(Interface).values(interface_values)
+        session.execute(stmt)
+        stats["interfaces_copied"] = len(interface_values)
+
+    # 13. Duplicate Temp Interfaces using bulk insert
+    temp_interfaces = temp_interface_dao.get_interfaces(project_id=source_project.id)
+    temp_interface_values = []
+
+    for ti in temp_interfaces:
+        temp_interface_values.append(
+            {
+                "project_id": new_project.id,
+                "name": ti.name,
+                "new_counter": ti.new_counter,
+                "items": ti.items,
+                "context": ti.context,
+            },
+        )
+
+    if temp_interface_values:
+        stmt = sqlalchemy.insert(TempInterface).values(temp_interface_values)
+        session.execute(stmt)
+        stats["temp_interfaces_copied"] = len(temp_interface_values)
+
+    # 14. Commit all changes
+    session.commit()
+
+    return {
+        "info": f"Project '{request.from_project_name}' duplicated successfully to '{request.new_project_name}'!",
+        "details": stats,
+    }
