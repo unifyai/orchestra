@@ -26,6 +26,7 @@ from orchestra.web.api import (  # noqa: WPS235
 )
 from orchestra.web.api.dependencies import auth_admin_key, auth_api_key
 from orchestra.web.api.log.views import admin_router as log_admin_router
+from orchestra.web.api.project.views import admin_router as project_admin_router
 
 API_KEY_AUTH = [Depends(auth_api_key)]
 ADMIN_AUTH = [Depends(auth_admin_key)] if not os.environ.get("ON_PREM") else None
@@ -66,6 +67,13 @@ api_router.include_router(
     log_admin_router,
     prefix="/admin",
     tags=["Logs"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
+    project_admin_router,
+    prefix="/admin",
+    tags=["Projects"],
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )

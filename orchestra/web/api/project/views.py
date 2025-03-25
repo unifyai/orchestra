@@ -310,3 +310,104 @@ def delete_project_contexts(
         context_dao.delete(context[0].id)
 
     return {"info": "Project contexts and logs deleted successfully!"}
+
+
+###########################
+# Admin endpoints
+###########################
+# Admin router for protected endpoints
+admin_router = APIRouter()
+
+
+@admin_router.post(
+    "/share-project",
+    responses={
+        200: {
+            "description": "Project shared successfully",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Project shared successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "User or Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "User or Project not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def admin_share_project(
+    request: ShareProjectRequest,
+    project_dao: ProjectDAO = Depends(),
+    auth_user_dao: AuthUserDAO = Depends(),
+    organization_dao: OrganizationDAO = Depends(),
+    organization_member_dao: OrganizationMemberDAO = Depends(),
+):
+    """
+    Admin endpoint to share a project between users.
+    This enables real-time collaboration between users.
+    """
+    # Lookup the from_user and to_user
+    from_user = auth_user_dao.get_by_id(request.from_user_id)
+    to_user = auth_user_dao.get_by_id(request.to_user_id)
+
+    if not from_user or not to_user:
+        raise not_found("User")
+
+    # Retrieve the project
+    try:
+        project = project_dao.get_by_user_and_name(
+            user_id=request.from_user_id,
+            name=request.project_name,
+        )
+    except HTTPException:
+        raise not_found(f"Project {request.project_name}")
+
+    # Handle organization assignment
+    if project.organization_id is None:
+        # Project is not associated with an organization yet
+        # Try to find an existing organization for from_user
+        orgs = organization_dao.filter(owner_id=request.from_user_id)
+
+        if orgs:
+            # Use existing organization
+            organization = orgs[0][0]
+        else:
+            # Create a new organization
+            org_name = f"{from_user[0].email.split('@')[0]}'s Organization"
+            organization_dao.create(name=org_name, owner_id=request.from_user_id)
+            organization_dao.session.commit()
+
+            # Re-fetch the newly created organization
+            orgs = organization_dao.filter(owner_id=request.from_user_id)
+            organization = orgs[0][0]
+
+        # Update the project to be associated with the organization
+        project_dao.update(
+            id=project.id,
+            organization_id=organization.id,
+            user_id=None,  # Remove user_id as it's now org-owned
+        )
+    else:
+        # Project already belongs to an organization
+        orgs = organization_dao.filter(id=project.organization_id)
+        organization = orgs[0][0]
+
+    # Add the to_user to the organization
+    organization_member_dao.create(
+        organization_id=organization.id,
+        user_id=request.to_user_id,
+        level="admin",  # Give admin access to the shared user
+    )
+
+    # Commit all changes
+    organization_member_dao.session.commit()
+    project_dao.session.commit()
+
+    return {"info": "Project shared successfully!"}
