@@ -1564,11 +1564,7 @@ def update_logs(
                     if existing:
                         version = existing[0][0].version
                     else:
-                        existing_params = log_dao.filter(key=k, project_id=project_id)
-                        highest_version = max(
-                            [-1] + [e[0].version for e in existing_params],
-                        )
-                        version = highest_version + 1
+                        version = log_dao.get_next_param_version(project_id, ctx_id, k)
 
                 # Add to the batch update list
                 # If we have multiple contexts, create an update for each context
