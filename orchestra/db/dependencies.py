@@ -8,12 +8,13 @@ from typing import Any, Dict, Generator
 
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind
-from sqlalchemy import event, text
+from sqlalchemy import event
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from orchestra.logging import structured_logger
 from orchestra.web.api.utils.observability import (
+    get_first_name,
+    get_last_name,
     get_request_id,
     get_user_email,
     get_user_id,
@@ -88,9 +89,15 @@ def before_cursor_execute(conn, cursor, statement, parameters, context, executem
             set_user_context(
                 user_id=request_state.user_id,
                 user_email=getattr(request_state, "user_email", None),
+                first_name=getattr(request_state, "first_name", None),
+                last_name=getattr(request_state, "last_name", None),
             )
         if hasattr(request_state, "request_id"):
             set_request_id(request_state.request_id)
+
+        # Initialize sql_trace list if not present
+        if not hasattr(request_state, "sql_trace"):
+            request_state.sql_trace = []
 
     # Periodically clean up stale entries
     if len(query_start_times) > 100:  # Only check when we have many entries
@@ -178,6 +185,23 @@ def before_cursor_execute(conn, cursor, statement, parameters, context, executem
             },
         )
 
+    # Store query details in request state for sql trace if available
+    if hasattr(conn, "info") and "request_state" in conn.info:
+        request_state = conn.info["request_state"]
+        if hasattr(request_state, "sql_trace"):
+            # Create a trace entry with initial data
+
+            trace_entry = {
+                "query": statement,
+                "parameters": convert_datetimes(parameters),
+                "query_type": query_type,
+                "table": table,
+                "start_time": time.time(),
+                "query_fingerprint": query_fingerprint,
+            }
+            # Store the trace entry in context for later retrieval
+            context._sql_trace_entry = trace_entry
+
 
 def after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
     """Event hook that fires after SQL execution.
@@ -231,6 +255,8 @@ def after_cursor_execute(conn, cursor, statement, parameters, context, executema
         user_id = get_user_id() or "anonymous"
         user_email = get_user_email()
         request_id = get_request_id()
+        first_name = get_first_name()
+        last_name = get_last_name()
 
         # Use the enhanced record_db_query_duration function
         record_db_query_duration(
@@ -274,243 +300,6 @@ def after_cursor_execute(conn, cursor, statement, parameters, context, executema
             log_extras["query_params"] = str(parameters)
 
             # For very slow queries (>500ms), capture detailed performance information
-            if duration > 0.5 and query_type == "select":
-                try:
-                    # 1. Log the original query and parameters (sanitized)
-                    log_extras["query_text"] = statement
-                    # Sanitize parameters to avoid sensitive data in logs
-                    if parameters:
-                        if isinstance(parameters, (list, tuple)):
-                            # For positional parameters, just log the count
-                            log_extras["param_count"] = len(parameters)
-                        elif isinstance(parameters, dict):
-                            # For named parameters, log the keys
-                            log_extras["param_keys"] = list(parameters.keys())
-
-                    # 2. Get table statistics
-                    if table != "unknown":
-                        try:
-                            # Use text() for proper parameter binding
-                            stats_query = text(
-                                "SELECT * FROM pg_stat_user_tables WHERE relname = :table_name",
-                            )
-                            stats_result = conn.execute(
-                                stats_query,
-                                {"table_name": table},
-                            )
-                            stats_row = stats_result.fetchone()
-                            if stats_row:
-                                # Convert row to dict
-                                table_stats = dict(zip(stats_result.keys(), stats_row))
-                                log_extras["table_stats"] = {
-                                    "total_rows": table_stats.get("n_live_tup", 0),
-                                    "dead_rows": table_stats.get("n_dead_tup", 0),
-                                    "sequential_scans": table_stats.get("seq_scan", 0),
-                                    "index_scans": table_stats.get("idx_scan", 0),
-                                    "sequential_rows_read": table_stats.get(
-                                        "seq_tup_read",
-                                        0,
-                                    ),
-                                    "index_rows_fetched": table_stats.get(
-                                        "idx_tup_fetch",
-                                        0,
-                                    ),
-                                    "inserts": table_stats.get("n_tup_ins", 0),
-                                    "updates": table_stats.get("n_tup_upd", 0),
-                                    "deletes": table_stats.get("n_tup_del", 0),
-                                    "last_vacuum": table_stats.get("last_vacuum"),
-                                    "last_analyze": table_stats.get("last_analyze"),
-                                }
-                        except Exception as stats_error:
-                            print(f"Error getting table stats: {stats_error}")
-                            log_extras["table_stats_error"] = str(stats_error)
-
-                    # 3. Get index information
-                    if table != "unknown":
-                        try:
-                            # Use text() for proper parameter binding
-                            index_query = text(
-                                """
-                            SELECT
-                                i.relname as index_name,
-                                a.attname as column_name,
-                                ix.indisunique as is_unique,
-                                ix.indisprimary as is_primary
-                            FROM
-                                pg_class t,
-                                pg_class i,
-                                pg_index ix,
-                                pg_attribute a
-                            WHERE
-                                t.oid = ix.indrelid
-                                AND i.oid = ix.indexrelid
-                                AND a.attrelid = t.oid
-                                AND a.attnum = ANY(ix.indkey)
-                                AND t.relkind = 'r'
-                                AND t.relname = :table_name
-                            ORDER BY
-                                t.relname,
-                                i.relname;
-                            """,
-                            )
-                            index_result = conn.execute(
-                                index_query,
-                                {"table_name": table},
-                            )
-                            indexes = []
-                            for row in index_result:
-                                indexes.append(
-                                    {
-                                        "index_name": row[0],
-                                        "column_name": row[1],
-                                        "is_unique": row[2],
-                                        "is_primary": row[3],
-                                    },
-                                )
-                            log_extras["table_indexes"] = indexes
-                        except Exception as index_error:
-                            print(f"Error getting index info: {index_error}")
-                            log_extras["index_info_error"] = str(index_error)
-
-                    # 4. Check for missing indexes based on query pattern
-                    try:
-                        # Extract WHERE conditions to suggest potential indexes
-                        where_pattern = re.search(
-                            r"WHERE\s+(.+?)(?:ORDER BY|GROUP BY|LIMIT|$)",
-                            statement,
-                            re.IGNORECASE | re.DOTALL,
-                        )
-                        if where_pattern:
-                            where_clause = where_pattern.group(1).strip()
-                            # Extract column names from WHERE clause
-                            column_pattern = re.findall(
-                                r"([a-zA-Z0-9_\.]+)\s*(?:=|>|<|LIKE|IN)",
-                                where_clause,
-                                re.IGNORECASE,
-                            )
-                            potential_index_columns = []
-                            for col in column_pattern:
-                                if "." in col:
-                                    # Handle table.column format
-                                    potential_index_columns.append(col.split(".")[1])
-                                else:
-                                    potential_index_columns.append(col)
-
-                            if potential_index_columns:
-                                log_extras[
-                                    "potential_index_columns"
-                                ] = potential_index_columns
-                    except Exception as pattern_error:
-                        log_extras["pattern_analysis_error"] = str(pattern_error)
-
-                    # 5. Check for table bloat (tables that need VACUUM)
-                    try:
-                        # Use text() for proper parameter binding
-                        bloat_query = text(
-                            """
-                        SELECT
-                            current_database(), schemaname, tablename,
-                            ROUND(CASE WHEN otta=0 THEN 0.0 ELSE sml.relpages/otta::numeric END,1) AS bloat_ratio,
-                            CASE WHEN relpages < otta THEN 0 ELSE relpages::bigint - otta::bigint END AS bloat_pages
-                        FROM (
-                            SELECT
-                                schemaname, tablename, cc.reltuples, cc.relpages, bs,
-                                CEIL((cc.reltuples*((datahdr+ma-
-                                    (CASE WHEN datahdr%ma=0 THEN ma ELSE datahdr%ma END))+nullhdr2+4))/(bs-20::float)) AS otta
-                            FROM (
-                                SELECT
-                                    ma,bs,schemaname,tablename,
-                                    (datawidth+(hdr+ma-(case when hdr%ma=0 THEN ma ELSE hdr%ma END)))::numeric AS datahdr,
-                                    (maxfracsum*(nullhdr+ma-(case when nullhdr%ma=0 THEN ma ELSE nullhdr%ma END))) AS nullhdr2
-                                FROM (
-                                    SELECT
-                                        schemaname, tablename, hdr, ma, bs,
-                                        SUM((1-null_frac)*avg_width) AS datawidth,
-                                        MAX(null_frac) AS maxfracsum,
-                                        hdr+(
-                                            SELECT 1+count(*)/8
-                                            FROM pg_stats s2
-                                            WHERE null_frac<>0 AND s2.schemaname = s.schemaname AND s2.tablename = s.tablename
-                                        ) AS nullhdr
-                                    FROM pg_stats s, (
-                                        SELECT
-                                            (SELECT current_setting('block_size')::numeric) AS bs,
-                                            CASE WHEN substring(v,12,3) IN ('8.0','8.1','8.2') THEN 27 ELSE 23 END AS hdr,
-                                            CASE WHEN v ~ 'mingw32' THEN 8 ELSE 4 END AS ma
-                                        FROM (SELECT version() AS v) AS foo
-                                    ) AS constants
-                                    GROUP BY 1,2,3,4,5
-                                ) AS foo
-                            ) AS foo
-                            JOIN pg_class cc ON cc.relname = tablename
-                            JOIN pg_namespace nn ON cc.relnamespace = nn.oid AND nn.nspname = schemaname
-                            WHERE schemaname = 'public'
-                        ) AS sml
-                        WHERE sml.tablename = :table_name
-                        """,
-                        )
-                        try:
-                            bloat_result = conn.execute(
-                                bloat_query,
-                                {"table_name": table},
-                            )
-                            bloat_row = bloat_result.fetchone()
-                            if bloat_row:
-                                log_extras["table_bloat"] = {
-                                    "bloat_ratio": bloat_row[3],
-                                    "bloat_pages": bloat_row[4],
-                                }
-                        except Exception as e:
-                            # This query might fail on some PostgreSQL versions, so we'll silently ignore errors
-                            pass
-                    except Exception as bloat_error:
-                        log_extras["bloat_analysis_error"] = str(bloat_error)
-
-                    # 6. Performance recommendations based on collected data
-                    recommendations = []
-
-                    # Check if we're doing sequential scans on large tables
-                    if (
-                        log_extras.get("table_stats", {}).get("sequential_scans", 0) > 0
-                        and log_extras.get("table_stats", {}).get("total_rows", 0)
-                        > 1000
-                    ):
-                        recommendations.append(
-                            "Consider adding indexes to avoid sequential scans on large tables",
-                        )
-
-                    # Check for high bloat ratio
-                    if log_extras.get("table_bloat", {}).get("bloat_ratio", 0) > 3:
-                        recommendations.append(
-                            f"Table has high bloat ratio ({log_extras['table_bloat']['bloat_ratio']}). Consider running VACUUM FULL",
-                        )
-
-                    # Check for potential missing indexes
-                    if (
-                        "potential_index_columns" in log_extras
-                        and "table_indexes" in log_extras
-                    ):
-                        indexed_columns = set()
-                        for idx in log_extras["table_indexes"]:
-                            indexed_columns.add(idx["column_name"])
-
-                        for col in log_extras["potential_index_columns"]:
-                            if col not in indexed_columns:
-                                recommendations.append(
-                                    f"Consider adding index on column '{col}'",
-                                )
-
-                    if recommendations:
-                        log_extras["performance_recommendations"] = recommendations
-
-                except Exception as e:
-                    log_extras["analysis_error"] = str(e)
-
-        if is_slow_query:
-            structured_logger.warning(
-                f"DB Query: {query_type} on {table} (SLOW)",
-                extra=log_extras,
-            )
 
         # End OpenTelemetry span if it exists
         if hasattr(context, "_otel_span"):
@@ -526,12 +315,29 @@ def after_cursor_execute(conn, cursor, statement, parameters, context, executema
                 if hasattr(cursor, "rowcount"):
                     span.set_attribute("db.rows_affected", cursor.rowcount)
 
-                # Add lock information if detected
-                if "locks_detected" in log_extras:
-                    span.set_attribute("db.locks_detected", True)
-                    span.set_attribute("db.locks_count", log_extras["locks_count"])
-
                 span.end()
+
+        # Complete the SQL trace entry and add it to request.state.sql_trace
+        if (
+            hasattr(conn, "info")
+            and "request_state" in conn.info
+            and hasattr(context, "_sql_trace_entry")
+        ):
+            request_state = conn.info["request_state"]
+            if hasattr(request_state, "sql_trace"):
+                trace_entry = context._sql_trace_entry
+                # Add duration and other completion data
+                trace_entry["duration"] = duration
+                trace_entry["duration_ms"] = duration * 1000
+                if hasattr(cursor, "rowcount"):
+                    trace_entry["rows_affected"] = cursor.rowcount
+
+                # Add the completed trace entry to the list
+                request_state.sql_trace.append(trace_entry)
+                request_state.first_name = first_name
+                request_state.last_name = last_name
+                request_state.email = user_email
+                request_state.user_id = user_id
 
         # Handle transaction completion
         if query_type == "commit" and conn_id in active_transactions:
