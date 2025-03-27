@@ -107,18 +107,9 @@ class Settings(BaseSettings):
     )
 
     # Production Traffic Project (for internal monitoring)
-    orchestra_organization_name: str = os.environ.get(
-        "ORCHESTRA_ORGANIZATION_NAME",
-        "Orchestra Admin Organization",
-    )
-    orchestra_owner_id: str = os.environ.get(
-        "ORCHESTRA_OWNER_ID",
-        "67abcd12-1fac-4a8f-afe9-c54698c96971",
-    )
-    orchestra_prod_traffic_name: str = os.environ.get(
-        "ORCHESTRA_PROD_TRAFFIC_NAME",
-        "Production Traffic",
-    )
+    orchestra_organization_name: str = "Orchestra Admin Organization"
+    orchestra_owner_id: str = "67abcd12-1fac-4a8f-afe9-c54698c96971"
+    orchestra_prod_traffic_name: str = "Production Traffic"
 
     cors_allow_origins: list[str] = []
 
