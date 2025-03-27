@@ -133,6 +133,8 @@ class ProductionTrafficMiddleware(BaseHTTPMiddleware):
         request: Request,
         call_next: RequestResponseEndpoint,
     ) -> Response:
+        if request.url.path in ["/metrics", "/v0/admin"]:
+            return await call_next(request)
         # Initialize timestamps and data
         request_timestamp = time.time()
         status_code = 500  # Default status code in case of unhandled errors
