@@ -9,6 +9,8 @@ from prometheus_client import Histogram
 user_id_ctx: ContextVar[Optional[str]] = ContextVar("user_id", default=None)
 user_email_ctx: ContextVar[Optional[str]] = ContextVar("user_email", default=None)
 request_id_ctx: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
+first_name_ctx: ContextVar[Optional[str]] = ContextVar("first_name", default=None)
+last_name_ctx: ContextVar[Optional[str]] = ContextVar("last_name", default=None)
 
 # Prometheus metrics
 DB_QUERY_DURATION = Histogram(
@@ -43,7 +45,12 @@ TABLE_QUERY_DURATION = Histogram(
 )
 
 # Helper functions for context management
-def set_user_context(user_id: Optional[str] = None, user_email: Optional[str] = None):
+def set_user_context(
+    user_id: Optional[str] = None,
+    user_email: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+):
     """
     Set user information in the current execution context.
     This context will be available to all code in the current async task.
@@ -56,6 +63,10 @@ def set_user_context(user_id: Optional[str] = None, user_email: Optional[str] = 
         user_id_ctx.set(user_id)
     if user_email is not None:
         user_email_ctx.set(user_email)
+    if first_name is not None:
+        first_name_ctx.set(first_name)
+    if last_name is not None:
+        last_name_ctx.set(last_name)
 
 
 def get_user_id() -> Optional[str]:
@@ -66,6 +77,16 @@ def get_user_id() -> Optional[str]:
 def get_user_email() -> Optional[str]:
     """Get the current user's email from the execution context."""
     return user_email_ctx.get()
+
+
+def get_first_name() -> Optional[str]:
+    """Get the current user's first name from the execution context."""
+    return first_name_ctx.get()
+
+
+def get_last_name() -> Optional[str]:
+    """Get the current user's last name from the execution context."""
+    return last_name_ctx.get()
 
 
 def set_request_id(request_id: Optional[str] = None):
@@ -83,6 +104,8 @@ def clear_user_context():
     """Clear user information from the current execution context."""
     user_id_ctx.set(None)
     user_email_ctx.set(None)
+    first_name_ctx.set(None)
+    last_name_ctx.set(None)
     request_id_ctx.set(None)
 
 
