@@ -121,8 +121,6 @@ def _compute_expression(filter_dict, log_event_alias, session, log_event_ids=Non
     )
     if isinstance(expr, Subquery):
         rows = session.execute(select(expr.c.log_event_id, expr.c.value)).fetchall()
-        # filter out rows where value is None
-        rows = [row for row in rows if row[1] is not None]
         if not rows:
             return None
         return rows
