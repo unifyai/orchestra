@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends
-from sqlalchemy import cast, literal, select
+from sqlalchemy import cast, literal, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -20,6 +20,7 @@ from orchestra.db.models.orchestra_models import (
     LogEvent,
     LogEventContext,
     LogHistory,
+    ParamVersion,
 )
 
 
@@ -752,6 +753,58 @@ class LogDAO:
 
         except Exception as e:
             raise e
+
+    def get_next_param_version(
+        self,
+        project_id: int,
+        context_id: int,
+        param_key: str,
+    ) -> int:
+        """
+        Atomically obtain and increment the version counter for a given parameter key.
+
+        Args:
+            project_id: The project identifier.
+            param_key: The parameter key.
+
+        Returns:
+            The next version number for the parameter.
+        """
+        # Attempt to insert a new row with initial version -1 if not exists
+        insert_stmt = (
+            pg_insert(ParamVersion)
+            .values(
+                project_id=project_id,
+                context_id=context_id,
+                param_key=param_key,
+                last_version=-1,
+            )
+            .on_conflict_do_nothing(
+                index_elements=["project_id", "context_id", "param_key"],
+            )
+        )
+        self.session.execute(insert_stmt)
+
+        # Atomically update the row and get new version number
+        result = self.session.execute(
+            text(
+                """
+                UPDATE param_version
+                SET last_version = last_version + 1
+                WHERE project_id = :project_id AND context_id = :context_id AND param_key = :param_key
+                RETURNING last_version
+            """,
+            ),
+            {
+                "project_id": project_id,
+                "context_id": context_id,
+                "param_key": param_key,
+            },
+        )
+        row = result.fetchone()
+        if row is None:
+            raise ValueError(f"Failed to get next version for parameter {param_key}")
+        return row[0]
 
     def bulk_update(
         self,
