@@ -287,6 +287,9 @@ def ensure_production_traffic_project_exists(app: FastAPI):
         ORGANIZATION_NAME = settings.orchestra_organization_name
         OWNER_ID = settings.orchestra_owner_id
         PROJ_NAME = settings.orchestra_prod_traffic_name
+        logging.info(
+            f"Ensuring {ORGANIZATION_NAME} with owner {OWNER_ID} and {PROJ_NAME} exist",
+        )
         orgs = org_dao.filter(name=ORGANIZATION_NAME)
         if orgs:
             admin_org = orgs[0][0]
@@ -299,11 +302,15 @@ def ensure_production_traffic_project_exists(app: FastAPI):
         org_member_dao = OrganizationMemberDAO(session=session)
         admin_users = session.query(AdminUser).all()
         for admin_user in admin_users:
+            logging.info(
+                f"Ensuring {admin_user.user_id} is added to {ORGANIZATION_NAME}",
+            )
             existing_memberships = org_member_dao.filter(
                 user_id=admin_user.user_id,
                 organization_id=admin_org.id,
             )
             if not existing_memberships:
+                logging.info(f"Adding {admin_user.user_id} to {ORGANIZATION_NAME}")
                 org_member_dao.create(
                     user_id=admin_user.user_id,
                     organization_id=admin_org.id,
@@ -317,12 +324,17 @@ def ensure_production_traffic_project_exists(app: FastAPI):
             name=PROJ_NAME,
         )
         if not existing_projects:
+            logging.info(f"Creating {PROJ_NAME} in {ORGANIZATION_NAME}")
             project_dao.create(
                 name=PROJ_NAME,
                 organization_id=admin_org.id,
             )
         session.commit()
+        logging.info(
+            f"Production Traffic project {PROJ_NAME} created in {ORGANIZATION_NAME}",
+        )
     except Exception as e:
+        logging.error(f"Error creating Production Traffic project: {e}")
         session.rollback()
     finally:
         session.close()
