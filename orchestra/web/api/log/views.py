@@ -134,82 +134,36 @@ class SortConfig(BaseModel):
 ###########################
 # endpoints
 ###########################
-@router.post(
-    "/logs",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "info": "Logs created successfully!",
-                        "log_event_ids": [1, 2, 3],
-                    },
-                },
-            },
-        },
-        404: {
-            "description": "Project Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def create_logs(
-    request_fastapi: Request,
+def create_logs_internal(
     request: CreateLogConfig,
-    project_dao: ProjectDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    log_event_dao: LogEventDAO = Depends(),
-    log_dao: LogDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
+    project_id: int,
+    context_id: int,
+    project_dao: ProjectDAO,
+    field_type_dao: FieldTypeDAO,
+    log_event_dao: LogEventDAO,
+    log_dao: LogDAO,
+    context_dao: ContextDAO,
 ):
     """
-    Creates one or more logs associated to a project. Logs are
-    LLM-call-level data that might depend on other variables.
+    Core implementation of log creation logic, extracted from the create_logs endpoint.
+    This function handles the actual creation of logs after project and context validation.
 
-    If a context is specified and it is versioned, all logs will be versioned
-    and mutable. The context version will be incremented automatically when
-    logs are added, updated, or removed.
+    Args:
+        request: The CreateLogConfig containing entries and params to create
+        project_id: The ID of the project to create logs for
+        context_id: The ID of the context to associate logs with
+        project_dao: Data access object for projects
+        field_type_dao: Data access object for field types
+        log_event_dao: Data access object for log events
+        log_dao: Data access object for logs
+        context_dao: Data access object for contexts
 
-    The context parameter can be:
-    - A string: Uses the string as the context name with default values (description=None, is_versioned=False)
-    - An object: Uses the object's name, description, and is_versioned properties
+    Returns:
+        List of created log event IDs
 
-    An "explicit_types" dictionary can be passed as part of the `entries`.
-    If present, any matching key inside this dictionary will override the
-    inferred type of that particular entry. The explicit_types dictionary
-    can also specify if a field is mutable via a 'mutable' boolean flag:
-
-    {
-        "field_name": {
-            "type": "str",
-            "mutable": false  # Makes the field immutable
-        }
-    }
-
-    By default, all fields are immmutable unless specified otherwise.
-    Once a field is marked as mutable, only then can it be modified through
-    the update endpoint.
-
-    This method returns the ids of the new stored logs.
+    Raises:
+        HTTPException: If validation fails or duplicate logs are detected
     """
-    # check if the project exists
-    try:
-        user_id = request_fastapi.state.user_id
-        project = project_dao.get_by_user_and_name(
-            user_id=user_id,
-            name=request.project,
-        )
-        project_id = project.id
-    except (IndexError, AttributeError):
-        raise not_found("Project")
-
     # Convert single entries/params to list format for uniform processing
     entries_list = (
         request.entries if isinstance(request.entries, list) else [request.entries]
@@ -217,26 +171,6 @@ def create_logs(
     params_list = (
         request.params if isinstance(request.params, list) else [request.params]
     )
-    # Get or create context_id
-    if request.context:
-        # Check if context is a string
-        if isinstance(request.context, str):
-            context_id = context_dao.get_or_create(
-                project_id,
-                name=request.context,
-                description=None,
-                is_versioned=False,
-            )
-        else:
-            context_id = context_dao.get_or_create(
-                project_id,
-                name=request.context.name,
-                description=request.context.description,
-                is_versioned=request.context.is_versioned,
-            )
-    else:
-        # get the default context
-        context_id = context_dao.get_or_create(project_id, name="")
 
     # Validate and normalize params and entries
     if isinstance(request.entries, list) and isinstance(request.params, list):
@@ -414,10 +348,7 @@ def create_logs(
             if existing_param:
                 version = existing_param[0][0].version
             else:
-                # fetch the highest version for that param
-                existing_params = log_dao.filter(key=k, project_id=project_id)
-                highest_version = max([-1] + [e[0].version for e in existing_params])
-                version = highest_version + 1
+                version = log_dao.get_next_param_version(project_id, context_id, k)
 
             # Add to records for bulk creation
             log_records_to_create.append(
@@ -511,7 +442,118 @@ def create_logs(
         context_obj.version += 1
         context_obj.updated_at = datetime.now(timezone.utc)
         context_dao.session.commit()
+
     return log_event_ids
+
+
+@router.post(
+    "/logs",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Logs created successfully!",
+                        "log_event_ids": [1, 2, 3],
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def create_logs(
+    request_fastapi: Request,
+    request: CreateLogConfig,
+    project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    log_event_dao: LogEventDAO = Depends(),
+    log_dao: LogDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+):
+    """
+    Creates one or more logs associated to a project. Logs are
+    LLM-call-level data that might depend on other variables.
+
+    If a context is specified and it is versioned, all logs will be versioned
+    and mutable. The context version will be incremented automatically when
+    logs are added, updated, or removed.
+
+    The context parameter can be:
+    - A string: Uses the string as the context name with default values (description=None, is_versioned=False)
+    - An object: Uses the object's name, description, and is_versioned properties
+
+    An "explicit_types" dictionary can be passed as part of the `entries`.
+    If present, any matching key inside this dictionary will override the
+    inferred type of that particular entry. The explicit_types dictionary
+    can also specify if a field is mutable via a 'mutable' boolean flag:
+
+    {
+        "field_name": {
+            "type": "str",
+            "mutable": false  # Makes the field immutable
+        }
+    }
+
+    By default, all fields are immmutable unless specified otherwise.
+    Once a field is marked as mutable, only then can it be modified through
+    the update endpoint.
+
+    This method returns the ids of the new stored logs.
+    """
+    # check if the project exists
+    try:
+        user_id = request_fastapi.state.user_id
+        project = project_dao.get_by_user_and_name(
+            user_id=user_id,
+            name=request.project,
+        )
+        project_id = project.id
+    except (IndexError, AttributeError):
+        raise not_found("Project")
+
+    # Get or create context_id
+    if request.context:
+        # Check if context is a string
+        if isinstance(request.context, str):
+            context_id = context_dao.get_or_create(
+                project_id,
+                name=request.context,
+                description=None,
+                is_versioned=False,
+            )
+        else:
+            context_id = context_dao.get_or_create(
+                project_id,
+                name=request.context.name,
+                description=request.context.description,
+                is_versioned=request.context.is_versioned,
+            )
+    else:
+        # get the default context
+        context_id = context_dao.get_or_create(project_id, name="")
+
+    # Call the internal implementation with validated project and context
+    return create_logs_internal(
+        request=request,
+        project_id=project_id,
+        context_id=context_id,
+        project_dao=project_dao,
+        field_type_dao=field_type_dao,
+        log_event_dao=log_event_dao,
+        log_dao=log_dao,
+        context_dao=context_dao,
+    )
 
 
 def unify_id_sets_by_subset(alias_id_sets: Dict[str, Set[int]]) -> Dict[str, Set[int]]:
