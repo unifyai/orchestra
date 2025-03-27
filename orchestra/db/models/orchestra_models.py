@@ -702,6 +702,29 @@ class LogHistory(Base):
     archived_at = Column(TIMESTAMP, server_default=func.now())
 
 
+class ParamVersion(Base):
+    """Model class for tracking parameter versions."""
+
+    __tablename__ = "param_version"
+
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    param_key = Column(String, primary_key=True)
+    last_version = Column(Integer, nullable=False)
+
+    __table_args__ = (
+        Index("idx_param_version_project_key", "project_id", "context_id", "param_key"),
+    )
+
+
 class JSONLogHistory(Base):
     __tablename__ = "json_log_history"
 
