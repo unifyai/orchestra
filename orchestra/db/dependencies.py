@@ -1,3 +1,4 @@
+import datetime
 import hashlib
 import logging
 import re
@@ -49,6 +50,20 @@ def cleanup_query_start_times():
 
 # Track query counts by table and type for pattern detection
 query_patterns = defaultdict(int)
+
+
+def convert_datetimes(obj):
+    """Convert datetime objects to ISO 8601 strings."""
+    if isinstance(obj, datetime.datetime):
+        return obj.isoformat()  # Convert datetime to ISO 8601 string
+    elif isinstance(obj, dict):
+        # If the object is a dictionary, recursively convert datetime objects in its values
+        return {key: convert_datetimes(value) for key, value in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        # If the object is a list, recursively convert datetime objects in its elements
+        return [convert_datetimes(item) for item in obj]
+    else:
+        return obj
 
 
 def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
