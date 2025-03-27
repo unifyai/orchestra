@@ -272,6 +272,62 @@ def setup_observability(app: FastAPI) -> None:  # pragma: no cover
     logger.info("Observability stack setup completed")
 
 
+def ensure_production_traffic_project_exists(app: FastAPI):
+    """Ensures a special admin organization and the 'Production Traffic' project exist, and assigns all AdminUser records as admin members."""
+    from orchestra.db.dao.organization_dao import OrganizationDAO
+    from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+    from orchestra.db.dao.project_dao import ProjectDAO
+    from orchestra.db.models.orchestra_models import AdminUser
+
+    session = app.state.db_session_factory()
+
+    try:
+        # 1. Find or create 'Admin Organization'
+        org_dao = OrganizationDAO(session=session)
+        ORGANIZATION_NAME = settings.orchestra_organization_name
+        OWNER_ID = settings.orchestra_owner_id
+        PROJ_NAME = settings.orchestra_prod_traffic_name
+        orgs = org_dao.filter(name=ORGANIZATION_NAME)
+        if orgs:
+            admin_org = orgs[0][0]
+        else:
+            org_dao.create(name=ORGANIZATION_NAME, owner_id=OWNER_ID)
+            session.commit()
+            admin_org = org_dao.filter(name=ORGANIZATION_NAME)[0][0]
+
+        # 2. Ensure all AdminUser records are added as admin members
+        org_member_dao = OrganizationMemberDAO(session=session)
+        admin_users = session.query(AdminUser).all()
+        for admin_user in admin_users:
+            existing_memberships = org_member_dao.filter(
+                user_id=admin_user.user_id,
+                organization_id=admin_org.id,
+            )
+            if not existing_memberships:
+                org_member_dao.create(
+                    user_id=admin_user.user_id,
+                    organization_id=admin_org.id,
+                    level="admin",
+                )
+
+        # 3. Create the 'Production Traffic' project if it doesn't already exist
+        project_dao = ProjectDAO(session=session)
+        existing_projects = project_dao.filter(
+            organization_id=admin_org.id,
+            name=PROJ_NAME,
+        )
+        if not existing_projects:
+            project_dao.create(
+                name=PROJ_NAME,
+                organization_id=admin_org.id,
+            )
+        session.commit()
+    except Exception as e:
+        session.rollback()
+    finally:
+        session.close()
+
+
 def register_startup_event(
     app: FastAPI,
 ) -> Callable[[], None]:  # pragma: no cover
@@ -295,6 +351,7 @@ def register_startup_event(
             location=settings.vertexai_location,
         )
         app.middleware_stack = app.build_middleware_stack()
+        ensure_production_traffic_project_exists(app)
         pass  # noqa: WPS420
 
     return _startup
