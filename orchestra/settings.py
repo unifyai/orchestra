@@ -106,6 +106,11 @@ class Settings(BaseSettings):
         None,
     )
 
+    # Production Traffic Project (for internal monitoring)
+    orchestra_organization_name: str = os.environ.get("ORCHESTRA_ORGANIZATION_NAME")
+    orchestra_owner_id: str = os.environ.get("ORCHESTRA_OWNER_ID")
+    orchestra_prod_traffic_name: str = os.environ.get("ORCHESTRA_PROD_TRAFFIC_NAME")
+
     cors_allow_origins: list[str] = []
 
     vertexai_service_acc_json: str = ""
