@@ -3,8 +3,11 @@ import os
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
+from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.orchestra_models import AdminUser
 from orchestra.web.api.utils.http_responses import admin_not_authorized, invalid_api_key
 from orchestra.web.api.utils.observability import set_user_context
 
@@ -30,25 +33,51 @@ def auth_api_key(
     if db_response:
         request_fastapi.state.user_id = db_response[0][0]
         request_fastapi.state.user_email = db_response[0][1]
+        request_fastapi.state.first_name = db_response[0][2]
+        request_fastapi.state.last_name = db_response[0][3]
 
         # Update the user context for logging/tracing
         set_user_context(
             user_id=request_fastapi.state.user_id,
             user_email=request_fastapi.state.user_email,
+            first_name=request_fastapi.state.first_name,
+            last_name=request_fastapi.state.last_name,
         )
         return
     raise invalid_api_key
 
 
 def auth_admin_key(
+    request_fastapi: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
+    api_key_dao: ApiKeyDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> None:
     """
     Authenticate an admin key.
 
+    :param request_fastapi: FastAPI request object.
     :param credentials: current authorisation credentials.
+    :param db: Database session.
     :raises HTTPException: when admin key is invalid.
     """
     admin_key = credentials.credentials
-    if admin_key != os.environ["ORCHESTRA_ADMIN_KEY"]:
-        raise admin_not_authorized
+
+    # First check if the provided key matches the admin key from environment
+    if admin_key == os.environ["ORCHESTRA_ADMIN_KEY"]:
+        return
+
+    # If not, check if the user is an admin user in the database
+    try:
+        user_id = api_key_dao.get_user_id_and_mail(admin_key)[0][0]
+        admin_user = (
+            session.query(AdminUser).filter(AdminUser.user_id == user_id).first()
+        )
+
+        if admin_user:
+            return
+    except Exception as e:
+        logger.error(f"Error checking admin user status: {e}")
+
+    # If neither condition is met, raise unauthorized exception
+    raise admin_not_authorized
