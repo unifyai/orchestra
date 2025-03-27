@@ -28,8 +28,10 @@ from orchestra.db.models.orchestra_models import (
     Log,
     LogEvent,
     LogEventContext,
+    Organization,
     TempInterface,
 )
+from orchestra.settings import settings
 from orchestra.web.api.project.schema import (
     DuplicateProjectRequest,
     ProjectConfig,
@@ -129,10 +131,23 @@ def delete_project(
         example="eval-project",
     ),
     project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Deletes a project from your account.
     """
+    # Check if trying to delete the protected project (Production Traffic)
+    ORGANIZATION_NAME = settings.orchestra_organization_name
+    OWNER_ID = settings.orchestra_owner_id
+    PROJ_NAME = settings.orchestra_prod_traffic_name
+    orchestra_org = (
+        session.query(Organization)
+        .filter(
+            Organization.name == ORGANIZATION_NAME,
+            Organization.owner_id == OWNER_ID,
+        )
+        .first()
+    )
     try:
         # Get the project using the new access-aware method
         project = project_dao.get_by_user_and_name(
@@ -140,6 +155,11 @@ def delete_project(
             name=name,
         )
         project_id = project.id
+        if name == PROJ_NAME and project.organization_id == orchestra_org.id:
+            raise HTTPException(
+                status_code=403,
+                detail=f"The '{PROJ_NAME}' project cannot be deleted.",
+            )
         project_dao.delete(id=project_id)
 
     except:
