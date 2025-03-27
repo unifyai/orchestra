@@ -52,7 +52,12 @@ class ApiKeyDAO:
         return rows.fetchall()
 
     def get_user_id_and_mail(self, key):
-        query = select(ApiKey.user_id, AuthUser.email)
+        query = select(
+            ApiKey.user_id,
+            AuthUser.email,
+            AuthUser.name,
+            AuthUser.last_name,
+        )
         query = query.join(AuthUser, ApiKey.user_id == AuthUser.id)
         query = query.where(ApiKey.key == key)
         rows = self.session.execute(query)
