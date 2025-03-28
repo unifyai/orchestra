@@ -11,7 +11,6 @@ from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
-from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.settings import settings
@@ -20,6 +19,9 @@ from orchestra.web.api.log.views import CreateLogConfig, create_logs_internal
 
 async def log_production_traffic(
     user_id: Optional[int],
+    project_id: Optional[int],
+    context_id: Optional[int],
+    project_name: Optional[str],
     email: Optional[str],
     first_name: Optional[str],
     last_name: Optional[str],
@@ -37,6 +39,9 @@ async def log_production_traffic(
 
     Args:
         user_id: The ID of the user making the request
+        project_id: The ID of the project
+        context_id: The ID of the context
+        project_name: The name of the project
         email: The email of the user
         first_name: The first name of the user
         last_name: The last name of the user
@@ -59,25 +64,6 @@ async def log_production_traffic(
         log_dao = LogDAO(session)
         field_type_dao = FieldTypeDAO(session)
         context_dao = ContextDAO(session)
-        org_dao = OrganizationDAO(session)
-        # Get the Production Traffic project
-        orgs = org_dao.filter(
-            name=settings.orchestra_organization_name,
-            owner_id=settings.orchestra_owner_id,
-        )
-        if not orgs:
-            return
-        org_id = orgs[0][0].id
-        projects = project_dao.filter(
-            name=settings.orchestra_prod_traffic_name,
-            organization_id=org_id,
-        )
-        if not projects:
-            return
-
-        project_id = projects[0][0].id
-        project_name = settings.orchestra_prod_traffic_name
-
         # Prepare log entries
         entries = {
             "user_id": user_id,
@@ -95,13 +81,6 @@ async def log_production_traffic(
             "status_code": status_code,
         }
 
-        # Call create_logs_internal directly to avoid HTTP call and middleware recursion
-        context_id = context_dao.get_or_create(
-            project_id,
-            name="",
-            description=None,
-            is_versioned=False,
-        )
         event_ids = create_logs_internal(
             project_id=project_id,
             context_id=context_id,
@@ -170,6 +149,9 @@ class ProductionTrafficMiddleware(BaseHTTPMiddleware):
             # Use background tasks to avoid impacting response time
             # Get user information from request state if available
             user_id = getattr(request.state, "user_id", None)
+            project_id = getattr(request.state, "project_id", None)
+            context_id = getattr(request.state, "context_id", None)
+            project_name = settings.orchestra_organization_name
             email = getattr(request.state, "email", None)
             first_name = getattr(request.state, "first_name", None)
             last_name = getattr(request.state, "last_name", None)
@@ -178,6 +160,9 @@ class ProductionTrafficMiddleware(BaseHTTPMiddleware):
             tasks.add_task(
                 log_production_traffic,
                 user_id=user_id,
+                project_id=project_id,
+                context_id=context_id,
+                project_name=project_name,
                 email=email,
                 first_name=first_name,
                 last_name=last_name,
