@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 # Global variable to store the engine instance
 _engine = None
+_prod_traffic_project_id = None
+_prod_traffic_context_id = None
 
 
 def _setup_db(app: FastAPI) -> None:  # pragma: no cover
@@ -111,6 +113,16 @@ def get_engine():
         raise RuntimeError("Database engine not initialized")
 
     return _engine
+
+
+def get_prod_traffic_project_id_and_context_id():
+    """
+    Get the ID of the Production Traffic project and context.
+    """
+    global _prod_traffic_project_id
+    global _prod_traffic_context_id
+
+    return _prod_traffic_project_id, _prod_traffic_context_id
 
 
 def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
@@ -274,10 +286,14 @@ def setup_observability(app: FastAPI) -> None:  # pragma: no cover
 
 def ensure_production_traffic_project_exists(app: FastAPI):
     """Ensures a special admin organization and the 'Production Traffic' project exist, and assigns all AdminUser records as admin members."""
+    from orchestra.db.dao.context_dao import ContextDAO
     from orchestra.db.dao.organization_dao import OrganizationDAO
     from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.project_dao import ProjectDAO
     from orchestra.db.models.orchestra_models import AdminUser
+
+    global _prod_traffic_project_id
+    global _prod_traffic_context_id
 
     session = app.state.db_session_factory()
 
@@ -319,17 +335,34 @@ def ensure_production_traffic_project_exists(app: FastAPI):
 
         # 3. Create the 'Production Traffic' project if it doesn't already exist
         project_dao = ProjectDAO(session=session)
-        existing_projects = project_dao.filter(
+        existing_project = project_dao.filter(
             organization_id=admin_org.id,
             name=PROJ_NAME,
         )
-        if not existing_projects:
+        if not existing_project:
             logging.info(f"Creating {PROJ_NAME} in {ORGANIZATION_NAME}")
             project_dao.create(
                 name=PROJ_NAME,
                 organization_id=admin_org.id,
             )
-        session.commit()
+            session.commit()
+            existing_project = project_dao.filter(
+                organization_id=admin_org.id,
+                name=PROJ_NAME,
+            )
+            project_id = existing_project[0][0].id
+        else:
+            project_id = existing_project[0][0].id
+
+        context_dao = ContextDAO(session=session)
+        context_id = context_dao.get_or_create(
+            project_id,
+            name="",
+            description=None,
+            is_versioned=False,
+        )
+        _prod_traffic_project_id = project_id
+        _prod_traffic_context_id = context_id
         logging.info(
             f"Production Traffic project {PROJ_NAME} created in {ORGANIZATION_NAME}",
         )
