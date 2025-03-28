@@ -2973,7 +2973,7 @@ def get_logs(
     # Stage 2: Grouping Case
     #   (a) Retrieve all matching log event IDs (ignoring limit/offset)
     # -----------------------------------------------------------
-    event_ids, total_count = _get_all_filtered_log_event_ids(
+    event_ids_subq, total_count = _get_all_filtered_log_event_ids(
         request_fastapi=request_fastapi,
         project=project,
         context=context,
@@ -2985,26 +2985,25 @@ def get_logs(
         context_dao=context_dao,
         field_type_dao=field_type_dao,
         session=session,
+        as_subquery=True,  # Keep IDs as a subquery to avoid materializing large lists
     )
     field_order_map = field_type_dao.get_ordered_field_names(
-        project_dao.filter(name=project, user_id=request_fastapi.state.user_id)[0][
-            0
-        ].id,
+        project_id,
         context_id=context_id,
     )
     field_map = field_type_dao.get_field_types(
-        project_dao.filter(name=project, user_id=request_fastapi.state.user_id)[0][
-            0
-        ].id,
+        project_id,
         context_id=context_id,
     )
     if return_ids_only:
+        all_ids = session.query(event_ids_subq).all()  # each row is a tuple (id,)
+        event_ids = [r[0] for r in all_ids]
         return list(dict.fromkeys(event_ids))
 
     # -----------------------------------------------------------
     # Stage 3: Get Parameter Versions for the Log Events
     # -----------------------------------------------------------
-    params_out = _get_params_for_log_events(event_ids, session)
+    params_out = _get_params_for_log_events(event_ids_subq, session)
 
     # -----------------------------------------------------------
     # Stage 4: Build Grouped Structure
@@ -3013,7 +3012,7 @@ def get_logs(
         grouped_result = _build_grouped_data(
             request_fastapi=request_fastapi,
             project_id=project_id,
-            log_event_ids=event_ids,
+            log_event_ids=event_ids_subq,
             field_order_map=field_order_map,
             field_types=field_map,
             group_by=group_by,
@@ -3053,7 +3052,7 @@ def get_logs(
         # -----------------------------------------------------------
         rows, context_len, _ = _fetch_logs_for_event_ids(
             request_fastapi=request_fastapi,
-            event_ids=event_ids,
+            event_ids=event_ids_subq,
             project_id=project_id,
             column_context=column_context,
             context=context,
@@ -3081,7 +3080,7 @@ def get_logs(
             prefix, raw_key = parse_group_key(group_field)
             is_param = prefix == "params"
             distinct_values = _get_distinct_group_values(
-                log_event_ids=event_ids,
+                log_event_ids=event_ids_subq,
                 group_key=raw_key,
                 session=session,
                 is_param=is_param,
@@ -3090,7 +3089,7 @@ def get_logs(
             used_ids = set()
             for val in distinct_values:
                 subset_ids = _get_log_event_ids_for_group_value(
-                    log_event_ids=event_ids,
+                    log_event_ids=event_ids_subq,
                     group_key=raw_key,
                     group_value=val,
                     session=session,
@@ -3098,6 +3097,8 @@ def get_logs(
                 )
                 value_to_ids[val] = subset_ids
                 used_ids.update(subset_ids)
+            all_ids = session.query(event_ids_subq).all()
+            event_ids = [r[0] for r in all_ids]
             missing_ids = list(set(event_ids) - used_ids)
             if missing_ids:
                 value_to_ids["null"] = missing_ids
@@ -4894,13 +4895,13 @@ def _get_log_event_ids_for_group_value(
 
 
 def _get_params_for_log_events(
-    log_event_ids: List[int],
+    log_event_ids: Subquery,
     session,
 ) -> Dict[str, Dict[int, Any]]:
     """Get all parameter versions used across the log events."""
     query = (
         session.query(Log)
-        .filter(Log.log_event_id.in_(log_event_ids))
+        .filter(Log.log_event_id.in_(select(log_event_ids)))
         .filter(Log.version.isnot(None))
     )
 
@@ -5004,7 +5005,8 @@ def _get_all_filtered_log_event_ids(
     field_type_dao: FieldTypeDAO,
     session=Depends(get_db_session),
     return_versions: bool = False,
-) -> Tuple[List[int], int]:
+    as_subquery: bool = False,
+) -> Union[Tuple[List[int], int], Tuple[Subquery, int]]:
     """
     Return all log_event_ids (no pagination, no field-level filtering) that match
     these top-level filters: from_ids, exclude_ids, filter_expr, context, and project.
@@ -5173,17 +5175,22 @@ def _get_all_filtered_log_event_ids(
             ),
         )
 
-    # Execute the query: we get all relevant event IDs (no limit/offset)
-    all_ids = log_event_query.all()  # each row is a tuple (id,)
-    event_ids = [r[0] for r in all_ids]
-    total_count = len(event_ids)
+    # Get the total count
+    total_count = log_event_query.count()
 
-    return event_ids, total_count
+    if as_subquery:
+        # Return the query as a subquery without materializing it
+        return log_event_query.subquery(name="filtered_event_ids"), total_count
+    else:
+        # Execute the query: we get all relevant event IDs (no limit/offset)
+        all_ids = log_event_query.all()  # each row is a tuple (id,)
+        event_ids = [r[0] for r in all_ids]
+        return event_ids, total_count
 
 
 def _fetch_logs_for_event_ids(
     request_fastapi: Request,
-    event_ids: List[int],
+    event_ids: Union[List[int], Subquery],
     project_id: int,
     column_context: Optional[str],
     context: Optional[str],
@@ -5206,14 +5213,26 @@ def _fetch_logs_for_event_ids(
     + pagination to the distinct event_ids, and return (rows, count).
     If latest_timestamp=True, return only the max updated_at across those logs.
     """
-    if not event_ids:
-        return ([], 0) if not latest_timestamp else None
+    # Check if event_ids is empty
+    if isinstance(event_ids, list):
+        if not event_ids:
+            return ([], 0) if not latest_timestamp else None
+    else:
+        # For subquery, check if it returns any rows
+        count_check = session.query(event_ids.c.id).limit(1).all()
+        if not count_check:
+            return ([], 0) if not latest_timestamp else None
 
-    event_ids_cte = (
-        session.query(LogEvent.id.label("id"))
-        .filter(LogEvent.id.in_(event_ids))
-        .cte("event_ids_cte")
-    )
+    # Create a CTE from either the list or use the subquery directly
+    if isinstance(event_ids, list):
+        event_ids_cte = (
+            session.query(LogEvent.id.label("id"))
+            .filter(LogEvent.id.in_(event_ids))
+            .cte("event_ids_cte")
+        )
+    else:
+        # If event_ids is already a subquery, use it directly
+        event_ids_cte = event_ids
     # 1) Build union subquery from base logs + derived logs, for these event IDs
     unified_logs_subq = _build_unified_logs_subquery(
         session=session,
@@ -5570,7 +5589,7 @@ def _get_reduction_expr(metric, inferred_type, aggCol, label):
 
 def _handle_group_depth_level(
     session,
-    log_event_ids,
+    log_event_ids: Union[List[int], Subquery],
     field_types,
     group_by,
     group_sorting,
@@ -5583,11 +5602,16 @@ def _handle_group_depth_level(
     current_group_key = group_by[level]
     prefix, raw_key = parse_group_key(current_group_key)
 
-    event_ids_cte = (
-        session.query(LogEvent.id.label("id"))
-        .filter(LogEvent.id.in_(log_event_ids))
-        .cte("event_ids_cte")
-    )
+    # Create a CTE from either the list or use the subquery directly
+    if isinstance(log_event_ids, list):
+        event_ids_cte = (
+            session.query(LogEvent.id.label("id"))
+            .filter(LogEvent.id.in_(log_event_ids))
+            .cte("event_ids_cte")
+        )
+    else:
+        # If log_event_ids is already a subquery, use it directly
+        event_ids_cte = log_event_ids
 
     # Build unified logs subquery for the current log_event_ids
     unified = _build_unified_logs_subquery(
@@ -5607,7 +5631,7 @@ def _handle_group_depth_level(
             func.count(func.distinct(unified.c.log_event_id)).label("log_count"),
         )
         .filter(
-            unified.c.log_event_id.in_(log_event_ids),
+            unified.c.log_event_id.in_(select(log_event_ids)),
             unified.c.key == raw_key,
         )
         .group_by(field_to_compare)
@@ -5654,7 +5678,7 @@ def _handle_group_depth_level(
                         ),
                     )
                     .filter(
-                        base_alias.c.log_event_id.in_(log_event_ids),
+                        base_alias.c.log_event_id.in_(select(log_event_ids)),
                         base_alias.c.key == raw_key,
                     )
                     .subquery("sub_subq")
@@ -5754,7 +5778,7 @@ def _handle_group_depth_level(
 def _build_grouped_data(
     request_fastapi: Request,
     project_id: int,
-    log_event_ids: List[int],
+    log_event_ids: Subquery,
     field_order_map: Dict[str, int],
     field_types: Dict[str, str],
     group_by: List[str],
@@ -5787,7 +5811,7 @@ def _build_grouped_data(
     Performance is improved by minimizing in-memory processing.
     """
 
-    def _fetch_leaf_logs(ids: List[int]) -> Any:
+    def _fetch_leaf_logs(ids: Subquery) -> Any:
         rows, ctx_len, leaf_count = _fetch_logs_for_event_ids(
             request_fastapi=request_fastapi,
             event_ids=ids,
@@ -5809,23 +5833,32 @@ def _build_grouped_data(
         logs_out, _ = _format_flat_logs(rows, ctx_len, value_limit, field_order_map)
         return logs_out
 
-    total_logs_in_group = len(log_event_ids)
-    if total_logs_in_group == 0:
-        return {}
+    # Check if log_event_ids is a list or a subquery
+    if isinstance(log_event_ids, list):
+        total_logs_in_group = len(log_event_ids)
+        if total_logs_in_group == 0:
+            return {}
+    else:
+        # For subquery, check if it returns any rows
+        count_check = session.query(log_event_ids.c.id).limit(1).all()
+        if not count_check:
+            return {}
 
     if level >= len(group_by):
         if groups_only:
             if return_timestamps:
                 rows = (
                     session.query(LogEvent.id, LogEvent.created_at)
-                    .filter(LogEvent.id.in_(log_event_ids))
+                    .filter(LogEvent.id.in_(select(log_event_ids)))
                     .all()
                 )
                 return {
                     row[0]: row[1].isoformat() for row in rows if row[1] is not None
                 }
             else:
-                return log_event_ids
+                all_ids = session.query(log_event_ids).all()
+                event_ids = [r[0] for r in all_ids]
+                return event_ids
         return _fetch_leaf_logs(log_event_ids)
 
     # Special branch for when we've reached the requested group_depth (we simply return the group counts)
@@ -5862,11 +5895,16 @@ def _build_grouped_data(
     # Parse the group key to get prefix and raw key
     prefix, raw_key = parse_group_key(current_group_key)
 
-    event_ids_cte = (
-        session.query(LogEvent.id.label("id"))
-        .filter(LogEvent.id.in_(log_event_ids))
-        .cte("event_ids_cte")
-    )
+    # Create a CTE from either the list or use the subquery directly
+    if isinstance(log_event_ids, list):
+        event_ids_cte = (
+            session.query(LogEvent.id.label("id"))
+            .filter(LogEvent.id.in_(log_event_ids))
+            .cte("event_ids_cte")
+        )
+    else:
+        # If log_event_ids is already a subquery, use it directly
+        event_ids_cte = log_event_ids
 
     unified = _build_unified_logs_subquery(
         session=session,
@@ -6119,7 +6157,7 @@ def _build_grouped_data(
 # TODO(yusha): refactor get_logs_query to make it modular
 def _build_unified_logs_subquery(
     session,
-    event_ids: Optional[List[int]] = None,
+    event_ids: Optional[Subquery] = None,
     relevant_log_events: Optional[Subquery] = None,
     return_versions: bool = False,
 ) -> Subquery:
