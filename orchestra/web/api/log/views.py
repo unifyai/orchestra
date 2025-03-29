@@ -5749,11 +5749,14 @@ def _handle_group_depth_level(
         group_list.append({"key": str(group_val), "value": log_count})
 
     # Find missing IDs (logs that don't have this key)
-    missing_ids_q = session.query(LogEvent.id).filter(
-        LogEvent.id.in_(select(event_ids_cte.c.id)),
-        ~exists().where(
-            and_(unified.c.log_event_id == LogEvent.id, unified.c.key == raw_key),
-        ),
+    present_value_q = _build_unified_logs_subquery(
+        session=session,
+        relevant_log_events=event_ids_cte,
+        return_versions=return_versions,
+        key=raw_key,
+    )
+    missing_ids_q = session.query(event_ids_cte.c.id).filter(
+        ~event_ids_cte.c.id.in_(select(present_value_q.c.log_event_id)),
     )
     missing_ids = [row[0] for row in missing_ids_q.all()]
 
@@ -6065,11 +6068,14 @@ def _build_grouped_data(
         # Add to group list instead of directly to result_dict
         group_list.append({"key": str(group_val), "value": substructure})
     # find missing IDs (logs that don't have this key)
-    missing_ids_q = session.query(LogEvent.id).filter(
-        LogEvent.id.in_(select(event_ids_cte.c.id)),
-        ~exists().where(
-            and_(unified.c.log_event_id == LogEvent.id, unified.c.key == raw_key),
-        ),
+    present_value_q = _build_unified_logs_subquery(
+        session=session,
+        relevant_log_events=event_ids_cte,
+        return_versions=return_versions,
+        key=raw_key,
+    )
+    missing_ids_q = session.query(event_ids_cte.c.id).filter(
+        ~event_ids_cte.c.id.in_(select(present_value_q.c.log_event_id)),
     )
     missing_ids = [row[0] for row in missing_ids_q.all()]
     if missing_ids:
@@ -6156,6 +6162,7 @@ def _build_unified_logs_subquery(
     session,
     event_ids: Optional[Subquery] = None,
     relevant_log_events: Optional[Subquery] = None,
+    key: str = None,
     return_versions: bool = False,
 ) -> Subquery:
     """
@@ -6173,10 +6180,13 @@ def _build_unified_logs_subquery(
     if event_ids is None and relevant_log_events is None:
         raise ValueError("Either event_ids or relevant_log_events must be provided")
 
-    def _apply_event_filter(query):
+    def _apply_event_filter(query, table):
         if event_ids is not None:
             return query.filter(LogEvent.id.in_(event_ids))
-        return query.join(relevant_log_events, relevant_log_events.c.id == LogEvent.id)
+        query = query.join(relevant_log_events, relevant_log_events.c.id == LogEvent.id)
+        if key:
+            return query.filter(table.key == key)
+        return query
 
     if return_versions:
         # get latest version + all history logs
@@ -6223,7 +6233,7 @@ def _build_unified_logs_subquery(
             LogEvent.created_at.label("created_at"),
             literal("base").label("source_type"),
         ).join(LogEvent, LogEvent.id == Log.log_event_id)
-        base_logs_q = _apply_event_filter(base_logs_q)
+        base_logs_q = _apply_event_filter(base_logs_q, Log)
 
     derived_logs_q = session.query(
         DerivedLog.id.label("id"),
@@ -6238,7 +6248,7 @@ def _build_unified_logs_subquery(
         DerivedLog.created_at.label("created_at"),
         literal("derived").label("source_type"),
     ).join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
-    derived_logs_q = _apply_event_filter(derived_logs_q)
+    derived_logs_q = _apply_event_filter(derived_logs_q, DerivedLog)
 
     unified_logs_subq = base_logs_q.union_all(derived_logs_q).subquery(
         name="unified_logs",
