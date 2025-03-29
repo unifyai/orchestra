@@ -1,3 +1,4 @@
+import logging
 import time
 import traceback
 from datetime import datetime
@@ -7,14 +8,10 @@ from fastapi import BackgroundTasks, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import ASGIApp
 
-from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.field_type_dao import FieldTypeDAO
-from orchestra.db.dao.log_dao import LogDAO
-from orchestra.db.dao.log_event_dao import LogEventDAO
-from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.db.dependencies import get_db_session
 from orchestra.settings import settings
-from orchestra.web.api.log.views import CreateLogConfig, create_logs_internal
+from orchestra.web.api.utils.gcp import send_pubsub_msg
+
+logger = logging.getLogger(__name__)
 
 
 async def log_production_traffic(
@@ -35,7 +32,7 @@ async def log_production_traffic(
     request_fastapi: Request,
 ) -> None:
     """
-    Write production traffic logs to the 'Production Traffic' project.
+    Publish production traffic logs to PubSub for asynchronous processing.
 
     Args:
         user_id: The ID of the user making the request
@@ -55,18 +52,12 @@ async def log_production_traffic(
         request_fastapi: The original FastAPI request object
     """
     try:
-        session_generator = get_db_session(request_fastapi)
-        session = next(session_generator)
-
-        # Initialize DAOs
-        project_dao = ProjectDAO(session)
-        log_event_dao = LogEventDAO(session)
-        log_dao = LogDAO(session)
-        field_type_dao = FieldTypeDAO(session)
-        context_dao = ContextDAO(session)
-        # Prepare log entries
+        # Prepare log entries as a message for PubSub
         entries = {
             "user_id": user_id,
+            "project_id": project_id,
+            "context_id": context_id,
+            "project_name": project_name,
             "email": email,
             "first_name": first_name,
             "last_name": last_name,
@@ -81,21 +72,15 @@ async def log_production_traffic(
             "status_code": status_code,
         }
 
-        event_ids = create_logs_internal(
-            project_id=project_id,
-            context_id=context_id,
-            request=CreateLogConfig(
-                entries=entries,
-                project=project_name,
-                context=None,
-            ),
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            log_event_dao=log_event_dao,
-            log_dao=log_dao,
-            context_dao=context_dao,
+        # Send to PubSub
+        topic = f"projects/{settings.traffic_log_pubsub_project_id}/topics/{settings.traffic_log_pubsub_topic}"
+        logger.info(f"Sending traffic log to PubSub: {topic} for path: {request_path}")
+        send_pubsub_msg(topic, entries)
+        logger.debug(
+            f"Successfully sent traffic log to PubSub for path: {request_path}",
         )
     except Exception as e:
+        logger.error(f"Error sending traffic log to PubSub: {str(e)}")
         traceback.print_exc()
 
 
