@@ -20,8 +20,7 @@ def send_pubsub_msg(topic: str, msg: Dict[str, str]) -> None:
     # publisher = pubsub_v1.PublisherClient(credentials=credentials)
 
     publisher = pubsub_v1.PublisherClient()
-    future = publisher.publish(topic, json.dumps(msg).encode())
-    future.result()
+    publisher.publish(topic, json.dumps(msg).encode())
 
 
 # Cloud Storage
