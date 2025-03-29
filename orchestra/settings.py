@@ -110,6 +110,9 @@ class Settings(BaseSettings):
     orchestra_organization_name: str = "Orchestra Admin Organization"
     orchestra_owner_id: str = "67abcd12-1fac-4a8f-afe9-c54698c96971"
     orchestra_prod_traffic_name: str = "Production Traffic"
+    traffic_log_pubsub_topic: str = "orchestra-traffic-logs"
+    traffic_log_pubsub_subscription: str = "orchestra-traffic-logs-sub"
+    traffic_log_pubsub_project_id: str = "saas-368716"
 
     cors_allow_origins: list[str] = []
 
