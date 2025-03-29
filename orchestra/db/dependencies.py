@@ -219,6 +219,8 @@ def after_cursor_execute(conn, cursor, statement, parameters, context, executema
         context: Execution context
         executemany: True if executemany is used
     """
+    from orchestra.web.lifetime import get_prod_traffic_project_id_and_context_id
+
     conn_id = id(conn)
     start_time = query_start_times.pop(conn_id, None)
 
@@ -338,6 +340,10 @@ def after_cursor_execute(conn, cursor, statement, parameters, context, executema
                 request_state.last_name = last_name
                 request_state.email = user_email
                 request_state.user_id = user_id
+                (
+                    request_state.project_id,
+                    request_state.context_id,
+                ) = get_prod_traffic_project_id_and_context_id()
 
         # Handle transaction completion
         if query_type == "commit" and conn_id in active_transactions:
