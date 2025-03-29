@@ -6,6 +6,8 @@ from google.cloud.exceptions import NotFound
 
 # Pub/Sub
 
+PUBLISHER = pubsub_v1.PublisherClient()
+
 
 def send_pubsub_msg(topic: str, msg: Dict[str, str]) -> None:
     # TODO: Make sure this sends msgs correctly in:
@@ -19,8 +21,7 @@ def send_pubsub_msg(topic: str, msg: Dict[str, str]) -> None:
     # credentials = service_account.Credentials.from_service_account_file(key_path)
     # publisher = pubsub_v1.PublisherClient(credentials=credentials)
 
-    publisher = pubsub_v1.PublisherClient()
-    publisher.publish(topic, json.dumps(msg).encode())
+    PUBLISHER.publish(topic, json.dumps(msg).encode())
 
 
 # Cloud Storage
