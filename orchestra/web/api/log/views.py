@@ -21,6 +21,7 @@ from fastapi import (
     Request,
     status,
 )
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import (
     INTEGER,
@@ -6484,4 +6485,123 @@ def update_active_derived_logs(
         raise HTTPException(
             status_code=500,
             detail=f"Error processing active derived log templates: {str(e)}",
+        )
+
+
+@admin_router.post(
+    "/process_traffic_logs",
+    responses={
+        200: {
+            "description": "PubSub messages pulled and processed successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "message": "Pulled and processed 10 messages",
+                        "status": "success",
+                    },
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Error processing traffic logs",
+                    },
+                },
+            },
+        },
+    },
+)
+async def process_traffic_logs(
+    max_messages: int = Query(100, description="Maximum number of messages to pull"),
+    session=Depends(get_db_session),
+    project_dao: ProjectDAO = Depends(),
+    log_event_dao: LogEventDAO = Depends(),
+    log_dao: LogDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+    _=Depends(auth_admin_key),
+):
+    """
+    Admin endpoint to manually pull and process traffic log messages from PubSub.
+    This endpoint is designed to be called by internal processes (e.g., Cloud Scheduler) or administrators.
+    """
+    try:
+        from google.cloud import pubsub_v1
+
+        from orchestra.settings import settings
+
+        # Configure the subscriber client
+        subscriber = pubsub_v1.SubscriberClient()
+        subscription_path = subscriber.subscription_path(
+            settings.traffic_log_pubsub_project_id,
+            settings.traffic_log_pubsub_subscription,
+        )
+
+        # The maximum number of messages to return
+        pull_limit = max_messages
+
+        # Pull messages from PubSub
+        response = subscriber.pull(
+            request={"subscription": subscription_path, "max_messages": pull_limit},
+        )
+
+        processed_count = 0
+        ack_ids = []
+
+        # Process the received messages
+        for received_message in response.received_messages:
+            message = received_message.message
+            ack_ids.append(received_message.ack_id)
+
+            # Decode the message data
+            message_data = message.data.decode("utf-8")
+            entry = json.loads(message_data)
+
+            # Extract fields from the entry
+            project_id = entry.pop("project_id")
+            context_id = entry.pop("context_id")
+            project_name = entry.pop("project_name")
+
+            # Create log entry
+            event_ids = create_logs_internal(
+                project_id=project_id,
+                context_id=context_id,
+                request=CreateLogConfig(
+                    entries=entry,
+                    project=project_name,
+                    context=None,
+                ),
+                project_dao=project_dao,
+                field_type_dao=field_type_dao,
+                log_event_dao=log_event_dao,
+                log_dao=log_dao,
+                context_dao=context_dao,
+            )
+
+            processed_count += 1
+
+        # Acknowledge the processed messages
+        if ack_ids:
+            subscriber.acknowledge(
+                request={"subscription": subscription_path, "ack_ids": ack_ids},
+            )
+
+        # Close the subscriber client
+        subscriber.close()
+
+        return {
+            "message": f"Pulled and processed {processed_count} messages",
+            "status": "success",
+        }
+
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Error processing traffic logs: {str(e)}"},
         )
