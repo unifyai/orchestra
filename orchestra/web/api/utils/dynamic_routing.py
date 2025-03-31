@@ -590,11 +590,6 @@ metrics = {
         "ttft": 405.11531099997455,
         "itl": 4.174361656626742,
     },
-    "mixtral-8x7b-instruct-v0.1@mistral-ai": {
-        "cost": 0.7,
-        "ttft": 352.0689869999387,
-        "itl": 12.773902387097081,
-    },
     "mixtral-8x7b-instruct-v0.1@fireworks-ai": {
         "cost": 0.5,
         "ttft": 324.21352400001524,
@@ -614,11 +609,6 @@ metrics = {
         "cost": 0.7,
         "ttft": 713.9613250001275,
         "itl": 15.034942066296473,
-    },
-    "mixtral-8x22b-instruct-v0.1@mistral-ai": {
-        "cost": 3,
-        "ttft": 135,
-        "itl": 12.25,
     },
     "mixtral-8x22b-instruct-v0.1@fireworks-ai": {
         "cost": 0.9,
@@ -660,13 +650,6 @@ baked_router_endpoints = [
         model_id=114,
         provider="openai",
         provider_id=5,
-    ),
-    Endpoint(
-        id=1278,
-        model="mixtral-8x7b-instruct-v0.1",
-        model_id=29,
-        provider="mistral-ai",
-        provider_id=3,
     ),
     Endpoint(
         id=1387,
@@ -723,13 +706,6 @@ baked_router_endpoints = [
         model_id=140,
         provider="anthropic",
         provider_id=1,
-    ),
-    Endpoint(
-        id=1423,
-        model="mixtral-8x22b-instruct-v0.1",
-        model_id=141,
-        provider="mistral-ai",
-        provider_id=3,
     ),
     Endpoint(
         id=1424,
