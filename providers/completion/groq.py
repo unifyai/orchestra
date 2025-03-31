@@ -50,22 +50,22 @@ supported_models = {
     },
     "llama-3.2-1b-chat": {
         "endpoint": "groq/llama-3.2-1b-preview",
-        "context_window": 128000,
+        "context_window": 8000,
         "cost": {"prompt": 0.04, "completion": 0.04},
     },
     "llama-3.2-3b-chat": {
         "endpoint": "groq/llama-3.2-3b-preview",
-        "context_window": 128000,
+        "context_window": 8000,
         "cost": {"prompt": 0.06, "completion": 0.06},
     },
     "llama-3.2-11b-chat": {
         "endpoint": "groq/llama-3.2-11b-vision-preview",
-        "context_window": 128000,
+        "context_window": 8000,
         "cost": {"prompt": 0.18, "completion": 0.18},
     },
     "llama-3.2-90b-chat": {
         "endpoint": "groq/llama-3.2-90b-vision-preview",
-        "context_window": 128000,
+        "context_window": 8000,
         "cost": {"prompt": 0.9, "completion": 0.9},
     },
     "llama-3.3-70b-chat": {

@@ -28,6 +28,11 @@ class FireworksAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "deepseek-v3-0324": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-v3-0324",
+        "context_window": 160000,
+        "cost": {"prompt": 1.2, "completion": 1.2},
+    },
     "deepseek-r1": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-r1",
         "context_window": 160000,
@@ -42,11 +47,6 @@ supported_models = {
         "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
         "context_window": 128000,
         "cost": {"prompt": 0.9, "completion": 0.9},
-    },
-    "llama-3.2-3b-chat": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3p2-3b-instruct",
-        "context_window": 131072,
-        "cost": {"prompt": 0.1, "completion": 0.1},
     },
     "llama-3.2-11b-chat": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct",
