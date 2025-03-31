@@ -523,7 +523,6 @@ if __name__ == "__main__":
             {"provider": "lepton-ai", "model": "llama-2-7b-chat"},
             {"provider": "replicate", "model": "llama-2-7b-chat"},
             {"provider": "together-ai", "model": "llama-2-7b-chat"},
-            {"provider": "mistral-ai", "model": "mistral-7b-instruct-v0.2"},
             {"provider": "aws-bedrock", "model": "mistral-7b-instruct-v0.2"},
         ]
     asyncio.run(main(endpoints))

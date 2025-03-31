@@ -63,7 +63,7 @@ INSERT INTO model VALUES (7, 'gpt-3.5-turbo', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (8, 'claude-3-haiku', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (9, 'llama-3-8b-chat', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (10, 'gemini-1.5-flash', NOW(), 'dummy_task', true);
-INSERT INTO model VALUES (11, 'mistral-7b-instruct-v0.3', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (11, 'mistral-small', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (12, 'claude-3.5-sonnet', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (13, 'llama-3.1-8b-chat', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (14, 'deepseek-v3', NOW(), 'dummy_task', true);

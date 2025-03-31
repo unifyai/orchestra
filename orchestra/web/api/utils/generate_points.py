@@ -559,13 +559,6 @@ metrics = {
         "input_cost": 0.6,
         "output_cost": 0.6,
     },
-    "mixtral-8x7b-instruct-v0.1@mistral-ai": {
-        "cost": 0.7,
-        "ttft": 352.0689869999387,
-        "itl": 12.773902387097081,
-        "input_cost": 0.7,
-        "output_cost": 0.7,
-    },
     "mixtral-8x7b-instruct-v0.1@fireworks-ai": {
         "cost": 0.5,
         "ttft": 324.21352400001524,
@@ -594,13 +587,6 @@ metrics = {
         "input_cost": 0.45,
         "output_cost": 0.7,
     },
-    "mixtral-8x22b-instruct-v0.1@mistral-ai": {
-        "cost": 3,
-        "ttft": 135,
-        "itl": 12.25,
-        "input_cost": 2,
-        "output_cost": 6,
-    },
     "mixtral-8x22b-instruct-v0.1@fireworks-ai": {
         "cost": 0.9,
         "ttft": 314,
@@ -614,13 +600,6 @@ metrics = {
         "itl": 21.88,
         "input_cost": 1.2,
         "output_cost": 1.2,
-    },
-    "mistral-medium@mistral-ai": {
-        "cost": 0.7,  #
-        "ttft": 532.12,
-        "itl": 41.92,
-        "input_cost": 2.7,
-        "output_cost": 8.1,
     },
     "gemma-2b-it@together-ai": {
         "cost": 0.1,
@@ -705,13 +684,6 @@ metrics = {
         "itl": 8.92,
         "input_cost": 0.2,
         "output_cost": 0.2,
-    },
-    "mistral-7b-instruct-v0.2@mistral-ai": {
-        "cost": 0.25,
-        "ttft": 698.41,
-        "itl": 16.51,
-        "input_cost": 0.25,
-        "output_cost": 0.25,
     },
     "mistral-7b-instruct-v0.2@replicate": {
         "cost": 0.1,
