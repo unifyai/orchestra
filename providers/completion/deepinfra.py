@@ -28,14 +28,19 @@ class Deepinfra(BaseCompletionProvider):
 
 
 supported_models = {
+    "deepseek-v3-0324": {
+        "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3-0324",
+        "context_window": 160000,
+        "cost": {"prompt": 0.40, "completion": 0.89},
+    },
     "deepseek-r1": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-R1",
-        "context_window": 15000,
+        "context_window": 160000,
         "cost": {"prompt": 0.55, "completion": 2.19},
     },
     "deepseek-v3": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3",
-        "context_window": 15000,
+        "context_window": 160000,
         "cost": {"prompt": 0.40, "completion": 0.89},
     },
     "llama-3.3-70b-chat": {
@@ -98,15 +103,15 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.1, "completion": 0.2},
     },
-    "gemma-2-9b-it": {
-        "endpoint": "deepinfra/google/gemma-2-9b-it",
-        "context_window": 8000,
-        "cost": {"prompt": 0.03, "completion": 0.06},
+    "gemma-3-12b-it": {
+        "endpoint": "deepinfra/google/gemma-3-12b-it",
+        "context_window": 128000,
+        "cost": {"prompt": 0.05, "completion": 0.1},
     },
-    "gemma-2-27b-it": {
-        "endpoint": "deepinfra/google/gemma-2-27b-it",
-        "context_window": 8000,
-        "cost": {"prompt": 0.27, "completion": 0.27},
+    "gemma-3-4b-it": {
+        "endpoint": "deepinfra/google/gemma-3-4b-it",
+        "context_window": 128000,
+        "cost": {"prompt": 0.02, "completion": 0.04},
     },
     "mistral-small": {
         "endpoint": "mistralai/Mistral-Small-24B-Instruct-2501",
