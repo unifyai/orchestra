@@ -5628,6 +5628,7 @@ def _handle_group_depth_level(
     base_q = (
         session.query(
             field_to_compare.label("group_value"),
+            func.max(unified.c.log_event_id).label("log_event_id"),
             func.count(func.distinct(unified.c.log_event_id)).label("log_count"),
         )
         .filter(
@@ -5635,6 +5636,7 @@ def _handle_group_depth_level(
             unified.c.key == raw_key,
         )
         .group_by(field_to_compare)
+        .order_by(desc("log_event_id").nulls_last())
     )
 
     # Handle aggregator sorting if configured
@@ -5723,8 +5725,8 @@ def _handle_group_depth_level(
             else:
                 base_q = base_q.order_by(desc("agg").nulls_last())
     else:
-        # Default sorting on group value
-        base_q = base_q.order_by(asc("group_value").nulls_last())
+        # Default sorting on log event id
+        base_q = base_q.order_by(desc("log_event_id").nulls_last())
 
     # Calculate total distinct group count before applying pagination
     total_distinct_groups = session.query(
@@ -5921,6 +5923,7 @@ def _build_grouped_data(
     base_q = (
         session.query(
             field_to_compare.label("group_value"),
+            func.max(unified.c.log_event_id).label("log_event_id"),
             func.count(func.distinct(unified.c.log_event_id)).label("group_count"),
         )
         .filter(
@@ -5928,6 +5931,7 @@ def _build_grouped_data(
             unified.c.key == raw_key,
         )
         .group_by(field_to_compare)
+        .order_by(desc("log_event_id").nulls_last())
     )
     # group sorting
     if group_sort_config and group_sort_config.sort_type == SortType.SORT_GROUPS:
@@ -6002,8 +6006,8 @@ def _build_grouped_data(
             else:
                 base_q = base_q.order_by(desc("agg").nulls_last())
     else:
-        # Default sorting on group value  (#TODO sort by desc log event id if no metric is provided)
-        base_q = base_q.order_by(asc("group_value").nulls_last())
+        # Default sorting on log event id
+        base_q = base_q.order_by(desc("log_event_id").nulls_last())
     # Calculate total distinct group count before applying pagination
     # This ensures group_count is accurate regardless of pagination
     total_distinct_groups = session.query(
