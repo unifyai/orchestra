@@ -278,8 +278,8 @@ class BaseCompletionProvider:
                     "vertex_ai",
                 ]:
                     kwargs["extra_body"] = extra_body
-                if (
-                    self.litellm_provider_prefix == "anthropic"
+                elif (
+                    self.litellm_provider_prefix != "vertex_ai"
                     and "thinking" in extra_body
                 ):
                     kwargs["thinking"] = extra_body["thinking"]
