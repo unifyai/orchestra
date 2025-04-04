@@ -26,4 +26,4 @@ class AccountRequest(BaseModel):
 
 class FreezeAccountRequest(BaseModel):
     user_id: str
-    freeze: bool
+    freeze: bool = True
