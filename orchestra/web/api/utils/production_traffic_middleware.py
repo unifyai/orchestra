@@ -97,7 +97,9 @@ class ProductionTrafficMiddleware(BaseHTTPMiddleware):
         request: Request,
         call_next: RequestResponseEndpoint,
     ) -> Response:
-        if any(s in request.url.path for s in ["/metrics", "/v0/admin"]):
+        if any(
+            s in request.url.path for s in ["/metrics", "/v0/admin", "/v0/webhooks"]
+        ):
             return await call_next(request)
         # Initialize timestamps and data
         request_timestamp = time.time()
