@@ -22,3 +22,8 @@ class AccountRequest(BaseModel):
     token_type: str
     id_token: str
     userId: Optional[str] = None
+
+
+class FreezeAccountRequest(BaseModel):
+    user_id: str
+    freeze: bool
