@@ -58,8 +58,11 @@ def auth_admin_key(
 async def check_account_not_frozen(request: Request, users_dao: UsersDAO = Depends()):
     user_id = getattr(request.state, "user_id", None)
     if user_id:
-        if users_dao.is_account_frozen(user_id):
-            raise HTTPException(
-                status_code=403,
-                detail="Your account has been suspended. Please reach out to hello@unify.ai if you have any questions.",
-            )
+        try:
+            if users_dao.is_account_frozen(user_id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Your account has been suspended. Please reach out to hello@unify.ai if you have any questions.",
+                )
+        except Exception as e:
+            pass
