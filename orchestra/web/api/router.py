@@ -21,6 +21,7 @@ from orchestra.web.api import (  # noqa: WPS235
     monitoring,
     project,
     provider,
+    stripe_webhook,
     supported_endpoints,
     users,
 )
@@ -182,3 +183,7 @@ api_router.include_router(
 
 api_router.include_router(monitoring.router)
 api_router.include_router(docs.router)
+api_router.include_router(
+    stripe_webhook.router,
+    tags=["Stripe Webhooks"],
+)
