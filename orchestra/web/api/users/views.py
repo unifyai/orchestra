@@ -11,7 +11,11 @@ from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.web.api.users.schema import AccountRequest, UserRequest
+from orchestra.web.api.users.schema import (
+    AccountRequest,
+    FreezeAccountRequest,
+    UserRequest,
+)
 from orchestra.web.api.utils.http_responses import not_found
 
 admin_router = APIRouter()
@@ -245,6 +249,16 @@ async def reset_user_quotas(
             evaluations_enabled=True,
         )
     return f"User quotas reset successfully for {len(users)} users"
+
+
+@admin_router.post("/auth-user/freeze")
+async def freeze_account(
+    request: FreezeAccountRequest,
+    users_dao: UsersDAO = Depends(),
+):
+    users_dao.set_frozen_status(request.user_id, request.freeze)
+    status_str = "frozen" if request.freeze else "unfrozen"
+    return {"message": f"Account {status_str} successfully!"}
 
 
 @admin_router.get("/api_key/list")
