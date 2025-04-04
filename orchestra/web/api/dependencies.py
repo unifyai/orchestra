@@ -1,10 +1,11 @@
 import logging
 import os
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
+from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.utils.http_responses import admin_not_authorized, invalid_api_key
 from orchestra.web.api.utils.observability import set_user_context
 
@@ -52,3 +53,13 @@ def auth_admin_key(
     admin_key = credentials.credentials
     if admin_key != os.environ["ORCHESTRA_ADMIN_KEY"]:
         raise admin_not_authorized
+
+
+async def check_account_not_frozen(request: Request, users_dao: UsersDAO = Depends()):
+    user_id = getattr(request.state, "user_id", None)
+    if user_id:
+        if users_dao.is_account_frozen(user_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Your account has been suspended. Please reach out to hello@unify.ai if you have any questions.",
+            )
