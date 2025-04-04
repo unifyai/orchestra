@@ -159,8 +159,27 @@ class Recharge(Base):
     at = Column(TIMESTAMP, nullable=False)
     user_id = Column(String(), ForeignKey("users.id"), nullable=False)
     quantity = Column(Numeric(), nullable=False)
-    type = Column(String(), ForeignKey("recharge_type.type"), nullable=False)
+    type = Column(String())
     transaction_id = Column(String())
+    status = Column(
+        String(),
+        nullable=False,
+        server_default="pending",
+    )  # one of: pending, completed, refunded, disputed
+
+
+class WebhookLog(Base):
+    """
+    Model for tracking processed Stripe webhook events to enforce idempotency.
+    Each record represents a successfully processed webhook event.
+    """
+
+    __tablename__ = "webhook_log"
+
+    id = Column(String, primary_key=True)
+    event_id = Column(String, unique=True, nullable=False)
+    event_type = Column(String, nullable=False)
+    processed_at = Column(TIMESTAMP, nullable=False, server_default=func.now())
 
 
 class RechargeType(Base):
