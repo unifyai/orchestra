@@ -148,6 +148,7 @@ class Users(Base):
     autorecharge_threshold = Column(Numeric, nullable=False)
     autorecharge_qty = Column(Numeric, nullable=False)
     store_prompts = Column(Boolean)
+    frozen = Column(Boolean(), nullable=False, server_default="f")
 
 
 class Recharge(Base):
