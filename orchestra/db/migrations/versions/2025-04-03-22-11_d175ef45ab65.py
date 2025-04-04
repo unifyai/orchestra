@@ -1,7 +1,7 @@
 """Add webhook log table and recharge status column
 
 Revision ID: d175ef45ab65
-Revises: 0052a63d731e
+Revises: 9ad68c99bcd8
 Create Date: 2025-04-03 22:11:55.382058
 
 """
@@ -10,7 +10,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "d175ef45ab65"
-down_revision = "0052a63d731e"
+down_revision = "9ad68c99bcd8"
 branch_labels = None
 depends_on = None
 
