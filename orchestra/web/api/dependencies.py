@@ -33,15 +33,11 @@ def auth_api_key(
     if db_response:
         request_fastapi.state.user_id = db_response[0][0]
         request_fastapi.state.user_email = db_response[0][1]
-        request_fastapi.state.first_name = db_response[0][2]
-        request_fastapi.state.last_name = db_response[0][3]
 
         # Update the user context for logging/tracing
         set_user_context(
             user_id=request_fastapi.state.user_id,
             user_email=request_fastapi.state.user_email,
-            first_name=request_fastapi.state.first_name,
-            last_name=request_fastapi.state.last_name,
         )
         return
     raise invalid_api_key
