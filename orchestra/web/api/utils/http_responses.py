@@ -109,6 +109,11 @@ invalid_api_key = HTTPException(
     detail="Invalid API key. You can generate one at https://console.unify.ai/login",
 )
 
+account_frozen = HTTPException(
+    status_code=status.HTTP_403_FORBIDDEN,
+    detail="Your account has been suspended. Please reach out to hello@unify.ai if you have any questions.",
+)
+
 insufficient_credits_error = HTTPException(
     status_code=status.HTTP_402_PAYMENT_REQUIRED,
     detail=(

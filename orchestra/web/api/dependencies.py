@@ -1,7 +1,7 @@
 import logging
 import os
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -9,7 +9,11 @@ from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import AdminUser
-from orchestra.web.api.utils.http_responses import admin_not_authorized, invalid_api_key
+from orchestra.web.api.utils.http_responses import (
+    account_frozen,
+    admin_not_authorized,
+    invalid_api_key,
+)
 from orchestra.web.api.utils.observability import set_user_context
 
 security = HTTPBearer()
@@ -85,9 +89,9 @@ async def check_account_not_frozen(request: Request, users_dao: UsersDAO = Depen
     if user_id:
         try:
             if users_dao.is_account_frozen(user_id):
-                raise HTTPException(
-                    status_code=403,
-                    detail="Your account has been suspended. Please reach out to hello@unify.ai if you have any questions.",
-                )
+                raise account_frozen
         except Exception as e:
-            pass
+            if e == account_frozen:
+                raise account_frozen
+            else:
+                pass
