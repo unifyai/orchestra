@@ -184,3 +184,29 @@ class UsersDAO:
         user = self.get_user_with_id(user_id)
         if user is not None:
             setattr(user, "autorecharge_qty", decimal.Decimal(qty))  # noqa: B010
+
+    def set_frozen_status(
+        self,
+        user_id: str,
+        frozen: bool,
+    ) -> None:
+        """
+        Set the frozen status of a user account.
+
+        :param user_id: id of a user.
+        :param frozen: whether the account should be frozen (true) or unfrozen (false).
+        """
+        user = self.get_user_with_id(user_id)
+        if user is not None:
+            setattr(user, "frozen", frozen)
+            self.session.commit()
+
+    def is_account_frozen(self, user_id: str) -> bool:
+        """
+        Check if a user account is frozen.
+
+        :param user_id: id of a user.
+        :return: True if the account is frozen, False otherwise.
+        """
+        user = self.get_user_with_id(user_id)
+        return user.frozen
