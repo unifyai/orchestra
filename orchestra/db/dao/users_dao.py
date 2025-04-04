@@ -100,6 +100,7 @@ class UsersDAO:
                 "credits",
                 user.credits + decimal.Decimal(quantity),
             )
+        self.session.commit()
 
     def set_prompt_telemetry(
         self,

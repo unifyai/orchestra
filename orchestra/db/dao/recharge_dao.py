@@ -2,7 +2,7 @@ import datetime
 from typing import List, Optional
 
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
@@ -88,3 +88,41 @@ class RechargeDAO:
         raw_recharges = self.session.execute(query)
 
         return list(raw_recharges.scalars().fetchall())
+
+    def get_recharge_by_transaction_id(self, transaction_id: str) -> Recharge:
+        """
+        Get a recharge by its transaction ID.
+
+        :param transaction_id: transaction ID of the recharge.
+        :return: the recharge with the given transaction ID.
+        """
+        raw_recharge = self.session.execute(
+            select(Recharge).where(Recharge.transaction_id == transaction_id),
+        )
+
+        return raw_recharge.scalar()
+
+    def update_recharge_status(self, recharge_id: int, status: str):
+        """
+        Update the status of a recharge.
+
+        :param recharge_id: id of the recharge.
+        :param status: new status of the recharge.
+        """
+        self.session.execute(
+            update(Recharge).where(Recharge.id == recharge_id).values(status=status),
+        )
+        self.session.commit()
+
+    def get_recharge_by_id(self, recharge_id: int) -> Recharge:
+        """
+        Get a recharge by its ID.
+
+        :param recharge_id: id of the recharge.
+        :return: the recharge with the given ID.
+        """
+        raw_recharge = self.session.execute(
+            select(Recharge).where(Recharge.id == recharge_id),
+        )
+
+        return raw_recharge.scalar()
