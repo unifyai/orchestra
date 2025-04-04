@@ -935,3 +935,22 @@ class TempInterface(Base):
             name="temp_it_uq_project_name",
         ),
     )
+
+
+class AdminUser(Base):
+    """Model class for admin users who have special privileges."""
+
+    __tablename__ = "admin_user"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+    )
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+
+    # Relationship to AuthUser
+    auth_user = relationship("AuthUser", backref="admin_user")
