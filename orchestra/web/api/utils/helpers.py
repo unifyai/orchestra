@@ -1,11 +1,14 @@
 import inspect
 import logging
 import os
+from datetime import datetime, timezone
 
 import litellm
 import stripe
 from anthropic import Anthropic
 from openai import OpenAI
+
+from orchestra.db.models.orchestra_models import Recharge
 
 oai_func = OpenAI(api_key="").chat.completions.create
 OPENAI_ALLOWED_ARGS = set(inspect.signature(oai_func).parameters.keys())
@@ -110,19 +113,25 @@ def recharge_and_generate_invoice(user, users_dao):
     try:
         stripe.api_key = os.environ.get("STRIPE_SECRET_KEY_LIVE")
         customer_id = user.stripe_customer_id
-        logging.info
         customer = stripe.Customer.retrieve(customer_id)
         if not customer.invoice_settings.default_payment_method:
             logging.warning("Customer does not have a default payment method set.")
             return
 
-        # Create an invoice (not finalized yet)
-        invoice = stripe.Invoice.create(customer=customer_id, auto_advance=False)
+        # Create an invoice with metadata at creation time
+        invoice = stripe.Invoice.create(
+            customer=customer_id,
+            auto_advance=False,
+            metadata={
+                "user_id": user.id,
+                "credits_purchased": user.autorecharge_qty,
+            },
+        )
 
         # Add an invoice item
         stripe.InvoiceItem.create(
             customer=customer_id,
-            amount=user.autorecharge_qty * 100,  # stripe takes amount in cents
+            amount=int(user.autorecharge_qty * 100),  # stripe takes amount in cents
             currency="usd",
             description="Unify Credits",
             invoice=invoice.id,
@@ -130,18 +139,41 @@ def recharge_and_generate_invoice(user, users_dao):
 
         # Finalize the invoice, which will automatically create a PaymentIntent if needed
         finalized_invoice = stripe.Invoice.finalize_invoice(invoice.id)
+        payment_intent_id = finalized_invoice.payment_intent
+
+        if payment_intent_id:
+            stripe.PaymentIntent.modify(
+                payment_intent_id,
+                metadata={
+                    "user_id": user.id,
+                    "credits_purchased": user.autorecharge_qty,
+                },
+            )
         logging.info(f"Finalized invoice: {finalized_invoice}")
 
-        # pay the invoice
+        # Pay the invoice
         pay_invoice = stripe.Invoice.pay(invoice.id)
 
-        # Check the status of the payment
         if pay_invoice.status == "paid":
-            logging.info(f"Invoice {finalized_invoice.number} has been paid.")
-            users_dao.recharge_credit(user.id, user.autorecharge_qty)
+            logging.info(
+                f"Invoice {finalized_invoice.number} has been paid. Recording pending recharge.",
+            )
+
+            # Record the pending transaction in the Recharge table
+            # Note: Credit will be added by the webhook handler when payment is confirmed
+            recharge = Recharge(
+                at=datetime.now(tz=timezone.utc),
+                user_id=user.id,
+                quantity=user.autorecharge_qty,
+                type="invoice",
+                transaction_id=finalized_invoice.id,
+                status="pending",
+            )
+            users_dao.session.add(recharge)
+            users_dao.session.commit()
         else:
             logging.warning(
-                f"Invoice {finalized_invoice.number} is not paid as expected. Status: {finalized_invoice.status}",
+                f"Invoice {finalized_invoice.number} did not pay as expected. Status: {pay_invoice.status}",
             )
             return
 
