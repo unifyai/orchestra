@@ -116,7 +116,8 @@ class Settings(BaseSettings):
         "67abcd12-1fac-4a8f-afe9-c54698c96971",
     )
     orchestra_prod_traffic_name: str = os.environ.get(
-        "ORCHESTRA_PROD_TRAFFIC_NAME", "Production Traffic",
+        "ORCHESTRA_PROD_TRAFFIC_NAME",
+        "Production Traffic",
     )
     traffic_log_pubsub_topic: str = os.environ.get(
         "ORCHESTRA_TRAFFIC_LOG_PUBSUB_TOPIC",
