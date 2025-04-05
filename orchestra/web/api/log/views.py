@@ -53,6 +53,7 @@ from orchestra.db.dao.derived_log_dao import DerivedLogDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import ImmutableFieldError, LogDAO, OverwriteError
 from orchestra.db.dao.log_event_dao import LogEventDAO
+from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
@@ -6486,6 +6487,7 @@ async def process_traffic_logs(
     log_dao: LogDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
     context_dao: ContextDAO = Depends(),
+    organization_dao: OrganizationDAO = Depends(),
     _=Depends(auth_admin_key),
 ):
     """
@@ -6497,6 +6499,19 @@ async def process_traffic_logs(
 
         from orchestra.settings import settings
 
+        # 1. Fetch the 'Production Traffic' project
+        ORGANIZATION_NAME = settings.orchestra_organization_name
+        PROJ_NAME = settings.orchestra_prod_traffic_name
+        admin_org = organization_dao.filter(name=ORGANIZATION_NAME)[0][0]
+        project_id = project_dao.filter(organization_id=admin_org.id, name=PROJ_NAME)[
+            0
+        ][0].id
+        context_id = context_dao.get_or_create(
+            project_id,
+            name="",
+            description=None,
+            is_versioned=False,
+        )
         # Configure the subscriber client
         subscriber = pubsub_v1.SubscriberClient()
         subscription_path = subscriber.subscription_path(
@@ -6525,9 +6540,9 @@ async def process_traffic_logs(
             entry = json.loads(message_data)
 
             # Extract fields from the entry
-            project_id = entry.pop("project_id")
-            context_id = entry.pop("context_id")
-            project_name = entry.pop("project_name")
+            entry.pop("project_id")
+            entry.pop("context_id")
+            entry.pop("project_name")
 
             # Create log entry
             event_ids = create_logs_internal(
@@ -6535,7 +6550,7 @@ async def process_traffic_logs(
                 context_id=context_id,
                 request=CreateLogConfig(
                     entries=entry,
-                    project=project_name,
+                    project=PROJ_NAME,
                     context=None,
                 ),
                 project_dao=project_dao,
