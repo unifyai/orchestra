@@ -16,9 +16,6 @@ logger = logging.getLogger(__name__)
 
 async def log_production_traffic(
     user_id: Optional[int],
-    project_id: Optional[int],
-    context_id: Optional[int],
-    project_name: Optional[str],
     email: Optional[str],
     first_name: Optional[str],
     last_name: Optional[str],
@@ -36,9 +33,6 @@ async def log_production_traffic(
 
     Args:
         user_id: The ID of the user making the request
-        project_id: The ID of the project
-        context_id: The ID of the context
-        project_name: The name of the project
         email: The email of the user
         first_name: The first name of the user
         last_name: The last name of the user
@@ -55,9 +49,6 @@ async def log_production_traffic(
         # Prepare log entries as a message for PubSub
         entries = {
             "user_id": user_id,
-            "project_id": project_id,
-            "context_id": context_id,
-            "project_name": project_name,
             "email": email,
             "first_name": first_name,
             "last_name": last_name,
@@ -136,9 +127,6 @@ class ProductionTrafficMiddleware(BaseHTTPMiddleware):
             # Use background tasks to avoid impacting response time
             # Get user information from request state if available
             user_id = getattr(request.state, "user_id", None)
-            project_id = getattr(request.state, "project_id", None)
-            context_id = getattr(request.state, "context_id", None)
-            project_name = settings.orchestra_organization_name
             email = getattr(request.state, "email", None)
             first_name = getattr(request.state, "first_name", None)
             last_name = getattr(request.state, "last_name", None)
@@ -147,9 +135,6 @@ class ProductionTrafficMiddleware(BaseHTTPMiddleware):
             tasks.add_task(
                 log_production_traffic,
                 user_id=user_id,
-                project_id=project_id,
-                context_id=context_id,
-                project_name=project_name,
                 email=email,
                 first_name=first_name,
                 last_name=last_name,
