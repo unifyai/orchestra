@@ -6156,7 +6156,7 @@ def _build_unified_logs_subquery(
             LogEvent.created_at.label("created_at"),
             literal("current").label("source_type"),
         ).join(LogEvent, LogEvent.id == Log.log_event_id)
-        base_logs_q_current = _apply_event_filter(base_logs_q_current)
+        base_logs_q_current = _apply_event_filter(base_logs_q_current, Log)
 
         base_logs_q_history = session.query(
             LogHistory.id.label("id"),
@@ -6170,7 +6170,7 @@ def _build_unified_logs_subquery(
             LogEvent.created_at.label("created_at"),
             literal("history").label("source_type"),
         ).join(LogEvent, LogEvent.id == LogHistory.log_event_id)
-        base_logs_q_history = _apply_event_filter(base_logs_q_history)
+        base_logs_q_history = _apply_event_filter(base_logs_q_history, LogHistory)
 
         base_logs_q = base_logs_q_current.union_all(base_logs_q_history)
     else:
