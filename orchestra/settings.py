@@ -127,6 +127,10 @@ class Settings(BaseSettings):
         "ORCHESTRA_TRAFFIC_LOG_PUBSUB_SUBSCRIPTION",
         "orchestra-traffic-logs-sub",
     )
+    traffic_log_pubsub_project_id: str = os.environ.get(
+        "ORCHESTRA_TRAFFIC_LOG_PUBSUB_PROJECT_ID",
+        "saas-368716",
+    )
 
     cors_allow_origins: list[str] = []
 
