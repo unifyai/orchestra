@@ -6540,9 +6540,9 @@ async def process_traffic_logs(
             entry = json.loads(message_data)
 
             # Extract fields from the entry
-            entry.pop("project_id")
-            entry.pop("context_id")
-            entry.pop("project_name")
+            entry.pop("project_id", None)
+            entry.pop("context_id", None)
+            entry.pop("project_name", None)
 
             # Create log entry
             event_ids = create_logs_internal(
