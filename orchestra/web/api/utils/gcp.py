@@ -4,6 +4,8 @@ from typing import Dict, List, Union
 from google.cloud import aiplatform, aiplatform_v1, pubsub_v1, storage
 from google.cloud.exceptions import NotFound
 
+from orchestra.web.api.utils.helpers import CustomEncoder
+
 # Pub/Sub
 
 PUBLISHER = pubsub_v1.PublisherClient()
@@ -21,7 +23,7 @@ def send_pubsub_msg(topic: str, msg: Dict[str, str]) -> None:
     # credentials = service_account.Credentials.from_service_account_file(key_path)
     # publisher = pubsub_v1.PublisherClient(credentials=credentials)
 
-    PUBLISHER.publish(topic, json.dumps(msg).encode())
+    PUBLISHER.publish(topic, json.dumps(msg, cls=CustomEncoder).encode())
 
 
 # Cloud Storage
