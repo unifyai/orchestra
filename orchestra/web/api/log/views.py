@@ -893,7 +893,7 @@ def create_derived_entry(
 
             # Create a derived entry for each log ID involved in this computation
             for log_event_id in involved_log_ids:
-                val = json.loads(json.dumps(value, cls=DecimalEncoder))
+                val = json.loads(json.dumps(value, cls=CustomEncoder))
                 inferred_type = LogDAO.infer_type("", val)
                 new_derived_logs.append(
                     DerivedLog(
@@ -1155,7 +1155,7 @@ def update_derived_log(
         derived_log_dao.recompute_derived_logs(
             logs_to_recompute=updated_objs,
             session=session,
-            json_encoder=DecimalEncoder,
+            json_encoder=CustomEncoder,
         )
         return {"info": f"Updated {len(updated_objs)} derived logs successfully."}
 
@@ -1254,8 +1254,8 @@ def update_derived_log(
 
             # Create a derived entry for each log ID involved in this computation
             for log_event_id in involved_log_ids:
-                # Convert value using DecimalEncoder for proper JSON serialization
-                val = json.loads(json.dumps(value, cls=DecimalEncoder))
+                # Convert value using CustomEncoder for proper JSON serialization
+                val = json.loads(json.dumps(value, cls=CustomEncoder))
                 inferred_type = LogDAO.infer_type("", val)
 
                 new_derived_logs.append(
@@ -1710,7 +1710,7 @@ def update_logs(
                 derived_log_dao.recompute_derived_logs(
                     logs_to_recompute=derived_logs_to_recompute,
                     session=session,
-                    json_encoder=DecimalEncoder,
+                    json_encoder=CustomEncoder,
                 )
         except Exception as e:
             raise HTTPException(
@@ -6412,7 +6412,7 @@ def update_active_derived_logs(
                         matching_log_event_ids,
                         computed_values,
                     ):
-                        val = json.loads(json.dumps(value, cls=DecimalEncoder))
+                        val = json.loads(json.dumps(value, cls=CustomEncoder))
                         inferred_type = LogDAO.infer_type("", val)
 
                         new_derived_logs.append(
