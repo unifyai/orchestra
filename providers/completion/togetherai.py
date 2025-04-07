@@ -38,6 +38,16 @@ supported_models = {
         "context_window": 131072,
         "cost": {"prompt": 1.25, "completion": 1.25},
     },
+    "llama-4-maverick-instruct": {
+        "endpoint": "together_ai/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
+        "context_window": 524288,
+        "cost": {"prompt": 0.27, "completion": 0.85},
+    },
+    "llama-4-scout-instruct": {
+        "endpoint": "together_ai/meta-llama/Llama-4-Scout-Instruct",
+        "context_window": 327680,
+        "cost": {"prompt": 0.18, "completion": 0.59},
+    },
     "llama-3.3-70b-chat": {
         "endpoint": "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
         "context_window": 131072,
@@ -82,11 +92,6 @@ supported_models = {
         "endpoint": "mistralai/Mistral-Small-24B-Instruct-2501",
         "context_window": 32000,
         "cost": {"prompt": 0.8, "completion": 0.8},
-    },
-    "mixtral-8x22b-instruct-v0.1": {
-        "endpoint": "together_ai/mistralai/Mixtral-8x22B-Instruct-v0.1",
-        "context_window": 65536,
-        "cost": {"prompt": 1.2, "completion": 1.2},
     },
     "mistral-7b-instruct-v0.3": {
         "endpoint": "together_ai/mistralai/Mistral-7B-Instruct-v0.3",

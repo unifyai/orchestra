@@ -31,7 +31,7 @@ supported_models = {
     "deepseek-v3-0324": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-v3-0324",
         "context_window": 160000,
-        "cost": {"prompt": 1.2, "completion": 1.2},
+        "cost": {"prompt": 0.9, "completion": 0.9},
     },
     "deepseek-r1": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-r1",
@@ -43,19 +43,19 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.9, "completion": 0.9},
     },
+    "llama-4-maverick-instruct": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/llama4-maverick-instruct-basic",
+        "context_window": 1000000,
+        "cost": {"prompt": 0.22, "completion": 0.88},
+    },
+    "llama-4-scout-instruct": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/llama4-scout-instruct-basic",
+        "context_window": 128000,
+        "cost": {"prompt": 0.15, "completion": 0.6},
+    },
     "llama-3.3-70b-chat": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.9, "completion": 0.9},
-    },
-    "llama-3.2-11b-chat": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct",
-        "context_window": 131072,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
-    "llama-3.2-90b-chat": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3p2-90b-vision-instruct",
-        "context_window": 131072,
         "cost": {"prompt": 0.9, "completion": 0.9},
     },
     "llama-3.1-8b-chat": {
@@ -82,16 +82,6 @@ supported_models = {
         "endpoint": "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct",
         "context_window": 65536,
         "cost": {"prompt": 1.2, "completion": 1.2},
-    },
-    "mixtral-8x7b-instruct-v0.1": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct",
-        "context_window": 32768,
-        "cost": {"prompt": 0.5, "completion": 0.5},
-    },
-    "qwen-2.5-coder-32b-instruct": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b-instruct",
-        "context_window": 32768,
-        "cost": {"prompt": 0.9, "completion": 0.9},
     },
     "qwen-qwq-32b": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/qwq-32b",

@@ -73,6 +73,16 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.59, "completion": 0.79},
     },
+    "llama-4-maverick-instruct": {
+        "endpoint": "groq/meta-llama/llama-4-maverick-17b-128e-instruct",
+        "context_window": 131072,
+        "cost": {"prompt": 0.5, "completion": 0.77},
+    },
+    "llama-4-scout-instruct": {
+        "endpoint": "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+        "context_window": 131072,
+        "cost": {"prompt": 0.11, "completion": 0.24},
+    },
     "qwen-2.5-coder-32b-instruct": {
         "endpoint": "groq/qwen-2.5-coder-32b",
         "context_window": 32768,

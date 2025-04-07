@@ -67,8 +67,8 @@ supported_models = {
     "gemini-2.5-pro": {
         "endpoint": "vertex_ai/gemini-2.5-pro-exp-03-25",
         "region": "us-central1",
-        "context_window": 1048576,
-        "cost": {"prompt": 0, "completion": 0},
+        "context_window": 200000,
+        "cost": {"prompt": 1.25, "completion": 10},
     },
     "gemini-2.0-flash-lite": {
         "endpoint": "vertex_ai/gemini-2.0-flash-lite-001",
