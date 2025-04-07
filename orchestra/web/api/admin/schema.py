@@ -353,3 +353,13 @@ class DemoModelRequest(BaseModel):
     user_id: str
     code: str
     staging: bool = False
+
+
+class FileUploadRequest(BaseModel):
+    """Schema for file upload request."""
+
+    user_id: str
+    project: str
+    path: str
+    contents: str
+    staging: bool = False
