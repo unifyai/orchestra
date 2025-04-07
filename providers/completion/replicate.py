@@ -33,6 +33,16 @@ class Replicate(BaseCompletionProvider):
 
 
 supported_models = {
+    "llama-4-maverick-instruct": {
+        "endpoint": "replicate/meta/llama-4-maverick-instruct",
+        "context_window": 1000000,
+        "cost": {"prompt": 0.25, "completion": 0.95},
+    },
+    "llama-4-scout-instruct": {
+        "endpoint": "replicate/meta/llama-4-scout-instruct",
+        "context_window": 10000000,
+        "cost": {"prompt": 0.17, "completion": 0.65},
+    },
     "llama-3-8b-chat": {
         "endpoint": "replicate/meta/meta-llama-3-8b-instruct",
         "context_window": 8192,
@@ -47,6 +57,11 @@ supported_models = {
         "endpoint": "replicate/meta/meta-llama-3.1-405b-instruct",
         "context_window": 131072,
         "cost": {"prompt": 9.5, "completion": 9.5},
+    },
+    "deepseek-v3": {
+        "endpoint": "replicate/deepseek-ai/deepseek-v3",
+        "context_window": 64000,
+        "cost": {"prompt": 1.45, "completion": 1.45},
     },
     "deepseek-r1": {
         "endpoint": "replicate/deepseek-ai/deepseek-r1",

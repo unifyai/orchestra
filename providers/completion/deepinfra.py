@@ -43,6 +43,16 @@ supported_models = {
         "context_window": 160000,
         "cost": {"prompt": 0.40, "completion": 0.89},
     },
+    "llama-4-maverick-instruct": {
+        "endpoint": "deepinfra/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
+        "context_window": 128000,
+        "cost": {"prompt": 0.2, "completion": 0.6},
+    },
+    "llama-4-scout-instruct": {
+        "endpoint": "deepinfra/meta-llama/Llama-4-Scout-17B-16E-Instruct",
+        "context_window": 128000,
+        "cost": {"prompt": 0.1, "completion": 0.3},
+    },
     "llama-3.3-70b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.3-70B-Instruct",
         "context_window": 128000,
@@ -151,6 +161,6 @@ supported_models = {
     "qwen-qwq-32b": {
         "endpoint": "deepinfra/Qwen/QwQ-32B",
         "context_window": 128000,
-        "cost": {"prompt": 0.12, "completion": 0.18},
+        "cost": {"prompt": 0.15, "completion": 0.2},
     },
 }
