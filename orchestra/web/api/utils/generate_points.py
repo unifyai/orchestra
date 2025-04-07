@@ -559,13 +559,6 @@ metrics = {
         "input_cost": 0.6,
         "output_cost": 0.6,
     },
-    "mixtral-8x7b-instruct-v0.1@fireworks-ai": {
-        "cost": 0.5,
-        "ttft": 324.21352400001524,
-        "itl": 3.380061226190194,
-        "input_cost": 0.5,
-        "output_cost": 0.5,
-    },
     "mixtral-8x7b-instruct-v0.1@lepton-ai": {
         "cost": 0.5,
         "ttft": 872.5847029999159,
@@ -593,13 +586,6 @@ metrics = {
         "itl": 11.63,
         "input_cost": 0.9,
         "output_cost": 0.9,
-    },
-    "mixtral-8x22b-instruct-v0.1@together-ai": {
-        "cost": 1.2,
-        "ttft": 840,
-        "itl": 21.88,
-        "input_cost": 1.2,
-        "output_cost": 1.2,
     },
     "gemma-2b-it@together-ai": {
         "cost": 0.1,
