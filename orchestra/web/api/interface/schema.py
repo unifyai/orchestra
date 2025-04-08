@@ -36,7 +36,7 @@ class Item(BaseModel):
     plot_type: str | None = None
     plot_scale_x: str | None = None
     plot_scale_y: str | None = None
-    is_aggregated: str | None = None
+    plot_aggregate: str | None = None
     x_axis: str | None = None
     y_axis: str | None = None
     plot_group_by: str | None = None
