@@ -1069,7 +1069,7 @@ def get_files(
         for blob in blobs:
             # Download the content of each file
             content = blob.download_as_text() if not blob.name.endswith("/") else ""
-            files[blob.name] = content
+            files[blob.name.replace(prefix, "")] = content
 
         return files
     except Exception as e:
