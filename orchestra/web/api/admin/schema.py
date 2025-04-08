@@ -360,6 +360,5 @@ class FileWriteRequest(BaseModel):
 
     user_id: str
     project: str
-    path: str
-    contents: str
+    files: dict[str, str]
     staging: bool = False
