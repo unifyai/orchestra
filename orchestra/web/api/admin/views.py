@@ -1065,11 +1065,11 @@ def get_files(
         blobs = bucket.list_blobs(prefix=prefix)
 
         # Extract the full paths and contents
-        files = []
+        files = dict()
         for blob in blobs:
             # Download the content of each file
             content = blob.download_as_text() if not blob.name.endswith("/") else ""
-            files.append({blob.name: content})
+            files[blob.name] = content
 
         return files
     except Exception as e:
