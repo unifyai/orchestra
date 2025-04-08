@@ -42,7 +42,7 @@ class Item(BaseModel):
     plot_group_by: str | None = None
     bin_count: str | None = None
     regression_line: str | None = None
-    file_name: str | None = None
+    file_path: str | None = None
     file_type: str | None = None
     content: str | None = None
 
