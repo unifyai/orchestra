@@ -944,7 +944,6 @@ def run_demo(
                 "application/json": {
                     "example": {
                         "message": "File uploaded successfully",
-                        "path": "123/my-project/my/file/path.txt",
                     },
                 },
             },
@@ -961,13 +960,13 @@ def run_demo(
         },
     },
 )
-def write_file(
+def write_files(
     request: FileWriteRequest,
     project_dao: ProjectDAO = Depends(),
 ):
     """
-    Write/Update a file to the Google Cloud Storage bucket.
-    The file will be stored at <user-id>/<project>/<path>
+    Write/Update files to the Google Cloud Storage bucket.
+    The files will be stored at <user-id>/<project>/<path>
     """
     project = project_dao.get_by_user_and_name(
         user_id=request.user_id,
@@ -989,15 +988,15 @@ def write_file(
         )
 
         # Construct the full path in the bucket
-        full_path = f"{request.user_id}/{project.name}/{request.path}"
+        for file_path, file_content in request.files.items():
+            full_path = f"{request.user_id}/{project.name}/{file_path}"
 
-        # Create a new blob and upload the file contents
-        blob = bucket.blob(full_path)
-        blob.upload_from_string(request.contents)
+            # Create a new blob and upload the file contents
+            blob = bucket.blob(full_path)
+            blob.upload_from_string(file_content)
 
         return {
-            "message": "File uploaded successfully",
-            "path": full_path,
+            "message": "Files uploaded successfully",
         }
     except Exception as e:
         raise HTTPException(
@@ -1014,10 +1013,8 @@ def write_file(
             "content": {
                 "application/json": {
                     "example": {
-                        "files": [
-                            "123/my-project/file1.txt",
-                            "123/my-project/folder/file2.txt",
-                        ],
+                        "123/my-project/file1.txt": "Hello, world!",
+                        "123/my-project/folder/file2.txt": "Hello, world!",
                     },
                 },
             },
@@ -1034,15 +1031,15 @@ def write_file(
         },
     },
 )
-def list_files(
+def get_files(
     user_id: str,
     project: str,
     staging: bool = False,
     project_dao: ProjectDAO = Depends(),
 ):
     """
-    List all files in a user's project folder in the bucket.
-    Returns a flat list of file paths.
+    Get all files in a user's project folder in the bucket.
+    Returns a flat list of file paths and contents.
     """
     project_obj = project_dao.get_by_user_and_name(
         user_id=user_id,
@@ -1067,16 +1064,18 @@ def list_files(
         # List all blobs under the prefix
         blobs = bucket.list_blobs(prefix=prefix)
 
-        # Extract the full paths
-        files = [blob.name for blob in blobs]
+        # Extract the full paths and contents
+        files = []
+        for blob in blobs:
+            # Download the content of each file
+            content = blob.download_as_text() if not blob.name.endswith("/") else ""
+            files.append({blob.name: content})
 
-        return {
-            "files": files,
-        }
+        return files
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to list files: {str(e)}",
+            detail=f"Failed to get files: {str(e)}",
         )
 
 
