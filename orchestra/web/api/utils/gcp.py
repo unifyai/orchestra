@@ -7,8 +7,10 @@ from google.cloud.exceptions import NotFound
 from orchestra.web.api.utils.helpers import CustomEncoder
 
 # Pub/Sub
-
-PUBLISHER = pubsub_v1.PublisherClient()
+try:
+    PUBLISHER = pubsub_v1.PublisherClient()
+except:
+    pass
 
 
 def send_pubsub_msg(topic: str, msg: Dict[str, str]) -> None:
