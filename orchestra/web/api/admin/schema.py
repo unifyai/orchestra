@@ -355,8 +355,8 @@ class DemoModelRequest(BaseModel):
     staging: bool = False
 
 
-class FileUploadRequest(BaseModel):
-    """Schema for file upload request."""
+class FileWriteRequest(BaseModel):
+    """Schema for file write/update request."""
 
     user_id: str
     project: str

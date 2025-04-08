@@ -47,7 +47,7 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     DemoModelRequest,
     EndpointModelRequest,
     EndpointModelResponse,
-    FileUploadRequest,
+    FileWriteRequest,
     MetricModelRequest,
     MetricModelResponse,
     ModalityModelRequest,
@@ -961,12 +961,12 @@ def run_demo(
         },
     },
 )
-def upload_file(
-    request: FileUploadRequest,
+def write_file(
+    request: FileWriteRequest,
     project_dao: ProjectDAO = Depends(),
 ):
     """
-    Upload a file to the Google Cloud Storage bucket.
+    Write/Update a file to the Google Cloud Storage bucket.
     The file will be stored at <user-id>/<project>/<path>
     """
     project = project_dao.get_by_user_and_name(
