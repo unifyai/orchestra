@@ -42,6 +42,7 @@ from sqlalchemy import (
     literal,
     select,
     tuple_,
+    update,
 )
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 from sqlalchemy.orm import aliased
@@ -1139,21 +1140,17 @@ def update_derived_log(
     # If user *did not* pass new referenced_logs, do a simple "update in place"
     if not new_refs:
         # just update existing rows for new key/equation, then recompute
-        for dlogs in group_map.values():
-            for d in dlogs:
-                try:
-                    derived_log_dao.update(
-                        id=d.id,
-                        key=updated_key,
-                        equation=updated_equation,
-                    )
-                except ValueError as ve:
-                    raise HTTPException(status_code=400, detail=str(ve))
-        # re-fetch them (some might have new key)
-        updated_log_ids = [d.id for d in valid_logs]
-        updated_objs = (
-            session.query(DerivedLog).filter(DerivedLog.id.in_(updated_log_ids)).all()
-        )
+        # bulk update
+        try:
+            stmt = (
+                update(DerivedLog)
+                .where(DerivedLog.id.in_([dlog.id for dlog in existing_derived_logs]))
+                .values(key=updated_key, equation=updated_equation)
+            )
+            session.execute(stmt)
+            session.commit()
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
         # recompute
         derived_log_dao.recompute_derived_logs(
             logs_to_recompute=updated_objs,
