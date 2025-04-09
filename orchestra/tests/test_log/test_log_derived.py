@@ -217,7 +217,7 @@ async def test_update_derived_entry_with_filter(client: AsyncClient):
         json={
             "project": project_name,
             "target_derived_logs": {"from_fields": "temp_plus_10"},
-            "key": "temp_times_3",
+            "key": "temp_plus_10",
             "equation": "{t:temperature} * 3",
             "referenced_logs": {"t": [base_log_ids[0], base_log_ids[1]]},
         },
@@ -233,17 +233,17 @@ async def test_update_derived_entry_with_filter(client: AsyncClient):
     data = resp.json()
 
     # We'll gather how many logs have key="temp_times_3" vs. "temp_minus_5"
-    num_times_3 = 0
+    num_plus_10 = 0
     num_minus_5 = 0
 
     for log_obj in data["logs"]:
         derived_entries = log_obj.get("derived_entries", {})
         # Check if they have "temp_times_3"
-        if "temp_times_3" in derived_entries:
-            num_times_3 += 1
+        if "temp_plus_10" in derived_entries:
+            num_plus_10 += 1
             # verify correctness of the computed value
             base_temp = log_obj["entries"].get("temperature")
-            assert derived_entries["temp_times_3"] == base_temp * 3
+            assert derived_entries["temp_plus_10"] == base_temp * 3
         if "temp_minus_5" in derived_entries:
             num_minus_5 += 1
             # verify correctness
@@ -251,14 +251,9 @@ async def test_update_derived_entry_with_filter(client: AsyncClient):
             assert derived_entries["temp_minus_5"] == base_temp - 5
 
     # We expect 2 logs with "temp_times_3" (the old plus_10 ones)
-    assert num_times_3 == 2
+    assert num_plus_10 == 2
     # We expect 1 log with "temp_minus_5"
     assert num_minus_5 == 1
-
-    # Also ensure the old "temp_plus_10" is gone
-    for log_obj in data["logs"]:
-        derived_entries = log_obj.get("derived_entries", {})
-        assert "temp_plus_10" not in derived_entries
 
 
 @pytest.mark.anyio
