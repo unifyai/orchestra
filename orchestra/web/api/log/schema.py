@@ -240,8 +240,8 @@ class UpdateDerivedEntriesConfig(BaseModel):
             raise ValueError(
                 "target_derived_logs must be provided. Either as a list of derived_log IDs or as a set of arguments for the get_logs endpoint.",
             )
-        if not values.get("key") and not values.get("equation"):
-            raise ValueError("At least one of key or equation must be provided")
+        if not values.get("key"):
+            raise ValueError("key must be provided")
         return values
 
 
