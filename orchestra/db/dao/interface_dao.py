@@ -62,6 +62,7 @@ class InterfaceDAO:
             query = query.where(Interface.project_id == project_id)
         if name is not None:
             query = query.where(Interface.name == name)
+        query = query.order_by(Interface.created_at.asc())
         interfaces = self.session.execute(query).scalars().all()
         return interfaces
 

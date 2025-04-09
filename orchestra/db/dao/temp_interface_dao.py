@@ -62,6 +62,7 @@ class TempInterfaceDAO:
             query = query.where(TempInterface.project_id == project_id)
         if name is not None:
             query = query.where(TempInterface.name == name)
+        query = query.order_by(TempInterface.created_at.asc())
         interfaces = self.session.execute(query).scalars().all()
         return interfaces
 
