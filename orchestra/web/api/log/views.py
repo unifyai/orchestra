@@ -1088,7 +1088,8 @@ def update_derived_log(
     existing_derived_logs = (
         session.query(DerivedLog)
         .filter(
-            DerivedLog.log_event_id.in_(derived_log_ids), DerivedLog.key == updated_key,
+            DerivedLog.log_event_id.in_(derived_log_ids),
+            DerivedLog.key == updated_key,
         )
         .all()
     )
@@ -1126,7 +1127,8 @@ def update_derived_log(
         final_equation = updated_equation if updated_equation else valid_logs.equation
         # Delete all derived logs that were matched by the update filter.
         session.query(DerivedLog).filter(
-            DerivedLog.id.in_(derived_log_ids), DerivedLog.key == valid_logs.key,
+            DerivedLog.id.in_(derived_log_ids),
+            DerivedLog.key == valid_logs.key,
         ).delete(
             synchronize_session=False,
         )
