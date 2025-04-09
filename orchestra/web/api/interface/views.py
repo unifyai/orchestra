@@ -249,26 +249,27 @@ def get_interfaces(
         name=name,
     )
     if len(interfaces) == 0 and len(all_interfaces) == 0:
-        items = [
-            {
-                "i": "Table",
-                "x": 0.0,
-                "y": 0.0,
-                "w": 7.0,
-                "h": 8.0,
-                "tab": "Table",
-                "table_type": "Data Table",
-            },
-            {
-                "i": "View",
-                "x": 7.0,
-                "y": 0.0,
-                "w": 5.0,
-                "h": 8.0,
-                "tab": "View",
-                "table": "Table",
-            },
-        ]
+        # items = [
+        #     {
+        #         "i": "Table",
+        #         "x": 0.0,
+        #         "y": 0.0,
+        #         "w": 7.0,
+        #         "h": 8.0,
+        #         "tab": "Table",
+        #         "table_type": "Data Table",
+        #     },
+        #     {
+        #         "i": "View",
+        #         "x": 7.0,
+        #         "y": 0.0,
+        #         "w": 5.0,
+        #         "h": 8.0,
+        #         "tab": "View",
+        #         "table": "Table",
+        #     },
+        # ]
+        items = []
         new_counter = len(items)
         dao.create_interface(
             name=name,
