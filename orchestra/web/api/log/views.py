@@ -888,6 +888,7 @@ def create_derived_entry(
             if k in ph
         }
         # Iterate over the computed values and resolved IDs
+        non_null_value = None
         for i, (_, value) in enumerate(computed_values):
             # Get all log IDs involved in this specific computation
             involved_log_ids = list(set(ids[i] for ids in resolved_ids.values()))
@@ -895,7 +896,8 @@ def create_derived_entry(
             # Create a derived entry for each log ID involved in this computation
             for log_event_id in involved_log_ids:
                 val = json.loads(json.dumps(value, cls=CustomEncoder))
-                inferred_type = LogDAO.infer_type("", val)
+                non_null_val = val if val is not None else non_null_value
+                inferred_type = LogDAO.infer_type("", non_null_val)
                 new_derived_logs.append(
                     DerivedLog(
                         log_event_id=log_event_id,
@@ -954,7 +956,7 @@ def create_derived_entry(
         field_type_dao.create_field_type_if_absent(
             project_id=project_obj.id,
             field_name=body.key,
-            value=val,
+            value=non_null_val,
             field_category="derived_entry",
             context_id=context_id,
         )
