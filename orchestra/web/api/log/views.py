@@ -1064,79 +1064,34 @@ def update_derived_log(
         # get the default context
         context_id = context_dao.get_or_create(project_obj.id, name="")
 
-    # 2) Resolve which DerivedLog IDs to update
-    if isinstance(body.target_derived_logs, list):
-        derived_log_ids = body.target_derived_logs
-    else:
-        # treat as get_logs argument, gather all derived log rows that match
-        argdict = body.target_derived_logs
-        raw_rows, _, _count = _get_logs_query(
-            request_fastapi=request_fastapi,
-            project=body.project,
-            column_context=argdict.get("column_context"),
-            context=argdict.get("context"),
-            filter_expr=argdict.get("filter_expr"),
-            sorting=argdict.get("sort"),
-            from_ids=argdict.get("from_ids"),
-            exclude_ids=argdict.get("exclude_ids"),
-            from_fields=argdict.get("from_fields"),
-            exclude_fields=argdict.get("exclude_fields"),
-            limit=argdict.get("limit"),
-            offset=argdict.get("offset", 0),
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            session=session,
-        )
-
-        derived_event_ids = [
-            row[7]
-            for row in raw_rows
-            if row[5] == "derived"  # row_source_type=="derived"
-        ]
-        if not derived_event_ids:
-            return {"info": "No derived logs matched. Nothing to update."}
-
-        derived_log_ids = [
-            t[0]
-            for t in session.query(DerivedLog.id)
-            .filter(DerivedLog.log_event_id.in_(derived_event_ids))
-            .all()
-        ]
-
-    if not derived_log_ids:
-        return {"info": "No derived logs matched. Nothing to update."}
-
-    # 3) Load the actual DerivedLog objects for these IDs
-    matched_derived_logs = (
-        session.query(DerivedLog).filter(DerivedLog.id.in_(derived_log_ids)).all()
-    )
-
-    if not matched_derived_logs:
-        return {"info": "No derived logs matched. Nothing to update."}
-
-    # 4) Verify user has permission
-    valid_logs = []
-    for dlog in matched_derived_logs:
-        user_id_of_this_event = log_event_dao.get_user_id(id=dlog.log_event_id)
-        if user_id_of_this_event != user_id:
-            continue
-        valid_logs.append(dlog)
-    if not valid_logs:
-        raise HTTPException(
-            status_code=404,
-            detail="No matching derived logs belong to your project or you lack permission.",
-        )
-
-    # 5) Group them by (log_event_id, old_key)
-    group_map = defaultdict(list)
-    for dlog in valid_logs:
-        group_map[(dlog.log_event_id, dlog.key)].append(dlog)
-
-    updated_equation = body.equation
+    updated_equation = body.equation if body.equation else None
     updated_key = body.key
     new_refs = body.referenced_logs  # can be None
 
+    # 2) Resolve which DerivedLog IDs to update
+    resolved_ids = prepare_resolved_ids(
+        equation=updated_equation,
+        referenced_logs=body.target_derived_logs,
+        request_fastapi=request_fastapi,
+        project_name=body.project,
+        project_dao=project_dao,
+        field_type_dao=field_type_dao,
+        context_dao=context_dao,
+        session=session,
+    )
+
+    # If none found, short-circuit
+    if not any(len(v) for v in resolved_ids.values()):
+        return {"info": "No references found. Nothing to update."}
+    # NOTE: currently we assume referenced logs are of equal length
+    derived_log_ids = [dlog_id for dlog_id in resolved_ids.values()][0][:5]
+    existing_derived_logs = (
+        session.query(DerivedLog)
+        .filter(
+            DerivedLog.log_event_id.in_(derived_log_ids), DerivedLog.key == updated_key,
+        )
+        .all()
+    )
     # If user *did not* pass new referenced_logs, do a simple "update in place"
     if not new_refs:
         # just update existing rows for new key/equation, then recompute
@@ -1153,31 +1108,40 @@ def update_derived_log(
             raise HTTPException(status_code=400, detail=str(ve))
         # recompute
         derived_log_dao.recompute_derived_logs(
-            logs_to_recompute=updated_objs,
+            logs_to_recompute=existing_derived_logs,
             session=session,
             json_encoder=CustomEncoder,
         )
-        return {"info": f"Updated {len(updated_objs)} derived logs successfully."}
+        return {
+            "info": f"Updated {len(existing_derived_logs)} derived logs successfully.",
+        }
 
-    # 6) If new_refs *is* provided, do the "compute & insert" approach
+    # 3) If new_refs *is* provided, do the "compute & insert" approach
     if new_refs:
         # Use updated_key/equation if provided; otherwise, take them from one of the matched logs.
-        final_key = updated_key if updated_key else valid_logs[0].key
-        final_equation = (
-            updated_equation if updated_equation else valid_logs[0].equation
+        valid_logs = (
+            session.query(DerivedLog).filter(DerivedLog.id.in_(derived_log_ids)).first()
         )
-
+        final_key = updated_key if updated_key else valid_logs.key
+        final_equation = updated_equation if updated_equation else valid_logs.equation
         # Delete all derived logs that were matched by the update filter.
-        valid_ids = [d.id for d in valid_logs]
-        session.query(DerivedLog).filter(DerivedLog.id.in_(valid_ids)).delete(
+        session.query(DerivedLog).filter(
+            DerivedLog.id.in_(derived_log_ids), DerivedLog.key == valid_logs.key,
+        ).delete(
             synchronize_session=False,
+        )
+        # Also delete the field type records for these derived logs
+        field_type_dao.delete_field_type(
+            project_id=project_id,
+            field_name=valid_logs.key,
+            context_id=context_id,
         )
         session.flush()  # flush the deletion so that new insertions do not conflict
 
-        # Resolve the new referenced logs using prepare_resolved_ids
-        resolved_ids = prepare_resolved_ids(
+        # Resolve the new referenced logs
+        new_resolved_ids = prepare_resolved_ids(
             equation=final_equation,
-            referenced_logs=new_refs,
+            referenced_logs=new_refs,  # use the new referenced logs
             request_fastapi=request_fastapi,
             project_name=body.project,
             project_dao=project_dao,
@@ -1185,13 +1149,14 @@ def update_derived_log(
             context_dao=context_dao,
             session=session,
         )
-
+        # NOTE: currently we assume referenced logs are of equal length
+        new_derived_log_ids = [dlog_id for dlog_id in new_resolved_ids.values()][0]
         # If none found, short-circuit
-        if not any(len(v) for v in resolved_ids.values()):
+        if not any(len(v) for v in new_resolved_ids.values()):
             return {"info": "No references found. Nothing to update."}
 
         # Get the common length of all resolved ID lists
-        lengths = [len(lst) for lst in resolved_ids.values()]
+        lengths = [len(lst) for lst in new_resolved_ids.values()]
         if lengths and len(set(lengths)) != 1:
             raise HTTPException(
                 status_code=400,
@@ -1202,7 +1167,7 @@ def update_derived_log(
         # 1. Substitute placeholders to get filter expression and alias mapping
         filter_expr, alias_to_key_map = _substitute_placeholders(
             final_equation,
-            resolved_ids,
+            new_resolved_ids,
         )
 
         # 2. Get field types for the project
@@ -1219,13 +1184,14 @@ def update_derived_log(
 
         # 4. Create a dictionary mapping field keys to their resolved IDs
         resolved_ids_dict = {}
-        for key, ids in resolved_ids.items():
+        for key, ids in new_resolved_ids.items():
             resolved_ids_dict.setdefault(alias_to_key_map[key], []).extend(ids)
 
         # 5. Get the filtered log events for this project
         log_event_ids_subq = (
             session.query(LogEvent.id)
             .filter(project_id == LogEvent.project_id)
+            .filter(LogEvent.id.in_(new_derived_log_ids))
             .subquery(name="log_event_ids_subq")
         )
 
@@ -1248,15 +1214,17 @@ def update_derived_log(
             if k in ph
         }
         # Iterate over the computed values and resolved IDs
+        non_null_value = None
         for i, (_, value) in enumerate(computed_values):
             # Get all log IDs involved in this specific computation
-            involved_log_ids = list(set(ids[i] for ids in resolved_ids.values()))
+            involved_log_ids = list(set(ids[i] for ids in new_resolved_ids.values()))
 
             # Create a derived entry for each log ID involved in this computation
             for log_event_id in involved_log_ids:
                 # Convert value using CustomEncoder for proper JSON serialization
                 val = json.loads(json.dumps(value, cls=CustomEncoder))
-                inferred_type = LogDAO.infer_type("", val)
+                non_null_val = val if val is not None else non_null_value
+                inferred_type = LogDAO.infer_type("", non_null_val)
 
                 new_derived_logs.append(
                     DerivedLog(
@@ -1264,7 +1232,7 @@ def update_derived_log(
                         key=final_key,
                         equation=final_equation,
                         referenced_logs=referenced_logs,
-                        value=val,
+                        value=non_null_val,
                         inferred_type=inferred_type,
                         created_at=now,
                         updated_at=now,
@@ -1281,13 +1249,12 @@ def update_derived_log(
             context_id=context_id,
             field_name=final_key,
             mutable=True,
-            value=val,  # Using the last computed value
+            value=non_null_val,
             field_category="derived_entry",
         )
 
         return {
-            "info": f"Updated references and replaced {len(valid_logs)} old derived logs with {len(new_derived_logs)} new ones.",
-            "derived_log_ids": [obj.id for obj in new_derived_logs],
+            "info": f"Updated references and replaced {len(new_derived_logs)} old derived logs with {len(new_derived_logs)} new ones.",
         }
 
 
