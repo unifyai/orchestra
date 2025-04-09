@@ -2280,7 +2280,12 @@ def _get_logs_query(
         context_obj = context_dao.filter(name="", project_id=project_id)
         if not context_obj:
             # no logs present within this context, return empty logs
-            return [], 0, 0
+            if latest_timestamp:
+                # return the project's timestamp
+                project_obj = project_dao.filter(name=project, user_id=user_id)
+                return project_obj[0][0].created_at.isoformat()
+            else:
+                return [], 0, 0
 
     if not context_obj:
         raise HTTPException(
