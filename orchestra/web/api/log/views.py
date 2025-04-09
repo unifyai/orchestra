@@ -1084,7 +1084,7 @@ def update_derived_log(
     if not any(len(v) for v in resolved_ids.values()):
         return {"info": "No references found. Nothing to update."}
     # NOTE: currently we assume referenced logs are of equal length
-    derived_log_ids = [dlog_id for dlog_id in resolved_ids.values()][0][:5]
+    derived_log_ids = [dlog_id for dlog_id in resolved_ids.values()][0]
     existing_derived_logs = (
         session.query(DerivedLog)
         .filter(
@@ -1121,13 +1121,18 @@ def update_derived_log(
     if new_refs:
         # Use updated_key/equation if provided; otherwise, take them from one of the matched logs.
         valid_logs = (
-            session.query(DerivedLog).filter(DerivedLog.id.in_(derived_log_ids)).first()
+            session.query(DerivedLog)
+            .filter(
+                DerivedLog.log_event_id.in_(derived_log_ids),
+                DerivedLog.key == updated_key,
+            )
+            .first()
         )
         final_key = updated_key if updated_key else valid_logs.key
         final_equation = updated_equation if updated_equation else valid_logs.equation
         # Delete all derived logs that were matched by the update filter.
         session.query(DerivedLog).filter(
-            DerivedLog.id.in_(derived_log_ids),
+            DerivedLog.log_event_id.in_(derived_log_ids),
             DerivedLog.key == valid_logs.key,
         ).delete(
             synchronize_session=False,
