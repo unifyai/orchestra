@@ -853,6 +853,7 @@ class Interface(Base):
         index=True,
     )
     context = Column(String(), nullable=True)
+    created_at = Column(TIMESTAMP, nullable=True, server_default=func.now())
     # Relationships
     project = relationship("Project", back_populates="interfaces")
     user = relationship("AuthUser", back_populates="interfaces")
@@ -923,6 +924,7 @@ class TempInterface(Base):
         index=True,
     )
     context = Column(String(), nullable=True)
+    created_at = Column(TIMESTAMP, nullable=True, server_default=func.now())
     # Relationships
     project = relationship("Project", back_populates="temp_interfaces")
     user = relationship("AuthUser", back_populates="temp_interfaces")
