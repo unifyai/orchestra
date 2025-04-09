@@ -135,6 +135,7 @@ async def test_update_derived_entry_with_referenced_logs(client: AsyncClient):
         json={
             "project": project_name,
             "target_derived_logs": {"from_fields": "temp_plus_10"},
+            "key": "temp_plus_10",
             "equation": "{t:temperature} + 20",  # Modified equation
             "referenced_logs": new_referenced_logs,
         },
@@ -825,6 +826,7 @@ async def test_derived_entry_datetime_arithmetic(client: AsyncClient):
             "target_derived_logs": {"from_fields": "timestamp_plus_1hour"},
             "equation": "{log:dt/timestamp} + 'PT2H'",  # Change from +1h to +2h
             "referenced_logs": {"log": [log_ids[0]]},
+            "key": "timestamp_plus_1hour",
         },
         headers=HEADERS,
     )
