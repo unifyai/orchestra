@@ -12,6 +12,7 @@ class Item(BaseModel):
     moved: bool = False
     static: bool = False
     visible: bool = True
+    color: str | None = None
     tab: str | None = None
     table: str | None = None
     table_type: str | None = None
@@ -40,6 +41,7 @@ class Item(BaseModel):
     x_axis: str | None = None
     y_axis: str | None = None
     plot_group_by: str | None = None
+    plot_group_by_colors: str | None = None
     bin_count: str | None = None
     regression_line: str | None = None
     file_path: str | None = None
@@ -55,3 +57,4 @@ class InterfaceConfig(BaseModel):
     temporary: bool = False
     new_name: str | None = None
     context: str | None = None
+    color: str | None = None
