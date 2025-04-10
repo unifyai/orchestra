@@ -1260,6 +1260,10 @@ def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type, session=None):
     If both subqueries have a __comp_idx__ column (used in comprehensions),
     the join condition will also include matching on __comp_idx__ to prevent
     duplicate rows, and the output will preserve the __comp_idx__ column.
+
+    Similarly, if both subqueries have a __parent_idx__ column (used in nested comprehensions),
+    the join condition will also include matching on __parent_idx__ to ensure proper nesting,
+    and the output will preserve the __parent_idx__ column.
     """
     # Get the value columns for both sides
     lhs_val, lhs_type = _select_value(lhs_subq, session)
@@ -1269,10 +1273,20 @@ def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type, session=None):
     has_idx_lhs = hasattr(lhs_subq.c, "__comp_idx__")
     has_idx_rhs = hasattr(rhs_subq.c, "__comp_idx__")
 
+    # Check if both sides have __parent_idx__ (used in nested comprehensions)
+    has_parent_idx_lhs = hasattr(lhs_subq.c, "__parent_idx__")
+    has_parent_idx_rhs = hasattr(rhs_subq.c, "__parent_idx__")
+
     # Build the join condition
     join_cond = lhs_subq.c.log_event_id == rhs_subq.c.log_event_id
     if has_idx_lhs and has_idx_rhs:
         join_cond = and_(join_cond, lhs_subq.c.__comp_idx__ == rhs_subq.c.__comp_idx__)
+
+    # Add parent index to join condition if both sides have it
+    if has_parent_idx_lhs and has_parent_idx_rhs:
+        join_cond = and_(
+            join_cond, lhs_subq.c.__parent_idx__ == rhs_subq.c.__parent_idx__
+        )
 
     # Build the select columns
     select_cols = [
@@ -1292,6 +1306,18 @@ def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type, session=None):
         select_cols.append(lhs_subq.c.__comp_idx__.label("__comp_idx__"))
     elif has_idx_rhs:
         select_cols.append(rhs_subq.c.__comp_idx__.label("__comp_idx__"))
+
+    # Include __parent_idx__ in the output if it exists
+    if has_parent_idx_lhs and has_parent_idx_rhs:
+        select_cols.append(
+            func.coalesce(lhs_subq.c.__parent_idx__, rhs_subq.c.__parent_idx__).label(
+                "__parent_idx__",
+            ),
+        )
+    elif has_parent_idx_lhs:
+        select_cols.append(lhs_subq.c.__parent_idx__.label("__parent_idx__"))
+    elif has_parent_idx_rhs:
+        select_cols.append(rhs_subq.c.__parent_idx__.label("__parent_idx__"))
 
     # Add the value and inferred_type columns
     select_cols.append(
