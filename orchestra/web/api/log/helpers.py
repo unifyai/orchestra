@@ -615,7 +615,7 @@ def _ast_op_to_str(op: ast.AST) -> str:
         raise ValueError(f"Unsupported operator type: {type(op)}")
 
 
-def _transform_ast(node: ast.AST) -> Dict:
+def _transform_ast(node: ast.AST) -> dict:
     """
     Recursively transforms an AST node into a filter dictionary.
 
@@ -759,7 +759,7 @@ def _transform_ast(node: ast.AST) -> Dict:
         raise ValueError(f"Unsupported AST node type: {type(node)}")
 
 
-def str_filter_exp_to_dict_using_ast(expr: str, field_names=None) -> Dict:
+def str_filter_exp_to_dict_using_ast(expr: str, field_names=None) -> dict:
     """
     Converts a string filter expression to a filter dictionary using Python's AST.
     Args:
@@ -2162,7 +2162,6 @@ def _handle_functions(
                     )
                     .subquery()
                 )
-                return subq
             elif isinstance(val_expr, Subquery):
                 val_col, val_type = _select_value(val_expr, session)
                 # If digits_expr is literal or bind param, we can pass it directly:
@@ -2217,7 +2216,6 @@ def _handle_functions(
             )
 
         if ts_is_sub and sec_is_sub:
-            # both timestamp and seconds are subqueries
             ts_col, ts_type = _select_value(ts_expr, session)
             sec_col, sec_type = _select_value(sec_expr, session)
 
@@ -2232,10 +2230,8 @@ def _handle_functions(
                 .join(sec_expr, ts_expr.c.log_event_id == sec_expr.c.log_event_id)
                 .subquery()
             )
-            return subq
 
         elif ts_is_sub:
-            # timestamp is subquery, seconds is literal
             ts_col, ts_type = _select_value(ts_expr, session)
             if isinstance(sec_expr, BindParameter) and isinstance(
                 sec_expr.value,
@@ -2257,12 +2253,10 @@ def _handle_functions(
                 )
 
         elif sec_is_sub:
-            # seconds is subquery, timestamp is literal or direct SQL
             if isinstance(ts_expr, BindParameter) and isinstance(
                 ts_expr.value,
                 (datetime, str),
             ):
-                # parse if needed. Or assume user gave a valid python datetime
                 ts_literal = literal(ts_expr.value, type_=TIMESTAMP)
                 sec_col, sec_type = _select_value(sec_expr, session)
 
@@ -2282,7 +2276,6 @@ def _handle_functions(
                 )
 
         else:
-            # both are direct expressions or literals
             if not isinstance(ts_expr, BindParameter) and not isinstance(
                 ts_expr,
                 (datetime, str),
@@ -2298,7 +2291,6 @@ def _handle_functions(
                     "Expected an integer or float literal for the rounding seconds.",
                 )
 
-            # Convert the Python datetime/string to a literal
             ts_lit = literal(ts_expr.value, type_=TIMESTAMP)
             return _pg_round_timestamp(ts_lit, sec_expr.value)
 
@@ -2319,7 +2311,6 @@ def _handle_functions(
             )
 
     elif operand == "version":
-        # Handle direct version(identifier) case
         if (
             isinstance(filter_dict.get("rhs"), dict)
             and filter_dict["rhs"].get("type") == "identifier"
@@ -2339,8 +2330,6 @@ def _handle_functions(
                 .subquery()
             )
             return version_subq
-        # Handle version(BASE(<ids>, <column_name>)) case
-        # TODO(yusha): add test for this!
         elif (
             isinstance(filter_dict.get("rhs"), dict)
             and filter_dict["rhs"].get("operand") == "BASE"
@@ -2351,10 +2340,8 @@ def _handle_functions(
                     "BASE(...) requires exactly 2 arguments: (event_id, key)",
                 )
 
-            # Extract event IDs from the first argument
             event_ids = base_args[0]
 
-            # Extract column name from the second argument
             if base_args[1].get("type") == "identifier":
                 identifier = base_args[1]["value"]
             else:
@@ -2362,7 +2349,6 @@ def _handle_functions(
                     f"Second argument to BASE must be an identifier, got: {base_args[1]}",
                 )
 
-            # Construct the query with the extracted event IDs and identifier
             row_number = (
                 func.row_number().over(order_by=Log.log_event_id).label("log_event_id")
             )
@@ -2384,7 +2370,6 @@ def _handle_functions(
             raise ValueError(f"Invalid argument for 'version' function: {filter_dict}")
 
     elif operand == "BASE":
-
         if len(rhs_expr) != 2:
             raise ValueError("BASE(...) requires exactly 2 arguments: (event_id, key)")
 
@@ -2397,7 +2382,6 @@ def _handle_functions(
             log_event_ids,
         )
     elif operand == "isNone":
-        # Handle the isNone function: check if the filtered value is None
         if isinstance(filter_dict.get("rhs"), dict):
             rhs_expr = build_sql_query(
                 filter_dict.get("rhs"),
@@ -2438,7 +2422,6 @@ def _handle_functions(
             return rhs_expr.is_(None)
 
     elif operand == "time":
-        # Handle the time function: extract time component from a datetime or parse a time string
         if isinstance(rhs_expr, Subquery):
             val, val_type = _select_value(rhs_expr, session)
 
@@ -3062,27 +3045,14 @@ def compute_group_aggregate(
     else:
         raise ValueError(f"Unsupported aggregation metric: {aggregation_metric}")
 
-    # Build and execute the aggregation query
-    result = (
-        session.query(
-            group_val.label("group_value"),
-            agg_func.label("agg_value"),
-        )
-        .select_from(group_subq)
-        .join(
-            value_subq,
-            group_subq.c.log_event_id == value_subq.c.log_event_id,
-        )
-        .group_by(group_val)
-        .all()
-    )
 
-    # Convert result to dictionary
-    return {row.group_value: row.agg_value for row in result}
+######################
+# Formatting functions
+######################
 
 
 def _flatten_fields(
-    log_fields: List[Tuple[Union[int, List[int]], Union[str, List[str]]]],
+    log_fields: list,
 ):
     flattened = dict()
     for log_ids, fields in log_fields:
@@ -3097,7 +3067,7 @@ def _flatten_fields(
     return flattened
 
 
-def is_image_field(field_name: str, field_types: Dict[str, str]) -> bool:
+def is_image_field(field_name: str, field_types: dict) -> bool:
     """Check if a field is an image type."""
     return field_types.get(field_name) == "image"
 
@@ -3132,7 +3102,7 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
         # Apply context_len slicing to the key
         key = row_key[context_len:]
 
-        def _limit_value(value: Any, inferred_type: str) -> Tuple[Any, bool]:
+        def _limit_value(value: any, inferred_type: str) -> tuple:
             """Limit the size of a value based on its type and the value_limit parameter.
             Returns a tuple of (limited_value, is_clipped)."""
             if value_limit is None:
@@ -3142,11 +3112,9 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
             if inferred_type in ["int", "float", "bool"]:
                 return value, False
 
-            # Handle image fields - return empty string
             if inferred_type == "image":
                 return "", True
 
-            # Convert value to string if it's a nested structure
             if inferred_type in ["list", "dict", "tuple"]:
                 str_value = str(value)
                 if len(str_value) > value_limit:
