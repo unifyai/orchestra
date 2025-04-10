@@ -3679,6 +3679,88 @@ def _handle_dict_comp(
     return final
 
 
+def _handle_zip(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived,
+    local_scope=None,
+):
+    args = [
+        build_sql_query(
+            arg,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+        )
+        for arg in filter_dict["rhs"]
+    ]
+    if not all(isinstance(arg, Subquery) for arg in args):
+        raise HTTPException(
+            status_code=400,
+            detail="zip() expects only JSONB list columns",
+        )
+
+    zipped_subqs = []
+    for idx, arg in enumerate(args):
+        col, _ = _select_value(arg, session, is_collection=True)
+        table_valued = (
+            func.jsonb_array_elements(col)
+            .table_valued("value", with_ordinality="ordinality")
+            .alias(f"elem_tbl_{idx}")
+        )
+        sub = (
+            select(
+                arg.c.log_event_id.label("log_event_id"),
+                table_valued.c.ordinality.label("ordinality"),
+                table_valued.c.value.label(f"value_{idx}"),
+            )
+            .select_from(arg.join(table_valued, literal(True)))
+            .subquery(name=f"zip_subq_{idx}")
+        )
+        zipped_subqs.append(sub)
+
+    base = zipped_subqs[0]
+    for i, other in enumerate(zipped_subqs[1:], start=1):
+        base = (
+            select(
+                base.c.log_event_id,
+                base.c.ordinality,
+                *[base.c[col] for col in base.c.keys() if col.startswith("value")],
+                other.c[f"value_{i}"],
+            )
+            .select_from(
+                base.join(
+                    other,
+                    and_(
+                        base.c.log_event_id == other.c.log_event_id,
+                        base.c.ordinality == other.c.ordinality,
+                    ),
+                ),
+            )
+            .subquery(name=f"zip_join_{i}")
+        )
+
+    value_columns = [base.c[col] for col in base.c.keys() if col.startswith("value")]
+
+    zipped = (
+        select(
+            base.c.log_event_id,
+            func.coalesce(
+                func.jsonb_agg(func.jsonb_build_array(*value_columns)),
+                literal("[]", type_=JSONB),
+            ).label("value"),
+            literal("list").label("inferred_type"),
+        )
+        .group_by(base.c.log_event_id)
+        .subquery(name="zipped")
+    )
+    return zipped
+
+
 
 
 def build_sql_query(
