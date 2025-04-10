@@ -2856,6 +2856,7 @@ def _replace_identifier(ast_node, original, replacement):
     # For literals or other types, return as is
     return ast_node
 
+
 def _handle_dict_method(
     filter_dict,
     log_event_alias,
@@ -3428,6 +3429,7 @@ def _handle_list_comp(
     )
     return final
 
+
 def _handle_dict_comp(
     filter_dict,
     log_event_alias,
@@ -3820,8 +3822,6 @@ def _handle_zip(
         .subquery(name="zipped")
     )
     return zipped
-
-
 
 
 def build_sql_query(
