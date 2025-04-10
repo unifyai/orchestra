@@ -2502,88 +2502,65 @@ def _handle_functions(
                 .subquery()
             )
         else:
-            # Handle literal values
             if isinstance(rhs_expr, BindParameter):
                 val = rhs_expr.value
                 if isinstance(val, datetime):
-                    # Extract time from datetime
                     return literal(val.time().isoformat(), type_=Time)
                 elif isinstance(val, str) and _is_time_string(val):
-                    # Parse time string - handle 12-hour format
                     clean_val = val.strip("\"'")
                     try:
-                        # Try 12-hour format first
                         if " PM" in clean_val or " AM" in clean_val:
-                            # Try different 12-hour formats
                             for fmt in ("%I:%M %p", "%I:%M:%S %p", "%I:%M:%S.%f %p"):
                                 try:
                                     dt = datetime.strptime(clean_val, fmt)
                                     return literal(dt.time().isoformat(), type_=Time)
                                 except ValueError:
                                     continue
-
-                        # Try 24-hour formats
                         for fmt in ("%H:%M:%S", "%H:%M:%S.%f", "%H:%M"):
                             try:
                                 dt = datetime.strptime(clean_val, fmt)
                                 return literal(dt.time().isoformat(), type_=Time)
                             except ValueError:
                                 continue
-
-                        # If we can't parse it, just pass it as is
                         return literal(clean_val, type_=Time)
                     except Exception:
-                        # If all parsing fails, just pass the string as is
                         return literal(clean_val, type_=Time)
                 else:
                     raise ValueError(
                         f"Cannot convert {val} to time. Expected datetime or time string.",
                     )
             else:
-                # Try to cast the expression to Time
                 return cast(rhs_expr, Time)
 
     elif operand == "date":
-        # Handle the date function: extract date component from a datetime
         return _handle_date_function(rhs_expr, session)
     elif operand == "now":
-        # Handle the now function: return current timestamp with timezone
-        # Create a subquery that returns the current timestamp for each log_event_id
         if log_event_ids is None or log_event_ids == []:
-            # If no log_event_ids provided, return a literal timestamp
             return literal(datetime.now(timezone.utc).isoformat(), type_=TIMESTAMP)
 
-        # Create a subquery with the current timestamp for each log_event_id
         if isinstance(log_event_ids, list):
-            # For a list of IDs, create a subquery with those IDs
             ids_subq = select(
                 literal(id).label("log_event_id") for id in log_event_ids
             ).subquery()
             now_subq = (
                 select(
                     ids_subq.c.log_event_id.label("log_event_id"),
-                    func.timezone("UTC", func.now()).label(
-                        "value",
-                    ),  # Use timezone-aware timestamp
+                    func.timezone("UTC", func.now()).label("value"),
                     literal("timestamp").label("inferred_type"),
                 )
                 .select_from(ids_subq)
                 .subquery()
             )
         else:
-            # For a subquery of IDs, use it directly
             ids_subq = log_event_ids
             row_number = (
                 func.row_number().over(order_by=ids_subq.c.id).label("log_event_id")
             )
-            # Return a subquery with current timestamp for each log_event_id
             event_id_col = row_number if is_derived else log_event_ids.c.id
             now_subq = (
                 select(
                     event_id_col.label("log_event_id"),
-                    func.timezone("UTC", func.now()).label(
-                        "value",
-                    ),  # Use timezone-aware timestamp
+                    func.timezone("UTC", func.now()).label("value"),
                     literal("timestamp").label("inferred_type"),
                 )
                 .select_from(ids_subq)
@@ -2659,7 +2636,6 @@ def _handle_index_operator(
                 .join(rhs_expr, lhs_expr.c.log_event_id == rhs_expr.c.log_event_id)
                 .subquery()
             )
-            return subq
         else:
             rhs_expr = (
                 rhs_expr.value if isinstance(rhs_expr, BindParameter) else rhs_expr
@@ -2702,8 +2678,6 @@ def _handle_index_operator(
                 # fallback
                 extracted = lhs_valcol[rhs_expr]
 
-            # Build the subquery
-            # TODO: add strong typing for lists/dicts to reason about the inferred_type when indexing.
             result = session.execute(select(extracted)).first()[0]
             inferred_type = LogDAO.infer_type("", result)
             subq = (
@@ -2775,7 +2749,7 @@ def _build_subquery_for_base_call(
     )
     filtered_subquery = (
         select(
-            row_number,  # use sequential log_event_ids as 1,2,3, etc..
+            row_number,
             key_val.label("value"),
             literal(key_type).label("inferred_type"),
         )
