@@ -62,15 +62,15 @@ STR_TO_SQL_TYPES = {
 }
 
 
-def _extract_placeholders(equation: str) -> List[str]:
+def _extract_placeholders(equation: str) -> list:
     """
     Find placeholders like '{log0:score}' in the equation.
     """
-    pattern = re.compile(r"\{([^}]+)\}")
+    pattern = re.compile(r"\{([^:{}\s]+:[^:{}\s]+)\}")
     return pattern.findall(equation)
 
 
-def _substitute_placeholders(equation: str, single_ref: Dict[str, int]) -> str:
+def _substitute_placeholders(equation: str, single_ref: dict) -> tuple:
     """
     E.g. equation="{log0:score} - {log1:score}", single_ref={"log0":10,"log1":20}
     => "BASE([10],score) - BASE([20],score)" if we are referencing 1 ID each time.
