@@ -3877,13 +3877,19 @@ def build_sql_query(
 
                 base_sub = local_scope.get("__comp_base__")
                 if base_sub is not None and "__comp_idx__" in local_scope:
+                    cols = [
+                        base_sub.c.log_event_id.label("log_event_id"),
+                        base_sub.c.ordinality.label("__comp_idx__"),
+                        col.label("value"),
+                        literal(itype).label("inferred_type"),
+                    ]
+                    if "__parent_idx__" in local_scope and hasattr(
+                        base_sub.c, "__parent_idx__",
+                    ):
+                        cols.append(base_sub.c.__parent_idx__.label("__parent_idx__"))
+
                     subq = (
-                        select(
-                            base_sub.c.log_event_id.label("log_event_id"),
-                            base_sub.c.ordinality.label("__comp_idx__"),
-                            col.label("value"),
-                            literal(itype).label("inferred_type"),
-                        )
+                        select(*cols)
                         .select_from(base_sub)
                         .subquery(name=f"__local_{key}_{random.randint(1,100000000)}")
                     )
