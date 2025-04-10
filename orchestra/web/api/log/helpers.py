@@ -3367,6 +3367,317 @@ def _handle_list_comp(
     )
     return final
 
+def _handle_dict_comp(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived,
+    local_scope=None,
+):
+    """
+    Handle dictionary comprehension expressions in filter queries.
+
+    This function processes expressions like {k: v*2 for k, v in some_dict.items() if v > 0}
+    by exploding the source dictionary into rows, then applying the transformations and
+    filter to each element, and finally aggregating back into a dictionary.
+    """
+
+    iter_subq = build_sql_query(
+        filter_dict["iter"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived,
+        local_scope=local_scope,
+    )
+    if not isinstance(iter_subq, Subquery):
+        raise HTTPException(
+            status_code=400,
+            detail="dict comprehension source must be JSONB list/dict",
+        )
+
+    val, _ = _select_value(iter_subq, session, is_collection=True)
+
+    # Determine if we're iterating over an array or object
+    is_array = session.execute(select(func.jsonb_typeof(val))).scalar() == "array"
+
+    # Use appropriate function based on the JSON type
+    if is_array:
+        # For arrays, use jsonb_array_elements with ordinality
+        elem_tbl = (
+            func.jsonb_array_elements(val)
+            .table_valued("value", with_ordinality="ordinality")
+            .alias(name="elem_tbl")
+        )
+    else:
+        # For objects, use jsonb_each with ordinality
+        elem_tbl = (
+            func.jsonb_each(val)
+            .table_valued("key", "value", with_ordinality="ordinality")
+            .alias(name="elem_tbl")
+        )
+
+    # Create the base subquery with the exploded elements
+    base = (
+        select(
+            iter_subq.c.log_event_id,
+            (
+                elem_tbl.c.value.op("->>")(literal(0)) if is_array else elem_tbl.c.key
+            ).label("__comp_key__"),
+            (
+                elem_tbl.c.value.op("->")(literal(1)) if is_array else elem_tbl.c.value
+            ).label("__comp_val__"),
+            elem_tbl.c.ordinality,
+        )
+        .select_from(iter_subq.join(elem_tbl, literal(True)))
+        .subquery(name="base")
+    )
+
+    # Replace occurrences of the comprehension target with a fake identifier
+    fake_ident_key = {"type": "identifier", "value": "__comp_key__"}
+    fake_ident_val = {"type": "identifier", "value": "__comp_val__"}
+
+    # Create a local scope with the comprehension variable and its ordinality
+    comp_key_type = LogDAO.infer_type(
+        "",
+        session.execute(select(base.c.__comp_key__)).scalar(),
+    )
+    comp_val_type = LogDAO.infer_type(
+        "",
+        session.execute(select(base.c.__comp_val__)).scalar(),
+    )
+    local_scope = {
+        "__comp_key__": (base.c.__comp_key__, comp_key_type),
+        "__comp_val__": (base.c.__comp_val__, comp_val_type),
+        "__comp_idx__": (base.c.ordinality, "int"),
+        "__comp_base__": base,
+    }
+
+    def _value_column(expr):
+        """
+        If *expr* is a sub‑query produced by build_sql_query return its
+        `.c.value` column and make sure the caller knows it has to JOIN it.
+        Otherwise just return *expr* unchanged.
+        """
+        if isinstance(expr, Subquery):
+            # Check if the subquery has the __comp_idx__ column (from local scope)
+            has_idx = hasattr(expr.c, "__comp_idx__")
+            return (
+                expr.c.value,
+                expr,
+                has_idx,
+            )  # (column, subquery to join, has_idx flag)
+        return expr, None, False
+
+    # Build the subqueries for key and value expressions
+    key_expr = build_sql_query(
+        _replace_identifier(
+            filter_dict["key_elt"],
+            filter_dict["target"],
+            fake_ident_key,
+        ),
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived,
+        local_scope=local_scope,
+    )
+
+    val_expr = build_sql_query(
+        _replace_identifier(
+            filter_dict["val_elt"],
+            filter_dict["target"],
+            fake_ident_val,
+        ),
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived,
+        local_scope=local_scope,
+    )
+
+    # Build the subqueries for the key and value expressions
+    key_col, key_subq, key_has_idx = _value_column(key_expr)
+    val_col, val_subq, val_has_idx = _value_column(val_expr)
+
+    # Start with the base table
+    from_clause = base
+
+    # Join with key_subq if needed
+    if key_subq is not None:
+        # Create a subquery that preserves both value and ordinality for key
+        key_with_row = (
+            select(
+                key_subq.c.log_event_id,
+                # If the subquery has __comp_idx__, use it; otherwise use row_number
+                (
+                    key_subq.c.__comp_idx__ if key_has_idx else func.row_number().over()
+                ).label("ordinality"),
+                key_subq.c.value,
+                key_subq.c.inferred_type,
+            )
+            .select_from(key_subq)
+            .subquery(name="key_with_row")
+        )
+
+        # Join on both log_event_id and ordinality
+        from_clause_with_key = (
+            select(
+                from_clause.c.log_event_id,
+                from_clause.c.ordinality,
+                from_clause.c.__comp_key__,
+                key_with_row.c.value.label("key_value"),
+                key_with_row.c.inferred_type.label("key_type"),
+            )
+            .select_from(
+                from_clause.join(
+                    key_with_row,
+                    and_(
+                        from_clause.c.log_event_id == key_with_row.c.log_event_id,
+                        from_clause.c.ordinality == key_with_row.c.ordinality,
+                    ),
+                ),
+            )
+            .subquery(name="from_clause_with_key")
+        )
+
+    # Join with val_subq if needed
+    if val_subq is not None:
+        # Create a subquery that preserves both value and ordinality for value
+        val_with_row = (
+            select(
+                val_subq.c.log_event_id,
+                # If the subquery has __comp_idx__, use it; otherwise use row_number
+                (
+                    val_subq.c.__comp_idx__ if val_has_idx else func.row_number().over()
+                ).label("ordinality"),
+                val_subq.c.value,
+                val_subq.c.inferred_type,
+            )
+            .select_from(val_subq)
+            .subquery(name="val_with_row")
+        )
+
+        # Join on both log_event_id and ordinality
+        from_clause_with_val = (
+            select(
+                from_clause.c.log_event_id,
+                from_clause.c.ordinality,
+                from_clause.c.__comp_val__,
+                val_with_row.c.value.label("val_value"),
+                val_with_row.c.inferred_type.label("val_type"),
+            )
+            .select_from(
+                from_clause.join(
+                    val_with_row,
+                    and_(
+                        from_clause.c.log_event_id == val_with_row.c.log_event_id,
+                        from_clause.c.ordinality == val_with_row.c.ordinality,
+                    ),
+                ),
+            )
+            .subquery(name="from_clause_with_val")
+        )
+
+    # --- Build the joined_clause ---
+    final_key_col = None
+    final_val_col = None
+
+    if from_clause_with_key is not None and from_clause_with_val is not None:
+        # Scenario 4: Both key and value subqueries exist. Join the two intermediate results.
+        joined_clause = (
+            select(
+                from_clause_with_key.c.log_event_id,
+                from_clause_with_key.c.ordinality,
+                from_clause_with_key.c.key_value,
+                from_clause_with_val.c.val_value,
+            )
+            .select_from(
+                from_clause_with_key.join(
+                    from_clause_with_val,
+                    and_(
+                        from_clause_with_key.c.log_event_id
+                        == from_clause_with_val.c.log_event_id,
+                        from_clause_with_key.c.ordinality
+                        == from_clause_with_val.c.ordinality,
+                    ),
+                ),
+            )
+            .subquery(name="joined_clause")
+        )
+        final_key_col = joined_clause.c.key_value
+        final_val_col = joined_clause.c.val_value
+
+    elif from_clause_with_key is not None:
+        # Scenario 2: Only key subquery exists. Use from_clause_with_key.
+        joined_clause = from_clause_with_key
+        final_key_col = joined_clause.c.key_value
+        final_val_col = joined_clause.c.__comp_val__
+
+    elif from_clause_with_val is not None:
+        # Scenario 3: Only value subquery exists. Use from_clause_with_val.
+        joined_clause = from_clause_with_val
+        final_key_col = joined_clause.c.__comp_key__
+        final_val_col = joined_clause.c.val_value
+
+    else:
+        # Scenario 1: Neither subquery exists. Use base directly.
+        joined_clause = (
+            select(
+                base.c.log_event_id,
+                base.c.ordinality,
+                base.c.__comp_key__.label("key_value"),
+                base.c.__comp_val__.label("val_value"),
+            )
+            .select_from(base)
+            .subquery(name="joined_clause")
+        )
+        final_key_col = joined_clause.c.key_value
+        final_val_col = joined_clause.c.val_value
+
+    # Process filter conditions
+    where_clause = literal(True)
+    for cond_ast in filter_dict.get("ifs", []):
+        cond_expr = build_sql_query(
+            _replace_identifier(cond_ast, filter_dict["target"], fake_ident_val),
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+        )
+        if isinstance(cond_expr, Subquery):
+            # Create a correlated scalar subquery
+            condition = (
+                select(cond_expr.c.value)
+                .where(
+                    cond_expr.c.log_event_id == joined_clause.c.log_event_id,
+                    cond_expr.c.__comp_idx__ == joined_clause.c.ordinality,
+                )
+                .scalar_subquery()
+            )
+        else:
+            condition = cond_expr
+        where_clause = and_(where_clause, condition)
+
+    # Create the final object aggregation subquery
+    final = (
+        select(
+            joined_clause.c.log_event_id,
+            func.coalesce(
+                func.jsonb_object_agg(final_key_col, final_val_col),
+                literal("{}", type_=JSONB),
+            ).label("value"),
+            literal("dict").label("inferred_type"),
+        )
+        .select_from(joined_clause)
+        .where(where_clause)
+        .group_by(joined_clause.c.log_event_id)
+        .subquery(name="final")
+    )
+    return final
+
 
 
 
