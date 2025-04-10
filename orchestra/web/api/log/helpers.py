@@ -33,7 +33,7 @@ from sqlalchemy import (
     true,
     union_all,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, aggregate_order_by
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.selectable import Subquery
 
@@ -1285,7 +1285,7 @@ def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type, session=None):
     # Add parent index to join condition if both sides have it
     if has_parent_idx_lhs and has_parent_idx_rhs:
         join_cond = and_(
-            join_cond, lhs_subq.c.__parent_idx__ == rhs_subq.c.__parent_idx__
+            join_cond, lhs_subq.c.__parent_idx__ == rhs_subq.c.__parent_idx__,
         )
 
     # Build the select columns
@@ -1640,6 +1640,8 @@ def _handle_arithmetic_operator(
         select_cols = [lhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in lhs.c.keys():
             select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__parent_idx__.label("__parent_idx__"))
         select_cols.extend(
             [expr.label("value"), literal(result_type).label("inferred_type")],
         )
@@ -1651,6 +1653,8 @@ def _handle_arithmetic_operator(
         select_cols = [rhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in rhs.c.keys():
             select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__parent_idx__.label("__parent_idx__"))
         select_cols.extend(
             [expr.label("value"), literal(result_type).label("inferred_type")],
         )
@@ -1769,6 +1773,8 @@ def _handle_comparison_operator(
         select_cols = [lhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in lhs.c.keys():
             select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__parent_idx__.label("__parent_idx__"))
         select_cols.extend(
             [expr.label("value"), literal("bool").label("inferred_type")],
         )
@@ -1809,6 +1815,8 @@ def _handle_comparison_operator(
         select_cols = [rhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in rhs.c.keys():
             select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__parent_idx__.label("__parent_idx__"))
         select_cols.extend(
             [expr.label("value"), literal("bool").label("inferred_type")],
         )
@@ -1940,6 +1948,8 @@ def _handle_membership_operator(
         select_cols = [lhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in lhs.c.keys():
             select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__parent_idx__.label("__parent_idx__"))
         select_cols.extend(
             [expr.label("value"), literal("bool").label("inferred_type")],
         )
@@ -1991,6 +2001,8 @@ def _handle_membership_operator(
         select_cols = [rhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in rhs.c.keys():
             select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__parent_idx__.label("__parent_idx__"))
         select_cols.extend(
             [cond.label("value"), literal("bool").label("inferred_type")],
         )
@@ -2083,15 +2095,15 @@ def _handle_date_function(rhs_expr, session):
             else_=None,
         )
 
-        return (
-            select(
-                rhs_expr.c.log_event_id.label("log_event_id"),
-                expr.label("value"),
-                literal("date").label("inferred_type"),
-            )
-            .select_from(rhs_expr)
-            .subquery()
+        select_cols = [rhs_expr.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in rhs_expr.c.keys():
+            select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in rhs_expr.c.keys():
+            select_cols.append(rhs_expr.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal("date").label("inferred_type")],
         )
+        return select(*select_cols).select_from(rhs_expr).subquery()
     else:
         # Handle literal values
         if isinstance(rhs_expr, BindParameter):
@@ -2203,6 +2215,8 @@ def _handle_functions(
             select_cols = [rhs_expr.c.log_event_id.label("log_event_id")]
             if "__comp_idx__" in rhs_expr.c.keys():
                 select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
+            if "__parent_idx__" in rhs_expr.c.keys():
+                select_cols.append(rhs_expr.c.__parent_idx__.label("__parent_idx__"))
             select_cols.extend(
                 [expr.label("value"), literal("int").label("inferred_type")],
             )
@@ -2217,6 +2231,8 @@ def _handle_functions(
             select_cols = [rhs_expr.c.log_event_id.label("log_event_id")]
             if "__comp_idx__" in rhs_expr.c.keys():
                 select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
+            if "__parent_idx__" in rhs_expr.c.keys():
+                select_cols.append(rhs_expr.c.__parent_idx__.label("__parent_idx__"))
             select_cols.extend(
                 [expr.label("value"), literal("str").label("inferred_type")],
             )
@@ -2239,6 +2255,10 @@ def _handle_functions(
                 select_cols = [val_expr.c.log_event_id.label("log_event_id")]
                 if "__comp_idx__" in val_expr.c.keys():
                     select_cols.append(val_expr.c.__comp_idx__.label("__comp_idx__"))
+                if "__parent_idx__" in val_expr.c.keys():
+                    select_cols.append(
+                        val_expr.c.__parent_idx__.label("__parent_idx__"),
+                    )
                 select_cols.extend(
                     [
                         func.round(cast(val_col, Numeric)).label("value"),
@@ -2259,6 +2279,10 @@ def _handle_functions(
                 select_cols = [val_expr.c.log_event_id.label("log_event_id")]
                 if "__comp_idx__" in val_expr.c.keys():
                     select_cols.append(val_expr.c.__comp_idx__.label("__comp_idx__"))
+                if "__parent_idx__" in val_expr.c.keys():
+                    select_cols.append(
+                        val_expr.c.__parent_idx__.label("__parent_idx__"),
+                    )
                 select_cols.extend(
                     [
                         func.round(cast(val_col, Numeric), dig_col).label("value"),
@@ -2279,6 +2303,10 @@ def _handle_functions(
                 select_cols = [val_expr.c.log_event_id.label("log_event_id")]
                 if "__comp_idx__" in val_expr.c.keys():
                     select_cols.append(val_expr.c.__comp_idx__.label("__comp_idx__"))
+                if "__parent_idx__" in val_expr.c.keys():
+                    select_cols.append(
+                        val_expr.c.__parent_idx__.label("__parent_idx__"),
+                    )
                 select_cols.extend(
                     [
                         func.round(cast(val_col, Numeric), digits_expr).label("value"),
@@ -2291,6 +2319,10 @@ def _handle_functions(
                 select_cols = [val_expr.c.log_event_id.label("log_event_id")]
                 if "__comp_idx__" in val_expr.c.keys():
                     select_cols.append(val_expr.c.__comp_idx__.label("__comp_idx__"))
+                if "__parent_idx__" in val_expr.c.keys():
+                    select_cols.append(
+                        val_expr.c.__parent_idx__.label("__parent_idx__"),
+                    )
                 select_cols.extend(
                     [
                         func.round(cast(val_col, Numeric), digits_expr).label("value"),
@@ -2302,6 +2334,10 @@ def _handle_functions(
                 select_cols = [val_expr.c.log_event_id.label("log_event_id")]
                 if "__comp_idx__" in val_expr.c.keys():
                     select_cols.append(val_expr.c.__comp_idx__.label("__comp_idx__"))
+                if "__parent_idx__" in val_expr.c.keys():
+                    select_cols.append(
+                        val_expr.c.__parent_idx__.label("__parent_idx__"),
+                    )
                 select_cols.extend(
                     [
                         func.round(cast(val_col, Numeric), digits_expr).label("value"),
@@ -2315,6 +2351,10 @@ def _handle_functions(
                 select_cols = [digits_expr.c.log_event_id.label("log_event_id")]
                 if "__comp_idx__" in digits_expr.c.keys():
                     select_cols.append(digits_expr.c.__comp_idx__.label("__comp_idx__"))
+                if "__parent_idx__" in digits_expr.c.keys():
+                    select_cols.append(
+                        digits_expr.c.__parent_idx__.label("__parent_idx__"),
+                    )
                 select_cols.extend(
                     [
                         func.round(cast(val_expr, Numeric), dig_col).label("value"),
@@ -2356,6 +2396,8 @@ def _handle_functions(
             select_cols = [ts_expr.c.log_event_id.label("log_event_id")]
             if "__comp_idx__" in ts_expr.c.keys():
                 select_cols.append(ts_expr.c.__comp_idx__.label("__comp_idx__"))
+            if "__parent_idx__" in ts_expr.c.keys():
+                select_cols.append(ts_expr.c.__parent_idx__.label("__parent_idx__"))
             select_cols.extend(
                 [
                     _pg_round_timestamp(ts_col, sec_col).label("value"),
@@ -2378,6 +2420,8 @@ def _handle_functions(
                 select_cols = [ts_expr.c.log_event_id.label("log_event_id")]
                 if "__comp_idx__" in ts_expr.c.keys():
                     select_cols.append(ts_expr.c.__comp_idx__.label("__comp_idx__"))
+                if "__parent_idx__" in ts_expr.c.keys():
+                    select_cols.append(ts_expr.c.__parent_idx__.label("__parent_idx__"))
                 select_cols.extend(
                     [
                         _pg_round_timestamp(ts_col, sec_expr.value).label("value"),
@@ -2401,6 +2445,10 @@ def _handle_functions(
                 select_cols = [sec_expr.c.log_event_id.label("log_event_id")]
                 if "__comp_idx__" in sec_expr.c.keys():
                     select_cols.append(sec_expr.c.__comp_idx__.label("__comp_idx__"))
+                if "__parent_idx__" in sec_expr.c.keys():
+                    select_cols.append(
+                        sec_expr.c.__parent_idx__.label("__parent_idx__"),
+                    )
                 select_cols.extend(
                     [
                         _pg_round_timestamp(ts_literal, sec_expr.value).label("value"),
@@ -2551,6 +2599,8 @@ def _handle_functions(
             select_cols = [rhs_expr.c.log_event_id.label("log_event_id")]
             if "__comp_idx__" in rhs_expr.c.keys():
                 select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
+            if "__parent_idx__" in rhs_expr.c.keys():
+                select_cols.append(rhs_expr.c.__parent_idx__.label("__parent_idx__"))
             select_cols.extend(
                 [expr.label("value"), literal("bool").label("inferred_type")],
             )
@@ -2582,6 +2632,8 @@ def _handle_functions(
             select_cols = [rhs_expr.c.log_event_id.label("log_event_id")]
             if "__comp_idx__" in rhs_expr.c.keys():
                 select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
+            if "__parent_idx__" in rhs_expr.c.keys():
+                select_cols.append(rhs_expr.c.__parent_idx__.label("__parent_idx__"))
             select_cols.extend(
                 [expr.label("value"), literal("time").label("inferred_type")],
             )
@@ -2708,6 +2760,8 @@ def _handle_index_operator(
             select_cols = [lhs_expr.c.log_event_id.label("log_event_id")]
             if "__comp_idx__" in lhs_expr.c.keys():
                 select_cols.append(lhs_expr.c.__comp_idx__.label("__comp_idx__"))
+            if "__parent_idx__" in lhs_expr.c.keys():
+                select_cols.append(lhs_expr.c.__parent_idx__.label("__parent_idx__"))
             select_cols.extend(
                 [
                     func.jsonb_extract_path(
@@ -2770,6 +2824,8 @@ def _handle_index_operator(
             select_cols = [lhs_expr.c.log_event_id.label("log_event_id")]
             if "__comp_idx__" in lhs_expr.c.keys():
                 select_cols.append(lhs_expr.c.__comp_idx__.label("__comp_idx__"))
+            if "__parent_idx__" in lhs_expr.c.keys():
+                select_cols.append(lhs_expr.c.__parent_idx__.label("__parent_idx__"))
             select_cols.extend(
                 [
                     extracted.label("value"),
@@ -3329,6 +3385,8 @@ def _handle_list_comp(
             "__comp_base__": base,
         }
 
+    if parent_idx_col is not None:
+        local_scope["__parent_idx__"] = (parent_idx_col, "int")
     # Use _replace_identifier on the element expression (elt) and any if conditions
     elt_expr = build_sql_query(
         filter_dict["elt"],
@@ -3367,6 +3425,11 @@ def _handle_list_comp(
                 (
                     elt_subq.c.__comp_idx__ if has_idx else func.row_number().over()
                 ).label("ordinality"),
+                *(
+                    [elt_subq.c.__parent_idx__.label("__parent_idx__")]
+                    if hasattr(elt_subq.c, "__parent_idx__")
+                    else []
+                ),
                 elt_subq.c.value,
                 elt_subq.c.inferred_type,
             )
@@ -3394,6 +3457,12 @@ def _handle_list_comp(
                     and_(
                         base.c.log_event_id == elt_with_row.c.log_event_id,
                         base.c.ordinality == elt_with_row.c.ordinality,
+                        *(
+                            [base.c.__parent_idx__ == elt_with_row.c.__parent_idx__]
+                            if hasattr(base.c, "__parent_idx__")
+                            and hasattr(elt_with_row.c, "__parent_idx__")
+                            else []
+                        ),
                     ),
                 ),
             )
@@ -3423,6 +3492,12 @@ def _handle_list_comp(
                 .where(
                     cond_expr.c.log_event_id == from_clause.c.log_event_id,
                     cond_expr.c.__comp_idx__ == from_clause.c.ordinality,
+                    *(
+                        [cond_expr.c.__parent_idx__ == from_clause.c.__parent_idx__]
+                        if hasattr(cond_expr.c, "__parent_idx__")
+                        and hasattr(from_clause.c, "__parent_idx__")
+                        else []
+                    ),
                 )
                 .scalar_subquery()
             )
