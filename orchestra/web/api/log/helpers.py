@@ -3880,197 +3880,61 @@ def build_sql_query(
             log_event_ids,
             is_derived=is_derived,
         )
-    # Handle unknown operand
+    # Handle dict methods (keys, values, items)
+    elif operand == "dict_method":
+        return _handle_dict_method(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+        )
+    # Handle if expressions
+    elif operand == "if_expr":
+        return _handle_if_expr(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+        )
+    # Handle list comprehensions
+    elif operand == "list_comp":
+        return _handle_list_comp(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+        )
+    # Handle dictionary comprehensions
+    elif operand == "dict_comp":
+        return _handle_dict_comp(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+        )
+    # Handle zip
+    elif operand == "zip":
+        return _handle_zip(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+        )
     else:
-        raise ValueError(f"Unknown operand or structure: {filter_dict}")
-
-
-# Reduction #
-# ----------#
-
-
-# noinspection PyBroadException
-def _is_timestamp(v: Any):
-    try:
-        # First normalize the timestamp if it's in a non-standard format
-        normalized = normalize_timestamp(v)
-        # Then try to parse it
-        datetime.fromisoformat(normalized)
-        return True
-    except:
-        return False
-
-
-def _is_type_for_len(v: Any) -> bool:
-    return (
-        (isinstance(v, str) and not _is_timestamp(v))
-        or isinstance(v, list)
-        or isinstance(v, dict)
-        or isinstance(v, tuple)
-        or isinstance(v, set)
-    )
-
-
-def _is_all_unique(vals):
-    """
-    Check if all entries in vals are unique. Works even for unhashable types like lists or dicts.
-    """
-    seen = []
-    for val in vals:
-        if val in seen:
-            return False
-        seen.append(val)
-    return True
-
-
-def _preprocess(
-    values: List[Union[int, float, bool, str]],
-) -> Tuple[List[Union[int, float, bool]], bool]:
-    assert all(
-        isinstance(x, type(values[0])) for x in values
-    ), "Not all elements have the same type"
-    if _is_type_for_len(values[0]):
-        return [len(v) for v in values], False
-    elif _is_timestamp(values[0]):
-        return [datetime.fromisoformat(v).timestamp() for v in values], True
-    else:
-        return values, False
-
-
-def _count(values: List[Union[int, float, bool]]) -> Union[int, float]:
-    values, _ = _preprocess(values)
-    return len(values)
-
-
-def _sum(values: List[Union[int, float, bool]]) -> Union[int, float, str]:
-    values, is_timestamp = _preprocess(values)
-    ret = sum(values)
-    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
-
-
-def _mean(values: List[Union[int, float, bool]]) -> Union[float, str]:
-    values, is_timestamp = _preprocess(values)
-    ret = sum(values) / len(values)
-    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
-
-
-def _var(values: List[Union[int, float, bool]]) -> Union[float, str]:
-    values, is_timestamp = _preprocess(values)
-    num_values = len(values)
-    mean = sum(values) / num_values
-    diffs_squared = [(v - mean) ** 2 for v in values]
-    ret = sum(diffs_squared) / num_values
-    return timedelta(seconds=ret).__repr__() if is_timestamp else ret
-
-
-def _std(values: List[Union[int, float, bool]]) -> Union[float, str]:
-    values, is_timestamp = _preprocess(values)
-    num_values = len(values)
-    mean = sum(values) / num_values
-    diffs_squared = [(v - mean) ** 2 for v in values]
-    ret = (sum(diffs_squared) / num_values) ** 0.5
-    return timedelta(seconds=ret).__repr__() if is_timestamp else ret
-
-
-def _min(values: List[Union[int, float, bool]]) -> Union[int, float, bool, str]:
-    values, is_timestamp = _preprocess(values)
-    ret = min(values)
-    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
-
-
-def _max(values: List[Union[int, float, bool]]) -> Union[int, float, bool, str]:
-    values, is_timestamp = _preprocess(values)
-    ret = max(values)
-    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
-
-
-def _median(values: List[Union[int, float, bool]]) -> Union[int, float, bool, str]:
-    values, is_timestamp = _preprocess(values)
-    ret = statistics.median(values)
-    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
-
-
-def _mode(values: List[Union[int, float, bool]]) -> Union[int, float, bool, str]:
-    values, is_timestamp = _preprocess(values)
-    ret = statistics.mode(values)
-    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
-
-
-reduction_methods = {
-    "count": _count,
-    "sum": _sum,
-    "mean": _mean,
-    "var": _var,
-    "std": _std,
-    "min": _min,
-    "max": _max,
-    "median": _median,
-    "mode": _mode,
-}
-
-
-def compute_group_aggregate(
-    session,
-    log_event_ids: List[int],
-    group_field: str,
-    value_field: str,
-    aggregation_metric: str,
-    log_event_alias,
-) -> Dict[Any, float]:
-    """
-    Compute aggregated values for a given group using SQLAlchemy.
-
-    Args:
-        session: SQLAlchemy session
-        log_event_ids: List of log event IDs to process
-        group_field: Field name to group by
-        value_field: Field name to aggregate
-        aggregation_metric: Metric to use for aggregation (e.g., 'mean', 'sum', 'min', etc.)
-        log_event_alias: Alias for LogEvent to correlate subqueries
-
-    Returns:
-        Dict mapping group values to their aggregated values
-    """
-    # Build subqueries for group and value fields
-    group_subq = _build_subquery_for_identifier(
-        group_field,
-        log_event_alias,
-        log_event_ids=log_event_ids,
-        session=session,
-    )
-    value_subq = _build_subquery_for_identifier(
-        value_field,
-        log_event_alias,
-        log_event_ids=log_event_ids,
-        session=session,
-    )
-
-    # Get the value columns and their types
-    group_val, group_type = _select_value(group_subq, session)
-    value_val, value_type = _select_value(value_subq, session)
-
-    # Cast value column to float for aggregation
-    value_col = cast(value_val, Float)
-
-    # Define the aggregation function based on the metric
-    if aggregation_metric == "mean":
-        agg_func = func.avg(value_col)
-    elif aggregation_metric == "sum":
-        agg_func = func.sum(value_col)
-    elif aggregation_metric == "min":
-        agg_func = func.min(value_col)
-    elif aggregation_metric == "max":
-        agg_func = func.max(value_col)
-    elif aggregation_metric == "count":
-        agg_func = func.count(value_col)
-    elif aggregation_metric == "std":
-        # Standard deviation using PostgreSQL's stddev function
-        agg_func = func.stddev(value_col)
-    elif aggregation_metric == "var":
-        # Variance using PostgreSQL's var_pop function
-        agg_func = func.var_pop(value_col)
-    else:
-        raise ValueError(f"Unsupported aggregation metric: {aggregation_metric}")
+        if operand is not None:
+            raise ValueError(f"Unknown operand or structure: {filter_dict}")
+        else:
+            return literal(filter_dict)
 
 
 ######################
