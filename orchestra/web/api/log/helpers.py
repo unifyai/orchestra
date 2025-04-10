@@ -1,9 +1,9 @@
 import ast
+import copy
 import json
+import random
 import re
-import statistics
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Tuple, Union
+from datetime import datetime, timezone
 
 from fastapi import HTTPException
 from sqlalchemy import (
@@ -24,11 +24,14 @@ from sqlalchemy import (
     case,
     cast,
     func,
+    lateral,
     literal,
     literal_column,
     not_,
     or_,
     select,
+    true,
+    union_all,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
@@ -1322,6 +1325,7 @@ def _handle_logical_operator(
     session,
     log_event_ids,
     is_derived=False,
+    local_scope=None,
 ):
     """
     Handles logical operators ('and', 'or', 'not') in the filter dictionary.
@@ -1342,6 +1346,7 @@ def _handle_logical_operator(
             session,
             log_event_ids=log_event_ids,
             is_derived=is_derived,
+            local_scope=local_scope,
         )
         if operand != "not"
         else None
@@ -1352,6 +1357,7 @@ def _handle_logical_operator(
         session,
         log_event_ids=log_event_ids,
         is_derived=is_derived,
+        local_scope=local_scope,
     )
 
     # Check if lhs and rhs are subqueries
@@ -1562,6 +1568,7 @@ def _handle_arithmetic_operator(
     session,
     log_event_ids,
     is_derived=False,
+    local_scope=None,
 ):
     """
     Handles arithmetic operators ('+', '-', '*', '**', '//', '/', '%') in the filter dictionary.
@@ -1581,6 +1588,7 @@ def _handle_arithmetic_operator(
         session,
         log_event_ids=log_event_ids,
         is_derived=is_derived,
+        local_scope=local_scope,
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -1588,6 +1596,7 @@ def _handle_arithmetic_operator(
         session,
         log_event_ids=log_event_ids,
         is_derived=is_derived,
+        local_scope=local_scope,
     )
 
     lhs_is_sub = isinstance(lhs, Subquery)
@@ -1646,6 +1655,7 @@ def _handle_comparison_operator(
     session,
     log_event_ids,
     is_derived=False,
+    local_scope=None,
 ):
     """
     Handles comparison operators ('==', '!=', '<', '>', '<=', '>=', 'is', 'is not') in the filter dictionary.
@@ -1665,6 +1675,7 @@ def _handle_comparison_operator(
         session,
         log_event_ids=log_event_ids,
         is_derived=is_derived,
+        local_scope=local_scope,
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -1672,6 +1683,7 @@ def _handle_comparison_operator(
         session,
         log_event_ids=log_event_ids,
         is_derived=is_derived,
+        local_scope=local_scope,
     )
 
     lhs_is_sub = isinstance(lhs, Subquery)
@@ -1801,6 +1813,7 @@ def _handle_membership_operator(
     session,
     log_event_ids,
     is_derived=False,
+    local_scope=None,
 ):
     """
     Handles membership operators ('in', 'not in') in the filter dictionary.
@@ -1822,6 +1835,7 @@ def _handle_membership_operator(
         session,
         log_event_ids=log_event_ids,
         is_derived=is_derived,
+        local_scope=local_scope,
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -1829,6 +1843,7 @@ def _handle_membership_operator(
         session,
         log_event_ids=log_event_ids,
         is_derived=is_derived,
+        local_scope=local_scope,
     )
 
     lhs_is_sub = isinstance(lhs, Subquery)
@@ -2087,6 +2102,7 @@ def _handle_functions(
     session,
     log_event_ids,
     is_derived=False,
+    local_scope=None,
 ):
     """
     Handles function-based operations ('len', 'str', 'type', 'round', 'round_timestamp',
@@ -2114,6 +2130,7 @@ def _handle_functions(
                 session,
                 log_event_ids=log_event_ids,
                 is_derived=is_derived,
+                local_scope=local_scope,
             )
             for expr in filter_dict.get("rhs")
         ]
@@ -2125,6 +2142,7 @@ def _handle_functions(
             session,
             log_event_ids=log_event_ids,
             is_derived=is_derived,
+            local_scope=local_scope,
         )
 
     if operand == "len":
@@ -2483,6 +2501,7 @@ def _handle_functions(
                 session,
                 log_event_ids=log_event_ids,
                 is_derived=is_derived,
+                local_scope=local_scope,
             )
         else:
             rhs_expr = [
@@ -2492,6 +2511,7 @@ def _handle_functions(
                     session,
                     log_event_ids=log_event_ids,
                     is_derived=is_derived,
+                    local_scope=local_scope,
                 )
                 for expr in filter_dict.get("rhs")
             ]
@@ -2616,6 +2636,7 @@ def _handle_index_operator(
     session,
     log_event_ids,
     is_derived=False,
+    local_scope=None,
 ):
     """
     Handle the INDEX operator in a filter expression.
@@ -2637,6 +2658,7 @@ def _handle_index_operator(
         session,
         log_event_ids=log_event_ids,
         is_derived=is_derived,
+        local_scope=local_scope,
     )
     rhs_expr = build_sql_query(
         rhs_node,
@@ -2644,6 +2666,7 @@ def _handle_index_operator(
         session,
         log_event_ids=log_event_ids,
         is_derived=is_derived,
+        local_scope=local_scope,
     )
 
     if isinstance(lhs_expr, Subquery):
@@ -3807,6 +3830,8 @@ def build_sql_query(
     session,
     log_event_ids,
     is_derived=False,
+    *,
+    local_scope=None,
 ):
     """
     Recursively build SQLAlchemy filter or expression from filter_dict.
@@ -3879,6 +3904,7 @@ def build_sql_query(
             session,
             log_event_ids,
             is_derived=is_derived,
+            local_scope=local_scope,
         )
 
     # Handle arithmetic operators (+, -, *, /, %, **, //)
@@ -3889,6 +3915,7 @@ def build_sql_query(
             session,
             log_event_ids,
             is_derived=is_derived,
+            local_scope=local_scope,
         )
 
     # Handle comparison operators (==, !=, <, >, <=, >=, is, is not)
@@ -3899,6 +3926,7 @@ def build_sql_query(
             session,
             log_event_ids,
             is_derived=is_derived,
+            local_scope=local_scope,
         )
 
     # Handle membership operators (in, not in)
@@ -3909,6 +3937,7 @@ def build_sql_query(
             session,
             log_event_ids,
             is_derived=is_derived,
+            local_scope=local_scope,
         )
 
     # Handle functions (len, str, type, round, round_timestamp, exists, version, isNone, time, date, now)
@@ -3932,6 +3961,7 @@ def build_sql_query(
             session,
             log_event_ids,
             is_derived=is_derived,
+            local_scope=local_scope,
         )
 
     # Handle list/dict indexing
@@ -3942,6 +3972,7 @@ def build_sql_query(
             session,
             log_event_ids,
             is_derived=is_derived,
+            local_scope=local_scope,
         )
     # Handle dict methods (keys, values, items)
     elif operand == "dict_method":
