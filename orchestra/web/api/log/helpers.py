@@ -2795,6 +2795,83 @@ def _replace_identifier(ast_node, original, replacement):
     # For literals or other types, return as is
     return ast_node
 
+def _handle_dict_method(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived,
+    local_scope=None,
+):
+    method = filter_dict["method"]  # e.g., "keys", "values", "items"
+    src = build_sql_query(
+        filter_dict["rhs"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+    )
+    if not isinstance(src, Subquery):
+        raise HTTPException(
+            status_code=400,
+            detail="dict.keys/values/items only valid on JSONB column",
+        )
+    # Extract JSONB column and use lateral join
+    val, _ = _select_value(src, session, is_collection=True)
+
+    # Ensure we're working with a JSON object, not an array or scalar
+    is_object = func.jsonb_typeof(val) == "object"
+
+    # Use a CASE expression to handle non-object values safely
+    safe_val = case((is_object, val), else_=literal("{}", type_=JSONB))
+
+    each = lateral(func.jsonb_each(safe_val).table_valued("key", "value")).alias(
+        "each_values",
+    )
+    base = (
+        select(src.c.log_event_id, each.c.key, each.c.value)
+        .select_from(src.join(each, true()))
+        .subquery(name="base")
+    )
+
+    if method == "keys":
+        agg = func.coalesce(
+            func.jsonb_agg(base.c.key),
+            literal("[]", type_=JSONB),
+        )
+        inf = "list"
+    elif method == "values":
+        agg = func.coalesce(
+            func.jsonb_agg(base.c.value),
+            literal("[]", type_=JSONB),
+        )
+        inf = "list"
+    else:  # items
+        agg = func.coalesce(
+            func.jsonb_agg(
+                func.jsonb_build_array(
+                    base.c.key,
+                    base.c.value,
+                ),
+            ),
+            literal("[]", type_=JSONB),
+        )
+        inf = "list"
+
+    final = (
+        select(
+            base.c.log_event_id,
+            func.coalesce(agg, literal("[]", type_=JSONB)).label("value"),
+            literal(inf).label("inferred_type"),
+        )
+        .group_by(base.c.log_event_id)
+        .subquery(name=f"dict_{method}_subquery")
+    )
+    return final
+
+
+
 
 
 def build_sql_query(
