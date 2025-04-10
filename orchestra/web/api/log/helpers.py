@@ -3405,24 +3405,39 @@ def _handle_list_comp(
         where_clause = and_(where_clause, condition)
 
     # Build the final subquery for the list comprehension
-    idx_col = (
-        from_clause.c.__parent_idx__
-        if "__parent_idx__" in from_clause.c.keys()
-        else from_clause.c.ordinality
-    )
-    final = (
-        select(
+    if parent_idx_col is not None:
+        # nested comprehension
+        select_cols = [
             from_clause.c.log_event_id,
-            idx_col.label("__comp_idx__"),
+            from_clause.c.__parent_idx__.label("__comp_idx__"),
             func.coalesce(
-                func.jsonb_agg(elt_col),
+                func.jsonb_agg(aggregate_order_by(elt_col, from_clause.c.ordinality)),
                 literal("[]", type_=JSONB),
             ).label("value"),
             literal("list").label("inferred_type"),
-        )
+        ]
+        group_by_cols = [
+            from_clause.c.log_event_id,
+            from_clause.c.__parent_idx__,
+        ]
+    else:
+        # top-level comprehension
+        select_cols = [
+            from_clause.c.log_event_id,
+            func.coalesce(
+                func.jsonb_agg(aggregate_order_by(elt_col, from_clause.c.ordinality)),
+                literal("[]", type_=JSONB),
+            ).label("value"),
+            literal("list").label("inferred_type"),
+        ]
+        group_by_cols = [
+            from_clause.c.log_event_id,
+        ]
+    final = (
+        select(*select_cols)
         .select_from(from_clause)
         .where(where_clause)
-        .group_by(from_clause.c.log_event_id, idx_col)
+        .group_by(*group_by_cols)
         .subquery(name="final")
     )
     return final
