@@ -1253,31 +1253,63 @@ def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type, session=None):
 
     This is useful for arithmetic operations and comparisons. The resulting
     subquery can be used in further operations.
+
+    If both subqueries have a __comp_idx__ column (used in comprehensions),
+    the join condition will also include matching on __comp_idx__ to prevent
+    duplicate rows, and the output will preserve the __comp_idx__ column.
     """
     # Get the value columns for both sides
     lhs_val, lhs_type = _select_value(lhs_subq, session)
     rhs_val, rhs_type = _select_value(rhs_subq, session)
 
-    j = (
-        select(
-            func.coalesce(lhs_subq.c.log_event_id, rhs_subq.c.log_event_id).label(
-                "log_event_id",
+    # Check if both sides have __comp_idx__ (used in comprehensions)
+    has_idx_lhs = hasattr(lhs_subq.c, "__comp_idx__")
+    has_idx_rhs = hasattr(rhs_subq.c, "__comp_idx__")
+
+    # Build the join condition
+    join_cond = lhs_subq.c.log_event_id == rhs_subq.c.log_event_id
+    if has_idx_lhs and has_idx_rhs:
+        join_cond = and_(join_cond, lhs_subq.c.__comp_idx__ == rhs_subq.c.__comp_idx__)
+
+    # Build the select columns
+    select_cols = [
+        func.coalesce(lhs_subq.c.log_event_id, rhs_subq.c.log_event_id).label(
+            "log_event_id",
+        ),
+    ]
+
+    # Include __comp_idx__ in the output if it exists
+    if has_idx_lhs and has_idx_rhs:
+        select_cols.append(
+            func.coalesce(lhs_subq.c.__comp_idx__, rhs_subq.c.__comp_idx__).label(
+                "__comp_idx__",
             ),
-            case(
-                # If either side is NULL, the result is NULL
-                (
-                    or_(
-                        lhs_val.is_(None),
-                        rhs_val.is_(None),
-                    ),
-                    None,
-                ),
-                else_=expr,
-            ).label("value"),
-            literal(inferred_type).label("inferred_type"),
         )
+    elif has_idx_lhs:
+        select_cols.append(lhs_subq.c.__comp_idx__.label("__comp_idx__"))
+    elif has_idx_rhs:
+        select_cols.append(rhs_subq.c.__comp_idx__.label("__comp_idx__"))
+
+    # Add the value and inferred_type columns
+    select_cols.append(
+        case(
+            # If either side is NULL, the result is NULL
+            (
+                or_(
+                    lhs_val.is_(None),
+                    rhs_val.is_(None),
+                ),
+                None,
+            ),
+            else_=expr,
+        ).label("value"),
+    )
+    select_cols.append(literal(inferred_type).label("inferred_type"))
+
+    j = (
+        select(*select_cols)
         .select_from(lhs_subq)
-        .outerjoin(rhs_subq, lhs_subq.c.log_event_id == rhs_subq.c.log_event_id)
+        .outerjoin(rhs_subq, join_cond)
         .subquery()
     )
     return j
