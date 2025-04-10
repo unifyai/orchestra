@@ -922,18 +922,19 @@ def _select_value(subq, session, is_collection=False):
     Helper function to select the appropriate value column from a subquery.
     Prioritizes 'value' if it exists, otherwise selects based on inferred types.
     """
-    if isinstance(subq, BindParameter):
-        return subq.value, LogDAO.infer_type("", subq.value)
-    if hasattr(subq.c, "value"):
-        if is_collection:
-            # the assumption here is lists/dicts to have a single consistent type
-            # so we can just check the first element
-            first_elem = session.execute(select(subq).limit(1)).first()[0]
-            dt = LogDAO.infer_type("", first_elem)
-        else:
-            dt = session.execute(select(subq.c.inferred_type)).first()[0]
-        return subq.c.value, dt
     try:
+        if isinstance(subq, BindParameter):
+            return subq.value, LogDAO.infer_type("", subq.value)
+        if hasattr(subq.c, "value"):
+            if is_collection:
+                # the assumption here is lists/dicts to have a single consistent type
+                # so we can just check the first element
+                first_elem = session.execute(select(subq).limit(1)).first()[0]
+                dt = LogDAO.infer_type("", first_elem)
+            else:
+                dt = session.execute(select(subq.c.inferred_type)).first()[0]
+            return subq.c.value, dt
+
         dt = session.execute(select(subq)).first()[
             -1
         ]  # execute the subquery to determine the type.
