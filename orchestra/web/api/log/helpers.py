@@ -3815,10 +3815,16 @@ def build_sql_query(
         filter_dict (dict): The filter dictionary.
         log_event_alias: Alias for LogEvent to correlate subqueries.
         session: SQLAlchemy session for executing subqueries.
+        log_event_ids: IDs of log events to filter on.
+        is_derived: Whether this is for a derived log.
+        local_scope: Dictionary mapping local variable names to (column, type) tuples.
+        Used for comprehensions to avoid building subqueries for local variables.
 
     Returns:
         SQLAlchemy condition or expression
     """
+    if local_scope is None:
+        local_scope = {}
 
     # Base cases
     if not isinstance(filter_dict, dict):
@@ -3827,6 +3833,25 @@ def build_sql_query(
     if "type" in filter_dict:
         if filter_dict["type"] == "identifier":
             key = filter_dict["value"]
+
+            if key in local_scope:
+                col, itype = local_scope[key]
+
+                base_sub = local_scope.get("__comp_base__")
+                if base_sub is not None and "__comp_idx__" in local_scope:
+                    subq = (
+                        select(
+                            base_sub.c.log_event_id.label("log_event_id"),
+                            base_sub.c.ordinality.label("__comp_idx__"),
+                            col.label("value"),
+                            literal(itype).label("inferred_type"),
+                        )
+                        .select_from(base_sub)
+                        .subquery(name=f"__local_{key}_{random.randint(1,100000000)}")
+                    )
+                    return subq
+
+            # Otherwise, proceed with normal identifier lookup
             if isinstance(log_event_ids, dict):
                 event_ids = log_event_ids.get(key)
             else:
