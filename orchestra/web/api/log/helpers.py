@@ -1602,28 +1602,24 @@ def _handle_arithmetic_operator(
         lval, lval_type = _select_value(lhs, session)
         rval, rval_type = _select_value(rhs, session)
         expr, result_type = _arithmetic_expr(lval, rval, operand, lval_type, rval_type)
-        return (
-            select(
-                lhs.c.log_event_id.label("log_event_id"),
-                expr.label("value"),
-                literal(result_type).label("inferred_type"),
-            )
-            .select_from(lhs)
-            .subquery()
+        select_cols = [lhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal(result_type).label("inferred_type")],
         )
+        return select(*select_cols).select_from(lhs).subquery()
     elif rhs_is_sub:
         rval, rval_type = _select_value(rhs, session)
         lval, lval_type = _select_value(lhs, session)
         expr, result_type = _arithmetic_expr(lval, rval, operand, lval_type, rval_type)
-        return (
-            select(
-                rhs.c.log_event_id.label("log_event_id"),
-                expr.label("value"),
-                literal(result_type).label("inferred_type"),
-            )
-            .select_from(rhs)
-            .subquery()
+        select_cols = [rhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal(result_type).label("inferred_type")],
         )
+        return select(*select_cols).select_from(rhs).subquery()
     else:
         # For direct expressions (not subqueries), we can't easily determine types
         # So we'll just use the standard SQLAlchemy operators and let PostgreSQL handle the casting
@@ -1732,15 +1728,13 @@ def _handle_comparison_operator(
                 if rhs is None or isinstance(rhs, BindParameter) and rhs.value is None
                 else lval != rhs
             )
-        return (
-            select(
-                lhs.c.log_event_id.label("log_event_id"),
-                expr.label("value"),
-                literal("bool").label("inferred_type"),
-            )
-            .select_from(lhs)
-            .subquery()
+        select_cols = [lhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal("bool").label("inferred_type")],
         )
+        return select(*select_cols).select_from(lhs).subquery()
     elif rhs_is_sub:
         rval, rval_type = _select_value(rhs, session)
         lval, lval_type = _select_value(lhs, session)
@@ -1774,15 +1768,13 @@ def _handle_comparison_operator(
                 and rval.value is None
                 else lhs != rval
             )
-        return (
-            select(
-                rhs.c.log_event_id.label("log_event_id"),
-                expr.label("value"),
-                literal("bool").label("inferred_type"),
-            )
-            .select_from(rhs)
-            .subquery()
+        select_cols = [rhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal("bool").label("inferred_type")],
         )
+        return select(*select_cols).select_from(rhs).subquery()
     else:
         if operand == "==":
             return lhs == rhs
@@ -1887,15 +1879,13 @@ def _handle_membership_operator(
                 # Use PostgreSQL's @> operator for array containment
                 containment_expr = lval.op("@>")(func.jsonb_build_array(rhs_value))
                 expr = containment_expr if is_in else ~containment_expr
-                return (
-                    select(
-                        lhs.c.log_event_id.label("log_event_id"),
-                        expr.label("value"),
-                        literal("bool").label("inferred_type"),
-                    )
-                    .select_from(lhs)
-                    .subquery()
+                select_cols = [lhs.c.log_event_id.label("log_event_id")]
+                if "__comp_idx__" in lhs.c.keys():
+                    select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
+                select_cols.extend(
+                    [expr.label("value"), literal("bool").label("inferred_type")],
                 )
+                return select(*select_cols).select_from(lhs).subquery()
 
         # Fall back to standard handling for non-array types
         rhs_list = _parse_rhs_list_or_dict_if_needed(filter_dict.get("rhs"), rhs)
@@ -1906,15 +1896,13 @@ def _handle_membership_operator(
             substring_cond = _substring_expr(lval, rhs)
             expr = substring_cond if is_in else ~substring_cond
 
-        return (
-            select(
-                lhs.c.log_event_id.label("log_event_id"),
-                expr.label("value"),
-                literal("bool").label("inferred_type"),
-            )
-            .select_from(lhs)
-            .subquery()
+        select_cols = [lhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal("bool").label("inferred_type")],
         )
+        return select(*select_cols).select_from(lhs).subquery()
 
     # Only RHS is a subquery
     elif rhs_is_sub and not lhs_is_sub:
@@ -1942,15 +1930,13 @@ def _handle_membership_operator(
                 # Create a JSONB array with the single value for the containment check
                 containment_expr = rval.op("@>")(func.jsonb_build_array(lhs_value))
                 cond = containment_expr if is_in else ~containment_expr
-                return (
-                    select(
-                        rhs.c.log_event_id.label("log_event_id"),
-                        cond.label("value"),
-                        literal("bool").label("inferred_type"),
-                    )
-                    .select_from(rhs)
-                    .subquery()
+                select_cols = [rhs.c.log_event_id.label("log_event_id")]
+                if "__comp_idx__" in rhs.c.keys():
+                    select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
+                select_cols.extend(
+                    [cond.label("value"), literal("bool").label("inferred_type")],
                 )
+                return select(*select_cols).select_from(rhs).subquery()
 
         lhs_list = _parse_rhs_list_or_dict_if_needed(filter_dict.get("lhs"), lhs)
 
@@ -1961,15 +1947,13 @@ def _handle_membership_operator(
             substring_cond = _substring_expr(lhs, rval)
             cond = substring_cond if is_in else ~substring_cond
 
-        return (
-            select(
-                rhs.c.log_event_id.label("log_event_id"),
-                cond.label("value"),
-                literal("bool").label("inferred_type"),
-            )
-            .select_from(rhs)
-            .subquery()
+        select_cols = [rhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
+        select_cols.extend(
+            [cond.label("value"), literal("bool").label("inferred_type")],
         )
+        return select(*select_cols).select_from(rhs).subquery()
 
     # Neither side is a subquery
     else:
@@ -2172,15 +2156,13 @@ def _handle_functions(
                 ),
                 else_=0,
             ).label("value")
-            return (
-                select(
-                    rhs_expr.c.log_event_id.label("log_event_id"),
-                    expr.label("value"),
-                    literal("int").label("inferred_type"),
-                )
-                .select_from(rhs_expr)
-                .subquery()
+            select_cols = [rhs_expr.c.log_event_id.label("log_event_id")]
+            if "__comp_idx__" in rhs_expr.c.keys():
+                select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
+            select_cols.extend(
+                [expr.label("value"), literal("int").label("inferred_type")],
             )
+            return select(*select_cols).select_from(rhs_expr).subquery()
         else:
             return len(rhs_expr)
 
@@ -2188,15 +2170,13 @@ def _handle_functions(
         if isinstance(rhs_expr, Subquery):
             val, val_type = _select_value(rhs_expr, session)
             expr = func.cast(val, String)
-            return (
-                select(
-                    rhs_expr.c.log_event_id.label("log_event_id"),
-                    expr.label("value"),
-                    literal("str").label("inferred_type"),
-                )
-                .select_from(rhs_expr)
-                .subquery()
+            select_cols = [rhs_expr.c.log_event_id.label("log_event_id")]
+            if "__comp_idx__" in rhs_expr.c.keys():
+                select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
+            select_cols.extend(
+                [expr.label("value"), literal("str").label("inferred_type")],
             )
+            return select(*select_cols).select_from(rhs_expr).subquery()
         else:
             expr = rhs_expr[0] if isinstance(rhs_expr, list) else rhs_expr
             return cast(expr, String)
@@ -2212,19 +2192,19 @@ def _handle_functions(
                 # subquery => we retrieve the numeric column
                 val_col, val_type = _select_value(val_expr, session)
                 # produce a new subquery
-                subq = (
-                    select(
-                        val_expr.c.log_event_id.label("log_event_id"),
+                select_cols = [val_expr.c.log_event_id.label("log_event_id")]
+                if "__comp_idx__" in val_expr.c.keys():
+                    select_cols.append(val_expr.c.__comp_idx__.label("__comp_idx__"))
+                select_cols.extend(
+                    [
                         func.round(cast(val_col, Numeric)).label("value"),
                         literal("int").label("inferred_type"),
-                    )
-                    .select_from(val_expr)
-                    .subquery()
+                    ],
                 )
-                return subq
+                return select(*select_cols).select_from(val_expr).subquery()
             else:
                 # val_expr is a literal or a direct SQL expression
-                return func.round(cast(val_col, Numeric))
+                return func.round(cast(val_expr, Numeric))
 
         elif len(rhs_expr) == 2:
             # round(val, digits)
@@ -2232,12 +2212,17 @@ def _handle_functions(
             if isinstance(val_expr, Subquery) and isinstance(digits_expr, Subquery):
                 val_col, val_type = _select_value(val_expr, session)
                 dig_col = _select_value(digits_expr, session)
-                subq = (
-                    select(
-                        val_expr.c.log_event_id.label("log_event_id"),
+                select_cols = [val_expr.c.log_event_id.label("log_event_id")]
+                if "__comp_idx__" in val_expr.c.keys():
+                    select_cols.append(val_expr.c.__comp_idx__.label("__comp_idx__"))
+                select_cols.extend(
+                    [
                         func.round(cast(val_col, Numeric), dig_col).label("value"),
                         literal("int").label("inferred_type"),
-                    )
+                    ],
+                )
+                return (
+                    select(*select_cols)
                     .select_from(val_expr)
                     .join(
                         digits_expr,
@@ -2247,30 +2232,52 @@ def _handle_functions(
                 )
             elif isinstance(val_expr, Subquery):
                 val_col, val_type = _select_value(val_expr, session)
-                # If digits_expr is literal or bind param, we can pass it directly:
-                subq = (
-                    select(
-                        val_expr.c.log_event_id.label("log_event_id"),
+                select_cols = [val_expr.c.log_event_id.label("log_event_id")]
+                if "__comp_idx__" in val_expr.c.keys():
+                    select_cols.append(val_expr.c.__comp_idx__.label("__comp_idx__"))
+                select_cols.extend(
+                    [
                         func.round(cast(val_col, Numeric), digits_expr).label("value"),
                         literal("int").label("inferred_type"),
-                    )
-                    .select_from(val_expr)
-                    .subquery()
+                    ],
                 )
-                return subq
+                return select(*select_cols).select_from(val_expr).subquery()
+            elif isinstance(digits_expr, Subquery):
+                val_col, val_type = _select_value(val_expr, session)
+                select_cols = [val_expr.c.log_event_id.label("log_event_id")]
+                if "__comp_idx__" in val_expr.c.keys():
+                    select_cols.append(val_expr.c.__comp_idx__.label("__comp_idx__"))
+                select_cols.extend(
+                    [
+                        func.round(cast(val_col, Numeric), digits_expr).label("value"),
+                        literal("int").label("inferred_type"),
+                    ],
+                )
+                return select(*select_cols).select_from(val_expr).subquery()
+            elif isinstance(digits_expr, Subquery):
+                select_cols = [val_expr.c.log_event_id.label("log_event_id")]
+                if "__comp_idx__" in val_expr.c.keys():
+                    select_cols.append(val_expr.c.__comp_idx__.label("__comp_idx__"))
+                select_cols.extend(
+                    [
+                        func.round(cast(val_col, Numeric), digits_expr).label("value"),
+                        literal("int").label("inferred_type"),
+                    ],
+                )
+                return select(*select_cols).select_from(val_expr).subquery()
             elif isinstance(digits_expr, Subquery):
                 dig_col, dig_type = _select_value(digits_expr, session)
                 # In that case, val_expr might be a literal
-                subq = (
-                    select(
-                        digits_expr.c.log_event_id.label("log_event_id"),
+                select_cols = [digits_expr.c.log_event_id.label("log_event_id")]
+                if "__comp_idx__" in digits_expr.c.keys():
+                    select_cols.append(digits_expr.c.__comp_idx__.label("__comp_idx__"))
+                select_cols.extend(
+                    [
                         func.round(cast(val_expr, Numeric), dig_col).label("value"),
                         literal("int").label("inferred_type"),
-                    )
-                    .select_from(digits_expr)
-                    .subquery()
+                    ],
                 )
-                return subq
+                return select(*select_cols).select_from(digits_expr).subquery()
             else:
                 # both val_expr and digits_expr are non-subquery expressions (literals or direct SQL)
                 return func.round(cast(val_expr, Numeric), digits_expr)
@@ -2302,13 +2309,17 @@ def _handle_functions(
             ts_col, ts_type = _select_value(ts_expr, session)
             sec_col, sec_type = _select_value(sec_expr, session)
 
-            # build a subquery that joins them on log_event_id
-            subq = (
-                select(
-                    ts_expr.c.log_event_id.label("log_event_id"),
+            select_cols = [ts_expr.c.log_event_id.label("log_event_id")]
+            if "__comp_idx__" in ts_expr.c.keys():
+                select_cols.append(ts_expr.c.__comp_idx__.label("__comp_idx__"))
+            select_cols.extend(
+                [
                     _pg_round_timestamp(ts_col, sec_col).label("value"),
                     literal("timestamp").label("inferred_type"),
-                )
+                ],
+            )
+            return (
+                select(*select_cols)
                 .select_from(ts_expr)
                 .join(sec_expr, ts_expr.c.log_event_id == sec_expr.c.log_event_id)
                 .subquery()
@@ -2320,16 +2331,16 @@ def _handle_functions(
                 sec_expr.value,
                 (int, float),
             ):
-                subq = (
-                    select(
-                        ts_expr.c.log_event_id.label("log_event_id"),
+                select_cols = [ts_expr.c.log_event_id.label("log_event_id")]
+                if "__comp_idx__" in ts_expr.c.keys():
+                    select_cols.append(ts_expr.c.__comp_idx__.label("__comp_idx__"))
+                select_cols.extend(
+                    [
                         _pg_round_timestamp(ts_col, sec_expr.value).label("value"),
                         literal("timestamp").label("inferred_type"),
-                    )
-                    .select_from(ts_expr)
-                    .subquery()
+                    ],
                 )
-                return subq
+                return select(*select_cols).select_from(ts_expr).subquery()
             else:
                 raise ValueError(
                     "round_timestamp() can't handle that form of seconds_expr (unless subquery).",
@@ -2343,16 +2354,16 @@ def _handle_functions(
                 ts_literal = literal(ts_expr.value, type_=TIMESTAMP)
                 sec_col, sec_type = _select_value(sec_expr, session)
 
-                subq = (
-                    select(
-                        sec_expr.c.log_event_id.label("log_event_id"),
+                select_cols = [sec_expr.c.log_event_id.label("log_event_id")]
+                if "__comp_idx__" in sec_expr.c.keys():
+                    select_cols.append(sec_expr.c.__comp_idx__.label("__comp_idx__"))
+                select_cols.extend(
+                    [
                         _pg_round_timestamp(ts_literal, sec_expr.value).label("value"),
                         literal("timestamp").label("inferred_type"),
-                    )
-                    .select_from(sec_expr)
-                    .subquery()
+                    ],
                 )
-                return subq
+                return select(*select_cols).select_from(sec_expr).subquery()
             else:
                 raise ValueError(
                     "round_timestamp() can't handle that form of timestamp_expr (unless subquery).",
@@ -2491,15 +2502,13 @@ def _handle_functions(
             if rval is None:
                 return None
             expr = rval.is_(None)
-            return (
-                select(
-                    rhs_expr.c.log_event_id.label("log_event_id"),
-                    expr.label("value"),
-                    literal("bool").label("inferred_type"),
-                )
-                .select_from(rhs_expr)
-                .subquery()
+            select_cols = [rhs_expr.c.log_event_id.label("log_event_id")]
+            if "__comp_idx__" in rhs_expr.c.keys():
+                select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
+            select_cols.extend(
+                [expr.label("value"), literal("bool").label("inferred_type")],
             )
+            return select(*select_cols).select_from(rhs_expr).subquery()
         else:
             # For non-subquery cases, simply return the boolean expression
             return rhs_expr.is_(None)
@@ -2524,16 +2533,13 @@ def _handle_functions(
                 (val_type == "time", func.cast(cast(val, Text), Time)),
                 else_=None,
             )
-
-            return (
-                select(
-                    rhs_expr.c.log_event_id.label("log_event_id"),
-                    expr.label("value"),
-                    literal("time").label("inferred_type"),
-                )
-                .select_from(rhs_expr)
-                .subquery()
+            select_cols = [rhs_expr.c.log_event_id.label("log_event_id")]
+            if "__comp_idx__" in rhs_expr.c.keys():
+                select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
+            select_cols.extend(
+                [expr.label("value"), literal("time").label("inferred_type")],
             )
+            return select(*select_cols).select_from(rhs_expr).subquery()
         else:
             if isinstance(rhs_expr, BindParameter):
                 val = rhs_expr.value
@@ -2649,22 +2655,21 @@ def _handle_index_operator(
             is_collection=is_collection,
         )
         if isinstance(rhs_expr, Subquery):
-            # Potentially advanced scenario: the user wrote x[y], where y is a subquery.
-            # We'll pick the .value from y, interpret it as a string or integer, and then do -> or ->> extraction.
             rhs_valcol, rhs_type = _select_value(rhs_expr, session)
-            # We must join them on log_event_id as well:
-            subq = (
-                select(
-                    lhs_expr.c.log_event_id.label("log_event_id"),
-                    # We'll do a JSON extraction. If rhs is a string => valcol->rhs.
-                    # If integer => valcol->rhs, but we must cast integer to text for JSON operator in PG.
-                    # The simplest approach is to do:
+            select_cols = [lhs_expr.c.log_event_id.label("log_event_id")]
+            if "__comp_idx__" in lhs_expr.c.keys():
+                select_cols.append(lhs_expr.c.__comp_idx__.label("__comp_idx__"))
+            select_cols.extend(
+                [
                     func.jsonb_extract_path(
                         lhs_valcol,
                         func.cast(rhs_valcol, String),
                     ).label("value"),
                     literal(rhs_type).label("inferred_type"),
-                )
+                ],
+            )
+            return (
+                select(*select_cols)
                 .select_from(lhs_expr)
                 .join(rhs_expr, lhs_expr.c.log_event_id == rhs_expr.c.log_event_id)
                 .subquery()
@@ -2713,16 +2718,16 @@ def _handle_index_operator(
 
             result = session.execute(select(extracted)).first()[0]
             inferred_type = LogDAO.infer_type("", result)
-            subq = (
-                select(
-                    lhs_expr.c.log_event_id.label("log_event_id"),
+            select_cols = [lhs_expr.c.log_event_id.label("log_event_id")]
+            if "__comp_idx__" in lhs_expr.c.keys():
+                select_cols.append(lhs_expr.c.__comp_idx__.label("__comp_idx__"))
+            select_cols.extend(
+                [
                     extracted.label("value"),
                     literal(inferred_type).label("inferred_type"),
-                )
-                .select_from(lhs_expr)
-                .subquery()
+                ],
             )
-            return subq
+            return select(*select_cols).select_from(lhs_expr).subquery()
 
     else:
         # If LHS is not a subquery => e.g. LHS is a python dict or list literal
