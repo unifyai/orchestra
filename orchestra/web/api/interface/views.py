@@ -85,6 +85,7 @@ def create_interface(
         new_counter=request.new_counter,
         project_id=project.id,
         context=request.context,
+        color=request.color,
     )
     return {"info": "Interface created successfully!"}
 
@@ -160,6 +161,7 @@ def update_interface(
         items=json.dumps([item.model_dump() for item in request.items]),
         new_counter=request.new_counter,
         context=request.context,
+        color=request.color,
         new_name=request.new_name,
     )
     return {"info": "Interface updated successfully!"}
@@ -277,6 +279,7 @@ def get_interfaces(
             new_counter=new_counter,
             project_id=project_obj.id,
             context=None,
+            color=None,
         )
         return [
             {
@@ -285,6 +288,7 @@ def get_interfaces(
                 "items": items,
                 "new_counter": new_counter,
                 "context": None,
+                "color": None,
             },
         ]
     elif len(interfaces) == 0:
@@ -299,6 +303,7 @@ def get_interfaces(
             "items": json.loads(interface.items),
             "new_counter": interface.new_counter,
             "context": interface.context,
+            "color": interface.color,
         }
         for interface in interfaces
     ]

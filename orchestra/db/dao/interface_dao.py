@@ -17,6 +17,7 @@ class InterfaceDAO:
         new_counter: int,
         project_id: int,
         context: str | None = None,
+        color: str | None = None,
     ):
         self.session.add(
             Interface(
@@ -25,6 +26,7 @@ class InterfaceDAO:
                 new_counter=new_counter,
                 project_id=project_id,
                 context=context,
+                color=color,
             ),
         )
         self.session.commit()
@@ -36,6 +38,7 @@ class InterfaceDAO:
         items: str,
         new_counter: int,
         context: str | None = None,
+        color: str | None = None,
         new_name: str = None,
     ):
         query = select(Interface)
@@ -51,6 +54,7 @@ class InterfaceDAO:
             if new_name is not None:
                 setattr(entry, "name", new_name)
             setattr(entry, "context", context)
+            setattr(entry, "color", color)
 
     def get_interfaces(
         self,
