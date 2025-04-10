@@ -2871,6 +2871,282 @@ def _handle_dict_method(
     return final
 
 
+def _handle_if_expr(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived,
+    local_scope=None,
+):
+    """
+    Handle conditional expressions (ternary if-else) in filter queries.
+
+    This function processes expressions like 'x if condition else y' by evaluating
+    the condition and then selecting either the 'then' or 'else' branch accordingly.
+    """
+
+    def _inflate_scalar_or_subquery(
+        value,
+        inferred_type,
+        ids_subq,
+        has_comp_idx=False,
+        local_scope=None,
+    ):
+        """
+        Given a scalar (possibly from a Python literal or BindParameter),
+        or an identifier subquery, produce a subquery of the form:
+
+            SELECT
+                ids_subq.log_event_id,
+                [ids_subq.__comp_idx__],
+                :value AS value,
+                :type  AS inferred_type
+            FROM ids_subq
+
+        so we can join on (log_event_id, __comp_idx__) if needed.
+        """
+        if isinstance(value, Subquery):
+            cols = [value.c.log_event_id]
+            if hasattr(ids_subq.c, "__comp_idx__"):
+                cols.append(ids_subq.c.__comp_idx__)
+            elif local_scope and "__comp_idx__" in local_scope:
+                # fallback to local_scope column if we want to replicate indexing
+                idx_col = local_scope["__comp_idx__"][0]
+                cols.append(idx_col.label("__comp_idx__"))
+
+            val, inf = _select_value(value, session)
+            cols.append(val.label("value"))
+            cols.append(literal(inf).label("inferred_type"))
+            return (
+                select(*cols)
+                .select_from(value)
+                .subquery(
+                    name=f"__inflate_select_subq_{value.name}",
+                )
+            )
+
+        # 1) Unwrap if it's a BindParameter
+        if isinstance(value, BindParameter):
+            value = value.value
+
+        # 2) Start building a list of columns for select(...)
+        cols = [ids_subq.c.log_event_id]
+
+        # 3) If we are in a comprehension, attach ordinality if available
+        if has_comp_idx:
+            if hasattr(ids_subq.c, "__comp_idx__"):
+                cols.append(ids_subq.c.__comp_idx__)
+            elif local_scope and "__comp_idx__" in local_scope:
+                # fallback to local_scope column if we want to replicate indexing
+                idx_col = local_scope["__comp_idx__"][0]
+                cols.append(idx_col.label("__comp_idx__"))
+            # else do nothing / or handle as an error if you must
+
+        # 4) Add the scalar columns
+        cols.append(literal(value).label("value"))
+        cols.append(literal(inferred_type).label("inferred_type"))
+
+        # 5) Make a SELECT statement from those columns
+        return (
+            select(*cols)
+            .select_from(ids_subq)
+            .subquery(name=f"__inflate_scalar_subq_{value}")
+        )
+
+    # Check if we're in a comprehension context (local_scope has __comp_idx__)
+    in_comprehension = local_scope is not None and "__comp_idx__" in local_scope
+
+    # Build SQL queries for test, body, and else expressions
+    raw_test = build_sql_query(
+        filter_dict["test"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived,
+        local_scope=local_scope,
+    )
+    raw_body = build_sql_query(
+        filter_dict["body"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived,
+        local_scope=local_scope,
+    )
+    raw_else = build_sql_query(
+        filter_dict["orelse"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived,
+        local_scope=local_scope,
+    )
+
+    # Collect all log_event_ids from subqueries
+    id_selects = []
+    for part in (raw_test, raw_body, raw_else):
+        if isinstance(part, Subquery):
+            # Include __comp_idx__ in the selection if it exists
+            if in_comprehension and hasattr(part.c, "__comp_idx__"):
+                id_selects.append(select(part.c.log_event_id, part.c.__comp_idx__))
+            else:
+                id_selects.append(select(part.c.log_event_id))
+
+    # Create a subquery with all unique log_event_ids (and __comp_idx__ if in comprehension)
+    if id_selects:
+        if in_comprehension and any(len(s.selected_columns) > 1 for s in id_selects):
+            # If any select has __comp_idx__, we need to handle it specially
+            # First, standardize all selects to have both log_event_id and __comp_idx__
+            standardized_selects = []
+            for s in id_selects:
+                if len(s.selected_columns) == 1:  # Only has log_event_id
+                    # Add a NULL __comp_idx__ column
+                    standardized_selects.append(
+                        select(
+                            s.selected_columns[0],
+                            literal(None).label("__comp_idx__"),
+                        ),
+                    )
+                else:  # Has both log_event_id and __comp_idx__
+                    standardized_selects.append(s)
+            # Union all standardized selects and get distinct rows
+            ids_subq = (
+                union_all(*standardized_selects)
+                .subquery(name="union_all_standardized_selects")
+                .select()
+                .distinct()
+                .subquery(name="ids_subq")
+            )
+        else:
+            # Simple case: just union all log_event_ids
+            ids_subq = (
+                union_all(*id_selects)
+                .subquery(name="union_all_id_selects")
+                .select()
+                .distinct()
+                .subquery(name="ids_subq")
+            )
+    else:
+        # No subqueries, fall back to the ids the caller gave us
+        if isinstance(log_event_ids, Subquery):
+            ids_subq = select(log_event_ids.c.id.label("log_event_id")).subquery()
+        elif isinstance(log_event_ids, (list, tuple)):
+            ids_subq = select(
+                literal(id_).label("log_event_id") for id_ in log_event_ids
+            ).subquery()
+        else:  # None → whole table
+            ids_subq = select(log_event_alias.id.label("log_event_id")).subquery()
+
+        # If we're in a comprehension, add the __comp_idx__ column from local_scope
+        if in_comprehension:
+            comp_idx_col = local_scope["__comp_idx__"][0]
+            ids_subq = (
+                select(ids_subq.c.log_event_id, comp_idx_col.label("__comp_idx__"))
+                .select_from(ids_subq)
+                .subquery()
+            )
+
+    # Convert non-subquery expressions to subqueries
+    if not isinstance(raw_test, Subquery) or (
+        isinstance(raw_test, Subquery) and "value" not in raw_test.columns
+    ):
+        raw_test = _inflate_scalar_or_subquery(
+            raw_test,
+            "bool"
+            if not isinstance(raw_test, BindParameter)
+            else LogDAO.infer_type("", raw_test.value),
+            ids_subq,
+            in_comprehension,
+        )
+
+    if not isinstance(raw_body, Subquery) or (
+        isinstance(raw_body, Subquery) and "value" not in raw_body.columns
+    ):
+        raw_body = _inflate_scalar_or_subquery(
+            raw_body,
+            LogDAO.infer_type(
+                "",
+                raw_body if not isinstance(raw_body, BindParameter) else raw_body.value,
+            ),
+            ids_subq,
+            in_comprehension,
+        )
+
+    if not isinstance(raw_else, Subquery) or (
+        isinstance(raw_else, Subquery) and "value" not in raw_else.columns
+    ):
+        raw_else = _inflate_scalar_or_subquery(
+            raw_else,
+            LogDAO.infer_type(
+                "",
+                raw_else if not isinstance(raw_else, BindParameter) else raw_else.value,
+            ),
+            ids_subq,
+            in_comprehension,
+        )
+
+    # Get the inferred types for body and else expressions
+    body_type = session.execute(select(raw_body.c.inferred_type)).scalar()
+    else_type = session.execute(select(raw_else.c.inferred_type)).scalar()
+    res_type = unify_inferred_types(body_type, else_type)
+
+    # Cast values to the unified type
+    body_val = cast_expr(raw_body.c.value, body_type, res_type)
+    else_val = cast_expr(raw_else.c.value, else_type, res_type)
+    test_val = cast_expr(raw_test.c.value, "bool", "bool")
+
+    # Create the CASE expression for the if-else logic
+    case_expr = case((test_val, body_val), else_=else_val)
+
+    # Build the join conditions
+    join_conditions = []
+
+    # Always join on log_event_id
+    test_join_cond = ids_subq.c.log_event_id == raw_test.c.log_event_id
+    body_join_cond = ids_subq.c.log_event_id == raw_body.c.log_event_id
+    else_join_cond = ids_subq.c.log_event_id == raw_else.c.log_event_id
+
+    # If in comprehension context, also join on __comp_idx__
+    if in_comprehension:
+        if hasattr(ids_subq.c, "__comp_idx__") and hasattr(raw_test.c, "__comp_idx__"):
+            test_join_cond = and_(
+                test_join_cond,
+                ids_subq.c.__comp_idx__ == raw_test.c.__comp_idx__,
+            )
+
+        if hasattr(ids_subq.c, "__comp_idx__") and hasattr(raw_body.c, "__comp_idx__"):
+            body_join_cond = and_(
+                body_join_cond,
+                ids_subq.c.__comp_idx__ == raw_body.c.__comp_idx__,
+            )
+
+        if hasattr(ids_subq.c, "__comp_idx__") and hasattr(raw_else.c, "__comp_idx__"):
+            else_join_cond = and_(
+                else_join_cond,
+                ids_subq.c.__comp_idx__ == raw_else.c.__comp_idx__,
+            )
+
+    # Create the final subquery
+    select_cols = [ids_subq.c.log_event_id]
+    if in_comprehension and hasattr(ids_subq.c, "__comp_idx__"):
+        select_cols.append(ids_subq.c.__comp_idx__)
+
+    select_cols.extend(
+        [case_expr.label("value"), literal(res_type).label("inferred_type")],
+    )
+
+    final_subq = (
+        select(*select_cols)
+        .select_from(
+            ids_subq.join(raw_test, test_join_cond)
+            .outerjoin(raw_body, body_join_cond)
+            .outerjoin(raw_else, else_join_cond),
+        )
+        .subquery(name="final_subq")
+    )
+
+    return final_subq
 
 
 
