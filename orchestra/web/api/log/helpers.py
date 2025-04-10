@@ -773,9 +773,40 @@ def _transform_ast(node: ast.AST) -> dict:
     elif isinstance(node, ast.Expression):
         return _transform_ast(node.body)
 
+    # Handle if expressions
+    if isinstance(node, ast.IfExp):
+        return {
+            "operand": "if_expr",
+            "test": _transform_ast(node.test),
+            "body": _transform_ast(node.body),
+            "orelse": _transform_ast(node.orelse),
+        }
+
+    # Handle list comprehensions
+    if isinstance(node, ast.ListComp):
+        comp = node.generators[0]
+        return {
+            "operand": "list_comp",
+            "elt": _transform_ast(node.elt),
+            "target": _transform_ast(comp.target),
+            "iter": _transform_ast(comp.iter),
+            "ifs": [_transform_ast(iff) for iff in comp.ifs],
+        }
+
+    # Handle dictionary comprehensions
+    if isinstance(node, ast.DictComp):
+        comp = node.generators[0]
+        return {
+            "operand": "dict_comp",
+            "key_elt": _transform_ast(node.key),
+            "val_elt": _transform_ast(node.value),
+            "target": _transform_ast(comp.target),
+            "iter": _transform_ast(comp.iter),
+            "ifs": [_transform_ast(iff) for iff in comp.ifs],
+        }
+
     # Default case for unsupported nodes
-    else:
-        raise ValueError(f"Unsupported AST node type: {type(node)}")
+    raise ValueError(f"Unsupported AST node type: {type(node)}")
 
 
 def str_filter_exp_to_dict_using_ast(expr: str, field_names=None) -> dict:
