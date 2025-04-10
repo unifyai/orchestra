@@ -3149,6 +3149,226 @@ def _handle_if_expr(
     return final_subq
 
 
+def _handle_list_comp(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived,
+    local_scope=None,
+):
+    """
+    Handle list comprehension expressions in filter queries.
+
+    This function processes expressions like [x*2 for x in some_list if x > 0]
+    by exploding the source list into rows, then applying the transformation and
+    filter to each element, and finally aggregating back into a list.
+    """
+    iter_subq = build_sql_query(
+        filter_dict["iter"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived,
+        local_scope=local_scope,
+    )
+    if not isinstance(iter_subq, Subquery):
+        raise HTTPException(
+            status_code=400,
+            detail="list comprehension source must be a JSONB collection",
+        )
+
+    val, _ = _select_value(iter_subq, session, is_collection=True)
+
+    # Determine if we're iterating over an array or object
+    is_array = session.execute(select(func.jsonb_typeof(val))).scalar() == "array"
+
+    # Use appropriate function based on the JSON type
+    if is_array:
+        # For arrays, use jsonb_array_elements with ordinality
+        elem_tbl = (
+            func.jsonb_array_elements(val)
+            .table_valued("value", with_ordinality="ordinality")
+            .alias(name="elem_tbl")
+        )
+    else:
+        # For objects, use jsonb_each with ordinality
+        elem_tbl = (
+            func.jsonb_each(val)
+            .table_valued("k", "v", with_ordinality="ordinality")
+            .alias(name="elem_tbl")
+        )
+
+    # Create the base subquery with the exploded elements
+    parent_idx_col = (
+        iter_subq.c.__comp_idx__ if "__comp_idx__" in iter_subq.c.keys() else None
+    )
+    base_cols = [
+        iter_subq.c.log_event_id,
+        (elem_tbl.c.value if is_array else elem_tbl.c.v).label("__comp_var__"),
+        elem_tbl.c.ordinality,
+    ]
+    if parent_idx_col is not None:
+        base_cols.append(parent_idx_col.label("__parent_idx__"))
+
+    base = (
+        select(*base_cols)
+        .select_from(iter_subq.join(elem_tbl, literal(True)))
+        .subquery("base")
+    )
+    # Replace occurrences of the comprehension target with a fake identifier
+    fake_ident = {"type": "identifier", "value": "__comp_var__"}
+
+    unpacking = isinstance(filter_dict["target"], list)
+    if unpacking:
+        local_scope = {
+            "__comp_idx__": (base.c.ordinality, "int"),
+            "__comp_base__": base,
+        }
+        for i, ident in enumerate(filter_dict["target"]):
+            comp_col = func.coalesce(base.c.__comp_var__.op("->")(i), "null")
+            comp_type = LogDAO.infer_type(
+                "",
+                session.execute(select(comp_col)).scalar(),
+            )
+            local_scope[ident["value"]] = (comp_col, comp_type)
+    else:
+        comp_type = LogDAO.infer_type(
+            "",
+            session.execute(select(base.c.__comp_var__)).scalar(),
+        )
+        local_scope = {
+            filter_dict["target"]["value"]: (base.c.__comp_var__, comp_type),
+            "__comp_idx__": (base.c.ordinality, "int"),
+            "__comp_base__": base,
+        }
+
+    # Use _replace_identifier on the element expression (elt) and any if conditions
+    elt_expr = build_sql_query(
+        filter_dict["elt"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived,
+        local_scope=local_scope,
+    )
+
+    def _value_column(expr):
+        """
+        If *expr* is a sub‑query produced by build_sql_query return its
+        `.c.value` column and make sure the caller knows it has to JOIN it.
+        Otherwise just return *expr* unchanged.
+        """
+        if isinstance(expr, Subquery):
+            # Check if the subquery has the __comp_idx__ column (from local scope)
+            has_idx = hasattr(expr.c, "__comp_idx__")
+            return (
+                expr.c.value,
+                expr,
+                has_idx,
+            )  # (column, subquery to join, has_idx flag)
+        return expr, None, False
+
+    # Build the subquery for the element expression
+    elt_col, elt_subq, has_idx = _value_column(elt_expr)
+
+    if elt_subq is not None:
+        # Create a subquery that preserves both value and ordinality
+        elt_with_row = (
+            select(
+                elt_subq.c.log_event_id,
+                # If the subquery has __comp_idx__, use it; otherwise use log_event_id
+                (
+                    elt_subq.c.__comp_idx__ if has_idx else func.row_number().over()
+                ).label("ordinality"),
+                elt_subq.c.value,
+                elt_subq.c.inferred_type,
+            )
+            .select_from(elt_subq)
+            .subquery(name="elt_with_row")
+        )
+
+        # Join on both log_event_id and ordinality
+        columns = [
+            base.c.log_event_id.label("log_event_id"),
+            *(
+                [base.c.__parent_idx__.label("__parent_idx__")]
+                if parent_idx_col is not None
+                else []
+            ),
+            base.c.ordinality.label("ordinality"),
+            elt_with_row.c.value.label("value"),
+            elt_with_row.c.inferred_type.label("inferred_type"),
+        ]
+        from_clause = (
+            select(*columns)
+            .select_from(
+                base.join(
+                    elt_with_row,
+                    and_(
+                        base.c.log_event_id == elt_with_row.c.log_event_id,
+                        base.c.ordinality == elt_with_row.c.ordinality,
+                    ),
+                ),
+            )
+            .order_by(base.c.log_event_id, base.c.ordinality, elt_with_row.c.ordinality)
+            .subquery(name="from_clause")
+        )
+
+        # Use the value from the joined subquery
+        elt_col = from_clause.c.value
+    else:
+        from_clause = base
+
+    where_clause = literal(True)
+    for cond_ast in filter_dict.get("ifs", []):
+        cond_expr = build_sql_query(
+            _replace_identifier(cond_ast, filter_dict["target"], fake_ident),
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+        )
+        if isinstance(cond_expr, Subquery):
+            # Create a correlated scalar subquery
+            condition = (
+                select(cond_expr.c.value)
+                .where(
+                    cond_expr.c.log_event_id == from_clause.c.log_event_id,
+                    cond_expr.c.__comp_idx__ == from_clause.c.ordinality,
+                )
+                .scalar_subquery()
+            )
+        else:
+            condition = cond_expr
+        where_clause = and_(where_clause, condition)
+
+    # Build the final subquery for the list comprehension
+    idx_col = (
+        from_clause.c.__parent_idx__
+        if "__parent_idx__" in from_clause.c.keys()
+        else from_clause.c.ordinality
+    )
+    final = (
+        select(
+            from_clause.c.log_event_id,
+            idx_col.label("__comp_idx__"),
+            func.coalesce(
+                func.jsonb_agg(elt_col),
+                literal("[]", type_=JSONB),
+            ).label("value"),
+            literal("list").label("inferred_type"),
+        )
+        .select_from(from_clause)
+        .where(where_clause)
+        .group_by(from_clause.c.log_event_id, idx_col)
+        .subquery(name="final")
+    )
+    return final
+
+
+
 
 def build_sql_query(
     filter_dict,
