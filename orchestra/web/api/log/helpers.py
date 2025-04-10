@@ -687,7 +687,11 @@ def _transform_ast(node: ast.AST) -> dict:
 
     # Handle function calls
     elif isinstance(node, ast.Call):
-        func_name = node.func.id if isinstance(node.func, ast.Name) else None
+        func_name = (
+            node.func.id
+            if isinstance(node.func, ast.Name)
+            else ast.unparse(node.func).strip()
+        )
 
         # Handle special functions
         if func_name in (
@@ -720,6 +724,21 @@ def _transform_ast(node: ast.AST) -> dict:
                 "operand": "BASE",
                 "rhs": [_transform_ast(arg) for arg in node.args],
             }
+        # Handle zip function
+        elif func_name == "zip":
+            return {"operand": "zip", "rhs": [_transform_ast(arg) for arg in node.args]}
+        # Handle dict methods (keys, values, items)
+        elif isinstance(node.func, ast.Attribute) and node.func.attr in (
+            "keys",
+            "values",
+            "items",
+        ):
+            return {
+                "operand": "dict_method",
+                "method": node.func.attr,
+                "rhs": _transform_ast(node.func.value),
+            }
+
         # Handle other function calls
         else:
             # Default handling for other functions
