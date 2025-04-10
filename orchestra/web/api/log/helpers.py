@@ -2760,6 +2760,43 @@ def _build_subquery_for_base_call(
     return filtered_subquery
 
 
+def _flatten_target(target):
+    """Recursively flatten a tuple/list target into a set of identifiers."""
+    if isinstance(target, dict) and target.get("type") == "identifier":
+        return {target["value"]}
+    elif isinstance(target, (list, tuple)):
+        names = set()
+        for elt in target:
+            names.update(_flatten_target(elt))
+        return names
+    return set()
+
+
+def _replace_identifier(ast_node, original, replacement):
+    """Recursively replace identifiers in the AST node: replace occurrences of 'original' with 'replacement'."""
+    # Get the set of original names to replace
+    orig_names = _flatten_target(original)
+
+    # If ast_node is a dict representing an identifier
+    if isinstance(ast_node, dict) and ast_node.get("type") == "identifier":
+        if ast_node.get("value") in orig_names:
+            # Return a deep copy of the replacement
+            return copy.deepcopy(replacement)
+        return ast_node
+    # If ast_node is a list, iterate over it
+    if isinstance(ast_node, list):
+        return [_replace_identifier(child, original, replacement) for child in ast_node]
+    # If ast_node is a dict, recursively replace for every key
+    if isinstance(ast_node, dict):
+        new_node = {}
+        for key, value in ast_node.items():
+            new_node[key] = _replace_identifier(value, original, replacement)
+        return new_node
+    # For literals or other types, return as is
+    return ast_node
+
+
+
 def build_sql_query(
     filter_dict,
     log_event_alias,
