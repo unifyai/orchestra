@@ -3278,8 +3278,6 @@ def _handle_list_comp(
         .select_from(iter_subq.join(elem_tbl, literal(True)))
         .subquery("base")
     )
-    # Replace occurrences of the comprehension target with a fake identifier
-    fake_ident = {"type": "identifier", "value": "__comp_var__"}
 
     unpacking = isinstance(filter_dict["target"], list)
     if unpacking:
@@ -3385,7 +3383,7 @@ def _handle_list_comp(
     where_clause = literal(True)
     for cond_ast in filter_dict.get("ifs", []):
         cond_expr = build_sql_query(
-            _replace_identifier(cond_ast, filter_dict["target"], fake_ident),
+            cond_ast,
             log_event_alias,
             session,
             log_event_ids,
