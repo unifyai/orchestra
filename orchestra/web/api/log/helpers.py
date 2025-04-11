@@ -3315,6 +3315,9 @@ def _handle_list_comp(
             detail="list comprehension source must be a JSONB collection",
         )
 
+    if not local_scope:
+        local_scope = {"__comp_base__": {}}
+
     val, _ = _select_value(iter_subq, session, is_collection=True)
 
     # Determine if we're iterating over an array or object
@@ -3355,7 +3358,14 @@ def _handle_list_comp(
     if unpacking:
         local_scope = {
             "__comp_idx__": (base.c.ordinality, "int"),
-            "__comp_base__": base,
+            "__comp_base__": {
+                **local_scope.pop("__comp_base__"),
+                **{
+                    ident["value"]: base
+                    for i, ident in enumerate(filter_dict["target"])
+                },
+            },
+            **local_scope,
         }
         for i, ident in enumerate(filter_dict["target"]):
             comp_col = func.coalesce(base.c.__comp_var__.op("->")(i), "null")
@@ -3372,7 +3382,11 @@ def _handle_list_comp(
         local_scope = {
             filter_dict["target"]["value"]: (base.c.__comp_var__, comp_type),
             "__comp_idx__": (base.c.ordinality, "int"),
-            "__comp_base__": base,
+            "__comp_base__": {
+                **local_scope.pop("__comp_base__"),
+                filter_dict["target"]["value"]: base,
+            },
+            **local_scope,
         }
 
     if parent_idx_col is not None:
@@ -3400,7 +3414,7 @@ def _handle_list_comp(
                 expr.c.value,
                 expr,
                 has_idx,
-            )  # (column, subquery to join, has_idx flag)
+            )
         return expr, None, False
 
     # Build the subquery for the element expression
@@ -3499,7 +3513,7 @@ def _handle_list_comp(
     if parent_idx_col is not None:
         # nested comprehension
         select_cols = [
-            from_clause.c.log_event_id,
+            from_clause.c.log_event_id.label("log_event_id"),
             from_clause.c.__parent_idx__.label("__comp_idx__"),
             func.coalesce(
                 func.jsonb_agg(aggregate_order_by(elt_col, from_clause.c.ordinality)),
@@ -3564,6 +3578,9 @@ def _handle_dict_comp(
             detail="dict comprehension source must be JSONB list/dict",
         )
 
+    if not local_scope:
+        local_scope = {"__comp_base__": {}}
+
     val, _ = _select_value(iter_subq, session, is_collection=True)
 
     # Determine if we're iterating over an array or object
@@ -3620,11 +3637,18 @@ def _handle_dict_comp(
         session.execute(select(base.c.__comp_val__)).scalar(),
     )
     local_scope = {
-        "__comp_key__": (base.c.__comp_key__, comp_key_type),
-        "__comp_val__": (base.c.__comp_val__, comp_val_type),
+        filter_dict["target"][0]["value"]: (base.c.__comp_key__, comp_key_type),
+        filter_dict["target"][1]["value"]: (base.c.__comp_val__, comp_val_type),
         "__comp_idx__": (base.c.ordinality, "int"),
-        "__comp_base__": base,
+        "__comp_base__": {
+            **local_scope.pop("__comp_base__"),
+            filter_dict["target"][0]["value"]: base,
+            filter_dict["target"][1]["value"]: base,
+        },
+        **local_scope,
     }
+    if parent_idx_col is not None:
+        local_scope["__parent_idx__"] = (parent_idx_col, "int")
 
     def _value_column(expr):
         """
@@ -3639,7 +3663,7 @@ def _handle_dict_comp(
                 expr.c.value,
                 expr,
                 has_idx,
-            )  # (column, subquery to join, has_idx flag)
+            )
         return expr, None, False
 
     key_expr = build_sql_query(
@@ -4057,7 +4081,7 @@ def build_sql_query(
             if key in local_scope:
                 col, itype = local_scope[key]
 
-                base_sub = local_scope.get("__comp_base__")
+                base_sub = local_scope.get("__comp_base__").get(key)
                 if base_sub is not None and "__comp_idx__" in local_scope:
                     cols = [
                         base_sub.c.log_event_id.label("log_event_id"),
@@ -4066,7 +4090,8 @@ def build_sql_query(
                         literal(itype).label("inferred_type"),
                     ]
                     if "__parent_idx__" in local_scope and hasattr(
-                        base_sub.c, "__parent_idx__",
+                        base_sub.c,
+                        "__parent_idx__",
                     ):
                         cols.append(base_sub.c.__parent_idx__.label("__parent_idx__"))
 
