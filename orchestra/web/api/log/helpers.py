@@ -2939,6 +2939,15 @@ def _replace_identifier(ast_node, original, replacement):
     return ast_node
 
 
+def _get_parent_idx(col_collection):
+    """Return the column that carries the outer‑loop index, or None."""
+    if "__parent_idx__" in col_collection.keys():
+        return col_collection.__parent_idx__
+    if "__comp_idx__" in col_collection.keys():
+        return col_collection.__comp_idx__
+    return None
+
+
 def _handle_dict_method(
     filter_dict,
     log_event_alias,
@@ -2973,11 +2982,12 @@ def _handle_dict_method(
     each = lateral(func.jsonb_each(safe_val).table_valued("key", "value")).alias(
         "each_values",
     )
-    base = (
-        select(src.c.log_event_id, each.c.key, each.c.value)
-        .select_from(src.join(each, true()))
-        .subquery(name="base")
-    )
+    parent_idx_col = _get_parent_idx(src.c)
+    base_cols = [src.c.log_event_id, each.c.key, each.c.value]
+    if parent_idx_col is not None:
+        base_cols.append(parent_idx_col.label("__parent_idx__"))
+
+    base = select(*base_cols).select_from(src.join(each, true())).subquery("base")
 
     if method == "keys":
         agg = func.coalesce(
@@ -3343,10 +3353,7 @@ def _handle_list_comp(
             .alias(name="elem_tbl")
         )
 
-    # Create the base subquery with the exploded elements
-    parent_idx_col = (
-        iter_subq.c.__comp_idx__ if "__comp_idx__" in iter_subq.c.keys() else None
-    )
+    parent_idx_col = _get_parent_idx(iter_subq.c)
     base_cols = [
         iter_subq.c.log_event_id,
         (elem_tbl.c.value if is_array else elem_tbl.c.v).label("__comp_var__"),
@@ -3595,10 +3602,10 @@ def _handle_dict_comp(
             .alias(name="elem_tbl")
         )
 
-    # Create the base subquery with the exploded elements
-    base = (
-        select(
-            iter_subq.c.log_event_id,
+    parent_idx_col = _get_parent_idx(iter_subq.c)
+
+    base_cols = [
+        iter_subq.c.log_event_id,
             (
                 elem_tbl.c.value.op("->>")(literal(0)) if is_array else elem_tbl.c.key
             ).label("__comp_key__"),
