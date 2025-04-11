@@ -2905,7 +2905,7 @@ def _build_subquery_for_base_call(
         select(*select_cols)
         .select_from(from_clause)
         .where(key_expr.c.log_event_id.in_(base_ids))
-        .subquery(f"base_call_{key_expr.name}")
+        .subquery(f"base_call_{key_expr.name}_{random.randint(0, 1000000)}")
     )
     return filtered_subquery
 
