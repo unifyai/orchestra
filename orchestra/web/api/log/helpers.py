@@ -3589,16 +3589,21 @@ def _handle_dict_comp(
 
     base_cols = [
         iter_subq.c.log_event_id,
-            (
-                elem_tbl.c.value.op("->>")(literal(0)) if is_array else elem_tbl.c.key
-            ).label("__comp_key__"),
-            (
-                elem_tbl.c.value.op("->")(literal(1)) if is_array else elem_tbl.c.value
-            ).label("__comp_val__"),
-            elem_tbl.c.ordinality,
-        )
+        (elem_tbl.c.value.op("->>")(0) if is_array else elem_tbl.c.key).label(
+            "__comp_key__",
+        ),
+        (elem_tbl.c.value.op("->")(1) if is_array else elem_tbl.c.value).label(
+            "__comp_val__",
+        ),
+        elem_tbl.c.ordinality,
+    ]
+    if parent_idx_col is not None:
+        base_cols.append(parent_idx_col.label("__parent_idx__"))
+
+    base = (
+        select(*base_cols)
         .select_from(iter_subq.join(elem_tbl, literal(True)))
-        .subquery(name="base")
+        .subquery("base")
     )
 
     # Replace occurrences of the comprehension target with a fake identifier
@@ -3638,7 +3643,7 @@ def _handle_dict_comp(
         return expr, None, False
 
     key_expr = build_sql_query(
-            filter_dict["key_elt"],
+        filter_dict["key_elt"],
         log_event_alias,
         session,
         log_event_ids,
@@ -3674,6 +3679,11 @@ def _handle_dict_comp(
                 ).label("ordinality"),
                 key_subq.c.value,
                 key_subq.c.inferred_type,
+                *(
+                    [key_subq.c.__parent_idx__.label("__parent_idx__")]
+                    if hasattr(key_subq.c, "__parent_idx__")
+                    else []
+                ),
             )
             .select_from(key_subq)
             .subquery(name="key_with_row")
@@ -3687,6 +3697,12 @@ def _handle_dict_comp(
                 from_clause.c.__comp_key__,
                 key_with_row.c.value.label("key_value"),
                 key_with_row.c.inferred_type.label("key_type"),
+                *(
+                    [key_with_row.c.__parent_idx__]
+                    if hasattr(from_clause.c, "__parent_idx__")
+                    and hasattr(key_with_row.c, "__parent_idx__")
+                    else []
+                ),
             )
             .select_from(
                 from_clause.join(
@@ -3694,11 +3710,22 @@ def _handle_dict_comp(
                     and_(
                         from_clause.c.log_event_id == key_with_row.c.log_event_id,
                         from_clause.c.ordinality == key_with_row.c.ordinality,
+                        *(
+                            [
+                                from_clause.c.__parent_idx__
+                                == key_with_row.c.__parent_idx__,
+                            ]
+                            if hasattr(from_clause.c, "__parent_idx__")
+                            and hasattr(key_with_row.c, "__parent_idx__")
+                            else []
+                        ),
                     ),
                 ),
             )
             .subquery(name="from_clause_with_key")
         )
+    else:
+        from_clause_with_key = None
 
     # Join with val_subq if needed
     if val_subq is not None:
@@ -3712,6 +3739,11 @@ def _handle_dict_comp(
                 ).label("ordinality"),
                 val_subq.c.value,
                 val_subq.c.inferred_type,
+                *(
+                    [val_subq.c.__parent_idx__.label("__parent_idx__")]
+                    if hasattr(val_subq.c, "__parent_idx__")
+                    else []
+                ),
             )
             .select_from(val_subq)
             .subquery(name="val_with_row")
@@ -3725,6 +3757,12 @@ def _handle_dict_comp(
                 from_clause.c.__comp_val__,
                 val_with_row.c.value.label("val_value"),
                 val_with_row.c.inferred_type.label("val_type"),
+                *(
+                    [val_with_row.c.__parent_idx__]
+                    if hasattr(from_clause.c, "__parent_idx__")
+                    and hasattr(val_with_row.c, "__parent_idx__")
+                    else []
+                ),
             )
             .select_from(
                 from_clause.join(
@@ -3732,11 +3770,22 @@ def _handle_dict_comp(
                     and_(
                         from_clause.c.log_event_id == val_with_row.c.log_event_id,
                         from_clause.c.ordinality == val_with_row.c.ordinality,
+                        *(
+                            [
+                                from_clause.c.__parent_idx__
+                                == val_with_row.c.__parent_idx__,
+                            ]
+                            if hasattr(from_clause.c, "__parent_idx__")
+                            and hasattr(val_with_row.c, "__parent_idx__")
+                            else []
+                        ),
                     ),
                 ),
             )
             .subquery(name="from_clause_with_val")
         )
+    else:
+        from_clause_with_val = None
 
     # --- Build the joined_clause ---
     final_key_col = None
@@ -3750,6 +3799,11 @@ def _handle_dict_comp(
                 from_clause_with_key.c.ordinality,
                 from_clause_with_key.c.key_value,
                 from_clause_with_val.c.val_value,
+                *(
+                    [from_clause_with_key.c.__parent_idx__]
+                    if hasattr(from_clause_with_key.c, "__parent_idx__")
+                    else []
+                ),
             )
             .select_from(
                 from_clause_with_key.join(
@@ -3759,6 +3813,15 @@ def _handle_dict_comp(
                         == from_clause_with_val.c.log_event_id,
                         from_clause_with_key.c.ordinality
                         == from_clause_with_val.c.ordinality,
+                        *(
+                            [
+                                from_clause_with_key.c.__parent_idx__
+                                == from_clause_with_val.c.__parent_idx__,
+                            ]
+                            if hasattr(from_clause_with_key.c, "__parent_idx__")
+                            and hasattr(from_clause_with_val.c, "__parent_idx__")
+                            else []
+                        ),
                     ),
                 ),
             )
@@ -3812,6 +3875,12 @@ def _handle_dict_comp(
                 .where(
                     cond_expr.c.log_event_id == joined_clause.c.log_event_id,
                     cond_expr.c.__comp_idx__ == joined_clause.c.ordinality,
+                    *(
+                        [cond_expr.c.__parent_idx__ == joined_clause.c.__parent_idx__]
+                        if hasattr(cond_expr.c, "__parent_idx__")
+                        and hasattr(joined_clause.c, "__parent_idx__")
+                        else []
+                    ),
                 )
                 .scalar_subquery()
             )
@@ -3819,21 +3888,37 @@ def _handle_dict_comp(
             condition = cond_expr
         where_clause = and_(where_clause, condition)
 
-    # Create the final object aggregation subquery
-    final = (
-        select(
-            joined_clause.c.log_event_id,
-            func.coalesce(
-                func.jsonb_object_agg(final_key_col, final_val_col),
-                literal("{}", type_=JSONB),
-            ).label("value"),
-            literal("dict").label("inferred_type"),
+    if hasattr(joined_clause.c, "__parent_idx__"):
+        final = (
+            select(
+                joined_clause.c.log_event_id,
+                joined_clause.c.__parent_idx__.label("__parent_idx__"),
+                func.coalesce(
+                    func.jsonb_object_agg(final_key_col, final_val_col),
+                    literal("{}", type_=JSONB),
+                ).label("value"),
+                literal("dict").label("inferred_type"),
+            )
+            .select_from(joined_clause)
+            .where(where_clause)
+            .group_by(joined_clause.c.log_event_id, joined_clause.c.__parent_idx__)
+            .subquery(name="final")
         )
-        .select_from(joined_clause)
-        .where(where_clause)
-        .group_by(joined_clause.c.log_event_id)
-        .subquery(name="final")
-    )
+    else:
+        final = (
+            select(
+                joined_clause.c.log_event_id,
+                func.coalesce(
+                    func.jsonb_object_agg(final_key_col, final_val_col),
+                    literal("{}", type_=JSONB),
+                ).label("value"),
+                literal("dict").label("inferred_type"),
+            )
+            .select_from(joined_clause)
+            .where(where_clause)
+            .group_by(joined_clause.c.log_event_id)
+            .subquery(name="final")
+        )
     return final
 
 
