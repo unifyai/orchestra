@@ -146,54 +146,54 @@ INSERT INTO datapoint VALUES (53, 10, 'output_cost_per_token', 0.02, NULL, NOW()
 INSERT INTO datapoint VALUES (54, 10, 'ttft', 450, NULL, NOW());
 INSERT INTO datapoint VALUES (55, 10, 'itl', 10, NULL, NOW());
 
+-- Uncomment if needed.
+-- -- Create a test project for the user
+-- INSERT INTO project(id, user_id, name, created_at, updated_at)
+-- VALUES (1001, :user_id, 'Dummy Project', NOW(), NOW());
 
--- Create a test project for the user
-INSERT INTO project(id, user_id, name, created_at, updated_at)
-VALUES (1001, :user_id, 'Dummy Project', NOW(), NOW());
+-- -- Create contexts for the project
+-- INSERT INTO context(id, project_id, name, description, created_at, updated_at, is_versioned, version, allow_duplicates)
+-- VALUES (2001, 1001, 'Dummy Context 1', 'Context for testing logs', NOW(), NOW(), false, 1, true);
 
--- Create contexts for the project
-INSERT INTO context(id, project_id, name, description, created_at, updated_at, is_versioned, version, allow_duplicates)
-VALUES (2001, 1001, 'Dummy Context 1', 'Context for testing logs', NOW(), NOW(), false, 1, true);
+-- INSERT INTO context(id, project_id, name, description, created_at, updated_at, is_versioned, version, allow_duplicates)
+-- VALUES (2002, 1001, 'Dummy Context 2', 'Another context for testing logs', NOW(), NOW(), false, 1, true);
 
-INSERT INTO context(id, project_id, name, description, created_at, updated_at, is_versioned, version, allow_duplicates)
-VALUES (2002, 1001, 'Dummy Context 2', 'Another context for testing logs', NOW(), NOW(), false, 1, true);
+-- -- Set the sequence for log_event id to start from a high value
+-- SELECT pg_catalog.setval(pg_get_serial_sequence('log_event', 'id'), 12000, false);
 
--- Set the sequence for log_event id to start from a high value
-SELECT pg_catalog.setval(pg_get_serial_sequence('log_event', 'id'), 12000, false);
+-- -- Insert several log events with high IDs
+-- INSERT INTO log_event(id, project_id, created_at, updated_at)
+-- VALUES (12345, 1001, NOW(), NOW());
 
--- Insert several log events with high IDs
-INSERT INTO log_event(id, project_id, created_at, updated_at)
-VALUES (12345, 1001, NOW(), NOW());
+-- INSERT INTO log_event(id, project_id, created_at, updated_at)
+-- VALUES (12346, 1001, NOW(), NOW());
 
-INSERT INTO log_event(id, project_id, created_at, updated_at)
-VALUES (12346, 1001, NOW(), NOW());
+-- INSERT INTO log_event(id, project_id, created_at, updated_at)
+-- VALUES (12347, 1001, NOW(), NOW());
 
-INSERT INTO log_event(id, project_id, created_at, updated_at)
-VALUES (12347, 1001, NOW(), NOW());
+-- -- Associate log events with contexts
+-- INSERT INTO log_event_context(log_event_id, context_id)
+-- VALUES (12345, 2001);
 
--- Associate log events with contexts
-INSERT INTO log_event_context(log_event_id, context_id)
-VALUES (12345, 2001);
+-- INSERT INTO log_event_context(log_event_id, context_id)
+-- VALUES (12346, 2001);
 
-INSERT INTO log_event_context(log_event_id, context_id)
-VALUES (12346, 2001);
+-- INSERT INTO log_event_context(log_event_id, context_id)
+-- VALUES (12347, 2002);
 
-INSERT INTO log_event_context(log_event_id, context_id)
-VALUES (12347, 2002);
+-- -- Add some log entries for the log events
+-- INSERT INTO log(id, log_event_id, key, value, version, inferred_type, created_at, updated_at)
+-- VALUES (5001, 12345, 'test_metric', '{"value": 0.95}', 1, 'float', NOW(), NOW());
 
--- Add some log entries for the log events
-INSERT INTO log(id, log_event_id, key, value, version, inferred_type, created_at, updated_at)
-VALUES (5001, 12345, 'test_metric', '{"value": 0.95}', 1, 'float', NOW(), NOW());
+-- INSERT INTO log(id, log_event_id, key, value, version, inferred_type, created_at, updated_at)
+-- VALUES (5002, 12346, 'test_metric', '{"value": 0.87}', 1, 'float', NOW(), NOW());
 
-INSERT INTO log(id, log_event_id, key, value, version, inferred_type, created_at, updated_at)
-VALUES (5002, 12346, 'test_metric', '{"value": 0.87}', 1, 'float', NOW(), NOW());
+-- INSERT INTO log(id, log_event_id, key, value, version, inferred_type, created_at, updated_at)
+-- VALUES (5003, 12347, 'other_metric', '{"value": "test string"}', 1, 'string', NOW(), NOW());
 
-INSERT INTO log(id, log_event_id, key, value, version, inferred_type, created_at, updated_at)
-VALUES (5003, 12347, 'other_metric', '{"value": "test string"}', 1, 'string', NOW(), NOW());
+-- -- Add some JSON logs too
+-- INSERT INTO json_log(id, log_event_id, key, value)
+-- VALUES (6001, 12345, 'json_data', '{"score": 0.98, "metadata": {"source": "test"}}');
 
--- Add some JSON logs too
-INSERT INTO json_log(id, log_event_id, key, value)
-VALUES (6001, 12345, 'json_data', '{"score": 0.98, "metadata": {"source": "test"}}');
-
-INSERT INTO json_log(id, log_event_id, key, value)
-VALUES (6002, 12346, 'json_data', '{"score": 0.76, "metadata": {"source": "another test"}}');
+-- INSERT INTO json_log(id, log_event_id, key, value)
+-- VALUES (6002, 12346, 'json_data', '{"score": 0.76, "metadata": {"source": "another test"}}');
