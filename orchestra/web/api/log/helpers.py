@@ -2983,14 +2983,19 @@ def _handle_dict_method(
         )
         inf = "list"
 
+    select_cols = [
+        base.c.log_event_id,
+        func.coalesce(agg, literal("[]", type_=JSONB)).label("value"),
+        literal(inf).label("inferred_type"),
+    ]
+    group_cols = [base.c.log_event_id]
+
+    if "__parent_idx__" in base.c.keys():
+        select_cols.insert(1, base.c.__parent_idx__.label("__parent_idx__"))
+        group_cols.append(base.c.__parent_idx__)
+
     final = (
-        select(
-            base.c.log_event_id,
-            func.coalesce(agg, literal("[]", type_=JSONB)).label("value"),
-            literal(inf).label("inferred_type"),
-        )
-        .group_by(base.c.log_event_id)
-        .subquery(name=f"dict_{method}_subquery")
+        select(*select_cols).group_by(*group_cols).subquery(f"dict_{method}_subquery")
     )
     return final
 
