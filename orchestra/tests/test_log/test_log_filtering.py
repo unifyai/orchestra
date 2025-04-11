@@ -528,56 +528,100 @@ def test_ast_parser(expression, expected_dict):
         ("not isNone(field2)", {"field2": "non-null"}, True),
         ("isNone(field3)", {"field3": None}, True),
         ("not isNone(field4)", {"field4": 0}, True),
-        # 1. datetime object.
+        # datetime object.
         (
             "time(a) == '14:30:00'",
             {"a": datetime(2023, 5, 4, 14, 30, 0).isoformat()},
             True,
         ),
-        # 2. 24-hour formatted time string.
+        # 24-hour formatted time string.
         ("time(a) == '14:30:00'", {"a": "14:30:00"}, True),
-        # 3. 12-hour formatted time string.
+        # 12-hour formatted time string.
         ("time(a) == '14:30:00'", {"a": "2:30 PM"}, True),
-        # 4.the time does not match.
+        # The time does not match.
         ("time(a) != '14:30:00'", {"a": "15:00:00"}, True),
-        # 5. Date extraction from timestamp
+        # Date extraction from timestamp
         ("date(ts) == '2023-01-01'", {"ts": "2023-01-01T12:00:00"}, True),
-        # 6. Date comparison (less than)
+        # Date comparison (less than)
         ("date(ts) < '2023-01-02'", {"ts": "2023-01-01T23:59:59"}, True),
-        # 7. Date comparison (greater than)
+        # Date comparison (greater than)
         ("date(ts) > '2022-12-31'", {"ts": "2023-01-01T00:00:01"}, True),
-        # 8. Date comparison (not equal)
+        # Date comparison (not equal)
         ("date(ts) != '2023-01-02'", {"ts": "2023-01-01T12:00:00"}, True),
-        # 9. Timedelta arithmetic - adding hours to timestamp
+        # Timedelta arithmetic - adding hours to timestamp
         ("ts + 'PT1H' == '2023-01-01T13:00:00'", {"ts": "2023-01-01T12:00:00"}, True),
-        # 10. Timedelta arithmetic - adding days to timestamp
+        # Timedelta arithmetic - adding days to timestamp
         ("ts + 'P1D' == '2023-01-02T12:00:00'", {"ts": "2023-01-01T12:00:00"}, True),
-        # 11. Timedelta arithmetic - subtracting hours from timestamp
+        # Timedelta arithmetic - subtracting hours from timestamp
         ("ts - 'PT2H' == '2023-01-01T10:00:00'", {"ts": "2023-01-01T12:00:00"}, True),
-        # 12. Date subtraction resulting in timedelta
+        # Date subtraction resulting in timedelta
         (
             "date2 - date1 == 'P1D'",
             {"date1": "2023-01-01", "date2": "2023-01-02"},
             True,
         ),
-        # 13. Time difference between two timestamps
+        # Time difference between two timestamps
         (
             "time2 - time1 == 'PT1H'",
             {"time1": "2023-01-01T12:00:00", "time2": "2023-01-01T13:00:00"},
             True,
         ),
-        # 14. Complex date arithmetic with multiple operations
+        # Complex date arithmetic with multiple operations
         (
             "(date1 + 'P1D') - date2 == 'P0D'",
             {"date1": "2023-01-01", "date2": "2023-01-02"},
             True,
         ),
-        # 15. Comparing date with extracted date from timestamp
+        # Comparing date with extracted date from timestamp
         (
             "date(ts) == date1",
             {"ts": "2023-01-01T12:00:00", "date1": "2023-01-01"},
             True,
         ),
+        # dict .keys / .values / .items
+        ("len(my.keys()) == 3", {"my": {"a": 1, "b": 2, "c": 3}}, True),
+        ("my.values()== [2,3,1]", {"my": {"x": 2, "y": 3, "z": 1}}, True),
+        ("my.items()[-1] == ['z', 3]", {"my": {"x": 2, "y": 3, "z": 3}}, True),
+        # if‑expressions  (test / body / orelse   scalar vs sub‑query)
+        ("(1 if flag else 0) == 1", {"flag": True}, True),  # all scalars
+        ("(x if flag else 0) == 5", {"flag": True, "x": 5}, True),  # body sub‑q
+        ("(0 if x<0 else x) == 0", {"x": -3}, True),  # test & body sub‑q
+        ("(y if True else 0) == -7", {"y": -7}, True),  # test scalar
+        ("(0 if True else y) == 0", {"y": 99}, True),  # body & test scalar
+        ("(0 if False else 1) == 1", {"x": 1}, True),  # no identifiers
+        # list comprehensions
+        ("[y*2 for y in nums] == [4,-2,6]", {"nums": [2, -1, 3]}, True),
+        ("[y if y>0 else 0 for y in nums] == [2,0,3]", {"nums": [2, -1, 3]}, True),
+        ("[y for y in nums if y>1] == [2,3]", {"nums": [0, 1, 2, 3]}, True),
+        ("[y for y in nums if False] == []", {"nums": [1, 2, 3]}, True),
+        # nested list‑comp in dict‑comp value
+        (
+            "{k:[v*2 for v in vs] for k,vs in d.items()} == {'a':[2,4],'b':[]}",
+            {"d": {"a": [1, 2], "b": []}},
+            True,
+        ),
+        # dict comprehensions
+        (
+            "{k:v for k,v in d.items() if v>1} == {'b':2,'c':3}",
+            {"d": {"a": 0, "b": 2, "c": 3}},
+            True,
+        ),
+        (
+            "len({i:i*i for k,i in nums}) == 3",
+            {"nums": [["a", 1], ["b", 2], ["c", 3]]},
+            True,
+        ),
+        ("len({}) == 0", {}, True),
+        # zip()
+        ("zip(a,b) == [[1,'x'],[2,'y']]", {"a": [1, 2], "b": ["x", "y"]}, True),
+        (
+            "zip(a,b,c) == [[1,'x',10],[2,'y',20]]",
+            {"a": [1, 2], "b": ["x", "y"], "c": [10, 20]},
+            True,
+        ),
+        ("zip(a,b) == []", {"a": [], "b": []}, True),
+        # shorter second list – zip truncates
+        ("zip(a,b) == [[1,'x']]", {"a": [1, 2], "b": ["x"]}, True),
     ],
 )
 async def test_log_filter_helper_w_arithmetic(
