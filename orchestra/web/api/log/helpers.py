@@ -1285,7 +1285,8 @@ def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type, session=None):
     # Add parent index to join condition if both sides have it
     if has_parent_idx_lhs and has_parent_idx_rhs:
         join_cond = and_(
-            join_cond, lhs_subq.c.__parent_idx__ == rhs_subq.c.__parent_idx__,
+            join_cond,
+            lhs_subq.c.__parent_idx__ == rhs_subq.c.__parent_idx__,
         )
 
     # Build the select columns
@@ -2315,37 +2316,6 @@ def _handle_functions(
                 )
                 return select(*select_cols).select_from(val_expr).subquery()
             elif isinstance(digits_expr, Subquery):
-                val_col, val_type = _select_value(val_expr, session)
-                select_cols = [val_expr.c.log_event_id.label("log_event_id")]
-                if "__comp_idx__" in val_expr.c.keys():
-                    select_cols.append(val_expr.c.__comp_idx__.label("__comp_idx__"))
-                if "__parent_idx__" in val_expr.c.keys():
-                    select_cols.append(
-                        val_expr.c.__parent_idx__.label("__parent_idx__"),
-                    )
-                select_cols.extend(
-                    [
-                        func.round(cast(val_col, Numeric), digits_expr).label("value"),
-                        literal("int").label("inferred_type"),
-                    ],
-                )
-                return select(*select_cols).select_from(val_expr).subquery()
-            elif isinstance(digits_expr, Subquery):
-                select_cols = [val_expr.c.log_event_id.label("log_event_id")]
-                if "__comp_idx__" in val_expr.c.keys():
-                    select_cols.append(val_expr.c.__comp_idx__.label("__comp_idx__"))
-                if "__parent_idx__" in val_expr.c.keys():
-                    select_cols.append(
-                        val_expr.c.__parent_idx__.label("__parent_idx__"),
-                    )
-                select_cols.extend(
-                    [
-                        func.round(cast(val_col, Numeric), digits_expr).label("value"),
-                        literal("int").label("inferred_type"),
-                    ],
-                )
-                return select(*select_cols).select_from(val_expr).subquery()
-            elif isinstance(digits_expr, Subquery):
                 dig_col, dig_type = _select_value(digits_expr, session)
                 # In that case, val_expr might be a literal
                 select_cols = [digits_expr.c.log_event_id.label("log_event_id")]
@@ -3066,7 +3036,6 @@ def _handle_if_expr(
             if hasattr(ids_subq.c, "__comp_idx__"):
                 cols.append(ids_subq.c.__comp_idx__)
             elif local_scope and "__comp_idx__" in local_scope:
-                # fallback to local_scope column if we want to replicate indexing
                 idx_col = local_scope["__comp_idx__"][0]
                 cols.append(idx_col.label("__comp_idx__"))
             if hasattr(ids_subq.c, "__parent_idx__"):
@@ -3085,19 +3054,15 @@ def _handle_if_expr(
                 )
             )
 
-        # 1) Unwrap if it's a BindParameter
         if isinstance(value, BindParameter):
             value = value.value
 
-        # 2) Start building a list of columns for select(...)
         cols = [ids_subq.c.log_event_id]
 
-        # 3) If we are in a comprehension, attach ordinality if available
         if has_comp_idx:
             if hasattr(ids_subq.c, "__comp_idx__"):
                 cols.append(ids_subq.c.__comp_idx__)
             elif local_scope and "__comp_idx__" in local_scope:
-                # fallback to local_scope column if we want to replicate indexing
                 idx_col = local_scope["__comp_idx__"][0]
                 cols.append(idx_col.label("__comp_idx__"))
         if hasattr(ids_subq.c, "__parent_idx__"):
@@ -3106,11 +3071,9 @@ def _handle_if_expr(
             par_col = local_scope["__parent_idx__"][0]
             cols.append(par_col.label("__parent_idx__"))
 
-        # 4) Add the scalar columns
         cols.append(literal(value).label("value"))
         cols.append(literal(inferred_type).label("inferred_type"))
 
-        # 5) Make a SELECT statement from those columns
         return (
             select(*cols)
             .select_from(ids_subq)
@@ -3143,11 +3106,9 @@ def _handle_if_expr(
         local_scope=local_scope,
     )
 
-    # Collect all log_event_ids from subqueries
     id_selects = []
     for part in (raw_test, raw_body, raw_else):
         if isinstance(part, Subquery):
-            # Include __comp_idx__ in the selection if it exists
             if in_comprehension and hasattr(part.c, "__comp_idx__"):
                 select_cols = [part.c.log_event_id, part.c.__comp_idx__]
                 if hasattr(part.c, "__parent_idx__"):
@@ -3156,11 +3117,8 @@ def _handle_if_expr(
             else:
                 id_selects.append(select(part.c.log_event_id))
 
-    # Create a subquery with all unique log_event_ids (and __comp_idx__ if in comprehension)
     if id_selects:
         if in_comprehension and any(len(s.selected_columns) > 1 for s in id_selects):
-            # If any select has __comp_idx__, we need to handle it specially
-            # First, standardize all selects to have both log_event_id and __comp_idx__
             standardized_selects = []
             for s in id_selects:
                 if len(s.selected_columns) == 1:
@@ -3173,7 +3131,6 @@ def _handle_if_expr(
                     )
                 else:
                     standardized_selects.append(s)
-            # Union all standardized selects and get distinct rows
             ids_subq = (
                 union_all(*standardized_selects)
                 .subquery(name="union_all_standardized_selects")
@@ -3182,7 +3139,6 @@ def _handle_if_expr(
                 .subquery(name="ids_subq")
             )
         else:
-            # Simple case: just union all log_event_ids
             ids_subq = (
                 union_all(*id_selects)
                 .subquery(name="union_all_id_selects")
@@ -3191,7 +3147,6 @@ def _handle_if_expr(
                 .subquery(name="ids_subq")
             )
     else:
-        # No subqueries, fall back to the ids the caller gave us
         if isinstance(log_event_ids, Subquery):
             ids_subq = select(log_event_ids.c.id.label("log_event_id")).subquery()
         elif isinstance(log_event_ids, (list, tuple)):
@@ -3201,7 +3156,6 @@ def _handle_if_expr(
         else:
             ids_subq = select(log_event_alias.id.label("log_event_id")).subquery()
 
-        # If we're in a comprehension, add the __comp_idx__ column from local_scope
         if in_comprehension:
             comp_idx_col = local_scope["__comp_idx__"][0]
             ids_subq = (
@@ -3210,7 +3164,6 @@ def _handle_if_expr(
                 .subquery()
             )
 
-    # Convert non-subquery expressions to subqueries
     if not isinstance(raw_test, Subquery) or (
         isinstance(raw_test, Subquery) and "value" not in raw_test.columns
     ):
@@ -3249,28 +3202,22 @@ def _handle_if_expr(
             in_comprehension,
         )
 
-    # Get the inferred types for body and else expressions
     body_type = session.execute(select(raw_body.c.inferred_type)).scalar()
     else_type = session.execute(select(raw_else.c.inferred_type)).scalar()
     res_type = unify_inferred_types(body_type, else_type)
 
-    # Cast values to the unified type
     body_val = cast_expr(raw_body.c.value, body_type, res_type)
     else_val = cast_expr(raw_else.c.value, else_type, res_type)
     test_val = cast_expr(raw_test.c.value, "bool", "bool")
 
-    # Create the CASE expression for the if-else logic
     case_expr = case((test_val, body_val), else_=else_val)
 
-    # Build the join conditions
     join_conditions = []
 
-    # Always join on log_event_id
     test_join_cond = ids_subq.c.log_event_id == raw_test.c.log_event_id
     body_join_cond = ids_subq.c.log_event_id == raw_body.c.log_event_id
     else_join_cond = ids_subq.c.log_event_id == raw_else.c.log_event_id
 
-    # If in comprehension context, also join on __comp_idx__
     if in_comprehension:
         if hasattr(ids_subq.c, "__comp_idx__") and hasattr(raw_test.c, "__comp_idx__"):
             test_join_cond = and_(
@@ -3312,7 +3259,6 @@ def _handle_if_expr(
                 ids_subq.c.__parent_idx__ == raw_else.c.__parent_idx__,
             )
 
-    # Create the final subquery
     select_cols = [ids_subq.c.log_event_id]
     if in_comprehension and hasattr(ids_subq.c, "__comp_idx__"):
         select_cols.append(ids_subq.c.__comp_idx__)
