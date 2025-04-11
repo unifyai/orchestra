@@ -3874,24 +3874,39 @@ def _handle_zip(
     zipped_subqs = []
     for idx, arg in enumerate(args):
         col, _ = _select_value(arg, session, is_collection=True)
+        parent_idx_col = _get_parent_idx(arg.c)
         table_valued = (
             func.jsonb_array_elements(col)
             .table_valued("value", with_ordinality="ordinality")
             .alias(f"elem_tbl_{idx}")
         )
+        sub_cols = [
+            arg.c.log_event_id.label("log_event_id"),
+            table_valued.c.ordinality.label("ordinality"),
+            table_valued.c.value.label(f"value_{idx}"),
+        ]
+        if parent_idx_col is not None:
+            sub_cols.append(parent_idx_col.label("__parent_idx__"))
+
         sub = (
-            select(
-                arg.c.log_event_id.label("log_event_id"),
-                table_valued.c.ordinality.label("ordinality"),
-                table_valued.c.value.label(f"value_{idx}"),
-            )
+            select(*sub_cols)
             .select_from(arg.join(table_valued, literal(True)))
-            .subquery(name=f"zip_subq_{idx}")
+            .subquery(f"zip_subq_{idx}")
         )
         zipped_subqs.append(sub)
 
     base = zipped_subqs[0]
     for i, other in enumerate(zipped_subqs[1:], start=1):
+        join_cond = and_(
+            base.c.log_event_id == other.c.log_event_id,
+            base.c.ordinality == other.c.ordinality,
+            *(
+                [base.c.__parent_idx__ == other.c.__parent_idx__]
+                if "__parent_idx__" in base.c.keys()
+                and "__parent_idx__" in other.c.keys()
+                else []
+            ),
+        )
         base = (
             select(
                 base.c.log_event_id,
@@ -3902,10 +3917,7 @@ def _handle_zip(
             .select_from(
                 base.join(
                     other,
-                    and_(
-                        base.c.log_event_id == other.c.log_event_id,
-                        base.c.ordinality == other.c.ordinality,
-                    ),
+                    join_cond,
                 ),
             )
             .subquery(name=f"zip_join_{i}")
@@ -3913,18 +3925,21 @@ def _handle_zip(
 
     value_columns = [base.c[col] for col in base.c.keys() if col.startswith("value")]
 
-    zipped = (
-        select(
-            base.c.log_event_id,
-            func.coalesce(
-                func.jsonb_agg(func.jsonb_build_array(*value_columns)),
-                literal("[]", type_=JSONB),
-            ).label("value"),
-            literal("list").label("inferred_type"),
-        )
-        .group_by(base.c.log_event_id)
-        .subquery(name="zipped")
-    )
+    select_cols = [
+        base.c.log_event_id,
+        func.coalesce(
+            func.jsonb_agg(func.jsonb_build_array(*value_columns)),
+            literal("[]", type_=JSONB),
+        ).label("value"),
+        literal("list").label("inferred_type"),
+    ]
+    group_cols = [base.c.log_event_id]
+
+    if "__parent_idx__" in base.c.keys():
+        select_cols.insert(1, base.c.__parent_idx__)
+        group_cols.append(base.c.__parent_idx__)
+
+    zipped = select(*select_cols).group_by(*group_cols).subquery("zipped")
     return zipped
 
 
