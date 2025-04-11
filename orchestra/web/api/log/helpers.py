@@ -2536,6 +2536,7 @@ def _handle_functions(
             key_expr,
             session,
             log_event_ids,
+            local_scope=local_scope,
         )
     elif operand == "isNone":
         if isinstance(filter_dict.get("rhs"), dict):
@@ -2831,6 +2832,7 @@ def _build_subquery_for_base_call(
     session,
     log_event_ids,
     is_derived=False,
+    local_scope=None,
 ):
     """
     Build a subselect that retrieves columns for a given list_of_ids and a key.
@@ -2857,18 +2859,33 @@ def _build_subquery_for_base_call(
 
     # Filter the key_expr subquery to only include rows with log_event_id in base_ids
     key_val, key_type = _select_value(key_expr, session)
-    row_number = (
-        func.row_number().over(order_by=key_expr.c.log_event_id).label("log_event_id")
-    )
-    filtered_subquery = (
-        select(
-            row_number,
-            key_val.label("value"),
-            literal(key_type).label("inferred_type"),
+    parent_idx_col = None
+    outer_base = None
+    if local_scope and "__comp_idx__" in local_scope:
+        parent_idx_col = local_scope["__comp_idx__"][0]
+        outer_base = next(iter(local_scope["__comp_base__"].values()), None)
+
+    select_cols = [
+        key_expr.c.log_event_id.label("log_event_id"),
+        key_val.label("value"),
+        literal(key_type).label("inferred_type"),
+    ]
+
+    if parent_idx_col is not None:
+        select_cols.insert(1, parent_idx_col.label("__parent_idx__"))
+
+    from_clause = key_expr
+    if parent_idx_col is not None and outer_base is not None:
+        from_clause = key_expr.join(
+            outer_base,
+            outer_base.c.log_event_id == key_expr.c.log_event_id,
         )
-        .select_from(key_expr)
+
+    filtered_subquery = (
+        select(*select_cols)
+        .select_from(from_clause)
         .where(key_expr.c.log_event_id.in_(base_ids))
-        .subquery()
+        .subquery(f"base_call_{key_expr.name}")
     )
     return filtered_subquery
 
