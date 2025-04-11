@@ -1309,13 +1309,20 @@ def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type, session=None):
         ),
     ]
 
-    # Include __comp_idx__ in the output if it exists
     if has_idx_lhs and has_idx_rhs:
-        select_cols.append(
-            func.coalesce(lhs_subq.c.__comp_idx__, rhs_subq.c.__comp_idx__).label(
-                "__comp_idx__",
-            ),
-        )
+        # nested case: rhs also has __parent_idx__  -> rhs is the inner loop
+        if has_parent_idx_rhs and not has_parent_idx_lhs:
+            select_cols.append(rhs_subq.c.__comp_idx__.label("__comp_idx__"))
+        # symmetric nested case
+        elif has_parent_idx_lhs and not has_parent_idx_rhs:
+            select_cols.append(lhs_subq.c.__comp_idx__.label("__comp_idx__"))
+        # same‑level comprehension
+        else:
+            select_cols.append(
+                func.coalesce(lhs_subq.c.__comp_idx__, rhs_subq.c.__comp_idx__).label(
+                    "__comp_idx__",
+                ),
+            )
     elif has_idx_lhs:
         select_cols.append(lhs_subq.c.__comp_idx__.label("__comp_idx__"))
     elif has_idx_rhs:
