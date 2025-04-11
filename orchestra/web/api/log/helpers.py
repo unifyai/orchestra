@@ -3319,20 +3319,14 @@ def _handle_list_comp(
         local_scope = {"__comp_base__": {}}
 
     val, _ = _select_value(iter_subq, session, is_collection=True)
-
-    # Determine if we're iterating over an array or object
     is_array = session.execute(select(func.jsonb_typeof(val))).scalar() == "array"
-
-    # Use appropriate function based on the JSON type
     if is_array:
-        # For arrays, use jsonb_array_elements with ordinality
         elem_tbl = (
             func.jsonb_array_elements(val)
             .table_valued("value", with_ordinality="ordinality")
             .alias(name="elem_tbl")
         )
     else:
-        # For objects, use jsonb_each with ordinality
         elem_tbl = (
             func.jsonb_each(val)
             .table_valued("k", "v", with_ordinality="ordinality")
@@ -3347,7 +3341,6 @@ def _handle_list_comp(
     ]
     if parent_idx_col is not None:
         base_cols.append(parent_idx_col.label("__parent_idx__"))
-
     base = (
         select(*base_cols)
         .select_from(iter_subq.join(elem_tbl, literal(True)))
@@ -3391,7 +3384,6 @@ def _handle_list_comp(
 
     if parent_idx_col is not None:
         local_scope["__parent_idx__"] = (parent_idx_col, "int")
-    # Use _replace_identifier on the element expression (elt) and any if conditions
     elt_expr = build_sql_query(
         filter_dict["elt"],
         log_event_alias,
@@ -3402,13 +3394,7 @@ def _handle_list_comp(
     )
 
     def _value_column(expr):
-        """
-        If *expr* is a sub‑query produced by build_sql_query return its
-        `.c.value` column and make sure the caller knows it has to JOIN it.
-        Otherwise just return *expr* unchanged.
-        """
         if isinstance(expr, Subquery):
-            # Check if the subquery has the __comp_idx__ column (from local scope)
             has_idx = hasattr(expr.c, "__comp_idx__")
             return (
                 expr.c.value,
@@ -3417,15 +3403,12 @@ def _handle_list_comp(
             )
         return expr, None, False
 
-    # Build the subquery for the element expression
     elt_col, elt_subq, has_idx = _value_column(elt_expr)
 
     if elt_subq is not None:
-        # Create a subquery that preserves both value and ordinality
         elt_with_row = (
             select(
                 elt_subq.c.log_event_id,
-                # If the subquery has __comp_idx__, use it; otherwise use log_event_id
                 (
                     elt_subq.c.__comp_idx__ if has_idx else func.row_number().over()
                 ).label("ordinality"),
@@ -3440,8 +3423,6 @@ def _handle_list_comp(
             .select_from(elt_subq)
             .subquery(name="elt_with_row")
         )
-
-        # Join on both log_event_id and ordinality
         columns = [
             base.c.log_event_id.label("log_event_id"),
             *(
@@ -3473,8 +3454,6 @@ def _handle_list_comp(
             .order_by(base.c.log_event_id, base.c.ordinality, elt_with_row.c.ordinality)
             .subquery(name="from_clause")
         )
-
-        # Use the value from the joined subquery
         elt_col = from_clause.c.value
     else:
         from_clause = base
@@ -3490,7 +3469,6 @@ def _handle_list_comp(
             local_scope=local_scope,
         )
         if isinstance(cond_expr, Subquery):
-            # Create a correlated scalar subquery
             condition = (
                 select(cond_expr.c.value)
                 .where(
@@ -3563,7 +3541,6 @@ def _handle_dict_comp(
     by exploding the source dictionary into rows, then applying the transformations and
     filter to each element, and finally aggregating back into a dictionary.
     """
-
     iter_subq = build_sql_query(
         filter_dict["iter"],
         log_event_alias,
@@ -3582,20 +3559,14 @@ def _handle_dict_comp(
         local_scope = {"__comp_base__": {}}
 
     val, _ = _select_value(iter_subq, session, is_collection=True)
-
-    # Determine if we're iterating over an array or object
     is_array = session.execute(select(func.jsonb_typeof(val))).scalar() == "array"
-
-    # Use appropriate function based on the JSON type
     if is_array:
-        # For arrays, use jsonb_array_elements with ordinality
         elem_tbl = (
             func.jsonb_array_elements(val)
             .table_valued("value", with_ordinality="ordinality")
             .alias(name="elem_tbl")
         )
     else:
-        # For objects, use jsonb_each with ordinality
         elem_tbl = (
             func.jsonb_each(val)
             .table_valued("key", "value", with_ordinality="ordinality")
@@ -3623,11 +3594,6 @@ def _handle_dict_comp(
         .subquery("base")
     )
 
-    # Replace occurrences of the comprehension target with a fake identifier
-    fake_ident_key = {"type": "identifier", "value": "__comp_key__"}
-    fake_ident_val = {"type": "identifier", "value": "__comp_val__"}
-
-    # Create a local scope with the comprehension variable and its ordinality
     comp_key_type = LogDAO.infer_type(
         "",
         session.execute(select(base.c.__comp_key__)).scalar(),
@@ -3636,6 +3602,7 @@ def _handle_dict_comp(
         "",
         session.execute(select(base.c.__comp_val__)).scalar(),
     )
+
     local_scope = {
         filter_dict["target"][0]["value"]: (base.c.__comp_key__, comp_key_type),
         filter_dict["target"][1]["value"]: (base.c.__comp_val__, comp_val_type),
@@ -3657,7 +3624,6 @@ def _handle_dict_comp(
         Otherwise just return *expr* unchanged.
         """
         if isinstance(expr, Subquery):
-            # Check if the subquery has the __comp_idx__ column (from local scope)
             has_idx = hasattr(expr.c, "__comp_idx__")
             return (
                 expr.c.value,
@@ -3684,20 +3650,15 @@ def _handle_dict_comp(
         local_scope=local_scope,
     )
 
-    # Build the subqueries for the key and value expressions
     key_col, key_subq, key_has_idx = _value_column(key_expr)
     val_col, val_subq, val_has_idx = _value_column(val_expr)
 
-    # Start with the base table
     from_clause = base
 
-    # Join with key_subq if needed
     if key_subq is not None:
-        # Create a subquery that preserves both value and ordinality for key
         key_with_row = (
             select(
                 key_subq.c.log_event_id,
-                # If the subquery has __comp_idx__, use it; otherwise use row_number
                 (
                     key_subq.c.__comp_idx__ if key_has_idx else func.row_number().over()
                 ).label("ordinality"),
@@ -3712,8 +3673,6 @@ def _handle_dict_comp(
             .select_from(key_subq)
             .subquery(name="key_with_row")
         )
-
-        # Join on both log_event_id and ordinality
         from_clause_with_key = (
             select(
                 from_clause.c.log_event_id,
@@ -3751,13 +3710,10 @@ def _handle_dict_comp(
     else:
         from_clause_with_key = None
 
-    # Join with val_subq if needed
     if val_subq is not None:
-        # Create a subquery that preserves both value and ordinality for value
         val_with_row = (
             select(
                 val_subq.c.log_event_id,
-                # If the subquery has __comp_idx__, use it; otherwise use row_number
                 (
                     val_subq.c.__comp_idx__ if val_has_idx else func.row_number().over()
                 ).label("ordinality"),
@@ -3772,8 +3728,6 @@ def _handle_dict_comp(
             .select_from(val_subq)
             .subquery(name="val_with_row")
         )
-
-        # Join on both log_event_id and ordinality
         from_clause_with_val = (
             select(
                 from_clause.c.log_event_id,
@@ -3811,12 +3765,10 @@ def _handle_dict_comp(
     else:
         from_clause_with_val = None
 
-    # --- Build the joined_clause ---
     final_key_col = None
     final_val_col = None
 
     if from_clause_with_key is not None and from_clause_with_val is not None:
-        # Scenario 4: Both key and value subqueries exist. Join the two intermediate results.
         joined_clause = (
             select(
                 from_clause_with_key.c.log_event_id,
@@ -3853,21 +3805,15 @@ def _handle_dict_comp(
         )
         final_key_col = joined_clause.c.key_value
         final_val_col = joined_clause.c.val_value
-
     elif from_clause_with_key is not None:
-        # Scenario 2: Only key subquery exists. Use from_clause_with_key.
         joined_clause = from_clause_with_key
         final_key_col = joined_clause.c.key_value
         final_val_col = joined_clause.c.__comp_val__
-
     elif from_clause_with_val is not None:
-        # Scenario 3: Only value subquery exists. Use from_clause_with_val.
         joined_clause = from_clause_with_val
         final_key_col = joined_clause.c.__comp_key__
         final_val_col = joined_clause.c.val_value
-
     else:
-        # Scenario 1: Neither subquery exists. Use base directly.
         joined_clause = (
             select(
                 base.c.log_event_id,
@@ -3881,11 +3827,10 @@ def _handle_dict_comp(
         final_key_col = joined_clause.c.key_value
         final_val_col = joined_clause.c.val_value
 
-    # Process filter conditions
     where_clause = literal(True)
     for cond_ast in filter_dict.get("ifs", []):
         cond_expr = build_sql_query(
-            _replace_identifier(cond_ast, filter_dict["target"], fake_ident_val),
+            cond_ast,
             log_event_alias,
             session,
             log_event_ids,
@@ -3893,7 +3838,6 @@ def _handle_dict_comp(
             local_scope=local_scope,
         )
         if isinstance(cond_expr, Subquery):
-            # Create a correlated scalar subquery
             condition = (
                 select(cond_expr.c.value)
                 .where(
@@ -4070,7 +4014,6 @@ def build_sql_query(
     if local_scope is None:
         local_scope = {}
 
-    # Base cases
     if not isinstance(filter_dict, dict):
         return literal(filter_dict)
 
@@ -4102,7 +4045,6 @@ def build_sql_query(
                     )
                     return subq
 
-            # Otherwise, proceed with normal identifier lookup
             if isinstance(log_event_ids, dict):
                 event_ids = log_event_ids.get(key)
             else:
@@ -4122,7 +4064,6 @@ def build_sql_query(
             return literal(filter_dict["value"])
     operand = filter_dict.get("operand")
 
-    # Handle logical operators (and, or, not)
     if operand in ("and", "or", "not"):
         return _handle_logical_operator(
             filter_dict,
@@ -4132,8 +4073,6 @@ def build_sql_query(
             is_derived=is_derived,
             local_scope=local_scope,
         )
-
-    # Handle arithmetic operators (+, -, *, /, %, **, //)
     elif operand in ("+", "-", "*", "/", "%", "**", "//"):
         return _handle_arithmetic_operator(
             filter_dict,
@@ -4143,8 +4082,6 @@ def build_sql_query(
             is_derived=is_derived,
             local_scope=local_scope,
         )
-
-    # Handle comparison operators (==, !=, <, >, <=, >=, is, is not)
     elif operand in ("==", "!=", "<", ">", "<=", ">=", "is", "is not"):
         return _handle_comparison_operator(
             filter_dict,
@@ -4154,8 +4091,6 @@ def build_sql_query(
             is_derived=is_derived,
             local_scope=local_scope,
         )
-
-    # Handle membership operators (in, not in)
     elif operand in ("in", "not in"):
         return _handle_membership_operator(
             filter_dict,
@@ -4165,8 +4100,6 @@ def build_sql_query(
             is_derived=is_derived,
             local_scope=local_scope,
         )
-
-    # Handle functions (len, str, type, round, round_timestamp, exists, version, isNone, time, date, now)
     elif operand in (
         "len",
         "str",
@@ -4189,8 +4122,6 @@ def build_sql_query(
             is_derived=is_derived,
             local_scope=local_scope,
         )
-
-    # Handle list/dict indexing
     elif operand == "INDEX":
         return _handle_index_operator(
             filter_dict,
@@ -4200,7 +4131,6 @@ def build_sql_query(
             is_derived=is_derived,
             local_scope=local_scope,
         )
-    # Handle dict methods (keys, values, items)
     elif operand == "dict_method":
         return _handle_dict_method(
             filter_dict,
@@ -4210,7 +4140,6 @@ def build_sql_query(
             is_derived,
             local_scope=local_scope,
         )
-    # Handle if expressions
     elif operand == "if_expr":
         return _handle_if_expr(
             filter_dict,
@@ -4220,7 +4149,6 @@ def build_sql_query(
             is_derived,
             local_scope=local_scope,
         )
-    # Handle list comprehensions
     elif operand == "list_comp":
         return _handle_list_comp(
             filter_dict,
@@ -4230,7 +4158,6 @@ def build_sql_query(
             is_derived,
             local_scope=local_scope,
         )
-    # Handle dictionary comprehensions
     elif operand == "dict_comp":
         return _handle_dict_comp(
             filter_dict,
@@ -4240,7 +4167,6 @@ def build_sql_query(
             is_derived,
             local_scope=local_scope,
         )
-    # Handle zip
     elif operand == "zip":
         return _handle_zip(
             filter_dict,
