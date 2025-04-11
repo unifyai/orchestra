@@ -3637,13 +3637,8 @@ def _handle_dict_comp(
             )  # (column, subquery to join, has_idx flag)
         return expr, None, False
 
-    # Build the subqueries for key and value expressions
     key_expr = build_sql_query(
-        _replace_identifier(
             filter_dict["key_elt"],
-            filter_dict["target"],
-            fake_ident_key,
-        ),
         log_event_alias,
         session,
         log_event_ids,
@@ -3652,11 +3647,7 @@ def _handle_dict_comp(
     )
 
     val_expr = build_sql_query(
-        _replace_identifier(
-            filter_dict["val_elt"],
-            filter_dict["target"],
-            fake_ident_val,
-        ),
+        filter_dict["val_elt"],
         log_event_alias,
         session,
         log_event_ids,
