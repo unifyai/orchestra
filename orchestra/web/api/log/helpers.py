@@ -1279,15 +1279,28 @@ def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type, session=None):
 
     # Build the join condition
     join_cond = lhs_subq.c.log_event_id == rhs_subq.c.log_event_id
-    if has_idx_lhs and has_idx_rhs:
-        join_cond = and_(join_cond, lhs_subq.c.__comp_idx__ == rhs_subq.c.__comp_idx__)
-
-    # Add parent index to join condition if both sides have it
+    # 1 If both sides carry a __parent_idx__, match on that first
     if has_parent_idx_lhs and has_parent_idx_rhs:
         join_cond = and_(
             join_cond,
             lhs_subq.c.__parent_idx__ == rhs_subq.c.__parent_idx__,
         )
+
+    # 2 Nested‑loop case: one side’s parent = the other side’s comp
+    elif has_parent_idx_lhs and has_idx_rhs:
+        join_cond = and_(
+            join_cond,
+            rhs_subq.c.__comp_idx__ == lhs_subq.c.__parent_idx__,
+        )
+    elif has_parent_idx_rhs and has_idx_lhs:
+        join_cond = and_(
+            join_cond,
+            lhs_subq.c.__comp_idx__ == rhs_subq.c.__parent_idx__,
+        )
+
+    # 3 Same‑level comprehensions
+    elif has_idx_lhs and has_idx_rhs:
+        join_cond = and_(join_cond, lhs_subq.c.__comp_idx__ == rhs_subq.c.__comp_idx__)
 
     # Build the select columns
     select_cols = [
