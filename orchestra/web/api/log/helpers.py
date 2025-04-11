@@ -3252,7 +3252,10 @@ def _handle_if_expr(
     else_val = cast_expr(raw_else.c.value, else_type, res_type)
     test_val = cast_expr(raw_test.c.value, "bool", "bool")
 
-    case_expr = case((test_val, body_val), else_=else_val)
+    case_expr = case(
+        (cast(test_val, Boolean), func.to_jsonb(body_val)),
+        else_=func.to_jsonb(else_val),
+    )
 
     join_conditions = []
 
@@ -3381,7 +3384,7 @@ def _handle_list_comp(
     base = (
         select(*base_cols)
         .select_from(iter_subq.join(elem_tbl, literal(True)))
-        .subquery("base")
+        .subquery("base_list_comp")
     )
 
     unpacking = isinstance(filter_dict["target"], list)
@@ -3628,7 +3631,7 @@ def _handle_dict_comp(
     base = (
         select(*base_cols)
         .select_from(iter_subq.join(elem_tbl, literal(True)))
-        .subquery("base")
+        .subquery("base_dict_comp")
     )
 
     comp_key_type = LogDAO.infer_type(
