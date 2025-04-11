@@ -3369,21 +3369,21 @@ def _handle_list_comp(
     else:
         elem_tbl = (
             func.jsonb_each(val)
-            .table_valued("k", "v", with_ordinality="ordinality")
+            .table_valued("key", "value", with_ordinality="ordinality")
             .alias(name="elem_tbl")
         )
 
     parent_idx_col = _get_parent_idx(iter_subq.c)
     base_cols = [
         iter_subq.c.log_event_id,
-        (elem_tbl.c.value if is_array else elem_tbl.c.v).label("__comp_var__"),
+        (elem_tbl.c.value if is_array else elem_tbl.c.value).label("__comp_var__"),
         elem_tbl.c.ordinality,
     ]
     if parent_idx_col is not None:
         base_cols.append(parent_idx_col.label("__parent_idx__"))
     base = (
         select(*base_cols)
-        .select_from(iter_subq.join(elem_tbl, literal(True)))
+        .select_from(iter_subq.outerjoin(elem_tbl, literal(True)))
         .subquery("base_list_comp")
     )
 
@@ -3477,7 +3477,7 @@ def _handle_list_comp(
         from_clause = (
             select(*columns)
             .select_from(
-                base.join(
+                base.outerjoin(
                     elt_with_row,
                     and_(
                         base.c.log_event_id == elt_with_row.c.log_event_id,
@@ -3534,7 +3534,9 @@ def _handle_list_comp(
             from_clause.c.log_event_id.label("log_event_id"),
             from_clause.c.__parent_idx__.label("__comp_idx__"),
             func.coalesce(
-                func.jsonb_agg(aggregate_order_by(elt_col, from_clause.c.ordinality)),
+                func.jsonb_agg(
+                    aggregate_order_by(elt_col, from_clause.c.ordinality)
+                ).filter(elt_col.isnot(None)),
                 literal("[]", type_=JSONB),
             ).label("value"),
             literal("list").label("inferred_type"),
@@ -3548,7 +3550,9 @@ def _handle_list_comp(
         select_cols = [
             from_clause.c.log_event_id,
             func.coalesce(
-                func.jsonb_agg(aggregate_order_by(elt_col, from_clause.c.ordinality)),
+                func.jsonb_agg(
+                    aggregate_order_by(elt_col, from_clause.c.ordinality)
+                ).filter(elt_col.isnot(None)),
                 literal("[]", type_=JSONB),
             ).label("value"),
             literal("list").label("inferred_type"),
