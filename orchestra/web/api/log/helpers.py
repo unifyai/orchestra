@@ -3535,7 +3535,7 @@ def _handle_list_comp(
             from_clause.c.__parent_idx__.label("__comp_idx__"),
             func.coalesce(
                 func.jsonb_agg(
-                    aggregate_order_by(elt_col, from_clause.c.ordinality)
+                    aggregate_order_by(elt_col, from_clause.c.ordinality),
                 ).filter(elt_col.isnot(None)),
                 literal("[]", type_=JSONB),
             ).label("value"),
@@ -3551,7 +3551,7 @@ def _handle_list_comp(
             from_clause.c.log_event_id,
             func.coalesce(
                 func.jsonb_agg(
-                    aggregate_order_by(elt_col, from_clause.c.ordinality)
+                    aggregate_order_by(elt_col, from_clause.c.ordinality),
                 ).filter(elt_col.isnot(None)),
                 literal("[]", type_=JSONB),
             ).label("value"),
@@ -3634,7 +3634,7 @@ def _handle_dict_comp(
 
     base = (
         select(*base_cols)
-        .select_from(iter_subq.join(elem_tbl, literal(True)))
+        .select_from(iter_subq.outerjoin(elem_tbl, literal(True)))
         .subquery("base_dict_comp")
     )
 
@@ -3706,7 +3706,7 @@ def _handle_dict_comp(
                 (
                     key_subq.c.__comp_idx__ if key_has_idx else func.row_number().over()
                 ).label("ordinality"),
-                key_subq.c.value,
+                cast(key_subq.c.value, Text).label("value"),
                 key_subq.c.inferred_type,
                 *(
                     [key_subq.c.__parent_idx__.label("__parent_idx__")]
@@ -3732,7 +3732,7 @@ def _handle_dict_comp(
                 ),
             )
             .select_from(
-                from_clause.join(
+                from_clause.outerjoin(
                     key_with_row,
                     and_(
                         from_clause.c.log_event_id == key_with_row.c.log_event_id,
@@ -3787,7 +3787,7 @@ def _handle_dict_comp(
                 ),
             )
             .select_from(
-                from_clause.join(
+                from_clause.outerjoin(
                     val_with_row,
                     and_(
                         from_clause.c.log_event_id == val_with_row.c.log_event_id,
@@ -3826,7 +3826,7 @@ def _handle_dict_comp(
                 ),
             )
             .select_from(
-                from_clause_with_key.join(
+                from_clause_with_key.outerjoin(
                     from_clause_with_val,
                     and_(
                         from_clause_with_key.c.log_event_id
@@ -3906,7 +3906,9 @@ def _handle_dict_comp(
                 joined_clause.c.log_event_id,
                 joined_clause.c.__parent_idx__.label("__parent_idx__"),
                 func.coalesce(
-                    func.jsonb_object_agg(final_key_col, final_val_col),
+                    func.jsonb_object_agg(final_key_col, final_val_col).filter(
+                        final_key_col.isnot(None),
+                    ),
                     literal("{}", type_=JSONB),
                 ).label("value"),
                 literal("dict").label("inferred_type"),
@@ -3921,7 +3923,9 @@ def _handle_dict_comp(
             select(
                 joined_clause.c.log_event_id,
                 func.coalesce(
-                    func.jsonb_object_agg(final_key_col, final_val_col),
+                    func.jsonb_object_agg(final_key_col, final_val_col).filter(
+                        final_key_col.isnot(None),
+                    ),
                     literal("{}", type_=JSONB),
                 ).label("value"),
                 literal("dict").label("inferred_type"),
