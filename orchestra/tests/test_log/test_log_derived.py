@@ -934,3 +934,129 @@ async def test_active_derived_logs_processing(client: AsyncClient):
     assert response.status_code == 200
     updated_log = response.json()["logs"][0]
     assert "high_score_flag" in updated_log["derived_entries"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        # 1)  list‑comp with filter
+        {
+            "equation": "[x*2 for x in {log:nums} if x > 1]",
+            "referenced_logs": {"log": {"filter_expr": ""}},
+            "key": "derived_0",
+            "expected": [4, 6],
+        },
+        # 2)  dict‑comp with filter
+        {
+            "equation": "{k: v for k, v in zip({log:keys}, {log:vals}) if v > 150}",
+            "referenced_logs": {"log": {"filter_expr": ""}},
+            "key": "derived_1",
+            "expected": {"b": 200, "c": 300},
+        },
+        # 3)  list‑comp with conditional
+        {
+            "equation": "[x if f else -x for x, f in zip({log:vals}, {log:flags})]",
+            "referenced_logs": {"log": {"filter_expr": ""}},
+            "key": "derived_2",
+            "expected": [100, -200, 300],
+        },
+        # 4)  list‑comp with nested list‑comp
+        {
+            "equation": "[[y*10 for y in x] for x in {log:nested}]",
+            "referenced_logs": {"log": {"filter_expr": ""}},
+            "key": "derived_3",
+            "expected": [[10, 20], [30, 40], [50, 60]],
+        },
+        # 5)  list‑comp with conditional and outer filter
+        {
+            "equation": "[k+str(v) for k, v in zip({log:keys}, {log:vals}) if v != 200]",
+            "referenced_logs": {"log": {"filter_expr": ""}},
+            "key": "derived_4",
+            "expected": ["a100", "c300"],
+        },
+        # 6)  list‑comp with zip
+        {
+            "equation": "zip({log:nums}, {log:alts}, {log:flags})",
+            "referenced_logs": {"log": {"filter_expr": ""}},
+            "key": "derived_5",
+            "expected": [[1, 10, True], [2, 20, False], [3, 30, True]],
+        },
+        # 7)  nested dict‑comp inside a list‑comp
+        {
+            "equation": "[{k:str(v) for k,v in d.items()} for d in {log:dicts}]",
+            "referenced_logs": {"log": {"filter_expr": ""}},
+            "key": "derived_6",
+            "expected": [
+                {"x": "1", "y": "2"},
+                {"x": "3", "y": "4"},
+            ],
+        },
+        # 8)  dict‑comp with nested list‑comp on RHS
+        {
+            "equation": "{k: [v*i for i in {log:multipliers}] "
+            " for k, v in zip({log:keys}, {log:nums})}",
+            "referenced_logs": {"log": {"filter_expr": ""}},
+            "key": "derived_7",
+            "expected": {
+                "a": [1, 2, 3],
+                "b": [2, 4, 6],
+                "c": [3, 6, 9],
+            },
+        },
+        # 9)  nested conditional inside nested comprehension
+        {
+            "equation": "[[y if y%2==0 else -y for y in x] " " for x in {log:nested}]",
+            "referenced_logs": {"log": {"filter_expr": ""}},
+            "key": "derived_8",
+            "expected": [[-1, 2], [-3, 4], [-5, 6]],
+        },
+        # 10)  dict‑comp with its own if‑expr and an outer filter
+        {
+            "equation": "{k: (v if v<200 else None) "
+            " for k,v in zip({log:keys}, {log:vals}) if k!='c'}",
+            "referenced_logs": {"log": {"filter_expr": ""}},
+            "key": "derived_9",
+            "expected": {"a": 100, "b": None},
+        },
+    ],
+)
+async def test_advanced_comprehensions_and_conditionals(client: AsyncClient, test_case):
+    project = "advanced-test"
+    await _create_project(client, project)
+
+    entries = []
+    for i in range(3):
+        entries.append(
+            {
+                "nums": [1, 2, 3],
+                "alts": [10, 20, 30],
+                "keys": ["a", "b", "c"],
+                "vals": [100, 200, 300],
+                "flags": [True, False, True],
+                "nested": [[1, 2], [3, 4], [5, 6]],
+                "dicts": [{"x": 1, "y": 2}, {"x": 3, "y": 4}],
+                "multipliers": [1, 2, 3],
+            },
+        )
+    await _create_log(client, project, entries=entries)
+
+    field = test_case["key"]
+    response = await _create_derived_entry(
+        client,
+        project,
+        equation=test_case["equation"],
+        key=field,
+        referenced_logs=test_case["referenced_logs"],
+    )
+    assert (
+        response.status_code == 200
+    ), f"Failed to create derived entry: {response.text}"
+
+    response = await client.get(
+        f"/v0/logs?project={project}&filter_expr={field} is not None",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["logs"][0]["derived_entries"][field] == test_case["expected"]
