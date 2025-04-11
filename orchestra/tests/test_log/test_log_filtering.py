@@ -123,7 +123,7 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
 @pytest.mark.parametrize(
     "expression, expected_dict",
     [
-        # 1) Basic comparison
+        # Basic comparison
         (
             "score > 20",
             {
@@ -132,7 +132,7 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 "rhs": 20,
             },
         ),
-        # 2) Parenthesized arithmetic + comparison
+        # Parenthesized arithmetic + comparison
         (
             "(a + b) > 10",
             {
@@ -145,7 +145,7 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 "rhs": 10,
             },
         ),
-        # 3) Double-nested parentheses with "and"
+        # Double-nested parentheses with "and"
         (
             "((a + b) > 10) and ((c * d) < 20)",
             {
@@ -170,7 +170,7 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 },
             },
         ),
-        # 4) Function calls: len(a)
+        # Function calls: len(a)
         (
             "(len(a) == 3) and ((b + c) > 10)",
             {
@@ -194,7 +194,7 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 },
             },
         ),
-        # 5) BASE function call
+        # BASE function call
         (
             "BASE([4, 5], score) / 2",
             {
@@ -209,7 +209,7 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 "rhs": 2,
             },
         ),
-        # 6) Membership with a string + function call
+        # Membership with a string + function call
         (
             "'new-var' in str(field_1)",
             {
@@ -221,7 +221,7 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 },
             },
         ),
-        # 7) Not operator
+        # Not operator
         (
             "not (x in [1, 2, 3])",
             {
@@ -233,7 +233,7 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 },
             },
         ),
-        # 8) round_timestamp, plus an arithmetic comparison
+        # round_timestamp, plus an arithmetic comparison
         (
             "round_timestamp(a, b) + 2 >= c",
             {
@@ -252,7 +252,7 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 "rhs": {"type": "identifier", "value": "c"},
             },
         ),
-        # 9) isNone(d)
+        # isNone(d)
         (
             "isNone(d)",
             {
@@ -260,7 +260,7 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 "rhs": {"type": "identifier", "value": "d"},
             },
         ),
-        # 10) Nested indexing
+        # Nested indexing
         (
             "x['a'][0] == 10",
             {
@@ -277,7 +277,7 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 "rhs": 10,
             },
         ),
-        # 11) ambiguous identifer (eg: date > date(...))
+        # ambiguous identifer (eg: date > date(...))
         (
             "date > date(a)",
             {
@@ -287,6 +287,89 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                     "operand": "date",
                     "rhs": {"type": "identifier", "value": "a"},
                 },
+            },
+        ),
+        # dict methods
+        (
+            "my_dict.keys()",
+            {
+                "operand": "dict_method",
+                "method": "keys",
+                "rhs": {"type": "identifier", "value": "my_dict"},
+            },
+        ),
+        (
+            "my_dict.values()",
+            {
+                "operand": "dict_method",
+                "method": "values",
+                "rhs": {"type": "identifier", "value": "my_dict"},
+            },
+        ),
+        (
+            "my_dict.items()",
+            {
+                "operand": "dict_method",
+                "method": "items",
+                "rhs": {"type": "identifier", "value": "my_dict"},
+            },
+        ),
+        # if‑expr
+        (
+            "a if cond else b",
+            {
+                "operand": "if_expr",
+                "test": {"type": "identifier", "value": "cond"},
+                "body": {"type": "identifier", "value": "a"},
+                "orelse": {"type": "identifier", "value": "b"},
+            },
+        ),
+        # list comprehension
+        (
+            "[x*2 for x in nums if x>0]",
+            {
+                "operand": "list_comp",
+                "elt": {
+                    "lhs": {"type": "identifier", "value": "x"},
+                    "operand": "*",
+                    "rhs": 2,
+                },
+                "target": {"type": "identifier", "value": "x"},
+                "iter": {"type": "identifier", "value": "nums"},
+                "ifs": [
+                    {
+                        "lhs": {"type": "identifier", "value": "x"},
+                        "operand": ">",
+                        "rhs": 0,
+                    },
+                ],
+            },
+        ),
+        # dict comprehension
+        (
+            "{k:v for k,v in pairs}",
+            {
+                "operand": "dict_comp",
+                "key_elt": {"type": "identifier", "value": "k"},
+                "val_elt": {"type": "identifier", "value": "v"},
+                "target": [
+                    {"type": "identifier", "value": "k"},
+                    {"type": "identifier", "value": "v"},
+                ],
+                "iter": {"type": "identifier", "value": "pairs"},
+                "ifs": [],
+            },
+        ),
+        # zip
+        (
+            "zip(a,b,c)",
+            {
+                "operand": "zip",
+                "rhs": [
+                    {"type": "identifier", "value": "a"},
+                    {"type": "identifier", "value": "b"},
+                    {"type": "identifier", "value": "c"},
+                ],
             },
         ),
     ],
