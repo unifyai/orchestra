@@ -1,11 +1,13 @@
 import json
+import statistics
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 import numpy as np
 import pytest
 from httpx import AsyncClient
 
-from ...web.api.log.helpers import _is_all_unique, reduction_methods
+from ...db.dao.log_dao import normalize_timestamp
 from . import (
     HEADERS,
     _create_derived_entry,
@@ -14,6 +16,126 @@ from . import (
     _create_several_logs,
     log_data,
 )
+
+# Reduction #
+# ----------#
+
+
+def _is_timestamp(v: any):
+    try:
+        normalized = normalize_timestamp(v)
+        datetime.fromisoformat(normalized)
+        return True
+    except:
+        return False
+
+
+def _is_type_for_len(v: any) -> bool:
+    return (
+        (isinstance(v, str) and not _is_timestamp(v))
+        or isinstance(v, list)
+        or isinstance(v, dict)
+        or isinstance(v, tuple)
+        or isinstance(v, set)
+    )
+
+
+def _is_all_unique(vals):
+    """
+    Check if all entries in vals are unique. Works even for unhashable types like lists or dicts.
+    """
+    seen = []
+    for val in vals:
+        if val in seen:
+            return False
+        seen.append(val)
+    return True
+
+
+def _preprocess(
+    values: list,
+) -> tuple:
+    assert all(
+        isinstance(x, type(values[0])) for x in values
+    ), "Not all elements have the same type"
+    if _is_type_for_len(values[0]):
+        return [len(v) for v in values], False
+    elif _is_timestamp(values[0]):
+        return [datetime.fromisoformat(v).timestamp() for v in values], True
+    else:
+        return values, False
+
+
+def _count(values: list) -> any:
+    values, _ = _preprocess(values)
+    return len(values)
+
+
+def _sum(values: list) -> any:
+    values, is_timestamp = _preprocess(values)
+    ret = sum(values)
+    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
+
+
+def _mean(values: list) -> any:
+    values, is_timestamp = _preprocess(values)
+    ret = sum(values) / len(values)
+    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
+
+
+def _var(values: list) -> any:
+    values, is_timestamp = _preprocess(values)
+    num_values = len(values)
+    mean_val = sum(values) / num_values
+    diffs_squared = [(v - mean_val) ** 2 for v in values]
+    ret = sum(diffs_squared) / num_values
+    return timedelta(seconds=ret).__repr__() if is_timestamp else ret
+
+
+def _std(values: list) -> any:
+    values, is_timestamp = _preprocess(values)
+    num_values = len(values)
+    mean_val = sum(values) / num_values
+    diffs_squared = [(v - mean_val) ** 2 for v in values]
+    ret = (sum(diffs_squared) / num_values) ** 0.5
+    return timedelta(seconds=ret).__repr__() if is_timestamp else ret
+
+
+def _min(values: list) -> any:
+    values, is_timestamp = _preprocess(values)
+    ret = min(values)
+    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
+
+
+def _max(values: list) -> any:
+    values, is_timestamp = _preprocess(values)
+    ret = max(values)
+    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
+
+
+def _median(values: list) -> any:
+    values, is_timestamp = _preprocess(values)
+    ret = statistics.median(values)
+    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
+
+
+def _mode(values: list) -> any:
+    values, is_timestamp = _preprocess(values)
+    ret = statistics.mode(values)
+    return datetime.fromtimestamp(ret).isoformat() if is_timestamp else ret
+
+
+reduction_methods = {
+    "count": _count,
+    "sum": _sum,
+    "mean": _mean,
+    "var": _var,
+    "std": _std,
+    "min": _min,
+    "max": _max,
+    "median": _median,
+    "mode": _mode,
+}
 
 
 @pytest.mark.anyio
