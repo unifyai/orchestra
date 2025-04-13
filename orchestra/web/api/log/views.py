@@ -66,7 +66,6 @@ from orchestra.web.api.log.schema import (
 from orchestra.web.api.utils.helpers import CustomEncoder
 from orchestra.web.api.utils.http_responses import not_found
 
-from .helpers import _flatten_fields, _format_flat_logs, _get_final_logs, is_image_field
 from .python2SQL import (
     STR_TO_SQL_TYPES,
     _compute_expression,
@@ -80,14 +79,18 @@ from .utils import (
     _build_unified_logs_subquery,
     _compute_metric_for_key_grouped,
     _fetch_logs_for_event_ids,
+    _flatten_fields,
+    _format_flat_logs,
     _get_all_filtered_log_event_ids,
     _get_distinct_group_values,
+    _get_final_logs,
     _get_log_event_ids_for_group_value,
     _get_params_for_log_events,
     _resolve_key_specific_filters,
     apply_group_threshold,
     compute_metric_for_key,
     create_logs_internal,
+    is_image_field,
 )
 
 router = APIRouter()
