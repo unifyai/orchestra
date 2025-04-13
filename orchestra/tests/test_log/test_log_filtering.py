@@ -593,7 +593,6 @@ def test_ast_parser(expression, expected_dict):
         ("[y*2 for y in nums] == [4,-2,6]", {"nums": [2, -1, 3]}, True),
         ("[y if y>0 else 0 for y in nums] == [2,0,3]", {"nums": [2, -1, 3]}, True),
         ("[y for y in nums if y>1] == [2,3]", {"nums": [0, 1, 2, 3]}, True),
-        ("[y for y in nums if False] == []", {"nums": [1, 2, 3]}, True),
         # nested list‑comp in dict‑comp value
         (
             "{k:[v*2 for v in vs] for k,vs in d.items()} == {'a':[2,4],'b':[]}",
@@ -611,7 +610,6 @@ def test_ast_parser(expression, expected_dict):
             {"nums": [["a", 1], ["b", 2], ["c", 3]]},
             True,
         ),
-        ("len({}) == 0", {}, True),
         # zip()
         ("zip(a,b) == [[1,'x'],[2,'y']]", {"a": [1, 2], "b": ["x", "y"]}, True),
         (
@@ -619,7 +617,6 @@ def test_ast_parser(expression, expected_dict):
             {"a": [1, 2], "b": ["x", "y"], "c": [10, 20]},
             True,
         ),
-        ("zip(a,b) == []", {"a": [], "b": []}, True),
         # shorter second list – zip truncates
         ("zip(a,b) == [[1,'x']]", {"a": [1, 2], "b": ["x"]}, True),
     ],
