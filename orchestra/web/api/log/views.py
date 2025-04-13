@@ -79,19 +79,16 @@ from orchestra.web.api.log.schema import (
 from orchestra.web.api.utils.helpers import CustomEncoder
 from orchestra.web.api.utils.http_responses import not_found
 
-from .helpers import (
+from .helpers import _flatten_fields, _format_flat_logs, _get_final_logs, is_image_field
+from .python2SQL import (
     STR_TO_SQL_TYPES,
     _compute_expression,
     _extract_placeholders,
-    _flatten_fields,
-    _format_flat_logs,
-    _get_final_logs,
     _substitute_placeholders,
     build_sql_query,
     is_image_field,
     str_filter_exp_to_dict,
 )
-
 router = APIRouter()
 
 # Admin router for protected endpoints
