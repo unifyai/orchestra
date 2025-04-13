@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import DerivedLog, LogEvent
-from orchestra.web.api.log.helpers import (
+from orchestra.web.api.log.python2SQL import (
     _compute_expression,
     _extract_placeholders,
     _substitute_placeholders,
