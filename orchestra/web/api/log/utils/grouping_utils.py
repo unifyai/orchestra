@@ -24,9 +24,12 @@ from orchestra.db.models.orchestra_models import (
     LogHistory,
 )
 
-from ..helpers import _format_flat_logs, _get_final_logs
 from ..python2SQL import STR_TO_SQL_TYPES, build_sql_query, str_filter_exp_to_dict
-from .logging_utils import _build_unified_logs_subquery
+from .logging_utils import (
+    _build_unified_logs_subquery,
+    _format_flat_logs,
+    _get_final_logs,
+)
 from .metric_utils import AggregationMetric, _get_reduction_expr
 
 __all__ = [
