@@ -1610,7 +1610,7 @@ def _handle_dict_comp(
         final = (
             select(
                 joined_clause.c.log_event_id,
-                joined_clause.c.__parent_idx__.label("__parent_idx__"),
+                joined_clause.c.__parent_idx__.label("__comp_idx__"),
                 func.coalesce(
                     func.jsonb_object_agg(final_key_col, final_val_col).filter(
                         final_key_col.isnot(None),
