@@ -3537,7 +3537,7 @@ def _handle_list_comp(
                 func.jsonb_agg(
                     aggregate_order_by(elt_col, from_clause.c.ordinality),
                 ).filter(elt_col.isnot(None)),
-                literal("[]", type_=JSONB),
+                literal([], type_=JSONB),
             ).label("value"),
             literal("list").label("inferred_type"),
         ]
@@ -3553,7 +3553,7 @@ def _handle_list_comp(
                 func.jsonb_agg(
                     aggregate_order_by(elt_col, from_clause.c.ordinality),
                 ).filter(elt_col.isnot(None)),
-                literal("[]", type_=JSONB),
+                literal([], type_=JSONB),
             ).label("value"),
             literal("list").label("inferred_type"),
         ]
@@ -3909,7 +3909,7 @@ def _handle_dict_comp(
                     func.jsonb_object_agg(final_key_col, final_val_col).filter(
                         final_key_col.isnot(None),
                     ),
-                    literal("{}", type_=JSONB),
+                    literal({}, type_=JSONB),
                 ).label("value"),
                 literal("dict").label("inferred_type"),
             )
@@ -3926,7 +3926,7 @@ def _handle_dict_comp(
                     func.jsonb_object_agg(final_key_col, final_val_col).filter(
                         final_key_col.isnot(None),
                     ),
-                    literal("{}", type_=JSONB),
+                    literal({}, type_=JSONB),
                 ).label("value"),
                 literal("dict").label("inferred_type"),
             )
@@ -4021,7 +4021,7 @@ def _handle_zip(
         base.c.log_event_id,
         func.coalesce(
             func.jsonb_agg(func.jsonb_build_array(*value_columns)),
-            literal("[]", type_=JSONB),
+            literal([], type_=JSONB),
         ).label("value"),
         literal("list").label("inferred_type"),
     ]
