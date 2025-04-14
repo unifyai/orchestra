@@ -1188,7 +1188,7 @@ async def test_filtering_and_sorting_base_and_derived_logs(client: AsyncClient):
     logs_alpha = await fetch_logs(client, project_name, column_context=col_ctx)
     assert len(logs_alpha) == 1
     assert logs_alpha[0]["id"] == base_log_ids[0]
-    assert set(logs_alpha[0]["entries"].keys()) == {"num", "str"}
+    assert set(logs_alpha[0]["entries"].keys()) == {"alpha/num", "alpha/str"}
     assert logs_alpha[0]["derived_entries"] == {}
 
     # (g) filter_expr => e.g. "alpha/num > 50 or beta/num < 10"
