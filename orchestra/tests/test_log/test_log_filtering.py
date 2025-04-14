@@ -619,6 +619,33 @@ def test_ast_parser(expression, expected_dict):
         ),
         # shorter second list – zip truncates
         ("zip(a,b) == [[1,'x']]", {"a": [1, 2], "b": ["x"]}, True),
+        # Reduction functions - mean
+        ("mean(test_list) == 2", {"test_list": [1, 2, 3]}, True),
+        ("mean(test_dict) == 3", {"test_dict": {"a": 2, "b": 4}}, True),
+        # Reduction functions - count (using len)
+        ("count(test_list) == 3", {"test_list": [1, 2, 3]}, True),
+        ("count(test_dict) == 2", {"test_dict": {"a": 2, "b": 4}}, True),
+        # Reduction functions - sum
+        ("sum(test_list) == 6", {"test_list": [1, 2, 3]}, True),
+        ("sum(test_dict) == 6", {"test_dict": {"a": 2, "b": 4}}, True),
+        # Reduction functions - variance
+        ("round(var(test_list),2) == 0.67", {"test_list": [1, 2, 3]}, True),
+        ("var(test_dict) == 1", {"test_dict": {"a": 2, "b": 4}}, True),
+        # Reduction functions - standard deviation
+        ("round(std(test_list),2) == 0.82", {"test_list": [1, 2, 3]}, True),
+        ("std(test_dict) == 1", {"test_dict": {"a": 2, "b": 4}}, True),
+        # Reduction functions - min
+        ("min(test_list) == 1", {"test_list": [1, 2, 3]}, True),
+        ("min(test_dict) == 2", {"test_dict": {"a": 2, "b": 4}}, True),
+        # Reduction functions - max
+        ("max(test_list) == 3", {"test_list": [1, 2, 3]}, True),
+        ("max(test_dict) == 4", {"test_dict": {"a": 2, "b": 4}}, True),
+        # Reduction functions - median
+        ("median(test_list) == 2", {"test_list": [1, 2, 3]}, True),
+        ("median(test_dict) == 3", {"test_dict": {"a": 2, "b": 4}}, True),
+        # Reduction functions - mode
+        ("mode(test_list) == 2", {"test_list": [1, 2, 2, 3]}, True),
+        ("mode(test_dict) == 2", {"test_dict": {"a": 2, "b": 2, "c": 3}}, True),
     ],
 )
 async def test_log_filter_helper_w_arithmetic(
