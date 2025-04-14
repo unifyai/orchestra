@@ -600,11 +600,6 @@ metrics = {
         "ttft": 1130.8457239999825,
         "itl": 15.669842747059405,
     },
-    "mixtral-8x7b-instruct-v0.1@aws-bedrock": {
-        "cost": 0.7,
-        "ttft": 713.9613250001275,
-        "itl": 15.034942066296473,
-    },
     "mixtral-8x22b-instruct-v0.1@fireworks-ai": {
         "cost": 0.9,
         "ttft": 314,
@@ -647,13 +642,6 @@ baked_router_endpoints = [
         model_id=29,
         provider="deepinfra",
         provider_id=12,
-    ),
-    Endpoint(
-        id=1415,
-        model="mixtral-8x7b-instruct-v0.1",
-        model_id=29,
-        provider="aws-bedrock",
-        provider_id=13,
     ),
     Endpoint(
         id=1418,

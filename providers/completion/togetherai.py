@@ -44,7 +44,7 @@ supported_models = {
         "cost": {"prompt": 0.27, "completion": 0.85},
     },
     "llama-4-scout-instruct": {
-        "endpoint": "together_ai/meta-llama/Llama-4-Scout-Instruct",
+        "endpoint": "together_ai/meta-llama/Llama-4-Scout-17B-16E-Instruct",
         "context_window": 327680,
         "cost": {"prompt": 0.18, "completion": 0.59},
     },
