@@ -15,6 +15,8 @@ from orchestra.web.api.context.schema import (
     AddLogsToContextRequest,
     ContextCreateRequest,
 )
+from orchestra.web.api.dependencies import get_db_session
+from orchestra.web.api.log.views import _get_logs_query
 from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
@@ -386,14 +388,18 @@ def add_logs_to_context(
     context_dao: ContextDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
     log_dao: LogDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Adds existing logs to a context within a project. The logs must already exist
-    in the project and can be specified by their IDs.
+    in the project and can be specified by their IDs or by log_args criteria.
     The same logs can be associated with multiple contexts.
 
     The context_name can be provided as a string or as an object with a name field.
     If the context doesn't exist, it will be created automatically.
+
+    If copy=True, new copies of the logs will be created and added to the context.
+    If copy=False (default), the existing logs will be associated with the context.
     """
     try:
         project = project_dao.get_by_user_and_name(
@@ -429,12 +435,60 @@ def add_logs_to_context(
         else:
             context_id = context[0][0].id
 
-        # Add logs to context
-        try:
-            context_dao.add_logs(
-                context_id=context_id,
-                log_ids=request.log_ids,
+        # Check if either log_ids or log_args is provided
+        log_ids = []
+        if hasattr(request, "log_ids") and request.log_ids:
+            log_ids = request.log_ids
+        elif hasattr(request, "log_args") and request.log_args:
+            # Use log_args to query for matching logs
+            log_args = request.log_args
+            raw_rows, _, _ = _get_logs_query(
+                request_fastapi,
+                project_name,
+                column_context=log_args.get("column_context"),
+                context=log_args.get("context"),
+                filter_expr=log_args.get("filter_expr"),
+                sorting=log_args.get("sorting"),
+                from_ids=log_args.get("from_ids"),
+                exclude_ids=log_args.get("exclude_ids"),
+                from_fields=log_args.get("from_fields"),
+                exclude_fields=log_args.get("exclude_fields"),
+                limit=log_args.get("limit"),
+                offset=log_args.get("offset", 0),
+                project_dao=project_dao,
+                field_type_dao=field_type_dao,
+                context_dao=context_dao,
+                session=session,
             )
+
+            log_ids = list({row[7] for row in raw_rows})
+
+            if not log_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No logs found matching the provided log_args criteria.",
+                )
+        else:
+            # Neither log_ids nor log_args provided
+            raise HTTPException(
+                status_code=400,
+                detail="Either log_ids or log_args must be provided.",
+            )
+
+        # Add logs to context based on copy flag
+        try:
+            if hasattr(request, "copy") and request.copy:
+                # Create copies of logs and add them to the context
+                context_dao.add_logs_copy(
+                    context_id=context_id,
+                    log_ids=log_ids,
+                )
+            else:
+                # Associate existing logs with the context
+                context_dao.add_logs(
+                    context_id=context_id,
+                    log_ids=log_ids,
+                )
         except ValueError as e:
             if "duplicate" in str(e).lower():
                 raise HTTPException(
@@ -452,7 +506,7 @@ def add_logs_to_context(
         existing_field_names = set(existing_fields)
         logs = log_dao.filter(
             project_id=project_id,
-            log_event_id=request.log_ids,
+            log_event_id=log_ids,
         )
 
         # Create field types for each field found, but only if not already existing
