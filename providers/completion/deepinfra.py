@@ -31,27 +31,27 @@ supported_models = {
     "deepseek-v3-0324": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3-0324",
         "context_window": 160000,
-        "cost": {"prompt": 0.40, "completion": 0.89},
+        "cost": {"prompt": 0.35, "completion": 0.89},
     },
     "deepseek-r1": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-R1",
         "context_window": 160000,
-        "cost": {"prompt": 0.55, "completion": 2.19},
+        "cost": {"prompt": 0.54, "completion": 2.18},
     },
     "deepseek-v3": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3",
         "context_window": 160000,
-        "cost": {"prompt": 0.40, "completion": 0.89},
+        "cost": {"prompt": 0.38, "completion": 0.89},
     },
     "llama-4-maverick-instruct": {
         "endpoint": "deepinfra/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
-        "context_window": 128000,
-        "cost": {"prompt": 0.2, "completion": 0.6},
+        "context_window": 1024000,
+        "cost": {"prompt": 0.18, "completion": 0.6},
     },
     "llama-4-scout-instruct": {
         "endpoint": "deepinfra/meta-llama/Llama-4-Scout-17B-16E-Instruct",
-        "context_window": 128000,
-        "cost": {"prompt": 0.1, "completion": 0.3},
+        "context_window": 320000,
+        "cost": {"prompt": 0.08, "completion": 0.3},
     },
     "llama-3.3-70b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.3-70B-Instruct",
@@ -71,7 +71,7 @@ supported_models = {
     "llama-3.2-11b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-11B-Vision-Instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.055, "completion": 0.055},
+        "cost": {"prompt": 0.049, "completion": 0.049},
     },
     "llama-3.2-90b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-90B-Vision-Instruct",
@@ -106,7 +106,7 @@ supported_models = {
     "llama-3-70b-chat": {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3-70B-Instruct",
         "context_window": 8000,
-        "cost": {"prompt": 0.23, "completion": 0.4},
+        "cost": {"prompt": 0.3, "completion": 0.4},
     },
     "gemma-3-27b-it": {
         "endpoint": "deepinfra/google/gemma-3-27b-it",
@@ -136,7 +136,7 @@ supported_models = {
     "mistral-7b-instruct-v0.3": {
         "endpoint": "deepinfra/mistralai/Mistral-7B-Instruct-v0.3",
         "context_window": 32768,
-        "cost": {"prompt": 0.03, "completion": 0.055},
+        "cost": {"prompt": 0.04, "completion": 0.055},
     },
     "mistral-nemo": {
         "endpoint": "deepinfra/mistralai/Mistral-Nemo-Instruct-2407",
@@ -151,12 +151,12 @@ supported_models = {
     "qwen-2.5-7b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-7B-Instruct",
         "context_window": 32000,
-        "cost": {"prompt": 0.025, "completion": 0.05},
+        "cost": {"prompt": 0.05, "completion": 0.1},
     },
     "qwen-2.5-72b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-72B-Instruct",
         "context_window": 32000,
-        "cost": {"prompt": 0.13, "completion": 0.40},
+        "cost": {"prompt": 0.12, "completion": 0.39},
     },
     "qwen-qwq-32b": {
         "endpoint": "deepinfra/Qwen/QwQ-32B",
