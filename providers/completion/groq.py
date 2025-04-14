@@ -48,26 +48,6 @@ supported_models = {
         "context_window": 131072,
         "cost": {"prompt": 0.05, "completion": 0.08},
     },
-    "llama-3.2-1b-chat": {
-        "endpoint": "groq/llama-3.2-1b-preview",
-        "context_window": 8000,
-        "cost": {"prompt": 0.04, "completion": 0.04},
-    },
-    "llama-3.2-3b-chat": {
-        "endpoint": "groq/llama-3.2-3b-preview",
-        "context_window": 8000,
-        "cost": {"prompt": 0.06, "completion": 0.06},
-    },
-    "llama-3.2-11b-chat": {
-        "endpoint": "groq/llama-3.2-11b-vision-preview",
-        "context_window": 8000,
-        "cost": {"prompt": 0.18, "completion": 0.18},
-    },
-    "llama-3.2-90b-chat": {
-        "endpoint": "groq/llama-3.2-90b-vision-preview",
-        "context_window": 8000,
-        "cost": {"prompt": 0.9, "completion": 0.9},
-    },
     "llama-3.3-70b-chat": {
         "endpoint": "groq/llama-3.3-70b-versatile",
         "context_window": 128000,
@@ -82,11 +62,6 @@ supported_models = {
         "endpoint": "groq/meta-llama/llama-4-scout-17b-16e-instruct",
         "context_window": 131072,
         "cost": {"prompt": 0.11, "completion": 0.34},
-    },
-    "qwen-2.5-coder-32b-instruct": {
-        "endpoint": "groq/qwen-2.5-coder-32b",
-        "context_window": 32768,
-        "cost": {"prompt": 0.79, "completion": 0.79},
     },
     "qwen-qwq-32b": {
         "endpoint": "groq/qwen-qwq-32b",
