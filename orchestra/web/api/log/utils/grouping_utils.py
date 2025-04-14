@@ -907,7 +907,7 @@ def _handle_group_depth_level(
     # Convert rows to array of objects with key/value pairs
     for row in group_rows:
         group_val = row.group_value
-        log_count = row.group_count
+        log_count = row.group_count if hasattr(row, "group_count") else row.log_count
         group_list.append({"key": str(group_val), "value": log_count})
 
     # Find missing IDs (logs that don't have this key)
