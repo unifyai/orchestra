@@ -279,20 +279,51 @@ def _get_reduction_expr(metric, inferred_type, aggCol, label):
     }
 
     # interpret X.c.value depending on X.c.inferred_type.
+    if inferred_type in ["list", "dict"]:
+        # Handle JSONB list/dict aggregation
+        if inferred_type == "list":
+            elements = func.jsonb_array_elements(cast(aggCol, JSONB)).table_valued(
+                "value",
+            )
+            target_col = elements.c.value
+        else:  # dict
+            key_values = func.jsonb_each(cast(aggCol, JSONB)).table_valued("value")
+            target_col = key_values.c.value
+
+        numeric_col = cast(target_col, Float)
+
+        # Map metric to aggregation function
+        if metric == AggregationMetric.COUNT:
+            agg_expr = func.count(numeric_col)
+        elif metric == AggregationMetric.SUM:
+            agg_expr = func.sum(numeric_col)
+        elif metric == AggregationMetric.MEAN:
+            agg_expr = func.avg(numeric_col)
+        elif metric == AggregationMetric.VAR:
+            agg_expr = func.var_pop(numeric_col)
+        elif metric == AggregationMetric.STD:
+            agg_expr = func.stddev_pop(numeric_col)
+        elif metric == AggregationMetric.MIN:
+            agg_expr = func.min(numeric_col)
+        elif metric == AggregationMetric.MAX:
+            agg_expr = func.max(numeric_col)
+        elif metric == AggregationMetric.MEDIAN:
+            agg_expr = func.percentile_cont(0.5).within_group(numeric_col.asc())
+        elif metric == AggregationMetric.MODE:
+            agg_expr = func.mode().within_group(numeric_col.asc())
+
+        subquery = (
+            select(agg_expr)
+            .select_from(
+                elements if inferred_type == "list" else key_values,
+            )
+            .scalar_subquery()
+        )
+        return func.coalesce(subquery, 0).label(label)
+
     cast_expr = case(
         # Handle NULL values first
         (aggCol.is_(None), literal(None, type_=Float)),
-        (
-            inferred_type == "list",
-            func.jsonb_array_length(cast(aggCol, JSONB)).cast(Float),
-        ),
-        (
-            inferred_type == "dict",
-            select(func.count())
-            .select_from(func.jsonb_object_keys(cast(aggCol, JSONB)))
-            .scalar_subquery()
-            .cast(Float),
-        ),
         (
             inferred_type == "bool",
             aggCol.cast(BOOLEAN).cast(INTEGER).cast(Float),
