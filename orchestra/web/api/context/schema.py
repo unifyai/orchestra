@@ -1,6 +1,6 @@
 """Schema models for context management endpoints."""
 
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -43,11 +43,20 @@ class AddLogsToContextRequest(BaseModel):
             "example": "experiment1/trial1",
         },
     )
-    log_ids: List[int] = Field(
-        ...,
+    log_ids: Optional[List[int]] = Field(
+        None,
         description="List of log IDs to add to the context. At least one log ID must be provided.",
         min_items=1,
         json_schema_extra={
             "example": [123, 456, 789],
         },
+    )
+    log_args: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Dictionary of arguments (e.g. filter_expr) to select logs by criteria.",
+        json_schema_extra={"example": {"filter_expr": "metric > 0.9"}},
+    )
+    copy: bool = Field(
+        default=False,
+        description="If True, a copy of each log is created and then added to the context. If False, the existing log associations are simply used.",
     )
