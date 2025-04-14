@@ -10,6 +10,7 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Context,
     ContextHistory,
+    JSONLog,
     Log,
     LogEvent,
     LogEventContext,
@@ -404,6 +405,124 @@ class ContextDAO:
             {"context_id": context_id, "log_event_id": log_event_id},
         )
         return result.scalar()
+
+    def add_logs_copy(self, context_id: int, log_ids: List[int]) -> None:
+        """Associate copies of LogEvent instances with the specified context.
+
+        This method creates new copies of the specified log events and their associated
+        Log and JSONLog entries, then associates these copies with the context.
+
+        Args:
+            context_id: ID of the context to associate logs with
+            log_ids: List of log event IDs to copy and associate with the context
+
+        Raises:
+            ValueError: If context_id doesn't exist or any log_ids don't exist
+            ValueError: If duplicates are found and context doesn't allow duplicates
+        """
+        try:
+            # Get the context to check if duplicates are allowed
+            context = self.session.query(Context).filter_by(id=context_id).one_or_none()
+            if not context:
+                raise ValueError(f"Context with id {context_id} not found")
+
+            # Get current timestamp for all new records
+            current_time = datetime.now(timezone.utc)
+
+            # Process each log event
+            for original_log_id in log_ids:
+                # Query the original LogEvent
+                original_log_event = (
+                    self.session.query(LogEvent)
+                    .filter_by(id=original_log_id)
+                    .one_or_none()
+                )
+                if not original_log_event:
+                    raise ValueError(f"Log event with id {original_log_id} not found")
+
+                # Check for duplicates if the context doesn't allow them
+                if not context.allow_duplicates:
+                    if self.check_for_duplicates(context_id, original_log_event.id):
+                        raise ValueError(
+                            f"Duplicate log entry detected. Context '{context.name}' does not allow duplicates.",
+                        )
+
+                # Create a new LogEvent by copying necessary fields
+                new_log_event = LogEvent(
+                    project_id=original_log_event.project_id,
+                    created_at=current_time,
+                    updated_at=current_time,
+                )
+                self.session.add(new_log_event)
+                self.session.flush()  # Get the new ID
+
+                # Query all associated Log rows for the original log event
+                original_logs = (
+                    self.session.query(Log)
+                    .filter_by(log_event_id=original_log_id)
+                    .all()
+                )
+
+                # Prepare bulk insert for Log entries
+                new_logs = []
+                for original_log in original_logs:
+                    new_log = Log(
+                        log_event_id=new_log_event.id,
+                        key=original_log.key,
+                        value=original_log.value,
+                        version=original_log.version,
+                        inferred_type=original_log.inferred_type,
+                    )
+                    new_logs.append(new_log)
+
+                # Bulk insert all new Log entries
+                if new_logs:
+                    self.session.bulk_save_objects(new_logs)
+
+                # Check for JSONLog entries (if the model exists)
+                if JSONLog is not None:
+                    try:
+                        # Query JSONLog entries for the original log event
+                        original_json_logs = (
+                            self.session.query(JSONLog)
+                            .filter_by(log_event_id=original_log_id)
+                            .all()
+                        )
+
+                        # Prepare bulk insert for JSONLog entries
+                        new_json_logs = []
+                        for original_json_log in original_json_logs:
+                            new_json_log = JSONLog(
+                                log_event_id=new_log_event.id,
+                                key=original_json_log.key,
+                                value=original_json_log.value,
+                                version=original_json_log.version,
+                            )
+                            new_json_logs.append(new_json_log)
+
+                        # Bulk insert all new JSONLog entries
+                        if new_json_logs:
+                            self.session.bulk_save_objects(new_json_logs)
+                    except Exception:
+                        pass
+
+                # Create association between the new log event and context
+                association = LogEventContext(
+                    log_event_id=new_log_event.id,
+                    context_id=context_id,
+                )
+                self.session.add(association)
+
+            # Increment version if context is versioned
+            if context.is_versioned:
+                self.increment_version(context_id)
+
+            # Commit all changes
+            self.session.commit()
+
+        except Exception as e:
+            self.session.rollback()
+            raise e
 
     def archive_context_state(
         self,
