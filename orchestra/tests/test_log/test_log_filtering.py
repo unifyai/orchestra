@@ -2409,7 +2409,7 @@ async def test_complex_string_filter_expressions(client: AsyncClient):
         "/v0/logs",
         params={
             "project": project_name,
-            "filter_expr": f"content == '{math_question}'",
+            "filter_expr": f"content == {json.dumps(math_question)}",
         },
         headers=HEADERS,
     )
@@ -2423,7 +2423,7 @@ async def test_complex_string_filter_expressions(client: AsyncClient):
         "/v0/logs",
         params={
             "project": project_name,
-            "filter_expr": f"content == '{probability_question}'",
+            "filter_expr": f"content == {json.dumps(probability_question)}",
         },
         headers=HEADERS,
     )
