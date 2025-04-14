@@ -124,11 +124,11 @@ async def test_get_params(client: AsyncClient):
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), dict)
     assert isinstance(response.json()["params"], dict)
-    assert isinstance(response.json()["params"]["param1"]["0"], str)
+    assert isinstance(response.json()["params"]["a/b/param1"]["0"], str)
     assert isinstance(response.json()["logs"], list)
     assert isinstance(response.json()["logs"][0]["ts"], str)
     assert response.json()["logs"][0]["entries"] == {}
-    assert isinstance(response.json()["logs"][0]["params"]["param1"], str)
+    assert isinstance(response.json()["logs"][0]["params"]["a/b/param1"], str)
 
     # fetch params for the project with the full context, with "params" inside
     response = await client.get(
@@ -139,11 +139,11 @@ async def test_get_params(client: AsyncClient):
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), dict)
     assert isinstance(response.json()["params"], dict)
-    assert isinstance(response.json()["params"]["param1"]["0"], str)
+    assert isinstance(response.json()["params"]["a/b/param1"]["0"], str)
     assert isinstance(response.json()["logs"], list)
     assert isinstance(response.json()["logs"][0]["ts"], str)
     assert response.json()["logs"][0]["entries"] == {}
-    assert isinstance(response.json()["logs"][0]["params"]["param1"], str)
+    assert isinstance(response.json()["logs"][0]["params"]["a/b/param1"], str)
 
     # fetch params for the project with the full context, appended by "params"
     response = await client.get(
@@ -154,11 +154,11 @@ async def test_get_params(client: AsyncClient):
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), dict)
     assert isinstance(response.json()["params"], dict)
-    assert isinstance(response.json()["params"]["param1"]["0"], str)
+    assert isinstance(response.json()["params"]["a/b/param1"]["0"], str)
     assert isinstance(response.json()["logs"], list)
     assert isinstance(response.json()["logs"][0]["ts"], str)
     assert response.json()["logs"][0]["entries"] == {}
-    assert isinstance(response.json()["logs"][0]["params"]["param1"], str)
+    assert isinstance(response.json()["logs"][0]["params"]["a/b/param1"], str)
 
 
 @pytest.mark.anyio
@@ -206,11 +206,11 @@ async def test_get_entries(client: AsyncClient):
     assert isinstance(response.json()["logs"], list)
     assert isinstance(response.json()["logs"][0]["ts"], str)
     assert isinstance(
-        response.json()["logs"][0]["entries"]["c/boolean_input"],
+        response.json()["logs"][0]["entries"]["a/b/c/boolean_input"],
         bool,
     )
     assert isinstance(
-        response.json()["logs"][0]["entries"]["c/numeric_input"],
+        response.json()["logs"][0]["entries"]["a/b/c/numeric_input"],
         float,
     )
     assert response.json()["logs"][0]["params"] == {}
@@ -229,11 +229,11 @@ async def test_get_entries(client: AsyncClient):
     assert isinstance(response.json()["logs"], list)
     assert isinstance(response.json()["logs"][0]["ts"], str)
     assert isinstance(
-        response.json()["logs"][0]["entries"]["c/boolean_input"],
+        response.json()["logs"][0]["entries"]["a/b/c/boolean_input"],
         bool,
     )
     assert isinstance(
-        response.json()["logs"][0]["entries"]["c/numeric_input"],
+        response.json()["logs"][0]["entries"]["a/b/c/numeric_input"],
         float,
     )
     assert response.json()["logs"][0]["params"] == {}
@@ -252,11 +252,11 @@ async def test_get_entries(client: AsyncClient):
     assert isinstance(response.json()["logs"], list)
     assert isinstance(response.json()["logs"][0]["ts"], str)
     assert isinstance(
-        response.json()["logs"][0]["entries"]["c/boolean_input"],
+        response.json()["logs"][0]["entries"]["a/b/c/boolean_input"],
         bool,
     )
     assert isinstance(
-        response.json()["logs"][0]["entries"]["c/numeric_input"],
+        response.json()["logs"][0]["entries"]["a/b/c/numeric_input"],
         float,
     )
     assert response.json()["logs"][0]["params"] == {}
@@ -448,7 +448,7 @@ async def test_get_logs_w_column_context(client: AsyncClient):
     del response["logs"][0]["ts"]
     assert response == {
         "params": {
-            "b/param1": {
+            "a/b/param1": {
                 "0": "test",
             },
         },
@@ -456,15 +456,15 @@ async def test_get_logs_w_column_context(client: AsyncClient):
             {
                 "id": 1,
                 "entries": {
-                    "b/c/input": "Some input data",
-                    "b/c/boolean_input": True,
-                    "b/c/numeric_input": 4.5,
+                    "a/b/c/input": "Some input data",
+                    "a/b/c/boolean_input": True,
+                    "a/b/c/numeric_input": 4.5,
                 },
                 "derived_entries": {},
                 "versions": {},
                 "clipped_fields": [],
                 "params": {
-                    "b/param1": "0",
+                    "a/b/param1": "0",
                 },
             },
         ],
@@ -483,7 +483,7 @@ async def test_get_logs_w_column_context(client: AsyncClient):
     del response["logs"][0]["ts"]
     assert response == {
         "params": {
-            "param1": {
+            "a/b/param1": {
                 "0": "test",
             },
         },
@@ -491,15 +491,15 @@ async def test_get_logs_w_column_context(client: AsyncClient):
             {
                 "id": 1,
                 "entries": {
-                    "c/input": "Some input data",
-                    "c/boolean_input": True,
-                    "c/numeric_input": 4.5,
+                    "a/b/c/input": "Some input data",
+                    "a/b/c/boolean_input": True,
+                    "a/b/c/numeric_input": 4.5,
                 },
                 "derived_entries": {},
                 "versions": {},
                 "clipped_fields": [],
                 "params": {
-                    "param1": "0",
+                    "a/b/param1": "0",
                 },
             },
         ],
@@ -522,9 +522,9 @@ async def test_get_logs_w_column_context(client: AsyncClient):
             {
                 "id": 1,
                 "entries": {
-                    "input": "Some input data",
-                    "boolean_input": True,
-                    "numeric_input": 4.5,
+                    "a/b/c/input": "Some input data",
+                    "a/b/c/boolean_input": True,
+                    "a/b/c/numeric_input": 4.5,
                 },
                 "derived_entries": {},
                 "versions": {},

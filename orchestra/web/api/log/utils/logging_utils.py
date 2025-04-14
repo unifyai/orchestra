@@ -512,7 +512,7 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
         is_derived = row_source_type == "derived"
 
         # Apply context_len slicing to the key
-        key = row_key[context_len:]
+        key = row_key
 
         def _limit_value(value: any, inferred_type: str) -> tuple:
             """Limit the size of a value based on its type and the value_limit parameter.
