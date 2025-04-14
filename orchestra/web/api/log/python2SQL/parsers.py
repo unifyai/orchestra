@@ -312,8 +312,6 @@ class _Parser:
         # Step 1: parse the core primary expression
         if self.current_token[0] == "FUNC":
             fn = self.current_token[1]
-            if fn == "count":
-                fn = "len"
             self.advance()
             if self.current_token[0] == "LPAREN":
                 self.advance()
@@ -592,7 +590,18 @@ def _transform_ast(node: ast.AST) -> dict:
             "now",
             "round",
             "round_timestamp",
+            "mean",
+            "sum",
+            "var",
+            "std",
+            "min",
+            "max",
+            "median",
+            "mode",
+            "count",
         ):
+            if func_name == "count":
+                func_name = "len"
             # For functions with a single argument
             if len(node.args) == 1:
                 return {"operand": func_name, "rhs": _transform_ast(node.args[0])}
