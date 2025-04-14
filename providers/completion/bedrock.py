@@ -111,21 +111,6 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 2.65, "completion": 3.5},
     },
-    "mistral-7b-instruct-v0.2": {
-        "endpoint": "bedrock/mistral.mistral-7b-instruct-v0:2",
-        "context_window": 32768,
-        "cost": {"prompt": 0.15, "completion": 0.2},
-    },
-    "mixtral-8x7b-instruct-v0.1": {
-        "endpoint": "bedrock/mistral.mixtral-8x7b-instruct-v0:1",
-        "context_window": 32768,
-        "cost": {"prompt": 0.45, "completion": 0.7},
-    },
-    "mistral-large": {
-        "endpoint": "bedrock/mistral.mistral-large-2407-v1:0",
-        "context_window": 128000,
-        "cost": {"prompt": 4, "completion": 12},
-    },
     "command-r-plus": {
         "endpoint": "bedrock/cohere.command-r-plus-v1:0",
         "context_window": 128000,
