@@ -1507,3 +1507,273 @@ async def test_context_allow_duplicates(client: AsyncClient):
 #         overwrite=True,
 #     )
 #     assert update_response.status_code == 200
+@pytest.mark.anyio
+async def test_add_logs_with_copy_false(client: AsyncClient):
+    """Test that when copy=false, the original logs are associated with the context"""
+    project_name = "test-copy-false"
+    context_name = "copy-false-context"
+
+    # Setup project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Test context"},
+        headers=HEADERS,
+    )
+
+    # Create a log
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "params": {"model": "test-model"},
+            "entries": {
+                "metric": 0.95,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    log_ids = response.json()
+
+    # Add logs to context with copy=false (default)
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts/add_logs",
+        json={
+            "context_name": context_name,
+            "log_ids": log_ids,
+            "copy": False,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert "Logs added to context successfully!" in response.json()["info"]
+
+    # Verify the logs in the context have the same IDs as the original logs
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={context_name}&return_ids_only=true",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    context_log_ids = response.json()
+    assert len(context_log_ids) == 1
+    assert context_log_ids[0] == log_ids[0]  # Same ID as original log
+
+
+@pytest.mark.anyio
+async def test_add_logs_with_copy_true(client: AsyncClient):
+    """Test that when copy=true, new log event ids are created and associated with the context"""
+    project_name = "test-copy-true"
+    context_name = "copy-true-context"
+
+    # Setup project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Test context"},
+        headers=HEADERS,
+    )
+
+    # Create a log
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "metric": 0.95,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "model": "test-model",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    original_log_ids = response.json()
+
+    # Add logs to context with copy=true
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts/add_logs",
+        json={
+            "context_name": context_name,
+            "log_ids": original_log_ids,
+            "copy": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert "Logs added to context successfully!" in response.json()["info"]
+
+    # Verify the logs in the context have different IDs than the original logs
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={context_name}&return_ids_only=true",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    context_log_ids = response.json()
+    assert len(context_log_ids) == 1
+    assert context_log_ids[0] != original_log_ids[0]  # Different ID than original log
+
+    # Verify the content of the copied log is the same as the original
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    copied_logs = response.json()["logs"]
+    assert len(copied_logs) == 1
+    assert copied_logs[0]["entries"]["metric"] == 0.95
+    assert copied_logs[0]["entries"]["model"] == "test-model"
+
+
+@pytest.mark.anyio
+async def test_add_logs_via_arguments(client: AsyncClient):
+    """Test adding logs to a context using log_args instead of explicit log_ids"""
+    project_name = "test-args-context"
+    context_name = "args-context"
+
+    # Setup project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Test context"},
+        headers=HEADERS,
+    )
+
+    # Create multiple logs with different metrics
+    for metric_value in [0.85, 0.90, 0.95]:
+        response = await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "params": {"model": "test-model"},
+                "entries": {
+                    "metric": metric_value,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Add logs to context using log_args to filter for logs with metric > 0.9
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts/add_logs",
+        json={
+            "context_name": context_name,
+            "log_args": {
+                "filter_expr": "metric > 0.9",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert "Logs added to context successfully!" in response.json()["info"]
+
+    # Verify only logs with metric > 0.9 were added to the context
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+    assert len(logs) == 1
+    assert logs[0]["entries"]["metric"] == 0.95
+
+
+@pytest.mark.anyio
+async def test_add_logs_via_arguments_with_copy(client: AsyncClient):
+    """Test adding logs to a context using log_args with copy=true"""
+    project_name = "test-args-copy"
+    context_name = "args-copy-context"
+
+    # Setup project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Test context"},
+        headers=HEADERS,
+    )
+
+    # Create multiple logs with different metrics
+    for metric_value in [0.85, 0.90, 0.95]:
+        response = await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "params": {"model": "test-model"},
+                "entries": {
+                    "metric": metric_value,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Get all logs to compare IDs later
+    response = await client.get(
+        f"/v0/logs?project={project_name}&return_ids_only=true",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    all_original_log_ids = set(response.json())
+
+    # Add logs to context using log_args with copy=true
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts/add_logs",
+        json={
+            "context_name": context_name,
+            "log_args": {
+                "filter_expr": "metric > 0.85",
+            },
+            "copy": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert "Logs added to context successfully!" in response.json()["info"]
+
+    # Verify logs in the context have different IDs than the original logs
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={context_name}&return_ids_only=true",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    context_log_ids = set(response.json())
+
+    # Verify no overlap between original and copied log IDs
+    assert len(context_log_ids.intersection(all_original_log_ids)) == 0
+
+    # Verify the correct number of logs were copied (metric > 0.85 should be 2 logs)
+    assert len(context_log_ids) == 2
+
+    # Verify the content of the copied logs
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    copied_logs = response.json()["logs"]
+    assert len(copied_logs) == 2
+
+    # Check that the copied logs have the expected metric values
+    metrics = [log["entries"]["metric"] for log in copied_logs]
+    assert 0.90 in metrics
+    assert 0.95 in metrics
