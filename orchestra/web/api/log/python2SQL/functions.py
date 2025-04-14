@@ -657,6 +657,73 @@ def _handle_functions(
                 .subquery()
             )
         return now_subq
+    elif operand in ["mean", "sum", "var", "std", "min", "max", "median", "mode"]:
+        from ..utils.metric_utils import AggregationMetric, _get_reduction_expr
+
+        reduction_functions = {
+            "mean": AggregationMetric.MEAN,
+            "sum": AggregationMetric.SUM,
+            "var": AggregationMetric.VAR,
+            "std": AggregationMetric.STD,
+            "min": AggregationMetric.MIN,
+            "max": AggregationMetric.MAX,
+            "median": AggregationMetric.MEDIAN,
+            "mode": AggregationMetric.MODE,
+        }
+        if isinstance(rhs_expr, Subquery):
+            val, val_type = _select_value(rhs_expr, session)
+            agg_expr = _get_reduction_expr(
+                reduction_functions[operand],
+                val_type,
+                val,
+                "value",
+            )
+            select_cols = [rhs_expr.c.log_event_id.label("log_event_id")]
+            if "__comp_idx__" in rhs_expr.c.keys():
+                select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
+            if "__parent_idx__" in rhs_expr.c.keys():
+                select_cols.append(rhs_expr.c.__parent_idx__.label("__parent_idx__"))
+            if val_type in ("list", "dict"):
+                group_by_cols = [rhs_expr.c.log_event_id, rhs_expr.c.jsonb_value]
+            else:
+                group_by_cols = [rhs_expr.c.log_event_id]
+            if "__comp_idx__" in rhs_expr.c.keys():
+                group_by_cols.append(rhs_expr.c.__comp_idx__)
+            if "__parent_idx__" in rhs_expr.c.keys():
+                group_by_cols.append(rhs_expr.c.__parent_idx__)
+            select_cols.extend(
+                [agg_expr.label("value"), literal("float").label("inferred_type")],
+            )
+            return (
+                select(*select_cols)
+                .select_from(rhs_expr)
+                .group_by(*group_by_cols)
+                .subquery()
+            )
+        else:
+            # For literal values or non-subquery cases
+            if isinstance(rhs_expr, BindParameter):
+                val = rhs_expr.value
+                if isinstance(val, (list, tuple)):
+                    # Convert Python list to JSONB array
+                    jsonb_val = literal(val, type_=JSONB)
+                    # Apply the reduction function directly
+                    reduction_expr = _get_reduction_expr(
+                        operand,
+                        "list",
+                        jsonb_val,
+                        None,
+                    )
+                    return reduction_expr
+                else:
+                    raise ValueError(
+                        f"Cannot apply {operand}() to non-list value: {val}",
+                    )
+            else:
+                # For other SQL expressions, try to cast to JSONB and apply the function
+                jsonb_expr = cast(rhs_expr, JSONB)
+                reduction_expr = _get_reduction_expr(operand, "list", jsonb_expr, None)
+                return reduction_expr
     else:
         raise ValueError(f"Unknown function operand: {operand}")
 
