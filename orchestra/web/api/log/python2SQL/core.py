@@ -171,6 +171,14 @@ def build_sql_query(
         "time",
         "date",
         "now",
+        "mean",
+        "sum",
+        "var",
+        "std",
+        "min",
+        "max",
+        "median",
+        "mode",
     ):
         return _handle_functions(
             filter_dict,
