@@ -13,7 +13,7 @@ from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.derived_log_dao import DerivedLogDAO
 from orchestra.db.dao.favorite_project_dao import FavoriteProjectDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
-from orchestra.db.dao.interface_dao import InterfaceDAO
+from orchestra.db.dao.legacy_interface_dao import InterfaceDAO
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
