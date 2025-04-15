@@ -3,7 +3,7 @@ import os
 import pytest
 from httpx import AsyncClient
 
-from .test_interface import _create_context, _create_interface, _create_project
+from .test_legacy_interface import _create_context, _create_interface, _create_project
 from .test_log import _create_derived_entry, _create_log, _update_logs
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
