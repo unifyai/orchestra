@@ -119,8 +119,6 @@ steps:
   - '--vpc-connector=orchestra-connector'
   - '--vpc-egress=all-traffic'
   - '--timeout=300s'
-  - '--cpu=1'
-  - '--memory=1024Mi'
   - '--min-instances=1'
   - '--max-instances=10'
   - '--no-cpu-throttling'
