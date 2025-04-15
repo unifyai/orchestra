@@ -362,7 +362,7 @@ def register_startup_event(
     def _startup() -> None:  # noqa: WPS430
         app.middleware_stack = None
         _setup_db(app)
-        setup_observability(app)
+        # setup_observability(app)
         aiplatform.init(
             project=settings.vertexai_project,
             location=settings.vertexai_location,
