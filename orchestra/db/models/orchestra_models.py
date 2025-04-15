@@ -13,6 +13,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
     text,
+    Float,
 )
 from sqlalchemy.dialects.postgresql import JSON, JSONB
 from sqlalchemy.orm import relationship
@@ -854,11 +855,21 @@ class Interface(Base):
     )
     context = Column(String(), nullable=True)
     color = Column(String(), nullable=True)
+    # Flag to indicate if this is a checkpoint (manual save) or auto-save
+    is_checkpoint = Column(Boolean(), nullable=False, server_default="f")
     created_at = Column(TIMESTAMP, nullable=True, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+    active_tab_id = Column(String, nullable=True)
     # Relationships
     project = relationship("Project", back_populates="interfaces")
     user = relationship("AuthUser", back_populates="interfaces")
     organization = relationship("Organization", back_populates="interfaces")
+    tabs = relationship(
+        "Tab",
+        back_populates="interface",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     __table_args__ = (
         UniqueConstraint("user_id", "project_id", "name", name="it_uq_project_name"),
@@ -927,10 +938,18 @@ class TempInterface(Base):
     context = Column(String(), nullable=True)
     color = Column(String(), nullable=True)
     created_at = Column(TIMESTAMP, nullable=True, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+    active_tab_id = Column(String, nullable=True)
     # Relationships
     project = relationship("Project", back_populates="temp_interfaces")
     user = relationship("AuthUser", back_populates="temp_interfaces")
     organization = relationship("Organization", back_populates="temp_interfaces")
+    tabs = relationship(
+        "Tab",
+        back_populates="temp_interface",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     __table_args__ = (
         UniqueConstraint(
             "user_id",
@@ -1009,3 +1028,219 @@ class Assistant(Base):
     email = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+
+class Tab(Base):
+    """Model class for tabs within interfaces."""
+    __tablename__ = "tab"
+
+    id = Column(String, primary_key=True, default=uuid.uuid4)
+    interface_id = Column(
+        String,
+        ForeignKey("interface.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name = Column(String(), nullable=False)
+    visible = Column(Boolean(), nullable=False, server_default="t")
+    active = Column(Boolean(), nullable=False, server_default="f")
+    order = Column(Integer, nullable=False, server_default="0")
+    global_context = Column(String(), nullable=True)
+    color = Column(String(), nullable=True)
+    # Flag to indicate if this is a checkpoint (manual save) or auto-save
+    is_checkpoint = Column(Boolean(), nullable=False, server_default="f")
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+    
+    # Relationships
+    interface = relationship("Interface", back_populates="tabs")
+    tiles = relationship(
+        "Tile",
+        back_populates="tab",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("interface_id", "name", name="tab_uq_interface_name"),
+    )
+
+
+class Tile(Base):
+    """Base model class for tiles within tabs."""
+    __tablename__ = "tile"
+
+    id = Column(String, primary_key=True, default=uuid.uuid4)
+    tab_id = Column(
+        String,
+        ForeignKey("tab.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name = Column(String(), nullable=False)
+    type = Column(String(), nullable=False)  # "Table", "Plot", "View", "Editor"
+    
+    # Position properties
+    x_position = Column(Float, nullable=False)
+    y_position = Column(Float, nullable=False)
+    width = Column(Float, nullable=False)
+    height = Column(Float, nullable=False)
+    min_width = Column(Float, nullable=True)
+    min_height = Column(Float, nullable=True)
+    
+    # Common properties
+    visible = Column(Boolean(), nullable=False, server_default="t")
+    locked = Column(Boolean(), nullable=False, server_default="f")
+    moved = Column(Boolean(), nullable=False, server_default="f")
+    static = Column(Boolean(), nullable=False, server_default="f")
+    
+    # Common data properties
+    context = Column(String(), nullable=True)
+    table = Column(String(), nullable=True)
+    auto_update = Column(String(), nullable=True)
+    freeze = Column(String(), nullable=True)
+    filters = Column(String(), nullable=True)
+    common_filter = Column(String(), nullable=True)
+    metric = Column(String(), nullable=True)
+    
+    # Flag to indicate if this is a checkpoint (manual save) or auto-save
+    is_checkpoint = Column(Boolean(), nullable=False, server_default="f")
+    
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+    
+    # Relationships
+    tab = relationship("Tab", back_populates="tiles")
+    table_tile = relationship(
+        "TableTile", 
+        uselist=False, 
+        back_populates="tile", 
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    plot_tile = relationship(
+        "PlotTile", 
+        uselist=False, 
+        back_populates="tile",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    view_tile = relationship(
+        "ViewTile", 
+        uselist=False, 
+        back_populates="tile",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    editor_tile = relationship(
+        "EditorTile", 
+        uselist=False, 
+        back_populates="tile",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tab_id", "name", name="tile_uq_tab_name"),
+    )
+
+
+class TableTile(Base):
+    """Model class for Table-specific tile properties."""
+    __tablename__ = "table_tile"
+
+    id = Column(String, primary_key=True, default=uuid.uuid4)
+    tile_id = Column(
+        String,
+        ForeignKey("tile.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    
+    # Table-specific properties
+    table_type = Column(String(), nullable=True)
+    column_context = Column(String(), nullable=True)
+    page_number = Column(String(), nullable=True)
+    column_order = Column(String(), nullable=True)
+    hidden_columns = Column(String(), nullable=True)
+    sorting = Column(String(), nullable=True)
+    grouping = Column(String(), nullable=True)
+    group_sorting = Column(String(), nullable=True)
+    columns_pin_left = Column(String(), nullable=True)
+    columns_pin_right = Column(String(), nullable=True)
+    selected = Column(String(), nullable=True)
+    
+    # Relationships
+    tile = relationship("Tile", back_populates="table_tile")
+
+
+class PlotTile(Base):
+    """Model class for Plot-specific tile properties."""
+    __tablename__ = "plot_tile"
+
+    id = Column(String, primary_key=True, default=uuid.uuid4)
+    tile_id = Column(
+        String,
+        ForeignKey("tile.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    
+    # Plot-specific properties
+    plot_type = Column(String(), nullable=True)
+    plot_scale_x = Column(String(), nullable=True)
+    plot_scale_y = Column(String(), nullable=True)
+    plot_aggregate = Column(String(), nullable=True)
+    x_axis = Column(String(), nullable=True)
+    y_axis = Column(String(), nullable=True)
+    plot_group_by = Column(String(), nullable=True)
+    plot_group_by_colors = Column(String(), nullable=True)
+    bin_count = Column(String(), nullable=True)
+    regression_line = Column(String(), nullable=True)
+    
+    # Relationships
+    tile = relationship("Tile", back_populates="plot_tile")
+
+
+class ViewTile(Base):
+    """Model class for View-specific tile properties."""
+    __tablename__ = "view_tile"
+
+    id = Column(String, primary_key=True, default=uuid.uuid4)
+    tile_id = Column(
+        String,
+        ForeignKey("tile.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    
+    # View-specific properties
+    base_index = Column(String(), nullable=True)
+    
+    # Relationships
+    tile = relationship("Tile", back_populates="view_tile")
+
+
+class EditorTile(Base):
+    """Model class for Editor-specific tile properties."""
+    __tablename__ = "editor_tile"
+
+    id = Column(String, primary_key=True, default=uuid.uuid4)
+    tile_id = Column(
+        String,
+        ForeignKey("tile.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    
+    # Editor-specific properties
+    file_name = Column(String(), nullable=True)
+    file_type = Column(String(), nullable=True)
+    content = Column(String(), nullable=True)
+    
+    # Relationships
+    tile = relationship("Tile", back_populates="editor_tile")
