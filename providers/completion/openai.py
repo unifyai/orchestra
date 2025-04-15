@@ -113,4 +113,19 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.15, "completion": 0.6},
     },
+    "gpt-4.1": {
+        "endpoint": "gpt-4.1",
+        "context_window": 1047576,
+        "cost": {"prompt": 2, "completion": 8},
+    },
+    "gpt-4.1-mini": {
+        "endpoint": "gpt-4.1-mini",
+        "context_window": 1047576,
+        "cost": {"prompt": 0.4, "completion": 1.6},
+    },
+    "gpt-4.1-nano": {
+        "endpoint": "gpt-4.1-nano",
+        "context_window": 1047576,
+        "cost": {"prompt": 0.1, "completion": 0.4},
+    },
 }
