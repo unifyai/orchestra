@@ -20,7 +20,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from orchestra.db.dependencies import register_db_listeners
-from orchestra.logging import setup_logging
 from orchestra.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -241,25 +240,25 @@ def setup_observability(app: FastAPI) -> None:  # pragma: no cover
 
     :param app: current application.
     """
-    # Setup logging with JSON formatting and Loki integration first
-    log_level = getattr(settings, "log_level", "INFO")
-    try:
-        setup_logging(log_level)
-    except Exception as e:
-        logger.error(f"Error setting up logging: {e}")
-        # Continue with basic logging if advanced setup fails
-        logging.basicConfig(level=getattr(logging, log_level.upper(), logging.INFO))
+    # # Setup logging with JSON formatting and Loki integration first
+    # log_level = getattr(settings, "log_level", "INFO")
+    # try:
+    #     setup_logging(log_level)
+    # except Exception as e:
+    #     logger.error(f"Error setting up logging: {e}")
+    #     # Continue with basic logging if advanced setup fails
+    #     logging.basicConfig(level=getattr(logging, log_level.upper(), logging.INFO))
 
-    # Add this before OpenTelemetry setup
-    if settings.grafana_url:
-        logger.info(f"Grafana dashboard available at {settings.grafana_url}")
+    # # Add this before OpenTelemetry setup
+    # if settings.grafana_url:
+    #     logger.info(f"Grafana dashboard available at {settings.grafana_url}")
 
-    # Setup OpenTelemetry for distributed tracing
-    try:
-        setup_opentelemetry(app)
-    except Exception as e:
-        logger.error(f"Failed to setup OpenTelemetry: {e}")
-        logger.info("Continuing without distributed tracing")
+    # # Setup OpenTelemetry for distributed tracing
+    # try:
+    #     setup_opentelemetry(app)
+    # except Exception as e:
+    #     logger.error(f"Failed to setup OpenTelemetry: {e}")
+    #     logger.info("Continuing without distributed tracing")
 
     # Setup SQLAlchemy instrumentation for query tracking
     # Only register DB listeners if the engine is already initialized
@@ -362,7 +361,7 @@ def register_startup_event(
     def _startup() -> None:  # noqa: WPS430
         app.middleware_stack = None
         _setup_db(app)
-        # setup_observability(app)
+        setup_observability(app)
         aiplatform.init(
             project=settings.vertexai_project,
             location=settings.vertexai_location,
