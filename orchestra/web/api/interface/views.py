@@ -2,7 +2,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from orchestra.db.dao.interface_dao import InterfaceDAO
+from orchestra.db.dao.legacy_interface_dao import InterfaceDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.temp_interface_dao import TempInterfaceDAO
 from orchestra.web.api.interface.schema import InterfaceConfig
