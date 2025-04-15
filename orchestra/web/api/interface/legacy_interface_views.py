@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from orchestra.db.dao.legacy_interface_dao import InterfaceDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.temp_interface_dao import TempInterfaceDAO
-from orchestra.web.api.interface.schema import InterfaceConfig
+from orchestra.web.api.interface.schema import LegacyInterfaceConfig
 
 router = APIRouter()
 
@@ -55,7 +55,7 @@ router = APIRouter()
 )
 def create_interface(
     request_fastapi: Request,
-    request: InterfaceConfig,
+    request: LegacyInterfaceConfig,
     project_dao: ProjectDAO = Depends(),
     interface_dao: InterfaceDAO = Depends(),
     temp_interface_dao: TempInterfaceDAO = Depends(),
@@ -131,7 +131,7 @@ def create_interface(
 )
 def update_interface(
     request_fastapi: Request,
-    request: InterfaceConfig,
+    request: LegacyInterfaceConfig,
     project_dao: ProjectDAO = Depends(),
     interface_dao: InterfaceDAO = Depends(),
     temp_interface_dao: TempInterfaceDAO = Depends(),

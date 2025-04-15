@@ -1,60 +1,64 @@
 from pydantic import BaseModel
+from typing import List, Optional
 
-
+# Legacy support (until frontend migration is complete)
 class Item(BaseModel):
+    """Legacy Item schema for backward compatibility"""
     i: str
     x: float
     y: float
     w: float
     h: float
-    minW: float | None = None
-    minH: float | None = None
+    minW: Optional[float] = None
+    minH: Optional[float] = None
     moved: bool = False
     static: bool = False
     visible: bool = True
-    color: str | None = None
-    tab: str | None = None
-    table: str | None = None
-    table_type: str | None = None
-    auto_update: str | None = None
-    freeze: str | None = None
-    context: str | None = None
-    column_context: str | None = None
-    prev_context: str | None = None
-    filters: str | None = None
-    common_filter: str | None = None
-    page_number: str | None = None
-    metric: str | None = None
-    column_order: str | None = None
-    hidden_columns: str | None = None
-    sorting: str | None = None
-    grouping: str | None = None
-    group_sorting: str | None = None
-    columns_pin_left: str | None = None
-    columns_pin_right: str | None = None
-    selected: str | None = None
-    base_index: str | None = None
-    plot_type: str | None = None
-    plot_scale_x: str | None = None
-    plot_scale_y: str | None = None
-    plot_aggregate: str | None = None
-    x_axis: str | None = None
-    y_axis: str | None = None
-    plot_group_by: str | None = None
-    plot_group_by_colors: str | None = None
-    bin_count: str | None = None
-    regression_line: str | None = None
-    file_path: str | None = None
-    file_type: str | None = None
-    content: str | None = None
+    color: Optional[str] = None
+    tab: Optional[str] = None
+    table: Optional[str] = None
+    table_type: Optional[str] = None
+    auto_update: Optional[str] = None
+    freeze: Optional[str] = None
+    context: Optional[str] = None
+    column_context: Optional[str] = None
+    prev_context: Optional[str] = None
+    filters: Optional[str] = None
+    common_filter: Optional[str] = None
+    page_number: Optional[str] = None
+    metric: Optional[str] = None
+    column_order: Optional[str] = None
+    hidden_columns: Optional[str] = None
+    sorting: Optional[str] = None
+    grouping: Optional[str] = None
+    group_sorting: Optional[str] = None
+    columns_pin_left: Optional[str] = None
+    columns_pin_right: Optional[str] = None
+    selected: Optional[str] = None
+    base_index: Optional[str] = None
+    plot_type: Optional[str] = None
+    plot_scale_x: Optional[str] = None
+    plot_scale_y: Optional[str] = None
+    plot_aggregate: Optional[str] = None
+    x_axis: Optional[str] = None
+    y_axis: Optional[str] = None
+    plot_group_by: Optional[str] = None
+    plot_group_by_colors: Optional[str] = None
+    bin_count: Optional[str] = None
+    regression_line: Optional[str] = None
+    file_path: Optional[str] = None
+    file_type: Optional[str] = None
+    content: Optional[str] = None
+    checkpoint: Optional[bool] = None
 
 
-class InterfaceConfig(BaseModel):
+class LegacyInterfaceConfig(BaseModel):
+    """Legacy Interface configuration schema for backward compatibility"""
     name: str
     project: str
-    items: list[Item]
+    items: List[Item]
     new_counter: int
     temporary: bool = False
-    new_name: str | None = None
-    context: str | None = None
-    color: str | None = None
+    new_name: Optional[str] = None
+    context: Optional[str] = None
+    color: Optional[str] = None
