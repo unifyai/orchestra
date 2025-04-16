@@ -208,5 +208,9 @@ class UsersDAO:
         :param user_id: id of a user.
         :return: True if the account is frozen, False otherwise.
         """
-        user = self.get_user_with_id(user_id)
-        return user.frozen
+        try:
+            user = self.get_user_with_id(user_id)
+            return user.frozen
+        except Exception as e:
+            self.session.rollback()
+            return False
