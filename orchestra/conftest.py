@@ -88,7 +88,6 @@ def dbsession(
         yield session
     finally:
         session.close()
-        trans.rollback()
         connection.close()
 
 
