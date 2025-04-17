@@ -402,12 +402,11 @@ def get_db_session(request: Request) -> Generator[Session, None, None]:
     :param request: current request.
     :yield: database session.
     """
-    session: Session = request.app.state.db_session_factory()
-    # Store request state in connection info for context propagation
-    if session.bind and hasattr(session.bind, "engine"):
-        connection = session.bind.engine.connect()
-        connection.info["request_state"] = request.state
-        session.bind = connection
+    SessionLocal = request.app.state.db_session_factory
+    session: Session = SessionLocal()
+    session.info["request_state"] = request.state
+    connection = session.connection()
+    connection.info["request_state"] = request.state
     try:  # noqa: WPS501
         yield session
         session.commit()
