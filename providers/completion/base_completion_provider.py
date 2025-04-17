@@ -357,7 +357,7 @@ class BaseCompletionProvider:
             logger.error(f"Raised RateLimitError, Error: {error}")
             raise HTTPException(
                 status_code=error.status_code,
-                detail=str(error),
+                detail=str(error).replace("org-D1OIs5ffDVTBSBpNWJyXxFfN", ""),
             )  # noqa: WPS432
         except litellm.ContextWindowExceededError as error:
             error = ContextWindowExceededError(error)
