@@ -168,5 +168,24 @@ async def test_n_1(model, client: AsyncClient):
     assert response.status_code == status.HTTP_200_OK
 
 
+@pytest.mark.anyio
+async def test_chat_completions_logging(client: AsyncClient):
+    # 1. Call chat/completions
+    payload = get_chat_completions_payload("gpt-3.5-turbo", "openai", stream=False)
+    await client.post("/v0/chat/completions", headers=HEADERS, json=payload)
+    # 2. Fetch logs for ChatCompletions
+    resp = await client.get(
+        "/v0/logs?project=ChatCompletions",
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    # 3. Assert at least one event and required fields
+    assert len(data["logs"]) >= 1
+    evt = data["logs"][0]
+    for key in ["model_provider_str", "query_body", "response_body", "credits"]:
+        assert key in evt["entries"]
+
+
 if __name__ == "__main__":
     pass
