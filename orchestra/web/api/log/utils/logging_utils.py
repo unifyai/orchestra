@@ -1,8 +1,9 @@
 import json
+import re
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from sqlalchemy import JSON, Integer, and_, case, cast, func, literal, select
 from sqlalchemy.sql.selectable import Subquery
 
@@ -18,6 +19,7 @@ from orchestra.db.models.orchestra_models import (
     JSONLogHistory,
     Log,
     LogEvent,
+    LogEventContext,
     LogHistory,
 )
 from orchestra.web.api.log.schema import CreateLogConfig
@@ -29,6 +31,7 @@ __all__ = [
     "_format_flat_logs",
     "_get_final_logs",
     "is_image_field",
+    "_join_logs",
 ]
 #########################
 # Logs Utils            #
@@ -1027,3 +1030,107 @@ def _create_logs_from_joined_rows(
 
     return new_log_ids
 
+
+def _join_logs(
+    project_id: int,
+    project_name: str,
+    pair_of_args: List[Dict[str, Any]],
+    join_expr: str,
+    mode: str,
+    context_id: int,
+    columns: Optional[List[str]] = None,
+    request_fastapi: Optional[Request] = None,
+    project_dao: ProjectDAO = None,
+    field_type_dao: FieldTypeDAO = None,
+    context_dao: ContextDAO = None,
+    session=None,
+) -> List[int]:
+    """
+    Join logs from two different queries and create new log entries with the joined data.
+
+    This method performs a SQL-based join between two sets of logs, using SQLAlchemy to
+    construct and execute the join query directly in the database. It avoids materializing
+    large result sets in Python memory by delegating the join operation to the database.
+
+    Args:
+        project_id: ID of the project containing the logs
+        project_name: Name of the project
+        pair_of_args: List of two dictionaries containing filtering criteria for logs to join
+        join_expr: SQL expression for the join condition using aliases A and B
+                   (e.g., 'A.user_id = B.user_id')
+        mode: Type of join to perform ('inner', 'left', 'right', or 'outer')
+        context_id: ID of the context where joined logs will be stored
+        columns: Optional list of column names to include in the joined result
+                 Format can be either 'column_name' or 'A.column_name'/'B.column_name'
+        request_fastapi: FastAPI request object for accessing user state
+        project_dao: ProjectDAO instance for project operations
+        field_type_dao: FieldTypeDAO instance for field type operations
+        context_dao: ContextDAO instance for context operations
+        session: SQLAlchemy session
+
+    Returns:
+        List of IDs of the newly created log entries
+
+    Raises:
+        ValueError: If the join parameters are invalid or if any other error occurs
+    """
+    try:
+        # Build subqueries for both sets of filtering criteria
+        subq_a, fields_a = _build_log_subquery(
+            args=pair_of_args[0],
+            project_name=project_name,
+            project_id=project_id,
+            request_fastapi=request_fastapi,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+            alias="A",
+        )
+
+        subq_b, fields_b = _build_log_subquery(
+            args=pair_of_args[1],
+            project_name=project_name,
+            project_id=project_id,
+            request_fastapi=request_fastapi,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+            alias="B",
+        )
+
+        # Construct the join query
+        joined_query = _construct_join_query(
+            subq_a=subq_a,
+            subq_b=subq_b,
+            join_expr=join_expr,
+            mode=mode,
+            columns=columns,
+            fields_a=fields_a,
+            fields_b=fields_b,
+            session=session,
+        )
+
+        # Execute the join query
+        result_rows = session.execute(joined_query).fetchall()
+
+        # If no results, return empty list
+        if not result_rows:
+            return []
+
+        # Create new log entries from the joined results
+        new_log_ids = _create_logs_from_joined_rows(
+            result_rows=result_rows,
+            project_id=project_id,
+            context_id=context_id,
+            session=session,
+        )
+
+        # Commit the transaction
+        session.commit()
+
+        return new_log_ids
+
+    except Exception as e:
+        raise ValueError(f"Failed to join logs: {str(e)}")
