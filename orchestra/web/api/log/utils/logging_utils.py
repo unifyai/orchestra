@@ -927,3 +927,103 @@ def _construct_join_query(
     return joined_query
 
 
+def _create_logs_from_joined_rows(
+    result_rows,
+    project_id: int,
+    context_id: int,
+    session,
+) -> List[int]:
+    """
+    Creates new log entries from joined query results.
+
+    Args:
+        result_rows: Result rows from the join query
+        project_id: ID of the project
+        context_id: ID of the context
+        session: SQLAlchemy session
+
+    Returns:
+        List of IDs of the newly created log events
+    """
+    new_log_ids = []
+    now = datetime.now(timezone.utc)
+
+    # Prepare bulk insert collections
+    log_events = []
+    log_event_contexts = []
+    logs = []
+    json_logs = []
+
+    # Process each row
+    for row in result_rows:
+        # Convert row to dictionary
+        row_dict = {}
+        for col in row._fields:
+            value = getattr(row, col)
+            if col != "id":  # Skip the id column as it's special
+                row_dict[col] = value
+
+        # Create a new LogEvent
+        log_event = LogEvent(
+            project_id=project_id,
+            created_at=now,
+            updated_at=now,
+        )
+        log_events.append(log_event)
+
+        # We need to flush to get the ID before creating related records
+        session.add(log_event)
+
+    # Flush to get IDs
+    session.flush()
+
+    # Now create the related records with the generated IDs
+    for i, log_event in enumerate(log_events):
+        row = result_rows[i]
+        row_dict = {}
+        for col in row._fields:
+            value = getattr(row, col)
+            if col != "id":  # Skip the id column as it's special
+                row_dict[col] = value
+
+        # Create LogEventContext association
+        log_event_contexts.append(
+            LogEventContext(
+                log_event_id=log_event.id,
+                context_id=context_id,
+            ),
+        )
+
+        # Create individual Log entries for each column in the joined result
+        for col, val in row_dict.items():
+            inferred_type = LogDAO.infer_type(col, val)
+            logs.append(
+                Log(
+                    log_event_id=log_event.id,
+                    key=col,
+                    value=val,
+                    inferred_type=inferred_type,
+                    created_at=now,
+                    updated_at=now,
+                ),
+            )
+
+            # If value is a dict or list, create a JSONLog entry
+            if isinstance(val, (dict, list)):
+                json_logs.append(
+                    JSONLog(
+                        log_event_id=log_event.id,
+                        key=col,
+                        value=val,
+                    ),
+                )
+
+        new_log_ids.append(log_event.id)
+
+    # Bulk insert related records
+    session.bulk_save_objects(log_event_contexts)
+    session.bulk_save_objects(logs)
+    session.bulk_save_objects(json_logs)
+
+    return new_log_ids
+
