@@ -116,22 +116,24 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         request_priority_list = [request]
 
     # Check for malicious patterns in any request
-    for req in request_priority_list:
-        for message in req.messages:
-            if message.get("content"):
-                content = message["content"].lower()
-                # Count how many patterns match
-                pattern_matches = sum(
-                    1 for pattern in malicious_patterns if pattern.lower() in content
-                )
-
-                # Only block if we exceed the minimum threshold
-                if pattern_matches >= MIN_PATTERNS_REQUIRED:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="This request has been blocked due to policy violations.",
+    try:
+        for req in request_priority_list:
+            for message in req.messages:
+                if message.get("content"):
+                    content = message["content"].lower()
+                    # Count how many patterns match
+                    pattern_matches = sum(
+                        1 for pattern in malicious_patterns if pattern.lower() in content
                     )
 
+                    # Only block if we exceed the minimum threshold
+                    if pattern_matches >= MIN_PATTERNS_REQUIRED:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="This request has been blocked due to policy violations.",
+                        )
+    except Exception as e:
+        pass
     try_request = 0
     num_tries = min(5, len(request_priority_list))
     region = None
