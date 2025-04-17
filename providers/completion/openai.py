@@ -128,4 +128,14 @@ supported_models = {
         "context_window": 1047576,
         "cost": {"prompt": 0.1, "completion": 0.4},
     },
+    "o3": {
+        "endpoint": "o3",
+        "context_window": 200000,
+        "cost": {"prompt": 10, "completion": 40},
+    },
+    "o4-mini": {
+        "endpoint": "o4-mini",
+        "context_window": 200000,
+        "cost": {"prompt": 1.1, "completion": 4.4},
+    },
 }
