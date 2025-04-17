@@ -236,6 +236,7 @@ class LegacyInterfaceConfig(BaseModel):
     project: str
     items: List[Item]
     new_counter: int
+    temporary: bool = False
     new_name: Optional[str] = None
     context: Optional[str] = None
     color: Optional[str] = None
