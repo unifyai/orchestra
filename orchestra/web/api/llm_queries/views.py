@@ -123,7 +123,9 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     content = message["content"].lower()
                     # Count how many patterns match
                     pattern_matches = sum(
-                        1 for pattern in malicious_patterns if pattern.lower() in content
+                        1
+                        for pattern in malicious_patterns
+                        if pattern.lower() in content
                     )
 
                     # Only block if we exceed the minimum threshold
