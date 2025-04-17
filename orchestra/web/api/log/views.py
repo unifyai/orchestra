@@ -59,6 +59,7 @@ from orchestra.web.api.log.schema import (
     CreateLogConfig,
     DeleteLogEntryRequest,
     GetLogsMetricRequest,
+    JoinLogsRequest,
     RenameFieldRequest,
     UpdateDerivedEntriesConfig,
     UpdateLogRequest,
@@ -86,6 +87,7 @@ from .utils import (
     _get_final_logs,
     _get_log_event_ids_for_group_value,
     _get_params_for_log_events,
+    _join_logs,
     _resolve_key_specific_filters,
     apply_group_threshold,
     compute_metric_for_key,
@@ -3354,6 +3356,160 @@ def rename_field(
         raise HTTPException(
             status_code=500,
             detail=f"Error renaming field: {str(e)}",
+        )
+
+
+@router.post(
+    "/logs/join",
+    responses={
+        200: {
+            "description": "Logs joined successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Joined logs created successfully!",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Bad Request",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid join parameters. Check your request and try again.",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def join_logs(
+    request_fastapi: Request,
+    request: JoinLogsRequest,
+    project_dao: ProjectDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    session=Depends(get_db_session),
+):
+    """
+    Joins two sets of logs based on specified criteria and creates new logs with the joined data.
+
+    The join operation is similar to SQL joins, allowing inner, left, right, and outer joins
+    between two sets of logs filtered by the criteria in pair_of_args.
+
+    Args:
+        pair_of_args: List of two dictionaries containing filtering criteria for logs to join.
+                     Each dictionary can include context, filter_expr, from_ids, etc.
+        join_expr: SQL expression for the join condition using aliases A and B
+                  (e.g., 'A.user_id = B.user_id')
+        mode: Type of join to perform ('inner', 'left', 'right', or 'outer')
+        new_context: Name for the new context where joined logs will be stored
+        columns: Optional list of column names to include in the joined result
+        project: Name of the project containing the logs
+
+    Returns:
+        JSON response with info about the join operation
+    """
+    # Validate input parameters
+    user_id = request_fastapi.state.user_id
+
+    # Validate project
+    try:
+        project_obj = project_dao.get_by_user_and_name(
+            user_id=user_id,
+            name=request.project,
+        )
+        project_id = project_obj.id
+    except (IndexError, AttributeError):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{request.project}' not found.",
+        )
+
+    # Validate pair_of_args
+    if not isinstance(request.pair_of_args, list) or len(request.pair_of_args) != 2:
+        raise HTTPException(
+            status_code=400,
+            detail="pair_of_args must be a list containing exactly two dictionaries.",
+        )
+
+    # Validate join mode
+    valid_modes = ["inner", "left", "right", "outer"]
+    if request.mode not in valid_modes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid join mode. Must be one of: {', '.join(valid_modes)}",
+        )
+
+    # Validate join expression
+    if not request.join_expr or not isinstance(request.join_expr, str):
+        raise HTTPException(
+            status_code=400,
+            detail="join_expr must be a non-empty string.",
+        )
+
+    # Validate new_context
+    if not request.new_context or not isinstance(request.new_context, str):
+        raise HTTPException(
+            status_code=400,
+            detail="new_context must be a non-empty string.",
+        )
+
+    # Create or get the new context
+    try:
+        context_id = context_dao.get_or_create(
+            project_id=project_id,
+            name=request.new_context,
+            description=f"Joined logs context created via join operation ({request.mode} join)",
+            is_versioned=False,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create context '{request.new_context}': {str(e)}",
+        )
+
+    # Perform the join operation
+    try:
+        new_log_ids = _join_logs(
+            project_name=request.project,
+            project_id=project_id,
+            pair_of_args=request.pair_of_args,
+            join_expr=request.join_expr,
+            mode=request.mode,
+            context_id=context_id,
+            columns=request.columns,
+            request_fastapi=request_fastapi,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+        )
+
+        return {
+            "info": f"Successfully joined logs with {request.mode} join and stored in context '{request.new_context}'",
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error performing join operation: {str(e)}",
         )
 
 
