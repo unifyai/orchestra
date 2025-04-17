@@ -4,6 +4,8 @@ Includes endpoints related to log projects.
 
 from datetime import datetime, timezone
 
+CHAT_COMPLETIONS_PROJECT = "ChatCompletions"
+
 import sqlalchemy
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 
@@ -155,6 +157,11 @@ def delete_project(
             name=name,
         )
         project_id = project.id
+        if name == CHAT_COMPLETIONS_PROJECT:
+            raise HTTPException(
+                status_code=403,
+                detail=f"The '{CHAT_COMPLETIONS_PROJECT}' project cannot be deleted.",
+            )
         if name == PROJ_NAME and project.organization_id == orchestra_org.id:
             raise HTTPException(
                 status_code=403,
