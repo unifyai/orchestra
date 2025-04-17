@@ -98,7 +98,9 @@ def _select_value(subq, session, is_collection=False):
     try:
         if isinstance(subq, BindParameter):
             return subq.value, LogDAO.infer_type("", subq.value)
-        if hasattr(subq.c, "value"):
+        if hasattr(subq, "element") and subq.name == "reduction_metric":
+            return subq.element, "float"
+        if isinstance(subq, Subquery) and hasattr(subq.c, "value"):
             if is_collection:
                 # the assumption here is lists/dicts to have a single consistent type
                 # so we can just check the first element
@@ -111,6 +113,8 @@ def _select_value(subq, session, is_collection=False):
         dt = session.execute(select(subq)).first()[
             -1
         ]  # execute the subquery to determine the type.
+        if not isinstance(subq, Subquery):
+            return subq, LogDAO.infer_type("", dt)
         d = {
             "int": subq.c.int_value,
             "float": subq.c.float_value,
