@@ -689,3 +689,110 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
         .order_by(paginated_ids_subq.c.row_num, filtered_logs_subq.c.created_at)
     )
     return final_logs_query.all()
+
+
+#### JOIN LOG ####
+def _build_log_subquery(
+    args: Dict[str, Any],
+    project_name: str,
+    project_id: int,
+    request_fastapi: Optional[Request],
+    project_dao: ProjectDAO,
+    field_type_dao: FieldTypeDAO,
+    context_dao: ContextDAO,
+    session,
+    alias: str,
+):
+    """
+    Helper function to build a SQLAlchemy subquery from log filtering criteria.
+
+    Args:
+        args: Dictionary containing filtering criteria
+        project_name: Name of the project
+        request_fastapi: FastAPI request object
+        project_dao: ProjectDAO instance
+        field_type_dao: FieldTypeDAO instance
+        context_dao: ContextDAO instance
+        session: SQLAlchemy session
+        alias: Alias name for the subquery
+
+    Returns:
+        SQLAlchemy subquery object
+    """
+    # Import the necessary function from views.py to build subqueries
+    from orchestra.web.api.log.views import _get_all_filtered_log_event_ids
+
+    # Extract filtering criteria from args
+    column_context = args.get("column_context")
+    context = args.get("context")
+    filter_expr = args.get("filter_expr")
+    from_ids = args.get("from_ids")
+    exclude_ids = args.get("exclude_ids")
+
+    # Get filtered log event IDs as a subquery
+    event_ids_subq, _ = _get_all_filtered_log_event_ids(
+        request_fastapi=request_fastapi,
+        project=project_name,
+        context=context,
+        filter_expr=filter_expr,
+        from_ids=from_ids,
+        exclude_ids=exclude_ids,
+        project_dao=project_dao,
+        context_dao=context_dao,
+        field_type_dao=field_type_dao,
+        session=session,
+        as_subquery=True,  # Return as a subquery
+    )
+
+    # Get context ID for field type lookup
+    context_id = None
+    if context:
+        context_id = context_dao.get_or_create(
+            project_id,
+            name=context,
+        )
+
+    # Start with a base query selecting log_event_id
+    base_query = session.query(LogEvent.id.label("log_event_id"))
+
+    # Try to get field names from FieldTypeDAO
+    log_keys = []
+    try:
+        # Get ordered field names from FieldTypeDAO
+        field_names_dict = field_type_dao.get_field_types(
+            project_id=project_id,
+            context_id=context_id,
+        )
+        if field_names_dict:
+            # Convert to list and sort by the order index
+            log_keys = [
+                k
+                for k, _ in sorted(
+                    field_names_dict.items(),
+                    key=lambda item: item[1],
+                )
+            ]
+    except Exception as e:
+        raise ValueError(f"Error getting field types: {str(e)}")
+
+    # For each key, add a lateral subquery that gets its value
+    for key in log_keys:
+        # Create a subquery that gets the value for this key
+        key_subq = (
+            session.query(Log.value)
+            .filter(Log.log_event_id == LogEvent.id, Log.key == key)
+            .limit(1)
+            .scalar_subquery()
+            .label(key)
+        )
+        base_query = base_query.add_columns(key_subq)
+
+    # Apply the filter to get only the log events we want
+    final_query = base_query.filter(
+        LogEvent.id.in_(select(event_ids_subq)),
+    ).order_by(LogEvent.id.asc())
+
+    # Return as a subquery with the specified alias
+    return final_query.subquery(alias), field_names_dict
+
+
