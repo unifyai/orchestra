@@ -796,3 +796,134 @@ def _build_log_subquery(
     return final_query.subquery(alias), field_names_dict
 
 
+def _construct_join_query(
+    subq_a,
+    subq_b,
+    join_expr: str,
+    mode: str,
+    columns: Optional[List[str]] = None,
+    fields_a: Optional[Dict[str, Any]] = None,
+    fields_b: Optional[Dict[str, Any]] = None,
+    session=None,
+):
+    """
+    Constructs a join query between two subqueries based on the specified join mode.
+
+    Args:
+        subq_a: First subquery (aliased as 'A')
+        subq_b: Second subquery (aliased as 'B')
+        join_expr: SQL expression for the join condition
+        mode: Type of join ('inner', 'left', 'right', or 'outer')
+        columns: Optional list of column names to include
+
+    Returns:
+        SQLAlchemy select statement representing the join
+    """
+    # Import the necessary functions from python2SQL module
+    from orchestra.web.api.log.python2SQL.core import build_sql_query
+    from orchestra.web.api.log.python2SQL.parsers import (
+        str_filter_exp_to_dict_using_ast,
+    )
+
+    try:
+        # 1. Preprocess the join expression to replace A. and B. prefixes with placeholders
+        processed_join_expr = re.sub(r"\bA\.(\w+)", r"__table_A_\1", join_expr)
+        processed_join_expr = re.sub(
+            r"\bB\.(\w+)",
+            r"__table_B_\1",
+            processed_join_expr,
+        )
+
+        # 2. Build the local_scope dictionary mapping placeholders to column objects
+        local_scope = {"subq_a": subq_a, "subq_b": subq_b}
+        for col in subq_a.c.keys():
+            if col in fields_a:
+                local_scope[f"__table_A_{col}"] = (getattr(subq_a.c, col), "column")
+        for col in subq_b.c.keys():
+            if col in fields_b:
+                local_scope[f"__table_B_{col}"] = (getattr(subq_b.c, col), "column")
+
+        # 3. Parse the processed join expression into a filter dictionary
+        filter_dict = str_filter_exp_to_dict_using_ast(processed_join_expr)
+
+        # 4. Build the SQL query using the filter dictionary with the local_scope
+        join_condition = build_sql_query(
+            filter_dict,
+            LogEvent,
+            session=session,
+            log_event_ids=select(subq_a.c.log_event_id).subquery("event_ids"),
+            is_derived=False,
+            local_scope=local_scope,
+        )
+    except Exception as e:
+        raise ValueError(f"Error processing join expression: {e}")
+    select_columns = []
+    if columns:
+        for col_name in columns:
+            # Parse the column name to determine the source table and actual column
+            if "." in col_name:
+                table_alias, actual_col = col_name.split(".", 1)
+                if table_alias.upper() == "A" and hasattr(subq_a.c, actual_col):
+                    select_columns.append(
+                        getattr(subq_a.c, actual_col).label(f"A_{actual_col}"),
+                    )
+                elif table_alias.upper() == "B" and hasattr(subq_b.c, actual_col):
+                    select_columns.append(
+                        getattr(subq_b.c, actual_col).label(f"B_{actual_col}"),
+                    )
+                else:
+                    raise ValueError(
+                        f"Column '{col_name}' not found in the specified table",
+                    )
+            else:
+                # If no table specified, check both tables
+                if hasattr(subq_a.c, col_name):
+                    select_columns.append(
+                        getattr(subq_a.c, col_name).label(f"A_{col_name}"),
+                    )
+                elif hasattr(subq_b.c, col_name):
+                    select_columns.append(
+                        getattr(subq_b.c, col_name).label(f"B_{col_name}"),
+                    )
+                else:
+                    raise ValueError(
+                        f"Column '{col_name}' not found in either table",
+                    )
+    else:
+        # Select all columns from both tables
+        select_columns.extend(
+            [
+                getattr(subq_a.c, col_name).label(f"A_{col_name}")
+                for col_name in subq_a.c.keys()
+                if col_name != "log_event_id"
+            ],
+        )
+        select_columns.extend(
+            [
+                getattr(subq_b.c, col_name).label(f"B_{col_name}")
+                for col_name in subq_b.c.keys()
+                if col_name != "log_event_id"
+            ],
+        )
+
+    # Build the join query based on the mode
+    if mode == "inner":
+        joined_query = select(*select_columns).select_from(
+            subq_a.join(subq_b, join_condition),
+        )
+    elif mode == "left":
+        joined_query = select(*select_columns).select_from(
+            subq_a.outerjoin(subq_b, join_condition),
+        )
+    elif mode == "right":
+        joined_query = select(*select_columns).select_from(
+            subq_b.outerjoin(subq_a, join_condition),
+        )
+    elif mode == "outer":
+        joined_query = select(*select_columns).select_from(
+            subq_b.outerjoin(subq_a, join_condition, full=True),
+        )
+
+    return joined_query
+
+
