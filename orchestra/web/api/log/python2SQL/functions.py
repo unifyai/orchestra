@@ -23,7 +23,7 @@ from sqlalchemy import (
     union_all,
 )
 from sqlalchemy.dialects.postgresql import JSONB, aggregate_order_by
-from sqlalchemy.sql.selectable import Subquery
+from sqlalchemy.sql.selectable import ColumnClause, Subquery
 
 from orchestra.db.dao.log_dao import LogDAO, _is_date_string, _is_time_string
 from orchestra.db.models.orchestra_models import Log
@@ -76,7 +76,8 @@ def _handle_date_function(rhs_expr, session):
             (val_type == "str", func.cast(cast(val, Text), Date)),
             else_=None,
         )
-
+        if isinstance(rhs_expr, ColumnClause):
+            return expr
         select_cols = [rhs_expr.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in rhs_expr.c.keys():
             select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
@@ -168,7 +169,7 @@ def _handle_functions(
 
     if operand == "len":
         rval, rval_type = _select_value(rhs_expr, session)
-        if isinstance(rhs_expr, Subquery):
+        if isinstance(rhs_expr, (Subquery, ColumnClause)):
             expr = case(
                 (
                     rval_type == "list",
@@ -194,7 +195,9 @@ def _handle_functions(
                     ).cast(Float),
                 ),
                 else_=0,
-            ).label("value")
+            )
+            if isinstance(rhs_expr, ColumnClause):
+                return expr
             select_cols = [rhs_expr.c.log_event_id.label("log_event_id")]
             if "__comp_idx__" in rhs_expr.c.keys():
                 select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
@@ -208,9 +211,11 @@ def _handle_functions(
             return len(rhs_expr)
 
     elif operand == "str":
-        if isinstance(rhs_expr, Subquery):
+        if isinstance(rhs_expr, (Subquery, ColumnClause)):
             val, val_type = _select_value(rhs_expr, session)
             expr = func.cast(val, String)
+            if isinstance(rhs_expr, ColumnClause):
+                return expr
             select_cols = [rhs_expr.c.log_event_id.label("log_event_id")]
             if "__comp_idx__" in rhs_expr.c.keys():
                 select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
@@ -231,7 +236,7 @@ def _handle_functions(
         if len(rhs_expr) == 1:
             # round(val)
             val_expr = rhs_expr[0]
-            if isinstance(val_expr, Subquery):
+            if isinstance(val_expr, (Subquery, ColumnClause)):
                 # subquery => we retrieve the numeric column
                 val_col, val_type = _select_value(val_expr, session)
                 # produce a new subquery
@@ -242,9 +247,12 @@ def _handle_functions(
                     select_cols.append(
                         val_expr.c.__parent_idx__.label("__parent_idx__"),
                     )
+                expr = func.round(cast(val_col, Numeric))
+                if isinstance(val_expr, ColumnClause):
+                    return expr
                 select_cols.extend(
                     [
-                        func.round(cast(val_col, Numeric)).label("value"),
+                        expr.label("value"),
                         literal("int").label("inferred_type"),
                     ],
                 )
@@ -266,9 +274,12 @@ def _handle_functions(
                     select_cols.append(
                         val_expr.c.__parent_idx__.label("__parent_idx__"),
                     )
+                expr = func.round(cast(val_col, Numeric), dig_col)
+                if isinstance(val_expr, ColumnClause):
+                    return expr
                 select_cols.extend(
                     [
-                        func.round(cast(val_col, Numeric), dig_col).label("value"),
+                        expr.label("value"),
                         literal("int").label("inferred_type"),
                     ],
                 )
@@ -290,9 +301,12 @@ def _handle_functions(
                     select_cols.append(
                         val_expr.c.__parent_idx__.label("__parent_idx__"),
                     )
+                expr = func.round(cast(val_col, Numeric), digits_expr)
+                if isinstance(val_expr, ColumnClause):
+                    return expr
                 select_cols.extend(
                     [
-                        func.round(cast(val_col, Numeric), digits_expr).label("value"),
+                        expr.label("value"),
                         literal("int").label("inferred_type"),
                     ],
                 )
@@ -307,9 +321,12 @@ def _handle_functions(
                     select_cols.append(
                         digits_expr.c.__parent_idx__.label("__parent_idx__"),
                     )
+                expr = func.round(cast(val_col, Numeric), dig_col)
+                if isinstance(digits_expr, ColumnClause):
+                    return expr
                 select_cols.extend(
                     [
-                        func.round(cast(val_expr, Numeric), dig_col).label("value"),
+                        expr.label("value"),
                         literal("int").label("inferred_type"),
                     ],
                 )
@@ -350,9 +367,12 @@ def _handle_functions(
                 select_cols.append(ts_expr.c.__comp_idx__.label("__comp_idx__"))
             if "__parent_idx__" in ts_expr.c.keys():
                 select_cols.append(ts_expr.c.__parent_idx__.label("__parent_idx__"))
+            expr = _pg_round_timestamp(ts_col, sec_col)
+            if isinstance(ts_expr, ColumnClause):
+                return expr
             select_cols.extend(
                 [
-                    _pg_round_timestamp(ts_col, sec_col).label("value"),
+                    expr.label("value"),
                     literal("timestamp").label("inferred_type"),
                 ],
             )
@@ -374,9 +394,12 @@ def _handle_functions(
                     select_cols.append(ts_expr.c.__comp_idx__.label("__comp_idx__"))
                 if "__parent_idx__" in ts_expr.c.keys():
                     select_cols.append(ts_expr.c.__parent_idx__.label("__parent_idx__"))
+                expr = _pg_round_timestamp(ts_col, sec_expr.value)
+                if isinstance(ts_expr, ColumnClause):
+                    return expr
                 select_cols.extend(
                     [
-                        _pg_round_timestamp(ts_col, sec_expr.value).label("value"),
+                        expr.label("value"),
                         literal("timestamp").label("inferred_type"),
                     ],
                 )
@@ -401,9 +424,12 @@ def _handle_functions(
                     select_cols.append(
                         sec_expr.c.__parent_idx__.label("__parent_idx__"),
                     )
+                expr = _pg_round_timestamp(ts_literal, sec_expr.value)
+                if isinstance(sec_expr, ColumnClause):
+                    return expr
                 select_cols.extend(
                     [
-                        _pg_round_timestamp(ts_literal, sec_expr.value).label("value"),
+                        expr.label("value"),
                         literal("timestamp").label("inferred_type"),
                     ],
                 )
@@ -544,11 +570,13 @@ def _handle_functions(
             ]
 
         # If the rhs_expr is a Subquery, select its value and check is_(None)
-        if isinstance(rhs_expr, Subquery):
+        if isinstance(rhs_expr, (Subquery, ColumnClause)):
             rval, rval_type = _select_value(rhs_expr, session)
             if rval is None:
                 return None
             expr = rval.is_(None)
+            if isinstance(rhs_expr, ColumnClause):
+                return expr
             select_cols = [rhs_expr.c.log_event_id.label("log_event_id")]
             if "__comp_idx__" in rhs_expr.c.keys():
                 select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
@@ -582,6 +610,8 @@ def _handle_functions(
                 (val_type == "time", func.cast(cast(val, Text), Time)),
                 else_=None,
             )
+            if isinstance(rhs_expr, ColumnClause):
+                return expr
             select_cols = [rhs_expr.c.log_event_id.label("log_event_id")]
             if "__comp_idx__" in rhs_expr.c.keys():
                 select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
@@ -670,14 +700,16 @@ def _handle_functions(
             "median": AggregationMetric.MEDIAN,
             "mode": AggregationMetric.MODE,
         }
-        if isinstance(rhs_expr, Subquery):
+        if isinstance(rhs_expr, (Subquery, ColumnClause)):
             val, val_type = _select_value(rhs_expr, session)
             agg_expr = _get_reduction_expr(
                 reduction_functions[operand],
                 val_type,
                 val,
-                "value",
+                "reduction_metric",
             )
+            if isinstance(rhs_expr, ColumnClause):
+                return agg_expr
             select_cols = [rhs_expr.c.log_event_id.label("log_event_id")]
             if "__comp_idx__" in rhs_expr.c.keys():
                 select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
