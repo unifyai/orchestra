@@ -938,18 +938,10 @@ class TempInterface(Base):
     context = Column(String(), nullable=True)
     color = Column(String(), nullable=True)
     created_at = Column(TIMESTAMP, nullable=True, server_default=func.now())
-    updated_at = Column(TIMESTAMP, onupdate=func.now())
-    active_tab_id = Column(String, nullable=True)
     # Relationships
     project = relationship("Project", back_populates="temp_interfaces")
     user = relationship("AuthUser", back_populates="temp_interfaces")
     organization = relationship("Organization", back_populates="temp_interfaces")
-    tabs = relationship(
-        "Tab",
-        back_populates="temp_interface",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
     __table_args__ = (
         UniqueConstraint(
             "user_id",
