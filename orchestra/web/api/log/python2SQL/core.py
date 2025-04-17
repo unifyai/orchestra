@@ -1,7 +1,7 @@
 import random
 
 from sqlalchemy import literal, select
-from sqlalchemy.sql.selectable import Subquery
+from sqlalchemy.sql.selectable import ColumnClause, Subquery
 
 from .helpers import _build_subquery_for_identifier
 
@@ -82,7 +82,7 @@ def build_sql_query(
             if key in local_scope:
                 col, itype = local_scope[key]
 
-                base_sub = local_scope.get("__comp_base__").get(key)
+                base_sub = local_scope.get("__comp_base__", {}).get(key)
                 if base_sub is not None and "__comp_idx__" in local_scope:
                     cols = [
                         base_sub.c.log_event_id.label("log_event_id"),
@@ -102,6 +102,9 @@ def build_sql_query(
                         .subquery(name=f"__local_{key}_{random.randint(1,100000000)}")
                     )
                     return subq
+
+                if isinstance(col, (Subquery, ColumnClause)):
+                    return col
 
             if isinstance(log_event_ids, dict):
                 event_ids = log_event_ids.get(key)
