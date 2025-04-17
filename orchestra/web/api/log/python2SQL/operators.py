@@ -357,22 +357,24 @@ def _handle_arithmetic_operator(
         )
         return select(*select_cols).select_from(rhs).subquery()
     else:
-        # For direct expressions (not subqueries), we can't easily determine types
-        # So we'll just use the standard SQLAlchemy operators and let PostgreSQL handle the casting
+        rval, rval_type = _select_value(rhs, session)
+        lval, lval_type = _select_value(lhs, session)
+        rval = cast_expr(rval, rval_type, lval_type)
+        lval = cast_expr(lval, lval_type, rval_type)
         if operand == "+":
-            return lhs + rhs
+            return lval + rval
         elif operand == "-":
-            return lhs - rhs
+            return lval - rval
         elif operand == "*":
-            return lhs * rhs
+            return lval * rval
         elif operand == "/":
-            return lhs / rhs
+            return lval / rval
         elif operand == "%":
-            return lhs % rhs
+            return lval % rval
         elif operand == "**":
-            return func.power(lhs, rhs)
+            return func.power(lval, rval)
         elif operand == "//":
-            return func.floor(lhs / rhs)
+            return func.floor(lval / rval)
 
 
 # Helper function for comparison operators (==, !=, <, >, <=, >=, is, is not)
@@ -519,22 +521,26 @@ def _handle_comparison_operator(
         )
         return select(*select_cols).select_from(rhs).subquery()
     else:
+        rval, rval_type = _select_value(rhs, session)
+        lval, lval_type = _select_value(lhs, session)
+        rval = cast_expr(rval, rval_type, lval_type)
+        lval = cast_expr(lval, lval_type, rval_type)
         if operand == "==":
-            return lhs == rhs
+            return lval == rval
         elif operand == "!=":
-            return lhs != rhs
+            return lval != rval
         elif operand == "<":
-            return lhs < rhs
+            return lval < rval
         elif operand == ">":
-            return lhs > rhs
+            return lval > rval
         elif operand == "<=":
-            return lhs <= rhs
+            return lval <= rval
         elif operand == ">=":
-            return lhs >= rhs
+            return lval >= rval
         elif operand == "is":
-            return lhs.is_(rhs)
+            return lval.is_(rval)
         elif operand == "is not":
-            return lhs.isnot(rhs)
+            return lval.isnot(rval)
 
 
 # Helper function for membership operators (in, not in)
