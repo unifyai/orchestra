@@ -296,3 +296,35 @@ class GetLogsMetricRequest(BaseModel):
         default=None,
         description="Field(s) to group by when computing metrics. Can be a single field name or a list of field names for nested grouping.",
     )
+
+
+class JoinLogsRequest(BaseModel):
+    pair_of_args: List[Dict[str, Any]] = Field(
+        ...,
+        description="Two sets of filtering criteria for logs to join",
+        example=[
+            {"context": "context_a", "filter_expr": "user_id == 1"},
+            {"context": "context_b", "filter_expr": "user_id == 2"},
+        ],
+    )
+    join_expr: str = Field(
+        ...,
+        description="SQL expression for join condition using aliases A and B",
+        example="A.user_id == B.user_id",
+    )
+    mode: str = Field(
+        ...,
+        description="Join type: 'inner', 'left', 'right', or 'outer'",
+        example="inner",
+    )
+    new_context: str = Field(
+        ...,
+        description="Name for the new context where joined logs will be stored",
+        example="Derived/A_B",
+    )
+    columns: Optional[List[str]] = Field(
+        default=None,
+        description="Optional list of columns to include in the result",
+        example=["A.user_id", "B.score"],
+    )
+    project: str = Field(..., description="Name of the project")
