@@ -41,12 +41,11 @@ from orchestra.db.models.orchestra_models import (
     LogHistory,
     Project,
 )
+from orchestra.settings import settings
 from orchestra.web.api.log.schema import CreateLogConfig
 from orchestra.web.api.utils.http_responses import not_found
 
 from ..python2SQL import STR_TO_SQL_TYPES, build_sql_query, str_filter_exp_to_dict
-
-CHAT_COMPLETIONS_PROJECT = "ChatCompletions"
 
 __all__ = [
     "_get_logs_query",
@@ -57,7 +56,6 @@ __all__ = [
     "_get_final_logs",
     "is_image_field",
     "_join_logs",
-    "CHAT_COMPLETIONS_PROJECT",
     "get_or_create_chat_completions_project",
     "log_chat_completion_event",
 ]
