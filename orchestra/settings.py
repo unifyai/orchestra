@@ -132,6 +132,9 @@ class Settings(BaseSettings):
         "gcp-project-saas",
     )
 
+    # Chat Completions Project
+    chat_completions_project_name: str = "ChatCompletions"
+
     cors_allow_origins: list[str] = []
 
     vertexai_service_acc_json: str = ""
