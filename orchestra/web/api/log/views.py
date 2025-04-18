@@ -204,7 +204,7 @@ def create_logs(
         context_id = context_dao.get_or_create(project_id, name="")
 
     # Call the internal implementation with validated project and context
-    return create_logs_internal(
+    event_ids = create_logs_internal(
         request=request,
         project_id=project_id,
         context_id=context_id,
@@ -214,6 +214,7 @@ def create_logs(
         log_dao=log_dao,
         context_dao=context_dao,
     )
+    return {"info": "Logs created successfully!", "log_event_ids": event_ids}
 
 
 def unify_id_sets_by_subset(alias_id_sets: Dict[str, Set[int]]) -> Dict[str, Set[int]]:
