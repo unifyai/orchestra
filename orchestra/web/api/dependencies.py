@@ -1,13 +1,13 @@
 import logging
 import os
+from contextlib import contextmanager
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import AdminUser
 from orchestra.web.api.utils.http_responses import (
     account_frozen,
@@ -19,11 +19,27 @@ from orchestra.web.api.utils.observability import set_user_context
 security = HTTPBearer()
 logger = logging.getLogger(__name__)
 
+# READ‑ONLY session for auth dependencies
+@contextmanager
+def _ro_session():
+    from orchestra.web.lifetime import get_engine
+    SessionLocal = sessionmaker(
+        bind=get_engine(),
+        autoflush=False,
+        expire_on_commit=True,
+    )
+    session: Session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception as e:
+        session.rollback()
+    finally:
+        session.close()
 
 def auth_api_key(
     request_fastapi: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    api_key_dao: ApiKeyDAO = Depends(),
 ) -> None:
     """
     Authenticate an API key.
@@ -34,7 +50,8 @@ def auth_api_key(
     """
     apikey = credentials.credentials
 
-    db_response = api_key_dao.get_user_id_and_mail(apikey)
+    with _ro_session() as session:              # <-- opens & closes inside
+        db_response = ApiKeyDAO(session).get_user_id_and_mail(apikey)
     if db_response:
         request_fastapi.state.user_id = db_response[0][0]
         request_fastapi.state.user_email = db_response[0][1]
@@ -55,8 +72,6 @@ def auth_api_key(
 def auth_admin_key(
     request_fastapi: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    api_key_dao: ApiKeyDAO = Depends(),
-    session: Session = Depends(get_db_session),
 ) -> None:
     """
     Authenticate an admin key.
@@ -74,13 +89,19 @@ def auth_admin_key(
 
     # If not, check if the user is an admin user in the database
     try:
-        user_id = api_key_dao.get_user_id_and_mail(admin_key)[0][0]
-        admin_user = (
-            session.query(AdminUser).filter(AdminUser.user_id == user_id).first()
-        )
-
-        if admin_user:
-            return
+        with _ro_session() as session:
+            dao = ApiKeyDAO(session)
+            row = dao.get_user_id_and_mail(admin_key)
+            if row:
+                user_id = row[0][0]
+                is_admin = (
+                    session.query(AdminUser)
+                    .filter(AdminUser.user_id == user_id)
+                    .first()
+                    is not None
+                )
+                if is_admin:
+                    return
     except Exception as e:
         logger.error(f"Error checking admin user status: {e}")
 
@@ -88,12 +109,13 @@ def auth_admin_key(
     raise admin_not_authorized
 
 
-async def check_account_not_frozen(request: Request, users_dao: UsersDAO = Depends()):
+def check_account_not_frozen(request: Request):
     user_id = getattr(request.state, "user_id", None)
     if user_id:
         try:
-            if users_dao.is_account_frozen(user_id):
-                raise account_frozen
+            with _ro_session() as session:
+                if UsersDAO(session).is_account_frozen(user_id):
+                    raise account_frozen
         except Exception as e:
             if e == account_frozen:
                 raise account_frozen
