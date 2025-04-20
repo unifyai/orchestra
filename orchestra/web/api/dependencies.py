@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 @contextmanager
 def _ro_session():
     from orchestra.web.lifetime import get_engine
+
     SessionLocal = sessionmaker(
         bind=get_engine(),
         autoflush=False,
@@ -37,6 +38,7 @@ def _ro_session():
     finally:
         session.close()
 
+
 def auth_api_key(
     request_fastapi: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -50,7 +52,7 @@ def auth_api_key(
     """
     apikey = credentials.credentials
 
-    with _ro_session() as session:              # <-- opens & closes inside
+    with _ro_session() as session:  # <-- opens & closes inside
         db_response = ApiKeyDAO(session).get_user_id_and_mail(apikey)
     if db_response:
         request_fastapi.state.user_id = db_response[0][0]
