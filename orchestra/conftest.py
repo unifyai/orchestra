@@ -58,6 +58,9 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
             conn.execute(text(file.read()), {"user_id": user_id, "api_key": api_key})
 
     try:
+        import orchestra.web.lifetime as lifetime
+
+        lifetime._engine = engine
         yield engine
     finally:
         engine.dispose()
