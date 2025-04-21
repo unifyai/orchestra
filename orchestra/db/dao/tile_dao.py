@@ -696,11 +696,14 @@ class TileDAO:
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
         is_checkpoint: Optional[bool] = None,
+        tile_type: Optional[str] = None,
     ) -> Optional[Tile]:
         """
         Partially update tile with only the fields that need changing.
         
         Either id or (tab_id and name) must be provided to identify the tile.
+        If tile_type is provided, it will be used to determine the specialized tile type;
+        otherwise it will be determined from the tile's type field.
         """
         tile = self._get_tile(
             id=id, 
@@ -712,8 +715,11 @@ class TileDAO:
         if tile is None:
             return None
         
-        # Handle specialized tile data separately
-        if 'table_tile' in update_data and tile.type == 'Table':
+        # If tile_type is specified, use it; otherwise use the tile's type
+        effective_type = tile_type or tile.type
+        
+        # Handle specialized tile data based on the effective type
+        if 'table_tile' in update_data and effective_type == 'Table':
             table_tile_data = update_data.pop('table_tile')
             # Get the table tile
             table_tile = self.get_table_tile(id=tile.id)
@@ -725,7 +731,7 @@ class TileDAO:
                         else:
                             setattr(table_tile, field, value)
         
-        if 'plot_tile' in update_data and tile.type == 'Plot':
+        if 'plot_tile' in update_data and effective_type == 'Plot':
             plot_tile_data = update_data.pop('plot_tile')
             # Get the plot tile
             plot_tile = self.get_plot_tile(id=tile.id)
@@ -737,7 +743,7 @@ class TileDAO:
                         else:
                             setattr(plot_tile, field, value)
         
-        if 'view_tile' in update_data and tile.type == 'View':
+        if 'view_tile' in update_data and effective_type == 'View':
             view_tile_data = update_data.pop('view_tile')
             # Get the view tile
             view_tile = self.get_view_tile(id=tile.id)
@@ -749,7 +755,7 @@ class TileDAO:
                         else:
                             setattr(view_tile, field, value)
         
-        if 'editor_tile' in update_data and tile.type == 'Editor':
+        if 'editor_tile' in update_data and effective_type == 'Editor':
             editor_tile_data = update_data.pop('editor_tile')
             # Get the editor tile
             editor_tile = self.get_editor_tile(id=tile.id)
