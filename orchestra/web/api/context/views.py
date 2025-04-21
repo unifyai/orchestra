@@ -11,11 +11,11 @@ from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.context.schema import (
     AddLogsToContextRequest,
     ContextCreateRequest,
 )
-from orchestra.web.api.dependencies import get_db_session
 from orchestra.web.api.log.views import _get_logs_query
 from orchestra.web.api.utils.http_responses import not_found
 
