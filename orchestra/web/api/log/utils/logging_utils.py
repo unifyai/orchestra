@@ -297,14 +297,10 @@ def _get_logs_query(
             sq,
             sq.c.log_event_id == relevant_log_events.c.id,
         )
-    seq_col = func.row_number().over(order_by=sort_criteria).label("row_num")
     pag_query = (
-        session.query(
-            relevant_log_events.c.id.label("id"),
-            seq_col,
-        )
+        session.query(relevant_log_events.c.id.label("id"))
         .select_from(joined_events)
-        .order_by(seq_col)
+        .order_by(*sort_criteria)
     )
 
     if limit:
@@ -1143,31 +1139,6 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
     )
     return final_logs_query.all()
 
-
-# if False:
-#         from sqlalchemy import text
-
-#         try:
-#             import json
-
-#             # Execute EXPLAIN ANALYZE with the same parameters
-#             compiled_sql = final_logs_query.statement.compile(
-#                 dialect=session.bind.dialect,
-#                 compile_kwargs={"literal_binds": True},
-#             ).string
-#             compiled_sql = (
-#                 "EXPLAIN (ANALYZE, BUFFERS, TIMING, COSTS, VERBOSE, FORMAT JSON) "
-#                 + compiled_sql
-#             )
-#             explain_query = text(compiled_sql)
-#             explain_result = session.execute(explain_query)
-#             explain_output = explain_result.fetchone()[0]
-#             with open("explain_analyze.json", "w") as f:
-#                 f.write(compiled_sql + "\n")
-#                 f.write(json.dumps(explain_output, indent=4))
-#                 print("Explain analyze written to explain_analyze.json")
-#         except Exception as explain_error:
-#             print(f"Error getting explain analyze: {explain_error}")
 
 #### JOIN LOG ####
 def _build_log_subquery(
