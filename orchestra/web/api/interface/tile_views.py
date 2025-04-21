@@ -1,7 +1,9 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Path, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from orchestra.db.dao.interface_dao import InterfaceDAO
+from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.tab_dao import TabDAO
 from orchestra.db.dao.tile_dao import TileDAO
 from orchestra.web.api.interface.schema import (
@@ -21,8 +23,8 @@ router = APIRouter(prefix="/tile", tags=["tile"])
 def _create_tile_response(tile) -> TileSchema:
     """Helper function to convert a tile entity to a TileSchema."""
     position = TilePosition(
-        x=tile.x_position,
-        y=tile.y_position,
+        x=tile.position_x,
+        y=tile.position_y,
         width=tile.width,
         height=tile.height,
     )
@@ -34,7 +36,7 @@ def _create_tile_response(tile) -> TileSchema:
     editor_tile = None
     
     # Populate specialized data based on tile type
-    if tile.type == "Table" and tile.table_tile:
+    if tile.type == "Table" and hasattr(tile, "table_tile") and tile.table_tile:
         table_tile = TableTileSchema(
             table_type=tile.table_tile.table_type,
             column_context=tile.table_tile.column_context,
@@ -48,7 +50,7 @@ def _create_tile_response(tile) -> TileSchema:
             columns_pin_right=tile.table_tile.columns_pin_right,
             selected=tile.table_tile.selected,
         )
-    elif tile.type == "Plot" and tile.plot_tile:
+    elif tile.type == "Plot" and hasattr(tile, "plot_tile") and tile.plot_tile:
         plot_tile = PlotTileSchema(
             plot_type=tile.plot_tile.plot_type,
             plot_scale_x=tile.plot_tile.plot_scale_x,
@@ -61,13 +63,13 @@ def _create_tile_response(tile) -> TileSchema:
             bin_count=tile.plot_tile.bin_count,
             regression_line=tile.plot_tile.regression_line,
         )
-    elif tile.type == "View" and tile.view_tile:
+    elif tile.type == "View" and hasattr(tile, "view_tile") and tile.view_tile:
         view_tile = ViewTileSchema(
             base_index=tile.view_tile.base_index,
         )
-    elif tile.type == "Editor" and tile.editor_tile:
+    elif tile.type == "Editor" and hasattr(tile, "editor_tile") and tile.editor_tile:
         editor_tile = EditorTileSchema(
-            file_path=tile.editor_tile.file_name,
+            file_path=tile.editor_tile.file_path,
             file_type=tile.editor_tile.file_type,
             content=tile.editor_tile.content,
         )
@@ -116,21 +118,59 @@ def create_tile(
     request_fastapi: Request,
     request: CreateTileRequest,
     checkpoint: bool = Query(False, description="Whether to create a checkpoint tile (manual save)"),
-    tile_dao: TileDAO = Depends(),
+    project_dao: ProjectDAO = Depends(),
+    interface_dao: InterfaceDAO = Depends(),
     tab_dao: TabDAO = Depends(),
+    tile_dao: TileDAO = Depends(),
 ):
     """Create a new tile in a tab."""
-    # Check if tab exists
-    tab = tab_dao.get_tab(request.tab_id)
+    # Get the tab, either directly by ID if provided in the request
+    tab = None
+    if hasattr(request, "tab_id") and request.tab_id:
+        tab = tab_dao.get_tab(request.tab_id)
+    # Or by project_id + interface_name + tab_name if provided
+    elif (hasattr(request, "project_id") and request.project_id and 
+          hasattr(request, "interface_name") and request.interface_name and 
+          hasattr(request, "tab_name") and request.tab_name):
+        # First get the project
+        project = project_dao.get_by_user_and_name(
+            user_id=request_fastapi.state.user_id,
+            name=request.project_id,
+        )
+        if not project:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project {request.project_id} not found or you don't have access.",
+            )
+        
+        # Then get the interface
+        interface = interface_dao.get_by_project_and_name(
+            project_id=project.id,
+            name=request.interface_name,
+            is_checkpoint=checkpoint
+        )
+        if not interface:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Interface {request.interface_name} not found in project {request.project_id}.",
+            )
+        
+        # Then get the tab
+        tab = tab_dao.get_tab_by_interface_and_name(
+            interface_id=interface.id,
+            name=request.tab_name,
+            is_checkpoint=checkpoint
+        )
+    
     if not tab:
         raise HTTPException(
             status_code=404,
-            detail=f"Tab {request.tab_id} not found.",
+            detail=f"Tab not found. Please provide valid tab_id or project_id+interface_name+tab_name.",
         )
     
     # Check if tile already exists with the same name in this tab
-    existing = tile_dao.get_tile_by_name(
-        tab_id=request.tab_id,
+    existing = tile_dao.get_tile_by_tab_and_name(
+        tab_id=tab.id,
         name=request.name,
         is_checkpoint=checkpoint
     )
@@ -143,15 +183,15 @@ def create_tile(
     
     # Create tile with position from the request
     position_data = {
-        "x_position": request.position.x,
-        "y_position": request.position.y,
+        "position_x": request.position.x,
+        "position_y": request.position.y,
         "width": request.position.width,
         "height": request.position.height,
     }
     
     # Create the tile
     tile = tile_dao.create_tile(
-        tab_id=request.tab_id,
+        tab_id=tab.id,
         name=request.name,
         type=request.type,
         min_width=request.min_width,
@@ -174,78 +214,39 @@ def create_tile(
     # Handle specialized tile data based on type
     if request.type == "Table" and request.table_tile:
         tile_dao.create_table_tile(
-            tile_id=tile.id,
-            table_type=request.table_tile.table_type,
-            column_context=request.table_tile.column_context,
-            page_number=request.table_tile.page_number,
-            column_order=request.table_tile.column_order,
-            hidden_columns=request.table_tile.hidden_columns,
-            sorting=request.table_tile.sorting,
-            grouping=request.table_tile.grouping,
-            group_sorting=request.table_tile.group_sorting,
-            columns_pin_left=request.table_tile.columns_pin_left,
-            columns_pin_right=request.table_tile.columns_pin_right,
-            selected=request.table_tile.selected,
+            tab_id=tab.id,
+            name=request.name,
+            headers=request.table_tile.headers if hasattr(request.table_tile, "headers") else None,
+            rows=request.table_tile.rows if hasattr(request.table_tile, "rows") else None,
+            **position_data
         )
     elif request.type == "Plot" and request.plot_tile:
         tile_dao.create_plot_tile(
-            tile_id=tile.id,
-            plot_type=request.plot_tile.plot_type,
-            plot_scale_x=request.plot_tile.plot_scale_x,
-            plot_scale_y=request.plot_tile.plot_scale_y,
-            plot_aggregate=request.plot_tile.plot_aggregate,
-            x_axis=request.plot_tile.x_axis,
-            y_axis=request.plot_tile.y_axis,
-            plot_group_by=request.plot_tile.plot_group_by,
-            plot_group_by_colors=request.plot_tile.plot_group_by_colors,
-            bin_count=request.plot_tile.bin_count,
-            regression_line=request.plot_tile.regression_line,
+            tab_id=tab.id,
+            name=request.name,
+            plot_data=request.plot_tile.plot_data if hasattr(request.plot_tile, "plot_data") else None,
+            **position_data
         )
     elif request.type == "View" and request.view_tile:
         tile_dao.create_view_tile(
-            tile_id=tile.id,
-            base_index=request.view_tile.base_index,
+            tab_id=tab.id,
+            name=request.name,
+            view_type=request.view_tile.view_type if hasattr(request.view_tile, "view_type") else "markdown",
+            view_data=request.view_tile.view_data if hasattr(request.view_tile, "view_data") else None,
+            **position_data
         )
     elif request.type == "Editor" and request.editor_tile:
         tile_dao.create_editor_tile(
-            tile_id=tile.id,
-            file_name=request.editor_tile.file_path,
-            file_type=request.editor_tile.file_type,
-            content=request.editor_tile.content,
+            tab_id=tab.id,
+            name=request.name,
+            content=request.editor_tile.content if hasattr(request.editor_tile, "content") else "",
+            language=request.editor_tile.language if hasattr(request.editor_tile, "language") else "python",
+            **position_data
         )
     
     # Get the full tile with all associated data
-    created_tile = tile_dao.get_tile(tile.id)
+    created_tile = tile_dao.get_tile_by_tab_and_name(tab_id=tab.id, name=request.name, is_checkpoint=checkpoint)
     return _create_tile_response(created_tile)
-
-
-@router.get(
-    "/{tile_id}",
-    response_model=TileSchema,
-    responses={
-        200: {"description": "Tile details retrieved successfully"},
-        404: {"description": "Tile not found"},
-    },
-)
-def get_tile(
-    request_fastapi: Request,
-    tile_id: str = Path(..., description="The ID of the tile to retrieve"),
-    checkpoint: bool = Query(False, description="Whether to get a checkpoint tile (manual save)"),
-    tile_dao: TileDAO = Depends(),
-):
-    """Get a specific tile by ID."""
-    tile = tile_dao.get_tile(tile_id)
-    
-    if not tile:
-        raise HTTPException(status_code=404, detail=f"Tile {tile_id} not found.")
-    
-    # If checkpoint is requested but tile is not a checkpoint, get the latest checkpoint
-    if checkpoint and not tile.is_checkpoint:
-        checkpoint_tile = tile_dao.get_latest_checkpoint(tile.tab_id, tile.name)
-        if checkpoint_tile:
-            tile = checkpoint_tile
-    
-    return _create_tile_response(tile)
 
 
 @router.get(
@@ -253,57 +254,186 @@ def get_tile(
     response_model=List[TileSchema],
     responses={
         200: {"description": "Tiles list retrieved successfully"},
+        404: {"description": "Project, interface, tab, or tile not found"},
+        400: {"description": "Missing required parameters"},
     },
 )
-def list_tiles(
+def get_tile(
     request_fastapi: Request,
-    tab_id: Optional[str] = Query(None, description="Filter tiles by tab ID"),
-    type: Optional[str] = Query(None, description="Filter tiles by type"),
-    name: Optional[str] = Query(None, description="Filter tiles by name"),
-    checkpoint: bool = Query(False, description="Whether to list checkpoint tiles (manual save)"),
+    project_id: str = Query(..., description="The project ID the interface belongs to"),
+    interface_name: str = Query(..., description="The interface name the tab belongs to"),
+    tab_name: str = Query(..., description="The tab name the tile belongs to"),
+    name: Optional[str] = Query(None, description="The name of the tile to retrieve (optional)"),
+    type: Optional[str] = Query(None, description="Filter tiles by type (Table, Plot, View, Editor)"),
+    checkpoint: bool = Query(False, description="Whether to get checkpoint tiles (manual save)"),
+    project_dao: ProjectDAO = Depends(),
+    interface_dao: InterfaceDAO = Depends(),
+    tab_dao: TabDAO = Depends(),
     tile_dao: TileDAO = Depends(),
 ):
-    """List all tiles, optionally filtered by tab ID and/or type."""
-    tiles = tile_dao.list_tiles(
-        tab_id=tab_id,
-        type=type,
-        name=name,
+    """
+    Get tiles by project, interface, tab, and optionally tile name.
+    
+    Returns a list of tiles for the specified tab, or a single tile if name is provided.
+    """
+    # Verify project exists and user has access
+    project = project_dao.get_by_user_and_name(
+        user_id=request_fastapi.state.user_id,
+        name=project_id,
+    )
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project_id} not found or you don't have access.",
+        )
+    
+    # Get interface
+    interface = interface_dao.get_by_project_and_name(
+        project_id=project.id,
+        name=interface_name,
         is_checkpoint=checkpoint
     )
+    
+    if not interface:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Interface {interface_name} not found in project {project_id}.",
+        )
+    
+    # Get tab
+    tab = tab_dao.get_tab_by_interface_and_name(
+        interface_id=interface.id,
+        name=tab_name,
+        is_checkpoint=checkpoint
+    )
+    
+    if not tab:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Tab {tab_name} not found in interface {interface_name}."
+        )
+    
+    # If looking for a specific tile by name
+    if name:
+        tile = tile_dao.get_tile_by_tab_and_name(
+            tab_id=tab.id,
+            name=name,
+            is_checkpoint=checkpoint
+        )
+        if not tile:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Tile {name} not found in tab {tab_name}."
+            )
+        
+        # If checkpoint is requested but tile is not a checkpoint, get the latest checkpoint
+        if checkpoint and not tile.is_checkpoint:
+            checkpoint_tile = tile_dao.get_latest_checkpoint(tab.id, name)
+            if checkpoint_tile:
+                tile = checkpoint_tile
+                
+        return [_create_tile_response(tile)]
+    
+    # Otherwise list all tiles for the tab
+    tiles = tile_dao.list_tiles_by_tab(
+        tab_id=tab.id,
+        is_checkpoint=checkpoint
+    )
+    
+    # Apply type filter if provided
+    if type and tiles:
+        tiles = [tile for tile in tiles if tile.type == type]
     
     return [_create_tile_response(tile) for tile in tiles]
 
 
 @router.put(
-    "/{tile_id}",
+    "/",
     response_model=TileSchema,
     responses={
         200: {"description": "Tile updated successfully"},
         404: {"description": "Tile not found"},
+        400: {"description": "Missing required parameters"},
     },
 )
 def update_tile(
     request_fastapi: Request,
     request: UpdateTileRequest,
-    tile_id: str = Path(..., description="The ID of the tile to update"),
+    project_id: str = Query(..., description="The project ID the interface belongs to"),
+    interface_name: str = Query(..., description="The interface name the tab belongs to"),
+    tab_name: str = Query(..., description="The tab name the tile belongs to"),
+    name: str = Query(..., description="The name of the tile to update"),
     checkpoint: bool = Query(False, description="Whether this is a checkpoint update (manual save)"),
+    project_dao: ProjectDAO = Depends(),
+    interface_dao: InterfaceDAO = Depends(),
+    tab_dao: TabDAO = Depends(),
     tile_dao: TileDAO = Depends(),
 ):
-    """Update a tile by ID."""
-    tile = tile_dao.get_tile(tile_id)
+    """Update a tile by project ID, interface name, tab name, and tile name."""
+    # Verify project exists and user has access
+    project = project_dao.get_by_user_and_name(
+        user_id=request_fastapi.state.user_id,
+        name=project_id,
+    )
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project_id} not found or you don't have access.",
+        )
+    
+    # Get interface
+    interface = interface_dao.get_by_project_and_name(
+        project_id=project.id,
+        name=interface_name,
+        is_checkpoint=checkpoint
+    )
+    
+    if not interface:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Interface {interface_name} not found in project {project_id}.",
+        )
+    
+    # Get tab
+    tab = tab_dao.get_tab_by_interface_and_name(
+        interface_id=interface.id,
+        name=tab_name,
+        is_checkpoint=checkpoint
+    )
+    
+    if not tab:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Tab {tab_name} not found in interface {interface_name}."
+        )
+    
+    # Get tile
+    tile = tile_dao.get_tile_by_tab_and_name(
+        tab_id=tab.id,
+        name=name,
+        is_checkpoint=checkpoint
+    )
     
     if not tile:
-        raise HTTPException(status_code=404, detail=f"Tile {tile_id} not found.")
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Tile {name} not found in tab {tab_name}."
+        )
     
     # Prepare update parameters
-    update_params = {"id": tile_id}
+    update_params = {
+        "tab_id": tab.id,
+        "name": name,
+        "is_checkpoint": checkpoint
+    }
     
+    # Add new name if provided
     if request.name is not None:
-        update_params["name"] = request.name
+        update_params["new_name"] = request.name
     
     if request.position is not None:
-        update_params["x_position"] = request.position.x
-        update_params["y_position"] = request.position.y
+        update_params["position_x"] = request.position.x
+        update_params["position_y"] = request.position.y
         update_params["width"] = request.position.width
         update_params["height"] = request.position.height
     
@@ -340,105 +470,225 @@ def update_tile(
     if request.metric is not None:
         update_params["metric"] = request.metric
     
-    if checkpoint:
-        update_params["is_checkpoint"] = True
-    
     # Update the tile
-    updated = tile_dao.update_tile(**update_params)
+    updated = tile_dao.update_tile_by_name(**update_params)
     
     # Update specialized tile data if provided
-    if tile.type == "Table" and request.table_tile:
-        tile_dao.update_table_tile(
-            tile_id=tile_id,
-            table_type=request.table_tile.table_type,
-            column_context=request.table_tile.column_context,
-            page_number=request.table_tile.page_number,
-            column_order=request.table_tile.column_order,
-            hidden_columns=request.table_tile.hidden_columns,
-            sorting=request.table_tile.sorting,
-            grouping=request.table_tile.grouping,
-            group_sorting=request.table_tile.group_sorting,
-            columns_pin_left=request.table_tile.columns_pin_left,
-            columns_pin_right=request.table_tile.columns_pin_right,
-            selected=request.table_tile.selected,
-        )
-    elif tile.type == "Plot" and request.plot_tile:
-        tile_dao.update_plot_tile(
-            tile_id=tile_id,
-            plot_type=request.plot_tile.plot_type,
-            plot_scale_x=request.plot_tile.plot_scale_x,
-            plot_scale_y=request.plot_tile.plot_scale_y,
-            plot_aggregate=request.plot_tile.plot_aggregate,
-            x_axis=request.plot_tile.x_axis,
-            y_axis=request.plot_tile.y_axis,
-            plot_group_by=request.plot_tile.plot_group_by,
-            plot_group_by_colors=request.plot_tile.plot_group_by_colors,
-            bin_count=request.plot_tile.bin_count,
-            regression_line=request.plot_tile.regression_line,
-        )
-    elif tile.type == "View" and request.view_tile:
-        tile_dao.update_view_tile(
-            tile_id=tile_id,
-            base_index=request.view_tile.base_index,
-        )
-    elif tile.type == "Editor" and request.editor_tile:
-        tile_dao.update_editor_tile(
-            tile_id=tile_id,
-            file_name=request.editor_tile.file_path,
-            file_type=request.editor_tile.file_type,
-            content=request.editor_tile.content,
-        )
+    tile_type = tile.type  # Use the original tile's type
+    
+    if tile_type == "Table" and request.table_tile:
+        # Use the same params but with the specialized tile update method
+        specialized_params = {
+            "tab_id": tab.id,
+            "name": name,
+            "headers": request.table_tile.headers if hasattr(request.table_tile, "headers") else None,
+            "rows": request.table_tile.rows if hasattr(request.table_tile, "rows") else None,
+        }
+        
+        # Call the specialized update method
+        tile_dao.update_table_tile_by_name(**specialized_params)
+             
+    elif tile_type == "Plot" and request.plot_tile:
+        specialized_params = {
+            "tab_id": tab.id,
+            "name": name,
+            "plot_data": request.plot_tile.plot_data if hasattr(request.plot_tile, "plot_data") else None,
+        }
+        
+        tile_dao.update_plot_tile_by_name(**specialized_params)
+             
+    elif tile_type == "View" and request.view_tile:
+        specialized_params = {
+            "tab_id": tab.id,
+            "name": name,
+            "view_type": request.view_tile.view_type if hasattr(request.view_tile, "view_type") else None,
+            "view_data": request.view_tile.view_data if hasattr(request.view_tile, "view_data") else None,
+        }
+        
+        tile_dao.update_view_tile_by_name(**specialized_params)
+             
+    elif tile_type == "Editor" and request.editor_tile:
+        specialized_params = {
+            "tab_id": tab.id,
+            "name": name,
+            "content": request.editor_tile.content if hasattr(request.editor_tile, "content") else None,
+            "language": request.editor_tile.language if hasattr(request.editor_tile, "language") else None,
+        }
+        
+        tile_dao.update_editor_tile_by_name(**specialized_params)
     
     # Get the full updated tile with all associated data
-    updated_tile = tile_dao.get_tile(tile_id)
+    updated_tile = tile_dao.get_tile_by_tab_and_name(
+        tab_id=tab.id,
+        name=request.name if request.name else name,
+        is_checkpoint=checkpoint
+    )
+        
     return _create_tile_response(updated_tile)
 
 
 @router.post(
-    "/{tile_id}/checkpoint",
+    "/checkpoint",
     response_model=TileSchema,
     responses={
         200: {"description": "Tile checkpoint created successfully"},
         404: {"description": "Tile not found"},
+        400: {"description": "Missing required parameters"},
     },
 )
 def create_tile_checkpoint(
     request_fastapi: Request,
-    tile_id: str = Path(..., description="The ID of the tile to checkpoint"),
+    project_id: str = Query(..., description="The project ID the interface belongs to"),
+    interface_name: str = Query(..., description="The interface name the tab belongs to"),
+    tab_name: str = Query(..., description="The tab name the tile belongs to"),
+    name: str = Query(..., description="The name of the tile to checkpoint"),
+    project_dao: ProjectDAO = Depends(),
+    interface_dao: InterfaceDAO = Depends(),
+    tab_dao: TabDAO = Depends(),
     tile_dao: TileDAO = Depends(),
 ):
-    """Create a manual checkpoint (save) of a tile."""
-    # Get the current tile
-    tile = tile_dao.get_tile(tile_id)
-    if not tile:
-        raise HTTPException(status_code=404, detail=f"Tile {tile_id} not found.")
+    """
+    Create a manual checkpoint (save) of a tile.
     
-    # Create a checkpoint by setting the is_checkpoint flag
-    updated = tile_dao.make_checkpoint(tile_id)
+    Identifies the tile by project ID, interface name, tab name, and tile name.
+    """
+    # Verify project exists and user has access
+    project = project_dao.get_by_user_and_name(
+        user_id=request_fastapi.state.user_id,
+        name=project_id,
+    )
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project_id} not found or you don't have access.",
+        )
+    
+    # Get interface
+    interface = interface_dao.get_by_project_and_name(
+        project_id=project.id,
+        name=interface_name,
+        is_checkpoint=False  # We're looking for the active interface
+    )
+    
+    if not interface:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Interface {interface_name} not found in project {project_id}.",
+        )
+    
+    # Get tab
+    tab = tab_dao.get_tab_by_interface_and_name(
+        interface_id=interface.id,
+        name=tab_name,
+        is_checkpoint=False  # We're looking for the active tab
+    )
+    
+    if not tab:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Tab {tab_name} not found in interface {interface_name}."
+        )
+    
+    # Get tile
+    tile = tile_dao.get_tile_by_tab_and_name(
+        tab_id=tab.id,
+        name=name,
+        is_checkpoint=False  # We're looking for the active tile
+    )
+    
+    if not tile:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Tile {name} not found in tab {tab_name}."
+        )
+    
+    # Create a checkpoint
+    updated = tile_dao.make_checkpoint_by_name(
+        tab_id=tab.id,
+        name=name
+    )
     
     return _create_tile_response(updated)
 
 
 @router.delete(
-    "/{tile_id}",
+    "/",
     status_code=204,
     responses={
         204: {"description": "Tile deleted successfully"},
         404: {"description": "Tile not found"},
+        400: {"description": "Missing required parameters"},
     },
 )
 def delete_tile(
     request_fastapi: Request,
-    tile_id: str = Path(..., description="The ID of the tile to delete"),
+    project_id: str = Query(..., description="The project ID the interface belongs to"),
+    interface_name: str = Query(..., description="The interface name the tab belongs to"),
+    tab_name: str = Query(..., description="The tab name the tile belongs to"),
+    name: str = Query(..., description="The name of the tile to delete"),
+    project_dao: ProjectDAO = Depends(),
+    interface_dao: InterfaceDAO = Depends(),
+    tab_dao: TabDAO = Depends(),
     tile_dao: TileDAO = Depends(),
 ):
-    """Delete a tile by ID."""
-    tile = tile_dao.get_tile(tile_id)
+    """
+    Delete a tile by project ID, interface name, tab name, and tile name.
+    """
+    # Verify project exists and user has access
+    project = project_dao.get_by_user_and_name(
+        user_id=request_fastapi.state.user_id,
+        name=project_id,
+    )
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project_id} not found or you don't have access.",
+        )
+    
+    # Get interface
+    interface = interface_dao.get_by_project_and_name(
+        project_id=project.id,
+        name=interface_name,
+        is_checkpoint=False  # We're looking for the active interface
+    )
+    
+    if not interface:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Interface {interface_name} not found in project {project_id}.",
+        )
+    
+    # Get tab
+    tab = tab_dao.get_tab_by_interface_and_name(
+        interface_id=interface.id,
+        name=tab_name,
+        is_checkpoint=False  # We're looking for the active tab
+    )
+    
+    if not tab:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Tab {tab_name} not found in interface {interface_name}."
+        )
+    
+    # Get tile
+    tile = tile_dao.get_tile_by_tab_and_name(
+        tab_id=tab.id,
+        name=name,
+        is_checkpoint=False  # We're looking for the active tile
+    )
     
     if not tile:
-        raise HTTPException(status_code=404, detail=f"Tile {tile_id} not found.")
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Tile {name} not found in tab {tab_name}."
+        )
     
     # Delete the tile
-    success = tile_dao.delete_tile(tile_id)
+    success = tile_dao.delete_tile_by_name(tab_id=tab.id, name=name)
+    
     if not success:
-        raise HTTPException(status_code=500, detail="Failed to delete tile.") 
+        raise HTTPException(
+            status_code=404,
+            detail=f"Tile with name {name} not found in tab {tab_name}."
+        ) 
