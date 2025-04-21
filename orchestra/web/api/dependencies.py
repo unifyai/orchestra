@@ -24,19 +24,14 @@ logger = logging.getLogger(__name__)
 def _ro_session():
     from orchestra.web.lifetime import get_engine
 
-    SessionLocal = sessionmaker(
-        bind=get_engine(),
-        autoflush=False,
-        expire_on_commit=True,
-    )
-    session: Session = SessionLocal()
-    try:
-        yield session
-        session.commit()
-    except Exception as e:
-        session.rollback()
-    finally:
-        session.close()
+    engine = get_engine()
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        SessionLocal = sessionmaker(bind=conn, autoflush=False, expire_on_commit=False)
+        session: Session = SessionLocal()
+        try:
+            yield session
+        finally:
+            session.close()
 
 
 def auth_api_key(
