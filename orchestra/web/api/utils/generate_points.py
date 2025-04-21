@@ -531,13 +531,6 @@ metrics = {
         "input_cost": 5,
         "output_cost": 15,
     },
-    "llama-3-70b-chat@fireworks-ai": {
-        "cost": 0.9,
-        "ttft": 469.78,
-        "itl": 6.58,
-        "input_cost": 0.9,
-        "output_cost": 0.9,
-    },
     "mistral-large@mistral-ai": {
         "cost": 24,
         "ttft": 439.49507400009225,
