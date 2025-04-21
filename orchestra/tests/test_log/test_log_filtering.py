@@ -74,7 +74,7 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
     # Create a log with the test values
     response = await _create_log(client, project_name, entries=values)
     assert response.status_code == 200
-    log_id = response.json()[0]
+    log_id = response.json()["log_event_ids"][0]
 
     # Test the filter expression
     response = await client.get(
@@ -1096,7 +1096,7 @@ async def test_filtering_and_sorting_base_and_derived_logs(client: AsyncClient):
         )
         assert resp.status_code == 200, resp.json()
         out_data = resp.json()
-        created_log_id = out_data[0]
+        created_log_id = out_data["log_event_ids"][0]
         base_log_ids.append(created_log_id)
 
     assert len(base_log_ids) == 2, f"Expected 2 base log_event_ids, got {base_log_ids}"
@@ -2270,7 +2270,7 @@ async def test_array_membership_operator(
         entries={"test_array": array_field},
     )
     assert response.status_code == 200
-    log_id = response.json()[0]
+    log_id = response.json()["log_event_ids"][0]
 
     # Test the membership operator
     filter_expr = f"{test_value!r} in test_array"
@@ -2393,7 +2393,7 @@ async def test_complex_string_filter_expressions(client: AsyncClient):
             user=user_id,
             entries={"content": math_question},
         )
-    ).json()[0]
+    ).json()["log_event_ids"][0]
 
     probability_log_id = (
         await _create_log(
@@ -2402,7 +2402,7 @@ async def test_complex_string_filter_expressions(client: AsyncClient):
             user=user_id,
             entries={"content": probability_question},
         )
-    ).json()[0]
+    ).json()["log_event_ids"][0]
 
     # Test 1: Filter for the math question
     resp = await client.get(

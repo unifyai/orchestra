@@ -23,7 +23,7 @@ async def test_get_log(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
     log_response = await _create_log(client, project_name)
-    log_id = log_response.json()[0]
+    log_id = log_response.json()["log_event_ids"][0]
 
     # fetch the log
     response = await _get_log(client, project_name, log_id)

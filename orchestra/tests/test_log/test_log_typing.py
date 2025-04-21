@@ -117,7 +117,7 @@ async def test_update_logs_strongly_typed(client: AsyncClient):
 
     # Create a log first
     response1 = await _create_log(client, project_name)
-    log_id1 = response1.json()[0]
+    log_id1 = response1.json()["log_event_ids"][0]
 
     # Update the log with strongly typed fields
     response = await client.put(
@@ -153,7 +153,7 @@ async def test_update_logs_previously_none(client: AsyncClient):
             "a/b/c/numeric_input": None,
         },
     )
-    log_id1 = response1.json()[0]
+    log_id1 = response1.json()["log_event_ids"][0]
 
     # Verify numeric is NoneType
     field_types_response = await client.get(
@@ -231,7 +231,7 @@ async def test_update_logs_type_mismatch(client: AsyncClient):
 
     # Create a log first
     response1 = await _create_log(client, project_name)
-    log_id1 = response1.json()[0]
+    log_id1 = response1.json()["log_event_ids"][0]
 
     # Update the log with a type mismatch
     response = await client.put(
@@ -272,7 +272,7 @@ async def test_create_log_with_mutable_fields(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 200
-    log_id = response.json()[0]
+    log_id = response.json()["log_event_ids"][0]
 
     # Verify field types include mutability information
     field_types_response = await client.get(
@@ -303,7 +303,7 @@ async def test_create_log_default_immutable(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 200
-    log_id = response.json()[0]
+    log_id = response.json()["log_event_ids"][0]
 
     # Verify field is immutable by default
     field_types_response = await client.get(
@@ -352,7 +352,7 @@ async def test_update_mutable_and_immutable_fields(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 200
-    log_id = response.json()[0]
+    log_id = response.json()["log_event_ids"][0]
 
     # Test updating mutable field (should succeed)
     response = await client.put(
@@ -415,7 +415,7 @@ async def test_update_field_mutability_only(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 200
-    log_id = response.json()[0]
+    log_id = response.json()["log_event_ids"][0]
 
     # Verify field is initially mutable
     field_types_response = await client.get(

@@ -16,7 +16,7 @@ async def test_create_logs(client: AsyncClient):
     # Test single log creation
     response = await _create_log(client, project_name)
     assert response.status_code == 200, response.json()
-    log_event_ids = response.json()
+    log_event_ids = response.json()["log_event_ids"]
     assert isinstance(log_event_ids, list) and len(log_event_ids) == 1
     assert isinstance(log_event_ids[0], int)
 
@@ -41,7 +41,7 @@ async def test_create_logs(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
-    log_event_ids = response.json()
+    log_event_ids = response.json()["log_event_ids"]
     assert isinstance(log_event_ids, list)
     assert len(log_event_ids) == 3
     assert all(isinstance(id, int) for id in log_event_ids)
@@ -75,7 +75,7 @@ async def test_create_log_w_image(client: AsyncClient):
     )
 
     assert response.status_code == 200, response.json()
-    assert isinstance(response.json()[0], int)
+    assert isinstance(response.json()["log_event_ids"][0], int)
 
     # Verify field type
     field_types_response = await client.get(

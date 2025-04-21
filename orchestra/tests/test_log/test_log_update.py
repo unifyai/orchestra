@@ -19,7 +19,7 @@ async def test_update_logs_overwrites(client: AsyncClient):
 
     response = await _create_log(client, project_name, entries=log_data["log"])
     assert response.status_code == 200, response.json()
-    log_id = response.json()[0]
+    log_id = response.json()["log_event_ids"][0]
 
     response = await _get_log(client, project_name, log_id)
     assert response.status_code == 200, response.json()
@@ -32,7 +32,7 @@ async def test_update_logs_overwrites(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
-    log_id_2 = response.json()[0]
+    log_id_2 = response.json()["log_event_ids"][0]
 
     log_ids = [log_id, log_id_2]
 
@@ -67,8 +67,8 @@ async def test_update_logs(client: AsyncClient):
     assert response1.status_code == 200, response1.json()
     assert response2.status_code == 200, response2.json()
 
-    log_id1 = response1.json()[0]
-    log_id2 = response2.json()[0]
+    log_id1 = response1.json()["log_event_ids"][0]
+    log_id2 = response2.json()["log_event_ids"][0]
     log_ids = [log_id1, log_id2]
 
     # Update both logs
@@ -101,8 +101,8 @@ async def test_update_logs_multi_values(client: AsyncClient):
     assert response1.status_code == 200, response1.json()
     assert response2.status_code == 200, response2.json()
 
-    log_id1 = response1.json()[0]
-    log_id2 = response2.json()[0]
+    log_id1 = response1.json()["log_event_ids"][0]
+    log_id2 = response2.json()["log_event_ids"][0]
     log_ids = [log_id1, log_id2]
 
     # Update both logs
@@ -141,7 +141,7 @@ async def test_update_logs_with_context_string(client: AsyncClient):
     # Create a log
     response = await _create_log(client, project_name, context=context_name)
     assert response.status_code == 200, response.json()
-    log_id = response.json()[0]
+    log_id = response.json()["log_event_ids"][0]
 
     # Update log with context as string
     entries = {
@@ -178,7 +178,7 @@ async def test_update_logs_with_context_list(client: AsyncClient):
         # Create a log
         response = await _create_log(client, project_name, context=context_name)
         assert response.status_code == 200, response.json()
-        log_ids.append(response.json()[0])
+        log_ids.append(response.json()["log_event_ids"][0])
 
     # Update log with context as list of strings
     entries = {
