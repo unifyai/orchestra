@@ -1,6 +1,6 @@
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.project_dao import ProjectDAO
@@ -92,31 +92,47 @@ def create_interface(
 
 
 @router.get(
-    "/{interface_id}",
+    "/",
     response_model=InterfaceSchema,
     responses={
         200: {"description": "Interface details retrieved successfully"},
         404: {"description": "Interface not found"},
+        400: {"description": "Missing required parameters"},
     },
 )
 def get_interface(
     request_fastapi: Request,
-    interface_id: str = Path(..., description="The ID of the interface to retrieve"),
+    project_id: str = Query(..., description="The project ID the interface belongs to"),
+    name: str = Query(..., description="The name of the interface to retrieve"),
     checkpoint: bool = Query(False, description="Whether to get a checkpoint version (manually saved)"),
+    project_dao: ProjectDAO = Depends(),
     interface_dao: InterfaceDAO = Depends(),
     tab_dao: TabDAO = Depends(),
 ):
-    """Get a specific interface by ID."""
-    interface = interface_dao.get(interface_id)
-        
-    # If checkpoint is requested but interface is not a checkpoint, try to find the latest checkpoint
-    if checkpoint and interface and not interface.is_checkpoint:
-        checkpoint_interface = interface_dao.get_latest_checkpoint(interface.project_id, interface.name)
-        if checkpoint_interface:
-            interface = checkpoint_interface
+    """Get a specific interface by project ID and name."""
+    # Verify project exists and user has access
+    project = project_dao.get_by_user_and_name(
+        user_id=request_fastapi.state.user_id,
+        name=project_id,
+    )
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project_id} not found or you don't have access.",
+        )
+    
+    # Get interface by project and name
+    interface = interface_dao.get_by_project_and_name(
+        project_id=project.id,
+        name=name,
+        is_checkpoint=checkpoint
+    )
     
     if not interface:
-        raise HTTPException(status_code=404, detail=f"Interface {interface_id} not found.")
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Interface {name} not found in project {project_id}."
+        )
     
     # Get tabs for this interface
     tabs = tab_dao.list_tabs_by_interface(
@@ -128,7 +144,7 @@ def get_interface(
 
 
 @router.get(
-    "/",
+    "/list",
     response_model=List[InterfaceSchema],
     responses={
         200: {"description": "Interfaces list retrieved successfully"},
@@ -147,7 +163,7 @@ def list_interfaces(
     # Verify project exists and user has access
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
-        name=project_id,  # Assuming project_id is the name for now
+        name=project_id,
     )
     if not project:
         raise HTTPException(
@@ -172,32 +188,59 @@ def list_interfaces(
 
 
 @router.put(
-    "/{interface_id}",
+    "/",
     response_model=InterfaceSchema,
     responses={
         200: {"description": "Interface updated successfully"},
         404: {"description": "Interface not found"},
+        400: {"description": "Missing required parameters"},
     },
 )
 def update_interface(
     request_fastapi: Request,
     request: UpdateInterfaceRequest,
-    interface_id: str = Path(..., description="The ID of the interface to update"),
+    project_id: str = Query(..., description="The project ID the interface belongs to"),
+    name: str = Query(..., description="The name of the interface to update"),
     checkpoint: bool = Query(False, description="Whether this is a checkpoint update (manual save)"),
+    project_dao: ProjectDAO = Depends(),
     interface_dao: InterfaceDAO = Depends(),
     tab_dao: TabDAO = Depends(),
 ):
-    """Update an interface by ID."""
-    interface = interface_dao.get(interface_id)
+    """Update an interface by project ID and name."""
+    # Verify project exists and user has access
+    project = project_dao.get_by_user_and_name(
+        user_id=request_fastapi.state.user_id,
+        name=project_id,
+    )
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project_id} not found or you don't have access.",
+        )
+    
+    # Get interface by project and name
+    interface = interface_dao.get_by_project_and_name(
+        project_id=project.id,
+        name=name,
+        is_checkpoint=checkpoint
+    )
     
     if not interface:
-        raise HTTPException(status_code=404, detail=f"Interface {interface_id} not found.")
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Interface {name} not found in project {project_id}."
+        )
     
-    # Update parameters
-    update_params = {"id": interface_id, "is_checkpoint": checkpoint}
+    # Prepare update parameters
+    update_params = {
+        "project_id": project.id,
+        "name": name,
+        "is_checkpoint": checkpoint
+    }
     
+    # Add new name if provided
     if request.name is not None:
-        update_params["name"] = request.name
+        update_params["new_name"] = request.name
     
     if request.color is not None:
         update_params["color"] = request.color
@@ -205,7 +248,7 @@ def update_interface(
     if request.active_tab_id is not None:
         # Verify that the tab exists and belongs to this interface
         tab = tab_dao.get_tab(request.active_tab_id)
-        if not tab or tab.interface_id != interface_id:
+        if not tab or tab.interface_id != interface.id:
             raise HTTPException(
                 status_code=404, 
                 detail=f"Tab {request.active_tab_id} not found or doesn't belong to this interface."
@@ -213,7 +256,7 @@ def update_interface(
         update_params["active_tab_id"] = request.active_tab_id
     
     # Update the interface
-    updated = interface_dao.update_interface(**update_params)
+    updated = interface_dao.update_interface_by_name(**update_params)
     
     # Get tabs for this interface
     tabs = tab_dao.list_tabs_by_interface(
@@ -225,27 +268,52 @@ def update_interface(
 
 
 @router.post(
-    "/{interface_id}/checkpoint",
+    "/checkpoint",
     response_model=InterfaceSchema,
     responses={
         200: {"description": "Interface checkpoint created successfully"},
         404: {"description": "Interface not found"},
+        400: {"description": "Missing required parameters"},
     },
 )
 def create_interface_checkpoint(
     request_fastapi: Request,
-    interface_id: str = Path(..., description="The ID of the interface to checkpoint"),
+    project_id: str = Query(..., description="The project ID the interface belongs to"),
+    name: str = Query(..., description="The name of the interface to checkpoint"),
+    project_dao: ProjectDAO = Depends(),
     interface_dao: InterfaceDAO = Depends(),
     tab_dao: TabDAO = Depends(),
 ):
-    """Create a manual checkpoint (save) of an interface."""
-    # Get the current interface
-    interface = interface_dao.get(interface_id)
-    if not interface:
-        raise HTTPException(status_code=404, detail=f"Interface {interface_id} not found.")
+    """Create a manual checkpoint (save) of an interface by project ID and name."""
+    # Verify project exists and user has access
+    project = project_dao.get_by_user_and_name(
+        user_id=request_fastapi.state.user_id,
+        name=project_id,
+    )
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project_id} not found or you don't have access.",
+        )
     
-    # Create a checkpoint by setting the is_checkpoint flag
-    updated = interface_dao.make_checkpoint(interface_id)
+    # Get interface by project and name
+    interface = interface_dao.get_by_project_and_name(
+        project_id=project.id,
+        name=name,
+        is_checkpoint=False  # We're looking for the active interface, not a checkpoint
+    )
+    
+    if not interface:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Interface {name} not found in project {project_id}."
+        )
+    
+    # Create a checkpoint
+    updated = interface_dao.make_checkpoint_by_name(
+        project_id=project.id,
+        name=name
+    )
     
     # Get tabs for this interface
     tabs = tab_dao.list_tabs_by_interface(
@@ -257,29 +325,54 @@ def create_interface_checkpoint(
 
 
 @router.get(
-    "/{interface_id}/checkpoint",
+    "/checkpoint",
     response_model=InterfaceSchema,
     responses={
         200: {"description": "Interface checkpoint retrieved successfully"},
         404: {"description": "Interface or checkpoint not found"},
+        400: {"description": "Missing required parameters"},
     },
 )
 def get_interface_checkpoint(
     request_fastapi: Request,
-    interface_id: str = Path(..., description="The ID of the interface to get checkpoint for"),
+    project_id: str = Query(..., description="The project ID the interface belongs to"),
+    name: str = Query(..., description="The name of the interface to get checkpoint for"),
+    project_dao: ProjectDAO = Depends(),
     interface_dao: InterfaceDAO = Depends(),
     tab_dao: TabDAO = Depends(),
 ):
-    """Get the latest checkpoint (manual save) for an interface."""
-    # Get the current interface
-    interface = interface_dao.get(interface_id)
+    """Get the latest checkpoint (manual save) for an interface by project ID and name."""
+    # Verify project exists and user has access
+    project = project_dao.get_by_user_and_name(
+        user_id=request_fastapi.state.user_id,
+        name=project_id,
+    )
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project_id} not found or you don't have access.",
+        )
+    
+    # Get interface by project and name
+    interface = interface_dao.get_by_project_and_name(
+        project_id=project.id,
+        name=name,
+        is_checkpoint=False  # We're looking for the active interface, not a checkpoint
+    )
+    
     if not interface:
-        raise HTTPException(status_code=404, detail=f"Interface {interface_id} not found.")
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Interface {name} not found in project {project_id}."
+        )
     
     # Find the latest checkpoint
-    checkpoint = interface_dao.get_latest_checkpoint(interface.project_id, interface.name)
+    checkpoint = interface_dao.get_latest_checkpoint(project.id, name)
     if not checkpoint:
-        raise HTTPException(status_code=404, detail=f"No checkpoint found for interface {interface_id}.")
+        raise HTTPException(
+            status_code=404, 
+            detail=f"No checkpoint found for interface {name} in project {project_id}."
+        )
     
     # Get tabs for this checkpoint interface
     tabs = tab_dao.list_tabs_by_interface(
@@ -291,31 +384,53 @@ def get_interface_checkpoint(
 
 
 @router.delete(
-    "/{interface_id}",
+    "/",
     status_code=204,
     responses={
         204: {"description": "Interface deleted successfully"},
         404: {"description": "Interface not found"},
+        400: {"description": "Missing required parameters"},
     },
 )
 def delete_interface(
     request_fastapi: Request,
-    interface_id: str = Path(..., description="The ID of the interface to delete"),
+    project_id: str = Query(..., description="The project ID the interface belongs to"),
+    name: str = Query(..., description="The name of the interface to delete"),
+    project_dao: ProjectDAO = Depends(),
     interface_dao: InterfaceDAO = Depends(),
     tab_dao: TabDAO = Depends(),
 ):
-    """Delete an interface by ID."""
-    interface = interface_dao.get(interface_id)
+    """Delete an interface by project ID and name."""
+    # Verify project exists and user has access
+    project = project_dao.get_by_user_and_name(
+        user_id=request_fastapi.state.user_id,
+        name=project_id,
+    )
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project_id} not found or you don't have access.",
+        )
+    
+    # Get interface by project and name
+    interface = interface_dao.get_by_project_and_name(
+        project_id=project.id,
+        name=name,
+        is_checkpoint=False  # We're looking for the active interface, not a checkpoint
+    )
     
     if not interface:
-        raise HTTPException(status_code=404, detail=f"Interface {interface_id} not found.")
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Interface {name} not found in project {project_id}."
+        )
     
     # First delete all tabs associated with this interface
-    tabs = tab_dao.list_tabs_by_interface(interface_id=interface_id)
+    tabs = tab_dao.list_tabs_by_interface(interface_id=interface.id)
     for tab in tabs:
-        tab_dao.delete_tab(tab.id)
+        tab_dao.delete_tab_by_name(interface_id=interface.id, name=tab.name)
     
     # Delete the interface
-    success = interface_dao.delete_interface(interface_id)
+    success = interface_dao.delete_interface_by_name(project_id=project.id, name=name)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete interface.") 
