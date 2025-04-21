@@ -22,8 +22,8 @@ async def test_delete_logs(client: AsyncClient):
     assert response1.status_code == 200, response1.json()
     assert response2.status_code == 200, response2.json()
 
-    log_id1 = response1.json()[0]
-    log_id2 = response2.json()[0]
+    log_id1 = response1.json()["log_event_ids"][0]
+    log_id2 = response2.json()["log_event_ids"][0]
     ids_and_fields = [([log_id1, log_id2], None)]
 
     # create a new context
@@ -97,9 +97,9 @@ async def test_delete_field_for_all_logs(client: AsyncClient):
     assert response2.status_code == 200, response2.json()
     assert response3.status_code == 200, response3.json()
 
-    log_id1 = response1.json()[0]
-    log_id2 = response2.json()[0]
-    log_id3 = response3.json()[0]
+    log_id1 = response1.json()["log_event_ids"][0]
+    log_id2 = response2.json()["log_event_ids"][0]
+    log_id3 = response3.json()["log_event_ids"][0]
 
     # Verify logs were created with the common field
     response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
@@ -167,7 +167,7 @@ async def test_field_cascaded_delete(client: AsyncClient):
 
     response = await _create_log(client, project_name, entries=entries)
     assert response.status_code == 200, response.json()
-    log_id = response.json()[0]
+    log_id = response.json()["log_event_ids"][0]
 
     # Create a second log with only the other field
     entries2 = {
@@ -179,7 +179,7 @@ async def test_field_cascaded_delete(client: AsyncClient):
 
     response = await _create_log(client, project_name, entries=entries2)
     assert response.status_code == 200, response.json()
-    log_id2 = response.json()[0]
+    log_id2 = response.json()["log_event_ids"][0]
 
     # Delete the test field from the first log
     # This should trigger cascaded deletion of the field type since no logs will have this field
@@ -226,8 +226,8 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
     assert response1.status_code == 200, response1.json()
     assert response2.status_code == 200, response2.json()
 
-    log_id1 = response1.json()[0]
-    log_id2 = response2.json()[0]
+    log_id1 = response1.json()["log_event_ids"][0]
+    log_id2 = response2.json()["log_event_ids"][0]
     entry_to_delete = "a/b/c/input"
     ids_and_fields = [(log_id1, entry_to_delete), (log_id2, entry_to_delete)]
 
@@ -293,7 +293,7 @@ async def test_delete_logs_from_specific_context(client: AsyncClient):
     # Create a log (in context1)
     response = await _create_log(client, project_name, context=context1)
     assert response.status_code == 200, response.json()
-    log_id = response.json()[0]
+    log_id = response.json()["log_event_ids"][0]
 
     assert response.status_code == 200, response.json()
 
@@ -393,7 +393,7 @@ async def test_delete_project_deletes_logs(client: AsyncClient):
     # add a log
     response = await _create_log(client, project_name)
     assert response.status_code == 200, response.json()
-    log_id = response.json()[0]
+    log_id = response.json()["log_event_ids"][0]
     assert isinstance(log_id, int)
 
     # verify it exists
