@@ -73,11 +73,6 @@ supported_models = {
         "context_window": 131072,
         "cost": {"prompt": 3, "completion": 3},
     },
-    "llama-3-70b-chat": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct",
-        "context_window": 8192,
-        "cost": {"prompt": 0.9, "completion": 0.9},
-    },
     "mixtral-8x22b-instruct-v0.1": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct",
         "context_window": 65536,
