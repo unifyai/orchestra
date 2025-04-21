@@ -2464,8 +2464,6 @@ def get_logs_metric(
         filter_expr = request_fastapi.query_params.get("filter_expr")
         from_ids = request_fastapi.query_params.get("from_ids")
         exclude_ids = request_fastapi.query_params.get("exclude_ids")
-        limit = request_fastapi.query_params.get("limit")
-        offset = request_fastapi.query_params.get("offset")
         context = request_fastapi.query_params.get("context")
         group_by = request_fastapi.query_params.get("group_by")
 
@@ -2482,8 +2480,6 @@ def get_logs_metric(
                 filter_expr=filter_expr,
                 from_ids=from_ids,
                 exclude_ids=exclude_ids,
-                limit=limit,
-                offset=offset,
                 context=context,
                 group_by=group_by,
                 metrics=None,
@@ -2495,8 +2491,6 @@ def get_logs_metric(
                 filter_expr=filter_expr,
                 from_ids=from_ids,
                 exclude_ids=exclude_ids,
-                limit=limit,
-                offset=offset,
                 context=context,
                 group_by=group_by,
                 metrics=None,
@@ -2562,8 +2556,6 @@ def get_logs_metric(
                 key_filter_expr=key_filter_expr,
                 key_from_ids=key_from_ids,
                 key_exclude_ids=key_exclude_ids,
-                limit=request.limit,
-                offset=request.offset,
                 session=session,
             )
 
@@ -2600,8 +2592,6 @@ def get_logs_metric(
                 key_filter_expr=key_filter_expr,
                 key_from_ids=key_from_ids,
                 key_exclude_ids=key_exclude_ids,
-                limit=request.limit,
-                offset=request.offset,
                 session=session,
             )
             results[k] = value
