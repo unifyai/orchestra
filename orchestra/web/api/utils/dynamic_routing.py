@@ -574,7 +574,6 @@ metrics = {
         "ttft": 589,
         "itl": 20.05,
     },
-    "llama-3-70b-chat@fireworks-ai": {"cost": 0.9, "ttft": 469.78, "itl": 6.58},
     "mistral-large@mistral-ai": {
         "cost": 24,
         "ttft": 439.49507400009225,
@@ -682,13 +681,6 @@ baked_router_endpoints = [
         id=1425,
         model="mixtral-8x22b-instruct-v0.1",
         model_id=141,
-        provider="fireworks-ai",
-        provider_id=10,
-    ),
-    Endpoint(
-        id=1430,
-        model="llama-3-70b-chat",
-        model_id=143,
         provider="fireworks-ai",
         provider_id=10,
     ),
