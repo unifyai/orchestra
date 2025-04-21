@@ -1,6 +1,6 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Body
 
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.project_dao import ProjectDAO
@@ -691,4 +691,161 @@ def delete_tile(
         raise HTTPException(
             status_code=404,
             detail=f"Tile with name {name} not found in tab {tab_name}."
-        ) 
+        )
+
+
+@router.patch(
+    "/",
+    response_model=TileSchema,
+    responses={
+        200: {"description": "Tile patched successfully"},
+        404: {"description": "Tile not found"},
+        400: {"description": "Missing required parameters"},
+    },
+)
+def patch_tile(
+    request_fastapi: Request,
+    update_data: Dict[str, Any],
+    project_id: str = Query(..., description="The project ID the interface belongs to"),
+    interface_name: str = Query(..., description="The interface name the tab belongs to"),
+    tab_name: str = Query(..., description="The tab name the tile belongs to"),
+    name: str = Query(..., description="The name of the tile to patch"),
+    checkpoint: bool = Query(False, description="Whether this is a checkpoint update (manual save)"),
+    project_dao: ProjectDAO = Depends(),
+    interface_dao: InterfaceDAO = Depends(),
+    tab_dao: TabDAO = Depends(),
+    tile_dao: TileDAO = Depends(),
+):
+    """
+    Partially update a tile by project ID, interface name, tab name, and tile name.
+    
+    Only the fields included in the request body will be updated.
+    """
+    # Verify project exists and user has access
+    project = project_dao.get_by_user_and_name(
+        user_id=request_fastapi.state.user_id,
+        name=project_id,
+    )
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project_id} not found or you don't have access.",
+        )
+    
+    # Get interface
+    interface = interface_dao.get_by_project_and_name(
+        project_id=project.id,
+        name=interface_name,
+        is_checkpoint=checkpoint
+    )
+    
+    if not interface:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Interface {interface_name} not found in project {project_id}.",
+        )
+    
+    # Get tab
+    tab = tab_dao.get_tab_by_interface_and_name(
+        interface_id=interface.id,
+        name=tab_name,
+        is_checkpoint=checkpoint
+    )
+    
+    if not tab:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Tab {tab_name} not found in interface {interface_name}."
+        )
+    
+    # Get tile
+    tile = tile_dao.get_tile_by_tab_and_name(
+        tab_id=tab.id,
+        name=name,
+        is_checkpoint=checkpoint
+    )
+    
+    if not tile:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Tile {name} not found in tab {tab_name}."
+        )
+    
+    # Apply the patch
+    updated = tile_dao.patch_tile(
+        update_data=update_data,
+        tab_id=tab.id,
+        name=name,
+        is_checkpoint=checkpoint
+    )
+    
+    if not updated:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to patch tile."
+        )
+    
+    # Get the full updated tile with all associated data
+    patched_tile = tile_dao.get_tile_by_tab_and_name(
+        tab_id=tab.id,
+        name=update_data.get("name", name),  # Use new name if it was updated
+        is_checkpoint=checkpoint
+    )
+    
+    return _create_tile_response(patched_tile)
+
+
+@router.patch("/specialized", response_model=TileSchema)
+async def patch_specialized_tile(
+    tile_type: str = Query(..., description="Type of tile to patch (Table, Plot, View, Editor)"),
+    tab_id: Optional[str] = None,
+    tile_id: Optional[str] = None,
+    name: Optional[str] = None,
+    update_data: Dict[str, Any] = Body(...),
+    tile_dao: TileDAO = Depends(),
+):
+    """
+    Generic endpoint to patch any specialized tile type.
+    
+    The tile_type parameter determines which specialized tile type to update.
+    Valid values are: Table, Plot, View, Editor
+    """
+    # Validate the tile type
+    valid_types = ["Table", "Plot", "View", "Editor"]
+    if tile_type not in valid_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid tile_type. Must be one of {', '.join(valid_types)}"
+        )
+    
+    # Validate we have either tile_id or (tab_id and name)
+    if not tile_id and (not tab_id or not name):
+        raise HTTPException(
+            status_code=400,
+            detail="Must provide either tile_id or both tab_id and name"
+        )
+    
+    # Format update data to include the specialized tile key if not already present
+    specialized_key = f"{tile_type.lower()}_tile"
+    if specialized_key not in update_data:
+        # Handle fields at the root level that should be in the specialized tile
+        # This allows for a more flexible API where specialized fields
+        # can be included directly in the update_data
+        update_data = {specialized_key: update_data}
+    
+    # Use the patch_tile DAO method with the specified tile_type
+    result = tile_dao.patch_tile(
+        update_data=update_data,
+        id=tile_id,
+        tab_id=tab_id,
+        name=name,
+        tile_type=tile_type
+    )
+    
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail=f"{tile_type} tile not found"
+        )
+    
+    return _create_tile_response(result)
