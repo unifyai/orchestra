@@ -3,8 +3,24 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import HTTPException, Request
-from sqlalchemy import JSON, Integer, and_, case, cast, func, literal, select
+from fastapi import Depends, HTTPException, Request
+from sqlalchemy import (
+    JSON,
+    Integer,
+    String,
+    and_,
+    asc,
+    case,
+    cast,
+    desc,
+    exists,
+    func,
+    literal,
+    select,
+    text,
+    tuple_,
+)
+from sqlalchemy.sql.expression import ColumnClause
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.context_dao import ContextDAO
@@ -12,6 +28,7 @@ from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Context,
     DerivedLog,
@@ -23,8 +40,12 @@ from orchestra.db.models.orchestra_models import (
     LogHistory,
 )
 from orchestra.web.api.log.schema import CreateLogConfig
+from orchestra.web.api.utils.http_responses import not_found
+
+from ..python2SQL import STR_TO_SQL_TYPES, build_sql_query, str_filter_exp_to_dict
 
 __all__ = [
+    "_get_logs_query",
     "create_logs_internal",
     "_build_unified_logs_subquery",
     "_flatten_fields",
@@ -36,6 +57,53 @@ __all__ = [
 #########################
 # Logs Utils            #
 #########################
+
+
+def _build_unified_logs_limited(
+    session,
+    ids_subq: Subquery,
+    return_versions: bool = False,
+) -> Subquery:
+    """
+    Phase 2 helper: build unified logs subquery limited to the specified log_event_ids.
+    """
+    return _build_unified_logs_subquery(
+        session=session,
+        relevant_log_events=ids_subq,
+        return_versions=return_versions,
+    )
+
+
+def _build_sort_criteria(
+    val_col: ColumnClause,
+    sort_key: str,
+    field_types: Dict[str, str],
+):
+    # If recognized type => cast
+    if sort_key in field_types:
+        pytype = field_types[sort_key]
+        cast_type = STR_TO_SQL_TYPES.get(pytype, None)
+        if cast_type is not None:
+            if pytype in ("timestamp", "date", "time"):
+                sort_expr = case(
+                    (val_col.is_(None), None),
+                    (val_col == text("'null'::jsonb"), None),
+                    else_=cast(cast(val_col, String), cast_type),
+                )
+            elif pytype in ("dict", "list"):
+                # For JSONB types, no need for additional casting
+                sort_expr = val_col
+            else:
+                # For other data types (bool, int, float, str)
+                sort_expr = case(
+                    (val_col.is_(None), None),
+                    (val_col == text("'null'::jsonb"), None),
+                    else_=cast(val_col, cast_type),
+                )
+    else:
+        sort_expr = val_col
+
+    return sort_expr
 
 
 def _get_logs_query(
@@ -60,42 +128,7 @@ def _get_logs_query(
 ):
     """
     Returns a combined list of base logs (Log) and derived logs (DerivedLog)
-    that match the given user filters.  Each returned row is a tuple of
-    (Log|DerivedLog ORM object, created_at (datetime), log_event_id (int)).
-
-    Args:
-        request_fastapi: The FastAPI request object.
-        project: Name of the project to fetch logs from.
-        column_context: String prefix to filter Log.key or DerivedLog.key.
-            Also can specify 'params' or 'entries' to exclude the other.
-        context: If provided, we join LogEventContext to filter on a
-            "static" context row in the Context table.
-        filter_expr: Optional string expression to filter based on fields
-            (converted to SQL).
-        sorting: JSON string specifying sorting criteria, e.g.
-            '{"score":"ascending","timestamp":"descending"}'.
-        from_ids: Optional string with '&'-separated log_event_ids to *include*.
-        exclude_ids: Optional string with '&'-separated log_event_ids to *exclude*.
-        from_fields: Optional string with '&'-separated field keys to *include*.
-        exclude_fields: Optional string with '&'-separated field keys to *exclude*.
-        limit: Max number of distinct log_event_ids to return (pagination).
-        offset: Skip the first N distinct log_event_ids (pagination).
-        project_dao, field_type_dao, context_dao: DAO objects for DB logic.
-        session: The SQLAlchemy session dependency.
-        latest_timestamp: If True, returns only the latest .updated_at timestamp
-            (as an ISO string) across all matching logs, otherwise returns
-            the matching rows.
-        return_versions: If True, return all versions of logs. Only valid for versioned contexts.
-        version: If provided, return only the logs with the specified version from LogHistory.
-        tuple: (list_of_rows, context_len, total_count)
-            Where:
-                list_of_rows = [(Log|DerivedLog, created_at, log_event_id), ...]
-                context_len = length of the column_context prefix that was stripped
-                              from the final keys (for your reference)
-                total_count = total number of distinct log_event_ids before pagination
-
-            Or, if latest_timestamp=True, it returns the single latest timestamp
-            as a string (or None if none found).
+    that match the given user filters. See docstring above for details.
     """
     user_id = request_fastapi.state.user_id
 
@@ -105,8 +138,7 @@ def _get_logs_query(
     except (IndexError, AttributeError):
         raise not_found(f"Project {project}")
 
-    # 2) Build initial query for relevant LogEvent rows
-    #    (filter_expr, from_ids, exclude_ids, plus optional static context)
+    # Phase 1: filtering, sorting, pagination, etc.
     log_event_query = session.query(LogEvent.id).filter(
         LogEvent.project_id == project_id,
     )
@@ -118,14 +150,13 @@ def _get_logs_query(
         context_id = None
     field_types = field_type_dao.get_field_types(project_id, context_id=context_id)
 
-    # Handle user-defined filter_expr => build SQL expression on LogEvent
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(
             filter_expr,
             field_names=list(field_types.keys()),
         )
         if filter_dict:
-            # Only allow 'exists' checks for image fields
+
             def validate_filter_dict(fd):
                 if isinstance(fd, dict):
                     if "type" in fd and fd["type"] == "identifier":
@@ -154,7 +185,6 @@ def _get_logs_query(
                 log_event_ids=event_ids_subq,
             )
             if isinstance(condition, Subquery):
-                # Subquery => we check existence
                 log_event_query = log_event_query.filter(
                     exists(
                         select(1)
@@ -168,20 +198,14 @@ def _get_logs_query(
                     ),
                 )
             else:
-                # Normal SQL expression
                 log_event_query = log_event_query.filter(condition)
 
-    # filter LogEvent by "static context" (LogEventContext + Context)
     if context:
-        # Get context object and check if it's versioned when return_versions=True
         context_obj = context_dao.filter(name=context, project_id=project_id)
     else:
-        # use the default context
         context_obj = context_dao.filter(name="", project_id=project_id)
         if not context_obj:
-            # no logs present within this context, return empty logs
             if latest_timestamp:
-                # return the project's timestamp
                 project_obj = project_dao.filter(name=project, user_id=user_id)
                 return project_obj[0][0].created_at.isoformat()
             else:
@@ -195,14 +219,12 @@ def _get_logs_query(
     context_obj = context_obj[0][0]
     ctx_id_val = context_obj.id
 
-    # If return_versions is True, verify the context is versioned
     if return_versions and not context_obj.is_versioned:
         raise HTTPException(
             status_code=400,
             detail="Cannot return versions for unversioned context",
         )
 
-    # Filter by context_id
     log_event_query = log_event_query.filter(
         exists(
             select(1)
@@ -218,17 +240,100 @@ def _get_logs_query(
 
     # Turn into a subquery => these are the log_event_ids we care about so far
     relevant_log_events = log_event_query.subquery(name="relevant_log_events")
-
-    # 3) Union base logs and derived logs into a single subquery
-    #    so they can be treated identically downstream.
-    unified_logs_subq = _build_unified_logs_subquery(
+    unified_logs_for_sort = _build_unified_logs_subquery(
         session=session,
         relevant_log_events=relevant_log_events,
         return_versions=return_versions,
     )
 
+    sort_val_sqs: List[Subquery] = []
+    sort_criteria: List[Any] = []
+
+    if sorting:
+        sort_dict = json.loads(sorting)
+
+        for sort_key, mode in sort_dict.items():
+            if is_image_field(sort_key, field_types):
+                continue
+            if mode not in ("ascending", "descending"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Sort mode must be 'ascending' or 'descending', got {mode}.",
+                )
+
+            cast_expr = _build_sort_criteria(
+                unified_logs_for_sort.c.value,
+                sort_key,
+                field_types,
+            )
+
+            sort_val_sq = (
+                select(
+                    unified_logs_for_sort.c.log_event_id.label("log_event_id"),
+                    cast_expr.label("val"),
+                )
+                .where(unified_logs_for_sort.c.key == sort_key)
+                .order_by(
+                    unified_logs_for_sort.c.log_event_id,
+                    unified_logs_for_sort.c.updated_at.desc(),
+                )
+                .distinct(unified_logs_for_sort.c.log_event_id)
+                .subquery(f"sort_{sort_key}_sq")
+            )
+
+            sort_val_sqs.append(sort_val_sq)
+
+            # --- 2. remember ORDER‑BY expression
+            direction = asc if mode == "ascending" else desc
+            sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
+
+    # Always add deterministic tie‑breaker
+    sort_criteria.append(desc(relevant_log_events.c.id))
+
+    # Bring the sort sub‑queries into the FROM‑clause
+    joined_events = relevant_log_events
+    for sq in sort_val_sqs:
+        joined_events = joined_events.outerjoin(
+            sq,
+            sq.c.log_event_id == relevant_log_events.c.id,
+        )
+    seq_col = func.row_number().over(order_by=sort_criteria).label("row_num")
+    pag_query = (
+        session.query(
+            relevant_log_events.c.id.label("id"),
+            seq_col,
+        )
+        .select_from(joined_events)
+        .order_by(seq_col)
+    )
+
+    if limit:
+        pag_query = pag_query.limit(limit)
+    if offset:
+        pag_query = pag_query.offset(offset)
+
+    paginated_ids_subq = pag_query.subquery(name="paginated_ids_subq")
+
+    # Phase 2: latest_timestamp, from_ids, exclude_ids, etc.
+    if latest_timestamp:
+        max_updated_at = (
+            session.query(func.max(unified_logs_for_sort.c.updated_at))
+            .join(
+                paginated_ids_subq,
+                paginated_ids_subq.c.id == unified_logs_for_sort.c.log_event_id,
+            )
+            .scalar()
+        )
+        return max_updated_at.isoformat() if max_updated_at else None
+
+    # Otherwise, build limited unified logs for hydration
+    unified_logs_limited = _build_unified_logs_limited(
+        session,
+        paginated_ids_subq,
+        return_versions,
+    )
+
     # 4) Apply "column_context" + 'params'/'entries' logic
-    #    We parse the user-supplied column_context (slash-separated).
     context_len = 0
     exclude_params = False
     exclude_entries = False
@@ -241,120 +346,94 @@ def _get_logs_query(
                 status_code=400,
                 detail="'entries' and 'params' cannot both be specified in column_context.",
             )
-        # Rebuild the actual context prefix (excluding the 'entries'/'params' tokens)
         column_context = "/".join(
             [substr for substr in split_context if substr not in ("params", "entries")],
         )
-        if column_context:
-            # Ensure trailing slash
-            if column_context[-1] != "/":
-                column_context += "/"
-            context_len = len(column_context)
+        if column_context and column_context[-1] != "/":
+            column_context += "/"
+        context_len = len(column_context or "")
 
-    filtered_logs_q = session.query(unified_logs_subq).filter(
-        True,
-    )  # start with everything
+    filtered_logs_q = session.query(unified_logs_limited).filter(True)
 
-    # If we have a column_context prefix, we do .where(key.startswith(...))
     if column_context:
         filtered_logs_q = filtered_logs_q.filter(
-            unified_logs_subq.c.key.startswith(column_context),
+            unified_logs_limited.c.key.startswith(column_context),
         )
 
-    # Handle from_ids vs exclude_ids
     if from_ids and exclude_ids:
         raise HTTPException(
             status_code=400,
             detail="Cannot set both from_ids and exclude_ids.",
         )
 
-    # Handle ID filtering differently based on return_versions
     if return_versions:
         if from_ids:
             try:
-                # Validate from_ids format for versioned logs
-                from_ids = json.loads(from_ids)
-                if not isinstance(from_ids, list):
+                from_ids_json = json.loads(from_ids)
+                if not isinstance(from_ids_json, list):
                     raise ValueError(
                         "from_ids must be a list when return_versions is True",
                     )
-                for item in from_ids:
-                    if (
-                        not isinstance(item, dict)
-                        or "id" not in item
-                        or "version" not in item
-                    ):
-                        raise ValueError(
-                            "Each item in from_ids must have 'id' and 'version' keys",
-                        )
-                allowed_pairs = [(item["id"], item["version"]) for item in from_ids]
-                # Apply filtering at the Log/LogHistory level since we need version info
+                allowed_pairs = [
+                    (item["id"], item["version"]) for item in from_ids_json
+                ]
                 filtered_logs_q = filtered_logs_q.filter(
                     tuple_(
-                        unified_logs_subq.c.log_event_id,
-                        unified_logs_subq.c.context_version,
+                        unified_logs_limited.c.log_event_id,
+                        unified_logs_limited.c.context_version
+                        if "context_version" in unified_logs_limited.c
+                        else unified_logs_limited.c.param_version,
                     ).in_(allowed_pairs),
                 )
-            except ValueError as e:
+            except Exception as e:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Invalid from_ids format for versioned logs: {str(e)}",
                 )
         if exclude_ids:
             try:
-                # Validate exclude_ids format for versioned logs
-                exclude_ids = json.loads(exclude_ids)
-                if not isinstance(exclude_ids, list):
+                exclude_ids_json = json.loads(exclude_ids)
+                if not isinstance(exclude_ids_json, list):
                     raise ValueError(
                         "exclude_ids must be a list when return_versions is True",
                     )
-                for item in exclude_ids:
-                    if (
-                        not isinstance(item, dict)
-                        or "id" not in item
-                        or "version" not in item
-                    ):
-                        raise ValueError(
-                            "Each item in exclude_ids must have 'id' and 'version' keys",
-                        )
-                excluded_pairs = [(item["id"], item["version"]) for item in exclude_ids]
-                # Apply filtering at the Log/LogHistory level since we need version info
+                excluded_pairs = [
+                    (item["id"], item["version"]) for item in exclude_ids_json
+                ]
                 filtered_logs_q = filtered_logs_q.filter(
                     ~tuple_(
-                        unified_logs_subq.c.log_event_id,
-                        unified_logs_subq.c.context_version,
+                        unified_logs_limited.c.log_event_id,
+                        unified_logs_limited.c.context_version
+                        if "context_version" in unified_logs_limited.c
+                        else unified_logs_limited.c.param_version,
                     ).in_(excluded_pairs),
                 )
-            except ValueError as e:
+            except Exception as e:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Invalid exclude_ids format for versioned logs: {str(e)}",
                 )
     else:
-        # For non-versioned queries, use simple log_event_id filtering
         if from_ids:
             include_ids = [int(x) for x in from_ids.split("&")]
             filtered_logs_q = filtered_logs_q.filter(
-                unified_logs_subq.c.log_event_id.in_(include_ids),
+                unified_logs_limited.c.log_event_id.in_(include_ids),
             )
         elif exclude_ids:
             exclude_set = [int(x) for x in exclude_ids.split("&")]
             filtered_logs_q = filtered_logs_q.filter(
-                unified_logs_subq.c.log_event_id.notin_(exclude_set),
+                unified_logs_limited.c.log_event_id.notin_(exclude_set),
             )
 
-    # If exclude_params / exclude_entries => filter on version
-    # TODO(yusha): handle filtering out corresponding rows from LogHistory as well
     if exclude_params:
         filtered_logs_q = filtered_logs_q.filter(
-            unified_logs_subq.c.param_version.is_(None),
+            unified_logs_limited.c.param_version.is_(None),
         )
     elif exclude_entries:
         filtered_logs_q = filtered_logs_q.filter(
-            unified_logs_subq.c.param_version.isnot(None),
+            unified_logs_limited.c.param_version.isnot(None),
         )
 
-    # 5) from_fields / exclude_fields
     if from_fields and exclude_fields:
         raise HTTPException(
             status_code=400,
@@ -364,124 +443,22 @@ def _get_logs_query(
     if from_fields:
         allowed_fields = from_fields.split("&")
         filtered_logs_q = filtered_logs_q.filter(
-            unified_logs_subq.c.key.in_(allowed_fields),
+            unified_logs_limited.c.key.in_(allowed_fields),
         )
     elif exclude_fields:
         excluded_fields = exclude_fields.split("&")
         filtered_logs_q = filtered_logs_q.filter(
-            unified_logs_subq.c.key.notin_(excluded_fields),
+            unified_logs_limited.c.key.notin_(excluded_fields),
         )
 
-    # now we have a single table of
-    # (id, log_event_id, key, value, inferred_type, version, updated_at, created_at, source_type)
     filtered_logs_subq = filtered_logs_q.subquery(name="filtered_logs_subq")
 
-    # 6) Find the distinct log_event_ids that actually remain
-    distinct_ids_subq = (
-        session.query(filtered_logs_subq.c.log_event_id.label("log_event_id"))
-        .distinct(filtered_logs_subq.c.log_event_id)
-        .subquery(name="distinct_ids_subq")
-    )
-
-    # 7) Sorting logic
-    sorted_query = session.query(distinct_ids_subq.c.log_event_id)
-
-    sort_criteria = []
-
-    if sorting:
-        # e.g. sorting='{"score":"ascending","timestamp":"descending"}'
-        sort_dict = json.loads(sorting)
-
-        # For each field in sort_dict, we outer-join a subquery from filtered_logs_subq
-        # that picks out the relevant value for that field. Then we cast it if known.
-        for sort_key, mode in sort_dict.items():
-            # Skip image fields from sorting
-            if is_image_field(sort_key, field_types):
-                continue
-            if mode not in ("ascending", "descending"):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Sort mode must be 'ascending' or 'descending', got {mode}.",
-                )
-
-            # Build a subquery => (log_event_id, value)
-            # so we can outerjoin to it
-            key_subq = (
-                session.query(
-                    filtered_logs_subq.c.log_event_id.label("log_event_id"),
-                    filtered_logs_subq.c.value.label("raw_value"),
-                )
-                .filter(filtered_logs_subq.c.key == sort_key)
-                .subquery(name=f"sort_{sort_key}_subq")
-            )
-
-            # Outerjoin
-            sorted_query = sorted_query.outerjoin(
-                key_subq,
-                key_subq.c.log_event_id == distinct_ids_subq.c.log_event_id,
-            )
-
-            # If recognized type => cast
-            if sort_key in field_types:
-                python_type = field_types[sort_key]
-                cast_type = STR_TO_SQL_TYPES.get(python_type, None)
-                # Now build an expression for sorting
-                sort_expr = (
-                    cast(
-                        cast(key_subq.c.raw_value, String),
-                        cast_type,
-                    )
-                    if cast_type in (DateTime, Date, Time, Interval)
-                    else cast(key_subq.c.raw_value, cast_type)
-                )
-            else:
-                sort_expr = key_subq.c.raw_value
-
-            direction = asc if mode == "ascending" else desc
-            sort_criteria.append(direction(sort_expr).nulls_last())
-
-    # Always fallback to sorting by log_event_id desc if not explicitly specified
-    if not sorting or "id" not in sorting:
-        sort_criteria.append(distinct_ids_subq.c.log_event_id.desc())
-
-    sorted_query = sorted_query.add_columns(
-        func.row_number().over(order_by=sort_criteria).label("row_num"),
-    ).order_by("row_num")
-
-    # 8) Pagination
-    count = sorted_query.count()  # total distinct log_event_ids
-    if limit:
-        sorted_query = sorted_query.limit(limit)
-    if offset:
-        sorted_query = sorted_query.offset(offset)
-
-    paginated_ids_subq = sorted_query.subquery(name="paginated_ids_subq")
-
-    # 9) If user just wants the latest timestamp
-    if latest_timestamp:
-        # find the max(updated_at) among logs that match the final set of log_event_ids
-        max_updated_at = (
-            session.query(func.max(filtered_logs_subq.c.updated_at))
-            .join(
-                paginated_ids_subq,
-                paginated_ids_subq.c.log_event_id == filtered_logs_subq.c.log_event_id,
-            )
-            .scalar()
-        )
-        return max_updated_at.isoformat() if max_updated_at else None
-
-    # 10) Otherwise, fetch final rows => join to paginated_ids_subq
-    #     so we only get logs in the final log_event_id set, in sorted order.
+    # 5) Fetch final hydrated rows
+    total_count = session.query(
+        func.count(func.distinct(filtered_logs_subq.c.log_event_id)),
+    ).scalar()
     raw_rows = _get_final_logs(session, filtered_logs_subq, paginated_ids_subq)
-    # raw_rows is a list of:
-    # [
-    #   (
-    #       id, log_event_id, key, value, inferred_type, param_version, context_version,
-    #       created_at, source_type
-    #   ), ...
-    # ]
 
-    # 11) Return the raw rows so that the top-level get_logs can do the final formatting.
     results = []
     for (
         row_id,
@@ -507,8 +484,8 @@ def _get_logs_query(
             ),
         )
 
-    # 12) Return results
-    return results, context_len, count
+    return results, context_len, total_count
+
 
 def create_logs_internal(
     request: CreateLogConfig,
@@ -849,6 +826,8 @@ def _build_unified_logs_subquery(
         if event_ids is not None:
             return query.filter(LogEvent.id.in_(event_ids))
         query = query.join(relevant_log_events, relevant_log_events.c.id == LogEvent.id)
+        if hasattr(relevant_log_events.c, "row_num"):
+            query = query.order_by(relevant_log_events.c.row_num)
         if key:
             return query.filter(table.key == key)
         return query
@@ -934,7 +913,7 @@ def _build_unified_logs_subquery(
 
 
 ######################
-# Formatting functions
+# Formatting utils    #
 ######################
 
 
@@ -1159,12 +1138,36 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
         )
         .join(
             paginated_ids_subq,
-            paginated_ids_subq.c.log_event_id == filtered_logs_subq.c.log_event_id,
+            paginated_ids_subq.c.id == filtered_logs_subq.c.log_event_id,
         )
-        .order_by(paginated_ids_subq.c.row_num, filtered_logs_subq.c.created_at)
     )
     return final_logs_query.all()
 
+
+# if False:
+#         from sqlalchemy import text
+
+#         try:
+#             import json
+
+#             # Execute EXPLAIN ANALYZE with the same parameters
+#             compiled_sql = final_logs_query.statement.compile(
+#                 dialect=session.bind.dialect,
+#                 compile_kwargs={"literal_binds": True},
+#             ).string
+#             compiled_sql = (
+#                 "EXPLAIN (ANALYZE, BUFFERS, TIMING, COSTS, VERBOSE, FORMAT JSON) "
+#                 + compiled_sql
+#             )
+#             explain_query = text(compiled_sql)
+#             explain_result = session.execute(explain_query)
+#             explain_output = explain_result.fetchone()[0]
+#             with open("explain_analyze.json", "w") as f:
+#                 f.write(compiled_sql + "\n")
+#                 f.write(json.dumps(explain_output, indent=4))
+#                 print("Explain analyze written to explain_analyze.json")
+#         except Exception as explain_error:
+#             print(f"Error getting explain analyze: {explain_error}")
 
 #### JOIN LOG ####
 def _build_log_subquery(
