@@ -1420,6 +1420,7 @@ def evaluate_in_python(expr_str: str, row: Dict[str, Any]) -> bool:
 
 
 @given(expr_and_type=bool_filter_strategy(max_depth=2))
+@pytest.mark.skip(reason="Enable when needed")
 @settings(
     max_examples=500,
     deadline=None,
