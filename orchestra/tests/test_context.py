@@ -165,7 +165,7 @@ async def test_add_log_to_context(client: AsyncClient):
         },
         headers=HEADERS,
     )
-    log_ids = response.json()
+    log_ids = response.json()["log_event_ids"]
     response = await client.post(
         f"/v0/project/{project_name}/contexts/add_logs",
         json={"context_name": context_name, "log_ids": log_ids},
@@ -202,7 +202,7 @@ async def test_implicit_context_creation(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 200
-    log_ids = response.json()
+    log_ids = response.json()["log_event_ids"]
 
     # Add logs to a context that doesn't exist yet - should create it implicitly
     response = await client.post(
@@ -319,7 +319,7 @@ async def test_context_as_string(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 200
-    log_id = response.json()[0]
+    log_id = response.json()["log_event_ids"][0]
 
     # Get logs by context string
     response = await client.get(
@@ -461,7 +461,7 @@ async def test_add_log_to_multiple_contexts(client: AsyncClient):
         },
         headers=HEADERS,
     )
-    log_ids = response.json()
+    log_ids = response.json()["log_event_ids"]
     response = await client.post(
         f"/v0/project/{project_name}/contexts/add_logs",
         json={"context_name": contexts[0], "log_ids": log_ids},
@@ -562,7 +562,7 @@ async def test_versioned_context_behavior(client: AsyncClient):
         context={"name": "versioned_context"},
     )
     assert log_response.status_code == 200
-    log_id = log_response.json()[0]
+    log_id = log_response.json()["log_event_ids"][0]
 
     # Verify context version incremented
     context_get = await client.get(
@@ -624,7 +624,7 @@ async def test_update_logs_with_string_context(client: AsyncClient):
         context=context_name,  # Provide context as string
     )
     assert log_response.status_code == 200
-    log_id = log_response.json()[0]
+    log_id = log_response.json()["log_event_ids"][0]
 
     # Update log with context as string
     update_response = await _update_logs(
@@ -673,7 +673,7 @@ async def test_unversioned_context_behavior(client: AsyncClient):
         context={"name": "unversioned_context"},
     )
     assert log_response.status_code == 200
-    log_id = log_response.json()[0]
+    log_id = log_response.json()["log_event_ids"][0]
 
     # Verify context version unchanged
     context_get = await client.get(
@@ -758,7 +758,7 @@ async def test_versioning_constraints(client: AsyncClient):
         context={"name": "versioned_context"},
     )
     assert log_response.status_code == 200
-    log_id = log_response.json()[0]
+    log_id = log_response.json()["log_event_ids"][0]
 
     # Verify the field is mutable despite explicit setting
     fields_response = await client.get(
@@ -796,7 +796,7 @@ async def test_versioning_constraints(client: AsyncClient):
         context={"name": "unversioned_context"},
     )
     assert log_response.status_code == 200
-    log_id = log_response.json()[0]
+    log_id = log_response.json()["log_event_ids"][0]
 
     # Verify the field is immutable as specified
     fields_response = await client.get(
@@ -870,7 +870,7 @@ async def test_version_retrieval(client: AsyncClient):
         context={"name": "versioned_context"},
     )
     assert log_response.status_code == 200
-    log_id = log_response.json()[0]
+    log_id = log_response.json()["log_event_ids"][0]
 
     # Update the log multiple times
     values = ["value2", "value3", "value4"]
@@ -930,7 +930,7 @@ async def test_versioned_ids_only(client: AsyncClient):
         context={"name": "versioned_context"},
     )
     assert log_response.status_code == 200
-    log_id = log_response.json()[0]
+    log_id = log_response.json()["log_event_ids"][0]
 
     # Update log to create a new version
     update_response = await _update_logs(
@@ -1030,7 +1030,7 @@ async def test_update_logs_with_multiple_contexts(client: AsyncClient):
         context=contexts[0],
     )
     assert log_response.status_code == 200
-    log_id = log_response.json()[0]
+    log_id = log_response.json()["log_event_ids"][0]
 
     # Add log to other contexts
     for context in contexts[1:]:
@@ -1083,7 +1083,7 @@ async def test_implicit_field_creation(client: AsyncClient):
         },
     )
     assert log_response.status_code == 200
-    log_id = log_response.json()[0]
+    log_id = log_response.json()["log_event_ids"][0]
 
     # Create a context and add the log to it
     response = await client.post(
@@ -1125,7 +1125,7 @@ async def test_implicit_field_creation(client: AsyncClient):
         },
     )
     assert log_response.status_code == 200
-    new_log_id = log_response.json()[0]
+    new_log_id = log_response.json()["log_event_ids"][0]
 
     # Add the new log to the context
     response = await client.post(
@@ -1446,12 +1446,12 @@ async def test_context_allow_duplicates(client: AsyncClient):
 #     # Create first log
 #     response = await _create_log(client, project_name, params=log_data_1["params"], entries=log_data_1["entries"], context=log_data_1["context"])
 #     assert response.status_code == 200
-#     log_id_1 = response.json()[0]
+#     log_id_1 = response.json()['log_event_ids'][0]
 
 #     # Create second log
 #     response = await _create_log(client, project_name, params=log_data_2["params"], entries=log_data_2["entries"], context=log_data_2["context"])
 #     assert response.status_code == 200
-#     log_id_2 = response.json()[0]
+#     log_id_2 = response.json()['log_event_ids'][0]
 
 #     # Try to update the second log to have the same values as the first - should be rejected
 #     update_response = await _update_logs(
@@ -1490,12 +1490,12 @@ async def test_context_allow_duplicates(client: AsyncClient):
 #     # Create third log
 #     response = await _create_log(client, project_name, params=log_data_3["params"], entries=log_data_3["entries"], context=log_data_3["context"])
 #     assert response.status_code == 200
-#     log_id_3 = response.json()[0]
+#     log_id_3 = response.json()['log_event_ids'][0]
 
 #     # Create fourth log
 #     response = await _create_log(client, project_name, params=log_data_4["params"], entries=log_data_4["entries"], context=log_data_4["context"])
 #     assert response.status_code == 200
-#     log_id_4 = response.json()[0]
+#     log_id_4 = response.json()['log_event_ids'][0]
 
 #     # Update the fourth log to have the same values as the third - should be accepted
 #     # since the default context allows duplicates
@@ -1539,7 +1539,7 @@ async def test_add_logs_with_copy_false(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 200
-    log_ids = response.json()
+    log_ids = response.json()["log_event_ids"]
 
     # Add logs to context with copy=false (default)
     response = await client.post(
@@ -1597,7 +1597,7 @@ async def test_add_logs_with_copy_true(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 200
-    original_log_ids = response.json()
+    original_log_ids = response.json()["log_event_ids"]
 
     # Add logs to context with copy=true
     response = await client.post(

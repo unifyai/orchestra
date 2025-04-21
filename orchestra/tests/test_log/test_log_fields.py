@@ -17,7 +17,7 @@ async def test_get_fields_with_derived_entries(client: AsyncClient):
         entries={"base_field": 100, "temperature": 25.5},
     )
     assert response.status_code == 200
-    log_id = response.json()[0]
+    log_id = response.json()["log_event_ids"][0]
 
     # Create derived entries
     derived_configs = [
@@ -110,7 +110,7 @@ async def test_rename_field_basic(client: AsyncClient):
     }
     response = await _create_log(client, project_name, entries=initial_entries)
     assert response.status_code == 200
-    log_id = response.json()[0]
+    log_id = response.json()["log_event_ids"][0]
 
     # Rename the field
     rename_response = await client.post(
