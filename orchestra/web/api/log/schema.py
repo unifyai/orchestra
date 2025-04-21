@@ -284,6 +284,14 @@ class GetLogsMetricRequest(BaseModel):
         default=None,
         description="Log IDs to include (string or key->IDs dict).",
     )
+    limit: Optional[int] = Field(
+        default=None,
+        description="Limit the number of logs to include.",
+    )
+    offset: Optional[int] = Field(
+        default=None,
+        description="Offset the number of logs to include.",
+    )
     exclude_ids: Optional[Union[str, Dict[str, str]]] = Field(
         default=None,
         description="Log IDs to exclude (string or key->IDs dict).",

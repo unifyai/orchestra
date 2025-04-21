@@ -458,6 +458,8 @@ def _compute_metric_for_key_grouped(
     key_filter_expr: Optional[str] = None,
     key_from_ids: Optional[str] = None,
     key_exclude_ids: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
     session=None,
 ) -> Dict[str, Any]:
     """
@@ -473,6 +475,8 @@ def _compute_metric_for_key_grouped(
         key_filter_expr: Key-specific filter expression
         key_from_ids: Key-specific from_ids
         key_exclude_ids: Key-specific exclude_ids
+        limit: Limit the number of logs to include
+        offset: Offset the number of logs to include
         session: Database session
 
     Returns:
@@ -536,6 +540,10 @@ def _compute_metric_for_key_grouped(
             else:
                 query = query.filter(condition)
 
+    if limit:
+        query = query.limit(limit)
+    if offset:
+        query = query.offset(offset)
     # Subquery of filtered LogEvents
     filtered_events_subq = query.subquery()
 
@@ -860,6 +868,8 @@ def compute_metric_for_key(
     key_filter_expr: Optional[str] = None,
     key_from_ids: Optional[str] = None,
     key_exclude_ids: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
     session=None,
 ) -> Union[float, int, bool, str, None]:
     """
@@ -874,6 +884,8 @@ def compute_metric_for_key(
         key_filter_expr: Key-specific filter expression
         key_from_ids: Key-specific from_ids
         key_exclude_ids: Key-specific exclude_ids
+        limit: Limit the number of logs to include
+        offset: Offset the number of logs to include
         session: Database session
 
     Returns:
@@ -923,6 +935,10 @@ def compute_metric_for_key(
             else:
                 query = query.filter(condition)
 
+    if limit:
+        query = query.limit(limit)
+    if offset:
+        query = query.offset(offset)
     # Subquery of filtered LogEvents
     subquery = query.subquery()
 
