@@ -23,7 +23,7 @@ async def test_create_derived_entry_with_list(client: AsyncClient):
     for i in range(3):
         response = await _create_log(client, project_name, entries={"a": i * 10})
         assert response.status_code == 200
-        log_ids.append(response.json()[0])
+        log_ids.append(response.json()["log_event_ids"][0])
 
     # Create derived logs
     key = "half_a"
@@ -89,7 +89,7 @@ async def test_update_derived_entry_with_referenced_logs(client: AsyncClient):
             headers=HEADERS,
         )
         assert resp.status_code == 200
-        base_log_ids.append(resp.json()[0])
+        base_log_ids.append(resp.json()["log_event_ids"][0])
 
     assert len(base_log_ids) == 4, "Expected to create 4 base logs"
 
@@ -180,7 +180,7 @@ async def test_update_derived_entry_with_filter(client: AsyncClient):
             headers=HEADERS,
         )
         assert resp.status_code == 200
-        base_log_ids.append(resp.json()[0])
+        base_log_ids.append(resp.json()["log_event_ids"][0])
 
     # 2) Create first derived log: "temp_plus_10"
     resp = await _create_derived_entry(
@@ -437,7 +437,7 @@ async def test_update_logs_and_derived_logs_are_updated(client: AsyncClient):
     for i in range(2):
         response = await _create_log(client, project_name, entries={"a": i + 1})
         assert response.status_code == 200
-        base_log_ids.append(response.json()[0])
+        base_log_ids.append(response.json()["log_event_ids"][0])
 
     # Create derived logs
     key = "add_one"
@@ -492,7 +492,7 @@ async def test_delete_derived_logs(client: AsyncClient):
     for i in range(3):
         response = await _create_log(client, project_name, entries={"a": i * 10})
         assert response.status_code == 200
-        log_ids.append(response.json()[0])
+        log_ids.append(response.json()["log_event_ids"][0])
 
     # Create first derived log
     key1 = "derived1"
@@ -632,7 +632,7 @@ async def test_derived_entry_datetime_arithmetic(client: AsyncClient):
             headers=HEADERS,
         )
         assert response.status_code == 200, response.text
-        log_ids.append(response.json()[0])
+        log_ids.append(response.json()["log_event_ids"][0])
 
     # 1. Test adding time to a timestamp
     response = await _create_derived_entry(
@@ -865,7 +865,7 @@ async def test_active_derived_logs_processing(client: AsyncClient):
             params={},
         )
         assert response.status_code == 200
-        log_ids.append(response.json()[0])
+        log_ids.append(response.json()["log_event_ids"][0])
 
     # Create a derived log with filter_expr to select logs with score > 40
     key = "high_score_flag"
@@ -903,7 +903,7 @@ async def test_active_derived_logs_processing(client: AsyncClient):
         params={},
     )
     assert response.status_code == 200
-    new_log_id = response.json()[0]
+    new_log_id = response.json()["log_event_ids"][0]
 
     # Verify the new log doesn't have the derived entry yet
     response = await client.get(
