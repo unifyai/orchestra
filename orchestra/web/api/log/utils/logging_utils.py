@@ -106,6 +106,112 @@ def _build_sort_criteria(
     return sort_expr
 
 
+def _apply_post_filters(
+    base_q,
+    ul_table,
+    from_ids,
+    exclude_ids,
+    from_fields,
+    exclude_fields,
+    exclude_params,
+    exclude_entries,
+    return_versions,
+):
+
+    if from_ids and exclude_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot set both from_ids and exclude_ids.",
+        )
+
+    if return_versions:
+        if from_ids:
+            try:
+                from_ids_json = json.loads(from_ids)
+                if not isinstance(from_ids_json, list):
+                    raise ValueError(
+                        "from_ids must be a list when return_versions is True",
+                    )
+                allowed_pairs = [
+                    (item["id"], item["version"]) for item in from_ids_json
+                ]
+                base_q = base_q.filter(
+                    tuple_(
+                        ul_table.c.log_event_id,
+                        ul_table.c.context_version
+                        if "context_version" in ul_table.c
+                        else ul_table.c.param_version,
+                    ).in_(allowed_pairs),
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid from_ids format for versioned logs: {str(e)}",
+                )
+        if exclude_ids:
+            try:
+                exclude_ids_json = json.loads(exclude_ids)
+                if not isinstance(exclude_ids_json, list):
+                    raise ValueError(
+                        "exclude_ids must be a list when return_versions is True",
+                    )
+                excluded_pairs = [
+                    (item["id"], item["version"]) for item in exclude_ids_json
+                ]
+                base_q = base_q.filter(
+                    ~tuple_(
+                        ul_table.c.log_event_id,
+                        ul_table.c.context_version
+                        if "context_version" in ul_table.c
+                        else ul_table.c.param_version,
+                    ).in_(excluded_pairs),
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid exclude_ids format for versioned logs: {str(e)}",
+                )
+    else:
+        if from_ids:
+            include_ids = [int(x) for x in from_ids.split("&")]
+            base_q = base_q.filter(
+                ul_table.c.log_event_id.in_(include_ids),
+            )
+        elif exclude_ids:
+            exclude_set = [int(x) for x in exclude_ids.split("&")]
+            base_q = base_q.filter(
+                ul_table.c.log_event_id.notin_(exclude_set),
+            )
+
+    if exclude_params:
+        base_q = base_q.filter(
+            ul_table.c.param_version.is_(None),
+        )
+    elif exclude_entries:
+        base_q = base_q.filter(
+            ul_table.c.param_version.isnot(None),
+        )
+
+    if from_fields and exclude_fields:
+        raise HTTPException(
+            status_code=400,
+            detail="Only one of from_fields or exclude_fields can be set.",
+        )
+
+    if from_fields:
+        allowed_fields = from_fields.split("&")
+        base_q = base_q.filter(
+            ul_table.c.key.in_(allowed_fields),
+        )
+    elif exclude_fields:
+        excluded_fields = exclude_fields.split("&")
+        base_q = base_q.filter(
+            ul_table.c.key.notin_(excluded_fields),
+        )
+
+    return base_q
+
+
 def _get_logs_query(
     request_fastapi: Request,
     project: str,
@@ -328,8 +434,14 @@ def _get_logs_query(
         paginated_ids_subq,
         return_versions,
     )
+    unified_logs_all = _build_unified_logs_limited(  # no LIMIT/OFFSET
+        session,
+        relevant_log_events,
+        return_versions,
+    )
+    total_filter_q = session.query(unified_logs_all).filter(True)
+    filtered_logs_q = session.query(unified_logs_limited).filter(True)
 
-    # 4) Apply "column_context" + 'params'/'entries' logic
     context_len = 0
     exclude_params = False
     exclude_entries = False
@@ -348,110 +460,42 @@ def _get_logs_query(
         if column_context and column_context[-1] != "/":
             column_context += "/"
         context_len = len(column_context or "")
-
-    filtered_logs_q = session.query(unified_logs_limited).filter(True)
-
     if column_context:
         filtered_logs_q = filtered_logs_q.filter(
             unified_logs_limited.c.key.startswith(column_context),
         )
-
-    if from_ids and exclude_ids:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot set both from_ids and exclude_ids.",
+        total_filter_q = total_filter_q.filter(
+            unified_logs_all.c.key.startswith(column_context),
         )
 
-    if return_versions:
-        if from_ids:
-            try:
-                from_ids_json = json.loads(from_ids)
-                if not isinstance(from_ids_json, list):
-                    raise ValueError(
-                        "from_ids must be a list when return_versions is True",
-                    )
-                allowed_pairs = [
-                    (item["id"], item["version"]) for item in from_ids_json
-                ]
-                filtered_logs_q = filtered_logs_q.filter(
-                    tuple_(
-                        unified_logs_limited.c.log_event_id,
-                        unified_logs_limited.c.context_version
-                        if "context_version" in unified_logs_limited.c
-                        else unified_logs_limited.c.param_version,
-                    ).in_(allowed_pairs),
-                )
-            except Exception as e:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid from_ids format for versioned logs: {str(e)}",
-                )
-        if exclude_ids:
-            try:
-                exclude_ids_json = json.loads(exclude_ids)
-                if not isinstance(exclude_ids_json, list):
-                    raise ValueError(
-                        "exclude_ids must be a list when return_versions is True",
-                    )
-                excluded_pairs = [
-                    (item["id"], item["version"]) for item in exclude_ids_json
-                ]
-                filtered_logs_q = filtered_logs_q.filter(
-                    ~tuple_(
-                        unified_logs_limited.c.log_event_id,
-                        unified_logs_limited.c.context_version
-                        if "context_version" in unified_logs_limited.c
-                        else unified_logs_limited.c.param_version,
-                    ).in_(excluded_pairs),
-                )
-            except Exception as e:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid exclude_ids format for versioned logs: {str(e)}",
-                )
-    else:
-        if from_ids:
-            include_ids = [int(x) for x in from_ids.split("&")]
-            filtered_logs_q = filtered_logs_q.filter(
-                unified_logs_limited.c.log_event_id.in_(include_ids),
-            )
-        elif exclude_ids:
-            exclude_set = [int(x) for x in exclude_ids.split("&")]
-            filtered_logs_q = filtered_logs_q.filter(
-                unified_logs_limited.c.log_event_id.notin_(exclude_set),
-            )
-
-    if exclude_params:
-        filtered_logs_q = filtered_logs_q.filter(
-            unified_logs_limited.c.param_version.is_(None),
-        )
-    elif exclude_entries:
-        filtered_logs_q = filtered_logs_q.filter(
-            unified_logs_limited.c.param_version.isnot(None),
-        )
-
-    if from_fields and exclude_fields:
-        raise HTTPException(
-            status_code=400,
-            detail="Only one of from_fields or exclude_fields can be set.",
-        )
-
-    if from_fields:
-        allowed_fields = from_fields.split("&")
-        filtered_logs_q = filtered_logs_q.filter(
-            unified_logs_limited.c.key.in_(allowed_fields),
-        )
-    elif exclude_fields:
-        excluded_fields = exclude_fields.split("&")
-        filtered_logs_q = filtered_logs_q.filter(
-            unified_logs_limited.c.key.notin_(excluded_fields),
-        )
-
+    filtered_logs_q = _apply_post_filters(
+        filtered_logs_q,
+        unified_logs_limited,
+        from_ids=from_ids,
+        exclude_ids=exclude_ids,
+        exclude_params=exclude_params,
+        exclude_entries=exclude_entries,
+        from_fields=from_fields,
+        exclude_fields=exclude_fields,
+        return_versions=return_versions,
+    )
     filtered_logs_subq = filtered_logs_q.subquery(name="filtered_logs_subq")
 
+    total_logs_q = _apply_post_filters(
+        total_filter_q,
+        unified_logs_all,
+        from_ids=from_ids,
+        exclude_ids=exclude_ids,
+        exclude_params=exclude_params,
+        exclude_entries=exclude_entries,
+        from_fields=from_fields,
+        exclude_fields=exclude_fields,
+        return_versions=return_versions,
+    )
+    total_logs_subq = total_logs_q.subquery(name="total_logs_subq")
     # 5) Fetch final hydrated rows
     total_count = session.query(
-        func.count(func.distinct(filtered_logs_subq.c.log_event_id)),
+        func.count(func.distinct(total_logs_subq.c.log_event_id)),
     ).scalar()
     raw_rows = _get_final_logs(session, filtered_logs_subq, paginated_ids_subq)
 
