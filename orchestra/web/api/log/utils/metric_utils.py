@@ -1346,7 +1346,8 @@ def compute_metric_bulk(
 
     # 6) Build and execute the final query
     query = select(
-        entries.c.key.label("key"), func.coalesce(agg_expr, 0).label("val"),
+        entries.c.key.label("key"),
+        func.coalesce(agg_expr, 0).label("val"),
     ).group_by(entries.c.key)
 
     # 7) Execute the query and build the result dictionary
