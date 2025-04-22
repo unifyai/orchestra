@@ -73,6 +73,7 @@ from .utils import (
     _join_logs,
     _resolve_key_specific_filters,
     apply_group_threshold,
+    compute_metric_bulk,
     compute_metric_for_key,
     create_logs_internal,
 )
@@ -2569,6 +2570,49 @@ def get_logs_metric(
     else:
         # Original non-grouped behavior
         results = {}
+        all_metrics = request.metrics or {}
+        # Check if all keys use the same metric for bulk computation
+        metrics_per_key = {k: (all_metrics.get(k, default_metric)) for k in all_keys}
+        unique_metrics = set(metrics_per_key.values())
+
+        # If all keys use the same metric, use bulk computation
+        if len(unique_metrics) == 1:
+            common_metric = next(iter(unique_metrics))
+
+            # Handle key-specific filters
+            has_key_specific_filters = False
+            for k in all_keys:
+                (
+                    key_filter_expr,
+                    key_from_ids,
+                    key_exclude_ids,
+                ) = _resolve_key_specific_filters(request, k)
+                if key_filter_expr or key_from_ids or key_exclude_ids:
+                    has_key_specific_filters = True
+                    break
+
+            # Only use bulk computation if there are no key-specific filters
+            if not has_key_specific_filters:
+                # Use bulk computation for all keys with the same metric
+                bulk_results = compute_metric_bulk(
+                    keys=all_keys,
+                    metric=common_metric,
+                    project_id=project_obj.id,
+                    field_types=field_types,
+                    filter_expr=request.filter_expr,
+                    from_ids=request.from_ids,
+                    exclude_ids=request.exclude_ids,
+                    session=session,
+                )
+
+                # Post-process each value
+                for k, value in bulk_results.items():
+                    results[k] = value
+
+                # Return single value or dictionary based on input type
+                return results[all_keys[0]] if single_key else results
+
+        # Fallback to per-key computation if metrics differ or key-specific filters exist
         for k in all_keys:
             # Get metric for this key or use default
             per_key_metric = default_metric
