@@ -1,7 +1,7 @@
 import json
 from datetime import date, datetime, time, timedelta
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from sqlalchemy import (
     INTEGER,
@@ -32,6 +32,7 @@ __all__ = [
     "AggregationMetric",
     "_get_reduction_expr",
     "compute_metric_for_key",
+    "compute_metric_bulk",
     "_compute_metric_for_key_grouped",
 ]
 
@@ -1103,3 +1104,269 @@ def compute_metric_for_key(
     )
 
     return processed_value
+
+
+def compute_metric_bulk(
+    keys: Sequence[str],
+    metric: str,
+    project_id: int,
+    field_types: Dict[str, str],
+    filter_expr: Optional[str] = None,
+    from_ids: Optional[str] = None,
+    exclude_ids: Optional[str] = None,
+    session=None,
+) -> Dict[str, Union[float, int, bool, str, None]]:
+    """
+    Compute a metric for multiple keys in a single GROUP BY SQL query.
+    Args:
+        keys: Sequence of field keys to compute the metric for
+        metric: The metric to compute (mean, sum, etc.)
+        project_id: The project ID
+        field_types: Dict of field types
+        filter_expr: Filter expression
+        from_ids: IDs to include
+        exclude_ids: IDs to exclude
+        session: Database session
+
+    Returns:
+        Dict mapping keys to their computed metric values
+    """
+    if not keys:
+        return {}
+
+    # 1) Build initial query to find matching LogEvent IDs
+    query = session.query(LogEvent.id).filter(LogEvent.project_id == project_id)
+
+    assert not (from_ids and exclude_ids), (
+        f"Only one of from_ids or exclude_ids can be set, "
+        f"but found values {from_ids} and {exclude_ids}."
+    )
+
+    if from_ids:
+        query = query.where(LogEvent.id.in_([int(i) for i in from_ids.split("&")]))
+    elif exclude_ids:
+        query = query.where(
+            LogEvent.id.notin_([int(i) for i in exclude_ids.split("&")]),
+        )
+
+    if filter_expr:
+        filter_dict = str_filter_exp_to_dict(
+            filter_expr,
+            field_names=list(field_types.keys()),
+        )
+        if filter_dict:
+            event_ids_subq = query.subquery(name="event_ids_subq")
+            condition = build_sql_query(
+                filter_dict,
+                LogEvent,
+                session,
+                log_event_ids=event_ids_subq,
+            )
+            if isinstance(condition, Subquery):
+                query = query.filter(
+                    exists(
+                        select(1)
+                        .select_from(condition)
+                        .where(
+                            and_(
+                                condition.c.log_event_id == LogEvent.id,
+                                condition.c.value.is_(True),
+                            ),
+                        ),
+                    ),
+                )
+            else:
+                query = query.filter(condition)
+    # Subquery of filtered LogEvents
+    filtered_events_subq = query.subquery()
+
+    # 2) Build queries for Log and DerivedLog tables
+    log_q = (
+        select(
+            Log.key.label("key"),
+            Log.value.label("value"),
+            Log.inferred_type.label("inferred_type"),
+        )
+        .where(Log.key.in_(keys))
+        .join(LogEvent, Log.log_event_id == LogEvent.id)
+        .where(LogEvent.project_id == project_id)
+        .where(Log.log_event_id.in_(select(filtered_events_subq.c.id)))
+    )
+
+    derived_q = (
+        select(
+            DerivedLog.key.label("key"),
+            DerivedLog.value.label("value"),
+            DerivedLog.inferred_type.label("inferred_type"),
+        )
+        .where(DerivedLog.key.in_(keys))
+        .join(LogEvent, DerivedLog.log_event_id == LogEvent.id)
+        .where(LogEvent.project_id == project_id)
+        .where(DerivedLog.log_event_id.in_(select(filtered_events_subq.c.id)))
+    )
+
+    # 3) Union the queries to get all entries
+    entries = log_q.union_all(derived_q).subquery("entries")
+
+    # 4) Define the cast expression for converting values to float
+    cast_expr = case(
+        (
+            entries.c.inferred_type == "list",
+            func.jsonb_array_length(cast(entries.c.value, JSONB)).cast(Float),
+        ),
+        (
+            entries.c.inferred_type == "dict",
+            select(func.count())
+            .select_from(func.jsonb_object_keys(cast(entries.c.value, JSONB)))
+            .scalar_subquery()
+            .cast(Float),
+        ),
+        (
+            entries.c.inferred_type == "bool",
+            entries.c.value.cast(BOOLEAN).cast(INTEGER).cast(Float),
+        ),
+        (
+            entries.c.inferred_type == "str",
+            func.length(cast(entries.c.value, JSONB)[0].astext).cast(Float),
+        ),
+        (
+            entries.c.inferred_type == "timestamp",
+            func.extract("epoch", cast(cast(entries.c.value, String), TIMESTAMP)).cast(
+                Float,
+            ),
+        ),
+        (
+            entries.c.inferred_type == "time",
+            # Extract seconds using time-specific casting
+            func.mod(
+                func.extract(
+                    "epoch",
+                    func.cast(
+                        func.concat(
+                            "2000-01-01 ",
+                            func.trim(func.cast(entries.c.value, String), '"'),
+                        ),
+                        TIMESTAMP,
+                    ),
+                ),
+                86400,
+            ).cast(Float),
+        ),
+        (
+            entries.c.inferred_type == "date",
+            # Extract epoch using date-specific casting
+            func.extract(
+                "epoch",
+                func.cast(func.trim(func.cast(entries.c.value, String), '"'), Date),
+            ).cast(Float),
+        ),
+        (
+            entries.c.inferred_type == "timedelta",
+            # Parse ISO 8601 duration format (e.g., "P1DT6H") to seconds
+            (
+                # Days component (86400 seconds per day)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(entries.c.value, String), '"'),
+                            "P([0-9]+)D",
+                        ),
+                        Float,
+                    )
+                    * 86400,
+                    0,
+                )
+                +
+                # Hours component (3600 seconds per hour)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(entries.c.value, String), '"'),
+                            "T([0-9]+)H",
+                        ),
+                        Float,
+                    )
+                    * 3600,
+                    0,
+                )
+                +
+                # Minutes component (60 seconds per minute)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(entries.c.value, String), '"'),
+                            "T[0-9]*H?([0-9]+)M",
+                        ),
+                        Float,
+                    )
+                    * 60,
+                    0,
+                )
+                +
+                # Seconds component
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(entries.c.value, String), '"'),
+                            "T[0-9]*H?[0-9]*M?([0-9.]+)S",
+                        ),
+                        Float,
+                    ),
+                    0,
+                )
+            ).cast(Float),
+        ),
+        (entries.c.inferred_type == "float", entries.c.value.cast(Float)),
+        (entries.c.inferred_type == "int", entries.c.value.cast(Float)),
+        else_=literal(0, type_=Float),
+    ).label("value_as_float")
+
+    # 5) Map metric to SQL aggregation function
+    agg_expr = None
+    if metric == AggregationMetric.COUNT:
+        agg_expr = func.count(cast_expr)
+    elif metric == AggregationMetric.SUM:
+        agg_expr = func.sum(cast_expr)
+    elif metric == AggregationMetric.MEAN:
+        agg_expr = func.avg(cast_expr)
+    elif metric == AggregationMetric.VAR:
+        agg_expr = func.var_pop(cast_expr)
+    elif metric == AggregationMetric.STD:
+        agg_expr = func.stddev_pop(cast_expr)
+    elif metric == AggregationMetric.MIN:
+        agg_expr = func.min(cast_expr)
+    elif metric == AggregationMetric.MAX:
+        agg_expr = func.max(cast_expr)
+    elif metric == AggregationMetric.MEDIAN:
+        agg_expr = func.percentile_cont(0.5).within_group(cast_expr.asc())
+    elif metric == AggregationMetric.MODE:
+        agg_expr = func.mode().within_group(cast_expr.asc())
+    else:
+        raise ValueError(f"Unsupported metric: {metric}")
+
+    # 6) Build and execute the final query
+    query = select(
+        entries.c.key.label("key"), func.coalesce(agg_expr, 0).label("val"),
+    ).group_by(entries.c.key)
+
+    # 7) Execute the query and build the result dictionary
+    result = {}
+    for row in session.execute(query):
+        key = row.key
+        value = row.val
+
+        # Post-process the value based on field type
+        field_type = field_types.get(key)
+        processed_value = _postprocess_aggregator_value(
+            value,
+            metric,
+            field_type,
+        )
+        result[key] = processed_value
+
+    # 8) Add any missing keys with None values
+    for key in keys:
+        if key not in result:
+            result[key] = None
+
+    return result
