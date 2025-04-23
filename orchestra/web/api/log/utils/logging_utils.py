@@ -56,7 +56,7 @@ __all__ = [
     "_get_final_logs",
     "is_image_field",
     "_join_logs",
-    "get_or_create_chat_completions_project",
+    "get_or_create_usage_project",
     "log_chat_completion_event",
 ]
 #########################
