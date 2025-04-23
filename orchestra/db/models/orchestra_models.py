@@ -958,3 +958,29 @@ class AdminUser(Base):
 
     # Relationship to AuthUser
     auth_user = relationship("AuthUser", backref="admin_user")
+
+
+class FavoriteProject(Base):
+    """Model class for user's favorite projects."""
+
+    __tablename__ = "favorite_project"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    icon = Column(String, nullable=False)
+    position = Column(Integer, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "project_id", name="uq_user_favorite_project"),
+        UniqueConstraint("user_id", "position", name="uq_user_favorite_position"),
+    )
