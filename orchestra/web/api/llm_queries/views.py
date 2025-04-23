@@ -8,6 +8,7 @@ from fastapi.param_functions import Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from providers.completion import PROVIDER_CLASSES
 
+from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
@@ -57,6 +58,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
     custom_router_dao: CustomRouterDAO = Depends(),
     router_dao: RouterDAO = Depends(),
+    auth_user_dao: AuthUserDAO = Depends(),
 ) -> Union[ChatCompletionResponse, StreamingResponse]:
     """
     OpenAI compatible `/chat/completions` endpoint for LLM inference.
@@ -401,6 +403,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         "custom_endpoint_dao": custom_endpoint_dao,
         "query_dao": query_dao,
         "users_dao": users_dao,
+        "auth_user_dao": auth_user_dao,
     }
 
     if request_failed:
