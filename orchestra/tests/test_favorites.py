@@ -1,0 +1,203 @@
+import pytest
+from httpx import AsyncClient
+
+from .test_interface import _create_project
+from .test_projects import HEADERS
+
+
+@pytest.mark.anyio
+async def test_get_empty_favorites(client: AsyncClient):
+    """
+    GET /v0/project/favorites should return an empty list when no favorites exist.
+    """
+    response = await client.get("/v0/project/favorites", headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.anyio
+async def test_create_favorite(client: AsyncClient):
+    """
+    POST /v0/project/favorites should create a favorite and return the created object.
+    """
+    project_name = "proj1"
+    await _create_project(client, project_name)
+
+    payload = {"project": project_name, "position": 1, "icon": "star"}
+    resp = await client.post("/v0/project/favorites", json=payload, headers=HEADERS)
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert "id" in data and isinstance(data["id"], int)
+    assert data["project"] == project_name
+    assert data["position"] == 1
+    assert data["icon"] == "star"
+
+
+@pytest.mark.anyio
+async def test_get_favorite_by_id(client: AsyncClient):
+    """
+    GET /v0/project/favorites/{id} should return the favorite when it exists.
+    """
+    project_name = "proj2"
+    await _create_project(client, project_name)
+    payload = {"project": project_name, "position": 2, "icon": "heart"}
+    post_resp = await client.post(
+        "/v0/project/favorites",
+        json=payload,
+        headers=HEADERS,
+    )
+    fav_id = post_resp.json()["id"]
+
+    get_resp = await client.get(f"/v0/project/favorites/{fav_id}", headers=HEADERS)
+    assert get_resp.status_code == 200
+    fav = get_resp.json()
+    assert fav["id"] == fav_id
+    assert fav["project"] == project_name
+    assert fav["position"] == 2
+    assert fav["icon"] == "heart"
+
+
+@pytest.mark.anyio
+async def test_get_favorite_not_found(client: AsyncClient):
+    """
+    GET /v0/project/favorites/{id} for a non-existent id should return 404.
+    """
+    resp = await client.get("/v0/project/favorites/9999", headers=HEADERS)
+    assert resp.status_code == 404
+    assert "Favorite with ID 9999 not found" in resp.json().get("detail", "")
+
+
+@pytest.mark.anyio
+async def test_update_favorite_icon_and_position(client: AsyncClient):
+    """
+    PATCH /v0/project/favorites/{id} should update icon and position.
+    """
+    project_name = "proj3"
+    await _create_project(client, project_name)
+    payload = {"project": project_name, "position": 3, "icon": "circle"}
+    post_resp = await client.post(
+        "/v0/project/favorites",
+        json=payload,
+        headers=HEADERS,
+    )
+    fav_id = post_resp.json()["id"]
+
+    update_payload = {"icon": "square", "position": 4}
+    patch_resp = await client.patch(
+        f"/v0/project/favorites/{fav_id}",
+        json=update_payload,
+        headers=HEADERS,
+    )
+    assert patch_resp.status_code == 200
+    updated = patch_resp.json()
+    assert updated["id"] == fav_id
+    assert updated["icon"] == "square"
+    assert updated["position"] == 4
+
+    get_resp = await client.get(f"/v0/project/favorites/{fav_id}", headers=HEADERS)
+    assert get_resp.status_code == 200
+    fav = get_resp.json()
+    assert fav["icon"] == "square"
+    assert fav["position"] == 4
+
+
+@pytest.mark.anyio
+async def test_update_favorite_not_found(client: AsyncClient):
+    """
+    PATCH /v0/project/favorites/{id} for a non-existent id should return 404.
+    """
+    update_payload = {"icon": "new", "position": 1}
+    resp = await client.patch(
+        "/v0/project/favorites/8888",
+        json=update_payload,
+        headers=HEADERS,
+    )
+    assert resp.status_code == 404
+    assert "Favorite with ID 8888 not found" in resp.json().get("detail", "")
+
+
+@pytest.mark.anyio
+async def test_delete_favorite(client: AsyncClient):
+    """
+    DELETE /v0/project/favorites/{id} should delete the favorite.
+    """
+    project_name = "proj4"
+    await _create_project(client, project_name)
+    payload = {"project": project_name, "position": 5, "icon": "triangle"}
+    post_resp = await client.post(
+        "/v0/project/favorites",
+        json=payload,
+        headers=HEADERS,
+    )
+    fav_id = post_resp.json()["id"]
+
+    del_resp = await client.delete(f"/v0/project/favorites/{fav_id}", headers=HEADERS)
+    assert del_resp.status_code == 204
+
+    list_resp = await client.get("/v0/project/favorites", headers=HEADERS)
+    assert list_resp.status_code == 200
+    assert all(f["id"] != fav_id for f in list_resp.json())
+
+    get_resp = await client.get(f"/v0/project/favorites/{fav_id}", headers=HEADERS)
+    assert get_resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_delete_favorite_not_found(client: AsyncClient):
+    """
+    DELETE /v0/project/favorites/{id} for a non-existent id should return 404.
+    """
+    resp = await client.delete("/v0/project/favorites/7777", headers=HEADERS)
+    assert resp.status_code == 404
+    assert "Favorite with ID 7777 not found" in resp.json().get("detail", "")
+
+
+@pytest.mark.anyio
+async def test_duplicate_position_on_create(client: AsyncClient):
+    """
+    Posting a favorite with a position already in use should return 400 with 'position' in detail.
+    """
+    await _create_project(client, "pA")
+    await _create_project(client, "pB")
+    payload1 = {"project": "pA", "position": 1, "icon": "star"}
+    resp1 = await client.post("/v0/project/favorites", json=payload1, headers=HEADERS)
+    assert resp1.status_code == 201
+
+    payload2 = {"project": "pB", "position": 1, "icon": "heart"}
+    resp2 = await client.post("/v0/project/favorites", json=payload2, headers=HEADERS)
+    assert resp2.status_code == 400
+    assert "Project is already in favorites" in resp2.json().get("detail", "")
+
+
+@pytest.mark.anyio
+async def test_duplicate_position_on_update(client: AsyncClient):
+    """
+    Updating a favorite to a position already in use should return 400 with 'position' in detail.
+    """
+    await _create_project(client, "pC")
+    await _create_project(client, "pD")
+    payload1 = {"project": "pC", "position": 10, "icon": "star"}
+    payload2 = {"project": "pD", "position": 20, "icon": "heart"}
+    resp1 = await client.post("/v0/project/favorites", json=payload1, headers=HEADERS)
+    resp2 = await client.post("/v0/project/favorites", json=payload2, headers=HEADERS)
+    id1 = resp1.json()["id"]
+    id2 = resp2.json()["id"]
+
+    update_payload = {"position": 10}
+    patch_resp = await client.patch(
+        f"/v0/project/favorites/{id2}",
+        json=update_payload,
+        headers=HEADERS,
+    )
+    assert patch_resp.status_code == 500
+
+
+@pytest.mark.anyio
+async def test_nonexistent_project_on_create(client: AsyncClient):
+    """
+    Posting a favorite for a non-existent project should return 404.
+    """
+    payload = {"project": "no_proj", "position": 2, "icon": "heart"}
+    resp = await client.post("/v0/project/favorites", json=payload, headers=HEADERS)
+    assert resp.status_code == 404
+    assert "Project 'no_proj' not found" in resp.json().get("detail", "")
