@@ -69,6 +69,11 @@ api_router.include_router(
     dependencies=ADMIN_AUTH,
 )
 api_router.include_router(
+    users.router,
+    tags=["Query Logging"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
     log_admin_router,
     prefix="/admin",
     tags=["Logs"],
@@ -106,6 +111,7 @@ groupings = {
     ],
     "Account": [
         "Credits",
+        "Query Logging",
     ],
 }
 
