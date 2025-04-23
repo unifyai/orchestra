@@ -1,6 +1,6 @@
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class UserRequest(BaseModel):
@@ -27,3 +27,13 @@ class AccountRequest(BaseModel):
 class FreezeAccountRequest(BaseModel):
     user_id: str
     freeze: bool = True
+
+
+class QueryLoggingStatus(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    enabled: bool
+
+
+class UpdateQueryLoggingRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    enabled: bool

@@ -3,7 +3,7 @@ import datetime
 import secrets
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from orchestra.db.dao.account_dao import AccountDAO
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
@@ -14,12 +14,14 @@ from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.users.schema import (
     AccountRequest,
     FreezeAccountRequest,
+    QueryLoggingStatus,
+    UpdateQueryLoggingRequest,
     UserRequest,
 )
 from orchestra.web.api.utils.http_responses import not_found
 
 admin_router = APIRouter()
-
+router = APIRouter()
 # TODO: Move exceptions to exceptions file
 # TODO: Fetch organization if it exists when reading user info
 # TODO: Return tier in user info endpoints + double check rest of the information
@@ -402,3 +404,34 @@ async def update_organization_member_level(
         raise not_found("User")
     organization_member_dao.update(id=org_member[0][0].id, level=new_level)
     return "Member level successfully updated!"
+
+
+@router.get("/user/query-logging")
+async def get_query_logging_status(
+    request: Request,
+    auth_user_dao: AuthUserDAO = Depends(),
+):
+    """Get the current query logging status for the authenticated user."""
+    user_id = request.state.user_id
+    user = auth_user_dao.get_by_id(user_id)
+    if not user:
+        raise not_found("User")
+
+    return QueryLoggingStatus(enabled=user.queries_enabled)
+
+
+@router.patch("/user/query-logging")
+async def update_query_logging_status(
+    request: Request,
+    body: UpdateQueryLoggingRequest,
+    auth_user_dao: AuthUserDAO = Depends(),
+):
+    """Update the query logging status for the authenticated user."""
+    user_id = request.state.user_id
+    user = auth_user_dao.get_by_id(user_id)
+    if not user:
+        raise not_found("User")
+
+    auth_user_dao.update(id=user_id, queries_enabled=body.enabled)
+
+    return QueryLoggingStatus(enabled=body.enabled)
