@@ -27,7 +27,6 @@ from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
-from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
@@ -62,6 +61,35 @@ __all__ = [
 #########################
 # Logs Utils            #
 #########################
+
+
+def get_or_create_chat_completions_project(
+    project_dao: ProjectDAO,
+    user_id: str,
+) -> Project:
+    """
+    Get or create the ChatCompletions project for a user.
+
+    Args:
+        project_dao: The project data access object
+        user_id: The ID of the user
+
+    Returns:
+        The Project instance for the ChatCompletions project
+    """
+    project = project_dao.get_by_user_and_name(
+        user_id,
+        settings.chat_completions_project_name,
+    )
+    if not project:
+        project_dao.create(user_id=user_id, name=settings.chat_completions_project_name)
+        project_dao.session.commit()
+        project = project_dao.get_by_user_and_name(
+            user_id,
+            settings.chat_completions_project_name,
+        )
+    return project
+
 
 
 def _build_unified_logs_limited(
