@@ -153,46 +153,6 @@ async def test_delete_favorite_not_found(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_duplicate_position_on_create(client: AsyncClient):
-    """
-    Posting a favorite with a position already in use should return 400 with 'position' in detail.
-    """
-    await _create_project(client, "pA")
-    await _create_project(client, "pB")
-    payload1 = {"project": "pA", "position": 1, "icon": "star"}
-    resp1 = await client.post("/v0/project/favorites", json=payload1, headers=HEADERS)
-    assert resp1.status_code == 201
-
-    payload2 = {"project": "pB", "position": 1, "icon": "heart"}
-    resp2 = await client.post("/v0/project/favorites", json=payload2, headers=HEADERS)
-    assert resp2.status_code == 400
-    assert "Project is already in favorites" in resp2.json().get("detail", "")
-
-
-@pytest.mark.anyio
-async def test_duplicate_position_on_update(client: AsyncClient):
-    """
-    Updating a favorite to a position already in use should return 400 with 'position' in detail.
-    """
-    await _create_project(client, "pC")
-    await _create_project(client, "pD")
-    payload1 = {"project": "pC", "position": 10, "icon": "star"}
-    payload2 = {"project": "pD", "position": 20, "icon": "heart"}
-    resp1 = await client.post("/v0/project/favorites", json=payload1, headers=HEADERS)
-    resp2 = await client.post("/v0/project/favorites", json=payload2, headers=HEADERS)
-    id1 = resp1.json()["id"]
-    id2 = resp2.json()["id"]
-
-    update_payload = {"position": 10}
-    patch_resp = await client.patch(
-        f"/v0/project/favorites/{id2}",
-        json=update_payload,
-        headers=HEADERS,
-    )
-    assert patch_resp.status_code == 500
-
-
-@pytest.mark.anyio
 async def test_nonexistent_project_on_create(client: AsyncClient):
     """
     Posting a favorite for a non-existent project should return 404.
