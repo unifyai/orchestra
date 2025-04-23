@@ -74,10 +74,11 @@ class AuthUserDAO:
                 setattr(entry, "image", image)
             if tier:
                 setattr(entry, "tier", tier)
-            if queries_enabled:
+            if queries_enabled is not None:
                 setattr(entry, "queries_enabled", queries_enabled)
-            if evaluations_enabled:
+            if evaluations_enabled is not None:
                 setattr(entry, "evaluations_enabled", evaluations_enabled)
+        self.session.commit()
 
     def delete(self, id: str):
         try:
