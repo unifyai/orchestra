@@ -3,6 +3,7 @@ import os
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
+from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
@@ -63,6 +64,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     model_dao: ModelDAO,
     provider_dao: ProviderDAO,
     endpoint_dao: EndpointDAO,
+    auth_user_dao: AuthUserDAO,
     custom_endpoint_dao: CustomEndpointDAO,
     query_dao: QueryDAO,
     users_dao: UsersDAO,
@@ -134,7 +136,15 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         status_code=status_code,
     )
 
-    create_query_model(query_model_request, query_dao=query_dao)
+    # Fetch AuthUser to check if query logging is enabled
+    try:
+        auth_user = auth_user_dao.get_by_id(user_id)[0]
+    except IndexError:
+        auth_user = None
+
+    # Only create query model if queries_enabled is True
+    if auth_user and auth_user.queries_enabled:
+        create_query_model(query_model_request, query_dao=query_dao)
     # Log the chat completion event using the new unified logging system
     try:
         req = json.loads(query_body) if isinstance(query_body, str) else query_body
@@ -149,22 +159,23 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         )
     except:
         resp = response_body
-    log_chat_completion_event(
-        user_id=user_id,
-        model_provider_str=f"{model}@{provider}",
-        endpoint_id=endpoint_id,
-        custom_endpoint_id=custom_endpoint_id,
-        local_endpoint_id=None,
-        credits=cost,  # type: ignore
-        query_body=req,
-        response_body=resp,
-        signature=signature,
-        used_router=used_router,
-        router=router,
-        tags=tags,
-        status_code=status_code,
-        session=session,
-    )
+    if auth_user and auth_user.queries_enabled:
+        log_chat_completion_event(
+            user_id=user_id,
+            model_provider_str=f"{model}@{provider}",
+            endpoint_id=endpoint_id,
+            custom_endpoint_id=custom_endpoint_id,
+            local_endpoint_id=None,
+            credits=cost,  # type: ignore
+            query_body=req,
+            response_body=resp,
+            signature=signature,
+            used_router=used_router,
+            router=router,
+            tags=tags,
+            status_code=status_code,
+            session=session,
+        )
     user = users_dao.get_user_with_id(user_id)
 
     if not os.environ.get("ON_PREM") and status_code == 200:
