@@ -982,5 +982,4 @@ class FavoriteProject(Base):
 
     __table_args__ = (
         UniqueConstraint("user_id", "project_id", name="uq_user_favorite_project"),
-        UniqueConstraint("user_id", "position", name="uq_user_favorite_position"),
     )
