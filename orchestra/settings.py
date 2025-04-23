@@ -133,7 +133,7 @@ class Settings(BaseSettings):
     )
 
     # Chat Completions Project
-    chat_completions_project_name: str = "ChatCompletions"
+    chat_completions_project_name: str = "Usage"
 
     cors_allow_origins: list[str] = []
 
