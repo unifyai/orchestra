@@ -3,13 +3,15 @@ Includes endpoints related to log projects.
 """
 
 from datetime import datetime, timezone
+from typing import List
 
 import sqlalchemy
-from fastapi import APIRouter, Depends, HTTPException, Path, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.derived_log_dao import DerivedLogDAO
+from orchestra.db.dao.favorite_project_dao import FavoriteProjectDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.log_dao import LogDAO
@@ -22,6 +24,7 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Context,
     DerivedLog,
+    FavoriteProject,
     FieldType,
     Interface,
     JSONLog,
@@ -34,6 +37,9 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.settings import settings
 from orchestra.web.api.project.schema import (
     DuplicateProjectRequest,
+    FavoriteProjectIn,
+    FavoriteProjectOut,
+    FavoriteProjectUpdate,
     ProjectConfig,
     ShareProjectRequest,
 )
@@ -45,6 +51,357 @@ router = APIRouter()
 ###########################
 # endpoints
 ###########################
+
+
+@router.get(
+    "/project/favorites",
+    response_model=List[FavoriteProjectOut],
+    responses={
+        200: {
+            "description": "List of favorite projects",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {
+                            "id": 1,
+                            "project": "my-project",
+                            "icon": "star",
+                            "position": 0,
+                        },
+                        {
+                            "id": 2,
+                            "project": "another-project",
+                            "icon": "folder",
+                            "position": 1,
+                        },
+                    ],
+                },
+            },
+        },
+    },
+)
+def get_favorites(
+    request_fastapi: Request,
+    favorite_project_dao: FavoriteProjectDAO = Depends(),
+    project_dao: ProjectDAO = Depends(),
+):
+    """
+    Returns a list of the user's favorite projects, sorted by position.
+    """
+    favorites = favorite_project_dao.filter_by_user(request_fastapi.state.user_id)
+
+    # Sort by position
+    favorites.sort(key=lambda x: x.position)
+
+    # Convert to response model
+    result = []
+    for fav in favorites:
+        # Get project name from project_id
+        project = project_dao.get_by_id(fav.project_id)
+        project_name = project.name if project else str(fav.project_id)
+
+        result.append(
+            FavoriteProjectOut(
+                id=fav.id,
+                project=project_name,
+                icon=fav.icon,
+                position=fav.position,
+            ),
+        )
+
+    return result
+
+
+@router.post(
+    "/project/favorites",
+    response_model=FavoriteProjectOut,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        201: {
+            "description": "Favorite created successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": 1,
+                        "project": "my-project",
+                        "icon": "star",
+                        "position": 0,
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Invalid request or duplicate favorite",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Project is already in favorites"},
+                },
+            },
+        },
+        404: {
+            "description": "Project not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Project 'unknown-project' not found"},
+                },
+            },
+        },
+    },
+)
+def create_favorite(
+    request_fastapi: Request,
+    favorite: FavoriteProjectIn,
+    favorite_project_dao: FavoriteProjectDAO = Depends(),
+    project_dao: ProjectDAO = Depends(),
+):
+    """
+    Creates a new favorite project for the user.
+
+    Each favorite must include a project name, icon, and position.
+    """
+    user_id = request_fastapi.state.user_id
+
+    # Verify project exists and user has access
+    project = project_dao.get_by_user_and_name(user_id=user_id, name=favorite.project)
+
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{favorite.project}' not found",
+        )
+
+    try:
+        # Create new favorite
+        favorite_project_dao.create(
+            user_id=user_id,
+            project_id=project.id,
+            icon=favorite.icon,
+            position=favorite.position,
+        )
+
+        # Commit changes
+        favorite_project_dao.session.commit()
+
+        # Return created favorite
+        return FavoriteProjectOut(
+            id=favorite_project_dao.session.query(FavoriteProject)
+            .filter_by(user_id=user_id, project_id=project.id)
+            .first()
+            .id,
+            project=favorite.project,
+            icon=favorite.icon,
+            position=favorite.position,
+        )
+    except ValueError as e:
+        favorite_project_dao.session.rollback()
+        raise HTTPException(status_code=400, detail=f"Project is already in favorites")
+    except Exception as e:
+        favorite_project_dao.session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create favorite: {str(e)}",
+        )
+
+
+@router.get(
+    "/project/favorites/{id}",
+    response_model=FavoriteProjectOut,
+    responses={
+        200: {
+            "description": "Favorite project details",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": 1,
+                        "project": "my-project",
+                        "icon": "star",
+                        "position": 0,
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Favorite not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Favorite with ID 123 not found"},
+                },
+            },
+        },
+    },
+)
+def get_favorite(
+    request_fastapi: Request,
+    id: int = Path(..., description="The ID of the favorite to retrieve"),
+    favorite_project_dao: FavoriteProjectDAO = Depends(),
+    project_dao: ProjectDAO = Depends(),
+):
+    """
+    Returns details of a specific favorite project.
+    """
+    user_id = request_fastapi.state.user_id
+    # Get the favorite
+    try:
+        favorite = favorite_project_dao.get_by_id(user_id, id)
+    except:
+        raise HTTPException(status_code=404, detail=f"Favorite with ID {id} not found")
+
+    # Get project name from project_id
+    try:
+        project = project_dao.filter(id=favorite.project_id)[0][0]
+        project_name = project.name if project else str(favorite.project_id)
+    except:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project with ID {favorite.project_id} not found",
+        )
+
+    # Return as response model
+    return FavoriteProjectOut(
+        id=favorite.id,
+        project=project_name,
+        icon=favorite.icon,
+        position=favorite.position,
+    )
+
+
+@router.patch(
+    "/project/favorites/{id}",
+    response_model=FavoriteProjectOut,
+    responses={
+        200: {
+            "description": "Favorite updated successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": 1,
+                        "project": "my-project",
+                        "icon": "updated-icon",
+                        "position": 2,
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Favorite not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Favorite with ID 123 not found"},
+                },
+            },
+        },
+    },
+)
+def update_favorite(
+    request_fastapi: Request,
+    update: FavoriteProjectUpdate,
+    id: int = Path(..., description="The ID of the favorite to update"),
+    favorite_project_dao: FavoriteProjectDAO = Depends(),
+    project_dao: ProjectDAO = Depends(),
+):
+    """
+    Updates a specific favorite project.
+
+    Only the provided fields will be updated.
+    """
+    # Get the favorite
+    user_id = request_fastapi.state.user_id
+    try:
+        favorite = favorite_project_dao.get_by_id(user_id, id)
+    except:
+        raise HTTPException(status_code=404, detail=f"Favorite with ID {id} not found")
+
+    try:
+        # Update fields if provided
+        update_data = {}
+        if update.icon is not None:
+            update_data["icon"] = update.icon
+        if update.position is not None:
+            update_data["position"] = update.position
+
+        # Apply updates
+        if update_data:
+            favorite_project_dao.update(user_id, id, **update_data)
+            favorite_project_dao.session.commit()
+
+        # Get updated favorite
+        updated_favorite = favorite_project_dao.get_by_id(user_id, id)
+
+        # Get project name from project_id
+        try:
+            project = project_dao.filter(id=updated_favorite.project_id)[0][0]
+            project_name = project.name if project else str(updated_favorite.project_id)
+        except:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project with ID {updated_favorite.project_id} not found",
+            )
+
+        # Return updated favorite
+        return FavoriteProjectOut(
+            id=updated_favorite.id,
+            project=project_name,
+            icon=updated_favorite.icon,
+            position=updated_favorite.position,
+        )
+    except Exception as e:
+        favorite_project_dao.session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update favorite: {str(e)}",
+        )
+
+
+@router.delete(
+    "/project/favorites/{id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={
+        204: {
+            "description": "Favorite deleted successfully",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Favorite deleted successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Favorite not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Favorite with ID 123 not found"},
+                },
+            },
+        },
+    },
+)
+def delete_favorite(
+    request_fastapi: Request,
+    id: int = Path(..., description="The ID of the favorite to delete"),
+    favorite_project_dao: FavoriteProjectDAO = Depends(),
+):
+    """
+    Deletes a specific favorite project.
+    """
+    # Get the favorite
+    user_id = request_fastapi.state.user_id
+    try:
+        favorite = favorite_project_dao.get_by_id(user_id, id)
+    except:
+        raise HTTPException(status_code=404, detail=f"Favorite with ID {id} not found")
+
+    try:
+        # Delete the favorite
+        favorite_project_dao.delete(user_id, id)
+        favorite_project_dao.session.commit()
+
+        # Return no content
+        return None
+    except Exception as e:
+        favorite_project_dao.session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete favorite: {str(e)}",
+        )
 
 
 @router.post(
