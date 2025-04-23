@@ -173,9 +173,9 @@ async def test_chat_completions_logging(client: AsyncClient):
     # 1. Call chat/completions
     payload = get_chat_completions_payload("gpt-3.5-turbo", "openai", stream=False)
     await client.post("/v0/chat/completions", headers=HEADERS, json=payload)
-    # 2. Fetch logs for ChatCompletions
+    # 2. Fetch logs for Usage
     resp = await client.get(
-        "/v0/logs?project=ChatCompletions",
+        "/v0/logs?project=Usage",
         headers=HEADERS,
     )
     assert resp.status_code == 200
