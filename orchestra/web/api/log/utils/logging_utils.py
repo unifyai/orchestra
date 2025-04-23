@@ -64,19 +64,19 @@ __all__ = [
 #########################
 
 
-def get_or_create_chat_completions_project(
+def get_or_create_usage_project(
     project_dao: ProjectDAO,
     user_id: str,
 ) -> Project:
     """
-    Get or create the ChatCompletions project for a user.
+    Get or create the Usage project for a user.
 
     Args:
         project_dao: The project data access object
         user_id: The ID of the user
 
     Returns:
-        The Project instance for the ChatCompletions project
+        The Project instance for the Usage project
     """
     project = project_dao.get_by_user_and_name(
         user_id,
@@ -98,7 +98,7 @@ def log_chat_completion_event(
     **kwargs,
 ) -> List[int]:
     """
-    Log a chat completion event to the ChatCompletions project.
+    Log a chat completion event to the Usage project.
 
     Args:
         user_id: The ID of the user
@@ -124,8 +124,8 @@ def log_chat_completion_event(
         log_event_dao = LogEventDAO(session=session)
         log_dao = LogDAO(session=session, context_dao=context_dao)
 
-        # Get or create the ChatCompletions project
-        project = get_or_create_chat_completions_project(project_dao, user_id)
+        # Get or create the Usage project
+        project = get_or_create_usage_project(project_dao, user_id)
 
         # Create the log config
         config = CreateLogConfig(
