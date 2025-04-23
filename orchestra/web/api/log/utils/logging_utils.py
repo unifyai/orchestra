@@ -27,6 +27,7 @@ from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
@@ -90,6 +91,72 @@ def get_or_create_chat_completions_project(
         )
     return project
 
+
+def log_chat_completion_event(
+    user_id: str,
+    session,
+    **kwargs,
+) -> List[int]:
+    """
+    Log a chat completion event to the ChatCompletions project.
+
+    Args:
+        user_id: The ID of the user
+        model: The model used for the completion
+        provider: The provider of the model
+        request_body: The request body sent to the model
+        response_body: The response received from the model
+        usage: Usage statistics for the completion
+        timestamp: The timestamp of the completion
+
+    Returns:
+        List of created log event IDs
+    """
+    try:
+        # Initialize DAOs
+        organization_member_dao = OrganizationMemberDAO(session=session)
+        project_dao = ProjectDAO(
+            session=session,
+            organization_member_dao=organization_member_dao,
+        )
+        context_dao = ContextDAO(session=session)
+        field_type_dao = FieldTypeDAO(session=session)
+        log_event_dao = LogEventDAO(session=session)
+        log_dao = LogDAO(session=session, context_dao=context_dao)
+
+        # Get or create the ChatCompletions project
+        project = get_or_create_chat_completions_project(project_dao, user_id)
+
+        # Create the log config
+        config = CreateLogConfig(
+            project=settings.chat_completions_project_name,
+            entries={**kwargs},
+            params={},
+        )
+        context_id = context_dao.get_or_create(
+            project.id,
+            name="",
+        )
+        # Create the logs
+        log_event_ids = create_logs_internal(
+            request=config,
+            project_id=project.id,
+            context_id=context_id,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            log_event_dao=log_event_dao,
+            log_dao=log_dao,
+            context_dao=context_dao,
+        )
+
+        # Commit the session
+        session.commit()
+
+        return log_event_ids
+    except Exception as e:
+        session.rollback()
+    finally:
+        session.close()
 
 
 def _build_unified_logs_limited(
