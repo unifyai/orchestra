@@ -97,7 +97,11 @@ def get_favorites(
     result = []
     for fav in favorites:
         # Get project name from project_id
-        project = project_dao.get_by_id(fav.project_id)
+        try:
+            project = project_dao.filter(id=fav.project_id)[0][0]
+        except:
+            project = None
+
         project_name = project.name if project else str(fav.project_id)
 
         result.append(
