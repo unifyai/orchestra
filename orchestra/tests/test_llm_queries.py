@@ -180,11 +180,40 @@ async def test_chat_completions_logging(client: AsyncClient):
     )
     assert resp.status_code == 200
     data = resp.json()
-    # 3. Assert at least one event and required fields
-    assert len(data["logs"]) >= 1
+    assert len(data["logs"]) == 1
     evt = data["logs"][0]
     for key in ["model_provider_str", "query_body", "response_body", "credits"]:
         assert key in evt["entries"]
+
+
+@pytest.mark.anyio
+async def test_no_query_logging_when_disabled(client: AsyncClient):
+    # 1. Fetch the current Usage logs count
+    payload = get_chat_completions_payload("gpt-3.5-turbo", "openai", stream=False)
+    await client.post("/v0/chat/completions", headers=HEADERS, json=payload)
+    resp_before = await client.get("/v0/logs?project=Usage", headers=HEADERS)
+    assert resp_before.status_code == 200
+    count_before = len(resp_before.json()["logs"])
+
+    # 2. Disable query logging
+    disable_resp = await client.patch(
+        "/v0/user/query-logging",
+        headers=HEADERS,
+        json={"enabled": False},
+    )
+    assert disable_resp.status_code == status.HTTP_200_OK
+    assert disable_resp.json()["enabled"] is False
+
+    # 3. Make a chat/completions request
+    payload = get_chat_completions_payload("gpt-3.5-turbo", "openai", stream=False)
+    llm_resp = await client.post("/v0/chat/completions", headers=HEADERS, json=payload)
+    assert llm_resp.status_code == status.HTTP_200_OK
+
+    # 4. Fetch the Usage logs again and assert no new entries
+    resp_after = await client.get("/v0/logs?project=Usage", headers=HEADERS)
+    assert resp_after.status_code == 200
+    count_after = len(resp_after.json()["logs"])
+    assert count_after == count_before
 
 
 if __name__ == "__main__":
