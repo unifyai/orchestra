@@ -358,9 +358,8 @@ def update_favorite(
 
 @router.delete(
     "/project/favorites/{id}",
-    status_code=status.HTTP_204_NO_CONTENT,
     responses={
-        204: {
+        200: {
             "description": "Favorite deleted successfully",
             "content": {
                 "application/json": {
@@ -399,11 +398,11 @@ def delete_favorite(
         favorite_project_dao.session.commit()
 
         # Return no content
-        return None
+        return {"info": "Favorite deleted successfully!"}
     except Exception as e:
         favorite_project_dao.session.rollback()
         raise HTTPException(
-            status_code=500,
+            status_code=404,
             detail=f"Failed to delete favorite: {str(e)}",
         )
 

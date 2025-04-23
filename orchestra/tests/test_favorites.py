@@ -132,7 +132,7 @@ async def test_delete_favorite(client: AsyncClient):
     fav_id = post_resp.json()["id"]
 
     del_resp = await client.delete(f"/v0/project/favorites/{fav_id}", headers=HEADERS)
-    assert del_resp.status_code == 204
+    assert del_resp.status_code == 200
 
     list_resp = await client.get("/v0/project/favorites", headers=HEADERS)
     assert list_resp.status_code == 200
