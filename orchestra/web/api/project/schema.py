@@ -1,4 +1,33 @@
+from typing import Optional
+
 from pydantic import BaseModel, Field
+
+
+class FavoriteProjectIn(BaseModel):
+    """Request model for creating a favorite project."""
+
+    project: str = Field(description="The name of the project to favorite")
+    icon: str = Field(description="Icon identifier for the favorite project")
+    position: int = Field(description="Position of the project in the favorites list")
+
+
+class FavoriteProjectOut(FavoriteProjectIn):
+    """Response model for favorite project data."""
+
+    id: int = Field(description="Unique identifier for the favorite project")
+
+
+class FavoriteProjectUpdate(BaseModel):
+    """Request model for updating a favorite project."""
+
+    icon: Optional[str] = Field(
+        None,
+        description="Icon identifier for the favorite project",
+    )
+    position: Optional[int] = Field(
+        None,
+        description="Position of the project in the favorites list",
+    )
 
 
 class ProjectConfig(BaseModel):
