@@ -128,9 +128,10 @@ def log_chat_completion_event(
         project = get_or_create_usage_project(project_dao, user_id)
 
         # Create the log config
+        at = datetime.now(timezone.utc)
         config = CreateLogConfig(
             project=settings.chat_completions_project_name,
-            entries={**kwargs},
+            entries={**kwargs, "user_id": user_id, "at": at.isoformat()},
             params={},
         )
         context_id = context_dao.get_or_create(
