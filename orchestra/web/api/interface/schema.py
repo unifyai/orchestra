@@ -169,7 +169,7 @@ class UpdateTabRequest(BaseModel):
 
 
 class CreateInterfaceRequest(BaseModel):
-    project_id: str
+    project: str
     name: str
     color: Optional[str] = None
 

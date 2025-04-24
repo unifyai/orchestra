@@ -31,81 +31,81 @@ async def _delete_project(client: AsyncClient, project_name=TEST_PROJECT):
 
 
 # Interface helpers
-async def _create_test_interface(client: AsyncClient, name=TEST_INTERFACE, project_id=TEST_PROJECT, color="#FF0000"):
+async def _create_test_interface(client: AsyncClient, name=TEST_INTERFACE, project=TEST_PROJECT, color="#FF0000"):
     """Create a test interface"""
     response = await client.post(
         "/v0/interfaces/",
         headers=HEADERS,
-        json={"name": name, "project_id": project_id, "color": color, "description": TEST_DESCRIPTION},
+        json={"name": name, "project": project, "color": color, "description": TEST_DESCRIPTION},
     )
     assert response.status_code == 201, f"Failed to create interface: {response.json()}"
     return response
 
 
-async def _get_interface(client: AsyncClient, interface_id=None, project_id=None, name=None):
+async def _get_interface(client: AsyncClient, interface_id=None, project=None, name=None):
     """
-    Get interface by ID or by project_id+name
+    Get interface by ID or by project+name
     
     If interface_id is provided, gets a single interface by ID
-    If project_id and name are provided, gets a single interface by project_id and name
+    If project and name are provided, gets a single interface by project and name
     """
     if interface_id:
         return await client.get(f"/v0/interfaces/{interface_id}", headers=HEADERS)
-    elif project_id and name:
-        return await client.get(f"/v0/interfaces/?project_id={project_id}&name={name}", headers=HEADERS)
+    elif project and name:
+        return await client.get(f"/v0/interfaces/?project={project}&name={name}", headers=HEADERS)
     else:
-        raise ValueError("Must provide either interface_id or project_id+name")
+        raise ValueError("Must provide either interface_id or project+name")
 
 
-async def _list_interfaces(client: AsyncClient, project_id=None):
+async def _list_interfaces(client: AsyncClient, project=None):
     """List interfaces for a project"""
-    if project_id:
-        return await client.get(f"/v0/interfaces/list?project_id={project_id}", headers=HEADERS)
+    if project:
+        return await client.get(f"/v0/interfaces/list?project={project}", headers=HEADERS)
     else:
-        raise ValueError("Must provide project_id")
+        raise ValueError("Must provide project")
 
 
-async def _update_interface(client: AsyncClient, interface_id=None, project_id=None, name=None, update_data=None):
-    """Update interface by ID or by project_id+name"""
+async def _update_interface(client: AsyncClient, interface_id=None, project=None, name=None, update_data=None):
+    """Update interface by ID or by project+name"""
     if update_data is None:
         update_data = {}
     
     if interface_id:
         return await client.put(f"/v0/interfaces/{interface_id}", headers=HEADERS, json=update_data)
-    elif project_id and name:
-        return await client.put(f"/v0/interfaces/?project_id={project_id}&name={name}", headers=HEADERS, json=update_data)
+    elif project and name:
+        return await client.put(f"/v0/interfaces/?project={project}&name={name}", headers=HEADERS, json=update_data)
     else:
-        raise ValueError("Must provide either interface_id or project_id+name")
+        raise ValueError("Must provide either interface_id or project+name")
 
 
-async def _delete_interface(client: AsyncClient, interface_id=None, project_id=None, name=None):
-    """Delete interface by ID or by project_id+name"""
+async def _delete_interface(client: AsyncClient, interface_id=None, project=None, name=None):
+    """Delete interface by ID or by project+name"""
     if interface_id:
         return await client.delete(f"/v0/interfaces/{interface_id}", headers=HEADERS)
-    elif project_id and name:
-        return await client.delete(f"/v0/interfaces/?project_id={project_id}&name={name}", headers=HEADERS)
+    elif project and name:
+        return await client.delete(f"/v0/interfaces/?project={project}&name={name}", headers=HEADERS)
     else:
-        raise ValueError("Must provide either interface_id or project_id+name")
+        raise ValueError("Must provide either interface_id or project+name")
 
 
-async def _create_interface_checkpoint(client: AsyncClient, interface_id=None, project_id=None, name=None):
+async def _create_interface_checkpoint(client: AsyncClient, interface_id=None, project=None, name=None):
     """Create a checkpoint for an interface"""
     if interface_id:
         return await client.post(f"/v0/interfaces/{interface_id}/checkpoint", headers=HEADERS)
-    elif project_id and name:
-        return await client.post(f"/v0/interfaces/checkpoint?project_id={project_id}&name={name}", headers=HEADERS)
+    elif project and name:
+        return await client.post(f"/v0/interfaces/checkpoint?project={project}&name={name}", headers=HEADERS)
     else:
-        raise ValueError("Must provide either interface_id or project_id+name")
+        raise ValueError("Must provide either interface_id or project+name")
 
 
-async def _get_interface_checkpoint(client: AsyncClient, interface_id=None, project_id=None, name=None):
+async def _get_interface_checkpoint(client: AsyncClient, interface_id=None, project=None, name=None):
     """Get the latest checkpoint for an interface"""
     if interface_id:
         return await client.get(f"/v0/interfaces/{interface_id}/checkpoint", headers=HEADERS)
-    elif project_id and name:
-        return await client.get(f"/v0/interfaces/checkpoint?project_id={project_id}&name={name}", headers=HEADERS)
+    elif project and name:
+        return await client.get(f"/v0/interfaces/checkpoint?project={project}&name={name}", headers=HEADERS)
     else:
-        raise ValueError("Must provide either interface_id or project_id+name")
+        raise ValueError("Must provide either interface_id or project+name")
 
 
 # Test fixtures
@@ -163,7 +163,7 @@ async def test_get_interface_by_project_and_name(client: AsyncClient):
     await _create_test_interface(client)
     
     # Get the interface by project_id and name
-    response = await _get_interface(client, project_id=TEST_PROJECT, name=TEST_INTERFACE)
+    response = await _get_interface(client, project=TEST_PROJECT, name=TEST_INTERFACE)
     assert response.status_code == 200
     
     data = response.json()
@@ -179,7 +179,7 @@ async def test_list_interfaces(client: AsyncClient):
     await _create_test_interface(client, name="list-interface-2")
     
     # List interfaces by project_id
-    response = await _list_interfaces(client, project_id=TEST_PROJECT)
+    response = await _list_interfaces(client, project=TEST_PROJECT)
     assert response.status_code == 200
     
     data = response.json()
@@ -225,7 +225,7 @@ async def test_update_interface_by_project_and_name(client: AsyncClient):
         "color": new_color,
         "description": "Updated description"
     }
-    response = await _update_interface(client, project_id=TEST_PROJECT, name=TEST_INTERFACE, update_data=update_data)
+    response = await _update_interface(client, project=TEST_PROJECT, name=TEST_INTERFACE, update_data=update_data)
     assert response.status_code == 200
     
     data = response.json()
@@ -257,11 +257,11 @@ async def test_delete_interface_by_project_and_name(client: AsyncClient):
     await _create_test_interface(client)
     
     # Delete the interface by project_id and name
-    response = await _delete_interface(client, project_id=TEST_PROJECT, name=TEST_INTERFACE)
+    response = await _delete_interface(client, project=TEST_PROJECT, name=TEST_INTERFACE)
     assert response.status_code == 204
     
     # Verify interface is deleted
-    get_response = await _get_interface(client, project_id=TEST_PROJECT, name=TEST_INTERFACE)
+    get_response = await _get_interface(client, project=TEST_PROJECT, name=TEST_INTERFACE)
     assert get_response.status_code == 404
 
 
@@ -288,7 +288,7 @@ async def test_interface_checkpoint_by_project_and_name(client: AsyncClient):
     await _create_test_interface(client)
     
     # Create a checkpoint by project_id and name
-    response = await _create_interface_checkpoint(client, project_id=TEST_PROJECT, name=TEST_INTERFACE)
+    response = await _create_interface_checkpoint(client, project=TEST_PROJECT, name=TEST_INTERFACE)
     assert response.status_code == 200
     
     checkpoint_data = response.json()
@@ -330,7 +330,7 @@ async def test_create_duplicate_interface(client: AsyncClient):
 async def test_interface_with_nonexistent_project(client: AsyncClient):
     """Test creating an interface with a non-existent project (should fail)"""
     non_existent_project = str(uuid.uuid4())  # random ID
-    response = await _create_test_interface(client, project_id=non_existent_project)
+    response = await _create_test_interface(client, project=non_existent_project)
     assert response.status_code == 404
 
 

@@ -21,23 +21,18 @@ router = APIRouter(prefix="/tile", tags=["tile"])
 
 
 def _create_tile_response(tile) -> TileSchema:
-    """Helper function to convert a tile entity to a TileSchema."""
-    position = TilePosition(
-        x=tile.position_x,
-        y=tile.position_y,
-        width=tile.width,
-        height=tile.height,
-    )
+    """Helper function to convert a tile entity to a TileSchema with specialized tile data."""
     
-    # Create specialized tile schemas based on type
-    table_tile = None
-    plot_tile = None
-    view_tile = None
-    editor_tile = None
+    # Create specialized tile data schemas if they exist
+    table_tile_data = None
+    plot_tile_data = None
+    view_tile_data = None
+    editor_tile_data = None
     
-    # Populate specialized data based on tile type
-    if tile.type == "Table" and hasattr(tile, "table_tile") and tile.table_tile:
-        table_tile = TableTileSchema(
+    if hasattr(tile, 'table_tile') and tile.table_tile:
+        table_tile_data = TableTileSchema(
+            id=str(tile.table_tile.id),
+            tile_id=str(tile.table_tile.tile_id),
             table_type=tile.table_tile.table_type,
             column_context=tile.table_tile.column_context,
             page_number=tile.table_tile.page_number,
@@ -48,10 +43,13 @@ def _create_tile_response(tile) -> TileSchema:
             group_sorting=tile.table_tile.group_sorting,
             columns_pin_left=tile.table_tile.columns_pin_left,
             columns_pin_right=tile.table_tile.columns_pin_right,
-            selected=tile.table_tile.selected,
+            selected=tile.table_tile.selected
         )
-    elif tile.type == "Plot" and hasattr(tile, "plot_tile") and tile.plot_tile:
-        plot_tile = PlotTileSchema(
+    
+    if hasattr(tile, 'plot_tile') and tile.plot_tile:
+        plot_tile_data = PlotTileSchema(
+            id=str(tile.plot_tile.id),
+            tile_id=str(tile.plot_tile.tile_id),
             plot_type=tile.plot_tile.plot_type,
             plot_scale_x=tile.plot_tile.plot_scale_x,
             plot_scale_y=tile.plot_tile.plot_scale_y,
@@ -61,26 +59,38 @@ def _create_tile_response(tile) -> TileSchema:
             plot_group_by=tile.plot_tile.plot_group_by,
             plot_group_by_colors=tile.plot_tile.plot_group_by_colors,
             bin_count=tile.plot_tile.bin_count,
-            regression_line=tile.plot_tile.regression_line,
-        )
-    elif tile.type == "View" and hasattr(tile, "view_tile") and tile.view_tile:
-        view_tile = ViewTileSchema(
-            base_index=tile.view_tile.base_index,
-        )
-    elif tile.type == "Editor" and hasattr(tile, "editor_tile") and tile.editor_tile:
-        editor_tile = EditorTileSchema(
-            file_path=tile.editor_tile.file_path,
-            file_type=tile.editor_tile.file_type,
-            content=tile.editor_tile.content,
+            regression_line=tile.plot_tile.regression_line
         )
     
-    # Create and return the TileSchema
+    if hasattr(tile, 'view_tile') and tile.view_tile:
+        view_tile_data = ViewTileSchema(
+            id=str(tile.view_tile.id),
+            tile_id=str(tile.view_tile.tile_id),
+            base_index=tile.view_tile.base_index
+        )
+    
+    if hasattr(tile, 'editor_tile') and tile.editor_tile:
+        editor_tile_data = EditorTileSchema(
+            id=str(tile.editor_tile.id),
+            tile_id=str(tile.editor_tile.tile_id),
+            file_name=tile.editor_tile.file_name,
+            file_type=tile.editor_tile.file_type,
+            content=tile.editor_tile.content
+        )
+    
+    position = {
+        "x": tile.x_position,
+        "y": tile.y_position,
+        "width": tile.width,
+        "height": tile.height
+    }
+    
     return TileSchema(
-        id=tile.id,
-        tab_id=tile.tab_id,
+        id=str(tile.id),
+        tab_id=str(tile.tab_id),
         name=tile.name,
-        position=position,
         type=tile.type,
+        position=position,
         min_width=tile.min_width,
         min_height=tile.min_height,
         visible=tile.visible,
@@ -95,10 +105,10 @@ def _create_tile_response(tile) -> TileSchema:
         common_filter=tile.common_filter,
         metric=tile.metric,
         is_checkpoint=tile.is_checkpoint,
-        table_tile=table_tile,
-        plot_tile=plot_tile,
-        view_tile=view_tile,
-        editor_tile=editor_tile,
+        table_tile=table_tile_data,
+        plot_tile=plot_tile_data,
+        view_tile=view_tile_data,
+        editor_tile=editor_tile_data,
         created_at=tile.created_at.isoformat() if tile.created_at else None,
         updated_at=tile.updated_at.isoformat() if tile.updated_at else None,
     )
@@ -309,7 +319,7 @@ def get_tile(
     
     if not tab:
         raise HTTPException(
-            status_code=404, 
+            status_code=404,
             detail=f"Tab {tab_name} not found in interface {interface_name}."
         )
     

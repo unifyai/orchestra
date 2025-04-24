@@ -27,8 +27,8 @@ def _create_tab_response(tab, tiles=None) -> TabSchema:
             tile_list.append(_create_tile_response(tile))
     
     return TabSchema(
-        id=tab.id,
-        interface_id=tab.interface_id,
+        id=str(tab.id),
+        interface_id=str(tab.interface_id),
         name=tab.name,
         visible=tab.visible,
         active=tab.active,

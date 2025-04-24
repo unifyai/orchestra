@@ -53,7 +53,6 @@ class TileDAO:
         )
         self.session.add(tile)
         self.session.commit()
-        self.session.refresh(tile)
         return tile
 
     def _get_tile(
@@ -65,10 +64,10 @@ class TileDAO:
     ) -> Optional[Tile]:
         """Internal method to get tile by ID or by tab_id and name."""
         if id is not None:
-            query = select(Tile).where(Tile.id == id)
+            query = select(Tile).where(Tile.id == str(id))
         elif tab_id is not None and name is not None:
             query = select(Tile).where(
-                Tile.tab_id == tab_id,
+                Tile.tab_id == str(tab_id),
                 Tile.name == name,
             )
         else:
@@ -98,7 +97,7 @@ class TileDAO:
         is_checkpoint: Optional[bool] = None,
     ) -> List[Tile]:
         """List all tiles for a tab."""
-        query = select(Tile).where(Tile.tab_id == tab_id)
+        query = select(Tile).where(Tile.tab_id == str(tab_id))
         
         if is_checkpoint is not None:
             query = query.where(Tile.is_checkpoint == is_checkpoint)
@@ -163,7 +162,6 @@ class TileDAO:
             tile.is_checkpoint = is_checkpoint
             
         self.session.commit()
-        self.session.refresh(tile)
         return tile
 
     def delete_tile(
@@ -255,7 +253,6 @@ class TileDAO:
         )
         self.session.add(table_tile)
         self.session.commit()
-        self.session.refresh(table_tile)
         return table_tile
         
     def _get_specialized_tile(
@@ -355,7 +352,6 @@ class TileDAO:
             table_tile.is_checkpoint = is_checkpoint
             
         self.session.commit()
-        self.session.refresh(table_tile)
         return table_tile
         
     def create_plot_tile(
@@ -390,7 +386,6 @@ class TileDAO:
         )
         self.session.add(plot_tile)
         self.session.commit()
-        self.session.refresh(plot_tile)
         return plot_tile
         
     def get_plot_tile(
@@ -462,7 +457,6 @@ class TileDAO:
             plot_tile.is_checkpoint = is_checkpoint
             
         self.session.commit()
-        self.session.refresh(plot_tile)
         return plot_tile
         
     def create_editor_tile(
@@ -499,7 +493,6 @@ class TileDAO:
         )
         self.session.add(editor_tile)
         self.session.commit()
-        self.session.refresh(editor_tile)
         return editor_tile
         
     def get_editor_tile(
@@ -574,7 +567,6 @@ class TileDAO:
             editor_tile.is_checkpoint = is_checkpoint
             
         self.session.commit()
-        self.session.refresh(editor_tile)
         return editor_tile
         
     def create_view_tile(
@@ -611,7 +603,6 @@ class TileDAO:
         )
         self.session.add(view_tile)
         self.session.commit()
-        self.session.refresh(view_tile)
         return view_tile
         
     def get_view_tile(
@@ -686,7 +677,6 @@ class TileDAO:
             view_tile.is_checkpoint = is_checkpoint
             
         self.session.commit()
-        self.session.refresh(view_tile)
         return view_tile
     
     def patch_tile(
@@ -785,5 +775,4 @@ class TileDAO:
                     setattr(tile, field, value)
         
         self.session.commit()
-        self.session.refresh(tile)
         return tile
