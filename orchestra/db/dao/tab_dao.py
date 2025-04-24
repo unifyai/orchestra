@@ -38,7 +38,6 @@ class TabDAO:
         )
         self.session.add(tab)
         self.session.commit()
-        self.session.refresh(tab)
         return tab
 
     def _get_tab(
@@ -50,10 +49,10 @@ class TabDAO:
     ) -> Optional[Tab]:
         """Internal method to get tab by ID or by interface_id and name."""
         if id is not None:
-            query = select(Tab).where(Tab.id == id)
+            query = select(Tab).where(Tab.id == str(id))
         elif interface_id is not None and name is not None:
             query = select(Tab).where(
-                Tab.interface_id == interface_id,
+                Tab.interface_id == str(interface_id),
                 Tab.name == name,
             )
         else:
@@ -139,7 +138,6 @@ class TabDAO:
             tab.is_checkpoint = is_checkpoint
             
         self.session.commit()
-        self.session.refresh(tab)
         return tab
 
     def delete_tab(
@@ -273,7 +271,6 @@ class TabDAO:
                 setattr(tab, field, value)
 
         self.session.commit()
-        self.session.refresh(tab)
         return tab
 
     def patch_tab_by_name(
@@ -300,5 +297,4 @@ class TabDAO:
                 setattr(tab, field, value)
 
         self.session.commit()
-        self.session.refresh(tab)
         return tab

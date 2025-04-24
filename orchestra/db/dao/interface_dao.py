@@ -38,7 +38,6 @@ class InterfaceDAO:
         )
         self.session.add(interface)
         self.session.commit()
-        self.session.refresh(interface)
         return interface
 
     def _get_interface(
@@ -50,7 +49,7 @@ class InterfaceDAO:
     ) -> Optional[Interface]:
         """Internal method to get interface by ID or by project_id and name."""
         if id is not None:
-            query = select(Interface).where(Interface.id == id)
+            query = select(Interface).where(Interface.id == str(id))
         elif project_id is not None and name is not None:
             query = select(Interface).where(
                 Interface.project_id == project_id,
@@ -147,7 +146,6 @@ class InterfaceDAO:
             interface.is_checkpoint = is_checkpoint
             
         self.session.commit()
-        self.session.refresh(interface)
         return interface
 
     def delete_interface(
@@ -233,5 +231,4 @@ class InterfaceDAO:
                 setattr(interface, field, value)
 
         self.session.commit()
-        self.session.refresh(interface)
         return interface
