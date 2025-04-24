@@ -26,11 +26,11 @@ def _create_interface_response(interface, tabs=None) -> InterfaceSchema:
             tab_list.append(_create_tab_response(tab))
     
     return InterfaceSchema(
-        id=interface.id,
+        id=str(interface.id),
         name=interface.name,
         project_id=str(interface.project_id),
         tabs=tab_list,
-        active_tab_id=interface.active_tab_id,
+        active_tab_id=str(interface.active_tab_id) if interface.active_tab_id else None,
         color=interface.color,
         is_checkpoint=interface.is_checkpoint,
         created_at=interface.created_at.isoformat() if interface.created_at else None,
@@ -59,12 +59,12 @@ def create_interface(
     # Verify project exists and user has access
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
-        name=request.project_id,  # Assuming project_id is the name for now
+        name=request.project,  # Assuming project is the name for now
     )
     if not project:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {request.project_id} not found or you don't have access.",
+            detail=f"Project {request.project} not found or you don't have access.",
         )
     
     # Check if interface already exists
