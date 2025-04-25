@@ -983,3 +983,24 @@ class FavoriteProject(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "project_id", name="uq_user_favorite_project"),
     )
+
+
+class Assistant(Base):
+    """Model class for the assistants table."""
+
+    __tablename__ = "assistants"
+
+    agent_id = Column(Integer, primary_key=True)
+    user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    first_name = Column(String, nullable=False)
+    surname = Column(String, nullable=False)
+    age = Column(Integer, nullable=False)
+    weekly_limit = Column(Numeric, nullable=False)
+    max_parallel = Column(Integer, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
