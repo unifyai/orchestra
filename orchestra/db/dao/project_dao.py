@@ -18,6 +18,24 @@ class ProjectDAO:
         self.session = session
         self.organization_member_dao = organization_member_dao
 
+    def _get_project(
+        self,
+        id: Optional[int] = None,
+        user_id: Optional[str] = None,
+        name: Optional[str] = None,
+    ) -> Optional[Project]:
+        """Internal method to get project by ID or by user_id and name."""
+        if id is not None:
+            query = select(Project).where(Project.id == id)
+            return self.session.execute(query).scalars().first()
+        elif user_id is not None and name is not None:
+            return self.get_by_user_and_name(user_id=user_id, name=name)
+        return None
+
+    def get(self, id: int) -> Optional[Project]:
+        """Get project by ID."""
+        return self._get_project(id=id)
+
     def create(  # noqa: WPS211
         self,
         name: str,

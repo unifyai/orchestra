@@ -96,7 +96,7 @@ class TabSchema(BaseSchema):
 # Interface-related schemas
 class InterfaceSchema(BaseSchema):
     name: str
-    project_id: str
+    project_id: int
     tabs: List[TabSchema] = []
     active_tab_id: Optional[str] = None
     color: Optional[str] = None
