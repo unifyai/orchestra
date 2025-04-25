@@ -1,0 +1,94 @@
+from decimal import Decimal
+from typing import List, Optional
+
+from fastapi import Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.orchestra_models import Assistant
+
+
+class AssistantDAO:
+    """
+    Data access object for Assistant operations.
+    """
+
+    def __init__(self, session: Session = Depends(get_db_session)):
+        self.session = session
+
+    def create_assistant(
+        self,
+        user_id: str,
+        first_name: str,
+        surname: str,
+        age: int,
+        weekly_limit: Decimal,
+        max_parallel: int,
+    ) -> Assistant:
+        """
+        Create a new Assistant for the given user.
+        """
+        assistant = Assistant(
+            user_id=user_id,
+            first_name=first_name,
+            surname=surname,
+            age=age,
+            weekly_limit=weekly_limit,
+            max_parallel=max_parallel,
+        )
+        self.session.add(assistant)
+        self.session.flush()
+        return assistant
+
+    def get_assistant_by_id(self, user_id: str, agent_id: int) -> Optional[Assistant]:
+        """
+        Retrieve an Assistant by user and agent IDs.
+        """
+        stmt = select(Assistant).where(
+            Assistant.agent_id == agent_id,
+            Assistant.user_id == user_id,
+        )
+        result = self.session.execute(stmt).scalar_one_or_none()
+        return result
+
+    def list_assistants_for_user(self, user_id: str) -> List[Assistant]:
+        """
+        List all Assistants belonging to a specific user.
+        """
+        stmt = select(Assistant).where(Assistant.user_id == user_id)
+        result = self.session.execute(stmt).scalars().all()
+        return result
+
+    def delete_assistant(self, user_id: str, agent_id: int) -> None:
+        """
+        Delete an Assistant by user and agent IDs.
+        """
+        assistant = self.get_assistant_by_id(user_id, agent_id)
+        if assistant:
+            self.session.delete(assistant)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant not found.",
+            )
+
+    def update_assistant_config(
+        self,
+        user_id: str,
+        agent_id: int,
+        weekly_limit: Optional[Decimal] = None,
+        max_parallel: Optional[int] = None,
+    ) -> Optional[Assistant]:
+        """
+        Update weekly_limit and/or max_parallel for an existing Assistant.
+        """
+        assistant = self.get_assistant_by_id(user_id, agent_id)
+        if not assistant:
+            return None
+        if weekly_limit is not None:
+            assistant.weekly_limit = weekly_limit
+        if max_parallel is not None:
+            assistant.max_parallel = max_parallel
+        self.session.add(assistant)
+        return assistant
