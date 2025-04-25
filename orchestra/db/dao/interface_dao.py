@@ -119,6 +119,8 @@ class InterfaceDAO:
             name=name,
             is_checkpoint=is_checkpoint
         )
+
+        print(f"Interface: {interface}")
         
         if interface is None:
             return None
