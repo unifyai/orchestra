@@ -25,6 +25,7 @@ from orchestra.web.api import (  # noqa: WPS235
     supported_endpoints,
     users,
 )
+from orchestra.web.api.assistant import router as assistant_router
 from orchestra.web.api.dependencies import (
     auth_admin_key,
     auth_api_key,
@@ -98,6 +99,7 @@ groupings = {
         "Custom Endpoints",
         "Custom API keys",
         "Endpoint Metrics",
+        "Assistants",
     ],
     "Logging": [
         "Datasets",
@@ -146,6 +148,11 @@ api_router.include_router(
 api_router.include_router(
     endpoint_metrics.router,
     tags=["Endpoint Metrics"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    assistant_router,
+    tags=["Assistants"],
     dependencies=API_KEY_AUTH,
 )
 
