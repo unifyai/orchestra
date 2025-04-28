@@ -36,7 +36,37 @@ class TileDAO:
         order: int = 0,
         is_checkpoint: bool = False,
     ) -> Tile:
-        """Create a new tile in a tab."""
+        """
+        Create a new tile in a tab.
+        
+        Args:
+            tab_id: The ID of the tab to create the tile in
+            type: The type of tile (Table, Plot, View, Editor)
+            name: The name of the tile
+            position_x: The x position of the tile
+            position_y: The y position of the tile
+            width: The width of the tile
+            height: The height of the tile
+            meta: Optional metadata for the tile
+            dependencies: Optional list of dependencies
+            state: Optional state data
+            order: The order of the tile
+            is_checkpoint: Whether this is a checkpoint tile
+            
+        Returns:
+            The created tile
+            
+        Raises:
+            ValueError: If required parameters are missing or invalid
+        """
+        if not tab_id or not type or not name:
+            raise ValueError("tab_id, type, and name are required")
+            
+        # Check if tile already exists
+        existing = self.get_by_tab_and_name(tab_id=tab_id, name=name, is_checkpoint=is_checkpoint)
+        if existing:
+            raise ValueError(f"Tile with name {name} already exists in tab {tab_id}")
+            
         tile = Tile(
             tab_id=tab_id,
             type=type,
@@ -62,7 +92,18 @@ class TileDAO:
         name: Optional[str] = None,
         is_checkpoint: Optional[bool] = None,
     ) -> Optional[Tile]:
-        """Internal method to get tile by ID or by tab_id and name."""
+        """
+        Internal method to get tile by ID or by tab_id and name.
+        
+        Args:
+            id: The ID of the tile
+            tab_id: The ID of the tab
+            name: The name of the tile
+            is_checkpoint: Whether to get a checkpoint tile
+            
+        Returns:
+            The tile if found, None otherwise
+        """
         if id is not None:
             query = select(Tile).where(Tile.id == str(id))
         elif tab_id is not None and name is not None:
@@ -78,31 +119,66 @@ class TileDAO:
             
         return self.session.execute(query).scalars().first()
 
-    def get_tile(self, id: str) -> Optional[Tile]:
-        """Get tile by ID."""
-        return self._get_tile(id=id)
+    def get(self, id: str, is_checkpoint: Optional[bool] = None) -> Optional[Tile]:
+        """
+        Get tile by ID.
+        
+        Args:
+            id: The ID of the tile
+            is_checkpoint: Whether to get a checkpoint tile
+            
+        Returns:
+            The tile if found, None otherwise
+        """
+        return self._get_tile(id=id, is_checkpoint=is_checkpoint)
 
-    def get_tile_by_tab_and_name(
+    def get_by_tab_and_name(
         self, 
         tab_id: str, 
         name: str,
         is_checkpoint: Optional[bool] = None,
     ) -> Optional[Tile]:
-        """Get tile by tab ID and name."""
+        """
+        Get tile by tab ID and name.
+        
+        Args:
+            tab_id: The ID of the tab
+            name: The name of the tile
+            is_checkpoint: Whether to get a checkpoint tile
+            
+        Returns:
+            The tile if found, None otherwise
+        """
         return self._get_tile(tab_id=tab_id, name=name, is_checkpoint=is_checkpoint)
 
     def list_tiles_by_tab(
-        self, 
+        self,
         tab_id: str,
+        name: Optional[str] = None,
+        type: Optional[str] = None,
         is_checkpoint: Optional[bool] = None,
     ) -> List[Tile]:
-        """List all tiles for a tab."""
-        query = select(Tile).where(Tile.tab_id == str(tab_id))
+        """
+        List tiles for a tab with optional filtering.
         
+        Args:
+            tab_id: The ID of the tab
+            name: Optional name filter
+            type: Optional type filter
+            is_checkpoint: Whether to list checkpoint tiles
+            
+        Returns:
+            List of tiles matching the criteria
+        """
+        query = select(Tile).where(Tile.tab_id == tab_id)
+        
+        if name is not None:
+            query = query.where(Tile.name == name)
+        if type is not None:
+            query = query.where(Tile.type == type)
         if is_checkpoint is not None:
             query = query.where(Tile.is_checkpoint == is_checkpoint)
             
-        query = query.order_by(Tile.order.asc())
         return self.session.execute(query).scalars().all()
 
     def update_tile(
@@ -123,9 +199,29 @@ class TileDAO:
         """
         Update tile by ID or by tab_id and name.
         
-        Either id or (tab_id and name) must be provided to identify the tile.
-        Other parameters are optional updates to apply.
+        Args:
+            id: The ID of the tile
+            tab_id: The ID of the tab
+            name: The name of the tile
+            is_checkpoint: Whether to update a checkpoint tile
+            position_x: New x position
+            position_y: New y position
+            width: New width
+            height: New height
+            meta: New metadata
+            dependencies: New dependencies
+            state: New state
+            order: New order
+            
+        Returns:
+            The updated tile if found, None otherwise
+            
+        Raises:
+            ValueError: If neither id nor (tab_id and name) are provided
         """
+        if not id and not (tab_id and name):
+            raise ValueError("Either id or both tab_id and name must be provided")
+            
         tile = self._get_tile(
             id=id, 
             tab_id=tab_id, 
@@ -174,8 +270,21 @@ class TileDAO:
         """
         Delete tile by ID or by tab_id and name.
         
-        Either id or (tab_id and name) must be provided.
+        Args:
+            id: The ID of the tile
+            tab_id: The ID of the tab
+            name: The name of the tile
+            is_checkpoint: Whether to delete a checkpoint tile
+            
+        Returns:
+            True if deleted, False if not found
+            
+        Raises:
+            ValueError: If neither id nor (tab_id and name) are provided
         """
+        if not id and not (tab_id and name):
+            raise ValueError("Either id or both tab_id and name must be provided")
+            
         tile = self._get_tile(
             id=id, 
             tab_id=tab_id, 
@@ -199,8 +308,20 @@ class TileDAO:
         """
         Mark a tile as a checkpoint (manually saved) by ID or by tab_id and name.
         
-        Either id or (tab_id and name) must be provided.
+        Args:
+            id: The ID of the tile
+            tab_id: The ID of the tab
+            name: The name of the tile
+            
+        Returns:
+            The checkpointed tile if found, None otherwise
+            
+        Raises:
+            ValueError: If neither id nor (tab_id and name) are provided
         """
+        if not id and not (tab_id and name):
+            raise ValueError("Either id or both tab_id and name must be provided")
+            
         return self.update_tile(
             id=id, 
             tab_id=tab_id, 
@@ -209,7 +330,16 @@ class TileDAO:
         )
     
     def get_latest_checkpoint(self, tab_id: str, name: str) -> Optional[Tile]:
-        """Get the latest manually saved checkpoint for a tile."""
+        """
+        Get the latest manually saved checkpoint for a tile.
+        
+        Args:
+            tab_id: The ID of the tab
+            name: The name of the tile
+            
+        Returns:
+            The latest checkpoint tile if found, None otherwise
+        """
         query = select(Tile).where(
             Tile.tab_id == tab_id,
             Tile.name == name,
@@ -217,7 +347,7 @@ class TileDAO:
         ).order_by(Tile.updated_at.desc())
         
         return self.session.execute(query).scalars().first()
-        
+
     # Specialized tile types
     def create_table_tile(
         self,

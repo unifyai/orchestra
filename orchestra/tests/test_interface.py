@@ -450,3 +450,353 @@ async def test_error_responses(client: AsyncClient):
     error_data = update_response.json()
     assert "detail" in error_data
     assert "invalid_field" in str(error_data["detail"])  # Error should mention the invalid field
+
+
+@pytest.mark.anyio
+async def test_create_interface_checkpoint_with_existing_checkpoint(client: AsyncClient):
+    """Test creating a checkpoint when one already exists (should update existing checkpoint)"""
+    # Create an interface
+    interface_response = await _create_test_interface(client)
+    assert interface_response.status_code == 201
+    interface_id = interface_response.json()["id"]
+
+    # Create first checkpoint
+    first_checkpoint = await _create_interface_checkpoint(client, interface_id=interface_id)
+    assert first_checkpoint.status_code == 200
+    first_checkpoint_id = first_checkpoint.json()["id"]
+
+    # Update the original interface
+    update_response = await _update_interface(
+        client, 
+        interface_id=interface_id, 
+        update_data={"color": "#00FF00"}
+    )
+    assert update_response.status_code == 200
+    
+    # Create second checkpoint (should update existing one)
+    second_checkpoint = await _create_interface_checkpoint(client, interface_id=interface_id)
+    assert second_checkpoint.status_code == 200
+    second_checkpoint_id = second_checkpoint.json()["id"]
+    
+    # Verify it's the same checkpoint (same ID)
+    assert first_checkpoint_id == second_checkpoint_id
+    # Verify it has the updated color
+    assert second_checkpoint.json()["color"] == "#00FF00"
+    
+    # Clean up by deleting the interface
+    await _delete_interface(client, interface_id=interface_id)
+
+
+@pytest.mark.anyio
+async def test_create_interface_checkpoint_with_tabs(client: AsyncClient):
+    """Test creating a checkpoint for an interface with tabs"""
+    # Create an interface
+    interface_response = await _create_test_interface(client)
+    assert interface_response.status_code == 201
+    interface_id = interface_response.json()["id"]
+    
+    # Create a tab in the interface
+    tab_response = await client.post(
+        "/v0/tab/",
+        headers=HEADERS,
+        json={
+            "interface_id": interface_id,
+            "name": "test-tab",
+            "visible": True,
+            "order": 1
+        }
+    )
+    assert tab_response.status_code == 201
+    
+    # Create a checkpoint
+    checkpoint_response = await _create_interface_checkpoint(client, interface_id=interface_id)
+    assert checkpoint_response.status_code == 200
+    
+    # Verify the checkpoint has the tab
+    checkpoint_data = checkpoint_response.json()
+    assert len(checkpoint_data["tabs"]) == 1
+    assert checkpoint_data["tabs"][0]["name"] == "test-tab"
+    assert checkpoint_data["tabs"][0]["visible"] is True
+    assert checkpoint_data["tabs"][0]["order"] == 1
+    
+    # Clean up by deleting the interface
+    await _delete_interface(client, interface_id=interface_id)
+
+
+@pytest.mark.anyio
+async def test_create_interface_checkpoint_with_multiple_tabs(client: AsyncClient):
+    """Test creating a checkpoint for an interface with multiple tabs"""
+    # Create an interface
+    interface_response = await _create_test_interface(client)
+    assert interface_response.status_code == 201
+    interface_id = interface_response.json()["id"]
+    
+    # Create multiple tabs
+    tab_names = ["tab1", "tab2", "tab3"]
+    for i, name in enumerate(tab_names):
+        tab_response = await client.post(
+            "/v0/tab/",
+            headers=HEADERS,
+            json={
+                "interface_id": interface_id,
+                "name": name,
+                "visible": True,
+                "order": i
+            }
+        )
+        assert tab_response.status_code == 201
+    
+    # Create a checkpoint
+    checkpoint_response = await _create_interface_checkpoint(client, interface_id=interface_id)
+    assert checkpoint_response.status_code == 200
+    
+    # Verify all tabs are in the checkpoint
+    checkpoint_data = checkpoint_response.json()
+    assert len(checkpoint_data["tabs"]) == len(tab_names)
+    checkpoint_tab_names = [tab["name"] for tab in checkpoint_data["tabs"]]
+    assert set(checkpoint_tab_names) == set(tab_names)
+    
+    # Clean up by deleting the interface
+    await _delete_interface(client, interface_id=interface_id)
+
+
+@pytest.mark.anyio
+async def test_create_interface_checkpoint_with_invisible_tabs(client: AsyncClient):
+    """Test creating a checkpoint for an interface with invisible tabs"""
+    # Create an interface
+    interface_response = await _create_test_interface(client)
+    assert interface_response.status_code == 201
+    interface_id = interface_response.json()["id"]
+    
+    # Create a tab with visible=False
+    tab_response = await client.post(
+        "/v0/tab/",
+        headers=HEADERS,
+        json={
+            "interface_id": interface_id,
+            "name": "invisible-tab",
+            "visible": False,
+            "order": 1
+        }
+    )
+    assert tab_response.status_code == 201
+    
+    # Create a checkpoint
+    checkpoint_response = await _create_interface_checkpoint(client, interface_id=interface_id)
+    assert checkpoint_response.status_code == 200
+    
+    # Verify the checkpoint preserves the tab's visibility
+    checkpoint_data = checkpoint_response.json()
+    assert len(checkpoint_data["tabs"]) == 1
+    assert checkpoint_data["tabs"][0]["visible"] is False
+    
+    # Clean up by deleting the interface
+    await _delete_interface(client, interface_id=interface_id)
+
+
+@pytest.mark.anyio
+async def test_create_interface_checkpoint_with_active_tab(client: AsyncClient):
+    """Test creating a checkpoint for an interface with an active tab"""
+    # Create an interface
+    interface_response = await _create_test_interface(client)
+    assert interface_response.status_code == 201
+    interface_id = interface_response.json()["id"]
+    
+    # Create a tab
+    tab_response = await client.post(
+        "/v0/tab/",
+        headers=HEADERS,
+        json={
+            "interface_id": interface_id,
+            "name": "active-tab",
+            "visible": True,
+            "order": 1
+        }
+    )
+    assert tab_response.status_code == 201
+    tab_id = tab_response.json()["id"]
+    
+    # Set the tab as active
+    update_response = await _update_interface(
+        client,
+        interface_id=interface_id,
+        update_data={"active_tab_id": tab_id}
+    )
+    assert update_response.status_code == 200
+    
+    # Create a checkpoint
+    checkpoint_response = await _create_interface_checkpoint(client, interface_id=interface_id)
+    assert checkpoint_response.status_code == 200
+    
+    # Verify the checkpoint preserves the active tab
+    checkpoint_data = checkpoint_response.json()
+    assert checkpoint_data["active_tab_id"] == tab_id
+    
+    # Clean up by deleting the interface
+    await _delete_interface(client, interface_id=interface_id)
+
+
+@pytest.mark.anyio
+async def test_create_interface_checkpoint_with_tab_updates(client: AsyncClient):
+    """Test creating a checkpoint after updating tabs"""
+    # Create an interface
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    
+    # Create a tab
+    tab_response = await client.post(
+        f"/v0/tab/",
+        headers=HEADERS,
+        json={
+            "interface_id": interface_id,
+            "name": "test-tab",
+            "visible": True,
+            "order": 1
+        }
+    )
+    assert tab_response.status_code == 201
+    tab_id = tab_response.json()["id"]
+    
+    # Create first checkpoint
+    first_checkpoint = await _create_interface_checkpoint(client, interface_id=interface_id)
+    assert first_checkpoint.status_code == 200
+    
+    # Update the tab
+    update_tab_response = await client.put(
+        f"/v0/tab/?tab_id={tab_id}",
+        headers=HEADERS,
+        json={
+            "visible": False,
+            "order": 2
+        }
+    )
+    assert update_tab_response.status_code == 200
+    
+    # Create second checkpoint
+    second_checkpoint = await _create_interface_checkpoint(client, interface_id=interface_id)
+    assert second_checkpoint.status_code == 200
+    
+    # Verify the second checkpoint has the updated tab properties
+    checkpoint_data = second_checkpoint.json()
+    assert len(checkpoint_data["tabs"]) == 1
+    assert checkpoint_data["tabs"][0]["visible"] is False
+    assert checkpoint_data["tabs"][0]["order"] == 2
+
+
+@pytest.mark.anyio
+async def test_create_interface_checkpoint_with_deleted_tabs(client: AsyncClient):
+    """Test creating a checkpoint after deleting tabs"""
+    # Create an interface
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    
+    # Create a tab
+    tab_response = await client.post(
+        f"/v0/tab/",
+        headers=HEADERS,
+        json={
+            "interface_id": interface_id,
+            "name": "test-tab",
+            "visible": True,
+            "order": 1
+        }
+    )
+    assert tab_response.status_code == 201
+    tab_id = tab_response.json()["id"]
+    
+    # Create first checkpoint
+    first_checkpoint = await _create_interface_checkpoint(client, interface_id=interface_id)
+    assert first_checkpoint.status_code == 200
+    
+    # Delete the tab
+    delete_tab_response = await client.delete(
+        f"/v0/tab/?tab_id={tab_id}",
+        headers=HEADERS
+    )
+    assert delete_tab_response.status_code == 204
+    
+    # Create second checkpoint
+    second_checkpoint = await _create_interface_checkpoint(client, interface_id=interface_id)
+    assert second_checkpoint.status_code == 200
+    
+    # Verify the second checkpoint has no tabs
+    checkpoint_data = second_checkpoint.json()
+    assert len(checkpoint_data["tabs"]) == 0
+
+
+@pytest.mark.anyio
+async def test_create_interface_checkpoint_with_added_tabs(client: AsyncClient):
+    """Test creating a checkpoint after adding new tabs"""
+    # Create an interface
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    
+    # Create first checkpoint (no tabs)
+    first_checkpoint = await _create_interface_checkpoint(client, interface_id=interface_id)
+    assert first_checkpoint.status_code == 200
+    assert len(first_checkpoint.json()["tabs"]) == 0
+    
+    # Add a tab
+    tab_response = await client.post(
+        f"/v0/tab/",
+        headers=HEADERS,
+        json={
+            "interface_id": interface_id,
+            "name": "new-tab",
+            "visible": True,
+            "order": 1
+        }
+    )
+    assert tab_response.status_code == 201
+    
+    # Create second checkpoint
+    second_checkpoint = await _create_interface_checkpoint(client, interface_id=interface_id)
+    assert second_checkpoint.status_code == 200
+    
+    # Verify the second checkpoint has the new tab
+    checkpoint_data = second_checkpoint.json()
+    assert len(checkpoint_data["tabs"]) == 1
+    assert checkpoint_data["tabs"][0]["name"] == "new-tab"
+
+
+@pytest.mark.anyio
+async def test_create_interface_checkpoint_with_renamed_tabs(client: AsyncClient):
+    """Test creating a checkpoint after renaming tabs"""
+    # Create an interface
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    
+    # Create a tab
+    tab_response = await client.post(
+        f"/v0/tab/",
+        headers=HEADERS,
+        json={
+            "interface_id": interface_id,
+            "name": "old-name",
+            "visible": True,
+            "order": 1
+        }
+    )
+    assert tab_response.status_code == 201
+    tab_id = tab_response.json()["id"]
+    
+    # Create first checkpoint
+    first_checkpoint = await _create_interface_checkpoint(client, interface_id=interface_id)
+    assert first_checkpoint.status_code == 200
+    
+    # Rename the tab
+    update_tab_response = await client.put(
+        f"/v0/tab/?tab_id={tab_id}",
+        headers=HEADERS,
+        json={"name": "new-name"}
+    )
+    assert update_tab_response.status_code == 200
+    
+    # Create second checkpoint
+    second_checkpoint = await _create_interface_checkpoint(client, interface_id=interface_id)
+    assert second_checkpoint.status_code == 200
+    
+    # Verify the second checkpoint has the renamed tab
+    checkpoint_data = second_checkpoint.json()
+    assert len(checkpoint_data["tabs"]) == 1
+    assert checkpoint_data["tabs"][0]["name"] == "new-name"

@@ -32,12 +32,12 @@ async def _delete_project(client: AsyncClient, project_name=TEST_PROJECT):
     return response
 
 
-async def _create_test_interface(client: AsyncClient, name=TEST_INTERFACE, project_id=TEST_PROJECT, color="#FF0000"):
+async def _create_test_interface(client: AsyncClient, name=TEST_INTERFACE, project=TEST_PROJECT, color="#FF0000"):
     """Create a test interface"""
     response = await client.post(
         "/v0/interfaces/",
         headers=HEADERS,
-        json={"name": name, "project_id": project_id, "color": color, "description": TEST_DESCRIPTION},
+        json={"name": name, "project": project, "color": color, "description": TEST_DESCRIPTION},
     )
     assert response.status_code == 201, f"Failed to create interface: {response.json()}"
     return response
@@ -46,7 +46,7 @@ async def _create_test_interface(client: AsyncClient, name=TEST_INTERFACE, proje
 async def _create_test_tab(client: AsyncClient, interface_id, name=TEST_TAB, active=True, order=0):
     """Create a test tab"""
     response = await client.post(
-        "/v0/tabs/",
+        "/v0/tab/",
         headers=HEADERS,
         json={
             "interface_id": interface_id,
@@ -55,7 +55,6 @@ async def _create_test_tab(client: AsyncClient, interface_id, name=TEST_TAB, act
             "order": order,
             "visible": True,
             "color": "#00FF00",
-            "description": TEST_DESCRIPTION,
         },
     )
     assert response.status_code == 201, f"Failed to create tab: {response.json()}"
@@ -71,7 +70,7 @@ async def _create_test_tile(client: AsyncClient, tab_id, name=TEST_TILE,
         config = {"key": "value"}
         
     response = await client.post(
-        "/v0/tiles/",
+        "/v0/tile/",
         headers=HEADERS,
         json={
             "tab_id": tab_id,
@@ -91,172 +90,107 @@ async def _create_test_tile(client: AsyncClient, tab_id, name=TEST_TILE,
     return response
 
 
-async def _get_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None,
-                  interface_id=None, interface_name=None, tab_name=None,
-                  project_id=None):
+async def _get_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None):
     """
-    Get tile by ID or by tab_id+name or by other combinations of parameters
+    Get tile by ID or by tab_id and name
     
     If tile_id is provided, gets a single tile by ID
     If tab_id and name are provided, gets a single tile by tab_id and name
-    If interface_id, tab_name, and name are provided, gets a single tile by those parameters
     """
     if tile_id:
-        return await client.get(f"/v0/tiles/{tile_id}", headers=HEADERS)
+        return await client.get(f"/v0/tile/?tile_id={tile_id}", headers=HEADERS)
     elif tab_id and name:
-        return await client.get(f"/v0/tiles/?tab_id={tab_id}&name={name}", headers=HEADERS)
-    elif interface_id and tab_name and name:
-        url = f"/v0/tiles/?interface_id={interface_id}&tab_name={tab_name}&name={name}"
-        return await client.get(url, headers=HEADERS)
-    elif project_id and interface_name and tab_name and name:
-        url = f"/v0/tiles/?project_id={project_id}&interface_name={interface_name}&tab_name={tab_name}&name={name}"
-        return await client.get(url, headers=HEADERS)
+        return await client.get(f"/v0/tile/?tab_id={tab_id}&name={name}", headers=HEADERS)
     else:
-        raise ValueError("Must provide either tile_id or tab_id+name or interface_id+tab_name+name")
+        raise ValueError("Must provide either tile_id or tab_id+name")
 
 
-async def _list_tiles(client: AsyncClient, tab_id=None, interface_id=None, tab_name=None,
-                    project_id=None, interface_name=None, tile_type=None, visible=None):
+async def _list_tiles(client: AsyncClient, tab_id=None, name=None, type=None):
     """List tiles for a tab"""
     params = {}
     if tab_id:
         params["tab_id"] = tab_id
-    elif interface_id and tab_name:
-        params["interface_id"] = interface_id
-        params["tab_name"] = tab_name
-    elif project_id and interface_name and tab_name:
-        params["project_id"] = project_id
-        params["interface_name"] = interface_name
-        params["tab_name"] = tab_name
     else:
-        raise ValueError("Must provide either tab_id or interface_id+tab_name or project_id+interface_name+tab_name")
+        raise ValueError("Must provide tab_id")
         
-    if tile_type:
-        params["type"] = tile_type
+    if name:
+        params["name"] = name
         
-    if visible is not None:
-        params["visible"] = str(visible).lower()
+    if type:
+        params["type"] = type
         
     # Construct the URL with parameters
     param_str = "&".join([f"{k}={v}" for k, v in params.items()])
-    return await client.get(f"/v0/tiles/list?{param_str}", headers=HEADERS)
+    return await client.get(f"/v0/tile/list?{param_str}", headers=HEADERS)
 
 
-async def _update_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None,
-                     interface_id=None, tab_name=None, project_id=None, 
-                     interface_name=None, update_data=None):
-    """Update tile by ID or by other parameter combinations"""
+async def _update_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None, update_data=None):
+    """Update tile by ID or by tab_id and name"""
     if update_data is None:
         update_data = {}
     
     if tile_id:
-        return await client.put(f"/v0/tiles/{tile_id}", headers=HEADERS, json=update_data)
+        return await client.put(f"/v0/tile/?tile_id={tile_id}", headers=HEADERS, json=update_data)
     elif tab_id and name:
-        return await client.put(f"/v0/tiles/?tab_id={tab_id}&name={name}", headers=HEADERS, json=update_data)
-    elif interface_id and tab_name and name:
-        url = f"/v0/tiles/?interface_id={interface_id}&tab_name={tab_name}&name={name}"
-        return await client.put(url, headers=HEADERS, json=update_data)
-    elif project_id and interface_name and tab_name and name:
-        url = f"/v0/tiles/?project_id={project_id}&interface_name={interface_name}&tab_name={tab_name}&name={name}"
-        return await client.put(url, headers=HEADERS, json=update_data)
+        return await client.put(f"/v0/tile/?tab_id={tab_id}&name={name}", headers=HEADERS, json=update_data)
     else:
-        raise ValueError("Must provide either tile_id or tab_id+name or interface_id+tab_name+name")
+        raise ValueError("Must provide either tile_id or tab_id+name")
 
 
-async def _patch_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None,
-                    interface_id=None, tab_name=None, project_id=None, 
-                    interface_name=None, patch_data=None):
-    """Patch tile by ID or by other parameter combinations"""
+async def _patch_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None, patch_data=None):
+    """Patch tile by ID or by tab_id and name"""
     if patch_data is None:
         patch_data = {}
     
     if tile_id:
-        return await client.patch(f"/v0/tiles/{tile_id}", headers=HEADERS, json=patch_data)
+        return await client.patch(f"/v0/tile/?tile_id={tile_id}", headers=HEADERS, json=patch_data)
     elif tab_id and name:
-        return await client.patch(f"/v0/tiles/?tab_id={tab_id}&name={name}", headers=HEADERS, json=patch_data)
-    elif interface_id and tab_name and name:
-        url = f"/v0/tiles/?interface_id={interface_id}&tab_name={tab_name}&name={name}"
-        return await client.patch(url, headers=HEADERS, json=patch_data)
-    elif project_id and interface_name and tab_name and name:
-        url = f"/v0/tiles/?project_id={project_id}&interface_name={interface_name}&tab_name={tab_name}&name={name}"
-        return await client.patch(url, headers=HEADERS, json=patch_data)
+        return await client.patch(f"/v0/tile/?tab_id={tab_id}&name={name}", headers=HEADERS, json=patch_data)
     else:
-        raise ValueError("Must provide either tile_id or tab_id+name or interface_id+tab_name+name")
+        raise ValueError("Must provide either tile_id or tab_id+name")
 
 
-async def _patch_specialized_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None,
-                               interface_id=None, tab_name=None, project_id=None, 
-                               interface_name=None, patch_data=None):
-    """Patch specialized tile data by ID or by other parameter combinations"""
+async def _patch_specialized_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None, patch_data=None):
+    """Patch specialized tile data by ID or by tab_id and name"""
     if patch_data is None:
         patch_data = {}
     
     if tile_id:
-        return await client.patch(f"/v0/tiles/{tile_id}/specialized", headers=HEADERS, json=patch_data)
+        return await client.patch(f"/v0/tile/specialized?tile_id={tile_id}", headers=HEADERS, json=patch_data)
     elif tab_id and name:
-        return await client.patch(f"/v0/tiles/specialized?tab_id={tab_id}&name={name}", headers=HEADERS, json=patch_data)
-    elif interface_id and tab_name and name:
-        url = f"/v0/tiles/specialized?interface_id={interface_id}&tab_name={tab_name}&name={name}"
-        return await client.patch(url, headers=HEADERS, json=patch_data)
-    elif project_id and interface_name and tab_name and name:
-        url = f"/v0/tiles/specialized?project_id={project_id}&interface_name={interface_name}&tab_name={tab_name}&name={name}"
-        return await client.patch(url, headers=HEADERS, json=patch_data)
+        return await client.patch(f"/v0/tile/specialized?tab_id={tab_id}&name={name}", headers=HEADERS, json=patch_data)
     else:
-        raise ValueError("Must provide either tile_id or tab_id+name or interface_id+tab_name+name")
+        raise ValueError("Must provide either tile_id or tab_id+name")
 
 
-async def _delete_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None,
-                     interface_id=None, tab_name=None, project_id=None, 
-                     interface_name=None):
-    """Delete tile by ID or by other parameter combinations"""
+async def _delete_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None):
+    """Delete tile by ID or by tab_id and name"""
     if tile_id:
-        return await client.delete(f"/v0/tiles/{tile_id}", headers=HEADERS)
+        return await client.delete(f"/v0/tile/?tile_id={tile_id}", headers=HEADERS)
     elif tab_id and name:
-        return await client.delete(f"/v0/tiles/?tab_id={tab_id}&name={name}", headers=HEADERS)
-    elif interface_id and tab_name and name:
-        url = f"/v0/tiles/?interface_id={interface_id}&tab_name={tab_name}&name={name}"
-        return await client.delete(url, headers=HEADERS)
-    elif project_id and interface_name and tab_name and name:
-        url = f"/v0/tiles/?project_id={project_id}&interface_name={interface_name}&tab_name={tab_name}&name={name}"
-        return await client.delete(url, headers=HEADERS)
+        return await client.delete(f"/v0/tile/?tab_id={tab_id}&name={name}", headers=HEADERS)
     else:
-        raise ValueError("Must provide either tile_id or tab_id+name or interface_id+tab_name+name")
+        raise ValueError("Must provide either tile_id or tab_id+name")
 
 
-async def _create_tile_checkpoint(client: AsyncClient, tile_id=None, tab_id=None, name=None,
-                              interface_id=None, tab_name=None, project_id=None, 
-                              interface_name=None):
+async def _create_tile_checkpoint(client: AsyncClient, tile_id=None, tab_id=None, name=None):
     """Create a checkpoint for a tile"""
     if tile_id:
-        return await client.post(f"/v0/tiles/{tile_id}/checkpoint", headers=HEADERS)
+        return await client.post(f"/v0/tile/checkpoint?tile_id={tile_id}", headers=HEADERS)
     elif tab_id and name:
-        return await client.post(f"/v0/tiles/checkpoint?tab_id={tab_id}&name={name}", headers=HEADERS)
-    elif interface_id and tab_name and name:
-        url = f"/v0/tiles/checkpoint?interface_id={interface_id}&tab_name={tab_name}&name={name}"
-        return await client.post(url, headers=HEADERS)
-    elif project_id and interface_name and tab_name and name:
-        url = f"/v0/tiles/checkpoint?project_id={project_id}&interface_name={interface_name}&tab_name={tab_name}&name={name}"
-        return await client.post(url, headers=HEADERS)
+        return await client.post(f"/v0/tile/checkpoint?tab_id={tab_id}&name={name}", headers=HEADERS)
     else:
-        raise ValueError("Must provide either tile_id or tab_id+name or interface_id+tab_name+name")
+        raise ValueError("Must provide either tile_id or tab_id+name")
 
 
-async def _get_tile_checkpoint(client: AsyncClient, tile_id=None, tab_id=None, name=None,
-                           interface_id=None, tab_name=None, project_id=None, 
-                           interface_name=None):
+async def _get_tile_checkpoint(client: AsyncClient, tile_id=None, tab_id=None, name=None):
     """Get the latest checkpoint for a tile"""
     if tile_id:
-        return await client.get(f"/v0/tiles/{tile_id}/checkpoint", headers=HEADERS)
+        return await client.get(f"/v0/tile/checkpoint?tile_id={tile_id}", headers=HEADERS)
     elif tab_id and name:
-        return await client.get(f"/v0/tiles/checkpoint?tab_id={tab_id}&name={name}", headers=HEADERS)
-    elif interface_id and tab_name and name:
-        url = f"/v0/tiles/checkpoint?interface_id={interface_id}&tab_name={tab_name}&name={name}"
-        return await client.get(url, headers=HEADERS)
-    elif project_id and interface_name and tab_name and name:
-        url = f"/v0/tiles/checkpoint?project_id={project_id}&interface_name={interface_name}&tab_name={tab_name}&name={name}"
-        return await client.get(url, headers=HEADERS)
+        return await client.get(f"/v0/tile/checkpoint?tab_id={tab_id}&name={name}", headers=HEADERS)
     else:
-        raise ValueError("Must provide either tile_id or tab_id+name or interface_id+tab_name+name")
+        raise ValueError("Must provide either tile_id or tab_id+name")
 
 
 # Test fixtures
@@ -375,56 +309,8 @@ async def test_get_tile_by_tab_and_name(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_get_tile_by_interface_tab_and_name(client: AsyncClient):
-    """Test getting a tile by interface_id, tab_name, and name"""
-    # Create an interface, tab, and tile
-    interface_response = await _create_test_interface(client)
-    interface_id = interface_response.json()["id"]
-    tab_response = await _create_test_tab(client, interface_id)
-    tab_id = tab_response.json()["id"]
-    await _create_test_tile(client, tab_id)
-    
-    # Get the tile by interface_id, tab_name, and name
-    response = await _get_tile(
-        client, 
-        interface_id=interface_id, 
-        tab_name=TEST_TAB,
-        name=TEST_TILE
-    )
-    assert response.status_code == 200
-    
-    data = response.json()
-    assert data["name"] == TEST_TILE
-    assert data["tab_id"] == tab_id
-
-
-@pytest.mark.anyio
-async def test_get_tile_by_project_interface_tab_and_name(client: AsyncClient):
-    """Test getting a tile by project_id, interface_name, tab_name, and name"""
-    # Create an interface, tab, and tile
-    interface_response = await _create_test_interface(client)
-    interface_id = interface_response.json()["id"]
-    tab_response = await _create_test_tab(client, interface_id)
-    tab_id = tab_response.json()["id"]
-    await _create_test_tile(client, tab_id)
-    
-    # Get the tile by project_id, interface_name, tab_name, and name
-    response = await _get_tile(
-        client, 
-        project_id=TEST_PROJECT,
-        interface_name=TEST_INTERFACE,
-        tab_name=TEST_TAB,
-        name=TEST_TILE
-    )
-    assert response.status_code == 200
-    
-    data = response.json()
-    assert data["name"] == TEST_TILE
-
-
-@pytest.mark.anyio
 async def test_list_tiles_by_tab_id(client: AsyncClient):
-    """Test listing tiles for a tab by tab_id"""
+    """Test listing tiles for a tab by ID"""
     # Create an interface and tab
     interface_response = await _create_test_interface(client)
     interface_id = interface_response.json()["id"]
@@ -435,7 +321,7 @@ async def test_list_tiles_by_tab_id(client: AsyncClient):
     await _create_test_tile(client, tab_id, name="list-tile-1", order=0)
     await _create_test_tile(client, tab_id, name="list-tile-2", order=1)
     
-    # List tiles by tab_id
+    # List tiles
     response = await _list_tiles(client, tab_id=tab_id)
     assert response.status_code == 200
     
@@ -461,7 +347,7 @@ async def test_list_tiles_with_type_filter(client: AsyncClient):
     await _create_test_tile(client, tab_id, name="view-tile", tile_type="view")
     
     # List only table tiles
-    response = await _list_tiles(client, tab_id=tab_id, tile_type="table")
+    response = await _list_tiles(client, tab_id=tab_id, type="table")
     assert response.status_code == 200
     
     data = response.json()
@@ -490,7 +376,6 @@ async def test_update_tile_by_id(client: AsyncClient):
         "height": 3,
         "x_pos": 4,
         "y_pos": 5,
-        "description": "Updated description"
     }
     response = await _update_tile(client, tile_id=tile_id, update_data=update_data)
     assert response.status_code == 200
@@ -503,7 +388,6 @@ async def test_update_tile_by_id(client: AsyncClient):
     assert data["height"] == 3
     assert data["x_pos"] == 4
     assert data["y_pos"] == 5
-    assert data["description"] == "Updated description"
 
 
 @pytest.mark.anyio
@@ -521,7 +405,6 @@ async def test_update_tile_by_tab_and_name(client: AsyncClient):
         "visible": False,
         "width": 2,
         "height": 3,
-        "description": "Updated description"
     }
     response = await _update_tile(client, tab_id=tab_id, name=TEST_TILE, update_data=update_data)
     assert response.status_code == 200
@@ -531,7 +414,6 @@ async def test_update_tile_by_tab_and_name(client: AsyncClient):
     assert data["visible"] is False
     assert data["width"] == 2
     assert data["height"] == 3
-    assert data["description"] == "Updated description"
 
 
 @pytest.mark.anyio

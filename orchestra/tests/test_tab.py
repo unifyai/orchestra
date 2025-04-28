@@ -31,12 +31,12 @@ async def _delete_project(client: AsyncClient, project_name=TEST_PROJECT):
     return response
 
 
-async def _create_test_interface(client: AsyncClient, name=TEST_INTERFACE, project_id=TEST_PROJECT, color="#FF0000"):
+async def _create_test_interface(client: AsyncClient, name=TEST_INTERFACE, project=TEST_PROJECT, color="#FF0000"):
     """Create a test interface"""
     response = await client.post(
         "/v0/interfaces/",
         headers=HEADERS,
-        json={"name": name, "project_id": project_id, "color": color, "description": TEST_DESCRIPTION},
+        json={"name": name, "project": project, "color": color},
     )
     assert response.status_code == 201, f"Failed to create interface: {response.json()}"
     return response
@@ -46,7 +46,7 @@ async def _create_test_interface(client: AsyncClient, name=TEST_INTERFACE, proje
 async def _create_test_tab(client: AsyncClient, interface_id, name=TEST_TAB, active=True, order=0):
     """Create a test tab"""
     response = await client.post(
-        "/v0/tabs/",
+        "/v0/tab/",
         headers=HEADERS,
         json={
             "interface_id": interface_id,
@@ -55,109 +55,81 @@ async def _create_test_tab(client: AsyncClient, interface_id, name=TEST_TAB, act
             "order": order,
             "visible": True,
             "color": "#00FF00",
-            "description": TEST_DESCRIPTION,
         },
     )
     assert response.status_code == 201, f"Failed to create tab: {response.json()}"
     return response
 
 
-async def _get_tab(client: AsyncClient, tab_id=None, interface_id=None, name=None,
-                 project_id=None, interface_name=None):
+async def _get_tab(client: AsyncClient, tab_id=None, interface_id=None, name=None):
     """
-    Get tab by ID or by interface_id+name or by project_id+interface_name+name
+    Get tab by ID or by interface_id and name
     
     If tab_id is provided, gets a single tab by ID
     If interface_id and name are provided, gets a single tab by interface_id and name
-    If project_id, interface_name, and name are provided, gets a single tab by those parameters
     """
     if tab_id:
-        return await client.get(f"/v0/tabs/{tab_id}", headers=HEADERS)
+        return await client.get(f"/v0/tab/?tab_id={tab_id}", headers=HEADERS)
     elif interface_id and name:
-        return await client.get(f"/v0/tabs/?interface_id={interface_id}&name={name}", headers=HEADERS)
-    elif project_id and interface_name and name:
-        url = f"/v0/tabs/?project_id={project_id}&interface_name={interface_name}&name={name}"
-        return await client.get(url, headers=HEADERS)
+        return await client.get(f"/v0/tab/?interface_id={interface_id}&name={name}", headers=HEADERS)
     else:
-        raise ValueError("Must provide either tab_id or interface_id+name or project_id+interface_name+name")
+        raise ValueError("Must provide either tab_id or interface_id+name")
 
 
-async def _list_tabs(client: AsyncClient, interface_id=None, project_id=None, interface_name=None, active=None):
+async def _list_tabs(client: AsyncClient, interface_id=None, name=None):
     """List tabs for an interface"""
     params = {}
     if interface_id:
         params["interface_id"] = interface_id
-    elif project_id and interface_name:
-        params["project_id"] = project_id
-        params["interface_name"] = interface_name
     else:
-        raise ValueError("Must provide either interface_id or project_id+interface_name")
-        
-    if active is not None:
-        params["active"] = str(active).lower()
+        raise ValueError("Must provide interface_id")
         
     # Construct the URL with parameters
     param_str = "&".join([f"{k}={v}" for k, v in params.items()])
-    return await client.get(f"/v0/tabs/list?{param_str}", headers=HEADERS)
+    return await client.get(f"/v0/tab/list?{param_str}", headers=HEADERS)
 
 
-async def _update_tab(client: AsyncClient, tab_id=None, interface_id=None, name=None,
-                    project_id=None, interface_name=None, update_data=None):
-    """Update tab by ID or by interface_id+name or by project_id+interface_name+name"""
+async def _update_tab(client: AsyncClient, tab_id=None, interface_id=None, name=None, update_data=None):
+    """Update tab by ID or by interface_id and name"""
     if update_data is None:
         update_data = {}
     
     if tab_id:
-        return await client.put(f"/v0/tabs/{tab_id}", headers=HEADERS, json=update_data)
+        return await client.put(f"/v0/tab/?tab_id={tab_id}", headers=HEADERS, json=update_data)
     elif interface_id and name:
-        return await client.put(f"/v0/tabs/?interface_id={interface_id}&name={name}", headers=HEADERS, json=update_data)
-    elif project_id and interface_name and name:
-        url = f"/v0/tabs/?project_id={project_id}&interface_name={interface_name}&name={name}"
-        return await client.put(url, headers=HEADERS, json=update_data)
+        return await client.put(f"/v0/tab/?interface_id={interface_id}&name={name}", headers=HEADERS, json=update_data)
     else:
-        raise ValueError("Must provide either tab_id or interface_id+name or project_id+interface_name+name")
+        raise ValueError("Must provide either tab_id or interface_id+name")
 
 
-async def _delete_tab(client: AsyncClient, tab_id=None, interface_id=None, name=None,
-                    project_id=None, interface_name=None):
-    """Delete tab by ID or by interface_id+name or by project_id+interface_name+name"""
+async def _delete_tab(client: AsyncClient, tab_id=None, interface_id=None, name=None):
+    """Delete tab by ID or by interface_id and name"""
     if tab_id:
-        return await client.delete(f"/v0/tabs/{tab_id}", headers=HEADERS)
+        return await client.delete(f"/v0/tab/?tab_id={tab_id}", headers=HEADERS)
     elif interface_id and name:
-        return await client.delete(f"/v0/tabs/?interface_id={interface_id}&name={name}", headers=HEADERS)
-    elif project_id and interface_name and name:
-        url = f"/v0/tabs/?project_id={project_id}&interface_name={interface_name}&name={name}"
-        return await client.delete(url, headers=HEADERS)
+        return await client.delete(f"/v0/tab/?interface_id={interface_id}&name={name}", headers=HEADERS)
     else:
-        raise ValueError("Must provide either tab_id or interface_id+name or project_id+interface_name+name")
+        raise ValueError("Must provide either tab_id or interface_id+name")
 
 
-async def _create_tab_checkpoint(client: AsyncClient, tab_id=None, interface_id=None, name=None,
-                              project_id=None, interface_name=None):
+async def _create_tab_checkpoint(client: AsyncClient, tab_id=None, interface_id=None, name=None):
     """Create a checkpoint for a tab"""
     if tab_id:
-        return await client.post(f"/v0/tabs/{tab_id}/checkpoint", headers=HEADERS)
+        return await client.post(f"/v0/tab/checkpoint?tab_id={tab_id}", headers=HEADERS)
     elif interface_id and name:
-        return await client.post(f"/v0/tabs/checkpoint?interface_id={interface_id}&name={name}", headers=HEADERS)
-    elif project_id and interface_name and name:
-        url = f"/v0/tabs/checkpoint?project_id={project_id}&interface_name={interface_name}&name={name}"
-        return await client.post(url, headers=HEADERS)
+        return await client.post(f"/v0/tab/checkpoint?interface_id={interface_id}&name={name}", headers=HEADERS)
     else:
-        raise ValueError("Must provide either tab_id or interface_id+name or project_id+interface_name+name")
+        raise ValueError("Must provide either tab_id or interface_id+name")
 
 
-async def _get_tab_checkpoint(client: AsyncClient, tab_id=None, interface_id=None, name=None,
-                             project_id=None, interface_name=None):
+async def _get_tab_checkpoint(client: AsyncClient, tab_id=None, interface_id=None, name=None):
     """Get the latest checkpoint for a tab"""
     if tab_id:
-        return await client.get(f"/v0/tabs/{tab_id}/checkpoint", headers=HEADERS)
+        return await client.get(f"/v0/tab/checkpoint?tab_id={tab_id}", headers=HEADERS)
     elif interface_id and name:
-        return await client.get(f"/v0/tabs/checkpoint?interface_id={interface_id}&name={name}", headers=HEADERS)
-    elif project_id and interface_name and name:
-        url = f"/v0/tabs/checkpoint?project_id={project_id}&interface_name={interface_name}&name={name}"
-        return await client.get(url, headers=HEADERS)
+        return await client.get(f"/v0/tab/checkpoint?interface_id={interface_id}&name={name}", headers=HEADERS)
     else:
-        raise ValueError("Must provide either tab_id or interface_id+name or project_id+interface_name+name")
+        raise ValueError("Must provide either tab_id or interface_id+name")
 
 
 # Test fixtures
@@ -193,7 +165,6 @@ async def test_create_tab(client: AsyncClient):
     assert data["visible"] is True
     assert data["order"] == 0
     assert data["color"] == "#00FF00"
-    assert data["description"] == TEST_DESCRIPTION
     assert data["is_checkpoint"] is False
     assert "id" in data
     assert "created_at" in data
@@ -236,29 +207,8 @@ async def test_get_tab_by_interface_and_name(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_get_tab_by_project_interface_and_name(client: AsyncClient):
-    """Test getting a tab by project_id, interface_name, and name"""
-    # Create an interface and tab
-    interface_response = await _create_test_interface(client)
-    interface_id = interface_response.json()["id"]
-    await _create_test_tab(client, interface_id)
-    
-    # Get the tab by project_id, interface_name, and name
-    response = await _get_tab(
-        client, 
-        project_id=TEST_PROJECT, 
-        interface_name=TEST_INTERFACE,
-        name=TEST_TAB
-    )
-    assert response.status_code == 200
-    
-    data = response.json()
-    assert data["name"] == TEST_TAB
-
-
-@pytest.mark.anyio
-async def test_list_tabs_by_interface_id(client: AsyncClient):
-    """Test listing tabs for an interface by interface_id"""
+async def test_list_tabs(client: AsyncClient):
+    """Test listing tabs for an interface"""
     # Create an interface
     interface_response = await _create_test_interface(client)
     interface_id = interface_response.json()["id"]
@@ -267,7 +217,7 @@ async def test_list_tabs_by_interface_id(client: AsyncClient):
     await _create_test_tab(client, interface_id, name="list-tab-1", active=True, order=0)
     await _create_test_tab(client, interface_id, name="list-tab-2", active=False, order=1)
     
-    # List tabs by interface_id
+    # List tabs
     response = await _list_tabs(client, interface_id=interface_id)
     assert response.status_code == 200
     
@@ -276,27 +226,6 @@ async def test_list_tabs_by_interface_id(client: AsyncClient):
     tab_names = [tab["name"] for tab in data]
     assert "list-tab-1" in tab_names
     assert "list-tab-2" in tab_names
-
-
-@pytest.mark.anyio
-async def test_list_tabs_with_active_filter(client: AsyncClient):
-    """Test listing tabs with active filter"""
-    # Create an interface
-    interface_response = await _create_test_interface(client)
-    interface_id = interface_response.json()["id"]
-    
-    # Create tabs with different active states
-    await _create_test_tab(client, interface_id, name="active-tab", active=True)
-    await _create_test_tab(client, interface_id, name="inactive-tab", active=False)
-    
-    # List only active tabs
-    response = await _list_tabs(client, interface_id=interface_id, active=True)
-    assert response.status_code == 200
-    
-    data = response.json()
-    assert len(data) == 1
-    assert data[0]["name"] == "active-tab"
-    assert data[0]["active"] is True
 
 
 @pytest.mark.anyio
@@ -313,8 +242,7 @@ async def test_update_tab_by_id(client: AsyncClient):
     update_data = {
         "name": new_name,
         "visible": False,
-        "color": "#0000FF",
-        "description": "Updated description"
+        "color": "#0000FF"
     }
     response = await _update_tab(client, tab_id=tab_id, update_data=update_data)
     assert response.status_code == 200
@@ -324,7 +252,6 @@ async def test_update_tab_by_id(client: AsyncClient):
     assert data["name"] == new_name
     assert data["visible"] is False
     assert data["color"] == "#0000FF"
-    assert data["description"] == "Updated description"
 
 
 @pytest.mark.anyio
@@ -338,8 +265,7 @@ async def test_update_tab_by_interface_and_name(client: AsyncClient):
     # Update the tab by interface_id and name
     update_data = {
         "visible": False,
-        "color": "#0000FF",
-        "description": "Updated description"
+        "color": "#0000FF"
     }
     response = await _update_tab(client, interface_id=interface_id, name=TEST_TAB, update_data=update_data)
     assert response.status_code == 200
@@ -348,7 +274,6 @@ async def test_update_tab_by_interface_and_name(client: AsyncClient):
     assert data["name"] == TEST_TAB
     assert data["visible"] is False
     assert data["color"] == "#0000FF"
-    assert data["description"] == "Updated description"
 
 
 @pytest.mark.anyio
@@ -524,8 +449,311 @@ async def test_tab_active_flag(client: AsyncClient):
     # Verify tab1 is now inactive
     response1 = await _get_tab(client, tab_id=tab1_id)
     assert response1.json()["active"] is False
+
+
+@pytest.mark.anyio
+async def test_create_tab_checkpoint_with_existing_checkpoint(client: AsyncClient):
+    """Test creating a checkpoint when one already exists (should update existing checkpoint)"""
+    # Create an interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
     
-    # Verify only tab2 is active
-    response = await _list_tabs(client, interface_id=interface_id, active=True)
-    assert len(response.json()) == 1
-    assert response.json()[0]["id"] == tab2_id 
+    # Create first checkpoint
+    first_checkpoint = await _create_tab_checkpoint(client, tab_id=tab_id)
+    assert first_checkpoint.status_code == 200
+    first_checkpoint_id = first_checkpoint.json()["id"]
+    
+    # Update the original tab
+    update_response = await _update_tab(
+        client, 
+        tab_id=tab_id, 
+        update_data={"color": "#00FF00"}
+    )
+    assert update_response.status_code == 200
+    
+    # Create second checkpoint (should update existing one)
+    second_checkpoint = await _create_tab_checkpoint(client, tab_id=tab_id)
+    assert second_checkpoint.status_code == 200
+    second_checkpoint_id = second_checkpoint.json()["id"]
+    
+    # Verify it's the same checkpoint (same ID)
+    assert first_checkpoint_id == second_checkpoint_id
+    # Verify it has the updated color
+    assert second_checkpoint.json()["color"] == "#00FF00"
+
+
+@pytest.mark.anyio
+async def test_create_tab_checkpoint_with_tiles(client: AsyncClient):
+    """Test creating a checkpoint for a tab with tiles"""
+    # Create an interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+    
+    # Create a tile in the tab
+    tile_response = await client.post(
+        f"/v0/tile/",
+        headers=HEADERS,
+        json={
+            "tab_id": tab_id,
+            "name": "test-tile",
+            "visible": True,
+            "order": 1
+        }
+    )
+    assert tile_response.status_code == 201
+    
+    # Create a checkpoint
+    checkpoint_response = await _create_tab_checkpoint(client, tab_id=tab_id)
+    assert checkpoint_response.status_code == 200
+    
+    # Verify the checkpoint has the tile
+    checkpoint_data = checkpoint_response.json()
+    assert len(checkpoint_data["tiles"]) == 1
+    assert checkpoint_data["tiles"][0]["name"] == "test-tile"
+    assert checkpoint_data["tiles"][0]["visible"] is True
+    assert checkpoint_data["tiles"][0]["order"] == 1
+
+
+@pytest.mark.anyio
+async def test_create_tab_checkpoint_with_multiple_tiles(client: AsyncClient):
+    """Test creating a checkpoint for a tab with multiple tiles"""
+    # Create an interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+    
+    # Create multiple tiles
+    tile_names = ["tile1", "tile2", "tile3"]
+    for i, name in enumerate(tile_names):
+        tile_response = await client.post(
+            f"/v0/tile/",
+            headers=HEADERS,
+            json={
+                "tab_id": tab_id,
+                "name": name,
+                "visible": True,
+                "order": i
+            }
+        )
+        assert tile_response.status_code == 201
+    
+    # Create a checkpoint
+    checkpoint_response = await _create_tab_checkpoint(client, tab_id=tab_id)
+    assert checkpoint_response.status_code == 200
+    
+    # Verify all tiles are in the checkpoint
+    checkpoint_data = checkpoint_response.json()
+    assert len(checkpoint_data["tiles"]) == len(tile_names)
+    checkpoint_tile_names = [tile["name"] for tile in checkpoint_data["tiles"]]
+    assert set(checkpoint_tile_names) == set(tile_names)
+
+
+@pytest.mark.anyio
+async def test_create_tab_checkpoint_with_invisible_tiles(client: AsyncClient):
+    """Test creating a checkpoint for a tab with invisible tiles"""
+    # Create an interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+    
+    # Create a tile with visible=False
+    tile_response = await client.post(
+        f"/v0/tile/",
+        headers=HEADERS,
+        json={
+            "tab_id": tab_id,
+            "name": "invisible-tile",
+            "visible": False,
+            "order": 1
+        }
+    )
+    assert tile_response.status_code == 201
+    
+    # Create a checkpoint
+    checkpoint_response = await _create_tab_checkpoint(client, tab_id=tab_id)
+    assert checkpoint_response.status_code == 200
+    
+    # Verify the checkpoint preserves the tile's visibility
+    checkpoint_data = checkpoint_response.json()
+    assert len(checkpoint_data["tiles"]) == 1
+    assert checkpoint_data["tiles"][0]["visible"] is False
+
+
+@pytest.mark.anyio
+async def test_create_tab_checkpoint_with_tile_updates(client: AsyncClient):
+    """Test creating a checkpoint after updating tiles"""
+    # Create an interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+    
+    # Create a tile
+    tile_response = await client.post(
+        f"/v0/tile/",
+        headers=HEADERS,
+        json={
+            "tab_id": tab_id,
+            "name": "test-tile",
+            "visible": True,
+            "order": 1
+        }
+    )
+    assert tile_response.status_code == 201
+    tile_id = tile_response.json()["id"]
+    
+    # Create first checkpoint
+    first_checkpoint = await _create_tab_checkpoint(client, tab_id=tab_id)
+    assert first_checkpoint.status_code == 200
+    
+    # Update the tile
+    update_tile_response = await client.put(
+        f"/v0/tile/?tile_id={tile_id}",
+        headers=HEADERS,
+        json={
+            "visible": False,
+            "order": 2
+        }
+    )
+    assert update_tile_response.status_code == 200
+    
+    # Create second checkpoint
+    second_checkpoint = await _create_tab_checkpoint(client, tab_id=tab_id)
+    assert second_checkpoint.status_code == 200
+    
+    # Verify the second checkpoint has the updated tile properties
+    checkpoint_data = second_checkpoint.json()
+    assert len(checkpoint_data["tiles"]) == 1
+    assert checkpoint_data["tiles"][0]["visible"] is False
+    assert checkpoint_data["tiles"][0]["order"] == 2
+
+
+@pytest.mark.anyio
+async def test_create_tab_checkpoint_with_deleted_tiles(client: AsyncClient):
+    """Test creating a checkpoint after deleting tiles"""
+    # Create an interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+    
+    # Create a tile
+    tile_response = await client.post(
+        f"/v0/tile/",
+        headers=HEADERS,
+        json={
+            "tab_id": tab_id,
+            "name": "test-tile",
+            "visible": True,
+            "order": 1
+        }
+    )
+    assert tile_response.status_code == 201
+    tile_id = tile_response.json()["id"]
+    
+    # Create first checkpoint
+    first_checkpoint = await _create_tab_checkpoint(client, tab_id=tab_id)
+    assert first_checkpoint.status_code == 200
+    
+    # Delete the tile
+    delete_tile_response = await client.delete(
+        f"/v0/tile/?tile_id={tile_id}",
+        headers=HEADERS
+    )
+    assert delete_tile_response.status_code == 204
+    
+    # Create second checkpoint
+    second_checkpoint = await _create_tab_checkpoint(client, tab_id=tab_id)
+    assert second_checkpoint.status_code == 200
+    
+    # Verify the second checkpoint has no tiles
+    checkpoint_data = second_checkpoint.json()
+    assert len(checkpoint_data["tiles"]) == 0
+
+
+@pytest.mark.anyio
+async def test_create_tab_checkpoint_with_added_tiles(client: AsyncClient):
+    """Test creating a checkpoint after adding new tiles"""
+    # Create an interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+    
+    # Create first checkpoint (no tiles)
+    first_checkpoint = await _create_tab_checkpoint(client, tab_id=tab_id)
+    assert first_checkpoint.status_code == 200
+    assert len(first_checkpoint.json()["tiles"]) == 0
+    
+    # Add a tile
+    tile_response = await client.post(
+        f"/v0/tile/",
+        headers=HEADERS,
+        json={
+            "tab_id": tab_id,
+            "name": "new-tile",
+            "visible": True,
+            "order": 1
+        }
+    )
+    assert tile_response.status_code == 201
+    
+    # Create second checkpoint
+    second_checkpoint = await _create_tab_checkpoint(client, tab_id=tab_id)
+    assert second_checkpoint.status_code == 200
+    
+    # Verify the second checkpoint has the new tile
+    checkpoint_data = second_checkpoint.json()
+    assert len(checkpoint_data["tiles"]) == 1
+    assert checkpoint_data["tiles"][0]["name"] == "new-tile"
+
+
+@pytest.mark.anyio
+async def test_create_tab_checkpoint_with_renamed_tiles(client: AsyncClient):
+    """Test creating a checkpoint after renaming tiles"""
+    # Create an interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+    
+    # Create a tile
+    tile_response = await client.post(
+        f"/v0/tile/",
+        headers=HEADERS,
+        json={
+            "tab_id": tab_id,
+            "name": "old-name",
+            "visible": True,
+            "order": 1
+        }
+    )
+    assert tile_response.status_code == 201
+    tile_id = tile_response.json()["id"]
+    
+    # Create first checkpoint
+    first_checkpoint = await _create_tab_checkpoint(client, tab_id=tab_id)
+    assert first_checkpoint.status_code == 200
+    
+    # Rename the tile
+    update_tile_response = await client.put(
+        f"/v0/tile/?tile_id={tile_id}",
+        headers=HEADERS,
+        json={"name": "new-name"}
+    )
+    assert update_tile_response.status_code == 200
+    
+    # Create second checkpoint
+    second_checkpoint = await _create_tab_checkpoint(client, tab_id=tab_id)
+    assert second_checkpoint.status_code == 200
+    
+    # Verify the second checkpoint has the renamed tile
+    checkpoint_data = second_checkpoint.json()
+    assert len(checkpoint_data["tiles"]) == 1
+    assert checkpoint_data["tiles"][0]["name"] == "new-name" 
