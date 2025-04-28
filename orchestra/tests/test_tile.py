@@ -15,13 +15,12 @@ TEST_PROJECT = "test-tile-project"
 TEST_INTERFACE = "test-interface"
 TEST_TAB = "test-tab"
 TEST_TILE = "test-tile"
-TEST_DESCRIPTION = "Test description"
 
 
 # Helper functions for project and interface creation
 async def _create_project(client: AsyncClient, project_name=TEST_PROJECT):
     """Create a test project"""
-    response = await client.post("/v0/project", json={"name": project_name, "description": TEST_DESCRIPTION}, headers=HEADERS)
+    response = await client.post("/v0/project", json={"name": project_name}, headers=HEADERS)
     assert response.status_code in [200, 201], f"Failed to create project: {response.json()}"
     return response
 
@@ -151,26 +150,46 @@ async def _create_test_tile(client: AsyncClient, tab_id, name=TEST_TILE,
     return response
 
 async def _create_test_table_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE}-table",
-                              headers=None, rows=None, **kwargs):
+                              table_type=None, column_context=None, page_number=None,
+                              column_order=None, hidden_columns=None, sorting=None,
+                              grouping=None, group_sorting=None, columns_pin_left=None,
+                              columns_pin_right=None, selected=None, **kwargs):
     """Create a test table tile with appropriate defaults.
     
     Args:
         client: AsyncClient for making requests
         tab_id: ID of the tab to create the tile in
         name: Name of the tile
-        headers: Column headers list
-        rows: Data rows list
+        table_type: Type of table
+        column_context: Column context data
+        page_number: Page number
+        column_order: Column order data
+        hidden_columns: Hidden columns data
+        sorting: Sorting data
+        grouping: Grouping data
+        group_sorting: Group sorting data
+        columns_pin_left: Columns pinned to left
+        columns_pin_right: Columns pinned to right
+        selected: Selected data
         **kwargs: Additional arguments to pass to _create_test_tile
     """
-    if headers is None:
-        headers = ["Column 1", "Column 2"]
-    if rows is None:
-        rows = [["Value 1-1", "Value 1-2"], ["Value 2-1", "Value 2-2"]]
         
     table_tile_data = {
-        "headers": headers,
-        "rows": rows
+        "table_type": table_type,
+        "column_context": column_context,
+        "page_number": page_number,
+        "column_order": column_order,
+        "hidden_columns": hidden_columns,
+        "sorting": sorting,
+        "grouping": grouping,
+        "group_sorting": group_sorting,
+        "columns_pin_left": columns_pin_left,
+        "columns_pin_right": columns_pin_right,
+        "selected": selected
     }
+    
+    # Remove None values
+    table_tile_data = {k: v for k, v in table_tile_data.items() if v is not None}
     
     # Set defaults for table tiles
     table_kwargs = {
@@ -185,14 +204,17 @@ async def _create_test_table_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE
         client=client,
         tab_id=tab_id,
         name=name,
-        tile_type="table",
+        tile_type="Table",
         table_tile_data=table_tile_data,
         **table_kwargs
     )
 
 
 async def _create_test_plot_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE}-plot",
-                              plot_type="scatter", plot_data=None, **kwargs):
+                             plot_type="scatter", plot_scale_x=None, plot_scale_y=None,
+                             plot_aggregate=None, x_axis="x", y_axis="y",
+                             plot_group_by=None, plot_group_by_colors=None,
+                             bin_count=None, regression_line=None, **kwargs):
     """Create a test plot tile with appropriate defaults.
     
     Args:
@@ -200,21 +222,33 @@ async def _create_test_plot_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE}
         tab_id: ID of the tab to create the tile in
         name: Name of the tile
         plot_type: Type of plot (scatter, bar, line, etc.)
-        plot_data: Plot data
+        plot_scale_x: X-axis scale
+        plot_scale_y: Y-axis scale
+        plot_aggregate: Plot aggregation
+        x_axis: X-axis field
+        y_axis: Y-axis field
+        plot_group_by: Group by field
+        plot_group_by_colors: Group by colors
+        bin_count: Bin count for histograms
+        regression_line: Regression line settings
         **kwargs: Additional arguments to pass to _create_test_tile
     """
-    if plot_data is None:
-        plot_data = {
-            "x": [1, 2, 3, 4, 5],
-            "y": [10, 15, 7, 12, 9]
-        }
         
     plot_tile_data = {
         "plot_type": plot_type,
-        "plot_data": plot_data,
-        "x_axis": "x",
-        "y_axis": "y"
+        "plot_scale_x": plot_scale_x,
+        "plot_scale_y": plot_scale_y,
+        "plot_aggregate": plot_aggregate,
+        "x_axis": x_axis,
+        "y_axis": y_axis,
+        "plot_group_by": plot_group_by,
+        "plot_group_by_colors": plot_group_by_colors,
+        "bin_count": bin_count,
+        "regression_line": regression_line
     }
+    
+    # Remove None values
+    plot_tile_data = {k: v for k, v in plot_tile_data.items() if v is not None}
     
     # Set defaults for plot tiles
     plot_kwargs = {
@@ -229,30 +263,29 @@ async def _create_test_plot_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE}
         client=client,
         tab_id=tab_id,
         name=name,
-        tile_type="plot",
+        tile_type="Plot",
         plot_tile_data=plot_tile_data,
         **plot_kwargs
     )
 
 
 async def _create_test_view_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE}-view",
-                              view_type="markdown", content="# Test Content", **kwargs):
+                             base_index=None, **kwargs):
     """Create a test view tile with appropriate defaults.
     
     Args:
         client: AsyncClient for making requests
         tab_id: ID of the tab to create the tile in
         name: Name of the tile
-        view_type: Type of view (markdown, html, etc.)
-        content: View content
+        base_index: Base index for the view
         **kwargs: Additional arguments to pass to _create_test_tile
     """
     view_tile_data = {
-        "view_type": view_type,
-        "view_data": {
-            "content": content
-        }
+        "base_index": base_index
     }
+    
+    # Remove None values
+    view_tile_data = {k: v for k, v in view_tile_data.items() if v is not None}
     
     # Set defaults for view tiles
     view_kwargs = {
@@ -267,29 +300,38 @@ async def _create_test_view_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE}
         client=client,
         tab_id=tab_id,
         name=name,
-        tile_type="view",
+        tile_type="View",
         view_tile_data=view_tile_data,
         **view_kwargs
     )
 
 
 async def _create_test_editor_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE}-editor",
-                                language="python", content="print('Hello World')", **kwargs):
+                                file_type="python", content="print('Hello World')", 
+                                file_path=None, **kwargs):
     """Create a test editor tile with appropriate defaults.
     
     Args:
         client: AsyncClient for making requests
         tab_id: ID of the tab to create the tile in
         name: Name of the tile
-        language: Programming language
+        file_type: File type/language
         content: Editor content
+        file_path: Path of the file
         **kwargs: Additional arguments to pass to _create_test_tile
     """
+    # Default file name if not provided
+    if file_path is None:
+        file_path = f"{name}.{file_type}"
+        
     editor_tile_data = {
-        "language": language,
-        "content": content,
-        "file_name": f"{name}.{language}"
+        "file_path": file_path,
+        "file_type": file_type,
+        "content": content
     }
+    
+    # Remove None values
+    editor_tile_data = {k: v for k, v in editor_tile_data.items() if v is not None}
     
     # Set defaults for editor tiles
     editor_kwargs = {
@@ -304,7 +346,7 @@ async def _create_test_editor_tile(client: AsyncClient, tab_id, name=f"{TEST_TIL
         client=client,
         tab_id=tab_id,
         name=name,
-        tile_type="editor",
+        tile_type="Editor",
         editor_tile_data=editor_tile_data,
         **editor_kwargs
     )
@@ -398,17 +440,35 @@ async def _patch_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None,
         raise ValueError("Must provide either tile_id or tab_id+name")
 
 
-async def _patch_specialized_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None, patch_data=None):
-    """Patch specialized tile data by ID or by tab_id and name"""
+async def _patch_specialized_tile(client: AsyncClient, tile_type=None, tile_id=None, tab_id=None, name=None, patch_data=None):
+    """Patch specialized tile data by ID or by tab_id and name
+    
+    Args:
+        client: AsyncClient for making requests
+        tile_type: The type of tile (Table, Plot, View, Editor)
+        tile_id: ID of the tile to patch
+        tab_id: ID of the tab containing the tile
+        name: Name of the tile to patch
+        patch_data: Data to patch in the specialized tile
+    """
     if patch_data is None:
         patch_data = {}
     
+    params = {}
+    if tile_type:
+        params["tile_type"] = tile_type
+        
     if tile_id:
-        return await client.patch(f"/v0/tile/specialized?tile_id={tile_id}", headers=HEADERS, json=patch_data)
+        params["tile_id"] = tile_id
     elif tab_id and name:
-        return await client.patch(f"/v0/tile/specialized?tab_id={tab_id}&name={name}", headers=HEADERS, json=patch_data)
+        params["tab_id"] = tab_id
+        params["name"] = name
     else:
         raise ValueError("Must provide either tile_id or tab_id+name")
+    
+    # Construct the URL with parameters
+    param_str = "&".join([f"{k}={v}" for k, v in params.items()])
+    return await client.patch(f"/v0/tile/specialized?{param_str}", headers=HEADERS, json=patch_data)
 
 
 async def _delete_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None):
@@ -498,40 +558,52 @@ async def test_create_different_tile_types(client: AsyncClient):
     tab_id = tab_response.json()["id"]
     
     # Create a table tile
-    table_response = await _create_test_table_tile(client, tab_id)
+    table_response = await _create_test_table_tile(client, tab_id, 
+                                              table_type="basic",
+                                              column_context="context1",
+                                              page_number="1")
     assert table_response.status_code == 201
     table_data = table_response.json()
-    assert table_data["type"] == "table"
+    assert table_data["type"] == "Table"
     assert "table_tile" in table_data
-    assert "headers" in table_data["table_tile"]
-    assert len(table_data["table_tile"]["headers"]) == 2
+    assert table_data["table_tile"]["table_type"] == "basic"
+    assert table_data["table_tile"]["column_context"] == "context1"
+    assert table_data["table_tile"]["page_number"] == "1"
     
     # Create a plot tile
-    plot_response = await _create_test_plot_tile(client, tab_id)
+    plot_response = await _create_test_plot_tile(client, tab_id, 
+                                            plot_type="scatter",
+                                            x_axis="x_data", 
+                                            y_axis="y_data")
     assert plot_response.status_code == 201
     plot_data = plot_response.json()
-    assert plot_data["type"] == "plot"
+    assert plot_data["type"] == "Plot"
     assert "plot_tile" in plot_data
-    assert "plot_type" in plot_data["plot_tile"]
     assert plot_data["plot_tile"]["plot_type"] == "scatter"
+    assert plot_data["plot_tile"]["x_axis"] == "x_data"
+    assert plot_data["plot_tile"]["y_axis"] == "y_data"
     
     # Create a view tile
-    view_response = await _create_test_view_tile(client, tab_id)
+    view_response = await _create_test_view_tile(client, tab_id, 
+                                            base_index="index1")
     assert view_response.status_code == 201
     view_data = view_response.json()
-    assert view_data["type"] == "view"
+    assert view_data["type"] == "View"
     assert "view_tile" in view_data
-    assert "view_type" in view_data["view_tile"]
-    assert view_data["view_tile"]["view_type"] == "markdown"
+    assert view_data["view_tile"]["base_index"] == "index1"
     
     # Create an editor tile
-    editor_response = await _create_test_editor_tile(client, tab_id)
+    editor_response = await _create_test_editor_tile(client, tab_id, 
+                                               file_type="python", 
+                                               content="print('Test')",
+                                               file_path="test.py")
     assert editor_response.status_code == 201
     editor_data = editor_response.json()
-    assert editor_data["type"] == "editor"
+    assert editor_data["type"] == "Editor"
     assert "editor_tile" in editor_data
-    assert "language" in editor_data["editor_tile"]
-    assert editor_data["editor_tile"]["language"] == "python"
+    assert editor_data["editor_tile"]["file_type"] == "python"
+    assert editor_data["editor_tile"]["content"] == "print('Test')"
+    assert editor_data["editor_tile"]["file_path"] == "test.py"
 
 
 @pytest.mark.anyio
@@ -584,8 +656,8 @@ async def test_list_tiles_by_tab_id(client: AsyncClient):
     tab_id = tab_response.json()["id"]
     
     # Create multiple tiles
-    await _create_test_tile(client, tab_id, name="list-tile-1", order=0)
-    await _create_test_tile(client, tab_id, name="list-tile-2", order=1)
+    await _create_test_tile(client, tab_id, name="list-tile-1")
+    await _create_test_tile(client, tab_id, name="list-tile-2")
     
     # List tiles
     response = await _list_tiles(client, tab_id=tab_id)
@@ -738,7 +810,7 @@ async def test_patch_specialized_tile(client: AsyncClient):
         "columns": ["col1", "col2"],
         "data": [["value1", "value2"], ["value3", "value4"]]
     }
-    response = await _patch_specialized_tile(client, tile_id=table_id, patch_data=specialized_data)
+    response = await _patch_specialized_tile(client, tile_type="table", tile_id=table_id, patch_data=specialized_data)
     assert response.status_code == 200
     
     # Verify the specialized data was updated
@@ -891,41 +963,6 @@ async def test_tile_positioning(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_tile_order(client: AsyncClient):
-    """Test tile ordering"""
-    # Create an interface and tab
-    interface_response = await _create_test_interface(client)
-    interface_id = interface_response.json()["id"]
-    tab_response = await _create_test_tab(client, interface_id)
-    tab_id = tab_response.json()["id"]
-    
-    # Create tiles with different order values
-    await _create_test_tile(client, tab_id, name="order-tile-1", order=1)
-    await _create_test_tile(client, tab_id, name="order-tile-0", order=0)
-    await _create_test_tile(client, tab_id, name="order-tile-2", order=2)
-    
-    # List tiles and verify order
-    response = await _list_tiles(client, tab_id=tab_id)
-    assert response.status_code == 200
-    
-    data = response.json()
-    assert len(data) == 3
-    
-    # Check that tiles are returned in order based on the order field
-    # This assumes the API returns tiles sorted by order
-    order_tiles = sorted(data, key=lambda t: t["order"])
-    
-    assert order_tiles[0]["name"] == "order-tile-0"
-    assert order_tiles[0]["order"] == 0
-    
-    assert order_tiles[1]["name"] == "order-tile-1"
-    assert order_tiles[1]["order"] == 1
-    
-    assert order_tiles[2]["name"] == "order-tile-2"
-    assert order_tiles[2]["order"] == 2
-
-
-@pytest.mark.anyio
 async def test_update_tile_with_position(client: AsyncClient):
     """Test updating tile position and other fields"""
     # Create an interface, tab, and tile
@@ -966,3 +1003,184 @@ async def test_update_tile_with_position(client: AsyncClient):
     assert data["min_width"] == 2
     assert data["min_height"] == 2
     assert data["locked"] is True
+
+
+@pytest.mark.anyio
+async def test_update_specialized_tile_data(client: AsyncClient):
+    """Test updating specialized tile data"""
+    # Create an interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+    
+    # Create a table tile with initial data
+    table_tile_response = await _create_test_table_tile(
+        client, tab_id, 
+        name="specialized-table",
+        table_type="basic",
+        column_context="initial_context"
+    )
+    table_tile_id = table_tile_response.json()["id"]
+    
+    # Update the specialized table data
+    update_data = {
+        "table_tile": {
+            "table_type": "advanced",
+            "column_context": "updated_context",
+            "sorting": "column1:asc"
+        }
+    }
+    response = await _patch_tile(client, tile_id=table_tile_id, patch_data=update_data)
+    assert response.status_code == 200
+    
+    # Verify the update worked
+    updated_data = response.json()
+    assert updated_data["table_tile"]["table_type"] == "advanced"
+    assert updated_data["table_tile"]["column_context"] == "updated_context"
+    assert updated_data["table_tile"]["sorting"] == "column1:asc"
+    
+    # Create a plot tile
+    plot_tile_response = await _create_test_plot_tile(
+        client, tab_id, 
+        name="specialized-plot",
+        plot_type="scatter"
+    )
+    plot_tile_id = plot_tile_response.json()["id"]
+    
+    # Update the specialized plot data
+    update_data = {
+        "plot_tile": {
+            "plot_type": "bar",
+            "plot_scale_x": "linear",
+            "plot_scale_y": "log",
+            "x_axis": "category",
+            "y_axis": "value"
+        }
+    }
+    response = await _patch_tile(client, tile_id=plot_tile_id, patch_data=update_data)
+    assert response.status_code == 200
+    
+    # Verify the update worked
+    updated_data = response.json()
+    assert updated_data["plot_tile"]["plot_type"] == "bar"
+    assert updated_data["plot_tile"]["plot_scale_x"] == "linear"
+    assert updated_data["plot_tile"]["plot_scale_y"] == "log"
+    assert updated_data["plot_tile"]["x_axis"] == "category"
+    assert updated_data["plot_tile"]["y_axis"] == "value"
+    
+    # Create an editor tile
+    editor_tile_response = await _create_test_editor_tile(
+        client, tab_id, 
+        name="specialized-editor",
+        file_type="python"
+    )
+    editor_tile_id = editor_tile_response.json()["id"]
+    
+    # Update the specialized editor data
+    update_data = {
+        "editor_tile": {
+            "file_type": "javascript",
+            "file_path": "script.js",
+            "content": "console.log('Hello');"
+        }
+    }
+    response = await _patch_tile(client, tile_id=editor_tile_id, patch_data=update_data)
+    assert response.status_code == 200
+    
+    # Verify the update worked
+    updated_data = response.json()
+    assert updated_data["editor_tile"]["file_type"] == "javascript"
+    assert updated_data["editor_tile"]["file_path"] == "script.js"
+    assert updated_data["editor_tile"]["content"] == "console.log('Hello');"
+
+
+@pytest.mark.anyio
+async def test_patch_specialized_tile_endpoint(client: AsyncClient):
+    """Test the specialized patch endpoint for each tile type"""
+    # Create an interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+    
+    # Create tiles of each type
+    table_tile = await _create_test_table_tile(client, tab_id, name="spec-table-tile")
+    table_id = table_tile.json()["id"]
+    
+    plot_tile = await _create_test_plot_tile(client, tab_id, name="spec-plot-tile")
+    plot_id = plot_tile.json()["id"]
+    
+    view_tile = await _create_test_view_tile(client, tab_id, name="spec-view-tile")
+    view_id = view_tile.json()["id"]
+    
+    editor_tile = await _create_test_editor_tile(client, tab_id, name="spec-editor-tile")
+    editor_id = editor_tile.json()["id"]
+    
+    # Test patch for table tile
+    table_patch = {
+        "table_type": "specialized-type",
+        "column_context": "updated-context",
+        "sorting": "field:desc"
+    }
+    table_response = await _patch_specialized_tile(
+        client, 
+        tile_type="Table", 
+        tile_id=table_id, 
+        patch_data=table_patch
+    )
+    assert table_response.status_code == 200
+    table_data = table_response.json()
+    assert table_data["table_tile"]["table_type"] == "specialized-type"
+    assert table_data["table_tile"]["column_context"] == "updated-context"
+    assert table_data["table_tile"]["sorting"] == "field:desc"
+    
+    # Test patch for plot tile
+    plot_patch = {
+        "plot_type": "bar",
+        "plot_scale_x": "continuous",
+        "plot_aggregate": "sum"
+    }
+    plot_response = await _patch_specialized_tile(
+        client, 
+        tile_type="Plot", 
+        tile_id=plot_id, 
+        patch_data=plot_patch
+    )
+    assert plot_response.status_code == 200
+    plot_data = plot_response.json()
+    assert plot_data["plot_tile"]["plot_type"] == "bar"
+    assert plot_data["plot_tile"]["plot_scale_x"] == "continuous"
+    assert plot_data["plot_tile"]["plot_aggregate"] == "sum"
+    
+    # Test patch for view tile
+    view_patch = {
+        "base_index": "updated-index"
+    }
+    view_response = await _patch_specialized_tile(
+        client, 
+        tile_type="View", 
+        tile_id=view_id, 
+        patch_data=view_patch
+    )
+    assert view_response.status_code == 200
+    view_data = view_response.json()
+    assert view_data["view_tile"]["base_index"] == "updated-index"
+    
+    # Test patch for editor tile
+    editor_patch = {
+        "file_path": "updated.js",
+        "file_type": "javascript",
+        "content": "console.log('Updated');"
+    }
+    editor_response = await _patch_specialized_tile(
+        client, 
+        tile_type="Editor", 
+        tile_id=editor_id, 
+        patch_data=editor_patch
+    )
+    assert editor_response.status_code == 200
+    editor_data = editor_response.json()
+    assert editor_data["editor_tile"]["file_path"] == "updated.js"
+    assert editor_data["editor_tile"]["file_type"] == "javascript"
+    assert editor_data["editor_tile"]["content"] == "console.log('Updated');"
