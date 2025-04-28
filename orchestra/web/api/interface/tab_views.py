@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -40,6 +40,70 @@ def _create_tab_response(tab, tiles=None) -> TabSchema:
         created_at=tab.created_at.isoformat() if tab.created_at else None,
         updated_at=tab.updated_at.isoformat() if tab.updated_at else None,
     )
+
+
+def _get_tab(
+    tab_id: Optional[str],
+    interface_id: Optional[str],
+    name: Optional[str],
+    checkpoint: bool,
+    interface_dao: InterfaceDAO,
+    tab_dao: TabDAO,
+    for_update: bool = False,
+) -> Tuple[object, object]:
+    """Helper function to retrieve a tab by ID or by interface_id and name."""
+    tab = None
+    interface = None
+    
+    # Get by ID if provided
+    if tab_id:
+        tab = tab_dao.get(tab_id, is_checkpoint=checkpoint)
+        if not tab:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Tab with ID {tab_id} not found."
+            )
+        # Get interface to verify access
+        interface = interface_dao.get(tab.interface_id)
+        if not interface:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Interface with ID {tab.interface_id} not found.",
+            )
+    # Get by interface_id and name
+    elif interface_id and name:
+        # Get interface
+        interface = interface_dao.get(interface_id)
+        if not interface:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Interface with ID {interface_id} not found.",
+            )
+        
+        # For specific operations like deletion, we need to get the active tab
+        is_checkpoint = checkpoint
+        if for_update and (checkpoint_operations := ["delete", "checkpoint"]):
+            is_checkpoint = False
+            
+        # Get tab by interface_id and name
+        tab = tab_dao.get_by_interface_and_name(
+            interface_id=interface_id,
+            name=name,
+            is_checkpoint=is_checkpoint
+        )
+        
+        if not tab:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Tab {name} not found in interface {interface_id}."
+            )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Either tab_id or both interface_id and name must be provided.",
+        )
+    
+    return tab, interface
 
 
 @router.post(
@@ -91,7 +155,7 @@ def create_tab(
         )
     
     # Check if tab already exists with the same name in this interface
-    existing = tab_dao.get_tab_by_interface_and_name(
+    existing = tab_dao.get_by_interface_and_name(
         interface_id=interface.id,
         name=request.name,
         is_checkpoint=checkpoint
@@ -128,59 +192,24 @@ def create_tab(
     },
 )
 def get_tab(
-    request_fastapi: Request,
-    interface_name: str = Query(..., description="The interface name the tab belongs to"),
-    project_id: str = Query(..., description="The project ID the interface belongs to"),
-    name: str = Query(..., description="The name of the tab to retrieve"),
+    tab_id: Optional[str] = Query(None, description="The ID of the tab to retrieve"),
+    interface_id: Optional[str] = Query(None, description="The interface ID the tab belongs to"),
+    name: Optional[str] = Query(None, description="The name of the tab to retrieve"),
     checkpoint: bool = Query(False, description="Whether to get a checkpoint tab (manual save)"),
-    project_dao: ProjectDAO = Depends(),
     interface_dao: InterfaceDAO = Depends(),
     tab_dao: TabDAO = Depends(),
     tile_dao: TileDAO = Depends(),
 ):
-    """Get a specific tab by interface name, project ID, and tab name."""
-    # Verify project exists and user has access
-    project = project_dao.get_by_user_and_name(
-        user_id=request_fastapi.state.user_id,
-        name=project_id,
-    )
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {project_id} not found or you don't have access.",
-        )
-    
-    # Get interface
-    interface = interface_dao.get_by_project_and_name(
-        project_id=project.id,
-        name=interface_name,
-        is_checkpoint=checkpoint
-    )
-    
-    if not interface:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Interface {interface_name} not found in project {project_id}.",
-        )
-    
-    # Get tab
-    tab = tab_dao.get_tab_by_interface_and_name(
-        interface_id=interface.id,
+    """Get a specific tab by ID or by interface_id and name."""
+    # Use helper function to get tab
+    tab, _ = _get_tab(
+        tab_id=tab_id,
+        interface_id=interface_id,
         name=name,
-        is_checkpoint=checkpoint
+        checkpoint=checkpoint,
+        interface_dao=interface_dao,
+        tab_dao=tab_dao
     )
-    
-    if not tab:
-        raise HTTPException(
-            status_code=404, 
-            detail=f"Tab {name} not found in interface {interface_name}."
-        )
-    
-    # If checkpoint is requested but tab is not a checkpoint, get the latest checkpoint
-    if checkpoint and not tab.is_checkpoint:
-        checkpoint_tab = tab_dao.get_latest_checkpoint(interface.id, name)
-        if checkpoint_tab:
-            tab = checkpoint_tab
     
     # Get all tiles for this tab
     tiles = tile_dao.list_tiles_by_tab(tab_id=tab.id, is_checkpoint=tab.is_checkpoint)
@@ -193,73 +222,38 @@ def get_tab(
     response_model=List[TabSchema],
     responses={
         200: {"description": "Tabs list retrieved successfully"},
-        404: {"description": "Interface or project not found"},
+        404: {"description": "Interface not found"},
     },
 )
 def list_tabs(
-    request_fastapi: Request,
-    interface_name: Optional[str] = Query(None, description="The interface name to filter tabs by"),
-    project_id: str = Query(..., description="The project ID to filter tabs by"),
+    interface_id: str = Query(..., description="The interface ID to list tabs for"),
     name: Optional[str] = Query(None, description="Filter tabs by name"),
     checkpoint: bool = Query(False, description="Whether to list checkpoint tabs (manual save)"),
-    project_dao: ProjectDAO = Depends(),
     interface_dao: InterfaceDAO = Depends(),
     tab_dao: TabDAO = Depends(),
     tile_dao: TileDAO = Depends(),
 ):
-    """List all tabs, optionally filtered by interface name and project ID."""
-    # Verify project exists and user has access
-    project = project_dao.get_by_user_and_name(
-        user_id=request_fastapi.state.user_id,
-        name=project_id,
-    )
-    if not project:
+    """List all tabs for an interface."""
+    # Get interface
+    interface = interface_dao.get(interface_id)
+    if not interface:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {project_id} not found or you don't have access.",
+            detail=f"Interface with ID {interface_id} not found.",
         )
     
-    # If interface name is provided, get the interface
-    interface_id = None
-    if interface_name:
-        interface = interface_dao.get_by_project_and_name(
-            project_id=project.id,
-            name=interface_name,
-            is_checkpoint=checkpoint
-        )
-        
-        if not interface:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Interface {interface_name} not found in project {project_id}.",
-            )
-        
-        interface_id = interface.id
+    # Get tabs for this interface
+    tabs = tab_dao.list_tabs(
+        interface_id=interface_id,
+        name=name,
+        is_checkpoint=checkpoint
+    )
     
-    # List all interfaces in the project if no interface name provided
-    interfaces = []
-    if not interface_name:
-        interfaces = interface_dao.get_interfaces(project_id=project.id, is_checkpoint=checkpoint)
-    else:
-        interfaces = [interface]
-    
-    # Collect tabs from all interfaces
     result = []
-    for interface in interfaces:
-        # Get tabs for this interface
-        tabs = tab_dao.list_tabs_by_interface(
-            interface_id=interface.id,
-            is_checkpoint=checkpoint
-        )
-        
-        # Filter by name if provided
-        if name:
-            tabs = [tab for tab in tabs if tab.name == name]
-        
+    for tab in tabs:
         # Get tiles for each tab
-        for tab in tabs:
-            tiles = tile_dao.list_tiles_by_tab(tab_id=tab.id, is_checkpoint=tab.is_checkpoint)
-            result.append(_create_tab_response(tab, tiles))
+        tiles = tile_dao.list_tiles_by_tab(tab_id=tab.id, is_checkpoint=tab.is_checkpoint)
+        result.append(_create_tab_response(tab, tiles))
     
     return result
 
@@ -274,83 +268,42 @@ def list_tabs(
     },
 )
 def update_tab(
-    request_fastapi: Request,
     request: UpdateTabRequest,
-    interface_name: str = Query(..., description="The interface name the tab belongs to"),
-    project_id: str = Query(..., description="The project ID the interface belongs to"),
-    name: str = Query(..., description="The name of the tab to update"),
+    tab_id: Optional[str] = Query(None, description="The ID of the tab to update"),
+    interface_id: Optional[str] = Query(None, description="The interface ID the tab belongs to"),
+    name: Optional[str] = Query(None, description="The name of the tab to update"),
     checkpoint: bool = Query(False, description="Whether this is a checkpoint update (manual save)"),
-    project_dao: ProjectDAO = Depends(),
     interface_dao: InterfaceDAO = Depends(),
     tab_dao: TabDAO = Depends(),
     tile_dao: TileDAO = Depends(),
 ):
-    """Update a tab by interface name, project ID, and tab name."""
-    # Verify project exists and user has access
-    project = project_dao.get_by_user_and_name(
-        user_id=request_fastapi.state.user_id,
-        name=project_id,
-    )
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {project_id} not found or you don't have access.",
-        )
+    """Update a tab by ID or by interface_id and name."""
+    # Use helper function to get tab
     
-    # Get interface
-    interface = interface_dao.get_by_project_and_name(
-        project_id=project.id,
-        name=interface_name,
-        is_checkpoint=checkpoint
-    )
-    
-    if not interface:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Interface {interface_name} not found in project {project_id}.",
-        )
-    
-    # Get tab
-    tab = tab_dao.get_tab_by_interface_and_name(
-        interface_id=interface.id,
-        name=name,
-        is_checkpoint=checkpoint
-    )
-    
-    if not tab:
-        raise HTTPException(
-            status_code=404, 
-            detail=f"Tab {name} not found in interface {interface_name}."
-        )
-    
-    # Prepare update parameters
-    update_params = {
-        "interface_id": interface.id,
-        "name": name,
-        "is_checkpoint": checkpoint
-    }
-    
-    # Add new name if provided
-    if request.name is not None:
-        update_params["new_name"] = request.name
-    
-    if request.visible is not None:
-        update_params["visible"] = request.visible
-    
-    if request.active is not None:
-        update_params["active"] = request.active
-    
-    if request.order is not None:
-        update_params["order"] = request.order
-    
-    if request.global_context is not None:
-        update_params["global_context"] = request.global_context
-    
-    if request.color is not None:
-        update_params["color"] = request.color
+    # Convert Pydantic model to dict, excluding unset fields
+    update_dict = request.model_dump(exclude_unset=True)
     
     # Update the tab
-    updated = tab_dao.update_tab_by_name(**update_params)
+    if tab_id:
+        updated = tab_dao.update_tab(
+            id=tab_id,
+            is_checkpoint=checkpoint,
+            **update_dict
+        )
+    else:
+        tab, _ = _get_tab(
+            tab_id=tab_id,
+            interface_id=interface_id,
+            name=name,
+            checkpoint=checkpoint,
+            interface_dao=interface_dao,
+            tab_dao=tab_dao
+        )
+        updated = tab_dao.update_tab(
+            id=tab.id,  # We already have the tab, so use its ID
+            is_checkpoint=checkpoint,
+            **update_dict
+        )
     
     # Get all tiles for this tab
     tiles = tile_dao.list_tiles_by_tab(tab_id=updated.id, is_checkpoint=updated.is_checkpoint)
@@ -368,63 +321,103 @@ def update_tab(
     },
 )
 def create_tab_checkpoint(
-    request_fastapi: Request,
-    interface_name: str = Query(..., description="The interface name the tab belongs to"),
-    project_id: str = Query(..., description="The project ID the interface belongs to"),
-    name: str = Query(..., description="The name of the tab to checkpoint"),
-    project_dao: ProjectDAO = Depends(),
+    tab_id: Optional[str] = Query(None, description="The ID of the tab to checkpoint"),
+    interface_id: Optional[str] = Query(None, description="The interface ID the tab belongs to"),
+    name: Optional[str] = Query(None, description="The name of the tab to checkpoint"),
     interface_dao: InterfaceDAO = Depends(),
     tab_dao: TabDAO = Depends(),
     tile_dao: TileDAO = Depends(),
 ):
     """Create a manual checkpoint (save) of a tab and all its tiles."""
-    # Verify project exists and user has access
-    project = project_dao.get_by_user_and_name(
-        user_id=request_fastapi.state.user_id,
-        name=project_id,
-    )
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {project_id} not found or you don't have access.",
-        )
-    
-    # Get interface
-    interface = interface_dao.get_by_project_and_name(
-        project_id=project.id,
-        name=interface_name,
-        is_checkpoint=False  # We're looking for the active interface
-    )
-    
-    if not interface:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Interface {interface_name} not found in project {project_id}.",
-        )
-    
-    # Get tab
-    tab = tab_dao.get_tab_by_interface_and_name(
-        interface_id=interface.id,
+    # Use helper function to get tab with for_update=True to ensure we're operating on the active tab
+    tab, _ = _get_tab(
+        tab_id=tab_id,
+        interface_id=interface_id,
         name=name,
-        is_checkpoint=False  # We're looking for the active tab
+        checkpoint=False,
+        interface_dao=interface_dao,
+        tab_dao=tab_dao,
+        for_update=True
     )
     
-    if not tab:
-        raise HTTPException(
-            status_code=404, 
-            detail=f"Tab {name} not found in interface {interface_name}."
+    # Check if a checkpoint already exists
+    existing_checkpoint = None
+    if tab_id:
+        # Get by name and interface ID of the original tab
+        existing_checkpoint = tab_dao.get_by_interface_and_name(
+            interface_id=tab.interface_id,
+            name=tab.name,
+            is_checkpoint=True
+        )
+    else:
+        # Get directly by interface ID and name
+        existing_checkpoint = tab_dao.get_by_interface_and_name(
+            interface_id=interface_id,
+            name=name,
+            is_checkpoint=True
         )
     
-    # Create a checkpoint
-    updated = tab_dao.make_checkpoint_by_name(
-        interface_id=interface.id,
-        name=name
+    # If checkpoint exists, update it with the current tab values
+    if existing_checkpoint:
+        updated = tab_dao.update_tab(
+            id=existing_checkpoint.id,
+            visible=tab.visible,
+            active=tab.active,
+            order=tab.order,
+            global_context=tab.global_context,
+            color=tab.color
+        )
+    # Otherwise, create a new checkpoint
+    else:
+        updated = tab_dao.create_tab(
+            interface_id=tab.interface_id,
+            name=tab.name,
+            visible=tab.visible,
+            active=tab.active,
+            order=tab.order,
+            global_context=tab.global_context,
+            color=tab.color,
+            is_checkpoint=True
+        )
+    
+    # Get tiles for this tab
+    tiles = tile_dao.list_tiles_by_tab(tab_id=tab.id, is_checkpoint=False)
+    
+    # Create checkpoint tiles for each tile in the tab
+    for tile in tiles:
+        # Check if a checkpoint tile already exists
+        existing_checkpoint_tile = tile_dao.get_tile_by_tab_and_name(
+            tab_id=updated.id,
+            name=tile.name,
+            is_checkpoint=True
+        )
+        
+        if existing_checkpoint_tile:
+            # Update existing checkpoint tile
+            tile_dao.update_tile(
+                tile_id=existing_checkpoint_tile.id,
+                visible=tile.visible,
+                order=tile.order,
+                # Copy other tile properties as needed
+            )
+        else:
+            # Create new checkpoint tile
+            tile_dao.create_tile(
+                tab_id=updated.id,
+                name=tile.name,
+                visible=tile.visible,
+                order=tile.order,
+                is_checkpoint=True,
+                # Copy other tile properties as needed
+            )
+    
+    # Get tiles for the checkpoint tab to return
+    checkpoint_tiles = tile_dao.list_tiles_by_tab(
+        tab_id=updated.id,
+        is_checkpoint=True
     )
     
-    # Get all tiles for this tab
-    tiles = tile_dao.list_tiles_by_tab(tab_id=updated.id, is_checkpoint=updated.is_checkpoint)
-    
-    return _create_tab_response(updated, tiles)
+    return _create_tab_response(updated, checkpoint_tiles)
 
 
 @router.delete(
@@ -437,52 +430,24 @@ def create_tab_checkpoint(
     },
 )
 def delete_tab(
-    request_fastapi: Request,
-    interface_name: str = Query(..., description="The interface name the tab belongs to"),
-    project_id: str = Query(..., description="The project ID the interface belongs to"),
-    name: str = Query(..., description="The name of the tab to delete"),
-    project_dao: ProjectDAO = Depends(),
+    tab_id: Optional[str] = Query(None, description="The ID of the tab to delete"),
+    interface_id: Optional[str] = Query(None, description="The interface ID the tab belongs to"),
+    name: Optional[str] = Query(None, description="The name of the tab to delete"),
     interface_dao: InterfaceDAO = Depends(),
     tab_dao: TabDAO = Depends(),
     tile_dao: TileDAO = Depends(),
 ):
-    """Delete a tab by interface name, project ID, and tab name."""
-    # Verify project exists and user has access
-    project = project_dao.get_by_user_and_name(
-        user_id=request_fastapi.state.user_id,
-        name=project_id,
-    )
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {project_id} not found or you don't have access.",
-        )
-    
-    # Get interface
-    interface = interface_dao.get_by_project_and_name(
-        project_id=project.id,
-        name=interface_name,
-        is_checkpoint=False  # We're looking for the active interface
-    )
-    
-    if not interface:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Interface {interface_name} not found in project {project_id}.",
-        )
-    
-    # Get tab
-    tab = tab_dao.get_tab_by_interface_and_name(
-        interface_id=interface.id,
+    """Delete a tab by ID or by interface_id and name."""
+    # Use helper function to get tab with for_update=True to ensure we're deleting the active tab
+    tab, interface = _get_tab(
+        tab_id=tab_id,
+        interface_id=interface_id,
         name=name,
-        is_checkpoint=False  # We're looking for the active tab
+        checkpoint=False,
+        interface_dao=interface_dao,
+        tab_dao=tab_dao,
+        for_update=True
     )
-    
-    if not tab:
-        raise HTTPException(
-            status_code=404, 
-            detail=f"Tab {name} not found in interface {interface_name}."
-        )
     
     # First delete all tiles associated with this tab
     tiles = tile_dao.list_tiles_by_tab(tab_id=tab.id)
@@ -490,6 +455,10 @@ def delete_tab(
         tile_dao.delete_tile_by_name(tab_id=tab.id, name=tile.name)
     
     # Delete the tab
-    success = tab_dao.delete_tab_by_name(interface_id=interface.id, name=name)
+    if tab_id:
+        success = tab_dao.delete_tab(id=tab_id)
+    else:
+        success = tab_dao.delete_tab(interface_id=interface.id, name=name)
+        
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete tab.") 

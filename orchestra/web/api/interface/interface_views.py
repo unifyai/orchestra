@@ -208,7 +208,7 @@ def get_interface(
     )
     
     # Get tabs for this interface
-    tabs = tab_dao.list_tabs_by_interface(
+    tabs = tab_dao.list_tabs(
         interface_id=interface.id,
         is_checkpoint=interface.is_checkpoint
     )
@@ -250,7 +250,7 @@ def list_interfaces(
     result = []
     for interface in interfaces:
         # Get tabs for this interface
-        tabs = tab_dao.list_tabs_by_interface(
+        tabs = tab_dao.list_tabs(
             interface_id=interface.id,
             is_checkpoint=interface.is_checkpoint
         )
@@ -281,7 +281,6 @@ def update_interface(
     tab_dao: TabDAO = Depends(),
 ):
     """Update an interface by ID or by project ID and name."""
-    print(request)
     project_obj = None
     interface = None
     
@@ -362,10 +361,10 @@ def update_interface(
     
     # Convert Pydantic model to dict, excluding unset fields
     update_dict = request.model_dump()
-    print(update_dict)
+
     # Verify that the tab exists and belongs to this interface if active_tab_id is being updated
     if update_dict.get("active_tab_id"):
-        tab = tab_dao.get_tab(update_dict["active_tab_id"])
+        tab = tab_dao.get(update_dict["active_tab_id"])
         if not tab or tab.interface_id != interface.id:
             raise HTTPException(
                 status_code=404, 
@@ -385,7 +384,7 @@ def update_interface(
         )
 
     # Get tabs for this interface
-    tabs = tab_dao.list_tabs_by_interface(
+    tabs = tab_dao.list_tabs(
         interface_id=updated.id,
         is_checkpoint=updated.is_checkpoint
     )
@@ -412,99 +411,61 @@ def create_interface_checkpoint(
     tab_dao: TabDAO = Depends(),
 ):
     """Create a manual checkpoint (save) of an interface by ID or by project ID and name."""
-    interface = None
-    
-    # Get by ID if provided
-    if interface_id:
-        interface = interface_dao.get(interface_id)
-        if not interface:
-            raise HTTPException(
-                status_code=404, 
-                detail=f"Interface with ID {interface_id} not found."
-            )
-    # Get by project and name
-    elif project and name:
-        # Verify project exists and user has access
-        project_obj = project_dao.get_by_user_and_name(
-            user_id=request_fastapi.state.user_id,
-            name=project,
-        )
-        if not project_obj:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Project {project} not found or you don't have access.",
-            )
-        
-        # Get the non-checkpoint interface
-        interface = interface_dao.get_by_project_and_name(
-            project_id=project_obj.id,
-            name=name,
-            is_checkpoint=False
-        )
-        
-        if not interface:
-            raise HTTPException(
-                status_code=404, 
-                detail=f"Interface {name} not found in project {project}."
-            )
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail="Either interface_id or both project and name must be provided.",
-        )
+    # Get the active interface first
+    interface, _ = _get_interface(
+        request_fastapi=request_fastapi,
+        interface_id=interface_id,
+        project=project,
+        name=name,
+        checkpoint=False,  # Always get the active interface
+        project_dao=project_dao,
+        interface_dao=interface_dao,
+        for_update=True
+    )
     
     # Check if a checkpoint already exists
-    existing_checkpoint = None
-
-    if interface_id:
-        # Get by name and project ID of the original interface
-        existing_checkpoint = interface_dao.get_by_project_and_name(
-            project_id=interface.project_id,
-            name=interface.name,
-            is_checkpoint=True
-        )
-    else:
-        # Get directly by project ID and name
-        existing_checkpoint = interface_dao.get_by_project_and_name(
-            project_id=project_obj.id,
-            name=name,
-            is_checkpoint=True
-        )
+    existing_checkpoint = interface_dao.get_by_project_and_name(
+        project_id=interface.project_id,
+        name=interface.name,
+        is_checkpoint=True
+    )
     
     # If checkpoint exists, update it with the current interface values
     if existing_checkpoint:
         updated = interface_dao.update_interface(
-            id=existing_checkpoint.id,
-            items=interface.items,
-            new_counter=interface.new_counter,
-            context=interface.context,
+            id=str(existing_checkpoint.id),
             color=interface.color,
-            active_tab_id=interface.active_tab_id
+            active_tab_id=interface.active_tab_id,
+            is_checkpoint=True,
         )
     # Otherwise, create a new checkpoint
     else:
         updated = interface_dao.create_interface(
             name=interface.name,
             project_id=interface.project_id,
-            items=interface.items,
-            new_counter=interface.new_counter,
-            context=interface.context,
             color=interface.color,
             active_tab_id=interface.active_tab_id,
             is_checkpoint=True
         )
     
-    # Get tabs for this checkpoint interface
-    tabs = tab_dao.list_tabs_by_interface(
-        interface_id=interface.id,
-        is_checkpoint=False  # Get non-checkpoint tabs
+    # Verify the updated interface exists
+    if not updated:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to create or update checkpoint interface."
+        )
+    
+    # Get tabs for the active interface
+    active_tabs = tab_dao.list_tabs(
+        interface_id=str(interface.id),  # Ensure ID is string
+        is_checkpoint=False
     )
     
-    # Create checkpoint tabs for each tab in the interface
-    for tab in tabs:
+    # Create or update checkpoint tabs
+    for tab in active_tabs:
         # Check if a checkpoint tab already exists
-        existing_checkpoint_tab = tab_dao.get_tab_by_interface_and_name(
-            interface_id=updated.id,
+        existing_checkpoint_tab = tab_dao.get_by_interface_and_name(
+            interface_id=str(updated.id),  # Ensure ID is string
             name=tab.name,
             is_checkpoint=True
         )
@@ -512,25 +473,29 @@ def create_interface_checkpoint(
         if existing_checkpoint_tab:
             # Update existing checkpoint tab
             tab_dao.update_tab(
-                tab_id=existing_checkpoint_tab.id,
+                id=str(existing_checkpoint_tab.id),  # Ensure ID is string
                 visible=tab.visible,
+                active=tab.active,
                 order=tab.order,
-                # Copy other tab properties as needed
+                global_context=tab.global_context,
+                color=tab.color
             )
         else:
             # Create new checkpoint tab
             tab_dao.create_tab(
-                interface_id=updated.id,
+                interface_id=str(updated.id),  # Ensure ID is string
                 name=tab.name,
                 visible=tab.visible,
+                active=tab.active,
                 order=tab.order,
-                is_checkpoint=True,
-                # Copy other tab properties as needed
+                global_context=tab.global_context,
+                color=tab.color,
+                is_checkpoint=True
             )
     
-    # Get tabs for the checkpoint interface to return
-    checkpoint_tabs = tab_dao.list_tabs_by_interface(
-        interface_id=str(updated.id),
+    # Get all tabs for the checkpoint interface to return
+    checkpoint_tabs = tab_dao.list_tabs(
+        interface_id=str(updated.id),  # Ensure ID is string
         is_checkpoint=True
     )
     
@@ -581,7 +546,7 @@ def get_interface_checkpoint(
         )
     
     # Get tabs for this checkpoint interface
-    tabs = tab_dao.list_tabs_by_interface(
+    tabs = tab_dao.list_tabs(
         interface_id=checkpoint.id,
         is_checkpoint=True
     )
@@ -621,9 +586,9 @@ def delete_interface(
     )
     
     # First delete all tabs associated with this interface
-    tabs = tab_dao.list_tabs_by_interface(interface_id=interface.id)
+    tabs = tab_dao.list_tabs(interface_id=interface.id)
     for tab in tabs:
-        tab_dao.delete_tab_by_name(interface_id=interface.id, name=tab.name)
+        tab_dao.delete_tab(interface_id=interface.id, name=tab.name)
     
     # Delete the interface
     if interface_id:
