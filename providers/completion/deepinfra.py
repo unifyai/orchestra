@@ -31,12 +31,12 @@ supported_models = {
     "deepseek-v3-0324": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3-0324",
         "context_window": 160000,
-        "cost": {"prompt": 0.34, "completion": 0.88},
+        "cost": {"prompt": 0.3, "completion": 0.88},
     },
     "deepseek-r1": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-R1",
         "context_window": 160000,
-        "cost": {"prompt": 0.54, "completion": 2.18},
+        "cost": {"prompt": 0.5, "completion": 2.18},
     },
     "deepseek-v3": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3",
@@ -46,7 +46,7 @@ supported_models = {
     "llama-4-maverick-instruct": {
         "endpoint": "deepinfra/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
         "context_window": 1024000,
-        "cost": {"prompt": 0.18, "completion": 0.6},
+        "cost": {"prompt": 0.17, "completion": 0.6},
     },
     "llama-4-scout-instruct": {
         "endpoint": "deepinfra/meta-llama/Llama-4-Scout-17B-16E-Instruct",
@@ -136,7 +136,7 @@ supported_models = {
     "mistral-7b-instruct-v0.3": {
         "endpoint": "deepinfra/mistralai/Mistral-7B-Instruct-v0.3",
         "context_window": 32768,
-        "cost": {"prompt": 0.04, "completion": 0.055},
+        "cost": {"prompt": 0.029, "completion": 0.055},
     },
     "mistral-nemo": {
         "endpoint": "deepinfra/mistralai/Mistral-Nemo-Instruct-2407",
@@ -146,7 +146,7 @@ supported_models = {
     "qwen-2.5-coder-32b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-Coder-32B-Instruct",
         "context_window": 32768,
-        "cost": {"prompt": 0.07, "completion": 0.16},
+        "cost": {"prompt": 0.07, "completion": 0.15},
     },
     "qwen-2.5-7b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-7B-Instruct",
