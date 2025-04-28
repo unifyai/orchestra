@@ -36,6 +36,8 @@ class BaseTileSchema(BaseSchema):
 
 
 class TableTileSchema(BaseModel):
+    id: Optional[str] = None
+    tile_id: Optional[str] = None
     table_type: Optional[str] = None
     column_context: Optional[str] = None
     page_number: Optional[str] = None
@@ -50,6 +52,8 @@ class TableTileSchema(BaseModel):
 
 
 class PlotTileSchema(BaseModel):
+    id: Optional[str] = None
+    tile_id: Optional[str] = None
     plot_type: Optional[str] = None
     plot_scale_x: Optional[str] = None
     plot_scale_y: Optional[str] = None
@@ -63,10 +67,14 @@ class PlotTileSchema(BaseModel):
 
 
 class ViewTileSchema(BaseModel):
+    id: Optional[str] = None
+    tile_id: Optional[str] = None
     base_index: Optional[str] = None
 
 
 class EditorTileSchema(BaseModel):
+    id: Optional[str] = None
+    tile_id: Optional[str] = None
     file_path: Optional[str] = None
     file_type: Optional[str] = None
     content: Optional[str] = None

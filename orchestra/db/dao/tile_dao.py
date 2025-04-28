@@ -26,14 +26,23 @@ class TileDAO:
         tab_id: str,
         type: str,
         name: str,
-        position_x: int = 0,
-        position_y: int = 0,
-        width: int = 400,
-        height: int = 400,
-        meta: Optional[dict] = None,
-        dependencies: Optional[list] = None,
-        state: Optional[dict] = None,
-        order: int = 0,
+        x_position: float = 0,
+        y_position: float = 0,
+        width: float = 400,
+        height: float = 400,
+        min_width: Optional[float] = None,
+        min_height: Optional[float] = None,
+        visible: bool = True,
+        locked: bool = False,
+        moved: bool = False,
+        static: bool = False,
+        context: Optional[str] = None,
+        table: Optional[str] = None,
+        auto_update: Optional[str] = None,
+        freeze: Optional[str] = None,
+        filters: Optional[str] = None,
+        common_filter: Optional[str] = None,
+        metric: Optional[str] = None,
         is_checkpoint: bool = False,
     ) -> Tile:
         """
@@ -43,14 +52,23 @@ class TileDAO:
             tab_id: The ID of the tab to create the tile in
             type: The type of tile (Table, Plot, View, Editor)
             name: The name of the tile
-            position_x: The x position of the tile
-            position_y: The y position of the tile
+            x_position: The x position of the tile
+            y_position: The y position of the tile
             width: The width of the tile
             height: The height of the tile
-            meta: Optional metadata for the tile
-            dependencies: Optional list of dependencies
-            state: Optional state data
-            order: The order of the tile
+            min_width: The minimum width of the tile
+            min_height: The minimum height of the tile
+            visible: Whether the tile is visible
+            locked: Whether the tile is locked
+            moved: Whether the tile has been moved
+            static: Whether the tile is static
+            context: Optional context data for the tile
+            table: Optional table data for the tile
+            auto_update: Optional auto-update setting
+            freeze: Optional freeze setting
+            filters: Optional filters
+            common_filter: Optional common filter
+            metric: Optional metric data
             is_checkpoint: Whether this is a checkpoint tile
             
         Returns:
@@ -71,14 +89,23 @@ class TileDAO:
             tab_id=tab_id,
             type=type,
             name=name,
-            position_x=position_x,
-            position_y=position_y,
+            x_position=x_position,
+            y_position=y_position,
             width=width,
             height=height,
-            meta=json.dumps(meta or {}),
-            dependencies=json.dumps(dependencies or []),
-            state=json.dumps(state or {}),
-            order=order,
+            min_width=min_width,
+            min_height=min_height,
+            visible=visible,
+            locked=locked,
+            moved=moved,
+            static=static,
+            context=context,
+            table=table,
+            auto_update=auto_update,
+            freeze=freeze,
+            filters=filters,
+            common_filter=common_filter,
+            metric=metric,
             is_checkpoint=is_checkpoint,
         )
         self.session.add(tile)
@@ -187,14 +214,24 @@ class TileDAO:
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
         is_checkpoint: Optional[bool] = None,
-        position_x: Optional[int] = None,
-        position_y: Optional[int] = None,
-        width: Optional[int] = None,
-        height: Optional[int] = None,
-        meta: Optional[dict] = None,
-        dependencies: Optional[list] = None,
-        state: Optional[dict] = None,
-        order: Optional[int] = None,
+        x_position: Optional[float] = None,
+        y_position: Optional[float] = None,
+        width: Optional[float] = None,
+        height: Optional[float] = None,
+        position: Optional[dict] = None,
+        min_width: Optional[float] = None,
+        min_height: Optional[float] = None,
+        visible: Optional[bool] = None,
+        locked: Optional[bool] = None,
+        moved: Optional[bool] = None,
+        static: Optional[bool] = None,
+        context: Optional[str] = None,
+        table: Optional[str] = None,
+        auto_update: Optional[str] = None,
+        freeze: Optional[str] = None,
+        filters: Optional[str] = None,
+        common_filter: Optional[str] = None,
+        metric: Optional[str] = None,
     ) -> Optional[Tile]:
         """
         Update tile by ID or by tab_id and name.
@@ -204,14 +241,24 @@ class TileDAO:
             tab_id: The ID of the tab
             name: The name of the tile
             is_checkpoint: Whether to update a checkpoint tile
-            position_x: New x position
-            position_y: New y position
+            x_position: New x position
+            y_position: New y position
             width: New width
             height: New height
-            meta: New metadata
-            dependencies: New dependencies
-            state: New state
-            order: New order
+            position: New position as a dict with x, y, width, height
+            min_width: New minimum width
+            min_height: New minimum height
+            visible: New visibility setting
+            locked: New locked setting
+            moved: New moved setting
+            static: New static setting
+            context: New context data
+            table: New table data
+            auto_update: New auto_update setting
+            freeze: New freeze setting
+            filters: New filters
+            common_filter: New common filter
+            metric: New metric data
             
         Returns:
             The updated tile if found, None otherwise
@@ -232,25 +279,57 @@ class TileDAO:
         if tile is None:
             return None
             
+        # Handle position as a dict if provided
+        if position:
+            position_values = self._position_from_dict(position)
+            if 'x_position' in position_values:
+                tile.x_position = position_values['x_position']
+            if 'y_position' in position_values:
+                tile.y_position = position_values['y_position']
+            if 'width' in position_values:
+                tile.width = position_values['width']
+            if 'height' in position_values:
+                tile.height = position_values['height']
+        else:
+            # Or handle individual position parameters
+            if x_position is not None:
+                tile.x_position = x_position
+            if y_position is not None:
+                tile.y_position = y_position
+            if width is not None:
+                tile.width = width
+            if height is not None:
+                tile.height = height
+                
         # Only update name if we identified by ID
         if name is not None and id is not None:
             tile.name = name
-        if position_x is not None:
-            tile.position_x = position_x
-        if position_y is not None:
-            tile.position_y = position_y
-        if width is not None:
-            tile.width = width
-        if height is not None:
-            tile.height = height
-        if meta is not None:
-            tile.meta = json.dumps(meta)
-        if dependencies is not None:
-            tile.dependencies = json.dumps(dependencies)
-        if state is not None:
-            tile.state = json.dumps(state)
-        if order is not None:
-            tile.order = order
+        if min_width is not None:
+            tile.min_width = min_width
+        if min_height is not None:
+            tile.min_height = min_height
+        if visible is not None:
+            tile.visible = visible
+        if locked is not None:
+            tile.locked = locked
+        if moved is not None:
+            tile.moved = moved
+        if static is not None:
+            tile.static = static
+        if context is not None:
+            tile.context = context
+        if table is not None:
+            tile.table = table
+        if auto_update is not None:
+            tile.auto_update = auto_update
+        if freeze is not None:
+            tile.freeze = freeze
+        if filters is not None:
+            tile.filters = filters
+        if common_filter is not None:
+            tile.common_filter = common_filter
+        if metric is not None:
+            tile.metric = metric
         if is_checkpoint is not None and (id is not None or not is_checkpoint):
             # Only update is_checkpoint if:
             # 1. We're identifying by ID, or
@@ -353,33 +432,79 @@ class TileDAO:
         self,
         tab_id: str,
         name: str,
-        position_x: int = 0,
-        position_y: int = 0,
-        width: int = 600,
-        height: int = 400,
-        meta: Optional[dict] = None,
-        dependencies: Optional[list] = None,
-        state: Optional[dict] = None,
-        order: int = 0,
-        headers: Optional[list] = None,
-        rows: Optional[list] = None,
+        tile_id: Optional[str] = None,
+        x_position: float = 0,
+        y_position: float = 0,
+        width: float = 600,
+        height: float = 400,
+        min_width: Optional[float] = None,
+        min_height: Optional[float] = None,
+        visible: bool = True,
+        locked: bool = False,
+        moved: bool = False,
+        static: bool = False,
+        context: Optional[str] = None,
+        table: Optional[str] = None,
+        auto_update: Optional[str] = None,
+        freeze: Optional[str] = None,
+        filters: Optional[str] = None,
+        common_filter: Optional[str] = None,
+        metric: Optional[str] = None,
+        table_type: Optional[str] = None,
+        column_context: Optional[str] = None,
+        page_number: Optional[str] = None,
+        column_order: Optional[str] = None,
+        hidden_columns: Optional[str] = None,
+        sorting: Optional[str] = None,
+        grouping: Optional[str] = None,
+        group_sorting: Optional[str] = None,
+        columns_pin_left: Optional[str] = None,
+        columns_pin_right: Optional[str] = None,
+        selected: Optional[str] = None,
         is_checkpoint: bool = False,
     ) -> TableTile:
         """Create a new table tile."""
+        # If no existing tile_id, create a base tile first
+        if not tile_id:
+            base_tile = self.create_tile(
+                tab_id=tab_id,
+                name=name,
+                type="Table",
+                x_position=x_position,
+                y_position=y_position,
+                width=width,
+                height=height,
+                min_width=min_width,
+                min_height=min_height,
+                visible=visible,
+                locked=locked,
+                moved=moved,
+                static=static,
+                context=context,
+                table=table,
+                auto_update=auto_update,
+                freeze=freeze,
+                filters=filters,
+                common_filter=common_filter,
+                metric=metric,
+                is_checkpoint=is_checkpoint,
+            )
+            tile_id = base_tile.id
+            
         table_tile = TableTile(
-            tab_id=tab_id,
-            name=name,
-            position_x=position_x,
-            position_y=position_y,
-            width=width,
-            height=height,
-            meta=json.dumps(meta or {}),
-            dependencies=json.dumps(dependencies or []),
-            state=json.dumps(state or {}),
-            order=order,
-            headers=json.dumps(headers or []),
-            rows=json.dumps(rows or []),
-            is_checkpoint=is_checkpoint,
+            id=tile_id,
+            tile_id=tile_id,
+            table_type=table_type,
+            column_context=column_context,
+            page_number=page_number,
+            column_order=column_order,
+            hidden_columns=hidden_columns,
+            sorting=sorting,
+            grouping=grouping,
+            group_sorting=group_sorting,
+            columns_pin_left=columns_pin_left,
+            columns_pin_right=columns_pin_right,
+            selected=selected,
         )
         self.session.add(table_tile)
         self.session.commit()
@@ -426,16 +551,35 @@ class TileDAO:
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
         is_checkpoint: Optional[bool] = None,
-        position_x: Optional[int] = None,
-        position_y: Optional[int] = None,
-        width: Optional[int] = None,
-        height: Optional[int] = None,
-        meta: Optional[dict] = None,
-        dependencies: Optional[list] = None,
-        state: Optional[dict] = None,
-        order: Optional[int] = None,
-        headers: Optional[list] = None,
-        rows: Optional[list] = None,
+        position: Optional[dict] = None,
+        x_position: Optional[float] = None,
+        y_position: Optional[float] = None,
+        width: Optional[float] = None,
+        height: Optional[float] = None,
+        min_width: Optional[float] = None,
+        min_height: Optional[float] = None,
+        visible: Optional[bool] = None,
+        locked: Optional[bool] = None,
+        moved: Optional[bool] = None,
+        static: Optional[bool] = None,
+        context: Optional[str] = None,
+        table: Optional[str] = None,
+        auto_update: Optional[str] = None,
+        freeze: Optional[str] = None,
+        filters: Optional[str] = None,
+        common_filter: Optional[str] = None,
+        metric: Optional[str] = None,
+        table_type: Optional[str] = None,
+        column_context: Optional[str] = None,
+        page_number: Optional[str] = None,
+        column_order: Optional[str] = None,
+        hidden_columns: Optional[str] = None,
+        sorting: Optional[str] = None,
+        grouping: Optional[str] = None,
+        group_sorting: Optional[str] = None,
+        columns_pin_left: Optional[str] = None,
+        columns_pin_right: Optional[str] = None,
+        selected: Optional[str] = None,
     ) -> Optional[TableTile]:
         """
         Update table tile by ID or by tab_id and name.
@@ -449,31 +593,78 @@ class TileDAO:
         if table_tile is None:
             return None
             
+        # Process position data
+        position_fields = {}
+        if position:
+            position_fields = self._position_from_dict(position)
+        else:
+            # Handle individual position fields
+            if x_position is not None:
+                position_fields['x_position'] = x_position
+            if y_position is not None:
+                position_fields['y_position'] = y_position
+            if width is not None:
+                position_fields['width'] = width
+            if height is not None:
+                position_fields['height'] = height
+                
+        # Apply position fields
+        for field, value in position_fields.items():
+            setattr(table_tile, field, value)
+            
         # Update the base tile fields
         if name is not None and id is not None:  # Only update name if identifying by ID
             table_tile.name = name
-        if position_x is not None:
-            table_tile.position_x = position_x
-        if position_y is not None:
-            table_tile.position_y = position_y
-        if width is not None:
-            table_tile.width = width
-        if height is not None:
-            table_tile.height = height
-        if meta is not None:
-            table_tile.meta = json.dumps(meta)
-        if dependencies is not None:
-            table_tile.dependencies = json.dumps(dependencies)
-        if state is not None:
-            table_tile.state = json.dumps(state)
-        if order is not None:
-            table_tile.order = order
+        if min_width is not None:
+            table_tile.min_width = min_width
+        if min_height is not None:
+            table_tile.min_height = min_height
+        if visible is not None:
+            table_tile.visible = visible
+        if locked is not None:
+            table_tile.locked = locked
+        if moved is not None:
+            table_tile.moved = moved
+        if static is not None:
+            table_tile.static = static
+        if context is not None:
+            table_tile.context = context
+        if table is not None:
+            table_tile.table = table
+        if auto_update is not None:
+            table_tile.auto_update = auto_update
+        if freeze is not None:
+            table_tile.freeze = freeze
+        if filters is not None:
+            table_tile.filters = filters
+        if common_filter is not None:
+            table_tile.common_filter = common_filter
+        if metric is not None:
+            table_tile.metric = metric
             
         # Update specialized fields
-        if headers is not None:
-            table_tile.headers = json.dumps(headers)
-        if rows is not None:
-            table_tile.rows = json.dumps(rows)
+        if table_type is not None:
+            table_tile.table_type = table_type
+        if column_context is not None:
+            table_tile.column_context = column_context
+        if page_number is not None:
+            table_tile.page_number = page_number
+        if column_order is not None:
+            table_tile.column_order = column_order
+        if hidden_columns is not None:
+            table_tile.hidden_columns = hidden_columns
+        if sorting is not None:
+            table_tile.sorting = sorting
+        if grouping is not None:
+            table_tile.grouping = grouping
+        if group_sorting is not None:
+            table_tile.group_sorting = group_sorting
+        if columns_pin_left is not None:
+            table_tile.columns_pin_left = columns_pin_left
+        if columns_pin_right is not None:
+            table_tile.columns_pin_right = columns_pin_right
+        if selected is not None:
+            table_tile.selected = selected
             
         if is_checkpoint is not None and (id is not None or not is_checkpoint):
             # Only update is_checkpoint if:
@@ -488,31 +679,77 @@ class TileDAO:
         self,
         tab_id: str,
         name: str,
-        position_x: int = 0,
-        position_y: int = 0,
-        width: int = 600,
-        height: int = 400,
-        meta: Optional[dict] = None,
-        dependencies: Optional[list] = None,
-        state: Optional[dict] = None,
-        order: int = 0,
-        plot_data: Optional[dict] = None,
+        tile_id: Optional[str] = None,
+        x_position: float = 0,
+        y_position: float = 0,
+        width: float = 600,
+        height: float = 400,
+        min_width: Optional[float] = None,
+        min_height: Optional[float] = None,
+        visible: bool = True,
+        locked: bool = False,
+        moved: bool = False,
+        static: bool = False,
+        context: Optional[str] = None,
+        table: Optional[str] = None,
+        auto_update: Optional[str] = None,
+        freeze: Optional[str] = None,
+        filters: Optional[str] = None,
+        common_filter: Optional[str] = None,
+        metric: Optional[str] = None,
+        plot_type: Optional[str] = None,
+        plot_scale_x: Optional[str] = None,
+        plot_scale_y: Optional[str] = None,
+        plot_aggregate: Optional[str] = None,
+        x_axis: Optional[str] = None,
+        y_axis: Optional[str] = None,
+        plot_group_by: Optional[str] = None,
+        plot_group_by_colors: Optional[str] = None,
+        bin_count: Optional[str] = None,
+        regression_line: Optional[str] = None,
         is_checkpoint: bool = False,
     ) -> PlotTile:
         """Create a new plot tile."""
+        # If no existing tile_id, create a base tile first
+        if not tile_id:
+            base_tile = self.create_tile(
+                tab_id=tab_id,
+                name=name,
+                type="Plot",
+                x_position=x_position,
+                y_position=y_position,
+                width=width,
+                height=height,
+                min_width=min_width,
+                min_height=min_height,
+                visible=visible,
+                locked=locked,
+                moved=moved,
+                static=static,
+                context=context,
+                table=table,
+                auto_update=auto_update,
+                freeze=freeze,
+                filters=filters,
+                common_filter=common_filter,
+                metric=metric,
+                is_checkpoint=is_checkpoint,
+            )
+            tile_id = base_tile.id
+            
         plot_tile = PlotTile(
-            tab_id=tab_id,
-            name=name,
-            position_x=position_x,
-            position_y=position_y,
-            width=width,
-            height=height,
-            meta=json.dumps(meta or {}),
-            dependencies=json.dumps(dependencies or []),
-            state=json.dumps(state or {}),
-            order=order,
-            plot_data=json.dumps(plot_data or {}),
-            is_checkpoint=is_checkpoint,
+            id=tile_id,
+            tile_id=tile_id,
+            plot_type=plot_type,
+            plot_scale_x=plot_scale_x,
+            plot_scale_y=plot_scale_y,
+            plot_aggregate=plot_aggregate,
+            x_axis=x_axis,
+            y_axis=y_axis,
+            plot_group_by=plot_group_by,
+            plot_group_by_colors=plot_group_by_colors,
+            bin_count=bin_count,
+            regression_line=regression_line,
         )
         self.session.add(plot_tile)
         self.session.commit()
@@ -534,15 +771,34 @@ class TileDAO:
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
         is_checkpoint: Optional[bool] = None,
-        position_x: Optional[int] = None,
-        position_y: Optional[int] = None,
-        width: Optional[int] = None,
-        height: Optional[int] = None,
-        meta: Optional[dict] = None,
-        dependencies: Optional[list] = None,
-        state: Optional[dict] = None,
-        order: Optional[int] = None,
-        plot_data: Optional[dict] = None,
+        position: Optional[dict] = None,
+        x_position: Optional[float] = None,
+        y_position: Optional[float] = None,
+        width: Optional[float] = None,
+        height: Optional[float] = None,
+        min_width: Optional[float] = None,
+        min_height: Optional[float] = None,
+        visible: Optional[bool] = None,
+        locked: Optional[bool] = None,
+        moved: Optional[bool] = None,
+        static: Optional[bool] = None,
+        context: Optional[str] = None,
+        table: Optional[str] = None,
+        auto_update: Optional[str] = None,
+        freeze: Optional[str] = None,
+        filters: Optional[str] = None,
+        common_filter: Optional[str] = None,
+        metric: Optional[str] = None,
+        plot_type: Optional[str] = None,
+        plot_scale_x: Optional[str] = None,
+        plot_scale_y: Optional[str] = None,
+        plot_aggregate: Optional[str] = None,
+        x_axis: Optional[str] = None,
+        y_axis: Optional[str] = None,
+        plot_group_by: Optional[str] = None,
+        plot_group_by_colors: Optional[str] = None,
+        bin_count: Optional[str] = None,
+        regression_line: Optional[str] = None,
     ) -> Optional[PlotTile]:
         """
         Update plot tile by ID or by tab_id and name.
@@ -556,29 +812,76 @@ class TileDAO:
         if plot_tile is None:
             return None
             
+        # Process position data
+        position_fields = {}
+        if position:
+            position_fields = self._position_from_dict(position)
+        else:
+            # Handle individual position fields
+            if x_position is not None:
+                position_fields['x_position'] = x_position
+            if y_position is not None:
+                position_fields['y_position'] = y_position
+            if width is not None:
+                position_fields['width'] = width
+            if height is not None:
+                position_fields['height'] = height
+                
+        # Apply position fields
+        for field, value in position_fields.items():
+            setattr(plot_tile, field, value)
+            
         # Update the base tile fields
         if name is not None and id is not None:  # Only update name if identifying by ID
             plot_tile.name = name
-        if position_x is not None:
-            plot_tile.position_x = position_x
-        if position_y is not None:
-            plot_tile.position_y = position_y
-        if width is not None:
-            plot_tile.width = width
-        if height is not None:
-            plot_tile.height = height
-        if meta is not None:
-            plot_tile.meta = json.dumps(meta)
-        if dependencies is not None:
-            plot_tile.dependencies = json.dumps(dependencies)
-        if state is not None:
-            plot_tile.state = json.dumps(state)
-        if order is not None:
-            plot_tile.order = order
+        if min_width is not None:
+            plot_tile.min_width = min_width
+        if min_height is not None:
+            plot_tile.min_height = min_height
+        if visible is not None:
+            plot_tile.visible = visible
+        if locked is not None:
+            plot_tile.locked = locked
+        if moved is not None:
+            plot_tile.moved = moved
+        if static is not None:
+            plot_tile.static = static
+        if context is not None:
+            plot_tile.context = context
+        if table is not None:
+            plot_tile.table = table
+        if auto_update is not None:
+            plot_tile.auto_update = auto_update
+        if freeze is not None:
+            plot_tile.freeze = freeze
+        if filters is not None:
+            plot_tile.filters = filters
+        if common_filter is not None:
+            plot_tile.common_filter = common_filter
+        if metric is not None:
+            plot_tile.metric = metric
             
         # Update specialized fields
-        if plot_data is not None:
-            plot_tile.plot_data = json.dumps(plot_data)
+        if plot_type is not None:
+            plot_tile.plot_type = plot_type
+        if plot_scale_x is not None:
+            plot_tile.plot_scale_x = plot_scale_x
+        if plot_scale_y is not None:
+            plot_tile.plot_scale_y = plot_scale_y
+        if plot_aggregate is not None:
+            plot_tile.plot_aggregate = plot_aggregate
+        if x_axis is not None:
+            plot_tile.x_axis = x_axis
+        if y_axis is not None:
+            plot_tile.y_axis = y_axis
+        if plot_group_by is not None:
+            plot_tile.plot_group_by = plot_group_by
+        if plot_group_by_colors is not None:
+            plot_tile.plot_group_by_colors = plot_group_by_colors
+        if bin_count is not None:
+            plot_tile.bin_count = bin_count
+        if regression_line is not None:
+            plot_tile.regression_line = regression_line
             
         if is_checkpoint is not None and (id is not None or not is_checkpoint):
             # Only update is_checkpoint if:
@@ -593,33 +896,63 @@ class TileDAO:
         self,
         tab_id: str,
         name: str,
-        position_x: int = 0,
-        position_y: int = 0,
-        width: int = 600,
-        height: int = 400,
-        meta: Optional[dict] = None,
-        dependencies: Optional[list] = None,
-        state: Optional[dict] = None,
-        order: int = 0,
+        tile_id: Optional[str] = None,
+        x_position: float = 0,
+        y_position: float = 0,
+        width: float = 600,
+        height: float = 400,
+        min_width: Optional[float] = None,
+        min_height: Optional[float] = None,
+        visible: bool = True,
+        locked: bool = False,
+        moved: bool = False,
+        static: bool = False,
+        context: Optional[str] = None,
+        table: Optional[str] = None,
+        auto_update: Optional[str] = None,
+        freeze: Optional[str] = None,
+        filters: Optional[str] = None,
+        common_filter: Optional[str] = None,
+        metric: Optional[str] = None,
         content: str = "",
-        language: str = "python",
+        file_path: Optional[str] = None,
+        file_type: Optional[str] = None,
         is_checkpoint: bool = False,
     ) -> EditorTile:
         """Create a new editor tile."""
+        # If no existing tile_id, create a base tile first
+        if not tile_id:
+            base_tile = self.create_tile(
+                tab_id=tab_id,
+                name=name,
+                type="Editor",
+                x_position=x_position,
+                y_position=y_position,
+                width=width,
+                height=height,
+                min_width=min_width,
+                min_height=min_height,
+                visible=visible,
+                locked=locked,
+                moved=moved,
+                static=static,
+                context=context,
+                table=table,
+                auto_update=auto_update,
+                freeze=freeze,
+                filters=filters,
+                common_filter=common_filter,
+                metric=metric,
+                is_checkpoint=is_checkpoint,
+            )
+            tile_id = base_tile.id
+            
         editor_tile = EditorTile(
-            tab_id=tab_id,
-            name=name,
-            position_x=position_x,
-            position_y=position_y,
-            width=width,
-            height=height,
-            meta=json.dumps(meta or {}),
-            dependencies=json.dumps(dependencies or []),
-            state=json.dumps(state or {}),
-            order=order,
+            id=tile_id,
+            tile_id=tile_id,
             content=content,
-            language=language,
-            is_checkpoint=is_checkpoint,
+            file_path=file_path,
+            file_type=file_type,
         )
         self.session.add(editor_tile)
         self.session.commit()
@@ -641,16 +974,27 @@ class TileDAO:
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
         is_checkpoint: Optional[bool] = None,
-        position_x: Optional[int] = None,
-        position_y: Optional[int] = None,
-        width: Optional[int] = None,
-        height: Optional[int] = None,
-        meta: Optional[dict] = None,
-        dependencies: Optional[list] = None,
-        state: Optional[dict] = None,
-        order: Optional[int] = None,
+        position: Optional[dict] = None,
+        x_position: Optional[float] = None,
+        y_position: Optional[float] = None,
+        width: Optional[float] = None,
+        height: Optional[float] = None,
+        min_width: Optional[float] = None,
+        min_height: Optional[float] = None,
+        visible: Optional[bool] = None,
+        locked: Optional[bool] = None,
+        moved: Optional[bool] = None,
+        static: Optional[bool] = None,
+        context: Optional[str] = None,
+        table: Optional[str] = None,
+        auto_update: Optional[str] = None,
+        freeze: Optional[str] = None,
+        filters: Optional[str] = None,
+        common_filter: Optional[str] = None,
+        metric: Optional[str] = None,
         content: Optional[str] = None,
-        language: Optional[str] = None,
+        file_path: Optional[str] = None,
+        file_type: Optional[str] = None,
     ) -> Optional[EditorTile]:
         """
         Update editor tile by ID or by tab_id and name.
@@ -664,31 +1008,62 @@ class TileDAO:
         if editor_tile is None:
             return None
             
+        # Process position data
+        position_fields = {}
+        if position:
+            position_fields = self._position_from_dict(position)
+        else:
+            # Handle individual position fields
+            if x_position is not None:
+                position_fields['x_position'] = x_position
+            if y_position is not None:
+                position_fields['y_position'] = y_position
+            if width is not None:
+                position_fields['width'] = width
+            if height is not None:
+                position_fields['height'] = height
+                
+        # Apply position fields
+        for field, value in position_fields.items():
+            setattr(editor_tile, field, value)
+            
         # Update the base tile fields
         if name is not None and id is not None:  # Only update name if identifying by ID
             editor_tile.name = name
-        if position_x is not None:
-            editor_tile.position_x = position_x
-        if position_y is not None:
-            editor_tile.position_y = position_y
-        if width is not None:
-            editor_tile.width = width
-        if height is not None:
-            editor_tile.height = height
-        if meta is not None:
-            editor_tile.meta = json.dumps(meta)
-        if dependencies is not None:
-            editor_tile.dependencies = json.dumps(dependencies)
-        if state is not None:
-            editor_tile.state = json.dumps(state)
-        if order is not None:
-            editor_tile.order = order
+        if min_width is not None:
+            editor_tile.min_width = min_width
+        if min_height is not None:
+            editor_tile.min_height = min_height
+        if visible is not None:
+            editor_tile.visible = visible
+        if locked is not None:
+            editor_tile.locked = locked
+        if moved is not None:
+            editor_tile.moved = moved
+        if static is not None:
+            editor_tile.static = static
+        if context is not None:
+            editor_tile.context = context
+        if table is not None:
+            editor_tile.table = table
+        if auto_update is not None:
+            editor_tile.auto_update = auto_update
+        if freeze is not None:
+            editor_tile.freeze = freeze
+        if filters is not None:
+            editor_tile.filters = filters
+        if common_filter is not None:
+            editor_tile.common_filter = common_filter
+        if metric is not None:
+            editor_tile.metric = metric
             
         # Update specialized fields
         if content is not None:
             editor_tile.content = content
-        if language is not None:
-            editor_tile.language = language
+        if file_path is not None:
+            editor_tile.file_path = file_path
+        if file_type is not None:
+            editor_tile.file_type = file_type
             
         if is_checkpoint is not None and (id is not None or not is_checkpoint):
             # Only update is_checkpoint if:
@@ -703,33 +1078,59 @@ class TileDAO:
         self,
         tab_id: str,
         name: str,
-        position_x: int = 0,
-        position_y: int = 0,
-        width: int = 600,
-        height: int = 400,
-        meta: Optional[dict] = None,
-        dependencies: Optional[list] = None,
-        state: Optional[dict] = None,
-        order: int = 0,
-        view_type: str = "markdown",
-        view_data: Optional[dict] = None,
+        tile_id: Optional[str] = None,
+        x_position: float = 0,
+        y_position: float = 0,
+        width: float = 600,
+        height: float = 400,
+        min_width: Optional[float] = None,
+        min_height: Optional[float] = None,
+        visible: bool = True,
+        locked: bool = False,
+        moved: bool = False,
+        static: bool = False,
+        context: Optional[str] = None,
+        table: Optional[str] = None,
+        auto_update: Optional[str] = None,
+        freeze: Optional[str] = None,
+        filters: Optional[str] = None,
+        common_filter: Optional[str] = None,
+        metric: Optional[str] = None,
+        base_index: Optional[str] = None,
         is_checkpoint: bool = False,
     ) -> ViewTile:
         """Create a new view tile."""
+        # If no existing tile_id, create a base tile first
+        if not tile_id:
+            base_tile = self.create_tile(
+                tab_id=tab_id,
+                name=name,
+                type="View",
+                x_position=x_position,
+                y_position=y_position,
+                width=width,
+                height=height,
+                min_width=min_width,
+                min_height=min_height,
+                visible=visible,
+                locked=locked,
+                moved=moved,
+                static=static,
+                context=context,
+                table=table,
+                auto_update=auto_update,
+                freeze=freeze,
+                filters=filters,
+                common_filter=common_filter,
+                metric=metric,
+                is_checkpoint=is_checkpoint,
+            )
+            tile_id = base_tile.id
+            
         view_tile = ViewTile(
-            tab_id=tab_id,
-            name=name,
-            position_x=position_x,
-            position_y=position_y,
-            width=width,
-            height=height,
-            meta=json.dumps(meta or {}),
-            dependencies=json.dumps(dependencies or []),
-            state=json.dumps(state or {}),
-            order=order,
-            view_type=view_type,
-            view_data=json.dumps(view_data or {}),
-            is_checkpoint=is_checkpoint,
+            id=tile_id,
+            tile_id=tile_id,
+            base_index=base_index,
         )
         self.session.add(view_tile)
         self.session.commit()
@@ -751,16 +1152,25 @@ class TileDAO:
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
         is_checkpoint: Optional[bool] = None,
-        position_x: Optional[int] = None,
-        position_y: Optional[int] = None,
-        width: Optional[int] = None,
-        height: Optional[int] = None,
-        meta: Optional[dict] = None,
-        dependencies: Optional[list] = None,
-        state: Optional[dict] = None,
-        order: Optional[int] = None,
-        view_type: Optional[str] = None,
-        view_data: Optional[dict] = None,
+        position: Optional[dict] = None,
+        x_position: Optional[float] = None,
+        y_position: Optional[float] = None,
+        width: Optional[float] = None,
+        height: Optional[float] = None,
+        min_width: Optional[float] = None,
+        min_height: Optional[float] = None,
+        visible: Optional[bool] = None,
+        locked: Optional[bool] = None,
+        moved: Optional[bool] = None,
+        static: Optional[bool] = None,
+        context: Optional[str] = None,
+        table: Optional[str] = None,
+        auto_update: Optional[str] = None,
+        freeze: Optional[str] = None,
+        filters: Optional[str] = None,
+        common_filter: Optional[str] = None,
+        metric: Optional[str] = None,
+        base_index: Optional[str] = None,
     ) -> Optional[ViewTile]:
         """
         Update view tile by ID or by tab_id and name.
@@ -774,31 +1184,58 @@ class TileDAO:
         if view_tile is None:
             return None
             
+        # Process position data
+        position_fields = {}
+        if position:
+            position_fields = self._position_from_dict(position)
+        else:
+            # Handle individual position fields
+            if x_position is not None:
+                position_fields['x_position'] = x_position
+            if y_position is not None:
+                position_fields['y_position'] = y_position
+            if width is not None:
+                position_fields['width'] = width
+            if height is not None:
+                position_fields['height'] = height
+                
+        # Apply position fields
+        for field, value in position_fields.items():
+            setattr(view_tile, field, value)
+            
         # Update the base tile fields
         if name is not None and id is not None:  # Only update name if identifying by ID
             view_tile.name = name
-        if position_x is not None:
-            view_tile.position_x = position_x
-        if position_y is not None:
-            view_tile.position_y = position_y
-        if width is not None:
-            view_tile.width = width
-        if height is not None:
-            view_tile.height = height
-        if meta is not None:
-            view_tile.meta = json.dumps(meta)
-        if dependencies is not None:
-            view_tile.dependencies = json.dumps(dependencies)
-        if state is not None:
-            view_tile.state = json.dumps(state)
-        if order is not None:
-            view_tile.order = order
+        if min_width is not None:
+            view_tile.min_width = min_width
+        if min_height is not None:
+            view_tile.min_height = min_height
+        if visible is not None:
+            view_tile.visible = visible
+        if locked is not None:
+            view_tile.locked = locked
+        if moved is not None:
+            view_tile.moved = moved
+        if static is not None:
+            view_tile.static = static
+        if context is not None:
+            view_tile.context = context
+        if table is not None:
+            view_tile.table = table
+        if auto_update is not None:
+            view_tile.auto_update = auto_update
+        if freeze is not None:
+            view_tile.freeze = freeze
+        if filters is not None:
+            view_tile.filters = filters
+        if common_filter is not None:
+            view_tile.common_filter = common_filter
+        if metric is not None:
+            view_tile.metric = metric
             
         # Update specialized fields
-        if view_type is not None:
-            view_tile.view_type = view_type
-        if view_data is not None:
-            view_tile.view_data = json.dumps(view_data)
+        if base_index is not None:
+            view_tile.base_index = base_index
             
         if is_checkpoint is not None and (id is not None or not is_checkpoint):
             # Only update is_checkpoint if:
@@ -821,10 +1258,23 @@ class TileDAO:
         """
         Partially update tile with only the fields that need changing.
         
-        Either id or (tab_id and name) must be provided to identify the tile.
-        If tile_type is provided, it will be used to determine the specialized tile type;
-        otherwise it will be determined from the tile's type field.
+        Args:
+            update_data: Dictionary of fields to update
+            id: The ID of the tile
+            tab_id: The ID of the tab
+            name: The name of the tile
+            is_checkpoint: Whether to update a checkpoint tile
+            tile_type: Type of the tile (Table, Plot, View, Editor)
+            
+        Returns:
+            The updated tile if found, None otherwise
+            
+        Raises:
+            ValueError: If neither id nor (tab_id and name) are provided
         """
+        if not id and not (tab_id and name):
+            raise ValueError("Either id or both tab_id and name must be provided")
+        
         tile = self._get_tile(
             id=id, 
             tab_id=tab_id, 
@@ -846,7 +1296,10 @@ class TileDAO:
             if table_tile:
                 for field, value in table_tile_data.items():
                     if hasattr(table_tile, field):
-                        if field in ('headers', 'rows') and not isinstance(value, str):
+                        if field in ('table_type', 'column_context', 'page_number', 
+                                    'column_order', 'hidden_columns', 'sorting', 
+                                    'grouping', 'group_sorting', 'columns_pin_left', 
+                                    'columns_pin_right', 'selected') and isinstance(value, (list, dict)):
                             setattr(table_tile, field, json.dumps(value))
                         else:
                             setattr(table_tile, field, value)
@@ -887,22 +1340,130 @@ class TileDAO:
         # Handle position updates specially
         if 'position' in update_data:
             position = update_data.pop('position')
-            if 'x' in position:
-                tile.position_x = position['x']
-            if 'y' in position:
-                tile.position_y = position['y']
-            if 'width' in position:
-                tile.width = position['width']
-            if 'height' in position:
-                tile.height = position['height']
+            position_fields = self._position_from_dict(position)
+            for field, value in position_fields.items():
+                setattr(tile, field, value)
         
-        # Update the base tile fields
-        for field, value in update_data.items():
-            if hasattr(tile, field):
-                if field in ('meta', 'dependencies', 'state') and not isinstance(value, str):
-                    setattr(tile, field, json.dumps(value))
-                else:
-                    setattr(tile, field, value)
+        # Update the base tile fields - translate certain fields if needed
+        allowed_fields = [
+            'name', 'min_width', 'min_height', 'visible', 'locked',
+            'moved', 'static', 'context', 'table', 'auto_update',
+            'freeze', 'filters', 'common_filter', 'metric',
+        ]
+        
+        for field in allowed_fields:
+            if field in update_data:
+                setattr(tile, field, update_data[field])
         
         self.session.commit()
         return tile
+        
+    def patch_specialized_tile(
+        self,
+        id: str,
+        tile_type: str,
+        update_data: dict,
+    ) -> Optional[Union[Tile, TableTile, PlotTile, ViewTile, EditorTile]]:
+        """
+        Update a specialized tile with specific data for its type.
+        
+        Args:
+            id: The ID of the tile to update
+            tile_type: The type of tile (Table, Plot, View, Editor)
+            update_data: The data to update the tile with
+            
+        Returns:
+            The updated tile if found, None otherwise
+        """
+        # Get the base tile first
+        tile = self.get(id)
+        if not tile:
+            return None
+            
+        # Get the specialized tile based on type
+        specialized_tile = None
+        if tile_type == 'Table':
+            specialized_key = 'table_tile'
+            specialized_tile = self.get_table_tile(id=id)
+        elif tile_type == 'Plot':
+            specialized_key = 'plot_tile'
+            specialized_tile = self.get_plot_tile(id=id)
+        elif tile_type == 'View':
+            specialized_key = 'view_tile'
+            specialized_tile = self.get_view_tile(id=id)
+        elif tile_type == 'Editor':
+            specialized_key = 'editor_tile'
+            specialized_tile = self.get_editor_tile(id=id)
+        else:
+            # Invalid tile type
+            return None
+            
+        if not specialized_tile:
+            return None
+            
+        # Extract the specialized data
+        specialized_data = None
+        if specialized_key in update_data:
+            specialized_data = update_data[specialized_key]
+            
+        # Update the specialized tile
+        if specialized_data:
+            for field, value in specialized_data.items():
+                if hasattr(specialized_tile, field):
+                    # JSON serialize if needed for complex types
+                    if tile_type == 'Table' and field in ('table_type', 'column_context', 'page_number', 
+                                                         'column_order', 'hidden_columns', 'sorting', 
+                                                         'grouping', 'group_sorting', 'columns_pin_left', 
+                                                         'columns_pin_right', 'selected') and isinstance(value, (list, dict)):
+                        setattr(specialized_tile, field, json.dumps(value))
+                    elif tile_type == 'Plot' and field in ('plot_type', 'plot_scale_x', 'plot_scale_y',
+                                                          'plot_aggregate', 'x_axis', 'y_axis',
+                                                          'plot_group_by', 'plot_group_by_colors',
+                                                          'bin_count', 'regression_line') and isinstance(value, (list, dict)):
+                        setattr(specialized_tile, field, json.dumps(value))
+                    elif tile_type == 'View' and field == 'base_index' and isinstance(value, (list, dict)):
+                        setattr(specialized_tile, field, json.dumps(value))
+                    elif tile_type == 'Editor' and field in ('file_path', 'file_type') and isinstance(value, (list, dict)):
+                        setattr(specialized_tile, field, json.dumps(value))
+                    else:
+                        setattr(specialized_tile, field, value)
+        
+        self.session.commit()
+        return tile
+
+    def _position_from_dict(self, position_dict: Optional[dict]) -> dict:
+        """Convert a position dictionary from the schema to model field values.
+        
+        Args:
+            position_dict: A dictionary with x, y, width, height keys
+            
+        Returns:
+            A dictionary with x_position, y_position, width, height keys
+        """
+        result = {}
+        if position_dict:
+            if 'x' in position_dict:
+                result['x_position'] = position_dict['x']
+            if 'y' in position_dict:
+                result['y_position'] = position_dict['y']
+            if 'width' in position_dict:
+                result['width'] = position_dict['width']
+            if 'height' in position_dict:
+                result['height'] = position_dict['height']
+        return result
+        
+    def _position_to_dict(self, tile: Tile) -> dict:
+        """Convert model position fields to a position dictionary for the schema.
+        
+        Args:
+            tile: A Tile object
+            
+        Returns:
+            A dictionary with x, y, width, height keys
+        """
+        return {
+            'x': tile.x_position,
+            'y': tile.y_position,
+            'width': tile.width,
+            'height': tile.height
+        }

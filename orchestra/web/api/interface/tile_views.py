@@ -73,7 +73,7 @@ def _create_tile_response(tile) -> TileSchema:
         editor_tile_data = EditorTileSchema(
             id=str(tile.editor_tile.id),
             tile_id=str(tile.editor_tile.tile_id),
-            file_name=tile.editor_tile.file_name,
+            file_path=tile.editor_tile.file_path,
             file_type=tile.editor_tile.file_type,
             content=tile.editor_tile.content
         )
@@ -245,8 +245,8 @@ def create_tile(
     try:
         # Create tile with position from the request
         position_data = {
-            "position_x": request.position.x,
-            "position_y": request.position.y,
+            "x_position": request.position.x,
+            "y_position": request.position.y,
             "width": request.position.width,
             "height": request.position.height,
         }
@@ -270,7 +270,7 @@ def create_tile(
             common_filter=request.common_filter,
             metric=request.metric,
             is_checkpoint=checkpoint,
-            **position_data
+            **position_data,
         )
         
         # Handle specialized tile data based on type
@@ -278,31 +278,57 @@ def create_tile(
             tile_dao.create_table_tile(
                 tab_id=tab.id,
                 name=request.name,
-                headers=request.table_tile.headers if hasattr(request.table_tile, "headers") else None,
-                rows=request.table_tile.rows if hasattr(request.table_tile, "rows") else None,
+                tile_id=tile.id,
+                table_type=request.table_tile.table_type if hasattr(request.table_tile, "table_type") else None,
+                column_context=request.table_tile.column_context if hasattr(request.table_tile, "column_context") else None,
+                page_number=request.table_tile.page_number if hasattr(request.table_tile, "page_number") else None,
+                column_order=request.table_tile.column_order if hasattr(request.table_tile, "column_order") else None,
+                hidden_columns=request.table_tile.hidden_columns if hasattr(request.table_tile, "hidden_columns") else None,
+                sorting=request.table_tile.sorting if hasattr(request.table_tile, "sorting") else None,
+                grouping=request.table_tile.grouping if hasattr(request.table_tile, "grouping") else None,
+                group_sorting=request.table_tile.group_sorting if hasattr(request.table_tile, "group_sorting") else None,
+                columns_pin_left=request.table_tile.columns_pin_left if hasattr(request.table_tile, "columns_pin_left") else None,
+                columns_pin_right=request.table_tile.columns_pin_right if hasattr(request.table_tile, "columns_pin_right") else None,
+                selected=request.table_tile.selected if hasattr(request.table_tile, "selected") else None,
+                is_checkpoint=checkpoint,
                 **position_data
             )
         elif request.type == "Plot" and request.plot_tile:
             tile_dao.create_plot_tile(
                 tab_id=tab.id,
                 name=request.name,
-                plot_data=request.plot_tile.plot_data if hasattr(request.plot_tile, "plot_data") else None,
+                tile_id=tile.id,
+                plot_type=request.plot_tile.plot_type if hasattr(request.plot_tile, "plot_type") else None,
+                plot_scale_x=request.plot_tile.plot_scale_x if hasattr(request.plot_tile, "plot_scale_x") else None,
+                plot_scale_y=request.plot_tile.plot_scale_y if hasattr(request.plot_tile, "plot_scale_y") else None,
+                plot_aggregate=request.plot_tile.plot_aggregate if hasattr(request.plot_tile, "plot_aggregate") else None,
+                x_axis=request.plot_tile.x_axis if hasattr(request.plot_tile, "x_axis") else None,
+                y_axis=request.plot_tile.y_axis if hasattr(request.plot_tile, "y_axis") else None,
+                plot_group_by=request.plot_tile.plot_group_by if hasattr(request.plot_tile, "plot_group_by") else None,
+                plot_group_by_colors=request.plot_tile.plot_group_by_colors if hasattr(request.plot_tile, "plot_group_by_colors") else None,
+                bin_count=request.plot_tile.bin_count if hasattr(request.plot_tile, "bin_count") else None,
+                regression_line=request.plot_tile.regression_line if hasattr(request.plot_tile, "regression_line") else None,
+                is_checkpoint=checkpoint,
                 **position_data
             )
         elif request.type == "View" and request.view_tile:
             tile_dao.create_view_tile(
                 tab_id=tab.id,
                 name=request.name,
-                view_type=request.view_tile.view_type if hasattr(request.view_tile, "view_type") else "markdown",
-                view_data=request.view_tile.view_data if hasattr(request.view_tile, "view_data") else None,
+                tile_id=tile.id,
+                base_index=request.view_tile.base_index if hasattr(request.view_tile, "base_index") else None,
+                is_checkpoint=checkpoint,
                 **position_data
             )
         elif request.type == "Editor" and request.editor_tile:
             tile_dao.create_editor_tile(
                 tab_id=tab.id,
                 name=request.name,
+                tile_id=tile.id,
                 content=request.editor_tile.content if hasattr(request.editor_tile, "content") else "",
-                language=request.editor_tile.language if hasattr(request.editor_tile, "language") else "python",
+                file_path=request.editor_tile.file_path if hasattr(request.editor_tile, "file_path") else None,
+                file_type=request.editor_tile.file_type if hasattr(request.editor_tile, "file_type") else None,
+                is_checkpoint=checkpoint,
                 **position_data
             )
         
@@ -579,6 +605,17 @@ async def patch_specialized_tile(
     
     The tile_type parameter determines which specialized tile type to update.
     Valid values are: Table, Plot, View, Editor
+    
+    For Table tiles, valid specialized fields include: table_type, column_context, page_number, 
+    column_order, hidden_columns, sorting, grouping, group_sorting, columns_pin_left, 
+    columns_pin_right, selected
+    
+    For Plot tiles, valid specialized fields include: plot_type, plot_scale_x, plot_scale_y,
+    plot_aggregate, x_axis, y_axis, plot_group_by, plot_group_by_colors, bin_count, regression_line
+    
+    For View tiles, valid specialized fields include: base_index
+    
+    For Editor tiles, valid specialized fields include: file_path, file_type, content
     """
     # Validate the tile type
     valid_types = ["Table", "Plot", "View", "Editor"]

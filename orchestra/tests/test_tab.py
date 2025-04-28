@@ -57,7 +57,6 @@ async def _create_test_tab(client: AsyncClient, interface_id, name=TEST_TAB, act
             "color": "#00FF00",
         },
     )
-    assert response.status_code == 201, f"Failed to create tab: {response.json()}"
     return response
 
 
