@@ -387,7 +387,7 @@ async def test_get_interface_checkpoint(client: AsyncClient):
     checkpoint_id = checkpoint_response.json()["id"]
     
     # Get the checkpoint
-    response = await _get_interface_checkpoint(client, interface_id=interface_id)
+    response = await _get_interface_checkpoint(client, interface_id=checkpoint_id)
     assert response.status_code == 200
     
     data = response.json()
@@ -446,6 +446,7 @@ async def test_error_responses(client: AsyncClient):
     interface_response = await _create_test_interface(client)
     interface_id = interface_response.json()["id"]
     update_response = await _update_interface(client, interface_id=interface_id, update_data={"invalid_field": "value"})
-    assert update_response.status_code in [400, 422]
+    assert update_response.status_code == 422  # Should be 422 for validation error
     error_data = update_response.json()
     assert "detail" in error_data
+    assert "invalid_field" in str(error_data["detail"])  # Error should mention the invalid field
