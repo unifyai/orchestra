@@ -119,8 +119,6 @@ steps:
   - '--vpc-connector=orchestra-connector'
   - '--vpc-egress=all-traffic'
   - '--timeout=300s'
-  - '--min-instances=1'
-  - '--max-instances=10'
   - '--no-cpu-throttling'
   - '--cpu-boost'
   id: Deploy Orchestra
