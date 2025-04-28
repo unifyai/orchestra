@@ -63,11 +63,11 @@ class TabDAO:
             
         return self.session.execute(query).scalars().first()
 
-    def get_tab(self, id: str) -> Optional[Tab]:
+    def get(self, id: str, is_checkpoint: Optional[bool] = None) -> Optional[Tab]:
         """Get tab by ID."""
-        return self._get_tab(id=id)
+        return self._get_tab(id=id, is_checkpoint=is_checkpoint)
 
-    def get_tab_by_interface_and_name(
+    def get_by_interface_and_name(
         self, 
         interface_id: str, 
         name: str,
@@ -76,14 +76,18 @@ class TabDAO:
         """Get tab by interface ID and name."""
         return self._get_tab(interface_id=interface_id, name=name, is_checkpoint=is_checkpoint)
 
-    def list_tabs_by_interface(
-        self, 
-        interface_id: str,
+    def list_tabs(
+        self,
+        interface_id: Optional[str] = None,
+        name: Optional[str] = None,
         is_checkpoint: Optional[bool] = None,
     ) -> List[Tab]:
-        """List all tabs for an interface."""
-        query = select(Tab).where(Tab.interface_id == interface_id)
-        
+        """List tabs with optional filtering."""
+        query = select(Tab)
+        if interface_id is not None:
+            query = query.where(Tab.interface_id == interface_id)
+        if name is not None:
+            query = query.where(Tab.name == name)
         if is_checkpoint is not None:
             query = query.where(Tab.is_checkpoint == is_checkpoint)
             
@@ -192,7 +196,7 @@ class TabDAO:
             tab_id = identified_tab.id
             
         # Get all tabs for the interface
-        tabs = self.list_tabs_by_interface(interface_id, is_checkpoint=is_checkpoint)
+        tabs = self.list_tabs(interface_id=interface_id, is_checkpoint=is_checkpoint)
         
         # Check if the tab exists
         tab_exists = False
@@ -282,7 +286,7 @@ class TabDAO:
     ) -> Optional[Tab]:
         """Partially update tab by interface ID and name."""
         # Get the tab by name
-        tab = self.get_tab_by_interface_and_name(
+        tab = self.get_by_interface_and_name(
             interface_id=interface_id,
             name=name,
             is_checkpoint=is_checkpoint,

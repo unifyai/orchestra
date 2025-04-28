@@ -119,7 +119,7 @@ class InterfaceDAO:
             name=name,
             is_checkpoint=is_checkpoint
         )
-        
+
         if interface is None:
             return None
             
