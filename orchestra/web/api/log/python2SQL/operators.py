@@ -436,6 +436,7 @@ def _handle_comparison_operator(
         elif operand == ">=":
             expr = lval >= rval
         elif operand == "is":
+            lval, _ = _select_value(lhs, session)
             expr = lval.is_(rval)
         elif operand == "is not":
             expr = lval.isnot(rval)
@@ -458,17 +459,9 @@ def _handle_comparison_operator(
         elif operand == ">=":
             expr = lval >= rhs
         elif operand == "is":
-            expr = (
-                lval.is_(None)
-                if rhs is None or isinstance(rhs, BindParameter) and rhs.value is None
-                else lval == rhs
-            )
+            expr = lval.is_(rval)
         elif operand == "is not":
-            expr = (
-                lval.isnot(None)
-                if rhs is None or isinstance(rhs, BindParameter) and rhs.value is None
-                else lval != rhs
-            )
+            expr = lval.isnot(rval)
         select_cols = [lhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in lhs.c.keys():
             select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
@@ -496,21 +489,9 @@ def _handle_comparison_operator(
         elif operand == ">=":
             expr = lhs >= rval
         elif operand == "is":
-            expr = (
-                lhs.is_(None)
-                if rval is None
-                or isinstance(rval, BindParameter)
-                and rval.value is None
-                else lhs == rval
-            )
+            expr = rval.is_(lhs)
         elif operand == "is not":
-            expr = (
-                lhs.isnot(None)
-                if rval is None
-                or isinstance(rval, BindParameter)
-                and rval.value is None
-                else lhs != rval
-            )
+            expr = rval.isnot(lhs)
         select_cols = [rhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in rhs.c.keys():
             select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))

@@ -143,6 +143,7 @@ def unify_inferred_types(t1: str, t2: str) -> str:
     """
     # You can customize this ordering as you please
     precedence = [
+        "NoneType",
         "bool",
         "int",
         "float",
@@ -155,7 +156,6 @@ def unify_inferred_types(t1: str, t2: str) -> str:
         "dict",
         "tuple",
         "image",
-        "NoneType",
     ]
 
     # If either side is "none", we skip it or treat it as the other side
