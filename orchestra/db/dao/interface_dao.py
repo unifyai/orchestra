@@ -45,7 +45,7 @@ class InterfaceDAO:
         id: Optional[str] = None,
         project_id: Optional[int] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> Optional[Interface]:
         """Internal method to get interface by ID or by project_id and name."""
         if id is not None:
@@ -71,7 +71,7 @@ class InterfaceDAO:
         self, 
         project_id: int, 
         name: str,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> Optional[Interface]:
         """Get interface by project ID and name."""
         return self._get_interface(project_id=project_id, name=name, is_checkpoint=is_checkpoint)
@@ -80,7 +80,7 @@ class InterfaceDAO:
         self,
         project_id: Optional[int] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> List[Interface]:
         """List interfaces with optional filtering."""
         query = select(Interface)
@@ -100,7 +100,7 @@ class InterfaceDAO:
         id: Optional[str] = None,
         project_id: Optional[int] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
         items: Optional[str] = None,
         new_counter: Optional[int] = None,
         context: Optional[str] = None,
@@ -119,8 +119,6 @@ class InterfaceDAO:
             name=name,
             is_checkpoint=is_checkpoint
         )
-
-        print(f"Interface: {interface}")
         
         if interface is None:
             return None
@@ -155,7 +153,7 @@ class InterfaceDAO:
         id: Optional[str] = None,
         project_id: Optional[int] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> bool:
         """
         Delete interface by ID or by project_id and name.
@@ -194,14 +192,21 @@ class InterfaceDAO:
             is_checkpoint=True
         )
     
-    def get_latest_checkpoint(self, project_id: int, name: str) -> Optional[Interface]:
+    def get_latest_checkpoint(self, id: Optional[str] = None, project_id: Optional[int] = None, name: Optional[str] = None) -> Optional[Interface]:
         """Get the latest manually saved checkpoint for an interface."""
-        query = select(Interface).where(
-            Interface.project_id == project_id,
-            Interface.name == name,
-            Interface.is_checkpoint == True
-        ).order_by(Interface.updated_at.desc())
-        
+        if id is not None:
+            query = select(Interface).where(
+                Interface.id == id,
+                Interface.is_checkpoint == True
+            ).order_by(Interface.updated_at.desc())
+        elif project_id is not None and name is not None:
+            query = select(Interface).where(
+                Interface.project_id == project_id,
+                Interface.name == name,
+                Interface.is_checkpoint == True
+            ).order_by(Interface.updated_at.desc())
+        else:
+            return None
         return self.session.execute(query).scalars().first()
 
     def patch_interface(
@@ -210,7 +215,7 @@ class InterfaceDAO:
         id: Optional[str] = None,
         project_id: Optional[int] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> Optional[Interface]:
         """
         Partially update interface with only the fields that need changing.

@@ -173,11 +173,17 @@ class CreateInterfaceRequest(BaseModel):
     name: str
     color: Optional[str] = None
 
+    class Config:
+        extra = "forbid"  # Reject unknown fields
+
 
 class UpdateInterfaceRequest(BaseModel):
     name: Optional[str] = None
     active_tab_id: Optional[str] = None
     color: Optional[str] = None
+
+    class Config:
+        extra = "forbid"  # Reject unknown fields
 
 
 # For legacy support (until frontend migration is complete)
