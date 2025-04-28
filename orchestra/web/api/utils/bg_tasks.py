@@ -3,6 +3,8 @@ import os
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
+from sqlalchemy.orm import sessionmaker
+
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
@@ -16,6 +18,7 @@ from orchestra.web.api.query.views import create_query_model
 from orchestra.web.api.utils.gcp import send_pubsub_msg
 from orchestra.web.api.utils.helpers import recharge_and_generate_invoice
 from orchestra.web.api.utils.http_responses import internal_endpoint_not_found
+from orchestra.web.lifetime import get_engine
 
 
 def telemetry_to_pub_sub(
@@ -61,13 +64,6 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     query_body: str,
     response_body: str,
     status_code: int,
-    model_dao: ModelDAO,
-    provider_dao: ProviderDAO,
-    endpoint_dao: EndpointDAO,
-    auth_user_dao: AuthUserDAO,
-    custom_endpoint_dao: CustomEndpointDAO,
-    query_dao: QueryDAO,
-    users_dao: UsersDAO,
     secondary_user_id: Optional[str] = None,
     signature: Optional[str] = "",
     used_router: Optional[bool] = None,
@@ -75,7 +71,6 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     processing_time: Optional[float] = 0,
     usage: Optional[Dict] = None,
     tags: Optional[list[str]] = None,
-    session=None,
 ):
     """
     Perform database operations.
@@ -84,117 +79,122 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     :param cost: cost of the operation.
     :param model: model name.
     :param provider: provider name.
-    :param model_dao: DAO for model models.
-    :param provider_dao: DAO for provider models.
-    :param endpoint_dao: DAO for endpoint models.
-    :param query_dao: DAO for query models.
-    :param users_dao: DAO for users models.
 
     :raises HTTPException: when endpoint is not found.
     """
-    if usage is None:
-        usage = {}
-    if secondary_user_id is None:
-        secondary_user_id = ""
-    if router is None:
-        router = ""
+    SessionLocal = sessionmaker(bind=get_engine())
+    with SessionLocal() as session:
+        model_dao = ModelDAO(session)
+        provider_dao = ProviderDAO(session)
+        endpoint_dao = EndpointDAO(session)
+        auth_user_dao = AuthUserDAO(session)
+        custom_endpoint_dao = CustomEndpointDAO(session)
+        query_dao = QueryDAO(session)
+        users_dao = UsersDAO(session)
 
-    if "custom" in provider:
-        endpoint_id = None
-        try:
-            custom_endpoint_id = int(
-                custom_endpoint_dao.filter(
-                    user_id=user_id,
-                    name=model,
-                )[0].id,
-            )
-        except IndexError:
-            raise internal_endpoint_not_found
-    else:
-        model_id = int(model_dao.filter(mdl_code=model)[0].id)
-        provider_id = int(provider_dao.filter(name=provider)[0].id)
-        try:
-            endpoint_id = int(
-                endpoint_dao.filter(mdl_id=model_id, provider_id=provider_id)[0].id,
-            )
-            custom_endpoint_id = None
-        except IndexError:
-            raise internal_endpoint_not_found
-    query_model_request = QueryModelRequest(
-        user_id=user_id,
-        model_provider_str=f"{model}@{provider}",
-        endpoint_id=endpoint_id,
-        custom_endpoint_id=custom_endpoint_id,
-        local_endpoint_id=None,
-        credits=cost,  # type: ignore
-        query_body=query_body,
-        response_body=response_body,
-        signature=signature,
-        used_router=used_router,
-        router=router,
-        tags=tags,
-        status_code=status_code,
-    )
+        if usage is None:
+            usage = {}
+        if secondary_user_id is None:
+            secondary_user_id = ""
+        if router is None:
+            router = ""
 
-    # Fetch AuthUser to check if query logging is enabled
-    try:
-        auth_user = auth_user_dao.get_by_id(user_id)[0]
-    except IndexError:
-        auth_user = None
-
-    # Only create query model if queries_enabled is True
-    if auth_user and auth_user.queries_enabled:
-        create_query_model(query_model_request, query_dao=query_dao)
-    # Log the chat completion event using the new unified logging system
-    try:
-        req = json.loads(query_body) if isinstance(query_body, str) else query_body
-    except:
-        req = query_body
-
-    try:
-        resp = (
-            json.loads(response_body)
-            if isinstance(response_body, str)
-            else response_body
-        )
-    except:
-        resp = response_body
-    if auth_user and auth_user.queries_enabled:
-        log_chat_completion_event(
+        if "custom" in provider:
+            endpoint_id = None
+            try:
+                custom_endpoint_id = int(
+                    custom_endpoint_dao.filter(
+                        user_id=user_id,
+                        name=model,
+                    )[0].id,
+                )
+            except IndexError:
+                raise internal_endpoint_not_found
+        else:
+            model_id = int(model_dao.filter(mdl_code=model)[0].id)
+            provider_id = int(provider_dao.filter(name=provider)[0].id)
+            try:
+                endpoint_id = int(
+                    endpoint_dao.filter(mdl_id=model_id, provider_id=provider_id)[0].id,
+                )
+                custom_endpoint_id = None
+            except IndexError:
+                raise internal_endpoint_not_found
+        query_model_request = QueryModelRequest(
             user_id=user_id,
             model_provider_str=f"{model}@{provider}",
             endpoint_id=endpoint_id,
             custom_endpoint_id=custom_endpoint_id,
             local_endpoint_id=None,
             credits=cost,  # type: ignore
-            query_body=req,
-            response_body=resp,
+            query_body=query_body,
+            response_body=response_body,
             signature=signature,
             used_router=used_router,
             router=router,
             tags=tags,
             status_code=status_code,
-            session=session,
         )
-    user = users_dao.get_user_with_id(user_id)
 
-    if not os.environ.get("ON_PREM") and status_code == 200:
-        users_dao.recharge_credit(user_id, -cost)
-        if (
-            user.autorecharge
-            and user.credits <= user.autorecharge_threshold
-            and user.autorecharge_qty > 0
-        ):
-            recharge_and_generate_invoice(user, users_dao)
+        # Fetch AuthUser to check if query logging is enabled
+        try:
+            auth_user = auth_user_dao.get_by_id(user_id)[0]
+        except IndexError:
+            auth_user = None
 
-        telemetry_to_pub_sub(
-            user_id,
-            secondary_user_id,
-            model,
-            provider,
-            router,
-            processing_time,
-            usage,
-            signature,
-            json.dumps(query_body),
-        )
+        # Only create query model if queries_enabled is True
+        if auth_user and auth_user.queries_enabled:
+            create_query_model(query_model_request, query_dao=query_dao)
+        # Log the chat completion event using the new unified logging system
+        try:
+            req = json.loads(query_body) if isinstance(query_body, str) else query_body
+        except:
+            req = query_body
+
+        try:
+            resp = (
+                json.loads(response_body)
+                if isinstance(response_body, str)
+                else response_body
+            )
+        except:
+            resp = response_body
+        if auth_user and auth_user.queries_enabled:
+            log_chat_completion_event(
+                user_id=user_id,
+                model_provider_str=f"{model}@{provider}",
+                endpoint_id=endpoint_id,
+                custom_endpoint_id=custom_endpoint_id,
+                local_endpoint_id=None,
+                credits=cost,  # type: ignore
+                query_body=req,
+                response_body=resp,
+                signature=signature,
+                used_router=used_router,
+                router=router,
+                tags=tags,
+                status_code=status_code,
+                session=session,
+            )
+        user = users_dao.get_user_with_id(user_id)
+
+        if not os.environ.get("ON_PREM") and status_code == 200:
+            users_dao.recharge_credit(user_id, -cost)
+            if (
+                user.autorecharge
+                and user.credits <= user.autorecharge_threshold
+                and user.autorecharge_qty > 0
+            ):
+                recharge_and_generate_invoice(user, users_dao)
+
+            telemetry_to_pub_sub(
+                user_id,
+                secondary_user_id,
+                model,
+                provider,
+                router,
+                processing_time,
+                usage,
+                signature,
+                json.dumps(query_body),
+            )

@@ -397,13 +397,6 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         "used_router": using_router,
         "router": router_str,
         "tags": tags,
-        "model_dao": model_dao,
-        "provider_dao": provider_dao,
-        "endpoint_dao": endpoint_dao,
-        "custom_endpoint_dao": custom_endpoint_dao,
-        "query_dao": query_dao,
-        "users_dao": users_dao,
-        "auth_user_dao": auth_user_dao,
     }
 
     if request_failed:
@@ -414,7 +407,6 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             usage=0,
             response_body=json.dumps({"detail": err.detail}),
             status_code=err.status_code,
-            session=users_dao.session,
             **db_operations_kwargs,
         )
         return JSONResponse(
@@ -460,7 +452,6 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     else ""
                 ),  # TODO this isn't the whole response
                 status_code=200,
-                session=users_dao.session,
                 **db_operations_kwargs,
             )
 
@@ -474,7 +465,6 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             usage=response["usage"],
             response_body=json.dumps(response) if store_response_body else "",
             status_code=200,
-            session=users_dao.session,
             **db_operations_kwargs,
         )
 
