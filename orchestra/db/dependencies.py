@@ -395,6 +395,12 @@ def register_db_listeners():
         logger.error(f"Error registering SQLAlchemy event listeners: {e}")
 
 
+@event.listens_for(Session, "after_begin")
+def _attach_request_state(session: Session, transaction, connection):
+    if "request_state" in session.info:
+        connection.info["request_state"] = session.info["request_state"]
+
+
 def get_db_session(request: Request) -> Generator[Session, None, None]:
     """
     Create and get database session.
@@ -405,8 +411,6 @@ def get_db_session(request: Request) -> Generator[Session, None, None]:
     SessionLocal = request.app.state.db_session_factory
     session: Session = SessionLocal()
     session.info["request_state"] = request.state
-    connection = session.connection()
-    connection.info["request_state"] = request.state
     try:  # noqa: WPS501
         yield session
         session.commit()
