@@ -127,6 +127,9 @@ class CreateTileRequest(BaseModel):
     view_tile: Optional[ViewTileSchema] = None
     editor_tile: Optional[EditorTileSchema] = None
 
+    class Config:
+        extra = "forbid"  # Reject unknown fields
+
 
 class UpdateTileRequest(BaseModel):
     name: Optional[str] = None
@@ -148,6 +151,9 @@ class UpdateTileRequest(BaseModel):
     view_tile: Optional[ViewTileSchema] = None
     editor_tile: Optional[EditorTileSchema] = None
 
+    class Config:
+        extra = "forbid"  # Reject unknown fields
+
 
 class CreateTabRequest(BaseModel):
     interface_id: str
@@ -158,6 +164,9 @@ class CreateTabRequest(BaseModel):
     global_context: Optional[str] = None
     color: Optional[str] = None
 
+    class Config:
+        extra = "forbid"  # Reject unknown fields
+
 
 class UpdateTabRequest(BaseModel):
     name: Optional[str] = None
@@ -166,6 +175,9 @@ class UpdateTabRequest(BaseModel):
     order: Optional[int] = None
     global_context: Optional[str] = None
     color: Optional[str] = None
+
+    class Config:
+        extra = "forbid"  # Reject unknown fields
 
 
 class CreateInterfaceRequest(BaseModel):
