@@ -74,6 +74,9 @@ def create_assistant(
             first_name=assistant_in.first_name,
             surname=assistant_in.surname,
             age=assistant_in.age,
+            region=assistant_in.region,
+            profile_photo=assistant_in.profile_photo,
+            about=assistant_in.about,
             weekly_limit=Decimal(assistant_in.weekly_limit),
             max_parallel=assistant_in.max_parallel,
         )
@@ -83,10 +86,15 @@ def create_assistant(
             first_name=assistant.first_name,
             surname=assistant.surname,
             age=assistant.age,
+            region=assistant.region,
+            profile_photo=assistant.profile_photo,
+            about=assistant.about,
             weekly_limit=float(assistant.weekly_limit),
             max_parallel=assistant.max_parallel,
             created_at=assistant.created_at,
             updated_at=assistant.updated_at,
+            phone=assistant.phone,
+            email=assistant.email,
         )
     except Exception as e:
         raise HTTPException(
@@ -152,10 +160,15 @@ def list_assistants(
                 first_name=a.first_name,
                 surname=a.surname,
                 age=a.age,
+                region=a.region,
+                profile_photo=a.profile_photo,
+                about=a.about,
                 weekly_limit=float(a.weekly_limit),
                 max_parallel=a.max_parallel,
                 created_at=a.created_at,
                 updated_at=a.updated_at,
+                phone=a.phone,
+                email=a.email,
             )
             for a in assistants
         ]
@@ -232,6 +245,11 @@ def delete_assistant(
                         "age": 25,
                         "weekly_limit": 45.0,
                         "max_parallel": 4,
+                        "about": "Award-winning mathematician specializing in algorithm development",
+                        "phone": "+1-555-987-6543",
+                        "email": "alice.smith@example.com",
+                        "region": "North America",
+                        "profile_photo": "https://example.com/photos/alice.jpg",
                         "created_at": "2025-04-25T12:00:00Z",
                         "updated_at": "2025-04-25T14:30:00Z",
                     },
@@ -251,9 +269,9 @@ def delete_assistant(
                     "example": {
                         "detail": [
                             {
-                                "loc": ["body", "weekly_limit"],
-                                "msg": "value is not a valid float",
-                                "type": "type_error.float",
+                                "loc": ["body", "email"],
+                                "msg": "value is not a valid email address",
+                                "type": "value_error.email",
                             },
                         ],
                     },
@@ -269,7 +287,7 @@ def update_assistant_config(
     dao: AssistantDAO = Depends(),
 ) -> AssistantRead:
     """
-    Update weekly_limit and/or max_parallel for an existing assistant.
+    Update about, phone, email, weekly_limit, and/or max_parallel for an existing assistant.
 
     Allows partial updates to an assistant's configuration. Only the fields
     provided in the request will be updated, while others remain unchanged.
@@ -279,9 +297,12 @@ def update_assistant_config(
         if update.weekly_limit is not None:
             weekly_limit = Decimal(update.weekly_limit)
 
-        updated = dao.update_assistant_config(
+        updated = dao.update_assistant(
             user_id=request.state.user_id,
             agent_id=assistant_id,
+            about=update.about,
+            phone=update.phone,
+            email=update.email,
             weekly_limit=weekly_limit,
             max_parallel=update.max_parallel,
         )
@@ -295,10 +316,15 @@ def update_assistant_config(
             first_name=updated.first_name,
             surname=updated.surname,
             age=updated.age,
+            region=updated.region,
+            profile_photo=updated.profile_photo,
+            about=updated.about,
             weekly_limit=float(updated.weekly_limit),
             max_parallel=updated.max_parallel,
             created_at=updated.created_at,
             updated_at=updated.updated_at,
+            phone=updated.phone,
+            email=updated.email,
         )
     except Exception as e:
         if isinstance(e, HTTPException):
