@@ -11,7 +11,6 @@ from orchestra.db.dao.webhook_log_dao import WebhookLogDAO
 router = APIRouter()
 
 
-STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
 
 
 @router.post("/webhooks/stripe", include_in_schema=False)
@@ -27,6 +26,7 @@ async def handle_stripe_webhook(
     payload = await request.body()
     sig_header = request.headers.get("Stripe-Signature")
     stripe.api_key = os.environ.get("STRIPE_SECRET_KEY_LIVE")
+    STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
     try:
         event = stripe.Webhook.construct_event(
             payload=payload,
