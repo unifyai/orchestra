@@ -23,8 +23,13 @@ class AssistantDAO:
         first_name: str,
         surname: str,
         age: int,
+        region: str,
+        profile_photo: str,
+        about: str,
         weekly_limit: Decimal,
         max_parallel: int,
+        phone: Optional[str] = None,
+        email: Optional[str] = None,
     ) -> Assistant:
         """
         Create a new Assistant for the given user.
@@ -34,8 +39,13 @@ class AssistantDAO:
             first_name=first_name,
             surname=surname,
             age=age,
+            region=region,
+            profile_photo=profile_photo,
+            about=about,
             weekly_limit=weekly_limit,
             max_parallel=max_parallel,
+            phone=phone,
+            email=email,
         )
         self.session.add(assistant)
         self.session.flush()
@@ -73,15 +83,18 @@ class AssistantDAO:
                 detail="Assistant not found.",
             )
 
-    def update_assistant_config(
+    def update_assistant(
         self,
         user_id: str,
         agent_id: int,
         weekly_limit: Optional[Decimal] = None,
         max_parallel: Optional[int] = None,
+        about: Optional[str] = None,
+        phone: Optional[str] = None,
+        email: Optional[str] = None,
     ) -> Optional[Assistant]:
         """
-        Update weekly_limit and/or max_parallel for an existing Assistant.
+        Update configuration for an existing Assistant.
         """
         assistant = self.get_assistant_by_id(user_id, agent_id)
         if not assistant:
@@ -90,5 +103,11 @@ class AssistantDAO:
             assistant.weekly_limit = weekly_limit
         if max_parallel is not None:
             assistant.max_parallel = max_parallel
+        if about is not None:
+            assistant.about = about
+        if phone is not None:
+            assistant.phone = phone
+        if email is not None:
+            assistant.email = email
         self.session.add(assistant)
         return assistant
