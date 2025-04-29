@@ -11,8 +11,6 @@ from orchestra.db.dao.webhook_log_dao import WebhookLogDAO
 router = APIRouter()
 
 
-
-
 @router.post("/webhooks/stripe", include_in_schema=False)
 async def handle_stripe_webhook(
     request: Request,
