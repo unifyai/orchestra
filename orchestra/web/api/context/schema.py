@@ -60,3 +60,15 @@ class AddLogsToContextRequest(BaseModel):
         default=False,
         description="If True, a copy of each log is created and then added to the context. If False, the existing log associations are simply used.",
     )
+
+
+class CreateColumnsRequest(BaseModel):
+    """Request model for creating columns in a context."""
+
+    columns: Dict[str, Optional[str]] = Field(
+        ...,
+        description="Dictionary mapping column names to their explicit types (or None for auto-detection).",
+        json_schema_extra={
+            "example": {"accuracy": "float", "model_name": "str", "iteration": None},
+        },
+    )
