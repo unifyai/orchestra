@@ -9,41 +9,55 @@ class AssistantCreate(BaseModel):
     Schema for creating a new assistant.
     """
 
-    first_name: str = Field(
-        ...,
+    first_name: Optional[str] = Field(
+        None,
         description="First name of the assistant",
         example="Ada",
     )
-    surname: str = Field(
-        ...,
+    surname: Optional[str] = Field(
+        None,
         description="Surname of the assistant",
         example="Lovelace",
     )
-    age: int = Field(..., description="Age of the assistant", example=28)
-    weekly_limit: float = Field(
-        ...,
+    age: Optional[int] = Field(
+        None,
+        description="Age of the assistant",
+        example=28,
+    )
+    weekly_limit: Optional[float] = Field(
+        None,
         description="Weekly time limit for the assistant in hours",
         example=15.75,
     )
-    max_parallel: int = Field(
-        ...,
+    max_parallel: Optional[int] = Field(
+        None,
         description="Maximum number of parallel tasks the assistant can handle",
         example=2,
     )
-    region: str = Field(
-        ...,
+    region: Optional[str] = Field(
+        None,
         description="Geographic region of the assistant",
         example="North America",
     )
-    profile_photo: str = Field(
-        ...,
+    profile_photo: Optional[str] = Field(
+        None,
         description="URL to the assistant's profile photo",
         example="https://example.com/photos/ada.jpg",
     )
-    about: str = Field(
-        ...,
+    about: Optional[str] = Field(
+        None,
         description="Brief description about the assistant",
         example="Mathematician and writer known for work on Analytical Engine",
+    )
+    phone: Optional[str] = Field(
+        None,
+        description="Contact phone number for the assistant",
+        example="+1-555-123-4567",
+    )
+    email: Optional[str] = Field(
+        None,
+        description="Email address for the assistant",
+        example="ada.lovelace@example.com",
     )
 
     class Config:
@@ -58,6 +72,8 @@ class AssistantCreate(BaseModel):
                 "region": "North America",
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "about": "Mathematician and writer known for work on Analytical Engine",
+                "phone": "+1-555-123-4567",
+                "email": "ada.lovelace@example.com",
             },
         }
 
