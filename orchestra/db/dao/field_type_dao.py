@@ -293,6 +293,51 @@ class FieldTypeDAO:
         field_to_rename.field_name = new_field_name
         self.session.commit()
 
+    def create_columns(
+        self,
+        project_id: int,
+        context_id: int,
+        columns: Dict[str, Optional[str]],
+    ) -> None:
+        """Create column definitions for a context without creating logs.
+
+        Args:
+            project_id: The project ID
+            context_id: The context ID
+            columns: Dictionary mapping column names to their types (or None if type is not specified)
+        """
+        from orchestra.web.api.log.python2SQL.constants import STR_TO_SQL_TYPES
+
+        if not columns:
+            return
+
+        # Prepare values for bulk insertion
+        values_to_insert = []
+        for field_name, field_type in columns.items():
+
+            if field_type and field_type not in STR_TO_SQL_TYPES:
+                raise ValueError(f"Invalid field type: {field_type}")
+            column_type = field_type if field_type is not None else "NoneType"
+
+            values_to_insert.append(
+                {
+                    "project_id": project_id,
+                    "field_name": field_name,
+                    "field_type": column_type,
+                    "field_category": "entry",
+                    "mutable": False,
+                    "context_id": context_id,
+                },
+            )
+
+        # Execute bulk insert with on_conflict_do_nothing
+        stmt = pg_insert(FieldType).values(values_to_insert)
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=["project_id", "field_name", "context_id"],
+        )
+        self.session.execute(stmt)
+        self.session.commit()
+
     def bulk_create_field_types(
         self,
         field_types_data: list[dict],
