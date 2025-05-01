@@ -24,6 +24,7 @@ class InterfaceDAO:
         color: str = None,
         active_tab_id: str = None,
         is_checkpoint: bool = False,
+        checkpoint_or_active_id: str = None,
     ) -> Interface:
         """Create a new interface."""
         interface = Interface(
@@ -35,6 +36,7 @@ class InterfaceDAO:
             color=color,
             active_tab_id=active_tab_id,
             is_checkpoint=is_checkpoint,
+            checkpoint_or_active_id=checkpoint_or_active_id,
         )
         self.session.add(interface)
         self.session.commit()
@@ -63,9 +65,9 @@ class InterfaceDAO:
             
         return self.session.execute(query).scalars().first()
 
-    def get(self, id: str) -> Optional[Interface]:
+    def get(self, id: str, is_checkpoint: Optional[bool] = False) -> Optional[Interface]:
         """Get interface by ID."""
-        return self._get_interface(id=id)
+        return self._get_interface(id=id, is_checkpoint=is_checkpoint)
 
     def get_by_project_and_name(
         self, 
@@ -174,6 +176,26 @@ class InterfaceDAO:
         self.session.commit()
         return True
         
+        
+    def make_checkpoint(
+        self,
+        id: Optional[str] = None,
+        project_id: Optional[int] = None,
+        name: Optional[str] = None,
+    ) -> Optional[Interface]:
+        """
+        Mark an interface as a checkpoint (manual save) by ID or by project_id and name.
+        
+        Either id or (project_id and name) must be provided.
+        """
+        return self.update_interface(
+            id=id, 
+            project_id=project_id, 
+            name=name, 
+            is_checkpoint=True
+        )
+    
+
     def make_checkpoint(
         self,
         id: Optional[str] = None,
@@ -209,6 +231,86 @@ class InterfaceDAO:
             return None
         return self.session.execute(query).scalars().first()
 
+    def get_checkpoint(self, id: Optional[str] = None, project_id: Optional[int] = None, name: Optional[str] = None) -> Optional[Interface]:
+        """
+        Get the checkpoint version of an interface.
+        
+        This method retrieves the checkpoint version of an interface by:
+        1. If the provided object is already a checkpoint, it returns it.
+        2. If the provided object is an active interface, it finds its checkpoint 
+           using the checkpoint_or_active_id reference.
+           
+        Args:
+            id: Optional ID of the interface
+            project_id: Optional project ID to identify the interface
+            name: Optional name to identify the interface
+            
+        Returns:
+            The checkpoint interface if found, None otherwise
+        """
+        # First get the interface based on the provided parameters
+        interface = self._get_interface(id=id, project_id=project_id, name=name)
+        
+        if not interface:
+            return None
+            
+        # If the interface is already a checkpoint, return it
+        if interface.is_checkpoint:
+            return interface
+            
+        # If the interface has a checkpoint reference, get that checkpoint
+        if interface.checkpoint_or_active_id:
+            checkpoint = self._get_interface(id=interface.checkpoint_or_active_id, is_checkpoint=True)
+            if checkpoint and checkpoint.is_checkpoint:
+                return checkpoint
+        
+        # If no direct reference, try to find by project_id and name
+        return self._get_interface(
+            project_id=interface.project_id,
+            name=interface.name,
+            is_checkpoint=True
+        )
+        
+    def get_current(self, id: Optional[str] = None, project_id: Optional[int] = None, name: Optional[str] = None) -> Optional[Interface]:
+        """
+        Get the current (active) version of an interface.
+        
+        This method retrieves the current version of an interface by:
+        1. If the provided object is already an active interface, it returns it.
+        2. If the provided object is a checkpoint, it finds its active version 
+           using the checkpoint_or_active_id reference.
+           
+        Args:
+            id: Optional ID of the interface
+            project_id: Optional project ID to identify the interface
+            name: Optional name to identify the interface
+            
+        Returns:
+            The active interface if found, None otherwise
+        """
+        # First get the interface based on the provided parameters
+        interface = self._get_interface(id=id, project_id=project_id, name=name)
+        
+        if not interface:
+            return None
+            
+        # If the interface is already an active interface, return it
+        if not interface.is_checkpoint:
+            return interface
+            
+        # If the interface has an active reference, get that active interface
+        if interface.checkpoint_or_active_id:
+            active = self.get(id=interface.checkpoint_or_active_id)
+            if active and not active.is_checkpoint:
+                return active
+        
+        # If no direct reference, try to find by project_id and name
+        return self._get_interface(
+            project_id=interface.project_id,
+            name=interface.name,
+            is_checkpoint=False
+        )
+
     def patch_interface(
         self,
         update_data: dict,
@@ -239,3 +341,82 @@ class InterfaceDAO:
 
         self.session.commit()
         return interface
+        
+    def checkpoint_interface(
+        self,
+        interface_id: Optional[str] = None,
+        project_id: Optional[int] = None,
+        name: Optional[str] = None,
+    ) -> Optional[Interface]:
+        """
+        Create or update a checkpoint of an interface.
+        
+        Args:
+            interface_id: ID of the interface to checkpoint
+            project_id: Project ID, if identifying interface by project and name
+            name: Interface name, if identifying interface by project and name
+            
+        Returns:
+            The checkpoint interface, either newly created or updated
+        """
+        # Get the source interface first
+        source_interface = self._get_interface(
+            id=interface_id,
+            project_id=project_id,
+            name=name,
+            is_checkpoint=False  # Always get the active interface
+        )
+        
+        if source_interface is None:
+            return None
+        
+        # Check if a checkpoint already exists
+        existing_checkpoint = None if not source_interface.checkpoint_or_active_id else self.get(
+            id=source_interface.checkpoint_or_active_id,
+            is_checkpoint=True
+        )
+        
+        checkpoint_interface = None
+        
+        # If checkpoint exists, update it with the current interface values
+        if existing_checkpoint:
+            checkpoint_interface = self.update_interface(
+                id=str(existing_checkpoint.id),
+                name=source_interface.name,
+                items=source_interface.items,
+                new_counter=source_interface.new_counter,
+                context=source_interface.context,
+                color=source_interface.color,
+                active_tab_id=source_interface.active_tab_id,
+                is_checkpoint=True,
+            )
+            
+            # Set checkpoint references - update one at a time
+            if not source_interface.checkpoint_or_active_id:
+                # Update and commit in separate transactions to avoid sorting issues
+                existing_checkpoint.checkpoint_or_active_id = source_interface.id
+                self.session.commit()
+                
+                source_interface.checkpoint_or_active_id = existing_checkpoint.id
+                self.session.commit()
+        # Otherwise, create a new checkpoint
+        else:
+            checkpoint_interface = self.create_interface(
+                name=source_interface.name,
+                project_id=source_interface.project_id,
+                items=source_interface.items,
+                new_counter=source_interface.new_counter,
+                context=source_interface.context,
+                color=source_interface.color,
+                active_tab_id=source_interface.active_tab_id,
+                is_checkpoint=True,
+                checkpoint_or_active_id=str(source_interface.id)
+            )
+
+            # Update and commit in separate transactions to avoid sorting issues
+            self.session.commit()  # Commit the new interface first
+            
+            source_interface.checkpoint_or_active_id = checkpoint_interface.id
+            self.session.commit()
+        
+        return checkpoint_interface

@@ -24,6 +24,7 @@ class TabDAO:
         global_context: Optional[str] = None,
         color: Optional[str] = None,
         is_checkpoint: bool = False,
+        checkpoint_or_active_id: Optional[str] = None,
     ) -> Tab:
         """Create a new tab in an interface."""
         tab = Tab(
@@ -35,6 +36,7 @@ class TabDAO:
             global_context=global_context,
             color=color,
             is_checkpoint=is_checkpoint,
+            checkpoint_or_active_id=checkpoint_or_active_id,
         )
         self.session.add(tab)
         self.session.commit()
@@ -45,7 +47,7 @@ class TabDAO:
         id: Optional[str] = None,
         interface_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> Optional[Tab]:
         """Internal method to get tab by ID or by interface_id and name."""
         if id is not None:
@@ -63,7 +65,7 @@ class TabDAO:
             
         return self.session.execute(query).scalars().first()
 
-    def get(self, id: str, is_checkpoint: Optional[bool] = None) -> Optional[Tab]:
+    def get(self, id: str, is_checkpoint: Optional[bool] = False) -> Optional[Tab]:
         """Get tab by ID."""
         return self._get_tab(id=id, is_checkpoint=is_checkpoint)
 
@@ -71,7 +73,7 @@ class TabDAO:
         self, 
         interface_id: str, 
         name: str,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> Optional[Tab]:
         """Get tab by interface ID and name."""
         return self._get_tab(interface_id=interface_id, name=name, is_checkpoint=is_checkpoint)
@@ -80,7 +82,7 @@ class TabDAO:
         self,
         interface_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> List[Tab]:
         """List tabs with optional filtering."""
         query = select(Tab)
@@ -99,7 +101,7 @@ class TabDAO:
         id: Optional[str] = None,
         interface_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
         visible: Optional[bool] = None,
         active: Optional[bool] = None,
         order: Optional[int] = None,
@@ -118,7 +120,7 @@ class TabDAO:
             name=name,
             is_checkpoint=is_checkpoint
         )
-        
+
         if tab is None:
             return None
             
@@ -128,7 +130,11 @@ class TabDAO:
         if visible is not None:
             tab.visible = visible
         if active is not None:
-            tab.active = active
+            # If we're making the current tab active, we need to deactivate all other tabs in the interface
+            if active:
+                self.set_active_tab(interface_id=tab.interface_id, tab_id=tab.id, is_checkpoint=tab.is_checkpoint)
+            else:
+                tab.active = active
         if order is not None:
             tab.order = order
         if global_context is not None:
@@ -149,7 +155,7 @@ class TabDAO:
         id: Optional[str] = None,
         interface_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> bool:
         """
         Delete tab by ID or by interface_id and name.
@@ -175,7 +181,7 @@ class TabDAO:
         interface_id: str, 
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> bool:
         """
         Set a tab as active and deactivate all other tabs in the interface.
@@ -217,34 +223,6 @@ class TabDAO:
         
         self.session.commit()
         return interface is not None
-        
-    def make_checkpoint(
-        self,
-        id: Optional[str] = None,
-        interface_id: Optional[str] = None,
-        name: Optional[str] = None,
-    ) -> Optional[Tab]:
-        """
-        Mark a tab as a checkpoint (manually saved) by ID or by interface_id and name.
-        
-        Either id or (interface_id and name) must be provided.
-        """
-        return self.update_tab(
-            id=id, 
-            interface_id=interface_id, 
-            name=name, 
-            is_checkpoint=True
-        )
-    
-    def get_latest_checkpoint(self, interface_id: str, name: str) -> Optional[Tab]:
-        """Get the latest manually saved checkpoint for a tab."""
-        query = select(Tab).where(
-            Tab.interface_id == interface_id,
-            Tab.name == name,
-            Tab.is_checkpoint == True
-        ).order_by(Tab.updated_at.desc())
-        
-        return self.session.execute(query).scalars().first()
     
     def patch_tab(
         self,
@@ -252,7 +230,7 @@ class TabDAO:
         id: Optional[str] = None,
         interface_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> Optional[Tab]:
         """
         Partially update tab with only the fields that need changing.
@@ -282,7 +260,7 @@ class TabDAO:
         interface_id: str, 
         name: str,
         update_data: dict,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> Optional[Tab]:
         """Partially update tab by interface ID and name."""
         # Get the tab by name
@@ -302,3 +280,184 @@ class TabDAO:
 
         self.session.commit()
         return tab
+
+    def checkpoint_tab(
+        self,
+        tab_id: Optional[str] = None,
+        interface_id: Optional[str] = None,
+        name: Optional[str] = None,
+        target_interface_id: Optional[str] = None,
+    ) -> Optional[Tab]:
+        """
+        Create or update a checkpoint of a tab.
+        
+        This method handles the complete process of checkpointing a tab,
+        including creating or updating the checkpoint tab and setting the
+        checkpoint references.
+        
+        Args:
+            tab_id: The ID of the source tab to checkpoint
+            interface_id: The interface ID of the source tab
+            name: The name of the source tab
+            target_interface_id: Optional target interface ID if the checkpoint should 
+                                 be created in a different interface
+            
+        Returns:
+            The checkpoint tab if successful, None otherwise
+            
+        Raises:
+            ValueError: If neither tab_id nor (interface_id and name) are provided
+        """
+        if not tab_id and not (interface_id and name):
+            raise ValueError("Either tab_id or both interface_id and name must be provided")
+            
+        # Get the source tab
+        source_tab = self._get_tab(
+            id=tab_id, 
+            interface_id=interface_id, 
+            name=name,
+            is_checkpoint=False
+        )
+
+        if not source_tab:
+            return None
+            
+        # Determine the target interface_id (where to create the checkpoint)
+        effective_interface_id = target_interface_id if target_interface_id else source_tab.interface_id
+        
+        # Check if a checkpoint already exists
+        existing_checkpoint = None if not source_tab.checkpoint_or_active_id else self._get_tab(
+            id=source_tab.checkpoint_or_active_id,
+            is_checkpoint=True,
+        )
+        
+        # If checkpoint exists, update it
+        if existing_checkpoint:
+            updated = self.update_tab(
+                id=existing_checkpoint.id,
+                name=source_tab.name,
+                visible=source_tab.visible,
+                active=source_tab.active,
+                order=source_tab.order,
+                global_context=source_tab.global_context,
+                color=source_tab.color,
+                is_checkpoint=True,
+            )
+            
+            # Update the checkpoint_or_active_id references
+            # If not already set on the source tab
+            if not source_tab.checkpoint_or_active_id:
+                existing_checkpoint.checkpoint_or_active_id = source_tab.id
+                self.session.commit()
+                
+                source_tab.checkpoint_or_active_id = existing_checkpoint.id
+                self.session.commit()
+        
+        # Otherwise, create a new checkpoint
+        else:
+            updated = self.create_tab(
+                interface_id=effective_interface_id,
+                name=source_tab.name,
+                visible=source_tab.visible,
+                active=source_tab.active,
+                order=source_tab.order,
+                global_context=source_tab.global_context,
+                color=source_tab.color,
+                is_checkpoint=True,
+                checkpoint_or_active_id=source_tab.id
+            )
+            
+            # Commit the new tab first
+            self.session.commit()
+
+            source_tab.checkpoint_or_active_id = updated.id
+            self.session.commit()
+        
+        # Get the full checkpoint tab
+        checkpoint_tab = self.get_by_interface_and_name(
+            interface_id=effective_interface_id,
+            name=source_tab.name,
+            is_checkpoint=True
+        )
+        
+        return checkpoint_tab
+        
+    def get_checkpoint(self, id: Optional[str] = None, interface_id: Optional[str] = None, name: Optional[str] = None) -> Optional[Tab]:
+        """
+        Get the checkpoint version of a tab.
+        
+        This method retrieves the checkpoint version of a tab by:
+        1. If the provided object is already a checkpoint, it returns it.
+        2. If the provided object is an active tab, it finds its checkpoint 
+           using the checkpoint_or_active_id reference.
+           
+        Args:
+            id: Optional ID of the tab
+            interface_id: Optional interface ID to identify the tab
+            name: Optional name to identify the tab
+            
+        Returns:
+            The checkpoint tab if found, None otherwise
+        """
+        # First get the tab based on the provided parameters
+        tab = self._get_tab(id=id, interface_id=interface_id, name=name)
+        
+        if not tab:
+            return None
+            
+        # If the tab is already a checkpoint, return it
+        if tab.is_checkpoint:
+            return tab
+            
+        # If the tab has a checkpoint reference, get that checkpoint
+        if tab.checkpoint_or_active_id:
+            checkpoint = self._get_tab(id=tab.checkpoint_or_active_id, is_checkpoint=True)
+            if checkpoint and checkpoint.is_checkpoint:
+                return checkpoint
+        
+        # If no direct reference, try to find by interface_id and name
+        return self._get_tab(
+            interface_id=tab.interface_id,
+            name=tab.name,
+            is_checkpoint=True
+        )
+        
+    def get_current(self, id: Optional[str] = None, interface_id: Optional[str] = None, name: Optional[str] = None) -> Optional[Tab]:
+        """
+        Get the current (active) version of a tab.
+        
+        This method retrieves the current version of a tab by:
+        1. If the provided object is already an active tab, it returns it.
+        2. If the provided object is a checkpoint, it finds its active version 
+           using the checkpoint_or_active_id reference.
+           
+        Args:
+            id: Optional ID of the tab
+            interface_id: Optional interface ID to identify the tab
+            name: Optional name to identify the tab
+            
+        Returns:
+            The active tab if found, None otherwise
+        """
+        # First get the tab based on the provided parameters
+        tab = self._get_tab(id=id, interface_id=interface_id, name=name)
+        
+        if not tab:
+            return None
+            
+        # If the tab is already an active tab, return it
+        if not tab.is_checkpoint:
+            return tab
+            
+        # If the tab has an active reference, get that active tab
+        if tab.checkpoint_or_active_id:
+            active = self.get(id=tab.checkpoint_or_active_id)
+            if active and not active.is_checkpoint:
+                return active
+        
+        # If no direct reference, try to find by interface_id and name
+        return self._get_tab(
+            interface_id=tab.interface_id,
+            name=tab.name,
+            is_checkpoint=False
+        )

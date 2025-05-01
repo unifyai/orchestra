@@ -330,7 +330,7 @@ def create_tab_checkpoint(
 ):
     """Create a manual checkpoint (save) of a tab and all its tiles."""
     # Use helper function to get tab with for_update=True to ensure we're operating on the active tab
-    tab, _ = _get_tab(
+    tab, interface = _get_tab(
         tab_id=tab_id,
         interface_id=interface_id,
         name=name,
@@ -339,85 +339,64 @@ def create_tab_checkpoint(
         tab_dao=tab_dao,
         for_update=True
     )
+
+    # First ensure that the parent interface has a checkpoint
+    checkpoint_interface = interface_dao.get_checkpoint(id=str(interface.id))
     
-    # Check if a checkpoint already exists
-    existing_checkpoint = None
-    if tab_id:
-        # Get by name and interface ID of the original tab
-        existing_checkpoint = tab_dao.get_by_interface_and_name(
-            interface_id=tab.interface_id,
-            name=tab.name,
-            is_checkpoint=True
-        )
-    else:
-        # Get directly by interface ID and name
-        existing_checkpoint = tab_dao.get_by_interface_and_name(
-            interface_id=interface_id,
-            name=name,
-            is_checkpoint=True
-        )
+    if not checkpoint_interface:
+        # If no checkpoint exists for the interface, create one
+        checkpoint_interface = interface_dao.checkpoint_interface(interface_id=str(interface.id))
+        
+        if not checkpoint_interface:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to create checkpoint for parent interface."
+            )
     
-    # If checkpoint exists, update it with the current tab values
-    if existing_checkpoint:
-        updated = tab_dao.update_tab(
-            id=existing_checkpoint.id,
-            visible=tab.visible,
-            active=tab.active,
-            order=tab.order,
-            global_context=tab.global_context,
-            color=tab.color
-        )
-    # Otherwise, create a new checkpoint
-    else:
-        updated = tab_dao.create_tab(
-            interface_id=tab.interface_id,
-            name=tab.name,
-            visible=tab.visible,
-            active=tab.active,
-            order=tab.order,
-            global_context=tab.global_context,
-            color=tab.color,
-            is_checkpoint=True
+    # Use the TabDAO checkpoint_tab method to handle the tab checkpointing
+    checkpoint_tab = tab_dao.checkpoint_tab(
+        tab_id=tab.id,
+        target_interface_id=checkpoint_interface.id
+    )
+    
+    if not checkpoint_tab:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to create tab checkpoint."
         )
     
     # Get tiles for this tab
-    tiles = tile_dao.list_tiles_by_tab(tab_id=tab.id, is_checkpoint=False)
+    tiles = tile_dao.list_tiles_by_tab(tab_id=str(tab.id), is_checkpoint=False)
     
     # Create checkpoint tiles for each tile in the tab
     for tile in tiles:
-        # Check if a checkpoint tile already exists
-        existing_checkpoint_tile = tile_dao.get_tile_by_tab_and_name(
-            tab_id=updated.id,
-            name=tile.name,
-            is_checkpoint=True
+        # Use the TileDAO checkpoint_tile method to handle tile checkpointing
+        tile_dao.checkpoint_tile(
+            tile_id=str(tile.id),
+            target_tab_id=str(checkpoint_tab.id)
         )
-        
-        if existing_checkpoint_tile:
-            # Update existing checkpoint tile
-            tile_dao.update_tile(
-                tile_id=existing_checkpoint_tile.id,
-                visible=tile.visible,
-                order=tile.order,
-                # Copy other tile properties as needed
-            )
-        else:
-            # Create new checkpoint tile
-            tile_dao.create_tile(
-                tab_id=updated.id,
-                name=tile.name,
-                visible=tile.visible,
-                order=tile.order,
-                is_checkpoint=True,
-                # Copy other tile properties as needed
-            )
     
     # Get tiles for the checkpoint tab to return
     checkpoint_tiles = tile_dao.list_tiles_by_tab(
-        tab_id=updated.id,
+        tab_id=str(checkpoint_tab.id),
         is_checkpoint=True
     )
+
+    # If we have a different number of tiles in the current tab comapred to the 
+    # checkpoint tab, we need to delete the extra tiles from the checkpoint tab
+    if len(tiles) < len(checkpoint_tiles):
+        # Delete any tiles in the checkpoint tab that are not in the current tab
+        for checkpoint_tile in checkpoint_tiles:
+            if not any(checkpoint_tile.id == tile.checkpoint_or_active_id for tile in tiles):
+                tile_dao.delete_tile(id=str(checkpoint_tile.id), is_checkpoint=True)
+
+        # Get tiles for the checkpoint tab to return
+        checkpoint_tiles = tile_dao.list_tiles_by_tab(
+            tab_id=str(checkpoint_tab.id),
+            is_checkpoint=True
+        )
     
-    return _create_tab_response(updated, checkpoint_tiles)
+    return _create_tab_response(checkpoint_tab, checkpoint_tiles)
 
 
 @router.delete(
@@ -461,4 +440,65 @@ def delete_tab(
         success = tab_dao.delete_tab(interface_id=interface.id, name=name)
         
     if not success:
-        raise HTTPException(status_code=500, detail="Failed to delete tab.") 
+        raise HTTPException(status_code=500, detail="Failed to delete tab.")
+
+
+@router.get(
+    "/checkpoint",
+    response_model=TabSchema,
+    responses={
+        200: {"description": "Tab checkpoint retrieved successfully"},
+        404: {"description": "Tab or checkpoint not found"},
+        400: {"description": "Missing required parameters"},
+    },
+)
+def get_tab_checkpoint(
+    tab_id: Optional[str] = Query(None, description="The ID of the tab to get checkpoint for"),
+    interface_id: Optional[str] = Query(None, description="The interface ID the tab belongs to"),
+    name: Optional[str] = Query(None, description="The name of the tab to get checkpoint for"),
+    tab_dao: TabDAO = Depends(),
+    tile_dao: TileDAO = Depends(),
+):
+    """Get the checkpoint (manual save) for a tab by ID or by interface_id and name."""
+    # First get the active tab to use as a reference
+    tab = None
+    if tab_id:
+        tab = tab_dao.get(id=tab_id)
+        if not tab:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Tab with ID {tab_id} not found."
+            )
+    elif interface_id and name:
+        tab = tab_dao.get_by_interface_and_name(
+            interface_id=interface_id,
+            name=name,
+            is_checkpoint=False
+        )
+        if not tab:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Tab with name {name} not found in interface {interface_id}."
+            )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Either tab_id or both interface_id and name must be provided."
+        )
+    
+    # Get the checkpoint version of this tab
+    checkpoint_tab = tab_dao.get_checkpoint(id=tab.id)
+    
+    if not checkpoint_tab:
+        raise HTTPException(
+            status_code=404,
+            detail="No checkpoint found for the specified tab."
+        )
+    
+    # Get tiles for this checkpoint tab
+    checkpoint_tiles = tile_dao.list_tiles_by_tab(
+        tab_id=checkpoint_tab.id,
+        is_checkpoint=True
+    )
+    
+    return _create_tab_response(checkpoint_tab, checkpoint_tiles) 

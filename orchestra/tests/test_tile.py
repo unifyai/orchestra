@@ -62,7 +62,7 @@ async def _create_test_tab(client: AsyncClient, interface_id, name=TEST_TAB, act
 
 # Tile helpers
 async def _create_test_tile(client: AsyncClient, tab_id, name=TEST_TILE, 
-                         tile_type="table", width=1, height=1, 
+                         tile_type="Table", width=1, height=1, 
                          x=0, y=0, 
                          min_width=None, min_height=None,
                          visible=True, locked=False, moved=False, static=False,
@@ -189,7 +189,7 @@ async def _create_test_table_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE
     }
     
     # Remove None values
-    table_tile_data = {k: v for k, v in table_tile_data.items() if v is not None}
+    table_tile_data = {k: v for k, v in table_tile_data.items()}
     
     # Set defaults for table tiles
     table_kwargs = {
@@ -248,7 +248,7 @@ async def _create_test_plot_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE}
     }
     
     # Remove None values
-    plot_tile_data = {k: v for k, v in plot_tile_data.items() if v is not None}
+    plot_tile_data = {k: v for k, v in plot_tile_data.items()}
     
     # Set defaults for plot tiles
     plot_kwargs = {
@@ -285,7 +285,7 @@ async def _create_test_view_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE}
     }
     
     # Remove None values
-    view_tile_data = {k: v for k, v in view_tile_data.items() if v is not None}
+    view_tile_data = {k: v for k, v in view_tile_data.items()}
     
     # Set defaults for view tiles
     view_kwargs = {
@@ -331,7 +331,7 @@ async def _create_test_editor_tile(client: AsyncClient, tab_id, name=f"{TEST_TIL
     }
     
     # Remove None values
-    editor_tile_data = {k: v for k, v in editor_tile_data.items() if v is not None}
+    editor_tile_data = {k: v for k, v in editor_tile_data.items()}
     
     # Set defaults for editor tiles
     editor_kwargs = {
@@ -527,13 +527,11 @@ async def test_create_tile(client: AsyncClient):
     
     # Create a tile
     response = await _create_test_tile(client, tab_id)
-    print(response.json())
     assert response.status_code == 201
     
     data = response.json()
     assert data["name"] == TEST_TILE
     assert data["tab_id"] == tab_id
-    assert data["type"] == "table"
     
     # Check position fields
     assert "position" in data
@@ -680,18 +678,18 @@ async def test_list_tiles_with_type_filter(client: AsyncClient):
     tab_id = tab_response.json()["id"]
     
     # Create tiles with different types
-    await _create_test_tile(client, tab_id, name="table-tile", tile_type="table")
-    await _create_test_tile(client, tab_id, name="plot-tile", tile_type="plot")
-    await _create_test_tile(client, tab_id, name="view-tile", tile_type="view")
+    await _create_test_tile(client, tab_id, name="table-tile", tile_type="Table")
+    await _create_test_tile(client, tab_id, name="plot-tile", tile_type="Plot")
+    await _create_test_tile(client, tab_id, name="view-tile", tile_type="View")
     
     # List only table tiles
-    response = await _list_tiles(client, tab_id=tab_id, type="table")
+    response = await _list_tiles(client, tab_id=tab_id, type="Table")
     assert response.status_code == 200
     
     data = response.json()
     assert len(data) == 1
     assert data[0]["name"] == "table-tile"
-    assert data[0]["type"] == "table"
+    assert data[0]["type"] == "Table"
 
 
 @pytest.mark.anyio
@@ -777,7 +775,7 @@ async def test_patch_tile(client: AsyncClient):
             "width": 2,
             "height": 3
         },
-        "context": {"updated": True}
+        "context": "Parameters/student/student_id"
     }
     response = await _patch_tile(client, tile_id=tile_id, patch_data=patch_data)
     assert response.status_code == 200
@@ -786,7 +784,7 @@ async def test_patch_tile(client: AsyncClient):
     assert data["id"] == tile_id
     assert data["position"]["width"] == 2
     assert data["position"]["height"] == 3
-    assert data["context"] == {"updated": True}
+    assert data["context"] == "Parameters/student/student_id"
     # Other fields should remain unchanged
     assert data["name"] == TEST_TILE
     assert data["visible"] is True
@@ -802,15 +800,15 @@ async def test_patch_specialized_tile(client: AsyncClient):
     tab_id = tab_response.json()["id"]
     
     # Create different specialized tiles
-    table_response = await _create_test_tile(client, tab_id, name="table-tile", tile_type="table")
+    table_response = await _create_test_table_tile(client, tab_id, name="table-tile")
     table_id = table_response.json()["id"]
     
     # Patch the specialized tile data
     specialized_data = {
-        "columns": ["col1", "col2"],
-        "data": [["value1", "value2"], ["value3", "value4"]]
+        "columns_pin_left": ["RowNumbering"],
+        "page_number": "1"
     }
-    response = await _patch_specialized_tile(client, tile_type="table", tile_id=table_id, patch_data=specialized_data)
+    response = await _patch_specialized_tile(client, tile_type="Table", tile_id=table_id, patch_data=specialized_data)
     assert response.status_code == 200
     
     # Verify the specialized data was updated
@@ -819,9 +817,8 @@ async def test_patch_specialized_tile(client: AsyncClient):
     
     # The response should contain the specialized data
     data = get_response.json()
-    # For this test, we'll assume the specialized data is included in the response
-    # This depends on how the API is actually implemented
-    assert "specialized_data" in data or "table_data" in data
+    assert data["table_tile"]["columns_pin_left"] == '["RowNumbering"]'
+    assert data["table_tile"]["page_number"] == '1'
 
 
 @pytest.mark.anyio

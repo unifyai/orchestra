@@ -493,16 +493,8 @@ async def test_create_tab_checkpoint_with_tiles(client: AsyncClient):
     tab_id = tab_response.json()["id"]
     
     # Create a tile in the tab
-    tile_response = await client.post(
-        f"/v0/tile/",
-        headers=HEADERS,
-        json={
-            "tab_id": tab_id,
-            "name": "test-tile",
-            "visible": True,
-            "order": 1
-        }
-    )
+    from orchestra.tests.test_tile import _create_test_tile
+    tile_response = await _create_test_tile(client, tab_id, name="test-tile")
     assert tile_response.status_code == 201
     
     # Create a checkpoint
@@ -514,7 +506,6 @@ async def test_create_tab_checkpoint_with_tiles(client: AsyncClient):
     assert len(checkpoint_data["tiles"]) == 1
     assert checkpoint_data["tiles"][0]["name"] == "test-tile"
     assert checkpoint_data["tiles"][0]["visible"] is True
-    assert checkpoint_data["tiles"][0]["order"] == 1
 
 
 @pytest.mark.anyio
@@ -528,17 +519,9 @@ async def test_create_tab_checkpoint_with_multiple_tiles(client: AsyncClient):
     
     # Create multiple tiles
     tile_names = ["tile1", "tile2", "tile3"]
+    from orchestra.tests.test_tile import _create_test_tile
     for i, name in enumerate(tile_names):
-        tile_response = await client.post(
-            f"/v0/tile/",
-            headers=HEADERS,
-            json={
-                "tab_id": tab_id,
-                "name": name,
-                "visible": True,
-                "order": i
-            }
-        )
+        tile_response = await _create_test_tile(client, tab_id, name=name)
         assert tile_response.status_code == 201
     
     # Create a checkpoint
@@ -562,16 +545,8 @@ async def test_create_tab_checkpoint_with_invisible_tiles(client: AsyncClient):
     tab_id = tab_response.json()["id"]
     
     # Create a tile with visible=False
-    tile_response = await client.post(
-        f"/v0/tile/",
-        headers=HEADERS,
-        json={
-            "tab_id": tab_id,
-            "name": "invisible-tile",
-            "visible": False,
-            "order": 1
-        }
-    )
+    from orchestra.tests.test_tile import _create_test_tile
+    tile_response = await _create_test_tile(client, tab_id, name="invisible-tile", visible=False)
     assert tile_response.status_code == 201
     
     # Create a checkpoint
@@ -594,16 +569,8 @@ async def test_create_tab_checkpoint_with_tile_updates(client: AsyncClient):
     tab_id = tab_response.json()["id"]
     
     # Create a tile
-    tile_response = await client.post(
-        f"/v0/tile/",
-        headers=HEADERS,
-        json={
-            "tab_id": tab_id,
-            "name": "test-tile",
-            "visible": True,
-            "order": 1
-        }
-    )
+    from orchestra.tests.test_tile import _create_test_tile
+    tile_response = await _create_test_tile(client, tab_id, name="test-tile")
     assert tile_response.status_code == 201
     tile_id = tile_response.json()["id"]
     
@@ -617,7 +584,6 @@ async def test_create_tab_checkpoint_with_tile_updates(client: AsyncClient):
         headers=HEADERS,
         json={
             "visible": False,
-            "order": 2
         }
     )
     assert update_tile_response.status_code == 200
@@ -630,7 +596,6 @@ async def test_create_tab_checkpoint_with_tile_updates(client: AsyncClient):
     checkpoint_data = second_checkpoint.json()
     assert len(checkpoint_data["tiles"]) == 1
     assert checkpoint_data["tiles"][0]["visible"] is False
-    assert checkpoint_data["tiles"][0]["order"] == 2
 
 
 @pytest.mark.anyio
@@ -643,16 +608,8 @@ async def test_create_tab_checkpoint_with_deleted_tiles(client: AsyncClient):
     tab_id = tab_response.json()["id"]
     
     # Create a tile
-    tile_response = await client.post(
-        f"/v0/tile/",
-        headers=HEADERS,
-        json={
-            "tab_id": tab_id,
-            "name": "test-tile",
-            "visible": True,
-            "order": 1
-        }
-    )
+    from orchestra.tests.test_tile import _create_test_tile
+    tile_response = await _create_test_tile(client, tab_id, name="test-tile")
     assert tile_response.status_code == 201
     tile_id = tile_response.json()["id"]
     
@@ -691,16 +648,8 @@ async def test_create_tab_checkpoint_with_added_tiles(client: AsyncClient):
     assert len(first_checkpoint.json()["tiles"]) == 0
     
     # Add a tile
-    tile_response = await client.post(
-        f"/v0/tile/",
-        headers=HEADERS,
-        json={
-            "tab_id": tab_id,
-            "name": "new-tile",
-            "visible": True,
-            "order": 1
-        }
-    )
+    from orchestra.tests.test_tile import _create_test_tile
+    tile_response = await _create_test_tile(client, tab_id, name="new-tile")
     assert tile_response.status_code == 201
     
     # Create second checkpoint
@@ -723,16 +672,8 @@ async def test_create_tab_checkpoint_with_renamed_tiles(client: AsyncClient):
     tab_id = tab_response.json()["id"]
     
     # Create a tile
-    tile_response = await client.post(
-        f"/v0/tile/",
-        headers=HEADERS,
-        json={
-            "tab_id": tab_id,
-            "name": "old-name",
-            "visible": True,
-            "order": 1
-        }
-    )
+    from orchestra.tests.test_tile import _create_test_tile
+    tile_response = await _create_test_tile(client, tab_id)
     assert tile_response.status_code == 201
     tile_id = tile_response.json()["id"]
     

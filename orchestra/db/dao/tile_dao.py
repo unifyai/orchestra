@@ -44,6 +44,7 @@ class TileDAO:
         common_filter: Optional[str] = None,
         metric: Optional[str] = None,
         is_checkpoint: bool = False,
+        checkpoint_or_active_id: Optional[str] = None,
     ) -> Tile:
         """
         Create a new tile in a tab.
@@ -107,6 +108,7 @@ class TileDAO:
             common_filter=common_filter,
             metric=metric,
             is_checkpoint=is_checkpoint,
+            checkpoint_or_active_id=checkpoint_or_active_id,
         )
         self.session.add(tile)
         self.session.commit()
@@ -117,7 +119,7 @@ class TileDAO:
         id: Optional[str] = None,
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> Optional[Tile]:
         """
         Internal method to get tile by ID or by tab_id and name.
@@ -146,7 +148,7 @@ class TileDAO:
             
         return self.session.execute(query).scalars().first()
 
-    def get(self, id: str, is_checkpoint: Optional[bool] = None) -> Optional[Tile]:
+    def get(self, id: str, is_checkpoint: Optional[bool] = False) -> Optional[Tile]:
         """
         Get tile by ID.
         
@@ -163,7 +165,7 @@ class TileDAO:
         self, 
         tab_id: str, 
         name: str,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> Optional[Tile]:
         """
         Get tile by tab ID and name.
@@ -183,7 +185,7 @@ class TileDAO:
         tab_id: str,
         name: Optional[str] = None,
         type: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> List[Tile]:
         """
         List tiles for a tab with optional filtering.
@@ -213,7 +215,7 @@ class TileDAO:
         id: Optional[str] = None,
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
         x_position: Optional[float] = None,
         y_position: Optional[float] = None,
         width: Optional[float] = None,
@@ -275,7 +277,7 @@ class TileDAO:
             name=name,
             is_checkpoint=is_checkpoint
         )
-        
+
         if tile is None:
             return None
             
@@ -344,7 +346,7 @@ class TileDAO:
         id: Optional[str] = None,
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> bool:
         """
         Delete tile by ID or by tab_id and name.
@@ -377,55 +379,6 @@ class TileDAO:
         self.session.delete(tile)
         self.session.commit()
         return True
-        
-    def make_checkpoint(
-        self,
-        id: Optional[str] = None,
-        tab_id: Optional[str] = None,
-        name: Optional[str] = None,
-    ) -> Optional[Tile]:
-        """
-        Mark a tile as a checkpoint (manually saved) by ID or by tab_id and name.
-        
-        Args:
-            id: The ID of the tile
-            tab_id: The ID of the tab
-            name: The name of the tile
-            
-        Returns:
-            The checkpointed tile if found, None otherwise
-            
-        Raises:
-            ValueError: If neither id nor (tab_id and name) are provided
-        """
-        if not id and not (tab_id and name):
-            raise ValueError("Either id or both tab_id and name must be provided")
-            
-        return self.update_tile(
-            id=id, 
-            tab_id=tab_id, 
-            name=name, 
-            is_checkpoint=True
-        )
-    
-    def get_latest_checkpoint(self, tab_id: str, name: str) -> Optional[Tile]:
-        """
-        Get the latest manually saved checkpoint for a tile.
-        
-        Args:
-            tab_id: The ID of the tab
-            name: The name of the tile
-            
-        Returns:
-            The latest checkpoint tile if found, None otherwise
-        """
-        query = select(Tile).where(
-            Tile.tab_id == tab_id,
-            Tile.name == name,
-            Tile.is_checkpoint == True
-        ).order_by(Tile.updated_at.desc())
-        
-        return self.session.execute(query).scalars().first()
 
     # Specialized tile types
     def create_table_tile(
@@ -490,7 +443,7 @@ class TileDAO:
                 is_checkpoint=is_checkpoint,
             )
             tile_id = base_tile.id
-            
+
         table_tile = TableTile(
             id=tile_id,
             tile_id=tile_id,
@@ -506,7 +459,16 @@ class TileDAO:
             columns_pin_right=columns_pin_right,
             selected=selected,
         )
+
         self.session.add(table_tile)
+
+        # Now update the base tile
+        base_tile = self._get_tile(id=tile_id, is_checkpoint=is_checkpoint)
+        if base_tile:
+            base_tile.table_tile = table_tile
+        else:
+            print(f"Base tile not found for {tile_id}")
+        
         self.session.commit()
         return table_tile
         
@@ -516,7 +478,7 @@ class TileDAO:
         id: Optional[str] = None,
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> Optional[Union[TableTile, PlotTile, ViewTile, EditorTile]]:
         """Helper method to get a specialized tile by ID or by tab_id and name."""
         if id is not None:
@@ -540,7 +502,7 @@ class TileDAO:
         id: Optional[str] = None,
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> Optional[TableTile]:
         """Get table tile by ID or by tab_id and name."""
         return self._get_specialized_tile(TableTile, id, tab_id, name, is_checkpoint)
@@ -550,7 +512,7 @@ class TileDAO:
         id: Optional[str] = None,
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
         position: Optional[dict] = None,
         x_position: Optional[float] = None,
         y_position: Optional[float] = None,
@@ -751,8 +713,17 @@ class TileDAO:
             bin_count=bin_count,
             regression_line=regression_line,
         )
+
+        # Now update the base tile
+        base_tile = self._get_tile(id=tile_id, is_checkpoint=is_checkpoint)
+        if base_tile:
+            base_tile.plot_tile = plot_tile
+        else:
+            print(f"Base tile not found for {tile_id}")
+
         self.session.add(plot_tile)
         self.session.commit()
+
         return plot_tile
         
     def get_plot_tile(
@@ -760,7 +731,7 @@ class TileDAO:
         id: Optional[str] = None,
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> Optional[PlotTile]:
         """Get plot tile by ID or by tab_id and name."""
         return self._get_specialized_tile(PlotTile, id, tab_id, name, is_checkpoint)
@@ -770,7 +741,7 @@ class TileDAO:
         id: Optional[str] = None,
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
         position: Optional[dict] = None,
         x_position: Optional[float] = None,
         y_position: Optional[float] = None,
@@ -954,8 +925,17 @@ class TileDAO:
             file_path=file_path,
             file_type=file_type,
         )
+
+        # Now update the base tile
+        base_tile = self._get_tile(id=tile_id, is_checkpoint=is_checkpoint)
+        if base_tile:
+            base_tile.editor_tile = editor_tile
+        else:
+            print(f"Base tile not found for {tile_id}")
+
         self.session.add(editor_tile)
         self.session.commit()
+
         return editor_tile
         
     def get_editor_tile(
@@ -963,7 +943,7 @@ class TileDAO:
         id: Optional[str] = None,
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> Optional[EditorTile]:
         """Get editor tile by ID or by tab_id and name."""
         return self._get_specialized_tile(EditorTile, id, tab_id, name, is_checkpoint)
@@ -973,7 +953,7 @@ class TileDAO:
         id: Optional[str] = None,
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
         position: Optional[dict] = None,
         x_position: Optional[float] = None,
         y_position: Optional[float] = None,
@@ -1132,8 +1112,17 @@ class TileDAO:
             tile_id=tile_id,
             base_index=base_index,
         )
+
+        # Now update the base tile
+        base_tile = self._get_tile(id=tile_id, is_checkpoint=is_checkpoint)
+        if base_tile:
+            base_tile.view_tile = view_tile
+        else:
+            print(f"Base tile not found for {tile_id}")
+
         self.session.add(view_tile)
         self.session.commit()
+
         return view_tile
         
     def get_view_tile(
@@ -1141,7 +1130,7 @@ class TileDAO:
         id: Optional[str] = None,
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
     ) -> Optional[ViewTile]:
         """Get view tile by ID or by tab_id and name."""
         return self._get_specialized_tile(ViewTile, id, tab_id, name, is_checkpoint)
@@ -1151,7 +1140,7 @@ class TileDAO:
         id: Optional[str] = None,
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
         position: Optional[dict] = None,
         x_position: Optional[float] = None,
         y_position: Optional[float] = None,
@@ -1252,7 +1241,7 @@ class TileDAO:
         id: Optional[str] = None,
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
-        is_checkpoint: Optional[bool] = None,
+        is_checkpoint: Optional[bool] = False,
         tile_type: Optional[str] = None,
     ) -> Optional[Tile]:
         """
@@ -1467,3 +1456,343 @@ class TileDAO:
             'width': tile.width,
             'height': tile.height
         }
+
+    def checkpoint_tile(
+        self,
+        tile_id: Optional[str] = None,
+        tab_id: Optional[str] = None,
+        name: Optional[str] = None,
+        target_tab_id: Optional[str] = None,
+    ) -> Optional[Tile]:
+        """
+        Create or update a checkpoint of a tile, including all specialized data.
+        
+        This method handles the complete process of checkpointing a tile, including
+        creating/updating the base tile and any specialized tile data.
+        
+        Args:
+            tile_id: The ID of the source tile to checkpoint
+            tab_id: The tab ID of the source tile
+            name: The name of the source tile
+            target_tab_id: Optional target tab ID if the checkpoint should be created
+                           in a different tab (used for tab checkpointing)
+            
+        Returns:
+            The checkpoint tile if successful, None otherwise
+            
+        Raises:
+            ValueError: If neither tile_id nor (tab_id and name) are provided
+        """
+        if not tile_id and not (tab_id and name):
+            raise ValueError("Either tile_id or both tab_id and name must be provided")
+            
+        # Get the source tile
+        source_tile = self._get_tile(
+            id=tile_id, 
+            tab_id=tab_id, 
+            name=name,
+            is_checkpoint=False
+        )
+        
+        if not source_tile:
+            return None
+            
+        # Determine the target tab_id (where to create the checkpoint)
+        effective_tab_id = target_tab_id if target_tab_id else source_tile.tab_id
+
+        # Check if a checkpoint already exists
+        existing_checkpoint = None if not source_tile.checkpoint_or_active_id else self._get_tile(
+            id=source_tile.checkpoint_or_active_id,
+            is_checkpoint=True,
+        )
+        
+        # Extract current position data
+        position_data = self._position_from_dict(self._position_to_dict(source_tile))
+        
+        # If checkpoint exists, update it
+        if existing_checkpoint:
+            updated = self.update_tile(
+                id=str(existing_checkpoint.id),
+                name=source_tile.name,
+                visible=source_tile.visible,
+                locked=source_tile.locked,
+                moved=source_tile.moved,
+                static=source_tile.static,
+                context=source_tile.context,
+                table=source_tile.table,
+                auto_update=source_tile.auto_update,
+                freeze=source_tile.freeze,
+                filters=source_tile.filters,
+                common_filter=source_tile.common_filter,
+                metric=source_tile.metric,
+                min_width=source_tile.min_width,
+                min_height=source_tile.min_height,
+                is_checkpoint=True,
+                **position_data
+            )
+            
+            # Update the checkpoint_or_active_id references
+            # If not already set on the source tile
+            if not source_tile.checkpoint_or_active_id:
+                existing_checkpoint.checkpoint_or_active_id = source_tile.id
+                self.session.commit()
+                
+                source_tile.checkpoint_or_active_id = existing_checkpoint.id
+                self.session.commit()
+        
+        # Otherwise, create a new checkpoint
+        else:
+            updated = self.create_tile(
+                tab_id=effective_tab_id,
+                name=source_tile.name,
+                type=source_tile.type,
+                visible=source_tile.visible,
+                locked=source_tile.locked,
+                moved=source_tile.moved,
+                static=source_tile.static,
+                context=source_tile.context,
+                table=source_tile.table,
+                auto_update=source_tile.auto_update,
+                freeze=source_tile.freeze,
+                filters=source_tile.filters,
+                common_filter=source_tile.common_filter,
+                metric=source_tile.metric,
+                min_width=source_tile.min_width,
+                min_height=source_tile.min_height,
+                is_checkpoint=True,
+                checkpoint_or_active_id=source_tile.id,
+                **position_data
+            )
+            
+            # Commit the new tile first
+            self.session.commit()
+            
+            source_tile.checkpoint_or_active_id = updated.id
+            self.session.commit()
+        
+        # Handle specialized tile data checkpointing based on tile type
+        if source_tile.type == "Table" and hasattr(source_tile, 'table_tile') and source_tile.table_tile:
+            # Check if checkpoint specialized tile exists
+            existing_specialized = self.get_table_tile(
+                tab_id=effective_tab_id,
+                name=source_tile.name,
+                is_checkpoint=True
+            )
+            
+            if existing_specialized:
+                # Update existing specialized tile
+                self.update_table_tile(
+                    id=str(existing_specialized.id),
+                    table_type=source_tile.table_tile.table_type,
+                    column_context=source_tile.table_tile.column_context,
+                    page_number=source_tile.table_tile.page_number,
+                    column_order=source_tile.table_tile.column_order,
+                    hidden_columns=source_tile.table_tile.hidden_columns,
+                    sorting=source_tile.table_tile.sorting,
+                    grouping=source_tile.table_tile.grouping,
+                    group_sorting=source_tile.table_tile.group_sorting,
+                    columns_pin_left=source_tile.table_tile.columns_pin_left,
+                    columns_pin_right=source_tile.table_tile.columns_pin_right,
+                    selected=source_tile.table_tile.selected
+                )
+            else:
+                # Create new specialized tile
+                self.create_table_tile(
+                    tab_id=effective_tab_id,
+                    name=source_tile.name,
+                    tile_id=updated.id,
+                    table_type=source_tile.table_tile.table_type,
+                    column_context=source_tile.table_tile.column_context,
+                    page_number=source_tile.table_tile.page_number,
+                    column_order=source_tile.table_tile.column_order,
+                    hidden_columns=source_tile.table_tile.hidden_columns,
+                    sorting=source_tile.table_tile.sorting,
+                    grouping=source_tile.table_tile.grouping,
+                    group_sorting=source_tile.table_tile.group_sorting,
+                    columns_pin_left=source_tile.table_tile.columns_pin_left,
+                    columns_pin_right=source_tile.table_tile.columns_pin_right,
+                    selected=source_tile.table_tile.selected,
+                    is_checkpoint=True
+                )
+        
+        elif source_tile.type == "Plot" and hasattr(source_tile, 'plot_tile') and source_tile.plot_tile:
+            # Check if checkpoint specialized tile exists
+            existing_specialized = self.get_plot_tile(
+                tab_id=effective_tab_id,
+                name=source_tile.name,
+                is_checkpoint=True
+            )
+            
+            if existing_specialized:
+                # Update existing specialized tile
+                self.update_plot_tile(
+                    id=str(existing_specialized.id),
+                    plot_type=source_tile.plot_tile.plot_type,
+                    plot_scale_x=source_tile.plot_tile.plot_scale_x,
+                    plot_scale_y=source_tile.plot_tile.plot_scale_y,
+                    plot_aggregate=source_tile.plot_tile.plot_aggregate,
+                    x_axis=source_tile.plot_tile.x_axis,
+                    y_axis=source_tile.plot_tile.y_axis,
+                    plot_group_by=source_tile.plot_tile.plot_group_by,
+                    plot_group_by_colors=source_tile.plot_tile.plot_group_by_colors,
+                    bin_count=source_tile.plot_tile.bin_count,
+                    regression_line=source_tile.plot_tile.regression_line
+                )
+            else:
+                # Create new specialized tile
+                self.create_plot_tile(
+                    tab_id=effective_tab_id,
+                    name=source_tile.name,
+                    tile_id=updated.id,
+                    plot_type=source_tile.plot_tile.plot_type,
+                    plot_scale_x=source_tile.plot_tile.plot_scale_x,
+                    plot_scale_y=source_tile.plot_tile.plot_scale_y,
+                    plot_aggregate=source_tile.plot_tile.plot_aggregate,
+                    x_axis=source_tile.plot_tile.x_axis,
+                    y_axis=source_tile.plot_tile.y_axis,
+                    plot_group_by=source_tile.plot_tile.plot_group_by,
+                    plot_group_by_colors=source_tile.plot_tile.plot_group_by_colors,
+                    bin_count=source_tile.plot_tile.bin_count,
+                    regression_line=source_tile.plot_tile.regression_line,
+                    is_checkpoint=True
+                )
+        
+        elif source_tile.type == "View" and hasattr(source_tile, 'view_tile') and source_tile.view_tile:
+            # Check if checkpoint specialized tile exists
+            existing_specialized = self.get_view_tile(
+                tab_id=effective_tab_id,
+                name=source_tile.name,
+                is_checkpoint=True
+            )
+            
+            if existing_specialized:
+                # Update existing specialized tile
+                self.update_view_tile(
+                    id=str(existing_specialized.id),
+                    base_index=source_tile.view_tile.base_index
+                )
+            else:
+                # Create new specialized tile
+                self.create_view_tile(
+                    tab_id=effective_tab_id,
+                    name=source_tile.name,
+                    tile_id=updated.id,
+                    base_index=source_tile.view_tile.base_index,
+                    is_checkpoint=True
+                )
+        
+        elif source_tile.type == "Editor" and hasattr(source_tile, 'editor_tile') and source_tile.editor_tile:
+            # Check if checkpoint specialized tile exists
+            existing_specialized = self.get_editor_tile(
+                tab_id=effective_tab_id,
+                name=source_tile.name,
+                is_checkpoint=True
+            )
+            
+            if existing_specialized:
+                # Update existing specialized tile
+                self.update_editor_tile(
+                    id=str(existing_specialized.id),
+                    content=source_tile.editor_tile.content,
+                    file_name=source_tile.editor_tile.file_name,
+                    file_type=source_tile.editor_tile.file_type
+                )
+            else:
+                # Create new specialized tile
+                self.create_editor_tile(
+                    tab_id=effective_tab_id,
+                    name=source_tile.name,
+                    tile_id=updated.id,
+                    content=source_tile.editor_tile.content,
+                    file_name=source_tile.editor_tile.file_name,
+                    file_type=source_tile.editor_tile.file_type,
+                    is_checkpoint=True
+                )
+        
+        # Get the full checkpoint tile with all associated data
+        checkpoint_tile = self.get_by_tab_and_name(
+            tab_id=effective_tab_id,
+            name=source_tile.name,
+            is_checkpoint=True
+        )
+        
+        return checkpoint_tile
+        
+    def get_checkpoint(self, id: Optional[str] = None, tab_id: Optional[str] = None, name: Optional[str] = None) -> Optional[Tile]:
+        """
+        Get the checkpoint version of a tile.
+        
+        This method retrieves the checkpoint version of a tile by:
+        1. If the provided object is already a checkpoint, it returns it.
+        2. If the provided object is an active tile, it finds its checkpoint 
+           using the checkpoint_or_active_id reference.
+           
+        Args:
+            id: Optional ID of the tile
+            tab_id: Optional tab ID to identify the tile
+            name: Optional name to identify the tile
+            
+        Returns:
+            The checkpoint tile if found, None otherwise
+        """
+        # First get the tile based on the provided parameters
+        tile = self._get_tile(id=id, tab_id=tab_id, name=name)
+        if not tile:
+            return None
+            
+        # If the tile is already a checkpoint, return it
+        if tile.is_checkpoint:
+            return tile
+            
+        # If the tile has a checkpoint reference, get that checkpoint
+        if tile.checkpoint_or_active_id:
+            checkpoint = self._get_tile(id=tile.checkpoint_or_active_id, is_checkpoint=True)
+            if checkpoint and checkpoint.is_checkpoint:
+                return checkpoint
+        
+        # If no direct reference, try to find by tab_id and name
+        return self._get_tile(
+            tab_id=tile.tab_id,
+            name=tile.name,
+            is_checkpoint=True
+        )
+        
+    def get_current(self, id: Optional[str] = None, tab_id: Optional[str] = None, name: Optional[str] = None) -> Optional[Tile]:
+        """
+        Get the current (active) version of a tile.
+        
+        This method retrieves the current version of a tile by:
+        1. If the provided object is already an active tile, it returns it.
+        2. If the provided object is a checkpoint, it finds its active version 
+           using the checkpoint_or_active_id reference.
+           
+        Args:
+            id: Optional ID of the tile
+            tab_id: Optional tab ID to identify the tile
+            name: Optional name to identify the tile
+            
+        Returns:
+            The active tile if found, None otherwise
+        """
+        # First get the tile based on the provided parameters
+        tile = self._get_tile(id=id, tab_id=tab_id, name=name)
+        
+        if not tile:
+            return None
+            
+        # If the tile is already an active tile, return it
+        if not tile.is_checkpoint:
+            return tile
+            
+        # If the tile has an active reference, get that active tile
+        if tile.checkpoint_or_active_id:
+            active = self.get(id=tile.checkpoint_or_active_id)
+            if active and not active.is_checkpoint:
+                return active
+        
+        # If no direct reference, try to find by tab_id and name
+        return self._get_tile(
+            tab_id=tile.tab_id,
+            name=tile.name,
+            is_checkpoint=False
+        )
