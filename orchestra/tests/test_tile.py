@@ -1,6 +1,7 @@
 import os
-import pytest
 import uuid
+
+import pytest
 from httpx import AsyncClient
 
 # Common headers and data
@@ -20,8 +21,15 @@ TEST_TILE = "test-tile"
 # Helper functions for project and interface creation
 async def _create_project(client: AsyncClient, project_name=TEST_PROJECT):
     """Create a test project"""
-    response = await client.post("/v0/project", json={"name": project_name}, headers=HEADERS)
-    assert response.status_code in [200, 201], f"Failed to create project: {response.json()}"
+    response = await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    assert response.status_code in [
+        200,
+        201,
+    ], f"Failed to create project: {response.json()}"
     return response
 
 
@@ -31,7 +39,12 @@ async def _delete_project(client: AsyncClient, project_name=TEST_PROJECT):
     return response
 
 
-async def _create_test_interface(client: AsyncClient, name=TEST_INTERFACE, project=TEST_PROJECT, color="#FF0000"):
+async def _create_test_interface(
+    client: AsyncClient,
+    name=TEST_INTERFACE,
+    project=TEST_PROJECT,
+    color="#FF0000",
+):
     """Create a test interface"""
     response = await client.post(
         "/v0/interfaces/",
@@ -42,7 +55,13 @@ async def _create_test_interface(client: AsyncClient, name=TEST_INTERFACE, proje
     return response
 
 
-async def _create_test_tab(client: AsyncClient, interface_id, name=TEST_TAB, active=True, order=0):
+async def _create_test_tab(
+    client: AsyncClient,
+    interface_id,
+    name=TEST_TAB,
+    active=True,
+    order=0,
+):
     """Create a test tab"""
     response = await client.post(
         "/v0/tab/",
@@ -61,17 +80,35 @@ async def _create_test_tab(client: AsyncClient, interface_id, name=TEST_TAB, act
 
 
 # Tile helpers
-async def _create_test_tile(client: AsyncClient, tab_id, name=TEST_TILE, 
-                         tile_type="Table", width=1, height=1, 
-                         x=0, y=0, 
-                         min_width=None, min_height=None,
-                         visible=True, locked=False, moved=False, static=False,
-                         context=None, table=None, auto_update=None, 
-                         freeze=None, filters=None, common_filter=None, metric=None,
-                         table_tile_data=None, plot_tile_data=None, 
-                         view_tile_data=None, editor_tile_data=None):
+async def _create_test_tile(
+    client: AsyncClient,
+    tab_id,
+    name=TEST_TILE,
+    tile_type="Table",
+    width=1,
+    height=1,
+    x=0,
+    y=0,
+    min_width=None,
+    min_height=None,
+    visible=True,
+    locked=False,
+    moved=False,
+    static=False,
+    context=None,
+    table=None,
+    auto_update=None,
+    freeze=None,
+    filters=None,
+    common_filter=None,
+    metric=None,
+    table_tile_data=None,
+    plot_tile_data=None,
+    view_tile_data=None,
+    editor_tile_data=None,
+):
     """Create a test tile
-    
+
     Args:
         client: AsyncClient for making requests
         tab_id: ID of the tab to create the tile in
@@ -99,15 +136,10 @@ async def _create_test_tile(client: AsyncClient, tab_id, name=TEST_TILE,
         view_tile_data: Specialized data for view tiles
         editor_tile_data: Specialized data for editor tiles
     """
-        
+
     # Create position object matching the schema
-    position = {
-        "x": x,
-        "y": y,
-        "width": width,
-        "height": height
-    }
-    
+    position = {"x": x, "y": y, "width": width, "height": height}
+
     # Prepare the request payload
     payload = {
         "tab_id": tab_id,
@@ -128,10 +160,10 @@ async def _create_test_tile(client: AsyncClient, tab_id, name=TEST_TILE,
         "common_filter": common_filter,
         "metric": metric,
     }
-    
+
     # Remove None values to avoid sending empty fields
     payload = {k: v for k, v in payload.items() if v is not None}
-    
+
     # Add specialized tile data based on type
     if tile_type.lower() == "table" and table_tile_data:
         payload["table_tile"] = table_tile_data
@@ -141,7 +173,7 @@ async def _create_test_tile(client: AsyncClient, tab_id, name=TEST_TILE,
         payload["view_tile"] = view_tile_data
     elif tile_type.lower() == "editor" and editor_tile_data:
         payload["editor_tile"] = editor_tile_data
-        
+
     response = await client.post(
         "/v0/tile/",
         headers=HEADERS,
@@ -149,13 +181,26 @@ async def _create_test_tile(client: AsyncClient, tab_id, name=TEST_TILE,
     )
     return response
 
-async def _create_test_table_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE}-table",
-                              table_type=None, column_context=None, page_number=None,
-                              column_order=None, hidden_columns=None, sorting=None,
-                              grouping=None, group_sorting=None, columns_pin_left=None,
-                              columns_pin_right=None, selected=None, **kwargs):
+
+async def _create_test_table_tile(
+    client: AsyncClient,
+    tab_id,
+    name=f"{TEST_TILE}-table",
+    table_type=None,
+    column_context=None,
+    page_number=None,
+    column_order=None,
+    hidden_columns=None,
+    sorting=None,
+    grouping=None,
+    group_sorting=None,
+    columns_pin_left=None,
+    columns_pin_right=None,
+    selected=None,
+    **kwargs,
+):
     """Create a test table tile with appropriate defaults.
-    
+
     Args:
         client: AsyncClient for making requests
         tab_id: ID of the tab to create the tile in
@@ -173,7 +218,7 @@ async def _create_test_table_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE
         selected: Selected data
         **kwargs: Additional arguments to pass to _create_test_tile
     """
-        
+
     table_tile_data = {
         "table_type": table_type,
         "column_context": column_context,
@@ -185,38 +230,49 @@ async def _create_test_table_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE
         "group_sorting": group_sorting,
         "columns_pin_left": columns_pin_left,
         "columns_pin_right": columns_pin_right,
-        "selected": selected
+        "selected": selected,
     }
-    
+
     # Remove None values
     table_tile_data = {k: v for k, v in table_tile_data.items()}
-    
+
     # Set defaults for table tiles
     table_kwargs = {
         "width": 4,
         "height": 3,
     }
-    
+
     # Override defaults with any provided kwargs
     table_kwargs.update(kwargs)
-    
+
     return await _create_test_tile(
         client=client,
         tab_id=tab_id,
         name=name,
         tile_type="Table",
         table_tile_data=table_tile_data,
-        **table_kwargs
+        **table_kwargs,
     )
 
 
-async def _create_test_plot_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE}-plot",
-                             plot_type="scatter", plot_scale_x=None, plot_scale_y=None,
-                             plot_aggregate=None, x_axis="x", y_axis="y",
-                             plot_group_by=None, plot_group_by_colors=None,
-                             bin_count=None, regression_line=None, **kwargs):
+async def _create_test_plot_tile(
+    client: AsyncClient,
+    tab_id,
+    name=f"{TEST_TILE}-plot",
+    plot_type="scatter",
+    plot_scale_x=None,
+    plot_scale_y=None,
+    plot_aggregate=None,
+    x_axis="x",
+    y_axis="y",
+    plot_group_by=None,
+    plot_group_by_colors=None,
+    bin_count=None,
+    regression_line=None,
+    **kwargs,
+):
     """Create a test plot tile with appropriate defaults.
-    
+
     Args:
         client: AsyncClient for making requests
         tab_id: ID of the tab to create the tile in
@@ -233,7 +289,7 @@ async def _create_test_plot_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE}
         regression_line: Regression line settings
         **kwargs: Additional arguments to pass to _create_test_tile
     """
-        
+
     plot_tile_data = {
         "plot_type": plot_type,
         "plot_scale_x": plot_scale_x,
@@ -244,35 +300,36 @@ async def _create_test_plot_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE}
         "plot_group_by": plot_group_by,
         "plot_group_by_colors": plot_group_by_colors,
         "bin_count": bin_count,
-        "regression_line": regression_line
+        "regression_line": regression_line,
     }
-    
+
     # Remove None values
     plot_tile_data = {k: v for k, v in plot_tile_data.items()}
-    
+
     # Set defaults for plot tiles
     plot_kwargs = {
         "width": 4,
         "height": 3,
     }
-    
+
     # Override defaults with any provided kwargs
     plot_kwargs.update(kwargs)
-    
+
     return await _create_test_tile(
         client=client,
         tab_id=tab_id,
         name=name,
         tile_type="Plot",
         plot_tile_data=plot_tile_data,
-        **plot_kwargs
+        **plot_kwargs,
     )
 
 
-async def _create_test_view_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE}-view",
-                             base_index=None, **kwargs):
+async def _create_test_view_tile(
+    client: AsyncClient, tab_id, name=f"{TEST_TILE}-view", base_index=None, **kwargs
+):
     """Create a test view tile with appropriate defaults.
-    
+
     Args:
         client: AsyncClient for making requests
         tab_id: ID of the tab to create the tile in
@@ -280,37 +337,41 @@ async def _create_test_view_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE}
         base_index: Base index for the view
         **kwargs: Additional arguments to pass to _create_test_tile
     """
-    view_tile_data = {
-        "base_index": base_index
-    }
-    
+    view_tile_data = {"base_index": base_index}
+
     # Remove None values
     view_tile_data = {k: v for k, v in view_tile_data.items()}
-    
+
     # Set defaults for view tiles
     view_kwargs = {
         "width": 4,
         "height": 3,
     }
-    
+
     # Override defaults with any provided kwargs
     view_kwargs.update(kwargs)
-    
+
     return await _create_test_tile(
         client=client,
         tab_id=tab_id,
         name=name,
         tile_type="View",
         view_tile_data=view_tile_data,
-        **view_kwargs
+        **view_kwargs,
     )
 
 
-async def _create_test_editor_tile(client: AsyncClient, tab_id, name=f"{TEST_TILE}-editor",
-                                file_type="python", content="print('Hello World')", 
-                                file_path=None, **kwargs):
+async def _create_test_editor_tile(
+    client: AsyncClient,
+    tab_id,
+    name=f"{TEST_TILE}-editor",
+    file_type="python",
+    content="print('Hello World')",
+    file_path=None,
+    **kwargs,
+):
     """Create a test editor tile with appropriate defaults.
-    
+
     Args:
         client: AsyncClient for making requests
         tab_id: ID of the tab to create the tile in
@@ -323,46 +384,49 @@ async def _create_test_editor_tile(client: AsyncClient, tab_id, name=f"{TEST_TIL
     # Default file name if not provided
     if file_path is None:
         file_path = f"{name}.{file_type}"
-        
+
     editor_tile_data = {
         "file_path": file_path,
         "file_type": file_type,
-        "content": content
+        "content": content,
     }
-    
+
     # Remove None values
     editor_tile_data = {k: v for k, v in editor_tile_data.items()}
-    
+
     # Set defaults for editor tiles
     editor_kwargs = {
         "width": 5,
         "height": 4,
     }
-    
+
     # Override defaults with any provided kwargs
     editor_kwargs.update(kwargs)
-    
+
     return await _create_test_tile(
         client=client,
         tab_id=tab_id,
         name=name,
         tile_type="Editor",
         editor_tile_data=editor_tile_data,
-        **editor_kwargs
+        **editor_kwargs,
     )
 
 
 async def _get_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None):
     """
     Get tile by ID or by tab_id and name
-    
+
     If tile_id is provided, gets a single tile by ID
     If tab_id and name are provided, gets a single tile by tab_id and name
     """
     if tile_id:
         return await client.get(f"/v0/tile/?tile_id={tile_id}", headers=HEADERS)
     elif tab_id and name:
-        return await client.get(f"/v0/tile/?tab_id={tab_id}&name={name}", headers=HEADERS)
+        return await client.get(
+            f"/v0/tile/?tab_id={tab_id}&name={name}",
+            headers=HEADERS,
+        )
     else:
         raise ValueError("Must provide either tile_id or tab_id+name")
 
@@ -374,23 +438,29 @@ async def _list_tiles(client: AsyncClient, tab_id=None, name=None, type=None):
         params["tab_id"] = tab_id
     else:
         raise ValueError("Must provide tab_id")
-        
+
     if name:
         params["name"] = name
-        
+
     if type:
         params["type"] = type
-        
+
     # Construct the URL with parameters
     param_str = "&".join([f"{k}={v}" for k, v in params.items()])
     return await client.get(f"/v0/tile/list?{param_str}", headers=HEADERS)
 
 
-async def _update_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None, update_data=None):
+async def _update_tile(
+    client: AsyncClient,
+    tile_id=None,
+    tab_id=None,
+    name=None,
+    update_data=None,
+):
     """Update tile by ID or by tab_id and name"""
     if update_data is None:
         update_data = {}
-    
+
     # Convert any position-related fields to a position object
     if any(key in update_data for key in ["x_pos", "y_pos", "width", "height"]):
         position = {}
@@ -402,22 +472,36 @@ async def _update_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None
             position["width"] = update_data.pop("width")
         if "height" in update_data:
             position["height"] = update_data.pop("height")
-        
+
         update_data["position"] = position
-    
+
     if tile_id:
-        return await client.put(f"/v0/tile/?tile_id={tile_id}", headers=HEADERS, json=update_data)
+        return await client.put(
+            f"/v0/tile/?tile_id={tile_id}",
+            headers=HEADERS,
+            json=update_data,
+        )
     elif tab_id and name:
-        return await client.put(f"/v0/tile/?tab_id={tab_id}&name={name}", headers=HEADERS, json=update_data)
+        return await client.put(
+            f"/v0/tile/?tab_id={tab_id}&name={name}",
+            headers=HEADERS,
+            json=update_data,
+        )
     else:
         raise ValueError("Must provide either tile_id or tab_id+name")
 
 
-async def _patch_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None, patch_data=None):
+async def _patch_tile(
+    client: AsyncClient,
+    tile_id=None,
+    tab_id=None,
+    name=None,
+    patch_data=None,
+):
     """Patch tile by ID or by tab_id and name"""
     if patch_data is None:
         patch_data = {}
-    
+
     # Convert any position-related fields to a position object
     if any(key in patch_data for key in ["x_pos", "y_pos", "width", "height"]):
         position = {}
@@ -429,20 +513,35 @@ async def _patch_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None,
             position["width"] = patch_data.pop("width")
         if "height" in patch_data:
             position["height"] = patch_data.pop("height")
-        
+
         patch_data["position"] = position
-    
+
     if tile_id:
-        return await client.patch(f"/v0/tile/?tile_id={tile_id}", headers=HEADERS, json=patch_data)
+        return await client.patch(
+            f"/v0/tile/?tile_id={tile_id}",
+            headers=HEADERS,
+            json=patch_data,
+        )
     elif tab_id and name:
-        return await client.patch(f"/v0/tile/?tab_id={tab_id}&name={name}", headers=HEADERS, json=patch_data)
+        return await client.patch(
+            f"/v0/tile/?tab_id={tab_id}&name={name}",
+            headers=HEADERS,
+            json=patch_data,
+        )
     else:
         raise ValueError("Must provide either tile_id or tab_id+name")
 
 
-async def _patch_specialized_tile(client: AsyncClient, tile_type=None, tile_id=None, tab_id=None, name=None, patch_data=None):
+async def _patch_specialized_tile(
+    client: AsyncClient,
+    tile_type=None,
+    tile_id=None,
+    tab_id=None,
+    name=None,
+    patch_data=None,
+):
     """Patch specialized tile data by ID or by tab_id and name
-    
+
     Args:
         client: AsyncClient for making requests
         tile_type: The type of tile (Table, Plot, View, Editor)
@@ -453,11 +552,11 @@ async def _patch_specialized_tile(client: AsyncClient, tile_type=None, tile_id=N
     """
     if patch_data is None:
         patch_data = {}
-    
+
     params = {}
     if tile_type:
         params["tile_type"] = tile_type
-        
+
     if tile_id:
         params["tile_id"] = tile_id
     elif tab_id and name:
@@ -465,10 +564,14 @@ async def _patch_specialized_tile(client: AsyncClient, tile_type=None, tile_id=N
         params["name"] = name
     else:
         raise ValueError("Must provide either tile_id or tab_id+name")
-    
+
     # Construct the URL with parameters
     param_str = "&".join([f"{k}={v}" for k, v in params.items()])
-    return await client.patch(f"/v0/tile/specialized?{param_str}", headers=HEADERS, json=patch_data)
+    return await client.patch(
+        f"/v0/tile/specialized?{param_str}",
+        headers=HEADERS,
+        json=patch_data,
+    )
 
 
 async def _delete_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None):
@@ -476,27 +579,52 @@ async def _delete_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None
     if tile_id:
         return await client.delete(f"/v0/tile/?tile_id={tile_id}", headers=HEADERS)
     elif tab_id and name:
-        return await client.delete(f"/v0/tile/?tab_id={tab_id}&name={name}", headers=HEADERS)
+        return await client.delete(
+            f"/v0/tile/?tab_id={tab_id}&name={name}",
+            headers=HEADERS,
+        )
     else:
         raise ValueError("Must provide either tile_id or tab_id+name")
 
 
-async def _create_tile_checkpoint(client: AsyncClient, tile_id=None, tab_id=None, name=None):
+async def _create_tile_checkpoint(
+    client: AsyncClient,
+    tile_id=None,
+    tab_id=None,
+    name=None,
+):
     """Create a checkpoint for a tile"""
     if tile_id:
-        return await client.post(f"/v0/tile/checkpoint?tile_id={tile_id}", headers=HEADERS)
+        return await client.post(
+            f"/v0/tile/checkpoint?tile_id={tile_id}",
+            headers=HEADERS,
+        )
     elif tab_id and name:
-        return await client.post(f"/v0/tile/checkpoint?tab_id={tab_id}&name={name}", headers=HEADERS)
+        return await client.post(
+            f"/v0/tile/checkpoint?tab_id={tab_id}&name={name}",
+            headers=HEADERS,
+        )
     else:
         raise ValueError("Must provide either tile_id or tab_id+name")
 
 
-async def _get_tile_checkpoint(client: AsyncClient, tile_id=None, tab_id=None, name=None):
+async def _get_tile_checkpoint(
+    client: AsyncClient,
+    tile_id=None,
+    tab_id=None,
+    name=None,
+):
     """Get the latest checkpoint for a tile"""
     if tile_id:
-        return await client.get(f"/v0/tile/checkpoint?tile_id={tile_id}", headers=HEADERS)
+        return await client.get(
+            f"/v0/tile/checkpoint?tile_id={tile_id}",
+            headers=HEADERS,
+        )
     elif tab_id and name:
-        return await client.get(f"/v0/tile/checkpoint?tab_id={tab_id}&name={name}", headers=HEADERS)
+        return await client.get(
+            f"/v0/tile/checkpoint?tab_id={tab_id}&name={name}",
+            headers=HEADERS,
+        )
     else:
         raise ValueError("Must provide either tile_id or tab_id+name")
 
@@ -507,10 +635,10 @@ async def setup_test_project(client: AsyncClient):
     """Setup and teardown for a test project"""
     # Setup
     await _create_project(client)
-    
+
     # Run test
     yield
-    
+
     # Teardown
     await _delete_project(client)
 
@@ -524,22 +652,22 @@ async def test_create_tile(client: AsyncClient):
     interface_id = interface_response.json()["id"]
     tab_response = await _create_test_tab(client, interface_id)
     tab_id = tab_response.json()["id"]
-    
+
     # Create a tile
     response = await _create_test_tile(client, tab_id)
     assert response.status_code == 201
-    
+
     data = response.json()
     assert data["name"] == TEST_TILE
     assert data["tab_id"] == tab_id
-    
+
     # Check position fields
     assert "position" in data
     assert data["position"]["x"] == 0
     assert data["position"]["y"] == 0
     assert data["position"]["width"] == 1
     assert data["position"]["height"] == 1
-    
+
     assert data["visible"] is True
     assert data["is_checkpoint"] is False
     assert "id" in data
@@ -554,12 +682,15 @@ async def test_create_different_tile_types(client: AsyncClient):
     interface_id = interface_response.json()["id"]
     tab_response = await _create_test_tab(client, interface_id)
     tab_id = tab_response.json()["id"]
-    
+
     # Create a table tile
-    table_response = await _create_test_table_tile(client, tab_id, 
-                                              table_type="basic",
-                                              column_context="context1",
-                                              page_number="1")
+    table_response = await _create_test_table_tile(
+        client,
+        tab_id,
+        table_type="basic",
+        column_context="context1",
+        page_number="1",
+    )
     assert table_response.status_code == 201
     table_data = table_response.json()
     assert table_data["type"] == "Table"
@@ -567,12 +698,15 @@ async def test_create_different_tile_types(client: AsyncClient):
     assert table_data["table_tile"]["table_type"] == "basic"
     assert table_data["table_tile"]["column_context"] == "context1"
     assert table_data["table_tile"]["page_number"] == "1"
-    
+
     # Create a plot tile
-    plot_response = await _create_test_plot_tile(client, tab_id, 
-                                            plot_type="scatter",
-                                            x_axis="x_data", 
-                                            y_axis="y_data")
+    plot_response = await _create_test_plot_tile(
+        client,
+        tab_id,
+        plot_type="scatter",
+        x_axis="x_data",
+        y_axis="y_data",
+    )
     assert plot_response.status_code == 201
     plot_data = plot_response.json()
     assert plot_data["type"] == "Plot"
@@ -580,21 +714,23 @@ async def test_create_different_tile_types(client: AsyncClient):
     assert plot_data["plot_tile"]["plot_type"] == "scatter"
     assert plot_data["plot_tile"]["x_axis"] == "x_data"
     assert plot_data["plot_tile"]["y_axis"] == "y_data"
-    
+
     # Create a view tile
-    view_response = await _create_test_view_tile(client, tab_id, 
-                                            base_index="index1")
+    view_response = await _create_test_view_tile(client, tab_id, base_index="index1")
     assert view_response.status_code == 201
     view_data = view_response.json()
     assert view_data["type"] == "View"
     assert "view_tile" in view_data
     assert view_data["view_tile"]["base_index"] == "index1"
-    
+
     # Create an editor tile
-    editor_response = await _create_test_editor_tile(client, tab_id, 
-                                               file_type="python", 
-                                               content="print('Test')",
-                                               file_path="test.py")
+    editor_response = await _create_test_editor_tile(
+        client,
+        tab_id,
+        file_type="python",
+        content="print('Test')",
+        file_path="test.py",
+    )
     assert editor_response.status_code == 201
     editor_data = editor_response.json()
     assert editor_data["type"] == "Editor"
@@ -614,11 +750,11 @@ async def test_get_tile_by_id(client: AsyncClient):
     tab_id = tab_response.json()["id"]
     tile_response = await _create_test_tile(client, tab_id)
     tile_id = tile_response.json()["id"]
-    
+
     # Get the tile by ID
     response = await _get_tile(client, tile_id=tile_id)
     assert response.status_code == 200
-    
+
     data = response.json()
     assert data["id"] == tile_id
     assert data["name"] == TEST_TILE
@@ -634,11 +770,11 @@ async def test_get_tile_by_tab_and_name(client: AsyncClient):
     tab_response = await _create_test_tab(client, interface_id)
     tab_id = tab_response.json()["id"]
     await _create_test_tile(client, tab_id)
-    
+
     # Get the tile by tab_id and name
     response = await _get_tile(client, tab_id=tab_id, name=TEST_TILE)
     assert response.status_code == 200
-    
+
     data = response.json()
     assert data["name"] == TEST_TILE
     assert data["tab_id"] == tab_id
@@ -652,15 +788,15 @@ async def test_list_tiles_by_tab_id(client: AsyncClient):
     interface_id = interface_response.json()["id"]
     tab_response = await _create_test_tab(client, interface_id)
     tab_id = tab_response.json()["id"]
-    
+
     # Create multiple tiles
     await _create_test_tile(client, tab_id, name="list-tile-1")
     await _create_test_tile(client, tab_id, name="list-tile-2")
-    
+
     # List tiles
     response = await _list_tiles(client, tab_id=tab_id)
     assert response.status_code == 200
-    
+
     data = response.json()
     assert len(data) == 2
     tile_names = [tile["name"] for tile in data]
@@ -676,16 +812,16 @@ async def test_list_tiles_with_type_filter(client: AsyncClient):
     interface_id = interface_response.json()["id"]
     tab_response = await _create_test_tab(client, interface_id)
     tab_id = tab_response.json()["id"]
-    
+
     # Create tiles with different types
     await _create_test_tile(client, tab_id, name="table-tile", tile_type="Table")
     await _create_test_tile(client, tab_id, name="plot-tile", tile_type="Plot")
     await _create_test_tile(client, tab_id, name="view-tile", tile_type="View")
-    
+
     # List only table tiles
     response = await _list_tiles(client, tab_id=tab_id, type="Table")
     assert response.status_code == 200
-    
+
     data = response.json()
     assert len(data) == 1
     assert data[0]["name"] == "table-tile"
@@ -702,22 +838,17 @@ async def test_update_tile_by_id(client: AsyncClient):
     tab_id = tab_response.json()["id"]
     tile_response = await _create_test_tile(client, tab_id)
     tile_id = tile_response.json()["id"]
-    
+
     # Update the tile by ID
     new_name = "updated-tile"
     update_data = {
         "name": new_name,
         "visible": False,
-        "position": {
-            "x": 4,
-            "y": 5,
-            "width": 2,
-            "height": 3
-        }
+        "position": {"x": 4, "y": 5, "width": 2, "height": 3},
     }
     response = await _update_tile(client, tile_id=tile_id, update_data=update_data)
     assert response.status_code == 200
-    
+
     data = response.json()
     assert data["id"] == tile_id
     assert data["name"] == new_name
@@ -737,20 +868,20 @@ async def test_update_tile_by_tab_and_name(client: AsyncClient):
     tab_response = await _create_test_tab(client, interface_id)
     tab_id = tab_response.json()["id"]
     await _create_test_tile(client, tab_id)
-    
+
     # Update the tile by tab_id and name
     update_data = {
         "visible": False,
-        "position": {
-            "width": 2,
-            "height": 3,
-            "x": 0,
-            "y": 0
-        }
+        "position": {"width": 2, "height": 3, "x": 0, "y": 0},
     }
-    response = await _update_tile(client, tab_id=tab_id, name=TEST_TILE, update_data=update_data)
+    response = await _update_tile(
+        client,
+        tab_id=tab_id,
+        name=TEST_TILE,
+        update_data=update_data,
+    )
     assert response.status_code == 200
-    
+
     data = response.json()
     assert data["name"] == TEST_TILE
     assert data["visible"] is False
@@ -768,18 +899,15 @@ async def test_patch_tile(client: AsyncClient):
     tab_id = tab_response.json()["id"]
     tile_response = await _create_test_tile(client, tab_id)
     tile_id = tile_response.json()["id"]
-    
+
     # Patch the tile
     patch_data = {
-        "position": {
-            "width": 2,
-            "height": 3
-        },
-        "context": "Parameters/student/student_id"
+        "position": {"width": 2, "height": 3},
+        "context": "Parameters/student/student_id",
     }
     response = await _patch_tile(client, tile_id=tile_id, patch_data=patch_data)
     assert response.status_code == 200
-    
+
     data = response.json()
     assert data["id"] == tile_id
     assert data["position"]["width"] == 2
@@ -798,27 +926,29 @@ async def test_patch_specialized_tile(client: AsyncClient):
     interface_id = interface_response.json()["id"]
     tab_response = await _create_test_tab(client, interface_id)
     tab_id = tab_response.json()["id"]
-    
+
     # Create different specialized tiles
     table_response = await _create_test_table_tile(client, tab_id, name="table-tile")
     table_id = table_response.json()["id"]
-    
+
     # Patch the specialized tile data
-    specialized_data = {
-        "columns_pin_left": ["RowNumbering"],
-        "page_number": "1"
-    }
-    response = await _patch_specialized_tile(client, tile_type="Table", tile_id=table_id, patch_data=specialized_data)
+    specialized_data = {"columns_pin_left": ["RowNumbering"], "page_number": "1"}
+    response = await _patch_specialized_tile(
+        client,
+        tile_type="Table",
+        tile_id=table_id,
+        patch_data=specialized_data,
+    )
     assert response.status_code == 200
-    
+
     # Verify the specialized data was updated
     get_response = await _get_tile(client, tile_id=table_id)
     assert get_response.status_code == 200
-    
+
     # The response should contain the specialized data
     data = get_response.json()
     assert data["table_tile"]["columns_pin_left"] == '["RowNumbering"]'
-    assert data["table_tile"]["page_number"] == '1'
+    assert data["table_tile"]["page_number"] == "1"
 
 
 @pytest.mark.anyio
@@ -831,11 +961,11 @@ async def test_delete_tile_by_id(client: AsyncClient):
     tab_id = tab_response.json()["id"]
     tile_response = await _create_test_tile(client, tab_id)
     tile_id = tile_response.json()["id"]
-    
+
     # Delete the tile by ID
     response = await _delete_tile(client, tile_id=tile_id)
     assert response.status_code == 204
-    
+
     # Verify tile is deleted
     get_response = await _get_tile(client, tile_id=tile_id)
     assert get_response.status_code == 404
@@ -850,11 +980,11 @@ async def test_delete_tile_by_tab_and_name(client: AsyncClient):
     tab_response = await _create_test_tab(client, interface_id)
     tab_id = tab_response.json()["id"]
     await _create_test_tile(client, tab_id)
-    
+
     # Delete the tile by tab_id and name
     response = await _delete_tile(client, tab_id=tab_id, name=TEST_TILE)
     assert response.status_code == 204
-    
+
     # Verify tile is deleted
     get_response = await _get_tile(client, tab_id=tab_id, name=TEST_TILE)
     assert get_response.status_code == 404
@@ -870,11 +1000,11 @@ async def test_tile_checkpoint_by_id(client: AsyncClient):
     tab_id = tab_response.json()["id"]
     tile_response = await _create_test_tile(client, tab_id)
     tile_id = tile_response.json()["id"]
-    
+
     # Create a checkpoint by ID
     response = await _create_tile_checkpoint(client, tile_id=tile_id)
     assert response.status_code == 200
-    
+
     checkpoint_data = response.json()
     assert checkpoint_data["is_checkpoint"] is True
     assert checkpoint_data["name"] == TEST_TILE
@@ -890,14 +1020,14 @@ async def test_get_tile_checkpoint(client: AsyncClient):
     tab_id = tab_response.json()["id"]
     tile_response = await _create_test_tile(client, tab_id)
     tile_id = tile_response.json()["id"]
-    
+
     # Create a checkpoint
     await _create_tile_checkpoint(client, tile_id=tile_id)
-    
+
     # Get the checkpoint
     response = await _get_tile_checkpoint(client, tile_id=tile_id)
     assert response.status_code == 200
-    
+
     data = response.json()
     assert data["is_checkpoint"] is True
     assert data["name"] == TEST_TILE
@@ -912,7 +1042,7 @@ async def test_create_duplicate_tile(client: AsyncClient):
     tab_response = await _create_test_tab(client, interface_id)
     tab_id = tab_response.json()["id"]
     await _create_test_tile(client, tab_id)
-    
+
     # Try to create another tile with the same name
     response = await _create_test_tile(client, tab_id)
     assert response.status_code == 409
@@ -934,25 +1064,25 @@ async def test_tile_positioning(client: AsyncClient):
     interface_id = interface_response.json()["id"]
     tab_response = await _create_test_tab(client, interface_id)
     tab_id = tab_response.json()["id"]
-    
+
     # Create tiles with different positions
     await _create_test_tile(client, tab_id, name="tile-0-0", x=0, y=0)
     await _create_test_tile(client, tab_id, name="tile-1-0", x=1, y=0)
     await _create_test_tile(client, tab_id, name="tile-0-1", x=0, y=1)
     await _create_test_tile(client, tab_id, name="tile-1-1", x=1, y=1)
-    
+
     # List tiles
     response = await _list_tiles(client, tab_id=tab_id)
     assert response.status_code == 200
-    
+
     data = response.json()
     assert len(data) == 4
-    
+
     # Verify positions
     positions = {}
     for tile in data:
         positions[(tile["position"]["x"], tile["position"]["y"])] = tile["name"]
-    
+
     assert positions[(0, 0)] == "tile-0-0"
     assert positions[(1, 0)] == "tile-1-0"
     assert positions[(0, 1)] == "tile-0-1"
@@ -967,30 +1097,33 @@ async def test_update_tile_with_position(client: AsyncClient):
     interface_id = interface_response.json()["id"]
     tab_response = await _create_test_tab(client, interface_id)
     tab_id = tab_response.json()["id"]
-    
+
     # Create a basic tile with default values
-    tile_response = await _create_test_tile(client, tab_id, name="position-test", x=0, y=0, width=1, height=1)
+    tile_response = await _create_test_tile(
+        client,
+        tab_id,
+        name="position-test",
+        x=0,
+        y=0,
+        width=1,
+        height=1,
+    )
     assert tile_response.status_code == 201
     tile_id = tile_response.json()["id"]
-    
+
     # Update the position and other fields
     update_data = {
         "name": "updated-position-test",
-        "position": {
-            "x": 2,
-            "y": 3,
-            "width": 4,
-            "height": 5
-        },
+        "position": {"x": 2, "y": 3, "width": 4, "height": 5},
         "min_width": 2,
         "min_height": 2,
-        "locked": True
+        "locked": True,
     }
-    
+
     response = await _update_tile(client, tile_id=tile_id, update_data=update_data)
     assert response.status_code == 200
     data = response.json()
-    
+
     # Verify the update worked
     assert data["name"] == "updated-position-test"
     assert data["position"]["x"] == 2
@@ -1010,41 +1143,43 @@ async def test_update_specialized_tile_data(client: AsyncClient):
     interface_id = interface_response.json()["id"]
     tab_response = await _create_test_tab(client, interface_id)
     tab_id = tab_response.json()["id"]
-    
+
     # Create a table tile with initial data
     table_tile_response = await _create_test_table_tile(
-        client, tab_id, 
+        client,
+        tab_id,
         name="specialized-table",
         table_type="basic",
-        column_context="initial_context"
+        column_context="initial_context",
     )
     table_tile_id = table_tile_response.json()["id"]
-    
+
     # Update the specialized table data
     update_data = {
         "table_tile": {
             "table_type": "advanced",
             "column_context": "updated_context",
-            "sorting": "column1:asc"
-        }
+            "sorting": "column1:asc",
+        },
     }
     response = await _patch_tile(client, tile_id=table_tile_id, patch_data=update_data)
     assert response.status_code == 200
-    
+
     # Verify the update worked
     updated_data = response.json()
     assert updated_data["table_tile"]["table_type"] == "advanced"
     assert updated_data["table_tile"]["column_context"] == "updated_context"
     assert updated_data["table_tile"]["sorting"] == "column1:asc"
-    
+
     # Create a plot tile
     plot_tile_response = await _create_test_plot_tile(
-        client, tab_id, 
+        client,
+        tab_id,
         name="specialized-plot",
-        plot_type="scatter"
+        plot_type="scatter",
     )
     plot_tile_id = plot_tile_response.json()["id"]
-    
+
     # Update the specialized plot data
     update_data = {
         "plot_tile": {
@@ -1052,12 +1187,12 @@ async def test_update_specialized_tile_data(client: AsyncClient):
             "plot_scale_x": "linear",
             "plot_scale_y": "log",
             "x_axis": "category",
-            "y_axis": "value"
-        }
+            "y_axis": "value",
+        },
     }
     response = await _patch_tile(client, tile_id=plot_tile_id, patch_data=update_data)
     assert response.status_code == 200
-    
+
     # Verify the update worked
     updated_data = response.json()
     assert updated_data["plot_tile"]["plot_type"] == "bar"
@@ -1065,26 +1200,27 @@ async def test_update_specialized_tile_data(client: AsyncClient):
     assert updated_data["plot_tile"]["plot_scale_y"] == "log"
     assert updated_data["plot_tile"]["x_axis"] == "category"
     assert updated_data["plot_tile"]["y_axis"] == "value"
-    
+
     # Create an editor tile
     editor_tile_response = await _create_test_editor_tile(
-        client, tab_id, 
+        client,
+        tab_id,
         name="specialized-editor",
-        file_type="python"
+        file_type="python",
     )
     editor_tile_id = editor_tile_response.json()["id"]
-    
+
     # Update the specialized editor data
     update_data = {
         "editor_tile": {
             "file_type": "javascript",
             "file_path": "script.js",
-            "content": "console.log('Hello');"
-        }
+            "content": "console.log('Hello');",
+        },
     }
     response = await _patch_tile(client, tile_id=editor_tile_id, patch_data=update_data)
     assert response.status_code == 200
-    
+
     # Verify the update worked
     updated_data = response.json()
     assert updated_data["editor_tile"]["file_type"] == "javascript"
@@ -1100,81 +1236,83 @@ async def test_patch_specialized_tile_endpoint(client: AsyncClient):
     interface_id = interface_response.json()["id"]
     tab_response = await _create_test_tab(client, interface_id)
     tab_id = tab_response.json()["id"]
-    
+
     # Create tiles of each type
     table_tile = await _create_test_table_tile(client, tab_id, name="spec-table-tile")
     table_id = table_tile.json()["id"]
-    
+
     plot_tile = await _create_test_plot_tile(client, tab_id, name="spec-plot-tile")
     plot_id = plot_tile.json()["id"]
-    
+
     view_tile = await _create_test_view_tile(client, tab_id, name="spec-view-tile")
     view_id = view_tile.json()["id"]
-    
-    editor_tile = await _create_test_editor_tile(client, tab_id, name="spec-editor-tile")
+
+    editor_tile = await _create_test_editor_tile(
+        client,
+        tab_id,
+        name="spec-editor-tile",
+    )
     editor_id = editor_tile.json()["id"]
-    
+
     # Test patch for table tile
     table_patch = {
         "table_type": "specialized-type",
         "column_context": "updated-context",
-        "sorting": "field:desc"
+        "sorting": "field:desc",
     }
     table_response = await _patch_specialized_tile(
-        client, 
-        tile_type="Table", 
-        tile_id=table_id, 
-        patch_data=table_patch
+        client,
+        tile_type="Table",
+        tile_id=table_id,
+        patch_data=table_patch,
     )
     assert table_response.status_code == 200
     table_data = table_response.json()
     assert table_data["table_tile"]["table_type"] == "specialized-type"
     assert table_data["table_tile"]["column_context"] == "updated-context"
     assert table_data["table_tile"]["sorting"] == "field:desc"
-    
+
     # Test patch for plot tile
     plot_patch = {
         "plot_type": "bar",
         "plot_scale_x": "continuous",
-        "plot_aggregate": "sum"
+        "plot_aggregate": "sum",
     }
     plot_response = await _patch_specialized_tile(
-        client, 
-        tile_type="Plot", 
-        tile_id=plot_id, 
-        patch_data=plot_patch
+        client,
+        tile_type="Plot",
+        tile_id=plot_id,
+        patch_data=plot_patch,
     )
     assert plot_response.status_code == 200
     plot_data = plot_response.json()
     assert plot_data["plot_tile"]["plot_type"] == "bar"
     assert plot_data["plot_tile"]["plot_scale_x"] == "continuous"
     assert plot_data["plot_tile"]["plot_aggregate"] == "sum"
-    
+
     # Test patch for view tile
-    view_patch = {
-        "base_index": "updated-index"
-    }
+    view_patch = {"base_index": "updated-index"}
     view_response = await _patch_specialized_tile(
-        client, 
-        tile_type="View", 
-        tile_id=view_id, 
-        patch_data=view_patch
+        client,
+        tile_type="View",
+        tile_id=view_id,
+        patch_data=view_patch,
     )
     assert view_response.status_code == 200
     view_data = view_response.json()
     assert view_data["view_tile"]["base_index"] == "updated-index"
-    
+
     # Test patch for editor tile
     editor_patch = {
         "file_path": "updated.js",
         "file_type": "javascript",
-        "content": "console.log('Updated');"
+        "content": "console.log('Updated');",
     }
     editor_response = await _patch_specialized_tile(
-        client, 
-        tile_type="Editor", 
-        tile_id=editor_id, 
-        patch_data=editor_patch
+        client,
+        tile_type="Editor",
+        tile_id=editor_id,
+        patch_data=editor_patch,
     )
     assert editor_response.status_code == 200
     editor_data = editor_response.json()
