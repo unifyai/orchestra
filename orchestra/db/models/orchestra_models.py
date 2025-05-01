@@ -857,6 +857,9 @@ class Interface(Base):
     color = Column(String(), nullable=True)
     # Flag to indicate if this is a checkpoint (manual save) or auto-save
     is_checkpoint = Column(Boolean(), nullable=False, server_default="f")
+    # ID of the checkpoint counterpart (if this is the active version)
+    # or the active counterpart (if this is a checkpoint)
+    checkpoint_or_active_id = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, nullable=True, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     active_tab_id = Column(String, nullable=True)
@@ -872,7 +875,7 @@ class Interface(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("user_id", "project_id", "name", name="it_uq_project_name"),
+        UniqueConstraint("user_id", "project_id", "name", "is_checkpoint", name="it_uq_project_name_checkpoint"),
     )
 
 
@@ -1026,7 +1029,7 @@ class Tab(Base):
     """Model class for tabs within interfaces."""
     __tablename__ = "tab"
 
-    id = Column(String, primary_key=True, default=uuid.uuid4)
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     interface_id = Column(
         String,
         ForeignKey("interface.id", ondelete="CASCADE"),
@@ -1041,6 +1044,9 @@ class Tab(Base):
     color = Column(String(), nullable=True)
     # Flag to indicate if this is a checkpoint (manual save) or auto-save
     is_checkpoint = Column(Boolean(), nullable=False, server_default="f")
+    # ID of the checkpoint counterpart (if this is the active version)
+    # or the active counterpart (if this is a checkpoint)
+    checkpoint_or_active_id = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     
@@ -1054,15 +1060,15 @@ class Tab(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("interface_id", "name", name="tab_uq_interface_name"),
+        UniqueConstraint("interface_id", "name", "is_checkpoint", name="tab_uq_interface_name_checkpoint"),
     )
 
 
 class Tile(Base):
-    """Base model class for tiles within tabs."""
+    """Model class for tiles within tabs."""
     __tablename__ = "tile"
 
-    id = Column(String, primary_key=True, default=uuid.uuid4)
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     tab_id = Column(
         String,
         ForeignKey("tab.id", ondelete="CASCADE"),
@@ -1097,43 +1103,45 @@ class Tile(Base):
     
     # Flag to indicate if this is a checkpoint (manual save) or auto-save
     is_checkpoint = Column(Boolean(), nullable=False, server_default="f")
-    
+    # ID of the checkpoint counterpart (if this is the active version)
+    # or the active counterpart (if this is a checkpoint)
+    checkpoint_or_active_id = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     
     # Relationships
     tab = relationship("Tab", back_populates="tiles")
     table_tile = relationship(
-        "TableTile", 
-        uselist=False, 
-        back_populates="tile", 
+        "TableTile",
+        back_populates="tile",
         cascade="all, delete-orphan",
         passive_deletes=True,
+        uselist=False,
     )
     plot_tile = relationship(
-        "PlotTile", 
-        uselist=False, 
+        "PlotTile",
         back_populates="tile",
         cascade="all, delete-orphan",
         passive_deletes=True,
+        uselist=False,
     )
     view_tile = relationship(
-        "ViewTile", 
-        uselist=False, 
+        "ViewTile",
         back_populates="tile",
         cascade="all, delete-orphan",
         passive_deletes=True,
+        uselist=False,
     )
     editor_tile = relationship(
-        "EditorTile", 
-        uselist=False, 
+        "EditorTile",
         back_populates="tile",
         cascade="all, delete-orphan",
         passive_deletes=True,
+        uselist=False,
     )
 
     __table_args__ = (
-        UniqueConstraint("tab_id", "name", name="tile_uq_tab_name"),
+        UniqueConstraint("tab_id", "name", "is_checkpoint", name="tile_uq_tab_name_checkpoint"),
     )
 
 
@@ -1141,7 +1149,7 @@ class TableTile(Base):
     """Model class for Table-specific tile properties."""
     __tablename__ = "table_tile"
 
-    id = Column(String, primary_key=True, default=uuid.uuid4)
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     tile_id = Column(
         String,
         ForeignKey("tile.id", ondelete="CASCADE"),
@@ -1171,7 +1179,7 @@ class PlotTile(Base):
     """Model class for Plot-specific tile properties."""
     __tablename__ = "plot_tile"
 
-    id = Column(String, primary_key=True, default=uuid.uuid4)
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     tile_id = Column(
         String,
         ForeignKey("tile.id", ondelete="CASCADE"),
@@ -1200,7 +1208,7 @@ class ViewTile(Base):
     """Model class for View-specific tile properties."""
     __tablename__ = "view_tile"
 
-    id = Column(String, primary_key=True, default=uuid.uuid4)
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     tile_id = Column(
         String,
         ForeignKey("tile.id", ondelete="CASCADE"),
@@ -1220,7 +1228,7 @@ class EditorTile(Base):
     """Model class for Editor-specific tile properties."""
     __tablename__ = "editor_tile"
 
-    id = Column(String, primary_key=True, default=uuid.uuid4)
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     tile_id = Column(
         String,
         ForeignKey("tile.id", ondelete="CASCADE"),
@@ -1230,7 +1238,7 @@ class EditorTile(Base):
     )
     
     # Editor-specific properties
-    file_name = Column(String(), nullable=True)
+    file_path = Column(String(), nullable=True)
     file_type = Column(String(), nullable=True)
     content = Column(String(), nullable=True)
     
