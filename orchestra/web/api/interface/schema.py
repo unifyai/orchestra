@@ -20,8 +20,8 @@ class BaseTileSchema(BaseSchema):
     name: str
     position: TilePosition
     type: Optional[str] = None
-    min_width: Optional[float] = Field(None, alias="minW")
-    min_height: Optional[float] = Field(None, alias="minH")
+    min_width: Optional[float] = Field(None)
+    min_height: Optional[float] = Field(None)
     visible: bool = True
     locked: bool = False
     moved: bool = False
