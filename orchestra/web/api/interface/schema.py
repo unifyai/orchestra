@@ -1,5 +1,7 @@
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
+
 from pydantic import BaseModel, Field
+
 
 class BaseSchema(BaseModel):
     id: str
@@ -82,6 +84,7 @@ class EditorTileSchema(BaseModel):
 
 class TileSchema(BaseTileSchema):
     """Complete Tile schema with type-specific properties"""
+
     tab_id: str
     table_tile: Optional[TableTileSchema] = None
     plot_tile: Optional[PlotTileSchema] = None
@@ -209,6 +212,7 @@ class UpdateInterfaceRequest(BaseModel):
 # For legacy support (until frontend migration is complete)
 class Item(BaseModel):
     """Legacy Item schema for backward compatibility"""
+
     i: str
     x: float
     y: float
@@ -258,6 +262,7 @@ class Item(BaseModel):
 
 class LegacyInterfaceConfig(BaseModel):
     """Legacy Interface configuration schema for backward compatibility"""
+
     name: str
     project: str
     items: List[Item]
@@ -271,6 +276,7 @@ class LegacyInterfaceConfig(BaseModel):
 # Reference schemas for API responses
 class TileReference(BaseModel):
     """Simple reference to a tile in a tab"""
+
     id: str
     name: str
     type: str
@@ -278,6 +284,7 @@ class TileReference(BaseModel):
 
 class TabReference(BaseModel):
     """Simple reference to a tab in an interface"""
+
     id: str
     name: str
     active: bool

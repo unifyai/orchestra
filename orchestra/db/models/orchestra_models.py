@@ -5,6 +5,7 @@ from sqlalchemy import (
     TIMESTAMP,
     Boolean,
     Column,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -13,7 +14,6 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
     text,
-    Float,
 )
 from sqlalchemy.dialects.postgresql import JSON, JSONB
 from sqlalchemy.orm import relationship
@@ -875,7 +875,13 @@ class Interface(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("user_id", "project_id", "name", "is_checkpoint", name="it_uq_project_name_checkpoint"),
+        UniqueConstraint(
+            "user_id",
+            "project_id",
+            "name",
+            "is_checkpoint",
+            name="it_uq_project_name_checkpoint",
+        ),
     )
 
 
@@ -1027,6 +1033,7 @@ class Assistant(Base):
 
 class Tab(Base):
     """Model class for tabs within interfaces."""
+
     __tablename__ = "tab"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -1049,7 +1056,7 @@ class Tab(Base):
     checkpoint_or_active_id = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
-    
+
     # Relationships
     interface = relationship("Interface", back_populates="tabs")
     tiles = relationship(
@@ -1060,12 +1067,18 @@ class Tab(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("interface_id", "name", "is_checkpoint", name="tab_uq_interface_name_checkpoint"),
+        UniqueConstraint(
+            "interface_id",
+            "name",
+            "is_checkpoint",
+            name="tab_uq_interface_name_checkpoint",
+        ),
     )
 
 
 class Tile(Base):
     """Model class for tiles within tabs."""
+
     __tablename__ = "tile"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -1077,7 +1090,7 @@ class Tile(Base):
     )
     name = Column(String(), nullable=False)
     type = Column(String(), nullable=False)  # "Table", "Plot", "View", "Editor"
-    
+
     # Position properties
     x_position = Column(Float, nullable=False)
     y_position = Column(Float, nullable=False)
@@ -1085,13 +1098,13 @@ class Tile(Base):
     height = Column(Float, nullable=False)
     min_width = Column(Float, nullable=True)
     min_height = Column(Float, nullable=True)
-    
+
     # Common properties
     visible = Column(Boolean(), nullable=False, server_default="t")
     locked = Column(Boolean(), nullable=False, server_default="f")
     moved = Column(Boolean(), nullable=False, server_default="f")
     static = Column(Boolean(), nullable=False, server_default="f")
-    
+
     # Common data properties
     context = Column(String(), nullable=True)
     table = Column(String(), nullable=True)
@@ -1100,7 +1113,7 @@ class Tile(Base):
     filters = Column(String(), nullable=True)
     common_filter = Column(String(), nullable=True)
     metric = Column(String(), nullable=True)
-    
+
     # Flag to indicate if this is a checkpoint (manual save) or auto-save
     is_checkpoint = Column(Boolean(), nullable=False, server_default="f")
     # ID of the checkpoint counterpart (if this is the active version)
@@ -1108,7 +1121,7 @@ class Tile(Base):
     checkpoint_or_active_id = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
-    
+
     # Relationships
     tab = relationship("Tab", back_populates="tiles")
     table_tile = relationship(
@@ -1141,12 +1154,18 @@ class Tile(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("tab_id", "name", "is_checkpoint", name="tile_uq_tab_name_checkpoint"),
+        UniqueConstraint(
+            "tab_id",
+            "name",
+            "is_checkpoint",
+            name="tile_uq_tab_name_checkpoint",
+        ),
     )
 
 
 class TableTile(Base):
     """Model class for Table-specific tile properties."""
+
     __tablename__ = "table_tile"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -1157,7 +1176,7 @@ class TableTile(Base):
         unique=True,
         index=True,
     )
-    
+
     # Table-specific properties
     table_type = Column(String(), nullable=True)
     column_context = Column(String(), nullable=True)
@@ -1170,13 +1189,14 @@ class TableTile(Base):
     columns_pin_left = Column(String(), nullable=True)
     columns_pin_right = Column(String(), nullable=True)
     selected = Column(String(), nullable=True)
-    
+
     # Relationships
     tile = relationship("Tile", back_populates="table_tile")
 
 
 class PlotTile(Base):
     """Model class for Plot-specific tile properties."""
+
     __tablename__ = "plot_tile"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -1187,7 +1207,7 @@ class PlotTile(Base):
         unique=True,
         index=True,
     )
-    
+
     # Plot-specific properties
     plot_type = Column(String(), nullable=True)
     plot_scale_x = Column(String(), nullable=True)
@@ -1199,13 +1219,14 @@ class PlotTile(Base):
     plot_group_by_colors = Column(String(), nullable=True)
     bin_count = Column(String(), nullable=True)
     regression_line = Column(String(), nullable=True)
-    
+
     # Relationships
     tile = relationship("Tile", back_populates="plot_tile")
 
 
 class ViewTile(Base):
     """Model class for View-specific tile properties."""
+
     __tablename__ = "view_tile"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -1216,16 +1237,17 @@ class ViewTile(Base):
         unique=True,
         index=True,
     )
-    
+
     # View-specific properties
     base_index = Column(String(), nullable=True)
-    
+
     # Relationships
     tile = relationship("Tile", back_populates="view_tile")
 
 
 class EditorTile(Base):
     """Model class for Editor-specific tile properties."""
+
     __tablename__ = "editor_tile"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -1236,11 +1258,11 @@ class EditorTile(Base):
         unique=True,
         index=True,
     )
-    
+
     # Editor-specific properties
     file_path = Column(String(), nullable=True)
     file_type = Column(String(), nullable=True)
     content = Column(String(), nullable=True)
-    
+
     # Relationships
     tile = relationship("Tile", back_populates="editor_tile")

@@ -10,7 +10,7 @@ from orchestra.db.models.orchestra_models import Interface
 
 class InterfaceDAO:
     """Data Access Object for Interface entity."""
-    
+
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 
@@ -43,7 +43,7 @@ class InterfaceDAO:
         return interface
 
     def _get_interface(
-        self, 
+        self,
         id: Optional[str] = None,
         project_id: Optional[int] = None,
         name: Optional[str] = None,
@@ -59,24 +59,32 @@ class InterfaceDAO:
             )
         else:
             return None
-            
+
         if is_checkpoint is not None:
             query = query.where(Interface.is_checkpoint == is_checkpoint)
-            
+
         return self.session.execute(query).scalars().first()
 
-    def get(self, id: str, is_checkpoint: Optional[bool] = False) -> Optional[Interface]:
+    def get(
+        self,
+        id: str,
+        is_checkpoint: Optional[bool] = False,
+    ) -> Optional[Interface]:
         """Get interface by ID."""
         return self._get_interface(id=id, is_checkpoint=is_checkpoint)
 
     def get_by_project_and_name(
-        self, 
-        project_id: int, 
+        self,
+        project_id: int,
         name: str,
         is_checkpoint: Optional[bool] = False,
     ) -> Optional[Interface]:
         """Get interface by project ID and name."""
-        return self._get_interface(project_id=project_id, name=name, is_checkpoint=is_checkpoint)
+        return self._get_interface(
+            project_id=project_id,
+            name=name,
+            is_checkpoint=is_checkpoint,
+        )
 
     def get_interfaces(
         self,
@@ -92,7 +100,7 @@ class InterfaceDAO:
             query = query.where(Interface.name == name)
         if is_checkpoint is not None:
             query = query.where(Interface.is_checkpoint == is_checkpoint)
-            
+
         query = query.order_by(Interface.created_at.asc())
         interfaces = self.session.execute(query).scalars().all()
         return interfaces
@@ -111,28 +119,32 @@ class InterfaceDAO:
     ) -> Optional[Interface]:
         """
         Update interface by ID or by project_id and name.
-        
+
         Either id or (project_id and name) must be provided to identify the interface.
         Other parameters are optional updates to apply.
         """
         interface = self._get_interface(
-            id=id, 
-            project_id=project_id, 
+            id=id,
+            project_id=project_id,
             name=name,
-            is_checkpoint=is_checkpoint
+            is_checkpoint=is_checkpoint,
         )
 
         if interface is None:
             return None
-            
+
         # These are the fields we might want to update
-        if name is not None and id is not None:  # Only update name if we identified by ID
+        if (
+            name is not None and id is not None
+        ):  # Only update name if we identified by ID
             interface.name = name
         if items is not None:
             interface.items = items
         if new_counter is not None:
             interface.new_counter = new_counter
-        if project_id is not None and id is not None:  # Only update project_id if we identified by ID
+        if (
+            project_id is not None and id is not None
+        ):  # Only update project_id if we identified by ID
             interface.project_id = project_id
         if context is not None:
             interface.context = context
@@ -146,7 +158,7 @@ class InterfaceDAO:
             # 2. We're identifying by name and we're setting is_checkpoint to False
             # (to avoid overriding existing checkpoints)
             interface.is_checkpoint = is_checkpoint
-            
+
         self.session.commit()
         return interface
 
@@ -159,42 +171,22 @@ class InterfaceDAO:
     ) -> bool:
         """
         Delete interface by ID or by project_id and name.
-        
+
         Either id or (project_id and name) must be provided.
         """
         interface = self._get_interface(
-            id=id, 
-            project_id=project_id, 
+            id=id,
+            project_id=project_id,
             name=name,
-            is_checkpoint=is_checkpoint
+            is_checkpoint=is_checkpoint,
         )
-        
+
         if interface is None:
             return False
-            
+
         self.session.delete(interface)
         self.session.commit()
         return True
-        
-        
-    def make_checkpoint(
-        self,
-        id: Optional[str] = None,
-        project_id: Optional[int] = None,
-        name: Optional[str] = None,
-    ) -> Optional[Interface]:
-        """
-        Mark an interface as a checkpoint (manual save) by ID or by project_id and name.
-        
-        Either id or (project_id and name) must be provided.
-        """
-        return self.update_interface(
-            id=id, 
-            project_id=project_id, 
-            name=name, 
-            is_checkpoint=True
-        )
-    
 
     def make_checkpoint(
         self,
@@ -204,111 +196,152 @@ class InterfaceDAO:
     ) -> Optional[Interface]:
         """
         Mark an interface as a checkpoint (manual save) by ID or by project_id and name.
-        
+
         Either id or (project_id and name) must be provided.
         """
         return self.update_interface(
-            id=id, 
-            project_id=project_id, 
-            name=name, 
-            is_checkpoint=True
+            id=id,
+            project_id=project_id,
+            name=name,
+            is_checkpoint=True,
         )
-    
-    def get_latest_checkpoint(self, id: Optional[str] = None, project_id: Optional[int] = None, name: Optional[str] = None) -> Optional[Interface]:
+
+    def make_checkpoint(
+        self,
+        id: Optional[str] = None,
+        project_id: Optional[int] = None,
+        name: Optional[str] = None,
+    ) -> Optional[Interface]:
+        """
+        Mark an interface as a checkpoint (manual save) by ID or by project_id and name.
+
+        Either id or (project_id and name) must be provided.
+        """
+        return self.update_interface(
+            id=id,
+            project_id=project_id,
+            name=name,
+            is_checkpoint=True,
+        )
+
+    def get_latest_checkpoint(
+        self,
+        id: Optional[str] = None,
+        project_id: Optional[int] = None,
+        name: Optional[str] = None,
+    ) -> Optional[Interface]:
         """Get the latest manually saved checkpoint for an interface."""
         if id is not None:
-            query = select(Interface).where(
-                Interface.id == id,
-                Interface.is_checkpoint == True
-            ).order_by(Interface.updated_at.desc())
+            query = (
+                select(Interface)
+                .where(Interface.id == id, Interface.is_checkpoint == True)
+                .order_by(Interface.updated_at.desc())
+            )
         elif project_id is not None and name is not None:
-            query = select(Interface).where(
-                Interface.project_id == project_id,
-                Interface.name == name,
-                Interface.is_checkpoint == True
-            ).order_by(Interface.updated_at.desc())
+            query = (
+                select(Interface)
+                .where(
+                    Interface.project_id == project_id,
+                    Interface.name == name,
+                    Interface.is_checkpoint == True,
+                )
+                .order_by(Interface.updated_at.desc())
+            )
         else:
             return None
         return self.session.execute(query).scalars().first()
 
-    def get_checkpoint(self, id: Optional[str] = None, project_id: Optional[int] = None, name: Optional[str] = None) -> Optional[Interface]:
+    def get_checkpoint(
+        self,
+        id: Optional[str] = None,
+        project_id: Optional[int] = None,
+        name: Optional[str] = None,
+    ) -> Optional[Interface]:
         """
         Get the checkpoint version of an interface.
-        
+
         This method retrieves the checkpoint version of an interface by:
         1. If the provided object is already a checkpoint, it returns it.
-        2. If the provided object is an active interface, it finds its checkpoint 
+        2. If the provided object is an active interface, it finds its checkpoint
            using the checkpoint_or_active_id reference.
-           
+
         Args:
             id: Optional ID of the interface
             project_id: Optional project ID to identify the interface
             name: Optional name to identify the interface
-            
+
         Returns:
             The checkpoint interface if found, None otherwise
         """
         # First get the interface based on the provided parameters
         interface = self._get_interface(id=id, project_id=project_id, name=name)
-        
+
         if not interface:
             return None
-            
+
         # If the interface is already a checkpoint, return it
         if interface.is_checkpoint:
             return interface
-            
+
         # If the interface has a checkpoint reference, get that checkpoint
         if interface.checkpoint_or_active_id:
-            checkpoint = self._get_interface(id=interface.checkpoint_or_active_id, is_checkpoint=True)
+            checkpoint = self._get_interface(
+                id=interface.checkpoint_or_active_id,
+                is_checkpoint=True,
+            )
             if checkpoint and checkpoint.is_checkpoint:
                 return checkpoint
-        
+
         # If no direct reference, try to find by project_id and name
         return self._get_interface(
             project_id=interface.project_id,
             name=interface.name,
-            is_checkpoint=True
+            is_checkpoint=True,
         )
-        
-    def get_current(self, id: Optional[str] = None, project_id: Optional[int] = None, name: Optional[str] = None) -> Optional[Interface]:
+
+    def get_current(
+        self,
+        id: Optional[str] = None,
+        project_id: Optional[int] = None,
+        name: Optional[str] = None,
+    ) -> Optional[Interface]:
         """
         Get the current (active) version of an interface.
-        
+
         This method retrieves the current version of an interface by:
         1. If the provided object is already an active interface, it returns it.
-        2. If the provided object is a checkpoint, it finds its active version 
+        2. If the provided object is a checkpoint, it finds its active version
            using the checkpoint_or_active_id reference.
-           
+
         Args:
             id: Optional ID of the interface
             project_id: Optional project ID to identify the interface
             name: Optional name to identify the interface
-            
+
         Returns:
             The active interface if found, None otherwise
         """
         # First get the interface based on the provided parameters
         interface = self._get_interface(id=id, project_id=project_id, name=name)
-        
+
         if not interface:
             return None
-            
+
         # If the interface is already an active interface, return it
         if not interface.is_checkpoint:
             return interface
-            
+
         # If the interface has an active reference, get that active interface
         if interface.checkpoint_or_active_id:
             active = self.get(id=interface.checkpoint_or_active_id)
             if active and not active.is_checkpoint:
                 return active
-        
+
         # If no direct reference, try to find by project_id and name
         return self._get_interface(
             project_id=interface.project_id,
             name=interface.name,
-            is_checkpoint=False
+            is_checkpoint=False,
         )
 
     def patch_interface(
@@ -321,16 +354,16 @@ class InterfaceDAO:
     ) -> Optional[Interface]:
         """
         Partially update interface with only the fields that need changing.
-        
+
         Either id or (project_id and name) must be provided to identify the interface.
         """
         interface = self._get_interface(
-            id=id, 
-            project_id=project_id, 
+            id=id,
+            project_id=project_id,
             name=name,
-            is_checkpoint=is_checkpoint
+            is_checkpoint=is_checkpoint,
         )
-        
+
         if interface is None:
             return None
 
@@ -341,7 +374,7 @@ class InterfaceDAO:
 
         self.session.commit()
         return interface
-        
+
     def checkpoint_interface(
         self,
         interface_id: Optional[str] = None,
@@ -350,12 +383,12 @@ class InterfaceDAO:
     ) -> Optional[Interface]:
         """
         Create or update a checkpoint of an interface.
-        
+
         Args:
             interface_id: ID of the interface to checkpoint
             project_id: Project ID, if identifying interface by project and name
             name: Interface name, if identifying interface by project and name
-            
+
         Returns:
             The checkpoint interface, either newly created or updated
         """
@@ -364,20 +397,24 @@ class InterfaceDAO:
             id=interface_id,
             project_id=project_id,
             name=name,
-            is_checkpoint=False  # Always get the active interface
+            is_checkpoint=False,  # Always get the active interface
         )
-        
+
         if source_interface is None:
             return None
-        
+
         # Check if a checkpoint already exists
-        existing_checkpoint = None if not source_interface.checkpoint_or_active_id else self.get(
-            id=source_interface.checkpoint_or_active_id,
-            is_checkpoint=True
+        existing_checkpoint = (
+            None
+            if not source_interface.checkpoint_or_active_id
+            else self.get(
+                id=source_interface.checkpoint_or_active_id,
+                is_checkpoint=True,
+            )
         )
-        
+
         checkpoint_interface = None
-        
+
         # If checkpoint exists, update it with the current interface values
         if existing_checkpoint:
             checkpoint_interface = self.update_interface(
@@ -390,13 +427,13 @@ class InterfaceDAO:
                 active_tab_id=source_interface.active_tab_id,
                 is_checkpoint=True,
             )
-            
+
             # Set checkpoint references - update one at a time
             if not source_interface.checkpoint_or_active_id:
                 # Update and commit in separate transactions to avoid sorting issues
                 existing_checkpoint.checkpoint_or_active_id = source_interface.id
                 self.session.commit()
-                
+
                 source_interface.checkpoint_or_active_id = existing_checkpoint.id
                 self.session.commit()
         # Otherwise, create a new checkpoint
@@ -410,13 +447,13 @@ class InterfaceDAO:
                 color=source_interface.color,
                 active_tab_id=source_interface.active_tab_id,
                 is_checkpoint=True,
-                checkpoint_or_active_id=str(source_interface.id)
+                checkpoint_or_active_id=str(source_interface.id),
             )
 
             # Update and commit in separate transactions to avoid sorting issues
             self.session.commit()  # Commit the new interface first
-            
+
             source_interface.checkpoint_or_active_id = checkpoint_interface.id
             self.session.commit()
-        
+
         return checkpoint_interface
