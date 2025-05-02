@@ -457,3 +457,74 @@ class InterfaceDAO:
             self.session.commit()
 
         return checkpoint_interface
+
+    def duplicate_interfaces(
+        self,
+        source_project_id: int,
+        target_project_id: int,
+    ) -> dict:
+        """
+        Duplicate all interfaces from one project to another.
+
+        Args:
+            source_project_id: ID of the source project
+            target_project_id: ID of the target project
+
+        Returns:
+            Dictionary with mapping of old interface IDs to new interface IDs and count
+        """
+        from datetime import datetime, timezone
+
+        import sqlalchemy
+
+        # Get interfaces from source project
+        modern_interfaces = self.get_interfaces(
+            project_id=source_project_id,
+            is_checkpoint=False,
+        )
+
+        interface_id_map = {}
+        count = 0
+
+        if modern_interfaces:
+            interface_values = []
+            old_interface_ids = []
+
+            for interface in modern_interfaces:
+                old_interface_ids.append(interface.id)
+                interface_values.append(
+                    {
+                        "project_id": target_project_id,
+                        "name": interface.name,
+                        "items": interface.items,
+                        "new_counter": interface.new_counter,
+                        "context": interface.context,
+                        "color": interface.color,
+                        "active_tab_id": None,  # Will be updated after tabs are created
+                        "is_checkpoint": interface.is_checkpoint,
+                        "checkpoint_or_active_id": None,  # Will be updated if needed
+                        "created_at": datetime.now(timezone.utc),
+                        "updated_at": datetime.now(timezone.utc),
+                    },
+                )
+
+            if interface_values:
+                # Bulk insert interfaces and get back the new IDs
+                stmt = (
+                    sqlalchemy.insert(Interface)
+                    .values(interface_values)
+                    .returning(Interface.id)
+                )
+                result = self.session.execute(stmt)
+                new_interface_ids = [row[0] for row in result]
+
+                # Build the interface ID mapping
+                for i, old_id in enumerate(old_interface_ids):
+                    interface_id_map[old_id] = new_interface_ids[i]
+
+                count = len(interface_values)
+
+        return {
+            "id_map": interface_id_map,
+            "count": count,
+        }

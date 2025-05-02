@@ -6,7 +6,7 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Interface
 
 
-class InterfaceDAO:
+class LegacyInterfaceDAO:
     def __init__(self, session: Session = Depends(get_db_session)):
         self.session = session
 

@@ -13,13 +13,16 @@ from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.derived_log_dao import DerivedLogDAO
 from orchestra.db.dao.favorite_project_dao import FavoriteProjectDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
-from orchestra.db.dao.legacy_interface_dao import InterfaceDAO
+from orchestra.db.dao.interface_dao import InterfaceDAO
+from orchestra.db.dao.legacy_interface_dao import LegacyInterfaceDAO
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.tab_dao import TabDAO
 from orchestra.db.dao.temp_interface_dao import TempInterfaceDAO
+from orchestra.db.dao.tile_dao import TileDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Context,
@@ -854,8 +857,13 @@ def admin_share_project(
                             "logs_copied": 100,
                             "json_logs_copied": 50,
                             "derived_logs_copied": 15,
-                            "interfaces_copied": 3,
-                            "temp_interfaces_copied": 2,
+                            "legacy_interfaces_copied": 3,
+                            "tabs_copied": 2,
+                            "tiles_copied": 10,
+                            "table_tiles_copied": 5,
+                            "plot_tiles_copied": 3,
+                            "editor_tiles_copied": 2,
+                            "view_tiles_copied": 1,
                         },
                     },
                 },
@@ -892,8 +900,11 @@ def admin_duplicate_project(
     log_event_dao: LogEventDAO = Depends(),
     log_dao: LogDAO = Depends(),
     derived_log_dao: DerivedLogDAO = Depends(),
-    interface_dao: InterfaceDAO = Depends(),
+    legacy_interface_dao: LegacyInterfaceDAO = Depends(),
     temp_interface_dao: TempInterfaceDAO = Depends(),
+    interface_dao: InterfaceDAO = Depends(),
+    tab_dao: TabDAO = Depends(),
+    tile_dao: TileDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -961,8 +972,15 @@ def admin_duplicate_project(
         "logs_copied": 0,
         "json_logs_copied": 0,
         "derived_logs_copied": 0,
-        "interfaces_copied": 0,
+        "legacy_interfaces_copied": 0,
         "temp_interfaces_copied": 0,
+        "interfaces_copied": 0,
+        "tabs_copied": 0,
+        "tiles_copied": 0,
+        "table_tiles_copied": 0,
+        "plot_tiles_copied": 0,
+        "editor_tiles_copied": 0,
+        "view_tiles_copied": 0,
     }
 
     # Create mappings to track old IDs to new IDs
@@ -1211,7 +1229,7 @@ def admin_duplicate_project(
         stats["derived_logs_copied"] = len(derived_log_values)
 
     # 12. Duplicate Interfaces using bulk insert
-    interfaces = interface_dao.get_interfaces(project_id=source_project.id)
+    interfaces = legacy_interface_dao.get_interfaces(project_id=source_project.id)
     interface_values = []
 
     for intf in interfaces:
@@ -1228,7 +1246,7 @@ def admin_duplicate_project(
     if interface_values:
         stmt = sqlalchemy.insert(Interface).values(interface_values)
         session.execute(stmt)
-        stats["interfaces_copied"] = len(interface_values)
+        stats["legacy_interfaces_copied"] = len(interface_values)
 
     # 13. Duplicate Temp Interfaces using bulk insert
     temp_interfaces = temp_interface_dao.get_interfaces(project_id=source_project.id)
@@ -1250,7 +1268,33 @@ def admin_duplicate_project(
         session.execute(stmt)
         stats["temp_interfaces_copied"] = len(temp_interface_values)
 
-    # 14. Commit all changes
+    # 14. Duplicate Interfaces, Tabs, Tiles and specialized tile types
+    # Use the DAO methods to duplicate the hierarchical data
+
+    # Duplicate interfaces
+    interface_result = interface_dao.duplicate_interfaces(
+        source_project_id=source_project.id,
+        target_project_id=new_project.id,
+    )
+    interface_id_map = interface_result["id_map"]
+    stats["interfaces_copied"] = interface_result["count"]
+
+    # Duplicate tabs for the interfaces
+    if interface_id_map:
+        tab_result = tab_dao.duplicate_tabs(interface_id_map)
+        tab_id_map = tab_result["id_map"]
+        stats["tabs_copied"] = tab_result["count"]
+
+        # Duplicate tiles for the tabs
+        if tab_id_map:
+            tile_result = tile_dao.duplicate_tiles(tab_id_map)
+            stats["tiles_copied"] = tile_result["tile_count"]
+            stats["table_tiles_copied"] = tile_result["table_tile_count"]
+            stats["plot_tiles_copied"] = tile_result["plot_tile_count"]
+            stats["view_tiles_copied"] = tile_result["view_tile_count"]
+            stats["editor_tiles_copied"] = tile_result["editor_tile_count"]
+
+    # 15. Commit all changes
     session.commit()
 
     return {
