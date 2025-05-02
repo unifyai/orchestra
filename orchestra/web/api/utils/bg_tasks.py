@@ -16,7 +16,6 @@ from orchestra.web.api.log.utils.logging_utils import log_chat_completion_event
 from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.query.views import create_query_model
 from orchestra.web.api.utils.gcp import send_pubsub_msg
-from orchestra.web.api.utils.helpers import recharge_and_generate_invoice
 from orchestra.web.api.utils.http_responses import internal_endpoint_not_found
 from orchestra.web.lifetime import get_engine
 
@@ -185,7 +184,9 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
                 and user.credits <= user.autorecharge_threshold
                 and user.autorecharge_qty > 0
             ):
-                recharge_and_generate_invoice(user, users_dao)
+                # TODO: uncomment this once autorecharge is tested more thoroughly
+                pass
+                # recharge_and_generate_invoice(user, users_dao)
 
             telemetry_to_pub_sub(
                 user_id,
