@@ -25,6 +25,7 @@ class ContextArtifactDAO:
                 value=value,
             ),
         )
+        self.session.commit()
 
     def filter(
         self,

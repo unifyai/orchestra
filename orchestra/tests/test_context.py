@@ -1861,3 +1861,56 @@ async def test_create_columns_invalid_type(client: AsyncClient):
     )
     assert response.status_code == 400
     assert "Invalid field type" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_rename_context(client: AsyncClient):
+    project = "rename-test-project"
+    old = "experiment1/trial1"
+    new = "experiment1/trial2"
+
+    # Create project and initial context
+    await client.post("/v0/project", json={"name": project}, headers=HEADERS)
+    await client.post(
+        f"/v0/project/{project}/contexts",
+        json={"name": old, "description": "desc"},
+        headers=HEADERS,
+    )
+
+    # Perform rename
+    resp = await client.patch(
+        f"/v0/project/{project}/contexts/{old}/rename",
+        json={"name": new},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+    assert "renamed successfully" in resp.json()["info"].lower()
+
+    # Old endpoint should 404
+    r_old = await client.get(
+        f"/v0/project/{project}/contexts/{old}",
+        headers=HEADERS,
+    )
+    assert r_old.status_code == 404
+
+    # New endpoint should exist
+    r_new = await client.get(
+        f"/v0/project/{project}/contexts/{new}",
+        headers=HEADERS,
+    )
+    assert r_new.status_code == 200
+    assert r_new.json()["name"] == new
+
+    # Name collision yields 400
+    await client.post(
+        f"/v0/project/{project}/contexts",
+        json={"name": "dup", "description": "dup"},
+        headers=HEADERS,
+    )
+    conflict = await client.patch(
+        f"/v0/project/{project}/contexts/{new}/rename",
+        json={"name": "dup"},
+        headers=HEADERS,
+    )
+    assert conflict.status_code == 400
+    assert "already exists" in conflict.json()["detail"].lower()
