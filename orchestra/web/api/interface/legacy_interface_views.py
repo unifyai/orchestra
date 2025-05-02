@@ -2,7 +2,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from orchestra.db.dao.legacy_interface_dao import InterfaceDAO
+from orchestra.db.dao.legacy_interface_dao import LegacyInterfaceDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.temp_interface_dao import TempInterfaceDAO
 from orchestra.web.api.interface.schema import LegacyInterfaceConfig
@@ -57,7 +57,7 @@ def create_interface(
     request_fastapi: Request,
     request: LegacyInterfaceConfig,
     project_dao: ProjectDAO = Depends(),
-    interface_dao: InterfaceDAO = Depends(),
+    interface_dao: LegacyInterfaceDAO = Depends(),
     temp_interface_dao: TempInterfaceDAO = Depends(),
 ):
     project = project_dao.get_by_user_and_name(
@@ -133,7 +133,7 @@ def update_interface(
     request_fastapi: Request,
     request: LegacyInterfaceConfig,
     project_dao: ProjectDAO = Depends(),
-    interface_dao: InterfaceDAO = Depends(),
+    interface_dao: LegacyInterfaceDAO = Depends(),
     temp_interface_dao: TempInterfaceDAO = Depends(),
 ):
     project = project_dao.get_by_user_and_name(
@@ -228,7 +228,7 @@ def get_interfaces(
     project: str = Query(...),
     temporary: bool = Query(False),
     project_dao: ProjectDAO = Depends(),
-    interface_dao: InterfaceDAO = Depends(),
+    interface_dao: LegacyInterfaceDAO = Depends(),
     temp_interface_dao: TempInterfaceDAO = Depends(),
 ):
     project_obj = project_dao.get_by_user_and_name(
@@ -335,7 +335,7 @@ def delete_interface(
     name: str = Query(...),
     project: str = Query(...),
     temporary: bool = Query(False),
-    interface_dao: InterfaceDAO = Depends(),
+    interface_dao: LegacyInterfaceDAO = Depends(),
     temp_interface_dao: TempInterfaceDAO = Depends(),
     project_dao: ProjectDAO = Depends(),
 ):
