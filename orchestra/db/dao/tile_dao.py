@@ -1904,6 +1904,8 @@ class TileDAO:
     def duplicate_tiles(self, tab_id_map: dict) -> dict:
         """
         Duplicate all tiles and specialized tile data for the given tabs.
+        If a tile with the same tab_id and name already exists,
+        it will be updated instead of creating a duplicate.
 
         Args:
             tab_id_map: Mapping of old tab IDs to new tab IDs
@@ -1938,38 +1940,81 @@ class TileDAO:
             if tiles:
                 tile_values = []
                 old_tile_ids = []
+                existing_tile_map = {}
 
                 for tile in tiles:
-                    old_tile_ids.append(tile.id)
-                    tile_values.append(
-                        {
-                            "tab_id": new_tab_id,
-                            "type": tile.type,
-                            "name": tile.name,
-                            "x_position": tile.x_position,
-                            "y_position": tile.y_position,
-                            "width": tile.width,
-                            "height": tile.height,
-                            "min_width": tile.min_width,
-                            "min_height": tile.min_height,
-                            "visible": tile.visible,
-                            "locked": tile.locked,
-                            "moved": tile.moved,
-                            "static": tile.static,
-                            "context": tile.context,
-                            "table": tile.table,
-                            "auto_update": tile.auto_update,
-                            "freeze": tile.freeze,
-                            "filters": tile.filters,
-                            "common_filter": tile.common_filter,
-                            "metric": tile.metric,
-                            "is_checkpoint": tile.is_checkpoint,
-                            "checkpoint_or_active_id": None,  # Will be updated if needed
-                            "created_at": datetime.now(timezone.utc),
-                            "updated_at": datetime.now(timezone.utc),
-                        },
+                    # Check if a tile with the same name already exists in the target tab
+                    existing_tile = self.get_by_tab_and_name(
+                        tab_id=new_tab_id,
+                        name=tile.name,
+                        is_checkpoint=False,
                     )
 
+                    if existing_tile:
+                        # If tile already exists, store it for updating later
+                        existing_tile_map[tile.id] = existing_tile
+                        tile_id_map[tile.id] = existing_tile.id
+                        total_tile_count += 1
+                    else:
+                        # If tile doesn't exist, add to list for bulk insert
+                        old_tile_ids.append(tile.id)
+                        tile_values.append(
+                            {
+                                "tab_id": new_tab_id,
+                                "type": tile.type,
+                                "name": tile.name,
+                                "x_position": tile.x_position,
+                                "y_position": tile.y_position,
+                                "width": tile.width,
+                                "height": tile.height,
+                                "min_width": tile.min_width,
+                                "min_height": tile.min_height,
+                                "visible": tile.visible,
+                                "locked": tile.locked,
+                                "moved": tile.moved,
+                                "static": tile.static,
+                                "context": tile.context,
+                                "table": tile.table,
+                                "auto_update": tile.auto_update,
+                                "freeze": tile.freeze,
+                                "filters": tile.filters,
+                                "common_filter": tile.common_filter,
+                                "metric": tile.metric,
+                                "is_checkpoint": tile.is_checkpoint,
+                                "checkpoint_or_active_id": None,  # Will be updated if needed
+                                "created_at": datetime.now(timezone.utc),
+                                "updated_at": datetime.now(timezone.utc),
+                            },
+                        )
+
+                # Update existing tiles
+                for old_id, existing_tile in existing_tile_map.items():
+                    source_tile = next((t for t in tiles if t.id == old_id), None)
+                    if source_tile:
+                        # Update existing tile with data from source
+                        self.update_tile(
+                            id=existing_tile.id,
+                            x_position=source_tile.x_position,
+                            y_position=source_tile.y_position,
+                            width=source_tile.width,
+                            height=source_tile.height,
+                            min_width=source_tile.min_width,
+                            min_height=source_tile.min_height,
+                            visible=source_tile.visible,
+                            locked=source_tile.locked,
+                            moved=source_tile.moved,
+                            static=source_tile.static,
+                            context=source_tile.context,
+                            table=source_tile.table,
+                            auto_update=source_tile.auto_update,
+                            freeze=source_tile.freeze,
+                            filters=source_tile.filters,
+                            common_filter=source_tile.common_filter,
+                            metric=source_tile.metric,
+                            is_checkpoint=source_tile.is_checkpoint,
+                        )
+
+                # Bulk insert new tiles
                 if tile_values:
                     # Bulk insert tiles and get back the new IDs
                     stmt = (
@@ -1978,7 +2023,7 @@ class TileDAO:
                     result = self.session.execute(stmt)
                     new_tile_ids = [row[0] for row in result]
 
-                    # Build the tile ID mapping
+                    # Build the tile ID mapping for newly created tiles
                     for i, old_id in enumerate(old_tile_ids):
                         tile_id_map[old_id] = new_tile_ids[i]
 
@@ -1995,30 +2040,69 @@ class TileDAO:
 
             if table_tiles:
                 table_tile_values = []
+                table_tile_updates = []
+
                 for tt in table_tiles:
                     new_tile_id = tile_id_map[tt.tile_id]
-                    table_tile_values.append(
-                        {
-                            "id": new_tile_id,  # Same ID as the base tile
-                            "tile_id": new_tile_id,
-                            "table_type": tt.table_type,
-                            "column_context": tt.column_context,
-                            "page_number": tt.page_number,
-                            "column_order": tt.column_order,
-                            "hidden_columns": tt.hidden_columns,
-                            "sorting": tt.sorting,
-                            "grouping": tt.grouping,
-                            "group_sorting": tt.group_sorting,
-                            "columns_pin_left": tt.columns_pin_left,
-                            "columns_pin_right": tt.columns_pin_right,
-                            "selected": tt.selected,
-                        },
+
+                    # Check if a TableTile already exists for this tile
+                    existing_table_tile = (
+                        self.session.query(TableTile)
+                        .filter(TableTile.tile_id == new_tile_id)
+                        .first()
                     )
 
+                    if existing_table_tile:
+                        # Update existing TableTile
+                        table_tile_updates.append(
+                            {
+                                "id": existing_table_tile.id,
+                                "table_type": tt.table_type,
+                                "column_context": tt.column_context,
+                                "page_number": tt.page_number,
+                                "column_order": tt.column_order,
+                                "hidden_columns": tt.hidden_columns,
+                                "sorting": tt.sorting,
+                                "grouping": tt.grouping,
+                                "group_sorting": tt.group_sorting,
+                                "columns_pin_left": tt.columns_pin_left,
+                                "columns_pin_right": tt.columns_pin_right,
+                                "selected": tt.selected,
+                            },
+                        )
+                    else:
+                        # Create new TableTile
+                        table_tile_values.append(
+                            {
+                                "id": new_tile_id,  # Same ID as the base tile
+                                "tile_id": new_tile_id,
+                                "table_type": tt.table_type,
+                                "column_context": tt.column_context,
+                                "page_number": tt.page_number,
+                                "column_order": tt.column_order,
+                                "hidden_columns": tt.hidden_columns,
+                                "sorting": tt.sorting,
+                                "grouping": tt.grouping,
+                                "group_sorting": tt.group_sorting,
+                                "columns_pin_left": tt.columns_pin_left,
+                                "columns_pin_right": tt.columns_pin_right,
+                                "selected": tt.selected,
+                            },
+                        )
+
+                # Insert new TableTiles
                 if table_tile_values:
                     stmt = sqlalchemy.insert(TableTile).values(table_tile_values)
                     self.session.execute(stmt)
                     table_tile_count = len(table_tile_values)
+
+                # Update existing TableTiles
+                for update_data in table_tile_updates:
+                    table_tile_id = update_data.pop("id")
+                    self.session.query(TableTile).filter(
+                        TableTile.id == table_tile_id,
+                    ).update(update_data)
+                    table_tile_count += 1
 
             # Process PlotTiles
             plot_tiles = (
@@ -2029,29 +2113,67 @@ class TileDAO:
 
             if plot_tiles:
                 plot_tile_values = []
+                plot_tile_updates = []
+
                 for pt in plot_tiles:
                     new_tile_id = tile_id_map[pt.tile_id]
-                    plot_tile_values.append(
-                        {
-                            "id": new_tile_id,  # Same ID as the base tile
-                            "tile_id": new_tile_id,
-                            "plot_type": pt.plot_type,
-                            "plot_scale_x": pt.plot_scale_x,
-                            "plot_scale_y": pt.plot_scale_y,
-                            "plot_aggregate": pt.plot_aggregate,
-                            "x_axis": pt.x_axis,
-                            "y_axis": pt.y_axis,
-                            "plot_group_by": pt.plot_group_by,
-                            "plot_group_by_colors": pt.plot_group_by_colors,
-                            "bin_count": pt.bin_count,
-                            "regression_line": pt.regression_line,
-                        },
+
+                    # Check if a PlotTile already exists for this tile
+                    existing_plot_tile = (
+                        self.session.query(PlotTile)
+                        .filter(PlotTile.tile_id == new_tile_id)
+                        .first()
                     )
 
+                    if existing_plot_tile:
+                        # Update existing PlotTile
+                        plot_tile_updates.append(
+                            {
+                                "id": existing_plot_tile.id,
+                                "plot_type": pt.plot_type,
+                                "plot_scale_x": pt.plot_scale_x,
+                                "plot_scale_y": pt.plot_scale_y,
+                                "plot_aggregate": pt.plot_aggregate,
+                                "x_axis": pt.x_axis,
+                                "y_axis": pt.y_axis,
+                                "plot_group_by": pt.plot_group_by,
+                                "plot_group_by_colors": pt.plot_group_by_colors,
+                                "bin_count": pt.bin_count,
+                                "regression_line": pt.regression_line,
+                            },
+                        )
+                    else:
+                        # Create new PlotTile
+                        plot_tile_values.append(
+                            {
+                                "id": new_tile_id,  # Same ID as the base tile
+                                "tile_id": new_tile_id,
+                                "plot_type": pt.plot_type,
+                                "plot_scale_x": pt.plot_scale_x,
+                                "plot_scale_y": pt.plot_scale_y,
+                                "plot_aggregate": pt.plot_aggregate,
+                                "x_axis": pt.x_axis,
+                                "y_axis": pt.y_axis,
+                                "plot_group_by": pt.plot_group_by,
+                                "plot_group_by_colors": pt.plot_group_by_colors,
+                                "bin_count": pt.bin_count,
+                                "regression_line": pt.regression_line,
+                            },
+                        )
+
+                # Insert new PlotTiles
                 if plot_tile_values:
                     stmt = sqlalchemy.insert(PlotTile).values(plot_tile_values)
                     self.session.execute(stmt)
                     plot_tile_count = len(plot_tile_values)
+
+                # Update existing PlotTiles
+                for update_data in plot_tile_updates:
+                    plot_tile_id = update_data.pop("id")
+                    self.session.query(PlotTile).filter(
+                        PlotTile.id == plot_tile_id,
+                    ).update(update_data)
+                    plot_tile_count += 1
 
             # Process ViewTiles
             view_tiles = (
@@ -2062,20 +2184,49 @@ class TileDAO:
 
             if view_tiles:
                 view_tile_values = []
+                view_tile_updates = []
+
                 for vt in view_tiles:
                     new_tile_id = tile_id_map[vt.tile_id]
-                    view_tile_values.append(
-                        {
-                            "id": new_tile_id,  # Same ID as the base tile
-                            "tile_id": new_tile_id,
-                            "base_index": vt.base_index,
-                        },
+
+                    # Check if a ViewTile already exists for this tile
+                    existing_view_tile = (
+                        self.session.query(ViewTile)
+                        .filter(ViewTile.tile_id == new_tile_id)
+                        .first()
                     )
 
+                    if existing_view_tile:
+                        # Update existing ViewTile
+                        view_tile_updates.append(
+                            {
+                                "id": existing_view_tile.id,
+                                "base_index": vt.base_index,
+                            },
+                        )
+                    else:
+                        # Create new ViewTile
+                        view_tile_values.append(
+                            {
+                                "id": new_tile_id,  # Same ID as the base tile
+                                "tile_id": new_tile_id,
+                                "base_index": vt.base_index,
+                            },
+                        )
+
+                # Insert new ViewTiles
                 if view_tile_values:
                     stmt = sqlalchemy.insert(ViewTile).values(view_tile_values)
                     self.session.execute(stmt)
                     view_tile_count = len(view_tile_values)
+
+                # Update existing ViewTiles
+                for update_data in view_tile_updates:
+                    view_tile_id = update_data.pop("id")
+                    self.session.query(ViewTile).filter(
+                        ViewTile.id == view_tile_id,
+                    ).update(update_data)
+                    view_tile_count += 1
 
             # Process EditorTiles
             editor_tiles = (
@@ -2086,22 +2237,53 @@ class TileDAO:
 
             if editor_tiles:
                 editor_tile_values = []
+                editor_tile_updates = []
+
                 for et in editor_tiles:
                     new_tile_id = tile_id_map[et.tile_id]
-                    editor_tile_values.append(
-                        {
-                            "id": new_tile_id,  # Same ID as the base tile
-                            "tile_id": new_tile_id,
-                            "content": et.content,
-                            "file_path": et.file_path,
-                            "file_type": et.file_type,
-                        },
+
+                    # Check if an EditorTile already exists for this tile
+                    existing_editor_tile = (
+                        self.session.query(EditorTile)
+                        .filter(EditorTile.tile_id == new_tile_id)
+                        .first()
                     )
 
+                    if existing_editor_tile:
+                        # Update existing EditorTile
+                        editor_tile_updates.append(
+                            {
+                                "id": existing_editor_tile.id,
+                                "file_path": et.file_path,
+                                "file_type": et.file_type,
+                                "content": et.content,
+                            },
+                        )
+                    else:
+                        # Create new EditorTile
+                        editor_tile_values.append(
+                            {
+                                "id": new_tile_id,  # Same ID as the base tile
+                                "tile_id": new_tile_id,
+                                "file_path": et.file_path,
+                                "file_type": et.file_type,
+                                "content": et.content,
+                            },
+                        )
+
+                # Insert new EditorTiles
                 if editor_tile_values:
                     stmt = sqlalchemy.insert(EditorTile).values(editor_tile_values)
                     self.session.execute(stmt)
                     editor_tile_count = len(editor_tile_values)
+
+                # Update existing EditorTiles
+                for update_data in editor_tile_updates:
+                    editor_tile_id = update_data.pop("id")
+                    self.session.query(EditorTile).filter(
+                        EditorTile.id == editor_tile_id,
+                    ).update(update_data)
+                    editor_tile_count += 1
 
         return {
             "id_map": tile_id_map,

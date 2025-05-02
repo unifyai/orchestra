@@ -465,6 +465,8 @@ class InterfaceDAO:
     ) -> dict:
         """
         Duplicate all interfaces from one project to another.
+        If an interface with the same name already exists in the target project,
+        it will be updated instead of creating a duplicate.
 
         Args:
             source_project_id: ID of the source project
@@ -478,7 +480,7 @@ class InterfaceDAO:
         import sqlalchemy
 
         # Get interfaces from source project
-        modern_interfaces = self.get_interfaces(
+        interfaces = self.get_interfaces(
             project_id=source_project_id,
             is_checkpoint=False,
         )
@@ -486,28 +488,60 @@ class InterfaceDAO:
         interface_id_map = {}
         count = 0
 
-        if modern_interfaces:
+        if interfaces:
             interface_values = []
             old_interface_ids = []
+            existing_interface_map = {}
 
-            for interface in modern_interfaces:
-                old_interface_ids.append(interface.id)
-                interface_values.append(
-                    {
-                        "project_id": target_project_id,
-                        "name": interface.name,
-                        "items": interface.items,
-                        "new_counter": interface.new_counter,
-                        "context": interface.context,
-                        "color": interface.color,
-                        "active_tab_id": None,  # Will be updated after tabs are created
-                        "is_checkpoint": interface.is_checkpoint,
-                        "checkpoint_or_active_id": None,  # Will be updated if needed
-                        "created_at": datetime.now(timezone.utc),
-                        "updated_at": datetime.now(timezone.utc),
-                    },
+            # First, check for existing interfaces with the same name in the target project
+            for interface in interfaces:
+                # Check if an interface with the same name already exists in the target project
+                existing_interface = self.get_by_project_and_name(
+                    project_id=target_project_id,
+                    name=interface.name,
+                    is_checkpoint=False,
                 )
 
+                if existing_interface:
+                    # If interface already exists, store it for updating later
+                    existing_interface_map[interface.id] = existing_interface
+                    interface_id_map[interface.id] = existing_interface.id
+                    count += 1
+                else:
+                    # If interface doesn't exist, add to list for bulk insert
+                    old_interface_ids.append(interface.id)
+                    interface_values.append(
+                        {
+                            "project_id": target_project_id,
+                            "name": interface.name,
+                            "items": interface.items,
+                            "new_counter": interface.new_counter,
+                            "context": interface.context,
+                            "color": interface.color,
+                            "active_tab_id": None,  # Will be updated after tabs are created
+                            "is_checkpoint": interface.is_checkpoint,
+                            "checkpoint_or_active_id": None,  # Will be updated if needed
+                            "created_at": datetime.now(timezone.utc),
+                            "updated_at": datetime.now(timezone.utc),
+                        },
+                    )
+
+            # Update existing interfaces
+            for old_id, existing_interface in existing_interface_map.items():
+                source_interface = next((i for i in interfaces if i.id == old_id), None)
+                if source_interface:
+                    # Update existing interface with data from source
+                    self.update_interface(
+                        id=existing_interface.id,
+                        items=source_interface.items,
+                        new_counter=source_interface.new_counter,
+                        context=source_interface.context,
+                        color=source_interface.color,
+                        is_checkpoint=source_interface.is_checkpoint,
+                        # Don't update active_tab_id yet - will be done after tabs are processed
+                    )
+
+            # Bulk insert new interfaces
             if interface_values:
                 # Bulk insert interfaces and get back the new IDs
                 stmt = (
@@ -518,11 +552,11 @@ class InterfaceDAO:
                 result = self.session.execute(stmt)
                 new_interface_ids = [row[0] for row in result]
 
-                # Build the interface ID mapping
+                # Build the interface ID mapping for newly created interfaces
                 for i, old_id in enumerate(old_interface_ids):
                     interface_id_map[old_id] = new_interface_ids[i]
 
-                count = len(interface_values)
+                count += len(interface_values)
 
         return {
             "id_map": interface_id_map,
