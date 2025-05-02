@@ -6,6 +6,7 @@ import re
 from typing import Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from sqlalchemy.exc import IntegrityError
 
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
@@ -16,6 +17,7 @@ from orchestra.web.api.context.schema import (
     AddLogsToContextRequest,
     ContextCreateRequest,
     CreateColumnsRequest,
+    RenameContextRequest,
 )
 from orchestra.web.api.log.views import _get_logs_query
 from orchestra.web.api.utils.http_responses import not_found
@@ -223,7 +225,7 @@ def get_contexts(
 
 
 @router.get(
-    "/project/{project_name}/contexts/{context_name}",
+    "/project/{project_name}/contexts/{context_name:path}",
     responses={
         200: {
             "description": "Context retrieved.",
@@ -618,3 +620,71 @@ def add_logs_to_context(
             status_code=400,
             detail="One or more specified logs do not exist in the project.",
         )
+
+
+@router.patch(
+    "/project/{project_name}/contexts/{context_name:path}/rename",
+    responses={
+        200: {
+            "description": "Context renamed successfully",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Context renamed successfully!"},
+                },
+            },
+        },
+        400: {
+            "description": "Context with new name already exists",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "A context with this name already exists in the project.",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project or Context Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project or context not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+async def rename_context(
+    request_fastapi: Request,
+    body: RenameContextRequest,
+    project_name: str = Path(...),
+    context_name: str = Path(...),
+    project_dao: ProjectDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+):
+    """Rename an existing context within a project."""
+    # 1) Verify project
+    project = project_dao.get_by_user_and_name(
+        user_id=request_fastapi.state.user_id,
+        name=project_name,
+    )
+    if not project:
+        raise not_found("Project")
+    # 2) Load context
+    ctx_list = context_dao.filter(
+        project_id=project.id,
+        name=context_name,
+    )
+    if not ctx_list:
+        raise not_found("Context")
+    ctx_id = ctx_list[0][0].id
+    # 3) Attempt rename
+    try:
+        context_dao.update(id=ctx_id, name=body.name)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=400,
+            detail="A context with this name already exists in the project.",
+        )
+    return {"info": "Context renamed successfully!"}
