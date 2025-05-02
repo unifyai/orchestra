@@ -438,7 +438,7 @@ async def test_share_project(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_duplicate_project(client: AsyncClient):
+async def test_duplicate_project_with_legacy_interfaces(client: AsyncClient):
     """
     Test the admin endpoint for duplicating a project.
     This test verifies that an admin can create a deep copy of a project from one user to another.
@@ -475,7 +475,7 @@ async def test_duplicate_project(client: AsyncClient):
     await _create_context(client, source_project_name, context_name, "test description")
     await _create_context(client, source_project_name, "dummy-context", None)
 
-    # Create legacy interface
+    # Create interface
     items = [
         {
             "i": "n0",
@@ -496,112 +496,6 @@ async def test_duplicate_project(client: AsyncClient):
         items,
         new_counter,
     )
-
-    # Create new interface with tabs and tiles
-    new_interface_name = "new_interface"
-    # Create new interface using the _create_test_interface helper
-    interface_response = await _create_test_interface(
-        client,
-        name=new_interface_name,
-        project=source_project_name,
-    )
-    assert interface_response.status_code == 201, interface_response.json()
-    new_interface_data = interface_response.json()
-    new_interface_id = new_interface_data["id"]
-
-    # Create tabs in the new interface
-    tab1_name = "Tab 1"
-    tab1_response = await _create_test_tab(
-        client,
-        new_interface_id,
-        name=tab1_name,
-        active=True,
-        order=0,
-    )
-    assert tab1_response.status_code == 201, tab1_response.json()
-    tab1_data = tab1_response.json()
-    tab1_id = tab1_data["id"]
-
-    tab2_name = "Tab 2"
-    tab2_response = await _create_test_tab(
-        client,
-        new_interface_id,
-        name=tab2_name,
-        active=False,
-        order=1,
-    )
-    assert tab2_response.status_code == 201, tab2_response.json()
-    tab2_data = tab2_response.json()
-    tab2_id = tab2_data["id"]
-
-    # Create different types of tiles in the tabs
-    # 1. Table Tile
-    table_tile_name = "Test Table"
-    table_response = await _create_test_table_tile(
-        client,
-        tab1_id,
-        name=table_tile_name,
-        table_type="fixed",
-        column_context=json.dumps(["Column 1", "Column 2"]),
-        width=4,
-        height=3,
-        x=0,
-        y=0,
-    )
-    assert table_response.status_code == 201, table_response.json()
-    table_tile_data = table_response.json()
-    table_tile_id = table_tile_data["id"]
-
-    # 2. Plot Tile
-    plot_tile_name = "Test Plot"
-    plot_response = await _create_test_plot_tile(
-        client,
-        tab1_id,
-        name=plot_tile_name,
-        plot_type="scatter",
-        x_axis="x",
-        y_axis="y",
-        width=4,
-        height=3,
-        x=4,
-        y=0,
-    )
-    assert plot_response.status_code == 201, plot_response.json()
-    plot_tile_data = plot_response.json()
-    plot_tile_id = plot_tile_data["id"]
-
-    # 3. View Tile
-    view_tile_name = "Test View"
-    view_response = await _create_test_view_tile(
-        client,
-        tab2_id,
-        name=view_tile_name,
-        base_index="markdown",
-        width=4,
-        height=3,
-        x=0,
-        y=0,
-    )
-    assert view_response.status_code == 201, view_response.json()
-    view_tile_data = view_response.json()
-    view_tile_id = view_tile_data["id"]
-
-    # 4. Editor Tile
-    editor_tile_name = "Test Editor"
-    editor_response = await _create_test_editor_tile(
-        client,
-        tab2_id,
-        name=editor_tile_name,
-        file_type="python",
-        content="print('Hello, World!')",
-        width=4,
-        height=3,
-        x=4,
-        y=0,
-    )
-    assert editor_response.status_code == 201, editor_response.json()
-    editor_tile_data = editor_response.json()
-    editor_tile_id = editor_tile_data["id"]
 
     # Create logs
     log_id = await _create_log(
@@ -660,11 +554,256 @@ async def test_duplicate_project(client: AsyncClient):
     result = response.json()["details"]
     assert result["contexts_copied"] >= 1
     assert result["field_types_copied"] >= 1
-    # Verify legacy and new interfaces are copied
-    assert result["legacy_interfaces_copied"] >= 1
     assert result["interfaces_copied"] >= 1
     assert result["logs_copied"] >= 1
     assert result["derived_logs_copied"] >= 1
+
+    # Get the API key for the target user
+    response = await client.get(
+        f"/v0/admin/auth-user/by-user-id?user_id={target_user_id}",
+        headers=admin_headers,
+    )
+    data = response.json()
+    target_user_api_key = data["apiKey"]
+    target_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {target_user_api_key}",
+    }
+
+    # 1) Verify the target user can access the duplicated project
+    response = await client.get(
+        f"/v0/projects",
+        headers=target_headers,
+    )
+    assert response.status_code == 200, response.json()
+    assert target_project_name in response.json()
+
+    # 2) Verify the target user can access the project's contexts
+    response = await client.get(
+        f"/v0/project/{target_project_name}/contexts",
+        headers=target_headers,
+    )
+    assert response.status_code == 200, response.json()
+    contexts = response.json()
+    assert len(contexts) > 0
+    assert context_name in [context["name"] for context in contexts]
+
+    # 3) Verify the target user can access the project's interfaces
+    response = await client.get(
+        f"/v0/interface",
+        params={"project": target_project_name},
+        headers=target_headers,
+    )
+    assert response.status_code == 200, response.json()
+    interfaces = response.json()
+    assert len(interfaces) > 0
+    assert interface_name in [interface["name"] for interface in interfaces]
+
+    # 4) Verify the target user can access the project's logs
+    response = await client.get(
+        f"/v0/logs",
+        params={"project": target_project_name, "context": context_name},
+        headers=target_headers,
+    )
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    assert len(data["logs"]) > 0
+    assert "source_key" in data["logs"][0]["entries"]
+    assert data["logs"][0]["entries"]["source_key"] == "source_value"
+
+    # 5) Update the source project logs and verify the changes don't affect the duplicate
+    response = await _update_logs(
+        client,
+        log_ids=[1],
+        context={"name": context_name},
+        entries={"updated_key": "updated_value"},
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify the source project has the updated log
+    response = await client.get(
+        f"/v0/logs",
+        params={"project": source_project_name, "context": context_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    source_logs = response.json()["logs"]
+    assert "updated_key" in source_logs[0]["entries"]
+
+    # Verify the duplicated project does NOT have the updated log
+    response = await client.get(
+        f"/v0/logs",
+        params={"project": target_project_name, "context": context_name},
+        headers=target_headers,
+    )
+    assert response.status_code == 200, response.json()
+    target_logs = response.json()["logs"]
+    assert "updated_key" not in target_logs[0]["entries"]
+
+
+@pytest.mark.anyio
+async def test_duplicate_project(client: AsyncClient):
+    """
+    Test the admin endpoint for duplicating a project with new interfaces.
+    This test focuses solely on new interfaces, tabs, and tiles (without legacy interfaces).
+    """
+    # Set up admin headers with admin API key
+    admin_api_key = str(os.getenv("ORCHESTRA_ADMIN_KEY"))
+    admin_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {admin_api_key}",
+    }
+
+    # Create a new target user
+    response = await client.post(
+        "v0/admin/auth-user",
+        json={
+            "email": "test_new_duplicate_target_with_new_interfaces@example.com",
+            "name": "test_new_duplicate_target_with_new_interfaces",
+        },
+        headers=admin_headers,
+    )
+    data = response.json()
+    target_user_id = data["id"]
+    source_user_id = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
+
+    # Create a source project with contexts
+    source_project_name = "new_source_project_with_new_interfaces"
+    target_project_name = "new_duplicated_project_with_new_interfaces"
+    context_name = "new_test_context_with_new_interfaces"
+
+    # Create project and its components
+    await _create_project(client, source_project_name)
+    await _create_context(client, source_project_name, context_name, "test description")
+
+    # Create a log in the source project (to test later that updates don't affect duplicate)
+    log_id = await _create_log(
+        client,
+        source_project_name,
+        context={"name": context_name},
+        entries={"source_key": "source_value"},
+    )
+
+    # Create new interface with tabs and tiles
+    new_interface_name = "new_source_interface"
+    interface_response = await _create_test_interface(
+        client,
+        name=new_interface_name,
+        project=source_project_name,
+    )
+    assert interface_response.status_code == 201, interface_response.json()
+    new_interface_data = interface_response.json()
+    new_interface_id = new_interface_data["id"]
+
+    # Create tabs in the new interface
+    tab1_name = "New Tab 1"
+    tab1_response = await _create_test_tab(
+        client,
+        new_interface_id,
+        name=tab1_name,
+        active=True,
+        order=0,
+    )
+    assert tab1_response.status_code == 201, tab1_response.json()
+    tab1_data = tab1_response.json()
+    tab1_id = tab1_data["id"]
+
+    tab2_name = "New Tab 2"
+    tab2_response = await _create_test_tab(
+        client,
+        new_interface_id,
+        name=tab2_name,
+        active=False,
+        order=1,
+    )
+    assert tab2_response.status_code == 201, tab2_response.json()
+    tab2_data = tab2_response.json()
+    tab2_id = tab2_data["id"]
+
+    # Create different types of tiles in the tabs
+    # 1. Table Tile
+    table_tile_name = "New Table"
+    table_response = await _create_test_table_tile(
+        client,
+        tab1_id,
+        name=table_tile_name,
+        table_type="fixed",
+        column_context=json.dumps(["Column 1", "Column 2"]),
+        width=4,
+        height=3,
+        x=0,
+        y=0,
+    )
+    assert table_response.status_code == 201, table_response.json()
+
+    # 2. Plot Tile
+    plot_tile_name = "New Plot"
+    plot_response = await _create_test_plot_tile(
+        client,
+        tab1_id,
+        name=plot_tile_name,
+        plot_type="scatter",
+        x_axis="x",
+        y_axis="y",
+        width=4,
+        height=3,
+        x=4,
+        y=0,
+    )
+    assert plot_response.status_code == 201, plot_response.json()
+
+    # 3. View Tile
+    view_tile_name = "New View"
+    view_response = await _create_test_view_tile(
+        client,
+        tab2_id,
+        name=view_tile_name,
+        base_index="markdown",
+        width=4,
+        height=3,
+        x=0,
+        y=0,
+    )
+    assert view_response.status_code == 201, view_response.json()
+
+    # 4. Editor Tile
+    editor_tile_name = "New Editor"
+    editor_response = await _create_test_editor_tile(
+        client,
+        tab2_id,
+        name=editor_tile_name,
+        file_type="python",
+        content="print('New Hello, World!')",
+        width=4,
+        height=3,
+        x=4,
+        y=0,
+    )
+    assert editor_response.status_code == 201, editor_response.json()
+
+    # Call the duplicate project endpoint
+    url = "v0/admin/duplicate-project"
+    duplicate_data = {
+        "from_user_id": source_user_id,
+        "from_project_name": source_project_name,
+        "to_user_id": target_user_id,
+        "new_project_name": target_project_name,
+    }
+
+    response = await client.post(url, json=duplicate_data, headers=admin_headers)
+
+    # Verify the response
+    assert response.status_code == 200, response.json()
+    assert (
+        f"Project '{source_project_name}' duplicated successfully"
+        in response.json()["info"]
+    )
+
+    # Verify the counts of duplicated resources
+    result = response.json()["details"]
+    assert result["contexts_copied"] >= 1
+    # Verify interfaces are copied
+    assert result["interfaces_copied"] >= 1
     # Verify tabs and specialized tiles are copied
     assert result["tabs_copied"] >= 2  # We created 2 tabs
     assert result["tiles_copied"] >= 4  # We created 4 tiles
@@ -703,18 +842,7 @@ async def test_duplicate_project(client: AsyncClient):
     assert len(contexts) > 0
     assert context_name in [context["name"] for context in contexts]
 
-    # 3) Verify the target user can access the legacy interfaces
-    response = await client.get(
-        f"/v0/interface",
-        params={"project": target_project_name},
-        headers=target_headers,
-    )
-    assert response.status_code == 200, response.json()
-    interfaces = response.json()
-    assert len(interfaces) > 0
-    assert interface_name in [interface["name"] for interface in interfaces]
-
-    # 4) Verify the target user can access the new interfaces
+    # 3) Verify the target user can access the new interfaces
     response = await client.get(
         f"/v0/interfaces/list",
         params={"project": target_project_name},
@@ -736,7 +864,7 @@ async def test_duplicate_project(client: AsyncClient):
     ), f"New interface '{new_interface_name}' not found in duplicated project"
     duplicated_interface_id = duplicated_interface["id"]
 
-    # 5) Verify the target user can access the tabs in the new interface
+    # 4) Verify the target user can access the tabs in the new interface
     response = await client.get(
         f"/v0/tab/list",
         params={"interface_id": duplicated_interface_id},
@@ -764,7 +892,7 @@ async def test_duplicate_project(client: AsyncClient):
         elif tab["name"] == tab2_name:
             duplicated_tab2_id = tab["id"]
 
-    # 6) Verify the target user can access the tiles in tab 1
+    # 5) Verify the target user can access the tiles in tab 1
     response = await client.get(
         f"/v0/tile/list",
         params={"tab_id": duplicated_tab1_id},
@@ -800,7 +928,7 @@ async def test_duplicate_project(client: AsyncClient):
         duplicated_table_tile["table_tile"]["table_type"] == "fixed"
     ), "Table type not preserved"
 
-    # 7) Verify the target user can access the tiles in tab 2
+    # 6) Verify the target user can access the tiles in tab 2
     response = await client.get(
         f"/v0/tile/list",
         params={"tab_id": duplicated_tab2_id},
@@ -832,13 +960,13 @@ async def test_duplicate_project(client: AsyncClient):
         "editor_tile" in duplicated_editor_tile
     ), "Editor tile specialized data not found"
     assert (
-        duplicated_editor_tile["editor_tile"]["content"] == "print('Hello, World!')"
+        duplicated_editor_tile["editor_tile"]["content"] == "print('New Hello, World!')"
     ), "Editor content not preserved"
     assert (
         duplicated_editor_tile["editor_tile"]["file_type"] == "python"
     ), "Editor file type not preserved"
 
-    # 8) Verify the target user can access the project's logs
+    # 7) Verify the target user can access the logs
     response = await client.get(
         f"/v0/logs",
         params={"project": target_project_name, "context": context_name},
@@ -850,7 +978,7 @@ async def test_duplicate_project(client: AsyncClient):
     assert "source_key" in data["logs"][0]["entries"]
     assert data["logs"][0]["entries"]["source_key"] == "source_value"
 
-    # 9) Update the source project logs and verify the changes don't affect the duplicate
+    # 8) Update the source project logs and verify the changes don't affect the duplicate
     response = await _update_logs(
         client,
         log_ids=[1],
