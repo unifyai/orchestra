@@ -498,6 +498,8 @@ class TabDAO:
     def duplicate_tabs(self, interface_id_map: dict) -> dict:
         """
         Duplicate all tabs for the given interfaces.
+        If a tab with the same interface_id and name already exists,
+        it will be updated instead of creating a duplicate.
 
         Args:
             interface_id_map: Mapping of old interface IDs to new interface IDs
@@ -524,48 +526,77 @@ class TabDAO:
             if tabs:
                 tab_values = []
                 old_tab_ids = []
+                existing_tab_map = {}
 
                 for tab in tabs:
-                    old_tab_ids.append(tab.id)
-                    tab_values.append(
-                        {
-                            "interface_id": new_interface_id,
-                            "name": tab.name,
-                            "visible": tab.visible,
-                            "active": tab.active,
-                            "order": tab.order,
-                            "global_context": tab.global_context,
-                            "color": tab.color,
-                            "is_checkpoint": tab.is_checkpoint,
-                            "checkpoint_or_active_id": None,  # Will be updated if needed
-                            "created_at": datetime.now(timezone.utc),
-                            "updated_at": datetime.now(timezone.utc),
-                        },
+                    # Check if a tab with the same name already exists in the target interface
+                    existing_tab = self.get_by_interface_and_name(
+                        interface_id=new_interface_id,
+                        name=tab.name,
+                        is_checkpoint=False,
                     )
 
+                    if existing_tab:
+                        # If tab already exists, store it for updating later
+                        existing_tab_map[tab.id] = existing_tab
+                        tab_id_map[tab.id] = existing_tab.id
+                        total_count += 1
+                    else:
+                        # If tab doesn't exist, add to list for bulk insert
+                        old_tab_ids.append(tab.id)
+                        tab_values.append(
+                            {
+                                "interface_id": new_interface_id,
+                                "name": tab.name,
+                                "visible": tab.visible,
+                                "active": tab.active,
+                                "order": tab.order,
+                                "global_context": tab.global_context,
+                                "color": tab.color,
+                                "is_checkpoint": tab.is_checkpoint,
+                                "checkpoint_or_active_id": None,  # Will be updated if needed
+                                "created_at": datetime.now(timezone.utc),
+                                "updated_at": datetime.now(timezone.utc),
+                            },
+                        )
+
+                # Update existing tabs
+                for old_id, existing_tab in existing_tab_map.items():
+                    source_tab = next((t for t in tabs if t.id == old_id), None)
+                    if source_tab:
+                        # Update existing tab with data from source
+                        self.update_tab(
+                            id=existing_tab.id,
+                            visible=source_tab.visible,
+                            active=source_tab.active,
+                            order=source_tab.order,
+                            global_context=source_tab.global_context,
+                            color=source_tab.color,
+                            is_checkpoint=source_tab.is_checkpoint,
+                        )
+
+                # Bulk insert new tabs
                 if tab_values:
                     # Bulk insert tabs and get back the new IDs
                     stmt = sqlalchemy.insert(Tab).values(tab_values).returning(Tab.id)
                     result = self.session.execute(stmt)
                     new_tab_ids = [row[0] for row in result]
 
-                    # Build the tab ID mapping
+                    # Build the tab ID mapping for newly created tabs
                     for i, old_id in enumerate(old_tab_ids):
                         tab_id_map[old_id] = new_tab_ids[i]
 
                     total_count += len(tab_values)
 
-                    # Update the interface's active_tab_id if needed
-                    source_interface = interface_dao.get(old_interface_id)
-                    if source_interface and source_interface.active_tab_id:
-                        if source_interface.active_tab_id in tab_id_map:
-                            # Update the new interface with the corresponding new active tab ID
-                            interface_dao.update_interface(
-                                id=new_interface_id,
-                                active_tab_id=tab_id_map[
-                                    source_interface.active_tab_id
-                                ],
-                            )
+                # Update the interface's active_tab_id if needed
+                source_interface = interface_dao.get(old_interface_id)
+                if source_interface and source_interface.active_tab_id:
+                    if source_interface.active_tab_id in tab_id_map:
+                        # Update the new interface with the corresponding new active tab ID
+                        interface_dao.update_interface(
+                            id=new_interface_id,
+                            active_tab_id=tab_id_map[source_interface.active_tab_id],
+                        )
 
         return {
             "id_map": tab_id_map,
