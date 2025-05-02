@@ -72,3 +72,15 @@ class CreateColumnsRequest(BaseModel):
             "example": {"accuracy": "float", "model_name": "str", "iteration": None},
         },
     )
+
+
+class RenameContextRequest(BaseModel):
+    """Request model for renaming an existing context."""
+
+    name: str = Field(
+        ...,
+        description="New name for the context, must meet naming rules",
+        json_schema_extra={
+            "example": "experiment2/trial3",
+        },
+    )
