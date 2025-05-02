@@ -1,7 +1,19 @@
 from datetime import datetime
-from typing import Optional
+from typing import Generic, Optional, TypeVar
 
 from pydantic import BaseModel, Field
+from pydantic.generics import GenericModel
+
+T = TypeVar("T")
+
+
+class InfoResponse(GenericModel, Generic[T]):
+    """
+    Generic wrapper for API responses.
+    Wraps any response type under an 'info' key while preserving schema validation.
+    """
+
+    info: T
 
 
 class AssistantCreate(BaseModel):
