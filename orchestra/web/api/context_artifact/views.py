@@ -22,7 +22,7 @@ router = APIRouter()
 
 
 @router.post(
-    "/project/{project}/contexts/{context_name}/artifacts",
+    "/project/{project}/contexts/{context_name:path}/artifacts",
     responses={
         200: {
             "description": "Successful Response",
@@ -78,7 +78,7 @@ def create_context_artifacts(
 
 
 @router.delete(
-    "/project/{project}/contexts/{context}/artifacts/{key}",
+    "/project/{project}/contexts/{context:path}/artifacts/{key}",
     responses={
         200: {
             "description": "Successful Response",
@@ -138,7 +138,7 @@ def delete_context_artifact(
 
 
 @router.get(
-    "/project/{project}/contexts/{context_name}/artifacts",
+    "/project/{project}/contexts/{context_name:path}/artifacts",
     responses={
         200: {
             "description": "Successful Response",

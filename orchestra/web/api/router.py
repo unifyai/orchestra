@@ -163,6 +163,11 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
+    context_artifact.router,
+    tags=["Context Artifacts"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
     context.router,
     tags=["Contexts"],
     dependencies=API_KEY_AUTH,
@@ -170,11 +175,6 @@ api_router.include_router(
 api_router.include_router(
     artifact.router,
     tags=["Project Artifacts"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    context_artifact.router,
-    tags=["Context Artifacts"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
