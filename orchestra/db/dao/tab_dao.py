@@ -494,3 +494,80 @@ class TabDAO:
             name=tab.name,
             is_checkpoint=False,
         )
+
+    def duplicate_tabs(self, interface_id_map: dict) -> dict:
+        """
+        Duplicate all tabs for the given interfaces.
+
+        Args:
+            interface_id_map: Mapping of old interface IDs to new interface IDs
+
+        Returns:
+            Dictionary with mapping of old tab IDs to new tab IDs and count
+        """
+        from datetime import datetime, timezone
+
+        import sqlalchemy
+
+        from orchestra.db.dao.interface_dao import InterfaceDAO
+        from orchestra.db.models.orchestra_models import Tab
+
+        interface_dao = InterfaceDAO(self.session)
+        tab_id_map = {}
+        total_count = 0
+
+        # Process each interface
+        for old_interface_id, new_interface_id in interface_id_map.items():
+            # Get tabs for the old interface
+            tabs = self.list_tabs(interface_id=old_interface_id, is_checkpoint=False)
+
+            if tabs:
+                tab_values = []
+                old_tab_ids = []
+
+                for tab in tabs:
+                    old_tab_ids.append(tab.id)
+                    tab_values.append(
+                        {
+                            "interface_id": new_interface_id,
+                            "name": tab.name,
+                            "visible": tab.visible,
+                            "active": tab.active,
+                            "order": tab.order,
+                            "global_context": tab.global_context,
+                            "color": tab.color,
+                            "is_checkpoint": tab.is_checkpoint,
+                            "checkpoint_or_active_id": None,  # Will be updated if needed
+                            "created_at": datetime.now(timezone.utc),
+                            "updated_at": datetime.now(timezone.utc),
+                        },
+                    )
+
+                if tab_values:
+                    # Bulk insert tabs and get back the new IDs
+                    stmt = sqlalchemy.insert(Tab).values(tab_values).returning(Tab.id)
+                    result = self.session.execute(stmt)
+                    new_tab_ids = [row[0] for row in result]
+
+                    # Build the tab ID mapping
+                    for i, old_id in enumerate(old_tab_ids):
+                        tab_id_map[old_id] = new_tab_ids[i]
+
+                    total_count += len(tab_values)
+
+                    # Update the interface's active_tab_id if needed
+                    source_interface = interface_dao.get(old_interface_id)
+                    if source_interface and source_interface.active_tab_id:
+                        if source_interface.active_tab_id in tab_id_map:
+                            # Update the new interface with the corresponding new active tab ID
+                            interface_dao.update_interface(
+                                id=new_interface_id,
+                                active_tab_id=tab_id_map[
+                                    source_interface.active_tab_id
+                                ],
+                            )
+
+        return {
+            "id_map": tab_id_map,
+            "count": total_count,
+        }

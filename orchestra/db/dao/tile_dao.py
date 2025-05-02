@@ -1900,3 +1900,214 @@ class TileDAO:
 
         # If no direct reference, try to find by tab_id and name
         return self._get_tile(tab_id=tile.tab_id, name=tile.name, is_checkpoint=False)
+
+    def duplicate_tiles(self, tab_id_map: dict) -> dict:
+        """
+        Duplicate all tiles and specialized tile data for the given tabs.
+
+        Args:
+            tab_id_map: Mapping of old tab IDs to new tab IDs
+
+        Returns:
+            Dictionary with mappings and counts for tiles and specialized tiles
+        """
+        from datetime import datetime, timezone
+
+        import sqlalchemy
+
+        from orchestra.db.models.orchestra_models import (
+            EditorTile,
+            PlotTile,
+            TableTile,
+            Tile,
+            ViewTile,
+        )
+
+        tile_id_map = {}
+        total_tile_count = 0
+        table_tile_count = 0
+        plot_tile_count = 0
+        view_tile_count = 0
+        editor_tile_count = 0
+
+        # Process each tab
+        for old_tab_id, new_tab_id in tab_id_map.items():
+            # Get tiles for the old tab
+            tiles = self.list_tiles_by_tab(tab_id=old_tab_id, is_checkpoint=False)
+
+            if tiles:
+                tile_values = []
+                old_tile_ids = []
+
+                for tile in tiles:
+                    old_tile_ids.append(tile.id)
+                    tile_values.append(
+                        {
+                            "tab_id": new_tab_id,
+                            "type": tile.type,
+                            "name": tile.name,
+                            "x_position": tile.x_position,
+                            "y_position": tile.y_position,
+                            "width": tile.width,
+                            "height": tile.height,
+                            "min_width": tile.min_width,
+                            "min_height": tile.min_height,
+                            "visible": tile.visible,
+                            "locked": tile.locked,
+                            "moved": tile.moved,
+                            "static": tile.static,
+                            "context": tile.context,
+                            "table": tile.table,
+                            "auto_update": tile.auto_update,
+                            "freeze": tile.freeze,
+                            "filters": tile.filters,
+                            "common_filter": tile.common_filter,
+                            "metric": tile.metric,
+                            "is_checkpoint": tile.is_checkpoint,
+                            "checkpoint_or_active_id": None,  # Will be updated if needed
+                            "created_at": datetime.now(timezone.utc),
+                            "updated_at": datetime.now(timezone.utc),
+                        },
+                    )
+
+                if tile_values:
+                    # Bulk insert tiles and get back the new IDs
+                    stmt = (
+                        sqlalchemy.insert(Tile).values(tile_values).returning(Tile.id)
+                    )
+                    result = self.session.execute(stmt)
+                    new_tile_ids = [row[0] for row in result]
+
+                    # Build the tile ID mapping
+                    for i, old_id in enumerate(old_tile_ids):
+                        tile_id_map[old_id] = new_tile_ids[i]
+
+                    total_tile_count += len(tile_values)
+
+        # Duplicate specialized tile data
+        if tile_id_map:
+            # Process TableTiles
+            table_tiles = (
+                self.session.query(TableTile)
+                .filter(TableTile.tile_id.in_(list(tile_id_map.keys())))
+                .all()
+            )
+
+            if table_tiles:
+                table_tile_values = []
+                for tt in table_tiles:
+                    new_tile_id = tile_id_map[tt.tile_id]
+                    table_tile_values.append(
+                        {
+                            "id": new_tile_id,  # Same ID as the base tile
+                            "tile_id": new_tile_id,
+                            "table_type": tt.table_type,
+                            "column_context": tt.column_context,
+                            "page_number": tt.page_number,
+                            "column_order": tt.column_order,
+                            "hidden_columns": tt.hidden_columns,
+                            "sorting": tt.sorting,
+                            "grouping": tt.grouping,
+                            "group_sorting": tt.group_sorting,
+                            "columns_pin_left": tt.columns_pin_left,
+                            "columns_pin_right": tt.columns_pin_right,
+                            "selected": tt.selected,
+                        },
+                    )
+
+                if table_tile_values:
+                    stmt = sqlalchemy.insert(TableTile).values(table_tile_values)
+                    self.session.execute(stmt)
+                    table_tile_count = len(table_tile_values)
+
+            # Process PlotTiles
+            plot_tiles = (
+                self.session.query(PlotTile)
+                .filter(PlotTile.tile_id.in_(list(tile_id_map.keys())))
+                .all()
+            )
+
+            if plot_tiles:
+                plot_tile_values = []
+                for pt in plot_tiles:
+                    new_tile_id = tile_id_map[pt.tile_id]
+                    plot_tile_values.append(
+                        {
+                            "id": new_tile_id,  # Same ID as the base tile
+                            "tile_id": new_tile_id,
+                            "plot_type": pt.plot_type,
+                            "plot_scale_x": pt.plot_scale_x,
+                            "plot_scale_y": pt.plot_scale_y,
+                            "plot_aggregate": pt.plot_aggregate,
+                            "x_axis": pt.x_axis,
+                            "y_axis": pt.y_axis,
+                            "plot_group_by": pt.plot_group_by,
+                            "plot_group_by_colors": pt.plot_group_by_colors,
+                            "bin_count": pt.bin_count,
+                            "regression_line": pt.regression_line,
+                        },
+                    )
+
+                if plot_tile_values:
+                    stmt = sqlalchemy.insert(PlotTile).values(plot_tile_values)
+                    self.session.execute(stmt)
+                    plot_tile_count = len(plot_tile_values)
+
+            # Process ViewTiles
+            view_tiles = (
+                self.session.query(ViewTile)
+                .filter(ViewTile.tile_id.in_(list(tile_id_map.keys())))
+                .all()
+            )
+
+            if view_tiles:
+                view_tile_values = []
+                for vt in view_tiles:
+                    new_tile_id = tile_id_map[vt.tile_id]
+                    view_tile_values.append(
+                        {
+                            "id": new_tile_id,  # Same ID as the base tile
+                            "tile_id": new_tile_id,
+                            "base_index": vt.base_index,
+                        },
+                    )
+
+                if view_tile_values:
+                    stmt = sqlalchemy.insert(ViewTile).values(view_tile_values)
+                    self.session.execute(stmt)
+                    view_tile_count = len(view_tile_values)
+
+            # Process EditorTiles
+            editor_tiles = (
+                self.session.query(EditorTile)
+                .filter(EditorTile.tile_id.in_(list(tile_id_map.keys())))
+                .all()
+            )
+
+            if editor_tiles:
+                editor_tile_values = []
+                for et in editor_tiles:
+                    new_tile_id = tile_id_map[et.tile_id]
+                    editor_tile_values.append(
+                        {
+                            "id": new_tile_id,  # Same ID as the base tile
+                            "tile_id": new_tile_id,
+                            "content": et.content,
+                            "file_path": et.file_path,
+                            "file_type": et.file_type,
+                        },
+                    )
+
+                if editor_tile_values:
+                    stmt = sqlalchemy.insert(EditorTile).values(editor_tile_values)
+                    self.session.execute(stmt)
+                    editor_tile_count = len(editor_tile_values)
+
+        return {
+            "id_map": tile_id_map,
+            "tile_count": total_tile_count,
+            "table_tile_count": table_tile_count,
+            "plot_tile_count": plot_tile_count,
+            "view_tile_count": view_tile_count,
+            "editor_tile_count": editor_tile_count,
+        }
