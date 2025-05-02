@@ -19,7 +19,9 @@ async def test_create_assistant_success(client: AsyncClient):
     }
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert resp.status_code == 200
-    data = resp.json()
+    body = resp.json()
+    assert "info" in body
+    data = body["info"]
     assert isinstance(data.get("agent_id"), str)
     assert data["first_name"] == payload["first_name"]
     assert data["surname"] == payload["surname"]
@@ -55,7 +57,7 @@ async def test_list_assistants_empty(client: AsyncClient):
     # `GET /v0/assistant` with no assistants -> 200 OK and empty list
     resp = await client.get("/v0/assistant", headers=HEADERS)
     assert resp.status_code == 200
-    assert resp.json() == []
+    assert resp.json() == {"info": []}
 
 
 @pytest.mark.anyio
@@ -86,11 +88,13 @@ async def test_list_assistants_after_create(client: AsyncClient):
     assert r1.status_code == 200 and r2.status_code == 200
     list_resp = await client.get("/v0/assistant", headers=HEADERS)
     assert list_resp.status_code == 200
-    data = list_resp.json()
+    body = list_resp.json()
+    assert "info" in body
+    data = body["info"]
     assert isinstance(data, list)
     assert len(data) == 2
     ids = {item["agent_id"] for item in data}
-    assert {r1.json()["agent_id"], r2.json()["agent_id"]} == ids
+    assert {r1.json()["info"]["agent_id"], r2.json()["info"]["agent_id"]} == ids
 
     # Verify all assistants have the new fields
     for assistant in data:
@@ -118,7 +122,7 @@ async def test_update_weekly_limit_only(client: AsyncClient):
         "about": "Machine learning expert with focus on computer vision",
     }
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    aid = create.json()["agent_id"]
+    aid = create.json()["info"]["agent_id"]
     new_limit = 45.5
     update_payload = {"weekly_limit": new_limit}
     patch = await client.patch(
@@ -127,7 +131,7 @@ async def test_update_weekly_limit_only(client: AsyncClient):
         headers=HEADERS,
     )
     assert patch.status_code == 200
-    updated = patch.json()
+    updated = patch.json()["info"]
     assert updated["weekly_limit"] == new_limit
     assert updated["max_parallel"] == payload["max_parallel"]
     assert updated["first_name"] == payload["first_name"]
@@ -152,7 +156,7 @@ async def test_update_max_parallel_only(client: AsyncClient):
         "about": "Robotics engineer specializing in autonomous systems",
     }
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    aid = create.json()["agent_id"]
+    aid = create.json()["info"]["agent_id"]
     new_parallel = 7
     update_payload = {"max_parallel": new_parallel}
     patch = await client.patch(
@@ -161,7 +165,7 @@ async def test_update_max_parallel_only(client: AsyncClient):
         headers=HEADERS,
     )
     assert patch.status_code == 200
-    updated = patch.json()
+    updated = patch.json()["info"]
     assert updated["max_parallel"] == new_parallel
     assert updated["weekly_limit"] == payload["weekly_limit"]
     assert updated["surname"] == payload["surname"]
@@ -196,11 +200,11 @@ async def test_delete_assistant_success(client: AsyncClient):
         "about": "Computer scientist and pioneer in programming languages",
     }
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    aid = create.json()["agent_id"]
+    aid = create.json()["info"]["agent_id"]
     del_resp = await client.delete(f"/v0/assistant/{aid}", headers=HEADERS)
     assert del_resp.status_code == 200
     list_resp = await client.get("/v0/assistant", headers=HEADERS)
-    assert all(item["agent_id"] != aid for item in list_resp.json())
+    assert all(item["agent_id"] != aid for item in list_resp.json()["info"])
 
 
 @pytest.mark.anyio
@@ -225,7 +229,7 @@ async def test_update_about_only(client: AsyncClient):
         "about": "Original bio information",
     }
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    aid = create.json()["agent_id"]
+    aid = create.json()["info"]["agent_id"]
     new_about = "Updated bio with additional qualifications and expertise"
     update_payload = {"about": new_about}
     patch = await client.patch(
@@ -234,7 +238,7 @@ async def test_update_about_only(client: AsyncClient):
         headers=HEADERS,
     )
     assert patch.status_code == 200
-    updated = patch.json()
+    updated = patch.json()["info"]
     assert updated["about"] == new_about
     assert updated["first_name"] == payload["first_name"]
     assert updated["region"] == payload["region"]
@@ -256,7 +260,7 @@ async def test_update_phone_only(client: AsyncClient):
         "about": "Cybersecurity expert with focus on network security",
     }
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    aid = create.json()["agent_id"]
+    aid = create.json()["info"]["agent_id"]
     new_phone = "+1-555-123-4567"
     update_payload = {"phone": new_phone}
     patch = await client.patch(
@@ -265,7 +269,7 @@ async def test_update_phone_only(client: AsyncClient):
         headers=HEADERS,
     )
     assert patch.status_code == 200
-    updated = patch.json()
+    updated = patch.json()["info"]
     assert updated["phone"] == new_phone
     assert updated["email"] is None
     assert updated["about"] == payload["about"]
@@ -286,7 +290,7 @@ async def test_update_email_only(client: AsyncClient):
         "about": "Data engineer specializing in big data infrastructure",
     }
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    aid = create.json()["agent_id"]
+    aid = create.json()["info"]["agent_id"]
     new_email = "julia.garcia@example.com"
     update_payload = {"email": new_email}
     patch = await client.patch(
@@ -295,7 +299,7 @@ async def test_update_email_only(client: AsyncClient):
         headers=HEADERS,
     )
     assert patch.status_code == 200
-    updated = patch.json()
+    updated = patch.json()["info"]
     assert updated["email"] == new_email
     assert updated["phone"] is None
     assert updated["about"] == payload["about"]
@@ -316,7 +320,7 @@ async def test_update_multiple_fields(client: AsyncClient):
         "about": "Original bio information",
     }
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    aid = create.json()["agent_id"]
+    aid = create.json()["info"]["agent_id"]
     update_payload = {
         "about": "Updated professional bio with new skills",
         "phone": "+1-555-987-6543",
@@ -328,7 +332,7 @@ async def test_update_multiple_fields(client: AsyncClient):
         headers=HEADERS,
     )
     assert patch.status_code == 200
-    updated = patch.json()
+    updated = patch.json()["info"]
     assert updated["about"] == update_payload["about"]
     assert updated["phone"] == update_payload["phone"]
     assert updated["email"] == update_payload["email"]
