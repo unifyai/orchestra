@@ -358,7 +358,7 @@ def delete_context(
 
 
 @router.post(
-    "/project/{project_name}/contexts/{context_name}/columns",
+    "/project/{project_name:path}/contexts/{context_name:path}/columns",
     responses={
         200: {
             "description": "Successful Response",
@@ -439,7 +439,7 @@ def create_columns(
 
 
 @router.post(
-    "/project/{project_name}/contexts/add_logs",
+    "/project/{project_name:path}/contexts/add_logs",
     responses={
         200: {
             "description": "Successful Response",
@@ -623,7 +623,7 @@ def add_logs_to_context(
 
 
 @router.patch(
-    "/project/{project_name}/contexts/{context_name:path}/rename",
+    "/project/{project_name:path}/contexts/{context_name:path}/rename",
     responses={
         200: {
             "description": "Context renamed successfully",
