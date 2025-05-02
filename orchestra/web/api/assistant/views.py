@@ -1,13 +1,14 @@
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.web.api.assistant.schema import (
     AssistantCreate,
     AssistantRead,
     AssistantUpdate,
+    InfoResponse,
 )
 
 router = APIRouter()
@@ -15,7 +16,7 @@ router = APIRouter()
 
 @router.post(
     "/assistant",
-    response_model=AssistantRead,
+    response_model=InfoResponse[AssistantRead],
     status_code=status.HTTP_200_OK,
     summary="Create a new assistant",
     description="Creates a new assistant for the authenticated user with the specified configuration.",
@@ -26,16 +27,18 @@ router = APIRouter()
             "content": {
                 "application/json": {
                     "example": {
-                        "agent_id": "123",
-                        "first_name": "Alice",
-                        "surname": "Smith",
-                        "age": 25,
-                        "weekly_limit": 40.0,
-                        "max_parallel": 3,
-                        "created_at": "2025-04-25T12:00:00Z",
-                        "updated_at": "2025-04-25T12:00:00Z",
-                        "phone": "+1-555-123-4567",
-                        "email": "alice.smith@example.com",
+                        "info": {
+                            "agent_id": "123",
+                            "first_name": "Alice",
+                            "surname": "Smith",
+                            "age": 25,
+                            "weekly_limit": 40.0,
+                            "max_parallel": 3,
+                            "created_at": "2025-04-25T12:00:00Z",
+                            "updated_at": "2025-04-25T12:00:00Z",
+                            "phone": "+1-555-123-4567",
+                            "email": "alice.smith@example.com",
+                        },
                     },
                 },
             },
@@ -62,7 +65,7 @@ def create_assistant(
     assistant_in: AssistantCreate,
     request: Request,
     dao: AssistantDAO = Depends(),
-) -> AssistantRead:
+) -> InfoResponse[AssistantRead]:
     """
     Create a new assistant for the authenticated user.
 
@@ -85,20 +88,22 @@ def create_assistant(
             email=assistant_in.email,
         )
 
-        return AssistantRead(
-            agent_id=str(assistant.agent_id),
-            first_name=assistant.first_name,
-            surname=assistant.surname,
-            age=assistant.age,
-            region=assistant.region,
-            profile_photo=assistant.profile_photo,
-            about=assistant.about,
-            weekly_limit=float(assistant.weekly_limit),
-            max_parallel=assistant.max_parallel,
-            created_at=assistant.created_at,
-            updated_at=assistant.updated_at,
-            phone=assistant.phone,
-            email=assistant.email,
+        return InfoResponse(
+            info=AssistantRead(
+                agent_id=str(assistant.agent_id),
+                first_name=assistant.first_name,
+                surname=assistant.surname,
+                age=assistant.age,
+                region=assistant.region,
+                profile_photo=assistant.profile_photo,
+                about=assistant.about,
+                weekly_limit=float(assistant.weekly_limit),
+                max_parallel=assistant.max_parallel,
+                created_at=assistant.created_at,
+                updated_at=assistant.updated_at,
+                phone=assistant.phone,
+                email=assistant.email,
+            ),
         )
     except Exception as e:
         raise HTTPException(
@@ -109,7 +114,7 @@ def create_assistant(
 
 @router.get(
     "/assistant",
-    response_model=List[AssistantRead],
+    response_model=InfoResponse[List[AssistantRead]],
     status_code=status.HTTP_200_OK,
     summary="List all assistants",
     description="Returns a list of all assistants belonging to the authenticated user.",
@@ -119,38 +124,40 @@ def create_assistant(
             "description": "List of assistants retrieved successfully",
             "content": {
                 "application/json": {
-                    "example": [
-                        {
-                            "agent_id": "123",
-                            "first_name": "Alice",
-                            "surname": "Smith",
-                            "age": 25,
-                            "weekly_limit": 40.0,
-                            "max_parallel": 3,
-                            "phone": "+1-555-123-4567",
-                            "email": "alice.smith@example.com",
-                            "region": "North America",
-                            "profile_photo": "https://example.com/photos/alice.jpg",
-                            "about": "Mathematician and writer known for work on Analytical Engine",
-                            "created_at": "2025-04-25T12:00:00Z",
-                            "updated_at": "2025-04-25T12:00:00Z",
-                        },
-                        {
-                            "agent_id": "456",
-                            "first_name": "Bob",
-                            "surname": "Jones",
-                            "age": 30,
-                            "weekly_limit": 35.5,
-                            "max_parallel": 2,
-                            "phone": "+1-555-987-6543",
-                            "email": "bob.jones@example.com",
-                            "region": "South America",
-                            "profile_photo": "https://example.com/photos/bob.jpg",
-                            "about": "Machine learning expert with focus on computer vision",
-                            "created_at": "2025-04-24T10:30:00Z",
-                            "updated_at": "2025-04-24T10:30:00Z",
-                        },
-                    ],
+                    "example": {
+                        "info": [
+                            {
+                                "agent_id": "123",
+                                "first_name": "Alice",
+                                "surname": "Smith",
+                                "age": 25,
+                                "weekly_limit": 40.0,
+                                "max_parallel": 3,
+                                "phone": "+1-555-123-4567",
+                                "email": "alice.smith@example.com",
+                                "region": "North America",
+                                "profile_photo": "https://example.com/photos/alice.jpg",
+                                "about": "Mathematician and writer known for work on Analytical Engine",
+                                "created_at": "2025-04-25T12:00:00Z",
+                                "updated_at": "2025-04-25T12:00:00Z",
+                            },
+                            {
+                                "agent_id": "456",
+                                "first_name": "Bob",
+                                "surname": "Jones",
+                                "age": 30,
+                                "weekly_limit": 35.5,
+                                "max_parallel": 2,
+                                "phone": "+1-555-987-6543",
+                                "email": "bob.jones@example.com",
+                                "region": "South America",
+                                "profile_photo": "https://example.com/photos/bob.jpg",
+                                "about": "Machine learning expert with focus on computer vision",
+                                "created_at": "2025-04-24T10:30:00Z",
+                                "updated_at": "2025-04-24T10:30:00Z",
+                            },
+                        ],
+                    },
                 },
             },
         },
@@ -159,7 +166,7 @@ def create_assistant(
 def list_assistants(
     request: Request,
     dao: AssistantDAO = Depends(),
-) -> List[AssistantRead]:
+) -> InfoResponse[List[AssistantRead]]:
     """
     List all assistants for the authenticated user.
 
@@ -168,24 +175,26 @@ def list_assistants(
     """
     try:
         assistants = dao.list_assistants_for_user(request.state.user_id)
-        return [
-            AssistantRead(
-                agent_id=str(a.agent_id),
-                first_name=a.first_name,
-                surname=a.surname,
-                age=a.age,
-                region=a.region,
-                profile_photo=a.profile_photo,
-                about=a.about,
-                weekly_limit=float(a.weekly_limit),
-                max_parallel=a.max_parallel,
-                created_at=a.created_at,
-                updated_at=a.updated_at,
-                phone=a.phone,
-                email=a.email,
-            )
-            for a in assistants
-        ]
+        return InfoResponse(
+            info=[
+                AssistantRead(
+                    agent_id=str(a.agent_id),
+                    first_name=a.first_name,
+                    surname=a.surname,
+                    age=a.age,
+                    region=a.region,
+                    profile_photo=a.profile_photo,
+                    about=a.about,
+                    weekly_limit=float(a.weekly_limit),
+                    max_parallel=a.max_parallel,
+                    created_at=a.created_at,
+                    updated_at=a.updated_at,
+                    phone=a.phone,
+                    email=a.email,
+                )
+                for a in assistants
+            ],
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -220,7 +229,7 @@ def delete_assistant(
     assistant_id: int,
     request: Request,
     dao: AssistantDAO = Depends(),
-) -> Response:
+) -> InfoResponse[str]:
     """
     Delete an assistant by ID for the authenticated user.
 
@@ -229,10 +238,7 @@ def delete_assistant(
     """
     try:
         dao.delete_assistant(user_id=request.state.user_id, agent_id=assistant_id)
-        return Response(
-            content="Assistant deleted successfully",
-            status_code=status.HTTP_200_OK,
-        )
+        return InfoResponse(info="Assistant deleted successfully")
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -242,7 +248,7 @@ def delete_assistant(
 
 @router.patch(
     "/assistant/{assistant_id}/config",
-    response_model=AssistantRead,
+    response_model=InfoResponse[AssistantRead],
     status_code=status.HTTP_200_OK,
     summary="Update assistant configuration",
     description="Updates the configuration parameters of an existing assistant.",
@@ -253,19 +259,21 @@ def delete_assistant(
             "content": {
                 "application/json": {
                     "example": {
-                        "agent_id": "123",
-                        "first_name": "Alice",
-                        "surname": "Smith",
-                        "age": 25,
-                        "weekly_limit": 45.0,
-                        "max_parallel": 4,
-                        "about": "Award-winning mathematician specializing in algorithm development",
-                        "phone": "+1-555-987-6543",
-                        "email": "alice.smith@example.com",
-                        "region": "North America",
-                        "profile_photo": "https://example.com/photos/alice.jpg",
-                        "created_at": "2025-04-25T12:00:00Z",
-                        "updated_at": "2025-04-25T14:30:00Z",
+                        "info": {
+                            "agent_id": "123",
+                            "first_name": "Alice",
+                            "surname": "Smith",
+                            "age": 25,
+                            "weekly_limit": 45.0,
+                            "max_parallel": 4,
+                            "about": "Award-winning mathematician specializing in algorithm development",
+                            "phone": "+1-555-987-6543",
+                            "email": "alice.smith@example.com",
+                            "region": "North America",
+                            "profile_photo": "https://example.com/photos/alice.jpg",
+                            "created_at": "2025-04-25T12:00:00Z",
+                            "updated_at": "2025-04-25T14:30:00Z",
+                        },
                     },
                 },
             },
@@ -299,7 +307,7 @@ def update_assistant_config(
     update: AssistantUpdate,
     request: Request,
     dao: AssistantDAO = Depends(),
-) -> AssistantRead:
+) -> InfoResponse[AssistantRead]:
     """
     Update about, phone, email, weekly_limit, and/or max_parallel for an existing assistant.
 
@@ -325,20 +333,22 @@ def update_assistant_config(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant not found.",
             )
-        return AssistantRead(
-            agent_id=str(updated.agent_id),
-            first_name=updated.first_name,
-            surname=updated.surname,
-            age=updated.age,
-            region=updated.region,
-            profile_photo=updated.profile_photo,
-            about=updated.about,
-            weekly_limit=float(updated.weekly_limit),
-            max_parallel=updated.max_parallel,
-            created_at=updated.created_at,
-            updated_at=updated.updated_at,
-            phone=updated.phone,
-            email=updated.email,
+        return InfoResponse(
+            info=AssistantRead(
+                agent_id=str(updated.agent_id),
+                first_name=updated.first_name,
+                surname=updated.surname,
+                age=updated.age,
+                region=updated.region,
+                profile_photo=updated.profile_photo,
+                about=updated.about,
+                weekly_limit=float(updated.weekly_limit),
+                max_parallel=updated.max_parallel,
+                created_at=updated.created_at,
+                updated_at=updated.updated_at,
+                phone=updated.phone,
+                email=updated.email,
+            ),
         )
     except Exception as e:
         if isinstance(e, HTTPException):
