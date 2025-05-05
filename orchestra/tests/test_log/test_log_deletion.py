@@ -8,6 +8,7 @@ from . import (
     _delete_log_fields_from_logs,
     _delete_logs,
     _get_log,
+    _update_logs,
 )
 
 
@@ -478,31 +479,31 @@ async def test_delete_logs_by_value_filter(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_empty_columns_flag(client: AsyncClient):
-    """Test that the delete_empty_columns flag controls whether columns are removed when no logs use them."""
-    project_name = "empty-columns-test"
+async def test_delete_empty_fields_flag(client: AsyncClient):
+    """Test that the delete_empty_fields flag controls whether fields are removed when no logs use them."""
+    project_name = "empty-fields-test"
     _ = await _create_project(client, project_name)
 
     # Create two logs with a shared column
-    shared_col = "shared/test/column"
-    unique_col1 = "unique/test/column1"
-    unique_col2 = "unique/test/column2"
+    shared_field = "shared/test/field"
+    unique_field1 = "unique/test/field1"
+    unique_field2 = "unique/test/field2"
 
     entries1 = {
-        shared_col: "value1",
-        unique_col1: "unique1",
+        shared_field: "value1",
+        unique_field1: "unique1",
         "explicit_types": {
-            shared_col: {"mutable": True},
-            unique_col1: {"mutable": True},
+            shared_field: {"mutable": True},
+            unique_field1: {"mutable": True},
         },
     }
 
     entries2 = {
-        shared_col: "value2",
-        unique_col2: "unique2",
+        shared_field: "value2",
+        unique_field2: "unique2",
         "explicit_types": {
-            shared_col: {"mutable": True},
-            unique_col2: {"mutable": True},
+            shared_field: {"mutable": True},
+            unique_field2: {"mutable": True},
         },
     }
 
@@ -522,46 +523,46 @@ async def test_delete_empty_columns_flag(client: AsyncClient):
     assert len(logs) == 2
 
     for log in logs:
-        assert shared_col in log["entries"]
+        assert shared_field in log["entries"]
 
-    # Test 1: Delete the shared column with delete_empty_columns=False
-    ids_and_fields = [(None, shared_col)]
+    # Test 1: Delete the shared column with delete_empty_fields=False
+    ids_and_fields = [(None, shared_field)]
     response = await _delete_log_fields_from_logs(
         client,
         ids_and_fields,
-        delete_empty_columns=False,
+        delete_empty_fields=False,
         project_name=project_name,
     )
     assert response.status_code == 200, response.json()
     assert response.json()["info"] == "Logs and fields deleted successfully!"
 
-    # Verify the column was removed from logs but still exists in columns list
+    # Verify the field was removed from logs but still exists in fields list
     response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
     assert response.status_code == 200, response.json()
     logs = response.json()["logs"]
 
     for log in logs:
-        assert shared_col not in log["entries"]
+        assert shared_field not in log["entries"]
 
     # Check that the column still exists in the columns list
     response = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
-    columns = response.json()
-    assert shared_col in columns
+    fields = response.json()
+    assert shared_field in fields
 
     # Test 2: Re-create logs with the shared column
     await _update_logs(
         client,
         [log_id1],
-        {shared_col: "value1", "explicit_types": {shared_col: {"mutable": True}}},
+        {shared_field: "value1", "explicit_types": {shared_field: {"mutable": True}}},
     )
     await _update_logs(
         client,
         [log_id2],
-        {shared_col: "value2", "explicit_types": {shared_col: {"mutable": True}}},
+        {shared_field: "value2", "explicit_types": {shared_field: {"mutable": True}}},
     )
 
     # Verify logs again have the shared column
@@ -570,14 +571,14 @@ async def test_delete_empty_columns_flag(client: AsyncClient):
     logs = response.json()["logs"]
 
     for log in logs:
-        assert shared_col in log["entries"]
+        assert shared_field in log["entries"]
 
     # Test 3: Delete the shared column with delete_empty_columns=True
-    ids_and_fields = [(None, shared_col)]
+    ids_and_fields = [(None, shared_field)]
     response = await _delete_log_fields_from_logs(
         client,
         ids_and_fields,
-        delete_empty_columns=True,
+        delete_empty_fields=True,
         project_name=project_name,
     )
     assert response.status_code == 200, response.json()
@@ -589,13 +590,13 @@ async def test_delete_empty_columns_flag(client: AsyncClient):
     logs = response.json()["logs"]
 
     for log in logs:
-        assert shared_col not in log["entries"]
+        assert shared_field not in log["entries"]
 
     # Check that the column no longer exists in the columns list
     response = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
-    columns = response.json()
-    assert shared_col not in columns
+    fields = response.json()
+    assert shared_field not in fields

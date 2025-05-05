@@ -293,27 +293,27 @@ class FieldTypeDAO:
         field_to_rename.field_name = new_field_name
         self.session.commit()
 
-    def create_columns(
+    def create_fields(
         self,
         project_id: int,
         context_id: int,
-        columns: Dict[str, Optional[str]],
+        fields: Dict[str, Optional[str]],
     ) -> None:
         """Create column definitions for a context without creating logs.
 
         Args:
             project_id: The project ID
             context_id: The context ID
-            columns: Dictionary mapping column names to their types (or None if type is not specified)
+            fields: Dictionary mapping fields names to their types (or None if type is not specified)
         """
         from orchestra.web.api.log.python2SQL.constants import STR_TO_SQL_TYPES
 
-        if not columns:
+        if not fields:
             return
 
         # Prepare values for bulk insertion
         values_to_insert = []
-        for field_name, field_type in columns.items():
+        for field_name, field_type in fields.items():
 
             if field_type and field_type not in STR_TO_SQL_TYPES:
                 raise ValueError(f"Invalid field type: {field_type}")
