@@ -30,6 +30,9 @@ def get_property_details(schema_properties, files=[]):
                 if property_type == "array" and "items" in prop:
                     property_type = prop["items"].get("type", "Any")
                     property_type = f"[{property_type}]"
+            elif "$ref" in prop:
+                # Reference to another schema
+                property_type = "object"
             else:  # in case multiple types are defined
                 property_type = " | ".join(
                     [prop_type.get("type", "any") for prop_type in prop["anyOf"]],
