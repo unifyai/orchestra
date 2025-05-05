@@ -415,6 +415,70 @@ async def test_delete_project_deletes_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_delete_logs_by_value_filter(client: AsyncClient):
+    """Test deleting logs by value filter instead of explicit IDs."""
+    project_name = "filter-deletion-test"
+    _ = await _create_project(client, project_name)
+
+    # Create two logs with different tags
+    keep_entries = {
+        "tag": "keep",
+        "data": "This log should be kept",
+        "explicit_types": {
+            "tag": {"mutable": True},
+            "data": {"mutable": True},
+        },
+    }
+
+    remove_entries = {
+        "tag": "remove",
+        "data": "This log should be removed",
+        "explicit_types": {
+            "tag": {"mutable": True},
+            "data": {"mutable": True},
+        },
+    }
+
+    # Create the logs
+    response_keep = await _create_log(client, project_name, entries=keep_entries)
+    response_remove = await _create_log(client, project_name, entries=remove_entries)
+
+    assert response_keep.status_code == 200, response_keep.json()
+    assert response_remove.status_code == 200, response_remove.json()
+
+    keep_log_id = response_keep.json()["log_event_ids"][0]
+    remove_log_id = response_remove.json()["log_event_ids"][0]
+
+    # Verify both logs exist
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    logs = response.json()["logs"]
+    assert len(logs) == 2
+    log_ids = [log["id"] for log in logs]
+    assert keep_log_id in log_ids
+    assert remove_log_id in log_ids
+
+    # Delete logs with tag="remove" using value filter
+    ids_and_fields = [({"tag": "remove"}, None)]
+    response = await _delete_logs(client, ids_and_fields, project_name=project_name)
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs and fields deleted successfully!"
+
+    # Verify only the "keep" log remains
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    logs = response.json()["logs"]
+    assert len(logs) == 1
+    assert logs[0]["id"] == keep_log_id
+    assert logs[0]["entries"]["tag"] == "keep"
+
+    # Verify the "remove" log is gone
+    response = await _get_log(client, project_name, remove_log_id)
+    assert response.status_code == 200, response.json()
+    assert response.json()["logs"] == []
+
+
+@pytest.mark.anyio
 async def test_delete_empty_columns_flag(client: AsyncClient):
     """Test that the delete_empty_columns flag controls whether columns are removed when no logs use them."""
     project_name = "empty-columns-test"
