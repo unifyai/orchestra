@@ -129,9 +129,44 @@ def _get_interface(
     response_model=InterfaceSchema,
     status_code=201,
     responses={
-        201: {"description": "Interface created successfully"},
-        404: {"description": "Project not found"},
-        409: {"description": "Interface with this name already exists"},
+        201: {
+            "description": "Interface created successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "123",
+                        "name": "my_interface",
+                        "project_id": "proj_abc",
+                        "tabs": [],
+                        "active_tab_id": None,
+                        "color": "blue",
+                        "is_checkpoint": False,
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "updated_at": "2024-01-01T12:00:00Z",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project not found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project my_project not found or you don't have access.",
+                    },
+                },
+            },
+        },
+        409: {
+            "description": "Interface with this name already exists",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Interface with name my_interface already exists in this project.",
+                    },
+                },
+            },
+        },
     },
 )
 def create_interface(
@@ -184,9 +219,42 @@ def create_interface(
     "/",
     response_model=InterfaceSchema,
     responses={
-        200: {"description": "Interface details retrieved successfully"},
-        404: {"description": "Interface not found"},
-        400: {"description": "Missing required parameters"},
+        200: {
+            "description": "Interface details retrieved successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "123",
+                        "name": "my_interface",
+                        "project_id": "proj_abc",
+                        "tabs": [],
+                        "active_tab_id": None,
+                        "color": "blue",
+                        "is_checkpoint": False,
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "updated_at": "2024-01-01T12:00:00Z",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Interface not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Interface with ID 123 not found."},
+                },
+            },
+        },
+        400: {
+            "description": "Missing required parameters",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Either interface_id or both project and name must be provided.",
+                    },
+                },
+            },
+        },
     },
 )
 def get_interface(
@@ -236,8 +304,36 @@ def get_interface(
     "/list",
     response_model=List[InterfaceSchema],
     responses={
-        200: {"description": "Interfaces list retrieved successfully"},
-        404: {"description": "Project not found"},
+        200: {
+            "description": "Interfaces list retrieved successfully",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {
+                            "id": "123",
+                            "name": "my_interface",
+                            "project_id": "proj_abc",
+                            "tabs": [],
+                            "active_tab_id": None,
+                            "color": "blue",
+                            "is_checkpoint": False,
+                            "created_at": "2024-01-01T12:00:00Z",
+                            "updated_at": "2024-01-01T12:00:00Z",
+                        },
+                    ],
+                },
+            },
+        },
+        404: {
+            "description": "Project not found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project my_project not found or you don't have access.",
+                    },
+                },
+            },
+        },
     },
 )
 def list_interfaces(
@@ -286,9 +382,42 @@ def list_interfaces(
     "/",
     response_model=InterfaceSchema,
     responses={
-        200: {"description": "Interface updated successfully"},
-        404: {"description": "Interface not found"},
-        400: {"description": "Missing required parameters"},
+        200: {
+            "description": "Interface updated successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "123",
+                        "name": "my_interface",
+                        "project_id": "proj_abc",
+                        "tabs": [],
+                        "active_tab_id": None,
+                        "color": "blue",
+                        "is_checkpoint": False,
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "updated_at": "2024-01-01T12:00:00Z",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Interface not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Interface with ID 123 not found."},
+                },
+            },
+        },
+        400: {
+            "description": "Missing required parameters",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Either interface_id or both project and name must be provided.",
+                    },
+                },
+            },
+        },
     },
 )
 def update_interface(
@@ -427,9 +556,52 @@ def update_interface(
     "/checkpoint",
     response_model=InterfaceSchema,
     responses={
-        200: {"description": "Interface checkpoint created successfully"},
-        404: {"description": "Interface not found"},
-        400: {"description": "Missing required parameters"},
+        200: {
+            "description": "Interface checkpoint created successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "123",
+                        "name": "my_interface",
+                        "project_id": "proj_abc",
+                        "tabs": [],
+                        "active_tab_id": None,
+                        "color": "blue",
+                        "is_checkpoint": True,
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "updated_at": "2024-01-01T12:00:00Z",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Interface not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Interface with ID 123 not found."},
+                },
+            },
+        },
+        400: {
+            "description": "Missing required parameters",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Either interface_id or both project and name must be provided.",
+                    },
+                },
+            },
+        },
+        500: {
+            "description": "Failed to create checkpoint",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Failed to create or update checkpoint interface.",
+                    },
+                },
+            },
+        },
     },
 )
 def create_interface_checkpoint(
@@ -524,9 +696,44 @@ def create_interface_checkpoint(
     "/checkpoint",
     response_model=InterfaceSchema,
     responses={
-        200: {"description": "Interface checkpoint retrieved successfully"},
-        404: {"description": "Interface or checkpoint not found"},
-        400: {"description": "Missing required parameters"},
+        200: {
+            "description": "Interface checkpoint retrieved successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "123",
+                        "name": "my_interface",
+                        "project_id": "proj_abc",
+                        "tabs": [],
+                        "active_tab_id": None,
+                        "color": "blue",
+                        "is_checkpoint": True,
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "updated_at": "2024-01-01T12:00:00Z",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Interface or checkpoint not found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "No checkpoint found for the specified interface.",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Missing required parameters",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Either interface_id or both project and name must be provided.",
+                    },
+                },
+            },
+        },
     },
 )
 def get_interface_checkpoint(
@@ -585,9 +792,40 @@ def get_interface_checkpoint(
     "/",
     status_code=204,
     responses={
-        204: {"description": "Interface deleted successfully"},
-        404: {"description": "Interface not found"},
-        400: {"description": "Missing required parameters"},
+        204: {
+            "description": "Interface deleted successfully",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Interface deleted successfully"},
+                },
+            },
+        },
+        404: {
+            "description": "Interface not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Interface with ID 123 not found."},
+                },
+            },
+        },
+        400: {
+            "description": "Missing required parameters",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Either interface_id or both project and name must be provided.",
+                    },
+                },
+            },
+        },
+        500: {
+            "description": "Failed to delete interface",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Failed to delete interface."},
+                },
+            },
+        },
     },
 )
 def delete_interface(
