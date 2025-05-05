@@ -2433,3 +2433,33 @@ async def test_complex_string_filter_expressions(client: AsyncClient):
         len(data["logs"]) == 1
     ), "Expected exactly 1 log matching the probability question"
     assert data["logs"][0]["id"] == probability_log_id
+
+
+async def test_filters_on_nones(
+    client: AsyncClient,
+):
+    """
+    Test filtering logs where a field is None.
+    """
+    project_name = "test_none_filter"
+    await _create_project(client, project_name)
+
+    for i in range(4):
+        response = await _create_log(
+            client,
+            project_name,
+            params={},
+            entries={"some_field": None},
+        )
+    assert response.status_code == 200
+    filter_expr = f"some_field == 'mystr'"
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": filter_expr,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 0
