@@ -182,9 +182,74 @@ def _get_tile(
     response_model=TileSchema,
     status_code=201,
     responses={
-        201: {"description": "Tile created successfully"},
-        404: {"description": "Tab not found"},
-        409: {"description": "Tile with this name already exists for this tab"},
+        201: {
+            "description": "Tile created successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "123",
+                        "tab_id": "tab_456",
+                        "name": "Data Table",
+                        "type": "Table",
+                        "position": {"x": 0, "y": 0, "width": 6, "height": 4},
+                        "min_width": 2,
+                        "min_height": 2,
+                        "visible": True,
+                        "locked": False,
+                        "moved": False,
+                        "static": False,
+                        "context": None,
+                        "table": "main_data",
+                        "auto_update": True,
+                        "freeze": False,
+                        "filters": None,
+                        "common_filter": None,
+                        "metric": None,
+                        "is_checkpoint": False,
+                        "table_tile": {
+                            "id": "table_123",
+                            "tile_id": "123",
+                            "table_type": "Data Table",
+                            "column_context": None,
+                            "page_number": 1,
+                            "column_order": ["id", "name", "value"],
+                            "hidden_columns": [],
+                            "sorting": None,
+                            "grouping": None,
+                            "group_sorting": None,
+                            "columns_pin_left": [],
+                            "columns_pin_right": [],
+                            "selected": None,
+                        },
+                        "plot_tile": None,
+                        "view_tile": None,
+                        "editor_tile": None,
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "updated_at": "2024-01-01T12:00:00Z",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Tab not found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Tab not found. Please provide valid tab_id or project_id+interface_name+tab_name.",
+                    },
+                },
+            },
+        },
+        409: {
+            "description": "Tile with this name already exists for this tab",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Tile with name Data Table already exists in this tab.",
+                    },
+                },
+            },
+        },
     },
 )
 def create_tile(
@@ -407,9 +472,72 @@ def create_tile(
     "/",
     response_model=TileSchema,
     responses={
-        200: {"description": "Tile details retrieved successfully"},
-        404: {"description": "Tile not found"},
-        400: {"description": "Missing required parameters"},
+        200: {
+            "description": "Tile details retrieved successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "123",
+                        "tab_id": "tab_456",
+                        "name": "Data Table",
+                        "type": "Table",
+                        "position": {"x": 0, "y": 0, "width": 6, "height": 4},
+                        "min_width": 2,
+                        "min_height": 2,
+                        "visible": True,
+                        "locked": False,
+                        "moved": False,
+                        "static": False,
+                        "context": None,
+                        "table": "main_data",
+                        "auto_update": True,
+                        "freeze": False,
+                        "filters": None,
+                        "common_filter": None,
+                        "metric": None,
+                        "is_checkpoint": False,
+                        "table_tile": {
+                            "id": "table_123",
+                            "tile_id": "123",
+                            "table_type": "Data Table",
+                            "column_context": None,
+                            "page_number": 1,
+                            "column_order": ["id", "name", "value"],
+                            "hidden_columns": [],
+                            "sorting": None,
+                            "grouping": None,
+                            "group_sorting": None,
+                            "columns_pin_left": [],
+                            "columns_pin_right": [],
+                            "selected": None,
+                        },
+                        "plot_tile": None,
+                        "view_tile": None,
+                        "editor_tile": None,
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "updated_at": "2024-01-01T12:00:00Z",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Tile not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Tile with ID 123 not found."},
+                },
+            },
+        },
+        400: {
+            "description": "Missing required parameters",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Either tile_id or both tab_id and name must be provided.",
+                    },
+                },
+            },
+        },
     },
 )
 def get_tile(
@@ -441,8 +569,104 @@ def get_tile(
     "/list",
     response_model=List[TileSchema],
     responses={
-        200: {"description": "Tiles list retrieved successfully"},
-        404: {"description": "Tab not found"},
+        200: {
+            "description": "Tiles list retrieved successfully",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {
+                            "id": "123",
+                            "tab_id": "tab_456",
+                            "name": "Data Table",
+                            "type": "Table",
+                            "position": {"x": 0, "y": 0, "width": 6, "height": 4},
+                            "min_width": 2,
+                            "min_height": 2,
+                            "visible": True,
+                            "locked": False,
+                            "moved": False,
+                            "static": False,
+                            "context": None,
+                            "table": "main_data",
+                            "auto_update": True,
+                            "freeze": False,
+                            "filters": None,
+                            "common_filter": None,
+                            "metric": None,
+                            "is_checkpoint": False,
+                            "table_tile": {
+                                "id": "table_123",
+                                "tile_id": "123",
+                                "table_type": "Data Table",
+                                "column_context": None,
+                                "page_number": 1,
+                                "column_order": ["id", "name", "value"],
+                                "hidden_columns": [],
+                                "sorting": None,
+                                "grouping": None,
+                                "group_sorting": None,
+                                "columns_pin_left": [],
+                                "columns_pin_right": [],
+                                "selected": None,
+                            },
+                            "plot_tile": None,
+                            "view_tile": None,
+                            "editor_tile": None,
+                            "created_at": "2024-01-01T12:00:00Z",
+                            "updated_at": "2024-01-01T12:00:00Z",
+                        },
+                        {
+                            "id": "124",
+                            "tab_id": "tab_456",
+                            "name": "Chart",
+                            "type": "Plot",
+                            "position": {"x": 6, "y": 0, "width": 6, "height": 4},
+                            "min_width": 2,
+                            "min_height": 2,
+                            "visible": True,
+                            "locked": False,
+                            "moved": False,
+                            "static": False,
+                            "context": None,
+                            "table": "main_data",
+                            "auto_update": True,
+                            "freeze": False,
+                            "filters": None,
+                            "common_filter": None,
+                            "metric": None,
+                            "is_checkpoint": False,
+                            "table_tile": None,
+                            "plot_tile": {
+                                "id": "plot_124",
+                                "tile_id": "124",
+                                "plot_type": "scatter",
+                                "plot_scale_x": "linear",
+                                "plot_scale_y": "linear",
+                                "plot_aggregate": None,
+                                "x_axis": "x",
+                                "y_axis": "y",
+                                "plot_group_by": None,
+                                "plot_group_by_colors": None,
+                                "bin_count": 10,
+                                "regression_line": False,
+                            },
+                            "view_tile": None,
+                            "editor_tile": None,
+                            "created_at": "2024-01-01T12:00:00Z",
+                            "updated_at": "2024-01-01T12:00:00Z",
+                        },
+                    ],
+                },
+            },
+        },
+        404: {
+            "description": "Tab not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Tab with ID tab_456 not found."},
+                },
+            },
+        },
     },
 )
 def list_tiles(
@@ -480,9 +704,72 @@ def list_tiles(
     "/",
     response_model=TileSchema,
     responses={
-        200: {"description": "Tile updated successfully"},
-        404: {"description": "Tile not found"},
-        400: {"description": "Missing required parameters"},
+        200: {
+            "description": "Tile updated successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "123",
+                        "tab_id": "tab_456",
+                        "name": "Updated Data Table",
+                        "type": "Table",
+                        "position": {"x": 1, "y": 1, "width": 8, "height": 5},
+                        "min_width": 2,
+                        "min_height": 2,
+                        "visible": True,
+                        "locked": False,
+                        "moved": True,
+                        "static": False,
+                        "context": None,
+                        "table": "main_data",
+                        "auto_update": True,
+                        "freeze": False,
+                        "filters": None,
+                        "common_filter": None,
+                        "metric": None,
+                        "is_checkpoint": False,
+                        "table_tile": {
+                            "id": "table_123",
+                            "tile_id": "123",
+                            "table_type": "Data Table",
+                            "column_context": None,
+                            "page_number": 1,
+                            "column_order": ["id", "name", "value"],
+                            "hidden_columns": [],
+                            "sorting": None,
+                            "grouping": None,
+                            "group_sorting": None,
+                            "columns_pin_left": [],
+                            "columns_pin_right": [],
+                            "selected": None,
+                        },
+                        "plot_tile": None,
+                        "view_tile": None,
+                        "editor_tile": None,
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "updated_at": "2024-01-01T12:30:00Z",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Tile not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Tile with ID 123 not found."},
+                },
+            },
+        },
+        400: {
+            "description": "Missing required parameters",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Either tile_id or both tab_id and name must be provided.",
+                    },
+                },
+            },
+        },
     },
 )
 def update_tile(
@@ -506,7 +793,9 @@ def update_tile(
     # Update the tile
     if tile_id:
         updated = tile_dao.update_tile(
-            id=tile_id, is_checkpoint=checkpoint, **update_dict
+            id=tile_id,
+            is_checkpoint=checkpoint,
+            **update_dict,
         )
     else:
         tile, _ = _get_tile(
@@ -530,9 +819,80 @@ def update_tile(
     "/checkpoint",
     response_model=TileSchema,
     responses={
-        200: {"description": "Tile checkpoint created successfully"},
-        404: {"description": "Tile not found"},
-        400: {"description": "Missing required parameters"},
+        200: {
+            "description": "Tile checkpoint created successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "checkpoint_123",
+                        "tab_id": "checkpoint_tab_456",
+                        "name": "Data Table",
+                        "type": "Table",
+                        "position": {"x": 0, "y": 0, "width": 6, "height": 4},
+                        "min_width": 2,
+                        "min_height": 2,
+                        "visible": True,
+                        "locked": False,
+                        "moved": False,
+                        "static": False,
+                        "context": None,
+                        "table": "main_data",
+                        "auto_update": True,
+                        "freeze": False,
+                        "filters": None,
+                        "common_filter": None,
+                        "metric": None,
+                        "is_checkpoint": True,
+                        "table_tile": {
+                            "id": "checkpoint_table_123",
+                            "tile_id": "checkpoint_123",
+                            "table_type": "Data Table",
+                            "column_context": None,
+                            "page_number": 1,
+                            "column_order": ["id", "name", "value"],
+                            "hidden_columns": [],
+                            "sorting": None,
+                            "grouping": None,
+                            "group_sorting": None,
+                            "columns_pin_left": [],
+                            "columns_pin_right": [],
+                            "selected": None,
+                        },
+                        "plot_tile": None,
+                        "view_tile": None,
+                        "editor_tile": None,
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "updated_at": "2024-01-01T12:30:00Z",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Tile not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Tile with ID 123 not found."},
+                },
+            },
+        },
+        400: {
+            "description": "Missing required parameters",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Either tile_id or both tab_id and name must be provided.",
+                    },
+                },
+            },
+        },
+        500: {
+            "description": "Failed to create checkpoint",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Failed to create tile checkpoint."},
+                },
+            },
+        },
     },
 )
 def create_tile_checkpoint(
@@ -611,9 +971,74 @@ def create_tile_checkpoint(
     "/checkpoint",
     response_model=TileSchema,
     responses={
-        200: {"description": "Tile checkpoint retrieved successfully"},
-        404: {"description": "Tile or checkpoint not found"},
-        400: {"description": "Missing required parameters"},
+        200: {
+            "description": "Tile checkpoint retrieved successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "checkpoint_123",
+                        "tab_id": "checkpoint_tab_456",
+                        "name": "Data Table",
+                        "type": "Table",
+                        "position": {"x": 0, "y": 0, "width": 6, "height": 4},
+                        "min_width": 2,
+                        "min_height": 2,
+                        "visible": True,
+                        "locked": False,
+                        "moved": False,
+                        "static": False,
+                        "context": None,
+                        "table": "main_data",
+                        "auto_update": True,
+                        "freeze": False,
+                        "filters": None,
+                        "common_filter": None,
+                        "metric": None,
+                        "is_checkpoint": True,
+                        "table_tile": {
+                            "id": "checkpoint_table_123",
+                            "tile_id": "checkpoint_123",
+                            "table_type": "Data Table",
+                            "column_context": None,
+                            "page_number": 1,
+                            "column_order": ["id", "name", "value"],
+                            "hidden_columns": [],
+                            "sorting": None,
+                            "grouping": None,
+                            "group_sorting": None,
+                            "columns_pin_left": [],
+                            "columns_pin_right": [],
+                            "selected": None,
+                        },
+                        "plot_tile": None,
+                        "view_tile": None,
+                        "editor_tile": None,
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "updated_at": "2024-01-01T12:30:00Z",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Tile or checkpoint not found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "No checkpoint found for the specified tile.",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Missing required parameters",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Either tile_id or both tab_id and name must be provided.",
+                    },
+                },
+            },
+        },
     },
 )
 def get_tile_checkpoint(
@@ -672,9 +1097,40 @@ def get_tile_checkpoint(
     "/",
     status_code=204,
     responses={
-        204: {"description": "Tile deleted successfully"},
-        404: {"description": "Tile not found"},
-        400: {"description": "Missing required parameters"},
+        204: {
+            "description": "Tile deleted successfully",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Tile deleted successfully"},
+                },
+            },
+        },
+        404: {
+            "description": "Tile not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Tile with ID 123 not found."},
+                },
+            },
+        },
+        400: {
+            "description": "Missing required parameters",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Either tile_id or both tab_id and name must be provided.",
+                    },
+                },
+            },
+        },
+        500: {
+            "description": "Failed to delete tile",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Failed to delete tile."},
+                },
+            },
+        },
     },
 )
 def delete_tile(
@@ -700,9 +1156,80 @@ def delete_tile(
     "/",
     response_model=TileSchema,
     responses={
-        200: {"description": "Tile patched successfully"},
-        404: {"description": "Tile not found"},
-        400: {"description": "Missing required parameters"},
+        200: {
+            "description": "Tile patched successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "123",
+                        "tab_id": "tab_456",
+                        "name": "Data Table",
+                        "type": "Table",
+                        "position": {"x": 2, "y": 2, "width": 6, "height": 4},
+                        "min_width": 2,
+                        "min_height": 2,
+                        "visible": True,
+                        "locked": False,
+                        "moved": True,
+                        "static": False,
+                        "context": None,
+                        "table": "main_data",
+                        "auto_update": True,
+                        "freeze": False,
+                        "filters": None,
+                        "common_filter": None,
+                        "metric": None,
+                        "is_checkpoint": False,
+                        "table_tile": {
+                            "id": "table_123",
+                            "tile_id": "123",
+                            "table_type": "Data Table",
+                            "column_context": None,
+                            "page_number": 1,
+                            "column_order": ["id", "name", "value"],
+                            "hidden_columns": [],
+                            "sorting": None,
+                            "grouping": None,
+                            "group_sorting": None,
+                            "columns_pin_left": [],
+                            "columns_pin_right": [],
+                            "selected": None,
+                        },
+                        "plot_tile": None,
+                        "view_tile": None,
+                        "editor_tile": None,
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "updated_at": "2024-01-01T12:45:00Z",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Tile not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Tile with ID 123 not found."},
+                },
+            },
+        },
+        400: {
+            "description": "Missing required parameters",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Either tile_id or both tab_id and name must be provided.",
+                    },
+                },
+            },
+        },
+        500: {
+            "description": "Failed to patch tile",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Failed to patch tile."},
+                },
+            },
+        },
     },
 )
 def patch_tile(
@@ -747,7 +1274,78 @@ def patch_tile(
     return _create_tile_response(updated)
 
 
-@router.patch("/specialized", response_model=TileSchema)
+@router.patch(
+    "/specialized",
+    response_model=TileSchema,
+    responses={
+        200: {
+            "description": "Specialized tile patched successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "123",
+                        "tab_id": "tab_456",
+                        "name": "Data Table",
+                        "type": "Table",
+                        "position": {"x": 0, "y": 0, "width": 6, "height": 4},
+                        "min_width": 2,
+                        "min_height": 2,
+                        "visible": True,
+                        "locked": False,
+                        "moved": False,
+                        "static": False,
+                        "context": None,
+                        "table": "main_data",
+                        "auto_update": True,
+                        "freeze": False,
+                        "filters": None,
+                        "common_filter": None,
+                        "metric": None,
+                        "is_checkpoint": False,
+                        "table_tile": {
+                            "id": "table_123",
+                            "tile_id": "123",
+                            "table_type": "Data Table",
+                            "column_context": None,
+                            "page_number": 2,
+                            "column_order": ["id", "name", "value", "new_column"],
+                            "hidden_columns": ["id"],
+                            "sorting": {"column": "name", "direction": "asc"},
+                            "grouping": None,
+                            "group_sorting": None,
+                            "columns_pin_left": ["name"],
+                            "columns_pin_right": [],
+                            "selected": None,
+                        },
+                        "plot_tile": None,
+                        "view_tile": None,
+                        "editor_tile": None,
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "updated_at": "2024-01-01T13:00:00Z",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Tile not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Table tile not found"},
+                },
+            },
+        },
+        400: {
+            "description": "Invalid tile type or missing parameters",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid tile_type. Must be one of Table, Plot, View, Editor",
+                    },
+                },
+            },
+        },
+    },
+)
 async def patch_specialized_tile(
     tile_type: str = Query(
         ...,
