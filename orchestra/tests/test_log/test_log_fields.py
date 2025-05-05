@@ -5,7 +5,7 @@ from . import HEADERS, _create_derived_entry, _create_log, _create_project
 
 
 @pytest.mark.anyio
-async def test_get_fields_with_derived_entries(client: AsyncClient):
+async def test_get_columns_with_derived_entries(client: AsyncClient):
     project_name = "test_project_derived"
     _ = await _create_project(client, project_name)
 
@@ -45,58 +45,58 @@ async def test_get_fields_with_derived_entries(client: AsyncClient):
 
     # Get field types and verify response
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/columns?project={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
-    fields = response.json()
+    columns = response.json()
 
     # Verify base entries
-    assert fields["base_field"]["field_type"] == "entry"
-    assert fields["base_field"]["data_type"] == "int"
-    assert fields["base_field"]["artifacts"] == ""
-    assert fields["base_field"]["created_at"] is not None
-    assert fields["base_field"]["mutable"] is True
+    assert columns["base_field"]["field_type"] == "entry"
+    assert columns["base_field"]["data_type"] == "int"
+    assert columns["base_field"]["artifacts"] == ""
+    assert columns["base_field"]["created_at"] is not None
+    assert columns["base_field"]["mutable"] is True
 
-    assert fields["temperature"]["field_type"] == "entry"
-    assert fields["temperature"]["data_type"] == "float"
-    assert fields["temperature"]["artifacts"] == ""
-    assert fields["temperature"]["created_at"] is not None
-    assert fields["temperature"]["mutable"] is True
+    assert columns["temperature"]["field_type"] == "entry"
+    assert columns["temperature"]["data_type"] == "float"
+    assert columns["temperature"]["artifacts"] == ""
+    assert columns["temperature"]["created_at"] is not None
+    assert columns["temperature"]["mutable"] is True
 
     # Verify params
-    assert fields["param1"]["field_type"] == "param"
-    assert fields["param1"]["data_type"] == "str"
-    assert fields["param1"]["artifacts"] == ""
-    assert fields["param1"]["created_at"] is not None
-    assert fields["param1"]["mutable"] is True
+    assert columns["param1"]["field_type"] == "param"
+    assert columns["param1"]["data_type"] == "str"
+    assert columns["param1"]["artifacts"] == ""
+    assert columns["param1"]["created_at"] is not None
+    assert columns["param1"]["mutable"] is True
 
     # Verify derived entries
-    assert fields["temp_plus_10"]["field_type"] == "derived_entry"
-    assert fields["temp_plus_10"]["data_type"] == "float"
-    assert fields["temp_plus_10"]["artifacts"] == "{t:temperature} + 10"
-    assert fields["temp_plus_10"]["created_at"] is not None
+    assert columns["temp_plus_10"]["field_type"] == "derived_entry"
+    assert columns["temp_plus_10"]["data_type"] == "float"
+    assert columns["temp_plus_10"]["artifacts"] == "{t:temperature} + 10"
+    assert columns["temp_plus_10"]["created_at"] is not None
     assert (
-        fields["temp_plus_10"]["mutable"] is False
+        columns["temp_plus_10"]["mutable"] is False
     )  # Derived entries are always immutable
 
-    assert fields["double_base"]["field_type"] == "derived_entry"
-    assert fields["double_base"]["data_type"] == "int"
-    assert fields["double_base"]["artifacts"] == "{b:base_field} * 2"
-    assert fields["double_base"]["created_at"] is not None
+    assert columns["double_base"]["field_type"] == "derived_entry"
+    assert columns["double_base"]["data_type"] == "int"
+    assert columns["double_base"]["artifacts"] == "{b:base_field} * 2"
+    assert columns["double_base"]["created_at"] is not None
     assert (
-        fields["double_base"]["mutable"] is False
+        columns["double_base"]["mutable"] is False
     )  # Derived entries are always immutable
 
     # Verify field ordering by created_at
-    created_times = [fields[k]["created_at"] for k in fields.keys()]
+    created_times = [columns[k]["created_at"] for k in columns.keys()]
     assert created_times == sorted(created_times)
 
 
 @pytest.mark.anyio
-async def test_rename_field_basic(client: AsyncClient):
-    """Test basic field renaming functionality."""
-    project_name = "test-rename-field"
+async def test_rename_column_basic(client: AsyncClient):
+    """Test basic column renaming functionality."""
+    project_name = "test-rename-column"
     _ = await _create_project(client, project_name)
 
     # Create initial logs with old field name
@@ -114,7 +114,7 @@ async def test_rename_field_basic(client: AsyncClient):
 
     # Rename the field
     rename_response = await client.post(
-        "/v0/logs/rename_field",
+        "/v0/logs/rename_column",
         json={
             "project": project_name,
             "old_field_name": "old_field_name",
@@ -126,7 +126,7 @@ async def test_rename_field_basic(client: AsyncClient):
 
     # Verify field types are updated
     field_types_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/columns?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200, field_types_response.json()
@@ -155,12 +155,12 @@ async def test_rename_field_basic(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_rename_field_edge_cases(client: AsyncClient):
-    """Test edge cases for field renaming functionality."""
-    project_name = "test-rename-field-edges"
+async def test_rename_column_edge_cases(client: AsyncClient):
+    """Test edge cases for column renaming functionality."""
+    project_name = "test-rename-column-edges"
     _ = await _create_project(client, project_name)
 
-    # Create a log with existing fields
+    # Create a log with existing columns
     initial_entries = {
         "existing_field": "test value",
         "other_field": "other value",
@@ -174,7 +174,7 @@ async def test_rename_field_edge_cases(client: AsyncClient):
 
     # Test case 1: Attempt to rename non-existent field
     response = await client.post(
-        "/v0/logs/rename_field",
+        "/v0/logs/rename_column",
         json={
             "project": project_name,
             "old_field_name": "nonexistent_field",
@@ -187,7 +187,7 @@ async def test_rename_field_edge_cases(client: AsyncClient):
 
     # Test case 2: Attempt to rename to an existing field name
     response = await client.post(
-        "/v0/logs/rename_field",
+        "/v0/logs/rename_column",
         json={
             "project": project_name,
             "old_field_name": "existing_field",
@@ -200,7 +200,7 @@ async def test_rename_field_edge_cases(client: AsyncClient):
 
     # Test case 3: Attempt to rename with invalid new field name
     response = await client.post(
-        "/v0/logs/rename_field",
+        "/v0/logs/rename_column",
         json={
             "project": project_name,
             "old_field_name": "existing_field",
@@ -213,9 +213,9 @@ async def test_rename_field_edge_cases(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_field_type_constraints_and_mutability(client: AsyncClient):
-    """Test that fields maintain their type (entry/param/derived) consistently and respect mutability."""
-    project_name = "test_field_type_constraints"
+async def test_column_type_constraints_and_mutability(client: AsyncClient):
+    """Test that columns maintain their type (entry/param/derived) consistently and respect mutability."""
+    project_name = "test_column_type_constraints"
     await _create_project(client, project_name)
 
     # Create a parameter
@@ -240,7 +240,7 @@ async def test_field_type_constraints_and_mutability(client: AsyncClient):
 
     # Verify field type and mutability in field types
     field_types_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/columns?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -328,12 +328,12 @@ async def test_field_type_constraints_and_mutability(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_rename_field_preserves_order(client: AsyncClient):
-    """Test that renaming a field preserves the original field order."""
-    project_name = "test-rename-field-order"
+async def test_rename_column_preserves_order(client: AsyncClient):
+    """Test that renaming a column preserves the original column order."""
+    project_name = "test-rename-column-order"
     _ = await _create_project(client, project_name)
 
-    # Create a log with fields in a specific order
+    # Create a log with columns in a specific order
     initial_entries = {
         "field_a": "value a",
         "field_b": "value b",
@@ -348,12 +348,12 @@ async def test_rename_field_preserves_order(client: AsyncClient):
     assert response.status_code == 200
 
     # Get initial field order
-    fields_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+    columns_response = await client.get(
+        f"/v0/logs/columns?project={project_name}",
         headers=HEADERS,
     )
-    assert fields_response.status_code == 200
-    initial_order = list(fields_response.json().keys())
+    assert columns_response.status_code == 200
+    initial_order = list(columns_response.json().keys())
 
     # Find the index of field_b
     field_b_index = initial_order.index("field_b")
@@ -372,7 +372,7 @@ async def test_rename_field_preserves_order(client: AsyncClient):
 
     # Rename field_b to field_b_renamed
     rename_response = await client.post(
-        "/v0/logs/rename_field",
+        "/v0/logs/rename_column",
         json={
             "project": project_name,
             "old_field_name": "field_b",
@@ -383,12 +383,12 @@ async def test_rename_field_preserves_order(client: AsyncClient):
     assert rename_response.status_code == 200, rename_response.json()
 
     # Get new field order after renaming
-    fields_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+    columns_response = await client.get(
+        f"/v0/logs/columns?project={project_name}",
         headers=HEADERS,
     )
-    assert fields_response.status_code == 200
-    new_order = list(fields_response.json().keys())
+    assert columns_response.status_code == 200
+    new_order = list(columns_response.json().keys())
 
     # Verify field_b is removed and field_b_renamed appears at the same index
     assert "field_b" not in new_order
