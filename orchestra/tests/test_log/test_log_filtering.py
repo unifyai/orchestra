@@ -1478,7 +1478,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     entries = {"_/state": "gas->liquid"}
     update_response = await client.put(
         f"/v0/logs",
-        json={"ids": log_ids, "entries": entries, "overwrite": True},
+        json={"logs": log_ids, "entries": entries, "overwrite": True},
         headers=HEADERS,
     )
     assert update_response.status_code == 200
@@ -1708,7 +1708,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # update description to None
     response = await client.put(
         f"/v0/logs",
-        json={"ids": [3, 4], "entries": {"_/description": None}, "overwrite": True},
+        json={"logs": [3, 4], "entries": {"_/description": None}, "overwrite": True},
         headers=HEADERS,
     )
     assert response.status_code == 200
