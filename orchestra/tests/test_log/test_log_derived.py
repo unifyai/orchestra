@@ -1030,3 +1030,60 @@ async def test_advanced_comprehensions_and_conditionals(client: AsyncClient, tes
     assert response.status_code == 200
     result = response.json()
     assert result["logs"][0]["derived_entries"][field] == test_case["expected"]
+
+
+@pytest.mark.anyio
+async def test_create_static_entries_with_flag(client: AsyncClient):
+    """
+    Test creating static entries with derived=false flag.
+
+    This test verifies that when the derived=false flag is passed to the /logs/derived endpoint,
+    the computed values are stored directly in the base logs' entries rather than in derived_entries.
+    """
+    # 1. Create a project
+    project_name = "test_static_entries"
+    await _create_project(client, project_name, user=1)
+
+    # 2. Create base logs
+    log_ids = []
+    for i in range(3):
+        response = await _create_log(client, project_name, entries={"value": i * 10})
+        assert response.status_code == 200
+        log_ids.append(response.json()["log_event_ids"][0])
+
+    # 3. Call /v0/logs/derived with derived=false
+    key = "doubled_value"
+    equation = "{log:value} * 2"
+    referenced_logs = {"log": log_ids}
+
+    # Use direct client.post to include the derived=false flag
+    response = await client.post(
+        "/v0/logs/derived",
+        json={
+            "project": project_name,
+            "key": key,
+            "equation": equation,
+            "referenced_logs": referenced_logs,
+            "derived": False,  # This is the key flag we're testing
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+
+    # 4. Fetch logs and verify the new key is in entries, not in derived_entries
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+
+    # Verify each log has the computed value in entries, not in derived_entries
+    for i, log in enumerate(logs):
+        # The value should be in regular entries
+        assert key in log["entries"]
+        assert log["entries"][key] == log["entries"]["value"] * 2
+
+        # The value should NOT be in derived_entries
+        assert key not in log["derived_entries"]
