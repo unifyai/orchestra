@@ -298,6 +298,24 @@ class GetLogsMetricRequest(BaseModel):
     )
 
 
+class CreateColumnsRequest(BaseModel):
+    project: str = Field(
+        description="Name of the project the columns belong to.",
+        example="eval-project",
+    )
+    context: Optional[str] = Field(
+        default=None,
+        description="Optional context path for the columns.",
+        example="experiment1/trial1",
+    )
+    columns: Dict[str, Optional[str]] = Field(
+        description="Dictionary mapping column names to their descriptions (or None if no description).",
+        example={"score": "Evaluation score", "response": None},
+    )
+
+
+
+
 class JoinLogsRequest(BaseModel):
     pair_of_args: List[Dict[str, Any]] = Field(
         ...,
