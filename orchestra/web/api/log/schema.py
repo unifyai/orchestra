@@ -100,6 +100,11 @@ class CreateDerivedEntriesConfig(BaseModel):
         "endpoint.",
         example={"log0": [0, 1, 2], "log1": {"filter_expr": "score > 0.5"}},
     )
+    derived: bool = Field(
+        default=True,
+        description="Whether to create derived logs (True) or static entries in base logs (False).",
+        example=False,
+    )
 
 
 class UpdateLogRequest(BaseModel):
@@ -318,6 +323,7 @@ class CreateColumnsRequest(BaseModel):
         example={"score": "Evaluation score", "response": None},
     )
 
+
 class DeleteColumnsRequest(BaseModel):
     project: str = Field(
         description="Name of the project the columns belong to.",
@@ -332,7 +338,6 @@ class DeleteColumnsRequest(BaseModel):
         description="List of column names to delete.",
         example=["score", "response"],
     )
-
 
 
 class JoinLogsRequest(BaseModel):
