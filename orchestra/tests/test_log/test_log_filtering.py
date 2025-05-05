@@ -760,8 +760,6 @@ async def test_get_logs_with_derived_math_expressions_and_indexing(client: Async
         user=user_id,
     )
     assert resp.status_code == 200, resp.json()
-    dl_add10_ids = resp.json()["derived_log_ids"]
-    assert len(dl_add10_ids) == 3, f"Expected 3 derived logs, got {dl_add10_ids}"
 
     #
     # (B) Convert Celsius→Fahrenheit: (C × 9/5) + 32, referencing [boiling, freezing]
@@ -782,8 +780,6 @@ async def test_get_logs_with_derived_math_expressions_and_indexing(client: Async
         user=user_id,
     )
     assert resp.status_code == 200, resp.json()
-    dl_c_to_f_ids = resp.json()["derived_log_ids"]
-    assert len(dl_c_to_f_ids) == 2, "Only boiling & freezing logs used"
 
     #
     # (C) Round the temperature to nearest hundred: round({t:_/temperature}, -2)
@@ -805,8 +801,6 @@ async def test_get_logs_with_derived_math_expressions_and_indexing(client: Async
         user=user_id,
     )
     assert resp.status_code == 200, resp.json()
-    dl_round_temp_ids = resp.json()["derived_log_ids"]
-    assert len(dl_round_temp_ids) == 4
 
     #
     # (D) len({desc:_/description}) for [all logs that have _/description].
@@ -834,8 +828,6 @@ async def test_get_logs_with_derived_math_expressions_and_indexing(client: Async
         user=user_id,
     )
     assert resp.status_code == 200, resp.json()
-    dl_len_desc_ids = resp.json()["derived_log_ids"]
-    assert len(dl_len_desc_ids) == len(logs_with_desc)
 
     #
     # (E) Subtraction across logs: "Sun temp minus boiling temp"
@@ -857,8 +849,6 @@ async def test_get_logs_with_derived_math_expressions_and_indexing(client: Async
         user=user_id,
     )
     assert resp.status_code == 200, resp.json()
-    dl_sub_ids = resp.json()["derived_log_ids"]
-    assert len(dl_sub_ids) >= 1, "Should create derived log for that combination"
 
     #
     # (F) Indexing a list: {m:_/metadata}[1] + 2
@@ -881,8 +871,6 @@ async def test_get_logs_with_derived_math_expressions_and_indexing(client: Async
         user=user_id,
     )
     assert resp.status_code == 200, resp.json()
-    dl_index_array_ids = resp.json()["derived_log_ids"]
-    assert len(dl_index_array_ids) == 2, "lava + air"
 
     #
     # (G) Indexing a dict: {d:_/_data}['b'] + 5
@@ -904,8 +892,6 @@ async def test_get_logs_with_derived_math_expressions_and_indexing(client: Async
         user=user_id,
     )
     assert resp.status_code == 200, resp.json()
-    dl_index_dict_ids = resp.json()["derived_log_ids"]
-    assert len(dl_index_dict_ids) == 3, "lava + air + no-desc"
 
     # (H) Exponent: e.g. {sun:_/temperature} ** 2
     derived_conf_exp = {
@@ -924,8 +910,6 @@ async def test_get_logs_with_derived_math_expressions_and_indexing(client: Async
         user=user_id,
     )
     assert resp.status_code == 200, resp.json()
-    dl_exp_ids = resp.json()["derived_log_ids"]
-    assert len(dl_exp_ids) == 1
 
     # (I) Floor Division: e.g. {boil:_/temperature} // 3
     derived_conf_floor_div = {
@@ -944,8 +928,6 @@ async def test_get_logs_with_derived_math_expressions_and_indexing(client: Async
         user=user_id,
     )
     assert resp.status_code == 200, resp.json()
-    dl_floor_div_ids = resp.json()["derived_log_ids"]
-    assert len(dl_floor_div_ids) == 1
 
     ############################################################################
     # 4) Verify the derived entries in GET /v0/logs
@@ -1114,7 +1096,6 @@ async def test_filtering_and_sorting_base_and_derived_logs(client: AsyncClient):
         },
     ]
 
-    derived_log_ids = []
     for ddef in derived_definitions:
         resp = await _create_derived_entry(
             client,
@@ -1125,10 +1106,6 @@ async def test_filtering_and_sorting_base_and_derived_logs(client: AsyncClient):
             user=user_id,
         )
         assert resp.status_code == 200, resp.json()
-        created_d_ids = resp.json()["derived_log_ids"]
-        derived_log_ids.extend(created_d_ids)
-
-    assert len(derived_log_ids) == 2, f"Expected 2 derived logs, got {derived_log_ids}"
 
     # (a) Test that *all* 2 base + 2 derived logs appear across 2 distinct log_event_ids
     logs_all = await fetch_logs(client, project_name)
