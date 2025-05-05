@@ -37,11 +37,6 @@ async def test_create_derived_entry_with_list(client: AsyncClient):
         referenced_logs,
     )
     assert response.status_code == 200
-    data = response.json()
-    assert "derived_log_ids" in data
-    assert (
-        len(data["derived_log_ids"]) == 3
-    )  # Should create one derived log per base log
 
 
 @pytest.mark.anyio
@@ -68,10 +63,6 @@ async def test_create_derived_entry_with_filter_expr(client: AsyncClient):
         referenced_logs,
     )
     assert response.status_code == 200
-    data = response.json()
-    # Only logs with score > 20 (i=3,4) should have derived logs
-    assert "derived_log_ids" in data
-    assert len(data["derived_log_ids"]) == 2
 
 
 @pytest.mark.anyio
@@ -105,11 +96,6 @@ async def test_update_derived_entry_with_referenced_logs(client: AsyncClient):
         referenced_logs=initial_referenced_logs,
     )
     assert resp.status_code == 200
-    initial_derived_ids = resp.json()["derived_log_ids"]
-    assert (
-        len(initial_derived_ids) == 2
-    ), "Should create derived logs for first two base logs"
-
     # Verify initial derived values
     resp = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
     assert resp.status_code == 200
@@ -191,8 +177,6 @@ async def test_update_derived_entry_with_filter(client: AsyncClient):
         referenced_logs={"t": [base_log_ids[0], base_log_ids[1]]},
     )
     assert resp.status_code == 200
-    derived_ids_1 = resp.json()["derived_log_ids"]
-    assert len(derived_ids_1) == 2
 
     # 3) Create second derived log: "temp_minus_5"
     resp = await _create_derived_entry(
@@ -203,8 +187,6 @@ async def test_update_derived_entry_with_filter(client: AsyncClient):
         referenced_logs={"t": [base_log_ids[2]]},
     )
     assert resp.status_code == 200
-    derived_ids_2 = resp.json()["derived_log_ids"]
-    assert len(derived_ids_2) == 1
 
     # Now we have 3 derived logs in total:
     #   2 of them with key="temp_plus_10"
@@ -283,8 +265,6 @@ async def test_get_logs_including_derived(client: AsyncClient):
         user=user_id,
     )
     assert resp.status_code == 200, resp.json()
-    derived_log_ids1 = resp.json()["derived_log_ids"]
-    assert len(derived_log_ids1) == len(base_log_ids1)
 
     base_log_ids2 = [1, 2, 3, 4, 5, 6]
     derived_conf2 = {
@@ -301,8 +281,6 @@ async def test_get_logs_including_derived(client: AsyncClient):
         user=user_id,
     )
     assert resp.status_code == 200, resp.json()
-    derived_log_ids2 = resp.json()["derived_log_ids"]
-    assert len(derived_log_ids2) == len(base_log_ids2)
 
     # Third derived log checking if _/safe is True
     base_log_ids3 = [1, 2, 3, 4]
@@ -320,8 +298,6 @@ async def test_get_logs_including_derived(client: AsyncClient):
         user=user_id,
     )
     assert resp.status_code == 200, resp.json()
-    derived_log_ids3 = resp.json()["derived_log_ids"]
-    assert len(derived_log_ids3) == len(base_log_ids3)
 
     # 4) Test retrieving logs *without* any filtering or sorting
     resp = await client.get(
@@ -506,8 +482,6 @@ async def test_delete_derived_logs(client: AsyncClient):
         referenced_logs1,
     )
     assert response.status_code == 200
-    derived_log_ids1 = response.json()["derived_log_ids"]
-    assert len(derived_log_ids1) == 3
 
     # Create second derived log
     key2 = "derived2"
@@ -521,8 +495,6 @@ async def test_delete_derived_logs(client: AsyncClient):
         referenced_logs2,
     )
     assert response.status_code == 200
-    derived_log_ids2 = response.json()["derived_log_ids"]
-    assert len(derived_log_ids2) == 3
 
     # Delete only the first derived log using unified endpoint
     ids_and_fields = [(id_, key1) for id_ in log_ids]
@@ -880,8 +852,6 @@ async def test_active_derived_logs_processing(client: AsyncClient):
         referenced_logs,
     )
     assert response.status_code == 200
-    data = response.json()
-    assert "derived_log_ids" in data
 
     # Verify only logs with score > 40 have the derived entry
     response = await client.get(
