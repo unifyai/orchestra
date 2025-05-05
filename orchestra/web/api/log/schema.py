@@ -214,6 +214,16 @@ class DeleteLogEntryRequest(BaseModel):
             "enum": ["base", "derived", "all"],
         },
     )
+    delete_empty_logs: bool = Field(
+        default=False,
+        description="Whether to delete logs which end up being empty as a result of the field deletion.",
+        example=True,
+    )
+    delete_empty_columns: bool = Field(
+        default=True,
+        description="Whether to delete columns that have no data after log deletion.",
+        example=True,
+    )
 
 
 class UpdateDerivedEntriesConfig(BaseModel):
