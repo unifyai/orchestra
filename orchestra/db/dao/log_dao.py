@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends
-from sqlalchemy import cast, literal, select, text
+from sqlalchemy import alias, cast, literal, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -348,6 +348,58 @@ class LogDAO:
                         return "image"
                     return "str"
         return type(raw_v).__name__
+
+    def get_ids_by_filter(
+        self,
+        project_id: int,
+        filters: Dict[str, Any],
+        context_ids: Optional[List[int]] = None,
+    ) -> List[int]:
+        """
+        Get log_event_ids that match the given filters for a project.
+
+        Args:
+            project_id: The project ID to filter by
+            filters: Dictionary of key-value pairs to filter logs by
+            context_ids: Optional list of context IDs to further filter the logs
+
+        Returns:
+            List of log_event_ids that match the filters
+        """
+        if not filters:
+            return []
+
+        # Start with a query for log events in the project
+        query = select(LogEvent.id).where(LogEvent.project_id == project_id)
+
+        # If context_ids are provided, filter by those contexts
+        if context_ids:
+            query = query.join(
+                LogEventContext,
+                LogEventContext.log_event_id == LogEvent.id,
+            ).where(LogEventContext.context_id.in_(context_ids))
+
+        # For each key-value pair in filters, add a join to Log and filter condition
+        for idx, (key, value) in enumerate(filters.items()):
+            # Create a unique alias for each Log join to avoid conflicts
+            log_alias = f"log_{idx}"
+            log_table = alias(Log, name=log_alias)
+
+            # Join with the Log table
+            query = query.join(
+                log_table,
+                log_table.c.log_event_id == LogEvent.id,
+            )
+
+            # Add filter conditions for this key-value pair
+            query = query.where(
+                log_table.c.key == key,
+                log_table.c.value == literal(value, type_=JSONB),
+            )
+
+        # Execute the query and return the list of log_event_ids
+        result = self.session.execute(query)
+        return [row[0] for row in result]
 
     def filter(
         self,
