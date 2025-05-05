@@ -123,7 +123,7 @@ async def test_update_logs_strongly_typed(client: AsyncClient):
     response = await client.put(
         f"/v0/logs",
         json={
-            "ids": [log_id1],
+            "logs": [log_id1],
             "entries": {
                 "a/b/c/input": "new data",
                 "a/b/c/numeric_input": -12.0,
@@ -171,7 +171,7 @@ async def test_update_logs_previously_none(client: AsyncClient):
     response = await client.put(
         f"/v0/logs",
         json={
-            "ids": [log_id1],
+            "logs": [log_id1],
             "entries": {
                 "a/b/c/numeric_input": -12.0,
             },
@@ -199,7 +199,7 @@ async def test_update_logs_previously_none(client: AsyncClient):
     response = await client.put(
         f"/v0/logs",
         json={
-            "ids": [log_id1],
+            "logs": [log_id1],
             "entries": {
                 "a/b/c/numeric_input": None,
             },
@@ -237,7 +237,7 @@ async def test_update_logs_type_mismatch(client: AsyncClient):
     response = await client.put(
         f"/v0/logs",
         json={
-            "ids": [log_id1],
+            "logs": [log_id1],
             "entries": {
                 "a/b/c/numeric_input": "not_an_int",  # This should cause a type mismatch
             },
@@ -318,7 +318,7 @@ async def test_create_log_default_immutable(client: AsyncClient):
     response = await client.put(
         "/v0/logs",
         json={
-            "ids": [log_id],
+            "logs": [log_id],
             "entries": {
                 "default_field": "attempted update",
             },
@@ -358,7 +358,7 @@ async def test_update_mutable_and_immutable_fields(client: AsyncClient):
     response = await client.put(
         "/v0/logs",
         json={
-            "ids": [log_id],
+            "logs": [log_id],
             "entries": {
                 "mutable_field": "updated value",
             },
@@ -382,7 +382,7 @@ async def test_update_mutable_and_immutable_fields(client: AsyncClient):
     response = await client.put(
         "/v0/logs",
         json={
-            "ids": [log_id],
+            "logs": [log_id],
             "entries": {
                 "immutable_field": "attempted update",
             },
@@ -430,7 +430,7 @@ async def test_update_field_mutability_only(client: AsyncClient):
     response = await client.put(
         "/v0/logs",
         json={
-            "ids": [log_id],
+            "logs": [log_id],
             "entries": {
                 "explicit_types": {
                     "mutable_field": {"mutable": False},
@@ -464,7 +464,7 @@ async def test_update_field_mutability_only(client: AsyncClient):
     response = await client.put(
         "/v0/logs",
         json={
-            "ids": [log_id],
+            "logs": [log_id],
             "entries": {
                 "mutable_field": "new value",
             },

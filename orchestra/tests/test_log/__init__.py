@@ -225,7 +225,7 @@ def _update_multiple_logs_w_overwrite(client, log_ids, overwrite, user=1):
     return client.put(
         f"/v0/logs",
         json={
-            "ids": log_ids,
+            "logs": log_ids,
             "entries": log_data["log_update_w_overwrite"],
             "overwrite": overwrite,
         },
@@ -264,7 +264,7 @@ def _update_logs(client, log_ids, entries, user=1, context=None, overwrite=False
     return client.put(
         "/v0/logs",
         json={
-            "ids": log_ids,
+            "logs": log_ids,
             "entries": entries,
             "overwrite": overwrite,
             "context": context,
