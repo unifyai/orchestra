@@ -1027,7 +1027,7 @@ def update_derived_log(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Invalid request format or data.",
+                        "detail": "When passing a filter dict in `logs`, you must supply `project` or `context`.",
                     },
                 },
             },
@@ -1049,15 +1049,100 @@ def update_logs(
     Updates multiple logs with the provided entries. Each entry will be either added
     or overridden in the specified logs.
 
+    The `logs` parameter can be either:
+    - A list of log IDs to update
+    - A filter dictionary to select logs matching specific criteria (requires `project` or `context`)
+
     A dictionary of "explicit_types" can be passed as part of the `entries`.
     If present, it will override the inferred type of any matching key in all logs.
     """
+    # Get user ID for permission checks
+    user_id = request_fastapi.state.user_id
+
+    # Normalize the logs parameter to get IDs to update
+    ids_to_update = []
+
+    # Use body.logs to determine which logs to update
+    if hasattr(body, "logs") and body.logs is not None:
+        # Check if it's a filter dict and validate required fields
+        if isinstance(body.logs, dict):
+            if not body.project:
+                raise HTTPException(
+                    status_code=400,
+                    detail="When passing a filter dict in `logs`, you must supply `project`.",
+                )
+
+            # Get project ID first for filtering
+            try:
+                project_obj = project_dao.get_by_user_and_name(
+                    name=body.project,
+                    user_id=user_id,
+                )
+                project_id = project_obj.id
+            except (IndexError, AttributeError):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Project '{body.project}' not found.",
+                )
+
+            # It's a filter dict, use log_dao.get_ids_by_filter to get matching IDs
+            try:
+                # Get context ID if provided
+                context_ids = None
+                if body.context:
+                    if isinstance(body.context, str):
+                        ctx = context_dao.filter(
+                            project_id=project_id,
+                            name=body.context,
+                        )
+                        if ctx:
+                            context_ids = [ctx[0][0].id]
+                    elif isinstance(body.context, list):
+                        context_ids = []
+                        for ctx_name in body.context:
+                            if isinstance(ctx_name, str):
+                                ctx = context_dao.filter(
+                                    project_id=project_id,
+                                    name=ctx_name,
+                                )
+                                if ctx:
+                                    context_ids.append(ctx[0][0].id)
+                else:
+                    # get the default context
+                    context_ids = [context_dao.get_or_create(project_id, name="")]
+                # Use log_dao.get_ids_by_filter to get matching log IDs
+                ids_to_update = log_dao.get_ids_by_filter(
+                    project_id=project_id,
+                    filters=body.logs,
+                    context_ids=context_ids,
+                )
+
+                if not ids_to_update:
+                    # No matching logs found
+                    raise HTTPException(
+                        status_code=404,
+                        detail="No logs found matching the provided filter criteria.",
+                    )
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid filter criteria: {str(e)}",
+                )
+        else:
+            # Assume it's a list of IDs
+            ids_to_update = body.logs
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="The 'logs' parameter is required and must be either a list of log IDs or a filter dictionary.",
+        )
+
     # Validate all log IDs upfront
     not_found_logs = []
     log_id_to_project = {}  # Maps log_id -> project_id
     updated_ids = set()
 
-    for log_id in body.ids:
+    for log_id in ids_to_update:
         try:
             project_user_id, project_id = log_event_dao.get_user_and_project_id(
                 id=log_id,
@@ -1173,7 +1258,7 @@ def update_logs(
     for data_type in ("params", "entries"):
         data = getattr(body, data_type)
 
-        for i, log_id in enumerate(body.ids):
+        for i, log_id in enumerate(ids_to_update):
             # Extract the data for this log. Support both dict and list formats.
             try:
                 this_data = data if isinstance(data, dict) else data[i]
@@ -1181,7 +1266,7 @@ def update_logs(
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"Mismatch between number of log ids ({len(body.ids)}) and length of "
+                        f"Mismatch between number of log ids ({len(ids_to_update)}) and length of "
                         f"{data_type} (got {len(data)}) at log id {log_id}."
                     ),
                 )
@@ -1321,7 +1406,7 @@ def update_logs(
                         )
                         if ctx_obj and not ctx_obj.allow_duplicates:
                             # Check each log ID for duplicates
-                            for log_id in body.ids:
+                            for log_id in ids_to_update:
                                 duplicate = context_dao.check_for_duplicates(
                                     context_id,
                                     log_id,
@@ -1338,7 +1423,7 @@ def update_logs(
                 )
                 if ctx_obj and not ctx_obj.allow_duplicates:
                     # Check each log ID for duplicates
-                    for log_id in body.ids:
+                    for log_id in ids_to_update:
                         duplicate = context_dao.check_for_duplicates(ctx_id, log_id)
                         if duplicate:
                             raise HTTPException(
@@ -1474,6 +1559,7 @@ def delete_logs(
     context_dao: ContextDAO = Depends(),
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
+    log_dao: LogDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -1497,7 +1583,6 @@ def delete_logs(
 
     not_found_logs = []
     not_found_entries = []
-    ids_and_fields = _flatten_fields(body.ids_and_fields)
     deleted_fields = set()  # Track which fields were deleted for cascading deletion
 
     # Validate project existence
@@ -1522,6 +1607,33 @@ def delete_logs(
             detail=f"Context '{context_name}' not found for project '{body.project}'.",
         )
     context_id = context[0][0].id
+
+    # Preprocess ids_and_fields to handle dict-based selectors
+    processed_ids_and_fields = []
+    for id_spec, fields in body.ids_and_fields:
+        if isinstance(id_spec, dict):
+            try:
+                # Use log_dao.get_ids_by_filter to get matching log IDs
+                matching_ids = log_dao.get_ids_by_filter(
+                    project_id=project_id,
+                    filters=id_spec,
+                    context_ids=[context_id] if context_id else None,
+                )
+
+                # Add each ID with the same fields to the processed list
+                for log_id in matching_ids:
+                    processed_ids_and_fields.append((log_id, fields))
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid filter criteria: {str(e)}",
+                )
+        else:
+            # Pass through unchanged if it's not a dict
+            processed_ids_and_fields.append((id_spec, fields))
+
+    # Use the processed list instead of the original
+    ids_and_fields = _flatten_fields(processed_ids_and_fields)
 
     # Track if we need to update the versioned context
     context_obj = None
