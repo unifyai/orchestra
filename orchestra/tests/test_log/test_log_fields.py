@@ -419,3 +419,94 @@ async def test_rename_field_preserves_order(client: AsyncClient):
     expected_log_order = initial_log_order.copy()
     expected_log_order[log_field_b_index] = "field_b_renamed"
     assert new_log_order == expected_log_order
+
+
+@pytest.mark.anyio
+async def test_create_columns_happy_path(client: AsyncClient):
+    """Test creating columns with explicit and null types"""
+    project_name = "test-create-columns"
+    context_name = "columns-context"
+
+    # Setup project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Test context for columns"},
+        headers=HEADERS,
+    )
+
+    # Create columns with explicit and null types
+    columns_data = {
+        "project": project_name,
+        "context": context_name,
+        "columns": {
+            "accuracy": "float",  # Explicit type
+            "value": None,  # Null type (auto-detect)
+        },
+    }
+    response = await client.post(
+        f"/v0/logs/columns",
+        json=columns_data,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert "Columns created successfully" in response.json()["info"]
+
+    # Verify the columns were created with correct types
+    response = await client.get(
+        f"/v0/logs/columns?project={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    columns = response.json()
+
+    # Check that both columns exist
+    assert "accuracy" in columns
+    assert "value" in columns
+
+    # Check that the explicit type was set correctly
+    assert columns["accuracy"]["data_type"] == "float"
+
+    # Check that the null type was set to NoneType
+    assert columns["value"]["data_type"] == "NoneType"
+
+
+@pytest.mark.anyio
+async def test_create_columns_invalid_type(client: AsyncClient):
+    """Test creating columns with an invalid type"""
+    project_name = "test-invalid-column-type"
+    context_name = "invalid-type-context"
+
+    # Setup project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "description": "Test context for invalid column type",
+        },
+        headers=HEADERS,
+    )
+
+    # Try to create a column with an invalid type
+    columns_data = {
+        "project": project_name,
+        "context": context_name,
+        "columns": {"badcol": "string"},  # Invalid type (should be str)
+    }
+    response = await client.post(
+        f"/v0/logs/columns",
+        json=columns_data,
+        headers=HEADERS,
+    )
+    assert response.status_code == 400
+    assert "Invalid field type" in response.json()["detail"]
+
