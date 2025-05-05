@@ -62,18 +62,6 @@ class AddLogsToContextRequest(BaseModel):
     )
 
 
-class CreateColumnsRequest(BaseModel):
-    """Request model for creating columns in a context."""
-
-    columns: Dict[str, Optional[str]] = Field(
-        ...,
-        description="Dictionary mapping column names to their explicit types (or None for auto-detection).",
-        json_schema_extra={
-            "example": {"accuracy": "float", "model_name": "str", "iteration": None},
-        },
-    )
-
-
 class RenameContextRequest(BaseModel):
     """Request model for renaming an existing context."""
 
