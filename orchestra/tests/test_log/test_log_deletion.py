@@ -8,7 +8,6 @@ from . import (
     _delete_log_fields_from_logs,
     _delete_logs,
     _get_log,
-    _update_logs,
 )
 
 
@@ -139,7 +138,7 @@ async def test_delete_field_for_all_logs(client: AsyncClient):
 
     # Check field types to verify the field type was removed
     response = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -208,7 +207,7 @@ async def test_field_cascaded_delete(client: AsyncClient):
 
     # Check that the field type was removed
     response = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()

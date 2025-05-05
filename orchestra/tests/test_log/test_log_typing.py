@@ -23,7 +23,7 @@ async def test_create_log_strongly_typed(client: AsyncClient):
 
     # Verify that field types are set correctly
     field_types_response = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -85,7 +85,7 @@ async def test_create_log_type_mismatch(client: AsyncClient):
     assert response.status_code == 200, response.json()
     # get field types
     field_types_response = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -157,7 +157,7 @@ async def test_update_logs_previously_none(client: AsyncClient):
 
     # Verify numeric is NoneType
     field_types_response = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -185,7 +185,7 @@ async def test_update_logs_previously_none(client: AsyncClient):
 
     # Verify numeric is now float
     field_types_response = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -213,7 +213,7 @@ async def test_update_logs_previously_none(client: AsyncClient):
 
     # Verify numeric is still float type (since type was established)
     field_types_response = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -276,7 +276,7 @@ async def test_create_log_with_mutable_fields(client: AsyncClient):
 
     # Verify field types include mutability information
     field_types_response = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -307,7 +307,7 @@ async def test_create_log_default_immutable(client: AsyncClient):
 
     # Verify field is immutable by default
     field_types_response = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -419,7 +419,7 @@ async def test_update_field_mutability_only(client: AsyncClient):
 
     # Verify field is initially mutable
     field_types_response = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -443,7 +443,7 @@ async def test_update_field_mutability_only(client: AsyncClient):
 
     # Verify field is now immutable but value unchanged
     field_types_response = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
