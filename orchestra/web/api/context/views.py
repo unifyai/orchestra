@@ -25,7 +25,7 @@ router = APIRouter()
 
 
 @router.post(
-    "/project/{project_name}/contexts",
+    "/project/{project_name:path}/contexts",
     responses={
         200: {
             "description": "Successful Response",
@@ -137,7 +137,7 @@ def create_context(
 
 
 @router.get(
-    "/project/{project_name}/contexts",
+    "/project/{project_name:path}/contexts",
     responses={
         200: {
             "description": "Contexts retrieved.",
@@ -224,7 +224,7 @@ def get_contexts(
 
 
 @router.get(
-    "/project/{project_name}/contexts/{context_name:path}",
+    "/project/{project_name:path}/contexts/{context_name:path}",
     responses={
         200: {
             "description": "Context retrieved.",
@@ -295,7 +295,7 @@ def get_context(
 
 
 @router.delete(
-    "/project/{project_name}/contexts/{context_name:path}",
+    "/project/{project_name:path}/contexts/{context_name:path}",
     responses={
         200: {
             "description": "Successful Response",
