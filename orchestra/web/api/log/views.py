@@ -40,14 +40,14 @@ from orchestra.db.models.orchestra_models import (
 )
 from orchestra.web.api.dependencies import auth_admin_key
 from orchestra.web.api.log.schema import (
-    CreateColumnsRequest,
     CreateDerivedEntriesConfig,
+    CreateFieldsRequest,
     CreateLogConfig,
-    DeleteColumnsRequest,
+    DeleteFieldsRequest,
     DeleteLogEntryRequest,
     GetLogsMetricRequest,
     JoinLogsRequest,
-    RenameColumnRequest,
+    RenameFieldRequest,
     UpdateDerivedEntriesConfig,
     UpdateLogRequest,
 )
@@ -1942,7 +1942,7 @@ def delete_logs(
         )
 
     # Cascading deletion: check if any deleted fields no longer exist in any logs
-    if deleted_fields and body.delete_empty_columns:
+    if deleted_fields and body.delete_empty_fields:
         # Get all fields that still exist in any logs with two efficient queries
         existing_base_fields = (
             session.query(Log.key)
@@ -2975,14 +2975,14 @@ def get_log_groups(
 
 
 @router.post(
-    "/logs/rename_column",
+    "/logs/rename_field",
     responses={
         200: {
-            "description": "Column renamed successfully",
+            "description": "Field renamed successfully",
             "content": {
                 "application/json": {
                     "example": {
-                        "info": "Column renamed successfully from 'old_name' to 'new_name'",
+                        "info": "Field renamed successfully from 'old_name' to 'new_name'",
                     },
                 },
             },
@@ -2992,7 +2992,7 @@ def get_log_groups(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Invalid column name or column already exists",
+                        "detail": "Invalid field name or field already exists",
                     },
                 },
             },
@@ -3002,25 +3002,25 @@ def get_log_groups(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Project or column not found",
+                        "detail": "Project or field not found",
                     },
                 },
             },
         },
     },
 )
-def rename_column(
+def rename_field(
     request_fastapi: Request,
-    request: RenameColumnRequest,
+    request: RenameFieldRequest,
     project_dao: ProjectDAO = Depends(),
     context_dao: ContextDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
     log_dao: LogDAO = Depends(),
 ):
     """
-    Renames a column across all logs in a project. This includes:
+    Renames a field across all logs in a project. This includes:
     - Updating the field type record
-    - Renaming the column in all logs (regular and history)
+    - Renaming the field in all logs (regular and history)
 
     The operation is atomic - either all renames succeed or none do.
     """
@@ -3272,14 +3272,14 @@ def join_logs(
 
 
 @router.get(
-    "/logs/columns",
+    "/logs/fields",
     responses={
         200: {
             "description": "Successful Response",
             "content": {
                 "application/json": {
                     "example": {
-                        "column1": {
+                        "field1": {
                             "data_type": "string",
                             "field_type": "entry",
                             "mutable": "true",
@@ -3302,15 +3302,15 @@ def join_logs(
         },
     },
 )
-def get_columns(
+def get_fields(
     request_fastapi: Request,
     project: str = Query(
-        description="Name of the project to get columns and their types for.",
+        description="Name of the project to get fields and their types for.",
         example="eval-project",
     ),
     context: Optional[str] = Query(
         "",
-        description="Optional context name to filter column types",
+        description="Optional context name to filter fields types",
         example="training",
     ),
     project_dao: ProjectDAO = Depends(),
@@ -3319,14 +3319,14 @@ def get_columns(
     session=Depends(get_db_session),
 ):
     """
-    Returns a dictionary of column names and their types for the specified project.
-    If a context is provided, returns only columns associated with that context.
+    Returns a dictionary of fields names and their types for the specified project.
+    If a context is provided, returns only fields associated with that context.
 
-    Each column entry contains:
-    - data_type: The data type of the column (int, str, etc)
+    Each field entry contains:
+    - data_type: The data type of the field (int, str, etc)
     - field_type: Whether it's an entry, param, or derived_entry
-    - mutable: Whether the column can be modified
-    - created_at: When the column was first created
+    - mutable: Whether the field can be modified
+    - created_at: When the field was first created
     - artifacts: For derived entries, contains the equation
     """
     try:
@@ -3385,14 +3385,14 @@ def get_columns(
 
 
 @router.post(
-    "/logs/columns",
+    "/logs/fields",
     responses={
         200: {
-            "description": "Columns created successfully",
+            "description": "Fields created successfully",
             "content": {
                 "application/json": {
                     "example": {
-                        "info": "Columns created successfully.",
+                        "info": "Fields created successfully.",
                     },
                 },
             },
@@ -3409,18 +3409,18 @@ def get_columns(
         },
     },
 )
-def create_columns(
+def create_fields(
     request_fastapi: Request,
-    request: CreateColumnsRequest,
+    request: CreateFieldsRequest,
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
     context_dao: ContextDAO = Depends(),
 ):
     """
-    Creates one or more columns in a project. Columns are field definitions that can be used
-    in logs. This endpoint allows pre-defining columns before adding any log data.
+    Creates one or more fields in a project. Fields are field definitions that can be used
+    in logs. This endpoint allows pre-defining fields before adding any log data.
 
-    Each column can have an optional description. If a column already exists, its description
+    Each field can have an optional description. If a field already exists, its description
     will be updated.
     """
     # Validate project
@@ -3446,32 +3446,32 @@ def create_columns(
         is_versioned=False,
     )
 
-    # Create columns
+    # Create fields
     try:
-        field_type_dao.create_columns(
+        field_type_dao.create_fields(
             project_id=project_id,
             context_id=context_id,
-            columns=request.columns,
+            fields=request.fields,
         )
     except Exception as e:
         raise HTTPException(
             status_code=400,
-            detail=f"Failed to create columns: {str(e)}",
+            detail=f"Failed to create fields: {str(e)}",
         )
 
-    return {"info": "Columns created successfully."}
+    return {"info": "Fields created successfully."}
 
 
 @router.delete(
-    "/logs/columns",
+    "/logs/fields",
     responses={
         200: {
-            "description": "Columns deleted successfully",
+            "description": "Fields deleted successfully",
             "content": {
                 "application/json": {
                     "example": {
-                        "info": "Columns deleted successfully.",
-                        "deleted_columns": ["score", "response"],
+                        "info": "Fields deleted successfully.",
+                        "deleted_fields": ["score", "response"],
                     },
                 },
             },
@@ -3488,18 +3488,18 @@ def create_columns(
         },
     },
 )
-def delete_columns(
+def delete_fields(
     request_fastapi: Request,
-    request: DeleteColumnsRequest,
+    request: DeleteFieldsRequest,
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
     context_dao: ContextDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
-    Deletes one or more columns from a project. This will:
-    1. Delete all log entries with the specified column names
-    2. Delete the field type records for those columns
+    Deletes one or more fields from a project. This will:
+    1. Delete all log entries with the specified field names
+    2. Delete the field type records for those fields
 
     This operation cannot be undone, so use with caution.
     """
@@ -3534,22 +3534,22 @@ def delete_columns(
         .subquery(name="all_log_events"),
     )
 
-    deleted_columns = []
-    for column_name in request.columns:
+    deleted_fields = []
+    for field_name in request.fields:
         # Delete from base logs
         try:
             deleted_count = (
                 session.query(Log)
                 .filter(
                     Log.log_event_id.in_(all_log_events_subq),
-                    Log.key == column_name,
+                    Log.key == field_name,
                 )
                 .delete(synchronize_session=False)
             )
         except Exception as e:
             raise HTTPException(
                 status_code=500,
-                detail=f"Error deleting column '{column_name}' from logs: {str(e)}",
+                detail=f"Error deleting field '{field_name}' from logs: {str(e)}",
             )
 
         # Delete from derived logs
@@ -3558,37 +3558,37 @@ def delete_columns(
                 session.query(DerivedLog)
                 .filter(
                     DerivedLog.log_event_id.in_(all_log_events_subq),
-                    DerivedLog.key == column_name,
+                    DerivedLog.key == field_name,
                 )
                 .delete(synchronize_session=False)
             )
         except Exception as e:
             raise HTTPException(
                 status_code=500,
-                detail=f"Error deleting column '{column_name}' from derived logs: {str(e)}",
+                detail=f"Error deleting field '{field_name}' from derived logs: {str(e)}",
             )
 
         # Delete field type record
         try:
             field_type_dao.delete_field_type(
                 project_id=project_id,
-                field_name=column_name,
+                field_name=field_name,
                 context_id=context_id,
             )
-            deleted_columns.append(column_name)
+            deleted_fields.append(field_name)
         except Exception as e:
-            # Continue with other columns even if one fails
+            # Continue with other fields even if one fails
             continue
 
-    if not deleted_columns:
+    if not deleted_fields:
         return {
-            "info": "No columns were deleted. They may not exist or you don't have permission to delete them.",
-            "deleted_columns": [],
+            "info": "No fields were deleted. They may not exist or you don't have permission to delete them.",
+            "deleted_fields": [],
         }
 
     return {
-        "info": "Columns deleted successfully.",
-        "deleted_columns": deleted_columns,
+        "info": "Fields deleted successfully.",
+        "deleted_fields": deleted_fields,
     }
 
 
