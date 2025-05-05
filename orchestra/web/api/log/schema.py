@@ -108,10 +108,16 @@ class CreateDerivedEntriesConfig(BaseModel):
 
 
 class UpdateLogRequest(BaseModel):
-    ids: list[int] = Field(
-        description="List of log IDs to update with new or overriding entries.",
-        example=[123, 456, 789],
-        min_items=1,
+    logs: Union[List[int], Dict[str, Any]] = Field(
+        description='List of log IDs or a dict of filter arguments to select logs. Filter dicts are passed as key:value pairs (e.g. `{"status": "done", "user_id": 12}`).',
+        json_schema_extra={
+            "examples": [[123, 456, 789], {"status": "done", "user_id": 12}],
+        },
+    )
+    project: Optional[str] = Field(
+        default=None,
+        description="Name of the project. Required when using filter dict in `logs`. Omit when passing a list of IDs.",
+        example="eval-project",
     )
     context: Union[
         ContextCreateRequest,
@@ -123,7 +129,7 @@ class UpdateLogRequest(BaseModel):
         description="Optional context path to update for the logs. "
         "Can use '/' for nested contexts (e.g. 'training/batch1'). "
         "Can be a string (which will be interpreted with description=None and is_versioned=False) "
-        "or a ContextCreateRequest object.",
+        "or a ContextCreateRequest object. Required when using filter dict in `logs` if project is not provided.",
         json_schema_extra={
             "example": "experiment1/trial1",
         },
@@ -184,15 +190,17 @@ class DeleteLogEntryRequest(BaseModel):
         },
     )
     ids_and_fields: List[
-        Tuple[Union[int, List[int], None], Union[None, str, List[str]]]
+        Tuple[Union[int, List[int], Dict[str, Any], None], Union[None, str, List[str]]]
     ] = Field(
         description="List of tuples of log ID(s) and field(s) to delete, "
         "either as an individual item or a list of items. A log ID of None indicates "
-        "that the field should be deleted from all logs.",
+        "that the field should be deleted from all logs. Can also use a dict of filter arguments to select logs. "
+        "The filter dict should be a key:value pair where the key is the field to filter on and the value is the value to filter on.",
         example=[
             (123, "score"),
             ([456, 457], ["score", "response"]),
             ([458, 459, 460], "response"),
+            ({"score": "100"}, None),
             (None, "score"),
         ],
         min_items=1,
