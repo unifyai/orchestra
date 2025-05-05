@@ -112,9 +112,47 @@ def _get_tab(
     response_model=TabSchema,
     status_code=201,
     responses={
-        201: {"description": "Tab created successfully"},
-        404: {"description": "Interface not found"},
-        409: {"description": "Tab with this name already exists for this interface"},
+        201: {
+            "description": "Tab created successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "123",
+                        "interface_id": "456",
+                        "name": "my_tab",
+                        "visible": True,
+                        "active": True,
+                        "order": 1,
+                        "global_context": {},
+                        "color": "blue",
+                        "is_checkpoint": False,
+                        "tiles": [],
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "updated_at": "2024-01-01T12:00:00Z",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Interface not found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Interface not found. Please provide valid interface_id or project_id+interface_name.",
+                    },
+                },
+            },
+        },
+        409: {
+            "description": "Tab with this name already exists for this interface",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Tab with name my_tab already exists for this interface.",
+                    },
+                },
+            },
+        },
     },
 )
 def create_tab(
@@ -195,9 +233,56 @@ def create_tab(
     "/",
     response_model=TabSchema,
     responses={
-        200: {"description": "Tab details retrieved successfully"},
-        404: {"description": "Tab not found"},
-        400: {"description": "Missing required parameters"},
+        200: {
+            "description": "Tab details retrieved successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "123",
+                        "interface_id": "456",
+                        "name": "my_tab",
+                        "visible": True,
+                        "active": True,
+                        "order": 1,
+                        "global_context": {},
+                        "color": "blue",
+                        "is_checkpoint": False,
+                        "tiles": [
+                            {
+                                "id": "789",
+                                "tab_id": "123",
+                                "name": "my_tile",
+                                "type": "chart",
+                                "config": {},
+                                "is_checkpoint": False,
+                                "created_at": "2024-01-01T12:00:00Z",
+                                "updated_at": "2024-01-01T12:00:00Z",
+                            },
+                        ],
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "updated_at": "2024-01-01T12:00:00Z",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Tab not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Tab with ID 123 not found."},
+                },
+            },
+        },
+        400: {
+            "description": "Missing required parameters",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Either tab_id or both interface_id and name must be provided.",
+                    },
+                },
+            },
+        },
     },
 )
 def get_tab(
@@ -236,8 +321,51 @@ def get_tab(
     "/list",
     response_model=List[TabSchema],
     responses={
-        200: {"description": "Tabs list retrieved successfully"},
-        404: {"description": "Interface not found"},
+        200: {
+            "description": "Tabs list retrieved successfully",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {
+                            "id": "123",
+                            "interface_id": "456",
+                            "name": "my_tab_1",
+                            "visible": True,
+                            "active": True,
+                            "order": 1,
+                            "global_context": {},
+                            "color": "blue",
+                            "is_checkpoint": False,
+                            "tiles": [],
+                            "created_at": "2024-01-01T12:00:00Z",
+                            "updated_at": "2024-01-01T12:00:00Z",
+                        },
+                        {
+                            "id": "124",
+                            "interface_id": "456",
+                            "name": "my_tab_2",
+                            "visible": True,
+                            "active": False,
+                            "order": 2,
+                            "global_context": {},
+                            "color": "green",
+                            "is_checkpoint": False,
+                            "tiles": [],
+                            "created_at": "2024-01-01T12:00:00Z",
+                            "updated_at": "2024-01-01T12:00:00Z",
+                        },
+                    ],
+                },
+            },
+        },
+        404: {
+            "description": "Interface not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Interface with ID 456 not found."},
+                },
+            },
+        },
     },
 )
 def list_tabs(
@@ -283,9 +411,45 @@ def list_tabs(
     "/",
     response_model=TabSchema,
     responses={
-        200: {"description": "Tab updated successfully"},
-        404: {"description": "Tab not found"},
-        400: {"description": "Missing required parameters"},
+        200: {
+            "description": "Tab updated successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "123",
+                        "interface_id": "456",
+                        "name": "updated_tab_name",
+                        "visible": True,
+                        "active": True,
+                        "order": 1,
+                        "global_context": {},
+                        "color": "red",
+                        "is_checkpoint": False,
+                        "tiles": [],
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "updated_at": "2024-01-01T12:30:00Z",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Tab not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Tab with ID 123 not found."},
+                },
+            },
+        },
+        400: {
+            "description": "Missing required parameters",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Either tab_id or both interface_id and name must be provided.",
+                    },
+                },
+            },
+        },
     },
 )
 def update_tab(
@@ -341,9 +505,53 @@ def update_tab(
     "/checkpoint",
     response_model=TabSchema,
     responses={
-        200: {"description": "Tab checkpoint created successfully"},
-        404: {"description": "Tab not found"},
-        400: {"description": "Missing required parameters"},
+        200: {
+            "description": "Tab checkpoint created successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "789",
+                        "interface_id": "456",
+                        "name": "my_tab",
+                        "visible": True,
+                        "active": True,
+                        "order": 1,
+                        "global_context": {},
+                        "color": "blue",
+                        "is_checkpoint": True,
+                        "tiles": [],
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "updated_at": "2024-01-01T12:30:00Z",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Tab not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Tab with ID 123 not found."},
+                },
+            },
+        },
+        400: {
+            "description": "Missing required parameters",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Either tab_id or both interface_id and name must be provided.",
+                    },
+                },
+            },
+        },
+        500: {
+            "description": "Failed to create checkpoint",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Failed to create tab checkpoint."},
+                },
+            },
+        },
     },
 )
 def create_tab_checkpoint(
@@ -433,9 +641,40 @@ def create_tab_checkpoint(
     "/",
     status_code=204,
     responses={
-        204: {"description": "Tab deleted successfully"},
-        404: {"description": "Tab not found"},
-        400: {"description": "Missing required parameters"},
+        204: {
+            "description": "Tab deleted successfully",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Tab deleted successfully"},
+                },
+            },
+        },
+        404: {
+            "description": "Tab not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Tab with ID 123 not found."},
+                },
+            },
+        },
+        400: {
+            "description": "Missing required parameters",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Either tab_id or both interface_id and name must be provided.",
+                    },
+                },
+            },
+        },
+        500: {
+            "description": "Failed to delete tab",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Failed to delete tab."},
+                },
+            },
+        },
     },
 )
 def delete_tab(
@@ -480,9 +719,45 @@ def delete_tab(
     "/checkpoint",
     response_model=TabSchema,
     responses={
-        200: {"description": "Tab checkpoint retrieved successfully"},
-        404: {"description": "Tab or checkpoint not found"},
-        400: {"description": "Missing required parameters"},
+        200: {
+            "description": "Tab checkpoint retrieved successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "789",
+                        "interface_id": "456",
+                        "name": "my_tab",
+                        "visible": True,
+                        "active": True,
+                        "order": 1,
+                        "global_context": {},
+                        "color": "blue",
+                        "is_checkpoint": True,
+                        "tiles": [],
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "updated_at": "2024-01-01T12:30:00Z",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Tab or checkpoint not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "No checkpoint found for the specified tab."},
+                },
+            },
+        },
+        400: {
+            "description": "Missing required parameters",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Either tab_id or both interface_id and name must be provided.",
+                    },
+                },
+            },
+        },
     },
 )
 def get_tab_checkpoint(
