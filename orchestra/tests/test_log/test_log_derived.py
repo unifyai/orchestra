@@ -430,7 +430,7 @@ async def test_update_logs_and_derived_logs_are_updated(client: AsyncClient):
 
     # Update base logs
     update_payload = {
-        "ids": base_log_ids,
+        "logs": base_log_ids,
         "entries": [{"a": 10}, {"a": 20}],
         "overwrite": True,
     }
