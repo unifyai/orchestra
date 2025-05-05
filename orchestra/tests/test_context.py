@@ -412,7 +412,7 @@ async def test_get_fields_no_context(client: AsyncClient):
 
     # Get fields with context
     response = await client.get(
-        f"/v0/logs/columns?project={project_name}&context={context_name}",
+        f"/v0/logs/fields?project={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -422,7 +422,7 @@ async def test_get_fields_no_context(client: AsyncClient):
 
     # Get fields without context (should return 0 fields)
     response = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -762,7 +762,7 @@ async def test_versioning_constraints(client: AsyncClient):
 
     # Verify the field is mutable despite explicit setting
     fields_response = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         params={"context": "versioned_context"},
         headers=HEADERS,
     )
@@ -800,7 +800,7 @@ async def test_versioning_constraints(client: AsyncClient):
 
     # Verify the field is immutable as specified
     fields_response = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+        f"/v0/logs/fields?project={project_name}",
         params={"context": "unversioned_context"},
         headers=HEADERS,
     )
@@ -1103,7 +1103,7 @@ async def test_implicit_field_creation(client: AsyncClient):
 
     # Check that field types were created for the context
     response = await client.get(
-        f"/v0/logs/columns?project={project_name}&context={context_name}",
+        f"/v0/logs/fields?project={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1137,7 +1137,7 @@ async def test_implicit_field_creation(client: AsyncClient):
 
     # Check that only new field types were created
     response = await client.get(
-        f"/v0/logs/columns?project={project_name}&context={context_name}",
+        f"/v0/logs/fields?project={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
