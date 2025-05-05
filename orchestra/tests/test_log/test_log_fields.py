@@ -422,10 +422,10 @@ async def test_rename_field_preserves_order(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_create_columns_happy_path(client: AsyncClient):
-    """Test creating columns with explicit and null types"""
-    project_name = "test-create-columns"
-    context_name = "columns-context"
+async def test_create_fields_happy_path(client: AsyncClient):
+    """Test creating fields with explicit and null types"""
+    project_name = "test-create-fields"
+    context_name = "fields-context"
 
     # Setup project and context
     await client.post(
@@ -439,46 +439,46 @@ async def test_create_columns_happy_path(client: AsyncClient):
         headers=HEADERS,
     )
 
-    # Create columns with explicit and null types
-    columns_data = {
+    # Create fields with explicit and null types
+    fields_data = {
         "project": project_name,
         "context": context_name,
-        "columns": {
+        "fields": {
             "accuracy": "float",  # Explicit type
             "value": None,  # Null type (auto-detect)
         },
     }
     response = await client.post(
-        f"/v0/logs/columns",
-        json=columns_data,
+        f"/v0/logs/fields",
+        json=fields_data,
         headers=HEADERS,
     )
     assert response.status_code == 200
-    assert "Columns created successfully" in response.json()["info"]
+    assert "Fields created successfully" in response.json()["info"]
 
-    # Verify the columns were created with correct types
+    # Verify the fields were created with correct types
     response = await client.get(
-        f"/v0/logs/columns?project={project_name}&context={context_name}",
+        f"/v0/logs/fields?project={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
-    columns = response.json()
+    fields = response.json()
 
-    # Check that both columns exist
-    assert "accuracy" in columns
-    assert "value" in columns
+    # Check that both fields exist
+    assert "accuracy" in fields
+    assert "value" in fields
 
     # Check that the explicit type was set correctly
-    assert columns["accuracy"]["data_type"] == "float"
+    assert fields["accuracy"]["data_type"] == "float"
 
     # Check that the null type was set to NoneType
-    assert columns["value"]["data_type"] == "NoneType"
+    assert fields["value"]["data_type"] == "NoneType"
 
 
 @pytest.mark.anyio
-async def test_create_columns_invalid_type(client: AsyncClient):
-    """Test creating columns with an invalid type"""
-    project_name = "test-invalid-column-type"
+async def test_create_fields_invalid_type(client: AsyncClient):
+    """Test creating fields with an invalid type"""
+    project_name = "test-invalid-field-type"
     context_name = "invalid-type-context"
 
     # Setup project and context
@@ -491,20 +491,20 @@ async def test_create_columns_invalid_type(client: AsyncClient):
         f"/v0/project/{project_name}/contexts",
         json={
             "name": context_name,
-            "description": "Test context for invalid column type",
+            "description": "Test context for invalid field type",
         },
         headers=HEADERS,
     )
 
-    # Try to create a column with an invalid type
-    columns_data = {
+    # Try to create a field with an invalid type
+    fields_data = {
         "project": project_name,
         "context": context_name,
-        "columns": {"badcol": "string"},  # Invalid type (should be str)
+        "fields": {"badfield": "string"},  # Invalid type (should be str)
     }
     response = await client.post(
-        f"/v0/logs/columns",
-        json=columns_data,
+        f"/v0/logs/fields",
+        json=fields_data,
         headers=HEADERS,
     )
     assert response.status_code == 400
@@ -512,9 +512,9 @@ async def test_create_columns_invalid_type(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_columns_endpoint(client: AsyncClient):
-    """Test deleting columns using the DELETE /v0/logs/columns endpoint"""
-    project_name = "test-delete-columns"
+async def test_delete_fields_endpoint(client: AsyncClient):
+    """Test deleting fields using the DELETE /v0/logs/fields endpoint"""
+    project_name = "test-delete-fields"
 
     # Create a project
     await _create_project(client, project_name)
@@ -549,35 +549,35 @@ async def test_delete_columns_endpoint(client: AsyncClient):
     )
     assert response2.status_code == 200
 
-    # Verify the columns exist
-    columns_response = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+    # Verify the fields exist
+    fields_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
-    assert columns_response.status_code == 200
-    columns = columns_response.json()
-    assert "col1" in columns
-    assert "col2" in columns
+    assert fields_response.status_code == 200
+    fields = fields_response.json()
+    assert "col1" in fields
+    assert "col2" in fields
 
     # Delete the columns
     delete_response = await client.request(
         "DELETE",
-        "/v0/logs/columns",
-        json={"project": project_name, "columns": ["col1", "col2"]},
+        "/v0/logs/fields",
+        json={"project": project_name, "fields": ["col1", "col2"]},
         headers=HEADERS,
     )
     assert delete_response.status_code == 200
-    assert delete_response.json()["deleted_columns"] == ["col1", "col2"]
+    assert delete_response.json()["deleted_fields"] == ["col1", "col2"]
 
     # Verify the columns no longer exist
-    columns_response_after = await client.get(
-        f"/v0/logs/columns?project={project_name}",
+    fields_response_after = await client.get(
+        f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
-    assert columns_response_after.status_code == 200
-    columns_after = columns_response_after.json()
-    assert "col1" not in columns_after
-    assert "col2" not in columns_after
+    assert fields_response_after.status_code == 200
+    fields_after = fields_response_after.json()
+    assert "col1" not in fields_after
+    assert "col2" not in fields_after
 
     # Verify the columns are removed from all logs
     logs_response = await client.get(
