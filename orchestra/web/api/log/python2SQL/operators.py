@@ -15,10 +15,12 @@ from sqlalchemy import (
     cast,
     func,
     literal,
+    literal_column,
     not_,
     or_,
     select,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
@@ -39,6 +41,7 @@ __all__ = [
     "_handle_comparison_operator",
     "_handle_membership_operator",
     "_handle_index_operator",
+    "_handle_slice_operator",
 ]
 
 # Helper function for logical operators (and, or, not)
@@ -444,24 +447,39 @@ def _handle_comparison_operator(
     elif lhs_is_sub:
         lval, lval_type = _select_value(lhs, session)
         rval, rval_type = _select_value(rhs, session)
-        lval = cast_expr(lval, lval_type, rval_type)
-        rhs = cast_expr(rhs, rval_type, lval_type)
-        if operand == "==":
-            expr = lval == rhs
-        elif operand == "!=":
-            expr = lval != rhs
-        elif operand == "<":
-            expr = lval < rhs
-        elif operand == ">":
-            expr = lval > rhs
-        elif operand == "<=":
-            expr = lval <= rhs
-        elif operand == ">=":
-            expr = lval >= rhs
-        elif operand == "is":
-            expr = lval.is_(rval)
-        elif operand == "is not":
-            expr = lval.isnot(rval)
+
+        # Special handling for JSONB array comparison with Python list literals
+        if (
+            operand in ("==", "!=")
+            and lval_type in ("list", "dict")
+            and isinstance(rval, (list, dict))
+        ):
+            # Convert Python list/dict to JSONB using json.dumps and cast
+            rhs_jsonb = cast(literal(json.dumps(rval)), JSONB)
+            if operand == "==":
+                expr = lval == rhs_jsonb
+            else:
+                expr = lval != rhs_jsonb
+        else:
+            # Standard handling for other types
+            lval = cast_expr(lval, lval_type, rval_type)
+            rhs = cast_expr(rhs, rval_type, lval_type)
+            if operand == "==":
+                expr = lval == rhs
+            elif operand == "!=":
+                expr = lval != rhs
+            elif operand == "<":
+                expr = lval < rhs
+            elif operand == ">":
+                expr = lval > rhs
+            elif operand == "<=":
+                expr = lval <= rhs
+            elif operand == ">=":
+                expr = lval >= rhs
+            elif operand == "is":
+                expr = lval.is_(rval)
+            elif operand == "is not":
+                expr = lval.isnot(rval)
         select_cols = [lhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in lhs.c.keys():
             select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
@@ -849,4 +867,104 @@ def _handle_index_operator(
         else:
             raise ValueError(
                 "INDEX operator expects LHS to be a subquery (JSON) or a python list/dict literal.",
+            )
+
+
+def _handle_slice_operator(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+):
+    """
+    Handle the SLICE operator in a filter expression.
+
+    Args:
+        filter_dict (dict): The filter expression dictionary containing "lhs" and "rhs".
+        log_event_alias: The alias for the log event.
+        session: The database session.
+
+    Returns:
+        Subquery: A subquery that extracts the substring from the LHS string or subarray from the LHS list
+        using the slice bounds.
+    """
+    lhs_node = filter_dict.get("lhs")
+    rhs_bounds = filter_dict.get("rhs")
+
+    # Unpack the slice bounds
+    lower, upper = rhs_bounds
+
+    lhs_expr = build_sql_query(
+        lhs_node,
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+    )
+
+    if isinstance(lhs_expr, Subquery):
+        lhs_valcol, lhs_type = _select_value(lhs_expr, session)
+
+        select_cols = [lhs_expr.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in lhs_expr.c.keys():
+            select_cols.append(lhs_expr.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in lhs_expr.c.keys():
+            select_cols.append(lhs_expr.c.__parent_idx__.label("__parent_idx__"))
+
+        if lhs_type == "str":
+            # PostgreSQL is 1-indexed, so we need to adjust the lower bound
+            start = lower + 1
+            length = upper - lower
+
+            # Use PostgreSQL's substring function to extract the slice
+            extracted = func.substring(
+                func.replace(cast(lhs_valcol, String), '"', ""),
+                literal(start),
+                literal(length),
+            )
+
+            select_cols.extend(
+                [
+                    extracted.label("value"),
+                    literal("str").label("inferred_type"),
+                ],
+            )
+        elif lhs_type == "list":
+            # For JSONB arrays, use jsonb_path_query_array to extract the slice
+            # JSON path is 0-indexed, so we use the bounds directly
+            start = lower
+            end = upper - 1  # End is inclusive in JSON path
+
+            # Use PostgreSQL's jsonb_path_query_array function with JSON path expression
+            slice_expr = func.jsonb_path_query_array(
+                lhs_valcol,
+                literal_column(f"'$[{start} to {end}]'"),
+            ).label("value")
+
+            select_cols.extend(
+                [
+                    slice_expr,
+                    literal("list").label("inferred_type"),
+                ],
+            )
+        else:
+            raise ValueError(
+                "Slice operation is only supported on string or list values",
+            )
+
+        return select(*select_cols).select_from(lhs_expr).subquery()
+    else:
+        # If LHS is a Python literal, perform the slice operation in Python
+        if isinstance(lhs_expr, str):
+            extracted_value = lhs_expr[lower:upper]
+            return literal(extracted_value)
+        elif isinstance(lhs_expr, list):
+            extracted_value = lhs_expr[lower:upper]
+            return literal(extracted_value)
+        else:
+            raise ValueError(
+                "SLICE operator expects LHS to be a subquery (string or list) or a Python string/list literal.",
             )
