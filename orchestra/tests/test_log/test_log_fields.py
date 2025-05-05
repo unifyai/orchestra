@@ -510,3 +510,84 @@ async def test_create_columns_invalid_type(client: AsyncClient):
     assert response.status_code == 400
     assert "Invalid field type" in response.json()["detail"]
 
+
+@pytest.mark.anyio
+async def test_delete_columns_endpoint(client: AsyncClient):
+    """Test deleting columns using the DELETE /v0/logs/columns endpoint"""
+    project_name = "test-delete-columns"
+
+    # Create a project
+    await _create_project(client, project_name)
+
+    # Create first log with columns col1 and col2
+    response1 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "col1": 1,
+            "col2": 2,
+            "explicit_types": {
+                "col1": {"type": "int", "mutable": True},
+                "col2": {"type": "int", "mutable": True},
+            },
+        },
+    )
+    assert response1.status_code == 200
+
+    # Create second log with the same columns
+    response2 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "col1": 10,
+            "col2": 20,
+            "explicit_types": {
+                "col1": {"type": "int", "mutable": True},
+                "col2": {"type": "int", "mutable": True},
+            },
+        },
+    )
+    assert response2.status_code == 200
+
+    # Verify the columns exist
+    columns_response = await client.get(
+        f"/v0/logs/columns?project={project_name}",
+        headers=HEADERS,
+    )
+    assert columns_response.status_code == 200
+    columns = columns_response.json()
+    assert "col1" in columns
+    assert "col2" in columns
+
+    # Delete the columns
+    delete_response = await client.request(
+        "DELETE",
+        "/v0/logs/columns",
+        json={"project": project_name, "columns": ["col1", "col2"]},
+        headers=HEADERS,
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.json()["deleted_columns"] == ["col1", "col2"]
+
+    # Verify the columns no longer exist
+    columns_response_after = await client.get(
+        f"/v0/logs/columns?project={project_name}",
+        headers=HEADERS,
+    )
+    assert columns_response_after.status_code == 200
+    columns_after = columns_response_after.json()
+    assert "col1" not in columns_after
+    assert "col2" not in columns_after
+
+    # Verify the columns are removed from all logs
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+
+    # Check each log to ensure the columns are gone
+    for log in logs:
+        assert "col1" not in log["entries"]
+        assert "col2" not in log["entries"]
