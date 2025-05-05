@@ -285,11 +285,12 @@ def _delete_log_fields_from_logs(
     request = Request(
         "DELETE",
         str(client.base_url) + f"/v0/logs",
-        params={
+        json={
+            "ids_and_fields": fields,
+            "project": project_name,
             "delete_empty_logs": delete_empty_logs,
             "delete_empty_columns": delete_empty_columns,
         },
-        json={"ids_and_fields": fields, "project": project_name},
         headers=_headers,
     )
     return client.send(request)
