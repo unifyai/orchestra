@@ -47,7 +47,7 @@ from orchestra.web.api.log.schema import (
     DeleteLogEntryRequest,
     GetLogsMetricRequest,
     JoinLogsRequest,
-    RenameFieldRequest,
+    RenameColumnRequest,
     UpdateDerivedEntriesConfig,
     UpdateLogRequest,
 )
@@ -1372,6 +1372,11 @@ def delete_logs(
         "the field deletion.",
         example=True,
     ),
+    delete_empty_columns: bool = Query(
+        default=True,
+        description="Whether to delete columns that have no data after log deletion.",
+        example=True,
+    ),
     log_event_dao: LogEventDAO = Depends(),
     context_dao: ContextDAO = Depends(),
     project_dao: ProjectDAO = Depends(),
@@ -1743,7 +1748,7 @@ def delete_logs(
         )
 
     # Cascading deletion: check if any deleted fields no longer exist in any logs
-    if deleted_fields:
+    if deleted_fields and delete_empty_columns:
         # Get all fields that still exist in any logs with two efficient queries
         existing_base_fields = (
             session.query(Log.key)
@@ -2773,14 +2778,14 @@ def get_log_groups(
 
 
 @router.post(
-    "/logs/rename_field",
+    "/logs/rename_column",
     responses={
         200: {
-            "description": "Field renamed successfully",
+            "description": "Column renamed successfully",
             "content": {
                 "application/json": {
                     "example": {
-                        "info": "Field renamed successfully from 'old_name' to 'new_name'",
+                        "info": "Column renamed successfully from 'old_name' to 'new_name'",
                     },
                 },
             },
@@ -2790,7 +2795,7 @@ def get_log_groups(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Invalid field name or field already exists",
+                        "detail": "Invalid column name or column already exists",
                     },
                 },
             },
@@ -2800,25 +2805,25 @@ def get_log_groups(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Project or field not found",
+                        "detail": "Project or column not found",
                     },
                 },
             },
         },
     },
 )
-def rename_field(
+def rename_column(
     request_fastapi: Request,
-    request: RenameFieldRequest,
+    request: RenameColumnRequest,
     project_dao: ProjectDAO = Depends(),
     context_dao: ContextDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
     log_dao: LogDAO = Depends(),
 ):
     """
-    Renames a field across all logs in a project. This includes:
+    Renames a column across all logs in a project. This includes:
     - Updating the field type record
-    - Renaming the field in all logs (regular and history)
+    - Renaming the column in all logs (regular and history)
 
     The operation is atomic - either all renames succeed or none do.
     """
@@ -3070,14 +3075,14 @@ def join_logs(
 
 
 @router.get(
-    "/logs/fields",
+    "/logs/columns",
     responses={
         200: {
             "description": "Successful Response",
             "content": {
                 "application/json": {
                     "example": {
-                        "field1": {
+                        "column1": {
                             "data_type": "string",
                             "field_type": "entry",
                             "mutable": "true",
@@ -3100,15 +3105,15 @@ def join_logs(
         },
     },
 )
-def get_fields(
+def get_columns(
     request_fastapi: Request,
     project: str = Query(
-        description="Name of the project to get fields and their types for.",
+        description="Name of the project to get columns and their types for.",
         example="eval-project",
     ),
     context: Optional[str] = Query(
         "",
-        description="Optional context name to filter field types",
+        description="Optional context name to filter column types",
         example="training",
     ),
     project_dao: ProjectDAO = Depends(),
@@ -3117,14 +3122,14 @@ def get_fields(
     session=Depends(get_db_session),
 ):
     """
-    Returns a dictionary of field names and their types for the specified project.
-    If a context is provided, returns only fields associated with that context.
+    Returns a dictionary of column names and their types for the specified project.
+    If a context is provided, returns only columns associated with that context.
 
-    Each field entry contains:
-    - data_type: The data type of the field (int, str, etc)
+    Each column entry contains:
+    - data_type: The data type of the column (int, str, etc)
     - field_type: Whether it's an entry, param, or derived_entry
-    - mutable: Whether the field can be modified
-    - created_at: When the field was first created
+    - mutable: Whether the column can be modified
+    - created_at: When the column was first created
     - artifacts: For derived entries, contains the equation
     """
     try:
