@@ -413,18 +413,24 @@ def prepare_resolved_ids(
         },
     },
 )
-def create_derived_entry(
+def create_from_logs(
     request_fastapi: Request,
     body: CreateDerivedEntriesConfig,
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
     context_dao: ContextDAO = Depends(),
     derived_log_dao: DerivedLogDAO = Depends(),
+    log_dao: LogDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
-    Creates one or more derived-log entries based on `body.equation` and `body.referenced_logs`.
-    Eagerly computes each derived value and stores it in DerivedLog.value.
+    Creates one or more entries based on `body.equation` and `body.referenced_logs`.
+
+    When body.derived=True (default):
+      Eagerly computes each derived value and stores it in DerivedLog.value.
+
+    When body.derived=False:
+      Computes values and stores them directly in the base logs as regular entries.
 
     The context parameter can be:
     - A string: Uses the string as the context name with default values (description=None, is_versioned=False)
@@ -465,17 +471,7 @@ def create_derived_entry(
         # get the default context
         context_id = context_dao.get_or_create(project_obj.id, name="")
 
-    # Check if this is a filter-based derived log
-    is_filter_based = False
-    filter_expression = None
-    if isinstance(body.referenced_logs, dict):
-        # Check if any value in referenced_logs is a dict with filter_expr
-        for key, value in body.referenced_logs.items():
-            if isinstance(value, dict) and "filter_expr" in value:
-                is_filter_based = True
-                filter_expression = body.referenced_logs
-                break
-
+    # Resolve IDs for both derived and non-derived paths
     resolved_ids = prepare_resolved_ids(
         equation=body.equation,
         referenced_logs=body.referenced_logs,
@@ -490,131 +486,228 @@ def create_derived_entry(
     # If none found, short‐circuit
     if not any(len(v) for v in resolved_ids.values()):
         return {"info": "No references found. Nothing to create."}
-    created_derived_ids = []
-    try:
 
-        # 5) Build a filter_dict that references those base logs. Then compute
-        filter_expr, alias_to_key_map = _substitute_placeholders(
-            body.equation,
-            resolved_ids,
-        )
-        field_types = field_type_dao.get_field_types(
-            project_obj.id,
-            context_id=context_id,
-        )
-        filter_dict = str_filter_exp_to_dict(
-            filter_expr,
-            field_names=list(field_types.keys()),
-        )
-        resolved_ids_dict = {}
-        for key, ids in resolved_ids.items():
-            resolved_ids_dict.setdefault(alias_to_key_map[key], []).extend(ids)
-        # get the filtered log events
-        log_event_ids_subq = (
-            session.query(LogEvent.id)
-            .filter(project_obj.id == LogEvent.project_id)
-            .subquery(name="log_event_ids_subq")
-        )
-        computed_values = _compute_expression(
-            filter_dict,
-            LogEvent,
-            session,
-            log_event_ids=log_event_ids_subq,
-        )
+    # Branch based on whether we're creating derived logs or static entries
+    if not body.derived:
+        # Create static entries in base logs
+        try:
+            # 1) Substitute placeholders and prepare for computation
+            filter_expr, alias_to_key_map = _substitute_placeholders(
+                body.equation,
+                resolved_ids,
+            )
+            field_types = field_type_dao.get_field_types(
+                project_obj.id,
+                context_id=context_id,
+            )
+            filter_dict = str_filter_exp_to_dict(
+                filter_expr,
+                field_names=list(field_types.keys()),
+            )
 
-        # Create a new derived log entry for each computed value
-        new_derived_logs = []
-        placeholders = _extract_placeholders(body.equation)
-        referenced_logs = {
-            ph.split(":")[1]: v
-            for ph in placeholders
-            for k, v in body.referenced_logs.items()
-            if k in ph
-        }
-        # Iterate over the computed values and resolved IDs
-        non_null_value = None
-        for i, (_, value) in enumerate(computed_values):
-            # Get all log IDs involved in this specific computation
-            involved_log_ids = list(set(ids[i] for ids in resolved_ids.values()))
+            # 2) Get the filtered log events
+            log_event_ids_subq = (
+                session.query(LogEvent.id)
+                .filter(project_obj.id == LogEvent.project_id)
+                .subquery(name="log_event_ids_subq")
+            )
 
-            # Create a derived entry for each log ID involved in this computation
-            for log_event_id in involved_log_ids:
-                val = json.loads(json.dumps(value, cls=CustomEncoder))
-                non_null_val = val if val is not None else non_null_value
-                inferred_type = LogDAO.infer_type("", non_null_val)
-                new_derived_logs.append(
-                    DerivedLog(
-                        log_event_id=log_event_id,
+            # 3) Compute values
+            computed_values = _compute_expression(
+                filter_dict,
+                LogEvent,
+                session,
+                log_event_ids=log_event_ids_subq,
+            )
+
+            # 4) Prepare updates for bulk_update
+            updates = []
+            non_null_value = None
+            updated_log_ids = []
+
+            for i, (_, value) in enumerate(computed_values):
+                # Get all log IDs involved in this specific computation
+                involved_log_ids = list(set(ids[i] for ids in resolved_ids.values()))
+                updated_log_ids.extend(involved_log_ids)
+
+                # Create an update entry for each log ID
+                for log_event_id in involved_log_ids:
+                    val = json.loads(json.dumps(value, cls=CustomEncoder))
+                    non_null_val = val if val is not None else non_null_value
+
+                    updates.append(
+                        {
+                            "log_event_id": log_event_id,
+                            "key": body.key,
+                            "value": val,
+                            "context_id": context_id,
+                            "overwrite": True,
+                        },
+                    )
+
+            # 5) Perform bulk update
+            if updates:
+                log_dao.bulk_update(updates)
+
+                # 6) Create or update field type record
+                field_type_dao.create_field_type_if_absent(
+                    project_id=project_obj.id,
+                    field_name=body.key,
+                    value=non_null_val,
+                    field_category="entry",
+                    context_id=context_id,
+                )
+
+                session.commit()
+
+                return {
+                    "info": f"Created {len(updates)} static entries with key='{body.key}'.",
+                }
+            else:
+                return {"info": "No entries created."}
+
+        except Exception as e:
+            session.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to create static entries with key='{body.key}'. Error: {e}",
+            )
+    else:
+        # Original derived log creation logic
+        created_derived_ids = []
+        try:
+            # Check if this is a filter-based derived log
+            is_filter_based = False
+            filter_expression = None
+            if isinstance(body.referenced_logs, dict):
+                # Check if any value in referenced_logs is a dict with filter_expr
+                for key, value in body.referenced_logs.items():
+                    if isinstance(value, dict) and "filter_expr" in value:
+                        is_filter_based = True
+                        filter_expression = body.referenced_logs
+                        break
+
+            # 5) Build a filter_dict that references those base logs. Then compute
+            filter_expr, alias_to_key_map = _substitute_placeholders(
+                body.equation,
+                resolved_ids,
+            )
+            field_types = field_type_dao.get_field_types(
+                project_obj.id,
+                context_id=context_id,
+            )
+            filter_dict = str_filter_exp_to_dict(
+                filter_expr,
+                field_names=list(field_types.keys()),
+            )
+            resolved_ids_dict = {}
+            for key, ids in resolved_ids.items():
+                resolved_ids_dict.setdefault(alias_to_key_map[key], []).extend(ids)
+            # get the filtered log events
+            log_event_ids_subq = (
+                session.query(LogEvent.id)
+                .filter(project_obj.id == LogEvent.project_id)
+                .subquery(name="log_event_ids_subq")
+            )
+            computed_values = _compute_expression(
+                filter_dict,
+                LogEvent,
+                session,
+                log_event_ids=log_event_ids_subq,
+            )
+
+            # Create a new derived log entry for each computed value
+            new_derived_logs = []
+            placeholders = _extract_placeholders(body.equation)
+            referenced_logs = {
+                ph.split(":")[1]: v
+                for ph in placeholders
+                for k, v in body.referenced_logs.items()
+                if k in ph
+            }
+            # Iterate over the computed values and resolved IDs
+            non_null_value = None
+            for i, (_, value) in enumerate(computed_values):
+                # Get all log IDs involved in this specific computation
+                involved_log_ids = list(set(ids[i] for ids in resolved_ids.values()))
+
+                # Create a derived entry for each log ID involved in this computation
+                for log_event_id in involved_log_ids:
+                    val = json.loads(json.dumps(value, cls=CustomEncoder))
+                    non_null_val = val if val is not None else non_null_value
+                    inferred_type = LogDAO.infer_type("", non_null_val)
+                    new_derived_logs.append(
+                        DerivedLog(
+                            log_event_id=log_event_id,
+                            key=body.key,
+                            equation=body.equation,
+                            referenced_logs=referenced_logs,
+                            value=val,
+                            inferred_type=inferred_type,
+                            created_at=datetime.now(timezone.utc),
+                            updated_at=datetime.now(timezone.utc),
+                        ),
+                    )
+
+            # Bulk insert all new derived logs in one go
+            session.bulk_save_objects(new_derived_logs)
+
+            # If this is a filter-based derived log, create an ActiveDerivedLog
+            if is_filter_based:
+                # Check if a template already exists for this project and key
+                existing_template = (
+                    session.query(ActiveDerivedLog)
+                    .filter(
+                        ActiveDerivedLog.project_id == project_obj.id,
+                        ActiveDerivedLog.key == body.key,
+                    )
+                    .first()
+                )
+
+                if not existing_template:
+                    # Create a new template
+                    template = ActiveDerivedLog(
+                        project_id=project_obj.id,
+                        context_id=context_id,
                         key=body.key,
                         equation=body.equation,
                         referenced_logs=referenced_logs,
-                        value=val,
+                        filter_expression=filter_expression,
                         inferred_type=inferred_type,
+                        is_active=True,
                         created_at=datetime.now(timezone.utc),
                         updated_at=datetime.now(timezone.utc),
-                    ),
-                )
+                    )
+                    session.add(template)
+                else:
+                    # Update existing template
+                    existing_template.equation = body.equation
+                    existing_template.referenced_logs = referenced_logs
+                    existing_template.filter_expression = filter_expression
+                    existing_template.inferred_type = inferred_type
+                    existing_template.is_active = True
+                    existing_template.updated_at = datetime.now(timezone.utc)
 
-        # Bulk insert all new derived logs in one go
-        session.bulk_save_objects(new_derived_logs)
+            session.commit()
 
-        # If this is a filter-based derived log, create an ActiveDerivedLog
-        if is_filter_based:
-            # Check if a template already exists for this project and key
-            existing_template = (
-                session.query(ActiveDerivedLog)
-                .filter(
-                    ActiveDerivedLog.project_id == project_obj.id,
-                    ActiveDerivedLog.key == body.key,
-                )
-                .first()
+            # Create or update field type record for derived entry
+            field_type_dao.create_field_type_if_absent(
+                project_id=project_obj.id,
+                field_name=body.key,
+                value=non_null_val,
+                field_category="derived_entry",
+                context_id=context_id,
             )
 
-            if not existing_template:
-                # Create a new template
-                template = ActiveDerivedLog(
-                    project_id=project_obj.id,
-                    context_id=context_id,
-                    key=body.key,
-                    equation=body.equation,
-                    referenced_logs=referenced_logs,
-                    filter_expression=filter_expression,
-                    inferred_type=inferred_type,
-                    is_active=True,
-                    created_at=datetime.now(timezone.utc),
-                    updated_at=datetime.now(timezone.utc),
-                )
-                session.add(template)
-            else:
-                # Update existing template
-                existing_template.equation = body.equation
-                existing_template.referenced_logs = referenced_logs
-                existing_template.filter_expression = filter_expression
-                existing_template.inferred_type = inferred_type
-                existing_template.is_active = True
-                existing_template.updated_at = datetime.now(timezone.utc)
-
-        session.commit()
-
-        # Create or update field type record for derived entry
-        field_type_dao.create_field_type_if_absent(
-            project_id=project_obj.id,
-            field_name=body.key,
-            value=non_null_val,
-            field_category="derived_entry",
-            context_id=context_id,
-        )
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create derived logs with key='{body.key}'. Error: {e}",
-        )
-    created_derived_ids = [log.id for log in new_derived_logs]
-    return {
-        "info": f"Created {len(created_derived_ids)} derived logs with key='{body.key}'.",
-        "derived_log_ids": created_derived_ids,
-    }
+        except Exception as e:
+            session.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to create derived logs with key='{body.key}'. Error: {e}",
+            )
+        return {
+            "info": f"Created {len(created_derived_ids)} derived logs with key='{body.key}'.",
+        }
 
 
 @router.put(
