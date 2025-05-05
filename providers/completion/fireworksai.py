@@ -78,6 +78,16 @@ supported_models = {
         "context_window": 65536,
         "cost": {"prompt": 1.2, "completion": 1.2},
     },
+    "qwen-3-235b-a22b-instruct": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/qwen3-235b-a22b",
+        "context_window": 128000,
+        "cost": {"prompt": 0.22, "completion": 0.88},
+    },
+    "qwen-3-30b-a3b-instruct": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/qwen3-30b-a3b",
+        "context_window": 128000,
+        "cost": {"prompt": 0.15, "completion": 0.6},
+    },
     "qwen-qwq-32b": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/qwq-32b",
         "context_window": 128000,

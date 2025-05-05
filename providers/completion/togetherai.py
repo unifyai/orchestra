@@ -30,22 +30,22 @@ class TogetherAI(BaseCompletionProvider):
 supported_models = {
     "deepseek-r1": {
         "endpoint": "together_ai/deepseek-ai/DeepSeek-R1",
-        "context_window": 64000,
+        "context_window": 128000,
         "cost": {"prompt": 3, "completion": 7},
     },
     "deepseek-v3": {
         "endpoint": "together_ai/deepseek-ai/DeepSeek-V3",
-        "context_window": 131072,
+        "context_window": 16384,
         "cost": {"prompt": 1.25, "completion": 1.25},
     },
     "llama-4-maverick-instruct": {
         "endpoint": "together_ai/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
-        "context_window": 524288,
+        "context_window": 1048576,
         "cost": {"prompt": 0.27, "completion": 0.85},
     },
     "llama-4-scout-instruct": {
         "endpoint": "together_ai/meta-llama/Llama-4-Scout-17B-16E-Instruct",
-        "context_window": 327680,
+        "context_window": 1048576,
         "cost": {"prompt": 0.18, "completion": 0.59},
     },
     "llama-3.3-70b-chat": {
@@ -70,7 +70,7 @@ supported_models = {
     },
     "llama-3.1-8b-chat": {
         "endpoint": "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
-        "context_window": 8192,
+        "context_window": 131072,
         "cost": {"prompt": 0.18, "completion": 0.18},
     },
     "llama-3.1-70b-chat": {
@@ -103,14 +103,19 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.6, "completion": 0.6},
     },
+    "qwen-3-235b-a22b-instruct": {
+        "endpoint": "together_ai/Qwen/Qwen3-235B-A22B-fp8-tput",
+        "context_window": 128000,
+        "cost": {"prompt": 0.2, "completion": 0.6},
+    },
     "qwen-2.5-7b-instruct": {
         "endpoint": "together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
-        "context_window": 131072,
+        "context_window": 32768,
         "cost": {"prompt": 0.3, "completion": 0.3},
     },
     "qwen-2.5-coder-32b-instruct": {
         "endpoint": "together_ai/Qwen/Qwen2.5-Coder-32B-Instruct",
-        "context_window": 131072,
+        "context_window": 32768,
         "cost": {"prompt": 0.8, "completion": 0.8},
     },
     "qwen-qwq-32b": {
@@ -120,7 +125,7 @@ supported_models = {
     },
     "qwen-2.5-72b-instruct": {
         "endpoint": "together_ai/Qwen/Qwen2.5-72B-Instruct-Turbo",
-        "context_window": 131072,
+        "context_window": 32768,
         "cost": {"prompt": 1.2, "completion": 1.2},
     },
     "qwen-2-72b-instruct": {

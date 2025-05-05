@@ -143,6 +143,16 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.035, "completion": 0.08},
     },
+    "qwen-3-235b-a22b-instruct": {
+        "endpoint": "deepinfra/Qwen/Qwen3-235B-A22B",
+        "context_window": 40000,
+        "cost": {"prompt": 0.1, "completion": 0.1},
+    },
+    "qwen-3-30b-a3b-instruct": {
+        "endpoint": "deepinfra/Qwen/Qwen3-30B-A3B",
+        "context_window": 40000,
+        "cost": {"prompt": 0.1, "completion": 0.3},
+    },
     "qwen-2.5-coder-32b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-Coder-32B-Instruct",
         "context_window": 32768,

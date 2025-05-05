@@ -190,6 +190,24 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 2, "completion": 2},
     },
+    "llama-3.3-70b-chat": {
+        "endpoint": "vertex_ai/meta/llama-3.3-70b-instruct-maas",
+        "region": "us-central1",
+        "context_window": 128000,
+        "cost": {"prompt": 0.72, "completion": 0.72},
+    },
+    "llama-4-maverick-instruct": {
+        "endpoint": "vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas",
+        "region": "us-east5",
+        "context_window": 1048576,
+        "cost": {"prompt": 0.35, "completion": 1.15},
+    },
+    "llama-4-scout-instruct": {
+        "endpoint": "vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas",
+        "region": "us-east5",
+        "context_window": 1048576,
+        "cost": {"prompt": 0.25, "completion": 0.7},
+    },
     "mistral-large": {
         "endpoint": "vertex_ai/mistral-large",
         "region": "europe-west4",
