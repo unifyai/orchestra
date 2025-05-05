@@ -16,7 +16,6 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.context.schema import (
     AddLogsToContextRequest,
     ContextCreateRequest,
-    CreateColumnsRequest,
     RenameContextRequest,
 )
 from orchestra.web.api.log.views import _get_logs_query
@@ -355,87 +354,6 @@ def delete_context(
         return {"info": "Context deleted successfully!"}
     except IndexError as e:
         raise not_found(str(e))
-
-
-@router.post(
-    "/project/{project_name:path}/contexts/{context_name:path}/columns",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {"info": "Columns created successfully."},
-                },
-            },
-        },
-        404: {
-            "description": "Project or Context Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project or context not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def create_columns(
-    request_fastapi: Request,
-    request: CreateColumnsRequest,
-    project_name: str = Path(
-        description="Name of the project containing the context.",
-        example="my_project",
-    ),
-    context_name: str = Path(
-        description="Name of the context to create columns for.",
-        example="my_context",
-    ),
-    project_dao: ProjectDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-):
-    """
-    Creates columns in a context within a project. Columns can have explicit types
-    or their types can be auto-detected when data is added.
-
-    The columns are specified as a dictionary mapping column names to their types.
-    If a type is specified as null, the type will be auto-detected when data is added.
-    """
-    try:
-        # Fetch project by name and user
-        project = project_dao.get_by_user_and_name(
-            user_id=request_fastapi.state.user_id,
-            name=project_name,
-        )
-        if not project:
-            raise IndexError("Project not found")
-        project_id = project.id
-
-        # Fetch context by project ID and name
-        context = context_dao.filter(
-            project_id=project_id,
-            name=context_name,
-        )
-        if not context:
-            raise IndexError("Context not found")
-        context_id = context[0][0].id
-
-        # Create columns using field_type_dao
-        field_type_dao.create_columns(
-            project_id=project_id,
-            context_id=context_id,
-            columns=request.columns,
-        )
-
-        return {"info": "Columns created successfully."}
-    except IndexError as e:
-        raise not_found(str(e))
-    except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=str(e),
-        )
 
 
 @router.post(
