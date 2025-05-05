@@ -277,6 +277,7 @@ def _delete_log_fields_from_logs(
     client,
     fields,
     delete_empty_logs=False,
+    delete_empty_columns=True,
     user=1,
     project_name=None,
 ):
@@ -284,7 +285,10 @@ def _delete_log_fields_from_logs(
     request = Request(
         "DELETE",
         str(client.base_url) + f"/v0/logs",
-        params={"delete_empty_logs": delete_empty_logs},
+        params={
+            "delete_empty_logs": delete_empty_logs,
+            "delete_empty_columns": delete_empty_columns,
+        },
         json={"ids_and_fields": fields, "project": project_name},
         headers=_headers,
     )
