@@ -1544,17 +1544,6 @@ def update_logs(
 def delete_logs(
     request_fastapi: Request,
     body: DeleteLogEntryRequest,
-    delete_empty_logs: bool = Query(
-        default=False,
-        description="Whether to delete logs which end up being empty as a result of "
-        "the field deletion.",
-        example=True,
-    ),
-    delete_empty_columns: bool = Query(
-        default=True,
-        description="Whether to delete columns that have no data after log deletion.",
-        example=True,
-    ),
     log_event_dao: LogEventDAO = Depends(),
     context_dao: ContextDAO = Depends(),
     project_dao: ProjectDAO = Depends(),
@@ -1851,7 +1840,7 @@ def delete_logs(
                 )
 
     # Delete empty log events if requested
-    if delete_empty_logs and potential_empty_logs:
+    if body.delete_empty_logs and potential_empty_logs:
         # Get all log_event_ids that still have logs in a single query
         still_used_base_ids = set(
             row[0]
@@ -1953,7 +1942,7 @@ def delete_logs(
         )
 
     # Cascading deletion: check if any deleted fields no longer exist in any logs
-    if deleted_fields and delete_empty_columns:
+    if deleted_fields and body.delete_empty_columns:
         # Get all fields that still exist in any logs with two efficient queries
         existing_base_fields = (
             session.query(Log.key)
@@ -2146,7 +2135,10 @@ def get_logs(
         False,
         description="When groups_only is True, return each leaf as a mapping from log id to timestamp instead of just a list of log ids.",
     ),
-    return_ids_only: bool = False,
+    return_ids_only: bool = Query(
+        False,
+        description="If True, return only log IDs instead of full entries.",
+    ),
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
     context_dao: ContextDAO = Depends(),
