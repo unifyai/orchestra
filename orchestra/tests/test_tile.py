@@ -326,7 +326,11 @@ async def _create_test_plot_tile(
 
 
 async def _create_test_view_tile(
-    client: AsyncClient, tab_id, name=f"{TEST_TILE}-view", base_index=None, **kwargs
+    client: AsyncClient,
+    tab_id,
+    name=f"{TEST_TILE}-view",
+    base_index=None,
+    **kwargs,
 ):
     """Create a test view tile with appropriate defaults.
 
