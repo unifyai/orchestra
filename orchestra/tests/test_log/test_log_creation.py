@@ -79,7 +79,7 @@ async def test_create_log_w_image(client: AsyncClient):
 
     # Verify field type
     field_types_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/columns?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
