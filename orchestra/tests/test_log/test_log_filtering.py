@@ -360,6 +360,31 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 "ifs": [],
             },
         ),
+        # slicing
+        (
+            "name[0:2] == 'sq'",
+            {
+                "lhs": {
+                    "lhs": {"type": "identifier", "value": "name"},
+                    "operand": "SLICE",
+                    "rhs": [0, 2],
+                },
+                "operand": "==",
+                "rhs": "sq",
+            },
+        ),
+        (
+            "mylist[1:3] == [20, 30]",
+            {
+                "lhs": {
+                    "lhs": {"type": "identifier", "value": "mylist"},
+                    "operand": "SLICE",
+                    "rhs": [1, 3],
+                },
+                "operand": "==",
+                "rhs": [20, 30],
+            },
+        ),
         # zip
         (
             "zip(a,b,c)",
