@@ -158,6 +158,11 @@ class DeleteLogsRequest(BaseModel):
         example=[123, 456, 789],
         min_items=1,
     )
+    delete_empty_columns: bool = Field(
+        default=True,
+        description="Whether to delete columns that become empty after log deletion",
+        example=True,
+    )
 
 
 class DeleteLogEntryRequest(BaseModel):
@@ -245,22 +250,22 @@ class UpdateDerivedEntriesConfig(BaseModel):
         return values
 
 
-class RenameFieldRequest(BaseModel):
+class RenameColumnRequest(BaseModel):
     project: str = Field(
-        description="Name of the project the field belongs to.",
+        description="Name of the project the column belongs to.",
         example="eval-project",
     )
     context: Optional[str] = Field(
         default="",
-        description="The context of the field to rename.",
+        description="The context of the column to rename.",
         example="test-context",
     )
     old_field_name: str = Field(
-        description="The current name of the field to rename.",
+        description="The current name of the column to rename.",
         example="score",
     )
     new_field_name: str = Field(
-        description="The new name for the field.",
+        description="The new name for the column.",
         example="score_new",
     )
 
@@ -313,6 +318,20 @@ class CreateColumnsRequest(BaseModel):
         example={"score": "Evaluation score", "response": None},
     )
 
+class DeleteColumnsRequest(BaseModel):
+    project: str = Field(
+        description="Name of the project the columns belong to.",
+        example="eval-project",
+    )
+    context: Optional[str] = Field(
+        default=None,
+        description="Optional context path for the columns.",
+        example="experiment1/trial1",
+    )
+    columns: List[str] = Field(
+        description="List of column names to delete.",
+        example=["score", "response"],
+    )
 
 
 
