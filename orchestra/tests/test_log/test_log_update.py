@@ -201,3 +201,117 @@ async def test_update_logs_with_context_list(client: AsyncClient):
             response.json()["logs"][0]["entries"]["new_entry"]
             == "Updated with list of contexts"
         )
+
+
+@pytest.mark.anyio
+async def test_update_logs_by_value_filter(client: AsyncClient):
+    """Test updating logs using a value filter instead of explicit IDs."""
+    project_name = "filter-by-value-project"
+    _ = await _create_project(client, project_name)
+
+    # Create two logs with different status values
+    done_log_entries = {
+        "status": "done",
+        "data": "This log is done",
+        "explicit_types": {
+            "status": {"type": "str", "mutable": True},
+            "data": {"type": "str", "mutable": True},
+        },
+    }
+
+    pending_log_entries = {
+        "status": "pending",
+        "data": "This log is pending",
+        "explicit_types": {
+            "status": {"type": "str", "mutable": True},
+            "data": {"type": "str", "mutable": True},
+        },
+    }
+
+    # Create the logs
+    response_done = await _create_log(client, project_name, entries=done_log_entries)
+    assert response_done.status_code == 200, response_done.json()
+    done_log_id = response_done.json()["log_event_ids"][0]
+
+    response_pending = await _create_log(
+        client,
+        project_name,
+        entries=pending_log_entries,
+    )
+    assert response_pending.status_code == 200, response_pending.json()
+    pending_log_id = response_pending.json()["log_event_ids"][0]
+
+    # Update logs using value filter (status: done)
+    update_entries = {
+        "status": "complete",
+        "explicit_types": {"status": {"type": "str", "mutable": True}},
+    }
+
+    # Use PUT request directly since _update_logs helper uses explicit IDs
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": {"status": "done"},
+            "entries": update_entries,
+            "project": project_name,
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs updated successfully!"
+
+    # Verify only the "done" log was updated to "complete"
+    response_done_log = await _get_log(client, project_name, done_log_id)
+    assert response_done_log.status_code == 200, response_done_log.json()
+    assert response_done_log.json()["logs"][0]["entries"]["status"] == "complete"
+
+    # Verify the "pending" log was not updated
+    response_pending_log = await _get_log(client, project_name, pending_log_id)
+    assert response_pending_log.status_code == 200, response_pending_log.json()
+    assert response_pending_log.json()["logs"][0]["entries"]["status"] == "pending"
+
+
+@pytest.mark.anyio
+async def test_update_logs_filter_missing_project_or_context(client: AsyncClient):
+    """Test that updating logs with a filter dict requires either project or context."""
+    project_name = "missing-project-context-project"
+    _ = await _create_project(client, project_name)
+
+    # Create a log with status value
+    log_entries = {
+        "status": "active",
+        "data": "This is test data",
+        "explicit_types": {
+            "status": {"type": "str", "mutable": True},
+            "data": {"type": "str", "mutable": True},
+        },
+    }
+
+    response = await _create_log(client, project_name, entries=log_entries)
+    assert response.status_code == 200, response.json()
+
+    # Update entries to use in the request
+    update_entries = {
+        "status": "updated",
+        "explicit_types": {"status": {"type": "str", "mutable": True}},
+    }
+
+    # Send PUT request without project or context
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": {"status": "active"},  # Filter dict
+            "entries": update_entries,
+            # Deliberately omitting both project and context
+        },
+        headers=HEADERS,
+    )
+
+    # Assert that we get a 400 error
+    assert response.status_code == 400, response.json()
+    # Verify the error message matches the validation message
+    assert (
+        "When passing a filter dict in `logs`, you must supply `project`."
+        in response.json()["detail"]
+    )
