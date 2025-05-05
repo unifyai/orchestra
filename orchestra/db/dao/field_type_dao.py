@@ -77,11 +77,7 @@ class FieldTypeDAO:
         Returns:
             Dictionary mapping field names to their types or metadata
         """
-        query = (
-            select(FieldType)
-            .order_by(FieldType.id)
-            .order_by(FieldType.created_at)
-        )
+        query = select(FieldType).order_by(FieldType.id).order_by(FieldType.created_at)
 
         # Build filters progressively
         if project_id is not None:
