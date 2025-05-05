@@ -325,3 +325,97 @@ async def test_field_type_constraints_and_mutability(client: AsyncClient):
     assert derived_response.status_code == 500, derived_response.json()
     assert "already exists as an entry" in derived_response.json()["detail"]
     assert "Cannot create it as a derived_entry" in derived_response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_rename_field_preserves_order(client: AsyncClient):
+    """Test that renaming a field preserves the original field order."""
+    project_name = "test-rename-field-order"
+    _ = await _create_project(client, project_name)
+
+    # Create a log with fields in a specific order
+    initial_entries = {
+        "field_a": "value a",
+        "field_b": "value b",
+        "field_c": "value c",
+        "explicit_types": {
+            "field_a": {"type": "str", "mutable": True},
+            "field_b": {"type": "str", "mutable": True},
+            "field_c": {"type": "str", "mutable": True},
+        },
+    }
+    response = await _create_log(client, project_name, entries=initial_entries)
+    assert response.status_code == 200
+
+    # Get initial field order
+    fields_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    initial_order = list(fields_response.json().keys())
+
+    # Find the index of field_b
+    field_b_index = initial_order.index("field_b")
+
+    # Get initial log entries and their order
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 1
+    initial_log_order = list(logs[0]["entries"].keys())
+    # Find the index of field_b in the log entries
+    log_field_b_index = initial_log_order.index("field_b")
+
+    # Rename field_b to field_b_renamed
+    rename_response = await client.post(
+        "/v0/logs/rename_field",
+        json={
+            "project": project_name,
+            "old_field_name": "field_b",
+            "new_field_name": "field_b_renamed",
+        },
+        headers=HEADERS,
+    )
+    assert rename_response.status_code == 200, rename_response.json()
+
+    # Get new field order after renaming
+    fields_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    new_order = list(fields_response.json().keys())
+
+    # Verify field_b is removed and field_b_renamed appears at the same index
+    assert "field_b" not in new_order
+    assert "field_b_renamed" in new_order
+    assert new_order.index("field_b_renamed") == field_b_index
+
+    # Verify the overall order is preserved with only the name change
+    expected_order = initial_order.copy()
+    expected_order[field_b_index] = "field_b_renamed"
+    assert new_order == expected_order
+
+    # Get logs after renaming and verify entry order is preserved
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 1
+    new_log_order = list(logs[0]["entries"].keys())
+
+    # Verify field_b is removed and field_b_renamed appears at the same index in log entries
+    assert "field_b" not in new_log_order
+    assert "field_b_renamed" in new_log_order
+    assert new_log_order.index("field_b_renamed") == log_field_b_index
+
+    # Verify the overall log entry order is preserved with only the name change
+    expected_log_order = initial_log_order.copy()
+    expected_log_order[log_field_b_index] = "field_b_renamed"
+    assert new_log_order == expected_log_order
