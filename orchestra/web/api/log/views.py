@@ -40,8 +40,10 @@ from orchestra.db.models.orchestra_models import (
 )
 from orchestra.web.api.dependencies import auth_admin_key
 from orchestra.web.api.log.schema import (
+    CreateColumnsRequest,
     CreateDerivedEntriesConfig,
     CreateLogConfig,
+    DeleteColumnsRequest,
     DeleteLogEntryRequest,
     GetLogsMetricRequest,
     JoinLogsRequest,
@@ -3177,6 +3179,214 @@ def get_fields(
             "artifacts": derived_equations.get(key, ""),
         }
         for key, info in types.items()
+    }
+
+
+@router.post(
+    "/logs/columns",
+    responses={
+        200: {
+            "description": "Columns created successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Columns created successfully.",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project or context not found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project 'example_project' not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def create_columns(
+    request_fastapi: Request,
+    request: CreateColumnsRequest,
+    project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+):
+    """
+    Creates one or more columns in a project. Columns are field definitions that can be used
+    in logs. This endpoint allows pre-defining columns before adding any log data.
+
+    Each column can have an optional description. If a column already exists, its description
+    will be updated.
+    """
+    # Validate project
+    try:
+        user_id = request_fastapi.state.user_id
+        project = project_dao.get_by_user_and_name(
+            user_id=user_id,
+            name=request.project,
+        )
+        project_id = project.id
+    except (IndexError, AttributeError):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{request.project}' not found.",
+        )
+
+    # Get or create context
+    context_name = request.context if request.context else ""
+    context_id = context_dao.get_or_create(
+        project_id=project_id,
+        name=context_name,
+        description=None,
+        is_versioned=False,
+    )
+
+    # Create columns
+    try:
+        field_type_dao.create_columns(
+            project_id=project_id,
+            context_id=context_id,
+            columns=request.columns,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to create columns: {str(e)}",
+        )
+
+    return {"info": "Columns created successfully."}
+
+
+@router.delete(
+    "/logs/columns",
+    responses={
+        200: {
+            "description": "Columns deleted successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Columns deleted successfully.",
+                        "deleted_columns": ["score", "response"],
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project or context not found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project 'example_project' not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def delete_columns(
+    request_fastapi: Request,
+    request: DeleteColumnsRequest,
+    project_dao: ProjectDAO = Depends(),
+    field_type_dao: FieldTypeDAO = Depends(),
+    context_dao: ContextDAO = Depends(),
+    session=Depends(get_db_session),
+):
+    """
+    Deletes one or more columns from a project. This will:
+    1. Delete all log entries with the specified column names
+    2. Delete the field type records for those columns
+
+    This operation cannot be undone, so use with caution.
+    """
+    # Validate project
+    try:
+        user_id = request_fastapi.state.user_id
+        project = project_dao.get_by_user_and_name(
+            user_id=user_id,
+            name=request.project,
+        )
+        project_id = project.id
+    except (IndexError, AttributeError):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{request.project}' not found.",
+        )
+
+    # Get context
+    context_name = request.context if request.context else ""
+    context = context_dao.filter(project_id=project_id, name=context_name)
+    if not context:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Context '{context_name}' not found.",
+        )
+    context_id = context[0][0].id
+
+    # Get all log events for this project
+    all_log_events_subq = select(
+        session.query(LogEvent.id)
+        .filter(LogEvent.project_id == project_id)
+        .subquery(name="all_log_events"),
+    )
+
+    deleted_columns = []
+    for column_name in request.columns:
+        # Delete from base logs
+        try:
+            deleted_count = (
+                session.query(Log)
+                .filter(
+                    Log.log_event_id.in_(all_log_events_subq),
+                    Log.key == column_name,
+                )
+                .delete(synchronize_session=False)
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error deleting column '{column_name}' from logs: {str(e)}",
+            )
+
+        # Delete from derived logs
+        try:
+            derived_deleted_count = (
+                session.query(DerivedLog)
+                .filter(
+                    DerivedLog.log_event_id.in_(all_log_events_subq),
+                    DerivedLog.key == column_name,
+                )
+                .delete(synchronize_session=False)
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error deleting column '{column_name}' from derived logs: {str(e)}",
+            )
+
+        # Delete field type record
+        try:
+            field_type_dao.delete_field_type(
+                project_id=project_id,
+                field_name=column_name,
+                context_id=context_id,
+            )
+            deleted_columns.append(column_name)
+        except Exception as e:
+            # Continue with other columns even if one fails
+            continue
+
+    if not deleted_columns:
+        return {
+            "info": "No columns were deleted. They may not exist or you don't have permission to delete them.",
+            "deleted_columns": [],
+        }
+
+    return {
+        "info": "Columns deleted successfully.",
+        "deleted_columns": deleted_columns,
     }
 
 
