@@ -645,11 +645,26 @@ def _transform_ast(node: ast.AST) -> dict:
 
     # Handle subscripts (indexing with [] or {})
     elif isinstance(node, ast.Subscript):
-        return {
-            "operand": "INDEX",
-            "lhs": _transform_ast(node.value),
-            "rhs": _transform_ast(node.slice),
-        }
+        if isinstance(node.slice, ast.Slice):
+            # Handle slice operations [lower:upper]
+            lower = (
+                None if node.slice.lower is None else _transform_ast(node.slice.lower)
+            )
+            upper = (
+                None if node.slice.upper is None else _transform_ast(node.slice.upper)
+            )
+            return {
+                "operand": "SLICE",
+                "lhs": _transform_ast(node.value),
+                "rhs": [lower, upper],
+            }
+        else:
+            # Handle regular index operations
+            return {
+                "operand": "INDEX",
+                "lhs": _transform_ast(node.value),
+                "rhs": _transform_ast(node.slice),
+            }
 
     # Handle lists and tuples
     elif isinstance(node, (ast.List, ast.Tuple)):
