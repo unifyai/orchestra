@@ -644,6 +644,9 @@ def test_ast_parser(expression, expected_dict):
         ),
         # shorter second list – zip truncates
         ("zip(a,b) == [[1,'x']]", {"a": [1, 2], "b": ["x"]}, True),
+        # slicing
+        ("name[0:2] == 'sq'", {"name": "squid"}, True),
+        ("nums[1:3] == [2,3]", {"nums": [1, 2, 3, 4]}, True),
         # Reduction functions - mean
         ("mean(test_list) == 2", {"test_list": [1, 2, 3]}, True),
         ("mean(test_dict) == 3", {"test_dict": {"a": 2, "b": 4}}, True),

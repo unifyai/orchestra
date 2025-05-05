@@ -67,6 +67,7 @@ def build_sql_query(
         _handle_index_operator,
         _handle_logical_operator,
         _handle_membership_operator,
+        _handle_slice_operator,
     )
 
     if local_scope is None:
@@ -193,6 +194,15 @@ def build_sql_query(
         )
     elif operand == "INDEX":
         return _handle_index_operator(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+        )
+    elif operand == "SLICE":
+        return _handle_slice_operator(
             filter_dict,
             log_event_alias,
             session,
