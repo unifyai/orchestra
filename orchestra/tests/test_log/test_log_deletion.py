@@ -411,3 +411,127 @@ async def test_delete_project_deletes_logs(client: AsyncClient):
     assert response.json() == {
         "detail": f"Project {project_name} not found.",
     }
+
+
+@pytest.mark.anyio
+async def test_delete_empty_columns_flag(client: AsyncClient):
+    """Test that the delete_empty_columns flag controls whether columns are removed when no logs use them."""
+    project_name = "empty-columns-test"
+    _ = await _create_project(client, project_name)
+
+    # Create two logs with a shared column
+    shared_col = "shared/test/column"
+    unique_col1 = "unique/test/column1"
+    unique_col2 = "unique/test/column2"
+
+    entries1 = {
+        shared_col: "value1",
+        unique_col1: "unique1",
+        "explicit_types": {
+            shared_col: {"mutable": True},
+            unique_col1: {"mutable": True},
+        },
+    }
+
+    entries2 = {
+        shared_col: "value2",
+        unique_col2: "unique2",
+        "explicit_types": {
+            shared_col: {"mutable": True},
+            unique_col2: {"mutable": True},
+        },
+    }
+
+    response1 = await _create_log(client, project_name, entries=entries1)
+    response2 = await _create_log(client, project_name, entries=entries2)
+
+    assert response1.status_code == 200, response1.json()
+    assert response2.status_code == 200, response2.json()
+
+    log_id1 = response1.json()["log_event_ids"][0]
+    log_id2 = response2.json()["log_event_ids"][0]
+
+    # Verify logs were created with the shared column
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    logs = response.json()["logs"]
+    assert len(logs) == 2
+
+    for log in logs:
+        assert shared_col in log["entries"]
+
+    # Test 1: Delete the shared column with delete_empty_columns=False
+    ids_and_fields = [(None, shared_col)]
+    response = await _delete_log_fields_from_logs(
+        client,
+        ids_and_fields,
+        delete_empty_columns=False,
+        project_name=project_name,
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs and fields deleted successfully!"
+
+    # Verify the column was removed from logs but still exists in columns list
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    logs = response.json()["logs"]
+
+    for log in logs:
+        assert shared_col not in log["entries"]
+
+    # Check that the column still exists in the columns list
+    response = await client.get(
+        f"/v0/logs/columns?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    columns = response.json()
+    assert shared_col in columns
+
+    # Test 2: Re-create logs with the shared column
+    await _update_logs(
+        client,
+        [log_id1],
+        {shared_col: "value1", "explicit_types": {shared_col: {"mutable": True}}},
+    )
+    await _update_logs(
+        client,
+        [log_id2],
+        {shared_col: "value2", "explicit_types": {shared_col: {"mutable": True}}},
+    )
+
+    # Verify logs again have the shared column
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    logs = response.json()["logs"]
+
+    for log in logs:
+        assert shared_col in log["entries"]
+
+    # Test 3: Delete the shared column with delete_empty_columns=True
+    ids_and_fields = [(None, shared_col)]
+    response = await _delete_log_fields_from_logs(
+        client,
+        ids_and_fields,
+        delete_empty_columns=True,
+        project_name=project_name,
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs and fields deleted successfully!"
+
+    # Verify the column was removed from logs AND from columns list
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    logs = response.json()["logs"]
+
+    for log in logs:
+        assert shared_col not in log["entries"]
+
+    # Check that the column no longer exists in the columns list
+    response = await client.get(
+        f"/v0/logs/columns?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    columns = response.json()
+    assert shared_col not in columns
