@@ -4,6 +4,7 @@ import secrets
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.orm import Session
 
 from orchestra.db.dao.account_dao import AccountDAO
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
@@ -11,6 +12,8 @@ from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dependencies import get_db_session
+from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 from orchestra.web.api.users.schema import (
     AccountRequest,
     FreezeAccountRequest,
@@ -35,6 +38,7 @@ async def create_user(
     auth_user_dao: AuthUserDAO = Depends(),
     api_key_dao: ApiKeyDAO = Depends(),
     user_dao: UsersDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     auth_user_dao.create(email=user.email)
     user = auth_user_dao.filter(email=user.email)
@@ -43,6 +47,8 @@ async def create_user(
     # TODO: remove this after migrating
     try:
         user_dao.create_users(id=user[0][0].id, credits=0)
+        # Seed default Unity project, interface, tab, and table tile for tasks
+        DefaultTasksSeeder.seed(session, user_id=user[0][0].id)
     except Exception as e:
         print(e)
     return {
