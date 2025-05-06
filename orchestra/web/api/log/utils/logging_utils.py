@@ -505,7 +505,10 @@ def _get_logs_query(
             sq.c.log_event_id == relevant_log_events.c.id,
         )
     pag_query = (
-        session.query(relevant_log_events.c.id.label("id"))
+        session.query(
+            relevant_log_events.c.id.label("id"),
+            func.row_number().over(order_by=sort_criteria).label("row_num"),
+        )
         .select_from(joined_events)
         .order_by(*sort_criteria)
     )
@@ -1281,6 +1284,7 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
             paginated_ids_subq,
             paginated_ids_subq.c.id == filtered_logs_subq.c.log_event_id,
         )
+        .order_by(paginated_ids_subq.c.row_num, filtered_logs_subq.c.created_at)
     )
     return final_logs_query.all()
 
