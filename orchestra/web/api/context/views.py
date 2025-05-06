@@ -305,6 +305,16 @@ def get_context(
                 },
             },
         },
+        403: {
+            "description": "Forbidden Operation",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Cannot delete built-in Tasks context.",
+                    },
+                },
+            },
+        },
         404: {
             "description": "Project or Context Not Found",
             "content": {
@@ -334,6 +344,12 @@ def delete_context(
     Deletes a context from a project. This will not delete the logs or artifacts
     within the context, but will remove their association with this context.
     """
+    # Protect the built-in Tasks context in Unity project
+    if project_name == "Unity" and context_name == "Tasks":
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot delete built-in Tasks context.",
+        )
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
@@ -561,6 +577,16 @@ def add_logs_to_context(
                 },
             },
         },
+        403: {
+            "description": "Forbidden Operation",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Cannot modify built-in Tasks context.",
+                    },
+                },
+            },
+        },
         404: {
             "description": "Project or Context Not Found",
             "content": {
@@ -582,6 +608,12 @@ async def rename_context(
     context_dao: ContextDAO = Depends(),
 ):
     """Rename an existing context within a project."""
+    # Protect the built-in Tasks context in Unity project
+    if project_name == "Unity" and context_name == "Tasks":
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot modify built-in Tasks context.",
+        )
     # 1) Verify project
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
