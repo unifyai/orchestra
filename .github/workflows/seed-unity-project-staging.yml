@@ -3,12 +3,12 @@ name: "Seed Unity projects for all users"
 on:
   push:
     branches:
-    - main
+    - staging
   workflow_dispatch:
 
 jobs:
-  seed-unity-project:
-    name: Seed Unity projects for all users
+  seed-unity-project-staging:
+    name: Seed Unity projects for all users (staging)
     runs-on: ubuntu-latest
 
     steps:
@@ -22,14 +22,14 @@ jobs:
 
     - name: Verify secrets (safe confirmation)
       run: |
-        echo "INSTANCE_CONNECTION_NAME is set: ${{ secrets.INSTANCE_CONNECTION_NAME != '' }}"
-        echo "DB_USER is set: ${{ secrets.DB_USER != '' }}"
-        echo "DB_PASS is set: ${{ secrets.DB_PASS != '' }}"
+        echo "INSTANCE_CONNECTION_NAME is set: ${{ secrets.STAGING_INSTANCE_CONNECTION_NAME != '' }}"
+        echo "DB_USER is set: ${{ secrets.STAGING_DB_USER != '' }}"
+        echo "DB_PASS is set: ${{ secrets.STAGING_DB_PASS != '' }}"
         echo "DB_USER length: ${#DB_USER}"
         echo "DB_PASS first character: ${DB_PASS:0:1}***"
       env:
-        DB_USER: ${{ secrets.DB_USER }}
-        DB_PASS: ${{ secrets.DB_PASS }}
+        DB_USER: ${{ secrets.STAGING_DB_USER }}
+        DB_PASS: ${{ secrets.STAGING_DB_PASS }}
 
     - name: Set up Python
       uses: actions/setup-python@v2
@@ -46,6 +46,6 @@ jobs:
         python3 -m pip install cloud-sql-python-connector[pg8000]
         python3 create_unity_project.py
       env:
-        INSTANCE_CONNECTION_NAME: ${{ secrets.INSTANCE_CONNECTION_NAME }}
-        DB_USER: ${{ secrets.DB_USER }}
-        DB_PASS: ${{ secrets.DB_PASS }}
+        INSTANCE_CONNECTION_NAME: ${{ secrets.STAGING_INSTANCE_CONNECTION_NAME }}
+        DB_USER: ${{ secrets.STAGING_DB_USER }}
+        DB_PASS: ${{ secrets.STAGING_DB_PASS }}
