@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
+from pgvector.sqlalchemy import Vector  # NEW: pgvector type for embedding literals
 from sqlalchemy import (
     TIMESTAMP,
     BindParameter,
@@ -756,6 +757,35 @@ def _handle_functions(
                 jsonb_expr = cast(rhs_expr, JSONB)
                 reduction_expr = _get_reduction_expr(operand, "list", jsonb_expr, None)
                 return reduction_expr
+    elif operand == "embed":
+        # Support client-side embedding computation within equation strings.
+        # The argument must be a literal string; we fetch the embedding using
+        # orchestra.vector.utils.embed() at compile time and return it as a
+        # SQL literal of pgvector type so that it can be used with distance
+        # operators.
+        if isinstance(rhs_expr, (Subquery, ColumnClause)):
+            raise ValueError(
+                "embed() argument must be a literal string, not an expression or subquery.",
+            )
+
+        # Resolve string value depending on whether SQLAlchemy produced a BindParameter
+        from orchestra.vector.utils import (
+            embed as _embed,  # local import to avoid circular deps
+        )
+
+        if isinstance(rhs_expr, BindParameter):
+            text_val = rhs_expr.value
+        else:  # Could be python str or other; we treat directly.
+            text_val = rhs_expr
+
+        if not isinstance(text_val, str):
+            raise ValueError("embed() expects a string literal argument.")
+
+        vector_vals = _embed(text_val)
+        vector_dim = len(vector_vals)
+
+        # Produce a literal value bound as pgvector
+        return literal(vector_vals, type_=Vector(vector_dim))
     else:
         raise ValueError(f"Unknown function operand: {operand}")
 

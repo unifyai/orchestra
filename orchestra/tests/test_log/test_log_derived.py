@@ -1087,3 +1087,93 @@ async def test_create_static_entries_with_flag(client: AsyncClient):
 
         # The value should NOT be in derived_entries
         assert key not in log["derived_entries"]
+
+
+@pytest.mark.anyio
+async def test_create_derived_embed_literal(client: AsyncClient, monkeypatch):
+    """
+    Test that embed('text') in a derived log equation stores the vector literal as derived entry.
+    """
+    # Stub embed to return a fixed vector
+    monkeypatch.setattr(
+        "orchestra.vector.utils.embed",
+        lambda text, model="text-embedding-3-large": [0.1, 0.2, 0.3],
+    )
+
+    project_name = "test_embed_literal_derived"
+    await _create_project(client, project_name)
+
+    # Create base logs (content irrelevant for literal embed)
+    log_ids = []
+    for _ in range(2):
+        resp = await _create_log(client, project_name, entries={})
+        assert resp.status_code == 200
+        log_ids.append(resp.json()["log_event_ids"][0])
+
+    # Create derived entries using literal embed
+    key = "emb_lit"
+    equation = "embed('foo')"
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        equation,
+        {"log": log_ids},
+    )
+    assert response.status_code == 200
+
+    # Fetch logs and verify derived_entries contains the stubbed vector for each log
+    get_resp = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert get_resp.status_code == 200
+    logs = get_resp.json()["logs"]
+    for log in logs:
+        assert key in log["derived_entries"]
+        assert log["derived_entries"][key] == [0.1, 0.2, 0.3]
+
+
+@pytest.mark.anyio
+async def test_create_derived_embed_on_column(client: AsyncClient, monkeypatch):
+    """
+    Test that embed({log:text}) in a derived log equation embeds each log's text field.
+    """
+    # Stub embed to return a vector based on text for visibility
+    def fake_embed(text, model="text-embedding-3-large"):
+        # simple stub: map each char to its ord mod 1.0
+        return [float(ord(c) % 10) for c in text]
+
+    monkeypatch.setattr(
+        "orchestra.vector.utils.embed",
+        fake_embed,
+    )
+
+    project_name = "test_embed_column_derived"
+    await _create_project(client, project_name)
+
+    # Create base logs with a 'text' entry
+    texts = ["abc", "xyz"]
+    log_ids = []
+    for txt in texts:
+        resp = await _create_log(client, project_name, entries={"text": txt})
+        assert resp.status_code == 200
+        log_ids.append(resp.json()["log_event_ids"][0])
+
+    # Derive embedding from each log's 'text' field
+    key = "emb_col"
+    equation = "embed({log:text})"
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        equation,
+        {"log": log_ids},
+    )
+    assert response.status_code == 200
+
+    # Fetch logs and verify derived_entries embedding matches fake_embed
+    get_resp = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert get_resp.status_code == 200
+    logs = get_resp.json()["logs"]
+    for log in logs:
+        text_val = log["entries"]["text"]
+        expected = fake_embed(text_val)
+        assert log["derived_entries"][key] == expected

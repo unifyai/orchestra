@@ -183,6 +183,7 @@ def build_sql_query(
         "max",
         "median",
         "mode",
+        "embed",
     ):
         return _handle_functions(
             filter_dict,
