@@ -1,9 +1,9 @@
 name: "Seed Unity projects for all users"
 
 on:
-  push:
-    branches:
-    - staging
+  # push:
+  #   branches:
+  #   - staging
   workflow_dispatch:
 
 jobs:
