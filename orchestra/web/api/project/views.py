@@ -499,6 +499,13 @@ def delete_project(
     """
     Deletes a project from your account.
     """
+    # Check if trying to delete the protected project (Unity)
+    if name == "Unity":
+        raise HTTPException(
+            status_code=403,
+            detail="The 'Unity' project cannot be deleted.",
+        )
+
     # Check if trying to delete the protected project (Production Traffic)
     ORGANIZATION_NAME = settings.orchestra_organization_name
     OWNER_ID = settings.orchestra_owner_id
@@ -575,6 +582,12 @@ def rename_project(
     """
     Renames a project from `name` to `new_name` in your account.
     """
+    # Check if trying to rename the protected Unity project
+    if name == "Unity":
+        raise HTTPException(
+            status_code=403,
+            detail="The 'Unity' project cannot be renamed.",
+        )
     try:
         # First verify the project exists and user has access
         try:

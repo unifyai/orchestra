@@ -3025,6 +3025,13 @@ def rename_field(
     The operation is atomic - either all renames succeed or none do.
     """
     try:
+        # Check if this is the protected Unity/Tasks context
+        if request.project == "Unity" and request.context == "Tasks":
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot modify fields in the built-in Tasks table - it is immutable",
+            )
+
         # Validate project and permissions
         user_id = request_fastapi.state.user_id
         project = project_dao.get_by_user_and_name(
@@ -3503,6 +3510,13 @@ def delete_fields(
 
     This operation cannot be undone, so use with caution.
     """
+    # Check if this is the protected Unity/Tasks context
+    if request.project == "Unity" and request.context == "Tasks":
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot modify fields in the built-in Tasks table - it is immutable",
+        )
+
     # Validate project
     try:
         user_id = request_fastapi.state.user_id
