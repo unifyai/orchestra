@@ -818,7 +818,7 @@ def _handle_functions(
         vector_dim = len(vector_vals)
 
         # Produce a literal value bound as pgvector
-        return cast(literal(vector_vals), Vector(vector_dim))
+        return cast(literal(vector_vals, type_=Vector(vector_dim)), Vector(vector_dim))
     else:
         raise ValueError(f"Unknown function operand: {operand}")
 

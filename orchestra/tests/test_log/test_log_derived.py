@@ -1177,3 +1177,70 @@ async def test_create_derived_embed_on_column(client: AsyncClient, monkeypatch):
         text_val = log["entries"]["text"]
         expected = fake_embed(text_val)
         assert log["derived_entries"][key] == expected
+
+
+@pytest.mark.anyio
+async def test_create_derived_vector_distance_functions(
+    client: AsyncClient,
+    monkeypatch,
+):
+    """
+    Test that vector distance functions in derived log equations compute expected distances using embed().
+    """
+    # Stub embed to return distinct vectors for 'a' and 'b'
+    def fake_embed(text, model="text-embedding-3-large"):
+        if text == "a":
+            return [1.0, 0.0]
+        elif text == "b":
+            return [0.0, 1.0]
+        return [0.0, 0.0]
+
+    monkeypatch.setattr("orchestra.vector.utils.embed", fake_embed)
+
+    project_name = "test_vector_distance_derived"
+    await _create_project(client, project_name)
+
+    # Create dummy logs
+    log_ids = []
+    for _ in range(2):
+        resp = await _create_log(client, project_name, entries={})
+        assert resp.status_code == 200
+        log_ids.append(resp.json()["log_event_ids"][0])
+
+    import math
+
+    # Define expected distances
+    expected_values = {
+        "l2": math.sqrt((1.0 - 0.0) ** 2 + (0.0 - 1.0) ** 2),
+        "l1": abs(1.0 - 0.0) + abs(0.0 - 1.0),
+        "ip": 1.0 * 0.0 + 0.0 * 1.0,
+        "cosine": 1 - ((1.0 * 0.0 + 0.0 * 1.0) / (math.sqrt(1.0) * math.sqrt(1.0))),
+        "hamming": 2,
+        "jaccard": 0,
+    }
+
+    for func_name, expected in expected_values.items():
+        key = f"dist_{func_name}"
+        equation = f"{func_name}(embed('a'), embed('b'))"
+        response = await _create_derived_entry(
+            client,
+            project_name,
+            key,
+            equation,
+            {"log": log_ids},
+        )
+        assert (
+            response.status_code == 200
+        ), f"{func_name} creation failed: {response.text}"
+
+        # Fetch logs and verify derived distance
+        get_resp = await client.get(
+            f"/v0/logs?project={project_name}",
+            headers=HEADERS,
+        )
+        assert get_resp.status_code == 200
+        logs = get_resp.json()["logs"]
+        value = logs[0]["derived_entries"][key]
+        assert (
+            pytest.approx(value, rel=1e-6) == expected
+        ), f"{func_name} expected {expected}, got {value}"
