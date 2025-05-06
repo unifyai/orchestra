@@ -21,12 +21,16 @@ logger = logging.getLogger(__name__)
 
 # READ‑ONLY session for auth dependencies
 @contextmanager
-def _ro_session():
+def _ro_session(autoflush=False, expire_on_commit=False):
     from orchestra.web.lifetime import get_engine
 
     engine = get_engine()
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-        SessionLocal = sessionmaker(bind=conn, autoflush=False, expire_on_commit=False)
+        SessionLocal = sessionmaker(
+            bind=conn,
+            autoflush=autoflush,
+            expire_on_commit=expire_on_commit,
+        )
         session: Session = SessionLocal()
         try:
             yield session
