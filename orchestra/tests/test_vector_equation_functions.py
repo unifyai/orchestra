@@ -63,7 +63,7 @@ def test_vector_distance_in_equation(func_name: str, sql_snippet: str):
     sql = _compile(expr)
 
     # Expect the pgvector cast and correct operator/function name
-    assert "AS Vector" in sql, "Embedding literals should be cast to pgvector"
+    assert "AS VECTOR" in sql, "Embedding literals should be cast to pgvector"
     assert sql_snippet in sql, f"Expected '{sql_snippet}' in SQL: {sql}"
 
 
@@ -80,6 +80,6 @@ def test_embed_only_in_equation():
     expr = build_sql_query(filter_dict, None, None, None)
     sql = _compile(expr)
 
-    assert "AS Vector" in sql
+    assert "AS VECTOR" in sql
     # Should contain our stubbed values
     assert re.search(r"\[0\.1[, ]+0\.2[, ]+0\.3", sql)
