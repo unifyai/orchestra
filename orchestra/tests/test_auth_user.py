@@ -327,5 +327,77 @@ async def test_add_organization_member_org_not_found(client: AsyncClient):
     assert response.status_code == 404, response.json()
 
 
+@pytest.mark.anyio
+async def test_default_unity_resources_on_user_creation(client: AsyncClient):
+    url = "/v0/admin/auth-user"
+    params = {"email": "unity_resources_test@example.com"}
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # get the user id from the response
+    user_id = response.json()["id"]
+
+    # call the get_user endpoint with the user id
+    url = f"/v0/admin/auth-user/by-user-id?user_id={user_id}"
+    response = await client.get(url, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # get the api key from the response
+    api_key = response.json()["apiKey"]
+
+    # Create user-specific headers with the API key
+    user_headers = {"accept": "application/json", "Authorization": f"Bearer {api_key}"}
+
+    # 1. Verify the Unity project exists
+    response = await client.get("/v0/projects", headers=user_headers)
+    assert response.status_code == 200, response.json()
+    projects = response.json()
+    assert "Unity" in projects, "Unity project not found in user projects"
+
+    # 2. Verify the Unity interface exists
+    response = await client.get(
+        "/v0/interfaces/list?project=Unity",
+        headers=user_headers,
+    )
+    assert response.status_code == 200, response.json()
+    interfaces = response.json()
+    unity_interface = next(
+        (interface for interface in interfaces if interface["name"] == "Unity"),
+        None,
+    )
+    assert unity_interface is not None, "Unity interface not found"
+    unity_interface_id = unity_interface["id"]
+
+    # 3. Verify the Tasks tab exists
+    response = await client.get(
+        f"/v0/tab/list?interface_id={unity_interface_id}",
+        headers=user_headers,
+    )
+    assert response.status_code == 200, response.json()
+    tabs = response.json()
+    tasks_tab = next((tab for tab in tabs if tab["name"] == "Tasks"), None)
+    assert tasks_tab is not None, "Tasks tab not found"
+    tasks_tab_id = tasks_tab["id"]
+
+    # 4. Verify the Tasks table tile exists
+    response = await client.get(
+        f"/v0/tile/list?tab_id={tasks_tab_id}",
+        headers=user_headers,
+    )
+    assert response.status_code == 200, response.json()
+    tiles = response.json()
+    tasks_tile = next(
+        (
+            tile
+            for tile in tiles
+            if tile["type"] == "Table"
+            and tile["context"] == "Tasks"
+            and tile["table"] == "Tasks"
+        ),
+        None,
+    )
+    assert tasks_tile is not None, "Tasks table tile not found"
+
+
 if __name__ == "__main__":
     pass
