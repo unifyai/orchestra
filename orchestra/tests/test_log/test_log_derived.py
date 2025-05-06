@@ -1116,9 +1116,9 @@ async def test_create_derived_embed_literal(client: AsyncClient, monkeypatch):
     response = await _create_derived_entry(
         client,
         project_name,
-        key,
-        equation,
-        {"log": log_ids},
+        key=key,
+        equation=equation,
+        referenced_logs={"log": log_ids},
     )
     assert response.status_code == 200
 
@@ -1163,9 +1163,9 @@ async def test_create_derived_embed_on_column(client: AsyncClient, monkeypatch):
     response = await _create_derived_entry(
         client,
         project_name,
-        key,
-        equation,
-        {"log": log_ids},
+        key=key,
+        equation=equation,
+        referenced_logs={"log": log_ids},
     )
     assert response.status_code == 200
 
@@ -1225,9 +1225,9 @@ async def test_create_derived_vector_distance_functions(
         response = await _create_derived_entry(
             client,
             project_name,
-            key,
-            equation,
-            {"log": log_ids},
+            key=key,
+            equation=equation,
+            referenced_logs={"log": log_ids},
         )
         assert (
             response.status_code == 200

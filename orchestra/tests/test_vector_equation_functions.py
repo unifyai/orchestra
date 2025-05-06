@@ -82,4 +82,4 @@ def test_embed_only_in_equation():
 
     assert "AS VECTOR" in sql
     # Should contain our stubbed values
-    assert re.search(r"\[0\.1[, ]+0\.2[, ]+0\.3", sql)
+    assert re.search(r"\[0\.1[0-9\.]*,\s*0\.2[0-9\.]*,\s*0\.3[0-9\.]*\]", sql)
