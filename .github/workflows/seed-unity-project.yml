@@ -1,0 +1,52 @@
+name: "Seed Unity projects for all users"
+
+on:
+  push:
+    branches:
+    - main
+    - staging
+  workflow_dispatch:
+
+jobs:
+  seed-unity-project:
+    name: Seed Unity projects for all users
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Auth into Google Cloud
+      uses: 'google-github-actions/auth@v2'
+      with:
+        credentials_json: '${{ secrets.GCP_DEFAULT_CREDENTIALS }}'
+
+    - name: Verify secrets (safe confirmation)
+      run: |
+        echo "INSTANCE_CONNECTION_NAME is set: ${{ secrets.INSTANCE_CONNECTION_NAME != '' }}"
+        echo "DB_USER is set: ${{ secrets.DB_USER != '' }}"
+        echo "DB_PASS is set: ${{ secrets.DB_PASS != '' }}"
+        echo "DB_USER length: ${#DB_USER}"
+        echo "DB_PASS first character: ${DB_PASS:0:1}***"
+      env:
+        DB_USER: ${{ secrets.DB_USER }}
+        DB_PASS: ${{ secrets.DB_PASS }}
+
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: "3.9"
+
+    - name: Install deps
+      uses: knowsuchagency/poetry-install@v1
+      env:
+        POETRY_VIRTUALENVS_CREATE: false
+
+    - name: Run Unity project seeder
+      run: |
+        python3 -m pip install cloud-sql-python-connector[pg8000]
+        python3 create_unity_project.py
+      env:
+        INSTANCE_CONNECTION_NAME: ${{ secrets.INSTANCE_CONNECTION_NAME }}
+        DB_USER: ${{ secrets.DB_USER }}
+        DB_PASS: ${{ secrets.DB_PASS }}
