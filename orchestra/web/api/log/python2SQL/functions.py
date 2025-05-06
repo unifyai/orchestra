@@ -141,7 +141,18 @@ def _handle_functions(
     """
     operand = filter_dict.get("operand")
     no_arg_functions = ["now"]
-    two_arg_functions = ["BASE", "round", "round_timestamp"]
+    # Functions that take exactly two arguments
+    two_arg_functions = [
+        "BASE",
+        "round",
+        "round_timestamp",
+        "l2",
+        "cosine",
+        "ip",
+        "l1",
+        "hamming",
+        "jaccard",
+    ]
 
     if operand in no_arg_functions:
         rhs_expr = None
@@ -757,6 +768,28 @@ def _handle_functions(
                 jsonb_expr = cast(rhs_expr, JSONB)
                 reduction_expr = _get_reduction_expr(operand, "list", jsonb_expr, None)
                 return reduction_expr
+    elif operand in ("l2", "cosine", "ip", "l1", "hamming", "jaccard"):
+        # rhs_expr is a list of two SQLAlchemy expressions
+        if not isinstance(rhs_expr, list) or len(rhs_expr) != 2:
+            raise ValueError(f"{operand}() requires exactly 2 arguments.")
+        left_expr, right_expr = rhs_expr
+        # import vector ops
+        from orchestra.vector.sqlalchemy_ops import cosine as _cosine
+        from orchestra.vector.sqlalchemy_ops import hamming as _hamming
+        from orchestra.vector.sqlalchemy_ops import ip as _ip
+        from orchestra.vector.sqlalchemy_ops import jaccard as _jaccard
+        from orchestra.vector.sqlalchemy_ops import l1 as _l1
+        from orchestra.vector.sqlalchemy_ops import l2 as _l2
+
+        func_map = {
+            "l2": _l2,
+            "cosine": _cosine,
+            "ip": _ip,
+            "l1": _l1,
+            "hamming": _hamming,
+            "jaccard": _jaccard,
+        }
+        return func_map[operand](left_expr, right_expr)
     elif operand == "embed":
         # Support client-side embedding computation within equation strings.
         # The argument must be a literal string; we fetch the embedding using

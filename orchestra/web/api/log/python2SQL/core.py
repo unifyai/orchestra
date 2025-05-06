@@ -184,6 +184,13 @@ def build_sql_query(
         "median",
         "mode",
         "embed",
+        # vector distance functions
+        "l2",
+        "cosine",
+        "ip",
+        "l1",
+        "hamming",
+        "jaccard",
     ):
         return _handle_functions(
             filter_dict,

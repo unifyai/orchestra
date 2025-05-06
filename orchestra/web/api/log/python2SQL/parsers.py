@@ -600,6 +600,13 @@ def _transform_ast(node: ast.AST) -> dict:
             "mode",
             "count",
             "embed",
+            # vector distance functions
+            "l2",
+            "cosine",
+            "ip",
+            "l1",
+            "hamming",
+            "jaccard",
         ):
             if func_name == "count":
                 func_name = "len"
