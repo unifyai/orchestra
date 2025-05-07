@@ -791,34 +791,10 @@ def _handle_functions(
         }
         return func_map[operand](left_expr, right_expr)
     elif operand == "embed":
-        # Support client-side embedding computation within equation strings.
-        # The argument must be a literal string; we fetch the embedding using
-        # orchestra.vector.utils.embed() at compile time and return it as a
-        # SQL literal of pgvector type so that it can be used with distance
-        # operators.
+        # Support embedding of literal strings or column-based placeholders.
+        # If this is a column or subquery, pass it through for Python fallback.
         if isinstance(rhs_expr, (Subquery, ColumnClause)):
-            raise ValueError(
-                "embed() argument must be a literal string, not an expression or subquery.",
-            )
-
-        # Resolve string value depending on whether SQLAlchemy produced a BindParameter
-        from orchestra.vector.utils import (
-            embed as _embed,  # local import to avoid circular deps
-        )
-
-        if isinstance(rhs_expr, BindParameter):
-            text_val = rhs_expr.value
-        else:  # Could be python str or other; we treat directly.
-            text_val = rhs_expr
-
-        if not isinstance(text_val, str):
-            raise ValueError("embed() expects a string literal argument.")
-
-        vector_vals = _embed(text_val)
-        vector_dim = len(vector_vals)
-
-        # Produce a literal value bound as pgvector
-        return cast(literal(vector_vals, type_=Vector(vector_dim)), Vector(vector_dim))
+            return rhs_expr
     else:
         raise ValueError(f"Unknown function operand: {operand}")
 

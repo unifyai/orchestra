@@ -573,6 +573,57 @@ def create_from_logs(
                 detail=f"Failed to create static entries with key='{body.key}'. Error: {e}",
             )
     else:
+        # Python fallback for embed({alias:column}) placeholders
+        import re
+        from datetime import datetime, timezone
+
+        from orchestra.db.dao.log_dao import LogDAO
+        from orchestra.db.models.orchestra_models import DerivedLog, Log
+        from orchestra.vector.utils import embed as _embed_util
+
+        # match exactly embed({alias:column})
+        m = re.fullmatch(r"embed\(\{([^:}]+):([^}]+)\}\)", body.equation)
+        if m:
+            alias, col = m.group(1), m.group(2)
+            ids_list = resolved_ids.get(alias, [])
+            new_logs = []
+            for lid in ids_list:
+                entry = (
+                    session.query(Log)
+                    .filter(
+                        Log.log_event_id == lid,
+                        Log.key == col,
+                    )
+                    .one_or_none()
+                )
+                text_val = entry.value if entry else None
+                vec = _embed_util(text_val) if text_val is not None else None
+                inferred = LogDAO.infer_type(col, vec)
+                new_logs.append(
+                    DerivedLog(
+                        log_event_id=lid,
+                        key=body.key,
+                        equation=body.equation,
+                        referenced_logs={alias: ids_list},
+                        value=vec,
+                        inferred_type=inferred,
+                        created_at=datetime.now(timezone.utc),
+                        updated_at=datetime.now(timezone.utc),
+                    ),
+                )
+            if new_logs:
+                session.bulk_save_objects(new_logs)
+                field_type_dao.create_field_type_if_absent(
+                    project_id=project_obj.id,
+                    field_name=body.key,
+                    value=new_logs[0].value,
+                    field_category="derived_entry",
+                    context_id=context_id,
+                )
+                session.commit()
+            return {
+                "info": f"Created {len(new_logs)} derived logs with key='{body.key}'.",
+            }
         # Original derived log creation logic
         created_derived_ids = []
         try:
