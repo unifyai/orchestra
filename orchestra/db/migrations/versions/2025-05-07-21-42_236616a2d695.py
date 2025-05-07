@@ -30,7 +30,10 @@ def upgrade() -> None:
     op.add_column(
         "field_type",
         sa.Column(
-            "enum_restrict", sa.Boolean(), server_default="false", nullable=False,
+            "enum_restrict",
+            sa.Boolean(),
+            server_default="false",
+            nullable=False,
         ),
     )
     # ### end Alembic commands ###
