@@ -1297,7 +1297,41 @@ def update_logs(
                         )
 
             # Process each field in the provided data.
+            # Create a separate list for nested updates (using dot or bracket notation)
+            nested_updates = []
+            flat_data = {}
+
+            # First pass: separate nested updates from flat updates
             for k, v in this_data.items():
+                # Check if this is a nested path (contains dots or brackets)
+                if "." in k or "[" in k:
+                    # Extract base key and path segments
+                    parts = k.split(".", 1) if "." in k else k.split("[", 1)
+                    base_key = parts[0]
+                    path_segments = k[len(base_key) :]  # Everything after the base key
+
+                    # Add to nested updates
+                    nested_updates.append(
+                        {
+                            "log_event_id": log_id,
+                            "base_key": base_key,
+                            "path_segments": path_segments,
+                            "new_value": v,
+                            "context_id": ctx_id if "ctx_ids" not in locals() else None,
+                            "context_ids": ctx_ids if "ctx_ids" in locals() else None,
+                            "overwrite": body.overwrite,
+                            "explicit_types": explicit_types,
+                        },
+                    )
+
+                    # Track this update for context versioning
+                    updated_ids.add((base_key, log_id))
+                else:
+                    # This is a flat update, keep it for normal processing
+                    flat_data[k] = v
+
+            # Process flat updates normally
+            for k, v in flat_data.items():
                 if k in field_types:
                     expected_type = field_types[k]["field_type"]
                     original_type = LogDAO.infer_type(k, v)
@@ -1391,7 +1425,7 @@ def update_logs(
     if new_field_types:
         field_type_dao.bulk_create_field_types(new_field_types)
 
-    # Bulk update all logs
+    # First, handle flat updates
     if all_updates:
         try:
             log_dao.bulk_update(all_updates, field_types=field_types)
@@ -1446,6 +1480,27 @@ def update_logs(
             raise HTTPException(
                 status_code=400,
                 detail=f"Field is immutable and cannot be modified: {str(e)}",
+            )
+
+    # Then, handle nested updates if any exist
+    if nested_updates:
+        try:
+            # Call the new method to apply nested updates
+            log_dao.apply_jsonb_patch(nested_updates, field_types=field_types)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Error applying nested updates: {str(e)}",
+            )
+        except OverwriteError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Existing nested value cannot be overwritten because overwrite is set to False: {str(e)}",
+            )
+        except ImmutableFieldError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Field or nested path is immutable and cannot be modified: {str(e)}",
             )
 
     # Update context version if needed

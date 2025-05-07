@@ -147,11 +147,16 @@ class UpdateLogRequest(BaseModel):
     )
     entries: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(
         default=dict(),
-        description="Dictionary or list of dictionaries of key-value entry pairs to add or update in the logs.",
+        description="Dictionary or list of dictionaries of key-value entry pairs to add or update in the logs. "
+        "Supports nested path syntax using dot notation for object properties (e.g., 'metadata.author') "
+        "and bracket notation for array indices (e.g., 'results[0]'). "
+        "Complex paths like 'results[0].scores.accuracy' are also supported for deep updates.",
         json_schema_extra={
             "example": {
                 "input": "...",
                 "score-test-1": "...",
+                "metadata.author": "John Doe",
+                "results[0].score": 0.95,
                 "explicit_types": {"input": {"type": "Image", "mutable": True}},
             },
         },
