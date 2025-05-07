@@ -1,4 +1,5 @@
 import json
+import math
 
 import pytest
 from httpx import AsyncClient
@@ -1137,54 +1138,54 @@ async def test_create_derived_embed_on_column(client: AsyncClient, monkeypatch):
         assert log["derived_entries"][key] == expected
 
 
-# @pytest.mark.anyio
-# @pytest.mark.parametrize(
-#     "func_name, expected",
-#     [
-#         ("l2", math.sqrt((1.0 - 0.0) ** 2 + (0.0 - 1.0) ** 2)),
-#         ("l1", abs(1.0 - 0.0) + abs(0.0 - 1.0)),
-#         ("ip", 1.0 * 0.0 + 0.0 * 1.0),
-#         ("cosine", 1 - ((1.0 * 0.0 + 0.0 * 1.0) / (math.sqrt(1.0) * math.sqrt(1.0)))),
-#         ("hamming", 2),
-#         ("jaccard", 0),
-#     ],
-# )
-# async def test_create_derived_vector_distance_functions(
-#     client: AsyncClient,
-#     func_name,
-#     expected,
-# ):
-#     """
-#     Test that vector distance functions compute expected distances directly from provided vector fields 'c' and 'd'.
-#     """
-#     project_name = "test_vector_distance_derived"
-#     await _create_project(client, project_name)
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "func_name, expected",
+    [
+        ("l2", math.sqrt((1.0 - 0.0) ** 2 + (0.0 - 1.0) ** 2)),
+        ("l1", abs(1.0 - 0.0) + abs(0.0 - 1.0)),
+        ("ip", 1.0 * 0.0 + 0.0 * 1.0),
+        ("cosine", 1 - ((1.0 * 0.0 + 0.0 * 1.0) / (math.sqrt(1.0) * math.sqrt(1.0)))),
+        ("hamming", 2),
+        ("jaccard", 0),
+    ],
+)
+async def test_create_derived_vector_distance_functions(
+    client: AsyncClient,
+    func_name,
+    expected,
+):
+    """
+    Test that vector distance functions compute expected distances directly from provided vector fields 'c' and 'd'.
+    """
+    project_name = "test_vector_distance_derived"
+    await _create_project(client, project_name)
 
-#     # Create dummy logs
-#     resp = await _create_log(
-#         client,
-#         project_name,
-#         entries={"c": [1.0, 0.0], "d": [0.0, 1.0]},
-#     )
-#     assert resp.status_code == 200
+    # Create dummy logs
+    resp = await _create_log(
+        client,
+        project_name,
+        entries={"c": [1.0, 0.0], "d": [0.0, 1.0]},
+    )
+    assert resp.status_code == 200
 
-#     # Compute and verify for the parameterized function
-#     key = f"dist_{func_name}"
-#     equation = f"{func_name}({{log:c}}, {{log:d}})"
-#     response = await _create_derived_entry(
-#         client,
-#         project_name,
-#         key=key,
-#         equation=equation,
-#         referenced_logs={"log": [resp.json()["log_event_ids"][0]]},
-#     )
-#     assert response.status_code == 200, f"{func_name} creation failed: {response.text}"
+    # Compute and verify for the parameterized function
+    key = f"dist_{func_name}"
+    equation = f"{func_name}({{log:c}}, {{log:d}})"
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key=key,
+        equation=equation,
+        referenced_logs={"log": [resp.json()["log_event_ids"][0]]},
+    )
+    assert response.status_code == 200, f"{func_name} creation failed: {response.text}"
 
-#     # Fetch logs and verify derived distance
-#     get_resp = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
-#     assert get_resp.status_code == 200
-#     logs = get_resp.json()["logs"]
-#     value = logs[0]["derived_entries"][key]
-#     assert (
-#         pytest.approx(value, rel=1e-6) == expected
-#     ), f"{func_name} expected {expected}, got {value}"
+    # Fetch logs and verify derived distance
+    get_resp = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert get_resp.status_code == 200
+    logs = get_resp.json()["logs"]
+    value = logs[0]["derived_entries"][key]
+    assert (
+        pytest.approx(value, rel=1e-6) == expected
+    ), f"{func_name} expected {expected}, got {value}"

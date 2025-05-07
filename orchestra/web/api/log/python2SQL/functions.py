@@ -769,7 +769,7 @@ def _handle_functions(
                 reduction_expr = _get_reduction_expr(operand, "list", jsonb_expr, None)
                 return reduction_expr
     elif operand in ("l2", "cosine", "ip", "l1", "hamming", "jaccard"):
-        # rhs_expr is a list of two SQLAlchemy expressions
+        # Vector similarity/distance functions
         if not isinstance(rhs_expr, list) or len(rhs_expr) != 2:
             raise ValueError(f"{operand}() requires exactly 2 arguments.")
         left_expr, right_expr = rhs_expr
@@ -789,6 +789,67 @@ def _handle_functions(
             "hamming": _hamming,
             "jaccard": _jaccard,
         }
+        # pure SQL path for direct columns
+        if isinstance(left_expr, ColumnClause) and isinstance(right_expr, ColumnClause):
+            return func_map[operand](left_expr, right_expr)
+
+        # both subqueries: join on log_event_id
+        if isinstance(left_expr, Subquery) and isinstance(right_expr, Subquery):
+            left_col, _ = _select_value(left_expr, session)
+            right_col, _ = _select_value(right_expr, session)
+            select_cols = [left_expr.c.log_event_id.label("log_event_id")]
+            if "__comp_idx__" in left_expr.c.keys():
+                select_cols.append(left_expr.c.__comp_idx__.label("__comp_idx__"))
+            if "__parent_idx__" in left_expr.c.keys():
+                select_cols.append(left_expr.c.__parent_idx__.label("__parent_idx__"))
+            expr = func_map[operand](left_col, right_col)
+            select_cols.extend(
+                [expr.label("value"), literal("float").label("inferred_type")],
+            )
+            return (
+                select(*select_cols)
+                .select_from(
+                    left_expr.join(
+                        right_expr,
+                        left_expr.c.log_event_id == right_expr.c.log_event_id,
+                    ),
+                )
+                .subquery()
+            )
+
+        # left subquery, right direct
+        if isinstance(left_expr, Subquery):
+            left_col, _ = _select_value(left_expr, session)
+            expr = func_map[operand](left_col, right_expr)
+            if isinstance(left_expr, ColumnClause):
+                return expr
+            select_cols = [left_expr.c.log_event_id.label("log_event_id")]
+            if "__comp_idx__" in left_expr.c.keys():
+                select_cols.append(left_expr.c.__comp_idx__.label("__comp_idx__"))
+            if "__parent_idx__" in left_expr.c.keys():
+                select_cols.append(left_expr.c.__parent_idx__.label("__parent_idx__"))
+            select_cols.extend(
+                [expr.label("value"), literal("float").label("inferred_type")],
+            )
+            return select(*select_cols).select_from(left_expr).subquery()
+
+        # right subquery, left direct
+        if isinstance(right_expr, Subquery):
+            right_col, _ = _select_value(right_expr, session)
+            expr = func_map[operand](left_expr, right_col)
+            if isinstance(right_expr, ColumnClause):
+                return expr
+            select_cols = [right_expr.c.log_event_id.label("log_event_id")]
+            if "__comp_idx__" in right_expr.c.keys():
+                select_cols.append(right_expr.c.__comp_idx__.label("__comp_idx__"))
+            if "__parent_idx__" in right_expr.c.keys():
+                select_cols.append(right_expr.c.__parent_idx__.label("__parent_idx__"))
+            select_cols.extend(
+                [expr.label("value"), literal("float").label("inferred_type")],
+            )
+            return select(*select_cols).select_from(right_expr).subquery()
+
+        # fallback SQL operator
         return func_map[operand](left_expr, right_expr)
     elif operand == "embed":
         # Support embedding of literal strings or column-based placeholders.
