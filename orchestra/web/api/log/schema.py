@@ -386,8 +386,8 @@ class CreateFieldsRequest(BaseModel):
         example="experiment1/trial1",
     )
     fields: Dict[str, Optional[str]] = Field(
-        description="Dictionary mapping field names to their descriptions (or None if no description).",
-        example={"score": "Evaluation score", "response": None},
+        description="Dictionary mapping field names to their types (or None if no type is specified).",
+        example={"score": "int", "response": None},
     )
 
 

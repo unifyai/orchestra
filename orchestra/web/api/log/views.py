@@ -3128,13 +3128,12 @@ def rename_field(
         project_id = project.id
 
         context_name = request.context if request.context else ""
-        context = context_dao.filter(project_id=project_id, name=context_name)
-        if not context:
+        context_id = context_dao.get_or_create(project_id=project_id, name=context_name)
+        if not context_id:
             raise HTTPException(
                 status_code=404,
                 detail=f"Context '{context_name}' not found",
             )
-        context_id = context[0][0].id
 
         # Validate new field name
         if not request.new_field_name:
