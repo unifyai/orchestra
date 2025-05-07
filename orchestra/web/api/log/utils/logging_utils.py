@@ -906,11 +906,17 @@ def create_logs_internal(
             )
 
     # Bulk create new field types if any
-    if new_field_types:
-        field_type_dao.bulk_create_field_types(new_field_types)
+    try:
+        if new_field_types:
+            field_type_dao.bulk_create_field_types(new_field_types)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # Bulk create all log records
-    log_dao.bulk_create(log_records_to_create)
+    try:
+        log_dao.bulk_create(log_records_to_create)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # Check for duplicates if context doesn't allow duplicates
     context_obj = None
