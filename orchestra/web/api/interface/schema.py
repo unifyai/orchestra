@@ -41,12 +41,10 @@ class TableTileSchema(BaseModel):
     id: Optional[str] = None
     tile_id: Optional[str] = None
     table_type: Optional[str] = None
-    column_context: Optional[str] = None
     page_number: Optional[str] = None
     column_order: Optional[str] = None
     hidden_columns: Optional[str] = None
     sorting: Optional[str] = None
-    grouping: Optional[str] = None
     group_sorting: Optional[str] = None
     columns_pin_left: Optional[str] = None
     columns_pin_right: Optional[str] = None
@@ -132,6 +130,8 @@ class CreateTileRequest(BaseModel):
     filters: Optional[str] = None
     common_filter: Optional[str] = None
     metric: Optional[str] = None
+    column_context: Optional[str] = None
+    grouping: Optional[str] = None
     # Type-specific fields will be included based on the tile type
     table_tile: Optional[TableTileSchema] = None
     plot_tile: Optional[PlotTileSchema] = None
@@ -156,6 +156,8 @@ class UpdateTileRequest(BaseModel):
     filters: Optional[str] = None
     common_filter: Optional[str] = None
     metric: Optional[str] = None
+    column_context: Optional[str] = None
+    grouping: Optional[str] = None
     # Type-specific fields
     table_tile: Optional[TableTileSchema] = None
     plot_tile: Optional[PlotTileSchema] = None
