@@ -143,12 +143,14 @@ def create_logs(
     inferred type of that particular entry. The explicit_types dictionary
     can also specify if a field is mutable via a 'mutable' boolean flag:
 
+    ```json
     {
         "field_name": {
             "type": "str",
             "mutable": false  # Makes the field immutable
         }
     }
+    ```
 
     By default, all fields are immmutable unless specified otherwise.
     Once a field is marked as mutable, only then can it be modified through
@@ -2158,7 +2160,7 @@ def get_logs(
          - When nested_groups is True, returns a nested structure under the "logs" key.
          - When nested_groups is False, returns flat per-field mappings under the "groups" key.
          - When groups_only is True, the detailed log objects are omitted and leaves are simplified
-           to either lists of log ids (if return_timestamps is False) or mappings of {log id: timestamp} (if True).
+           to either lists of log ids (if return_timestamps is False) or mappings of `{log id: timestamp}` (if True).
 
       3. **Return IDs only mode**:
          - If return_ids_only is True, returns only the log event ids.
@@ -2173,7 +2175,7 @@ def get_logs(
     If return_versions=True:
     - Returns all versions of logs in versioned contexts
     - from_ids and exclude_ids must be provided as lists of objects with 'id' and 'version' keys
-    - Each object must have format: {"id": log_event_id, "version": version_number}
+    - Each object must have format: `{"id": log_event_id, "version": version_number}`
     - This is only valid for logs in versioned contexts
 
     If return_versions=False (default):
@@ -2645,20 +2647,44 @@ def get_logs_metric(
     This endpoint supports three modes of operation:
 
     1. Single key, no grouping: Returns a single metric value
-       Example: GET /logs/metric/mean?key=score
-       Response: 4.56
+       Example:
+       ```bash
+       GET /logs/metric/mean?key=score
+       ```
+       Response:
+       ```json
+       4.56
+       ```
 
     2. Multiple keys, no grouping: Returns a dict mapping keys to metric values
-       Example: GET /logs/metric/mean?key=["score","length"]
-       Response: {"score": 4.56, "length": 120}
+       Example:
+       ```bash
+       GET /logs/metric/mean?key=["score","length"]
+       ```
+       Response:
+       ```json
+       {"score": 4.56, "length": 120}
+       ```
 
     3. With grouping: Returns metrics grouped by one or more fields
-       Example: GET /logs/metric/mean with body {"key": "score", "group_by": "model"}
-       Response: {"gpt-4": 4.56, "gpt-3.5": 3.78}
+       Example:
+       ```bash
+       GET /logs/metric/mean with body {"key": "score", "group_by": "model"}
+       ```
+       Response:
+       ```json
+       {"gpt-4": 4.56, "gpt-3.5": 3.78}
+       ```
 
        For nested grouping, provide a list of fields:
-       Example: GET /logs/metric/mean with body {"key": "score", "group_by": ["model", "temperature"]}
-       Response: {"gpt-4": {"0.7": 4.56, "0.9": 4.23}, "gpt-3.5": {"0.7": 3.78, "0.9": 3.45}}
+       Example:
+       ```bash
+       GET /logs/metric/mean with body {"key": "score", "group_by": ["model", "temperature"]}
+       ```
+       Response:
+       ```json
+       {"gpt-4": {"0.7": 4.56, "0.9": 4.23}, "gpt-3.5": {"0.7": 3.78, "0.9": 3.45}}
+       ```
 
     The group_by parameter can be a string for single-level grouping or a list of strings for
     nested grouping. Each group_by field can be prefixed with "params/" to indicate it's a parameter.
