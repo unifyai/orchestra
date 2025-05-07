@@ -474,3 +474,275 @@ async def test_update_field_mutability_only(client: AsyncClient):
     )
     assert response.status_code == 400
     assert "Field is immutable and cannot be modified" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_create_log_closed_enum(client: AsyncClient):
+    """Test creating a log with a closed enum type."""
+    project_name = "test_closed_enum"
+    _ = await _create_project(client, project_name)
+
+    # Create a log with a closed enum field
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            "color": "red",
+            "explicit_types": {
+                "color": {"type": "enum", "values": ["red", "green"], "restrict": True},
+            },
+        },
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify field types include enum information
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+
+    assert "color" in field_types
+    color_type = field_types["color"]
+    assert color_type["data_type"] == "str"
+    assert set(color_type["enum_values"]) == {"red", "green"}
+    assert color_type["restrict"] is True
+
+    # Verify the log entry has the correct value
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+    assert len(logs) == 1
+    assert logs[0]["entries"]["color"] == "red"
+
+
+@pytest.mark.anyio
+async def test_update_log_enum_auto_expand(client: AsyncClient):
+    """Test that open enums automatically expand when new values are added."""
+    project_name = "test_enum_auto_expand"
+    _ = await _create_project(client, project_name)
+
+    # Create a log with an open enum field
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            "status": "A",
+            "explicit_types": {
+                "status": {
+                    "type": "enum",
+                    "values": ["A"],
+                    "restrict": False,
+                    "mutable": True,
+                },
+            },
+        },
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Update the log with a new enum value
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "entries": {
+                "status": "B",
+                "explicit_types": {"status": {"type": "enum", "restrict": False}},
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify field types now include both enum values
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+
+    assert "status" in field_types
+    status_type = field_types["status"]
+    assert status_type["data_type"] == "str"
+    assert set(status_type["enum_values"]) == {"A", "B"}
+    assert status_type["restrict"] is False
+
+
+@pytest.mark.anyio
+async def test_create_open_enum_without_values(client: AsyncClient):
+    """Test creating a log with an open enum type that omits the values key entirely."""
+    project_name = "test_open_enum_no_values"
+    _ = await _create_project(client, project_name)
+
+    # Create a log with an open enum field that omits the values key
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            "category": "alpha",
+            "explicit_types": {
+                "category": {"type": "enum", "restrict": False, "mutable": True},
+            },
+        },
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Verify field types show "alpha" in enum_values and restrict=False
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+
+    assert "category" in field_types
+    category_type = field_types["category"]
+    assert category_type["data_type"] == "str"
+    assert category_type["enum_values"] == ["alpha"]
+    assert category_type["restrict"] is False
+
+    # Update the log with a new value without specifying values key
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "entries": {
+                "category": "beta",
+                "explicit_types": {"category": {"type": "enum", "restrict": False}},
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify field types now include both values
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+
+    assert "category" in field_types
+    category_type = field_types["category"]
+    assert category_type["data_type"] == "str"
+    assert category_type["enum_values"] == ["alpha", "beta"]
+    assert category_type["restrict"] is False
+
+
+@pytest.mark.anyio
+async def test_closed_enum_without_values(client: AsyncClient):
+    """Test creating a log with a closed enum type that omits the values key."""
+    project_name = "test_closed_enum_no_values"
+    _ = await _create_project(client, project_name)
+
+    # Create a log with a closed enum field that omits the values key
+    # First write should seed the enum with the initial value
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            "priority": "high",
+            "explicit_types": {
+                "priority": {"type": "enum", "restrict": True, "mutable": True},
+            },
+        },
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Verify field types show the seeded value and restrict=True
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+
+    assert "priority" in field_types
+    priority_type = field_types["priority"]
+    assert priority_type["data_type"] == "str"
+    assert priority_type["enum_values"] == ["high"]
+    assert priority_type["restrict"] is True
+
+    # Attempt to update with a new value not in the allowed set
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "entries": {
+                "priority": "new",
+                "explicit_types": {"priority": {"type": "enum"}},
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+
+    # Should fail with a value error about allowed values
+    assert response.status_code == 400
+    error_detail = response.json()["detail"]
+    assert "allowed enum values" in error_detail.lower()
+
+
+@pytest.mark.anyio
+async def test_filter_logs_by_enum(client: AsyncClient):
+    """Tests filtering logs by enum values is treated as regular string filtering."""
+    project_name = "test_enum_filtering"
+    _ = await _create_project(client, project_name)
+
+    # Create multiple logs with different enum values
+    for i in range(5):
+        status = "ok" if i % 2 == 0 else "error"
+        response = await _create_log(
+            client,
+            project_name,
+            entries={
+                "status": status,
+                "explicit_types": {
+                    "status": {
+                        "type": "enum",
+                        "values": ["ok", "error"],
+                        "restrict": True,
+                    },
+                },
+            },
+        )
+        assert response.status_code == 200, response.json()
+
+    # Filter logs by enum value
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "status == 'error'"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+
+    # Should have 2 logs with status="error"
+    assert len(logs) == 2
+    for log in logs:
+        assert log["entries"]["status"] == "error"
+
+    # Filter by the other enum value
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "status == 'ok'"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+
+    # Should have 3 logs with status="ok"
+    assert len(logs) == 3
+    for log in logs:
+        assert log["entries"]["status"] == "ok"
