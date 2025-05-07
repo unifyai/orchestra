@@ -14,7 +14,7 @@ depends_on = None
 
 
 L1_SQL = """
-CREATE OR REPLACE FUNCTION l1(a vector, b vector)
+CREATE OR REPLACE FUNCTION l1_distance(a vector, b vector)
 RETURNS double precision
 LANGUAGE sql IMMUTABLE STRICT AS $$
   SELECT sum(abs(x - y))::double precision
@@ -25,7 +25,7 @@ $$;
 
 
 HAMMING_SQL = """
-CREATE OR REPLACE FUNCTION hamming(a vector, b vector)
+CREATE OR REPLACE FUNCTION hamming_distance(a vector, b vector)
 RETURNS integer
 LANGUAGE sql IMMUTABLE STRICT AS $$
   SELECT count(*)::int
@@ -37,7 +37,7 @@ $$;
 
 
 JACCARD_SQL = """
-CREATE OR REPLACE FUNCTION jaccard(a vector, b vector)
+CREATE OR REPLACE FUNCTION jaccard_distance(a vector, b vector)
 RETURNS double precision
 LANGUAGE sql IMMUTABLE STRICT AS $$
   WITH sa AS (
@@ -80,6 +80,6 @@ def upgrade() -> None:  # noqa: D401
 
 def downgrade() -> None:  # noqa: D401
     """Drop custom vector distance functions."""
-    op.execute("DROP FUNCTION IF EXISTS jaccard(vector, vector);")
-    op.execute("DROP FUNCTION IF EXISTS hamming(vector, vector);")
-    op.execute("DROP FUNCTION IF EXISTS l1(vector, vector);")
+    op.execute("DROP FUNCTION IF EXISTS jaccard_distance(vector, vector);")
+    op.execute("DROP FUNCTION IF EXISTS hamming_distance(vector, vector);")
+    op.execute("DROP FUNCTION IF EXISTS l1_distance(vector, vector);")

@@ -1101,7 +1101,7 @@ async def test_create_derived_embed_on_column(client: AsyncClient, monkeypatch):
         return [float(ord(c) % 10) for c in text]
 
     monkeypatch.setattr(
-        "orchestra.vector.utils.embed",
+        "orchestra.web.api.log.utils.vector_utils.embed",
         fake_embed,
     )
 

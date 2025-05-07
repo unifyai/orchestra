@@ -769,40 +769,32 @@ def _handle_functions(
                 reduction_expr = _get_reduction_expr(operand, "list", jsonb_expr, None)
                 return reduction_expr
     elif operand in ("l2", "cosine", "ip", "l1", "hamming", "jaccard"):
-        # Vector similarity/distance functions
+        # Vector similarity/distance functions using SQLAlchemy func
+        sql_func = {
+            "l2": func.l2_distance,
+            "cosine": func.cosine_distance,
+            "ip": func.inner_product,
+            "l1": func.l1_distance,
+            "hamming": func.hamming_distance,
+            "jaccard": func.jaccard_distance,
+        }[operand]
         if not isinstance(rhs_expr, list) or len(rhs_expr) != 2:
             raise ValueError(f"{operand}() requires exactly 2 arguments.")
         left_expr, right_expr = rhs_expr
-        # import vector ops
-        from orchestra.vector.sqlalchemy_ops import cosine as _cosine
-        from orchestra.vector.sqlalchemy_ops import hamming as _hamming
-        from orchestra.vector.sqlalchemy_ops import ip as _ip
-        from orchestra.vector.sqlalchemy_ops import jaccard as _jaccard
-        from orchestra.vector.sqlalchemy_ops import l1 as _l1
-        from orchestra.vector.sqlalchemy_ops import l2 as _l2
-
-        func_map = {
-            "l2": _l2,
-            "cosine": _cosine,
-            "ip": _ip,
-            "l1": _l1,
-            "hamming": _hamming,
-            "jaccard": _jaccard,
-        }
         # pure SQL path for direct columns
         if isinstance(left_expr, ColumnClause) and isinstance(right_expr, ColumnClause):
-            return func_map[operand](left_expr, right_expr)
+            return sql_func(left_expr, right_expr)
 
         # both subqueries: join on log_event_id
         if isinstance(left_expr, Subquery) and isinstance(right_expr, Subquery):
             left_col, _ = _select_value(left_expr, session)
             right_col, _ = _select_value(right_expr, session)
-            select_cols = [left_expr.c.log_event_id.label("log_event_id")]
+            select_cols = [left_expr.c.log_event_id]
             if "__comp_idx__" in left_expr.c.keys():
                 select_cols.append(left_expr.c.__comp_idx__.label("__comp_idx__"))
             if "__parent_idx__" in left_expr.c.keys():
                 select_cols.append(left_expr.c.__parent_idx__.label("__parent_idx__"))
-            expr = func_map[operand](left_col, right_col)
+            expr = sql_func(left_col, right_col)
             select_cols.extend(
                 [expr.label("value"), literal("float").label("inferred_type")],
             )
@@ -820,10 +812,10 @@ def _handle_functions(
         # left subquery, right direct
         if isinstance(left_expr, Subquery):
             left_col, _ = _select_value(left_expr, session)
-            expr = func_map[operand](left_col, right_expr)
+            expr = sql_func(left_col, right_expr)
             if isinstance(left_expr, ColumnClause):
                 return expr
-            select_cols = [left_expr.c.log_event_id.label("log_event_id")]
+            select_cols = [left_expr.c.log_event_id]
             if "__comp_idx__" in left_expr.c.keys():
                 select_cols.append(left_expr.c.__comp_idx__.label("__comp_idx__"))
             if "__parent_idx__" in left_expr.c.keys():
@@ -836,10 +828,10 @@ def _handle_functions(
         # right subquery, left direct
         if isinstance(right_expr, Subquery):
             right_col, _ = _select_value(right_expr, session)
-            expr = func_map[operand](left_expr, right_col)
+            expr = sql_func(left_expr, right_col)
             if isinstance(right_expr, ColumnClause):
                 return expr
-            select_cols = [right_expr.c.log_event_id.label("log_event_id")]
+            select_cols = [right_expr.c.log_event_id]
             if "__comp_idx__" in right_expr.c.keys():
                 select_cols.append(right_expr.c.__comp_idx__.label("__comp_idx__"))
             if "__parent_idx__" in right_expr.c.keys():
@@ -850,7 +842,7 @@ def _handle_functions(
             return select(*select_cols).select_from(right_expr).subquery()
 
         # fallback SQL operator
-        return func_map[operand](left_expr, right_expr)
+        return sql_func(left_expr, right_expr)
     elif operand == "embed":
         # Support embedding of literal strings or column-based placeholders.
         # If this is a column or subquery, pass it through for Python fallback.

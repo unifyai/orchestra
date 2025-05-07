@@ -579,7 +579,8 @@ def create_from_logs(
 
         from orchestra.db.dao.log_dao import LogDAO
         from orchestra.db.models.orchestra_models import DerivedLog, Log
-        from orchestra.vector.utils import embed as _embed_util
+
+        from .utils.vector_utils import embed as _embed_util
 
         # match exactly embed({alias:column})
         m = re.fullmatch(r"embed\(\{([^:}]+):([^}]+)\}\)", body.equation)
