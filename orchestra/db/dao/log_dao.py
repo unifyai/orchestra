@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends
-from sqlalchemy import alias, cast, literal, select, text
+from sqlalchemy import alias, cast, literal, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -15,6 +15,7 @@ from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Context,
+    FieldType,
     JSONLog,
     JSONLogHistory,
     Log,
@@ -651,13 +652,36 @@ class LogDAO:
                 key = entry.get("key")
                 value = entry.get("value")
                 version = entry.get("version")
-                inferred_type = entry.get("explicit_types", {}).get(key, {}).get("type")
-                if inferred_type is None:
-                    inferred_type = self.infer_type(key, value)
+                explicit_types = entry.get("explicit_types", {})
+                key_explicit_type = explicit_types.get(key, {})
+                inferred_type = key_explicit_type.get("type")
                 context_id = entry.get("context_id")
 
                 if not all([log_event_id, key]):
                     continue
+
+                # Handle enum type
+                if inferred_type == "enum" and project_id is not None:
+                    # Extract enum values and restrict flag
+                    enum_values = key_explicit_type.get("values")
+                    enum_restrict = key_explicit_type.get("restrict", False)
+
+                    # Handle enum field type
+                    try:
+                        self._handle_enum_field_type(
+                            project_id=project_id,
+                            context_id=context_id,
+                            key=key,
+                            value=value,
+                            enum_values=enum_values,
+                            enum_restrict=enum_restrict,
+                        )
+                        # If enum field type is created, infer type as str
+                        inferred_type = "str"
+                    except ValueError as e:
+                        raise e
+                elif inferred_type is None:
+                    inferred_type = self.infer_type(key, value)
 
                 # Handle image uploads
                 if (
@@ -963,11 +987,37 @@ class LogDAO:
                 value = update.get("value")
                 version = update.get("version")
                 explicit_types = update.get("explicit_types", {})
+                key_explicit_type = explicit_types.get(key, {})
+                inferred_type = key_explicit_type.get("type")
                 context_id = update.get("context_id")
 
-                # Determine inferred type
-                inferred_type = explicit_types.get(key, {}).get("type")
-                if inferred_type is None:
+                # Get project_id from log_event
+                log_event = (
+                    self.session.query(LogEvent).filter_by(id=log_event_id).first()
+                )
+                project_id = log_event.project_id if log_event else None
+
+                # Handle enum type
+                if inferred_type == "enum" and project_id is not None:
+                    # Extract enum values and restrict flag
+                    enum_values = key_explicit_type.get("values")
+                    enum_restrict = key_explicit_type.get("restrict", False)
+
+                    # Handle enum field type
+                    try:
+                        self._handle_enum_field_type(
+                            project_id=project_id,
+                            context_id=context_id,
+                            key=key,
+                            value=value,
+                            enum_values=enum_values,
+                            enum_restrict=enum_restrict,
+                        )
+                        # If enum field type is created, infer type as str
+                        inferred_type = "str"
+                    except ValueError as e:
+                        raise e
+                elif inferred_type is None:
                     inferred_type = self.infer_type(key, value)
 
                 # Handle image uploads
@@ -1131,6 +1181,89 @@ class LogDAO:
             raise
         except Exception as e:
             raise ValueError(f"Failed to perform bulk update: {str(e)}")
+
+    def _handle_enum_field_type(
+        self,
+        project_id: int,
+        context_id: Optional[int],
+        key: str,
+        value: Any,
+        enum_values: Optional[List[str]],
+        enum_restrict: bool,
+    ) -> None:
+        """
+        Handle enum field type creation, update, and validation.
+
+        Args:
+            project_id: The project ID
+            context_id: Optional context ID
+            key: The field name
+            value: The field value to validate
+            enum_values: List of allowed enum values
+            enum_restrict: Whether to restrict to allowed values
+
+        Raises:
+            ValueError: If value is not in allowed enum values when restrict=True
+        """
+        # Query for existing field type
+        field_type = (
+            self.session.query(FieldType)
+            .filter_by(
+                project_id=project_id,
+                field_name=key,
+                context_id=context_id,
+            )
+            .first()
+        )
+
+        if field_type:
+            # Validate or update enum values
+            if isinstance(value, str):
+                current_enum_values = field_type.enum_values
+                if value not in current_enum_values:
+                    if field_type.enum_restrict:
+                        # Only enforce restriction if explicit non-empty values were provided
+                        raise ValueError(
+                            f"Value '{value}' is not in allowed enum values for field '{key}': {current_enum_values}",
+                        )
+                    else:
+                        # Auto-expand enum values for open enums using FieldTypeDAO
+                        # Use SQLAlchemy's update with array_append to atomically append the value
+                        new_values = (
+                            list(set([value] + enum_values))
+                            if isinstance(enum_values, list)
+                            else [value]
+                        )
+                        stmt = (
+                            update(FieldType)
+                            .where(
+                                FieldType.project_id == project_id,
+                                FieldType.field_name == key,
+                                FieldType.context_id == context_id,
+                            )
+                            .values(
+                                # Use PostgreSQL's array_append function to add the value
+                                # This is done at the database level to avoid race conditions
+                                enum_values=FieldType.enum_values.concat(new_values),
+                            )
+                        )
+                        self.session.execute(stmt)
+
+            if enum_restrict:
+                field_type.enum_restrict = enum_restrict
+
+        else:
+            # Create new field type
+            field_type = FieldType(
+                project_id=project_id,
+                context_id=context_id,
+                field_name=key,
+                field_type="enum",
+                field_category="entry",
+                enum_values=[] if enum_values is None else enum_values,
+                enum_restrict=enum_restrict,
+            )
+            self.session.add(field_type)
 
     def _apply_patch_to_doc(self, doc, segments, new_value, overwrite=False):
         """
