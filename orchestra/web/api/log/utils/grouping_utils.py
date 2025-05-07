@@ -999,9 +999,12 @@ def _build_grouped_data(
                     row[0]: row[1].isoformat() for row in rows if row[1] is not None
                 }
             else:
-                all_ids = session.query(log_event_ids).all()
-                event_ids = [r[0] for r in all_ids]
-                return event_ids
+                if isinstance(log_event_ids, list):
+                    return log_event_ids
+                else:
+                    all_ids = session.query(log_event_ids).all()
+                    event_ids = [r[0] for r in all_ids]
+                    return event_ids
         return _fetch_leaf_logs(log_event_ids)
 
     # Special branch for when we've reached the requested group_depth (we simply return the group counts)
