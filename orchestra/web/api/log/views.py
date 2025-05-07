@@ -2485,46 +2485,7 @@ def get_logs(
         }
 
     # -----------------------------------------------------------
-    # Stage 5: Simplify Leaves if groups_only is True
-    #   (Convert full log objects to simplified leaf values.)
-    # -----------------------------------------------------------
-    if groups_only:
-
-        def simplify_leaves(node):
-            if isinstance(node, list):
-                # Could be a list of log-dict(s) or a list of log-ids (ints)
-                if not node:
-                    return node
-                first_item = node[0]
-                if isinstance(first_item, dict):
-                    if return_timestamps:
-                        return {
-                            str(log["id"]): log["ts"]
-                            for log in node
-                            if "id" in log and "ts" in log
-                        }
-                    else:
-                        return [log["id"] for log in node if "id" in log]
-                else:
-                    return node
-            elif isinstance(node, dict):
-                new_node = {}
-                for k, v in node.items():
-                    if k in ("group_count", "count"):
-                        new_node[k] = v
-                    else:
-                        new_node[k] = simplify_leaves(v)
-                return new_node
-            return node
-
-        if nested_groups:
-            final_result["logs"] = simplify_leaves(final_result["logs"])
-        else:
-            final_result.pop("logs", None)
-            final_result["groups"] = simplify_leaves(final_result["groups"])
-
-    # -----------------------------------------------------------
-    # Stage 6: Return the Final Result.
+    # Stage 5: Return the Final Result.
     # -----------------------------------------------------------
     return final_result
 
