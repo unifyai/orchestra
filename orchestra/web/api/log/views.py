@@ -3465,6 +3465,8 @@ def get_fields(
             "data_type": info["field_type"],
             "field_type": info["field_category"],
             "mutable": info["mutable"],
+            "enum_values": info["enum_values"],
+            "restrict": info["restrict"],
             "created_at": info["created_at"],
             "artifacts": derived_equations.get(key, ""),
         }

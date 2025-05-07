@@ -1,8 +1,19 @@
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel, Field, model_validator
 
 from orchestra.web.api.context.schema import ContextCreateRequest
+
+
+class EnumType(BaseModel):
+    type: Literal["enum"]
+    values: Optional[List[str]] = None
+    restrict: Optional[bool] = False
+
+    class Config:
+        schema_extra = {
+            "description": "Defines an enum field type. Omit 'values' to create an open enum that auto-seeds itself on first write.",
+        }
 
 
 class CreateLogConfig(BaseModel):
@@ -29,7 +40,8 @@ class CreateLogConfig(BaseModel):
         "for batch processing. When using lists for both params and entries, their lengths must match. "
         "Parameters will be automatically versioned based on their values. "
         "Values must be JSON serializable. If a `explicit_types` dictionary is present, its values "
-        "will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag.",
+        "will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag. "
+        "For enum types, use the EnumType model with 'values' list and optional 'restrict' flag. Omit 'values' to create an open enum (auto-seeding).",
         json_schema_extra={
             "examples": [
                 {
@@ -37,6 +49,15 @@ class CreateLogConfig(BaseModel):
                     "function_definition": "...",
                     "explicit_types": {
                         "system-prompt": {"type": "str", "mutable": True},
+                        "category": {
+                            "type": "enum",
+                            "values": ["A", "B", "C"],
+                            "restrict": True,
+                        },
+                        "status": {
+                            "type": "enum",
+                            "restrict": False,
+                        },  # Open enum with no values
                     },
                 },
                 [
@@ -52,13 +73,22 @@ class CreateLogConfig(BaseModel):
         "will be logged into the platform. Can be either a single dictionary or a list of dictionaries "
         "for batch processing. When using lists for both params and entries, their lengths must match. "
         "Values must be JSON serializable. If a `explicit_types` dictionary is present, "
-        "its values will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag.",
+        "its values will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag. "
+        "For enum types, use the EnumType model with 'values' list and optional 'restrict' flag. Omit 'values' to create an open enum (auto-seeding).",
         json_schema_extra={
             "examples": [
                 {
                     "input": "...",
                     "score-test-1": "...",
-                    "explicit_types": {"input": {"type": "Image", "mutable": True}},
+                    "explicit_types": {
+                        "input": {"type": "Image", "mutable": True},
+                        "status": {
+                            "type": "enum",
+                            "values": ["pending", "completed", "failed"],
+                            "restrict": True,
+                        },
+                        "tag": {"type": "enum"},  # Open enum with no values
+                    },
                 },
                 [
                     {"input": "test1", "score": 0.8},
@@ -141,7 +171,15 @@ class UpdateLogRequest(BaseModel):
             "example": {
                 "system-prompt": "...",
                 "function_definition": "...",
-                "explicit_types": {"system-prompt": {"type": "str", "mutable": True}},
+                "explicit_types": {
+                    "system-prompt": {"type": "str", "mutable": True},
+                    "category": {
+                        "type": "enum",
+                        "values": ["A", "B", "C"],
+                        "restrict": False,
+                    },
+                    "priority": {"type": "enum"},  # Open enum with no values
+                },
             },
         },
     )
@@ -155,9 +193,15 @@ class UpdateLogRequest(BaseModel):
             "example": {
                 "input": "...",
                 "score-test-1": "...",
-                "metadata.author": "John Doe",
-                "results[0].score": 0.95,
-                "explicit_types": {"input": {"type": "Image", "mutable": True}},
+                "explicit_types": {
+                    "input": {"type": "Image", "mutable": True},
+                    "status": {
+                        "type": "enum",
+                        "values": ["pending", "completed", "failed"],
+                        "restrict": True,
+                    },
+                    "label": {"type": "enum"},  # Open enum with no values
+                },
             },
         },
     )
