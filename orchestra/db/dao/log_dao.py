@@ -1,4 +1,5 @@
 import base64
+import copy
 import re
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Union
@@ -1130,3 +1131,220 @@ class LogDAO:
             raise
         except Exception as e:
             raise ValueError(f"Failed to perform bulk update: {str(e)}")
+
+    def _apply_patch_to_doc(self, doc, segments, new_value, overwrite=False):
+        """
+        Apply a patch to a nested location in a JSON document.
+
+        Args:
+            doc: The JSON document (dict or list) to modify
+            segments: List of path segments (strings or numeric strings)
+            new_value: The value to set at the target location
+            overwrite: Whether to allow overwriting existing values
+
+        Returns:
+            The modified document
+
+        Raises:
+            OverwriteError: If overwrite=False and the existing value differs from new_value
+            ValueError: If the path is invalid or segments don't match document structure
+        """
+        if not segments:
+            return new_value
+
+        # Make a deep copy to avoid modifying the original during navigation
+        current = doc
+        parent = None
+        final_key = segments[-1]
+
+        # Navigate to the parent of the target location
+        for i, segment in enumerate(segments[:-1]):
+            parent = current
+
+            if isinstance(current, dict):
+                if segment not in current:
+                    current[segment] = {} if i < len(segments) - 2 else {}
+                current = current[segment]
+            elif isinstance(current, list):
+                try:
+                    idx = int(segment)
+                    if idx < 0 or idx >= len(current):
+                        raise ValueError(
+                            f"List index {idx} out of range for segment {segment}",
+                        )
+                    current = current[idx]
+                except ValueError:
+                    raise ValueError(f"Invalid list index: {segment}")
+            else:
+                raise ValueError(
+                    f"Cannot navigate through non-container at segment {segment}",
+                )
+
+        # Handle the final segment
+        if isinstance(current, dict):
+            # Check if we're allowed to overwrite
+            if (
+                not overwrite
+                and final_key in current
+                and current[final_key] != new_value
+            ):
+                raise OverwriteError(f"Cannot overwrite existing value at {segments}")
+            current[final_key] = new_value
+        elif isinstance(current, list):
+            try:
+                idx = int(final_key)
+                if idx < 0 or idx >= len(current):
+                    raise ValueError(
+                        f"List index {idx} out of range for final segment {final_key}",
+                    )
+                # Check if we're allowed to overwrite
+                if not overwrite and current[idx] != new_value:
+                    raise OverwriteError(
+                        f"Cannot overwrite existing value at {segments}",
+                    )
+                current[idx] = new_value
+            except ValueError:
+                raise ValueError(f"Invalid list index for final segment: {final_key}")
+        else:
+            raise ValueError(f"Cannot set path in scalar at final segment {final_key}")
+
+        return doc
+
+    def apply_jsonb_patch(
+        self,
+        patches: List[Dict[str, Any]],
+        overwrite: bool = False,
+        field_types: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Apply JSONB patches to nested paths within Log.value and JSONLog.value.
+        This allows partial updates to nested JSON objects in a single database transaction.
+        """
+        if not patches:
+            return
+
+        field_types = field_types or {}
+
+        try:
+            now = datetime.now(timezone.utc)
+            # Group patches by (log_event_id, base_key)
+            grouped = {}
+            for patch in patches:
+                le_id = patch.get("log_event_id")
+                base_key = patch.get("base_key")
+                if not le_id or not base_key:
+                    continue
+                grouped.setdefault((le_id, base_key), []).append(patch)
+
+            for (le_id, base_key), group in grouped.items():
+                # Lock the Log row for update
+                log_entry = (
+                    self.session.query(Log)
+                    .filter_by(log_event_id=le_id, key=base_key)
+                    .with_for_update()
+                    .first()
+                )
+                if not log_entry:
+                    raise ValueError(
+                        f"Log entry not found for log_event_id={le_id}, key='{base_key}'",
+                    )
+
+                # Check mutability
+                ft_info = field_types.get(base_key)
+                if ft_info and not ft_info.get("mutable", False):
+                    raise ImmutableFieldError(f"Field '{base_key}' is immutable")
+
+                # Determine versioned context
+                context_id = group[0].get("context_id")
+                context = None
+                is_versioned = False
+                if context_id is not None:
+                    context = (
+                        self.session.query(Context).filter_by(id=context_id).first()
+                    )
+                    is_versioned = bool(context and context.is_versioned)
+
+                # Get the corresponding JSONLog if it exists
+                json_log = (
+                    self.session.query(JSONLog)
+                    .filter_by(log_event_id=le_id, key=base_key)
+                    .first()
+                )
+
+                # Get current document value
+                current_doc = copy.deepcopy(log_entry.value)
+
+                # Handle versioned history before any modifications if needed
+                if is_versioned:
+                    self._handle_versioned_history(
+                        context_id=context_id,
+                        log_event_id=le_id,
+                        key=base_key,
+                        value=current_doc,
+                        inferred_type=log_entry.inferred_type,
+                        description=f"Patched nested JSON document",
+                        json_value=current_doc,
+                    )
+
+                for patch in group:
+                    path_str = patch.get("path_segments", "")
+                    new_value = patch.get("new_value")
+                    patch_overwrite = patch.get("overwrite", overwrite)
+
+                    # Parse path_segments into list of keys and indices
+                    segments = []
+                    s = path_str
+                    i = 0
+                    while i < len(s):
+                        if s[i] == ".":
+                            j = i + 1
+                            token = ""
+                            while j < len(s) and s[j] not in ".[":
+                                token += s[j]
+                                j += 1
+                            segments.append(token)
+                            i = j
+                        elif s[i] == "[":
+                            j = i + 1
+                            token = ""
+                            while j < len(s) and s[j] != "]":
+                                token += s[j]
+                                j += 1
+                            segments.append(token)
+                            i = j + 1
+                        else:
+                            j = i
+                            token = ""
+                            while j < len(s) and s[j] not in ".[":
+                                token += s[j]
+                                j += 1
+                            segments.append(token)
+                            i = j
+
+                    # Apply the patch to the document
+                    try:
+                        current_doc = self._apply_patch_to_doc(
+                            current_doc,
+                            segments,
+                            new_value,
+                            patch_overwrite,
+                        )
+                    except Exception as e:
+                        raise e
+
+                # Update the Log entry with the modified document
+                log_entry.value = current_doc
+                log_entry.updated_at = now
+
+                # Update the JSONLog entry if it exists
+                if json_log:
+                    json_log.value = current_doc
+
+            self.session.commit()
+
+        except (OverwriteError, ImmutableFieldError):
+            self.session.rollback()
+            raise
+        except Exception as e:
+            self.session.rollback()
+            raise ValueError(f"Failed to apply JSONB patch: {str(e)}")
