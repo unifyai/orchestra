@@ -1,4 +1,4 @@
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from fastapi import Depends
 from sqlalchemy import select
@@ -22,6 +22,8 @@ class FieldTypeDAO:
         context_id: int,
         mutable: bool = False,
         field_category: str = "entry",
+        enum_values: Optional[List[str]] = None,
+        enum_restrict: bool = False,
     ) -> None:
         """Upsert approach: insert or do nothing if it exists."""
         # First check if a field with this name exists but with a different category
@@ -53,6 +55,8 @@ class FieldTypeDAO:
             field_category=field_category,
             mutable=mutable,
             context_id=context_id,
+            enum_values=enum_values,
+            enum_restrict=enum_restrict,
         )
         # "on_conflict_do_nothing" will skip insertion if (project_id, field_name, context_id) already exists:
         stmt = stmt.on_conflict_do_nothing(
@@ -92,6 +96,8 @@ class FieldTypeDAO:
                     "field_type": field_type.field_type,
                     "field_category": field_type.field_category,
                     "mutable": field_type.mutable,
+                    "enum_values": field_type.enum_values,
+                    "restrict": field_type.enum_restrict,
                     "created_at": (
                         field_type.created_at.isoformat()
                         if field_type.created_at
@@ -114,6 +120,8 @@ class FieldTypeDAO:
         context_id: int,
         mutable: bool = False,
         field_category: str = "entry",
+        enum_values: Optional[List[str]] = None,
+        enum_restrict: bool = False,
     ) -> None:
         """Upsert approach: insert or overwrite the existing field_type."""
         # First check if a field with this name exists but with a different category
@@ -141,6 +149,8 @@ class FieldTypeDAO:
             field_category=field_category,
             mutable=mutable,
             context_id=context_id,
+            enum_values=enum_values,
+            enum_restrict=enum_restrict,
         )
         # "on_conflict_do_update" to update existing row if it already exists
         stmt = stmt.on_conflict_do_update(
@@ -149,6 +159,8 @@ class FieldTypeDAO:
                 "field_type": inferred_type,
                 "field_category": field_category,
                 "mutable": mutable,
+                "enum_values": enum_values,
+                "enum_restrict": enum_restrict,
             },
         )
         self.session.execute(stmt)
@@ -299,7 +311,7 @@ class FieldTypeDAO:
         context_id: int,
         fields: Dict[str, Optional[str]],
     ) -> None:
-        """Create column definitions for a context without creating logs.
+        """Create field definitions for a context without creating logs.
 
         Args:
             project_id: The project ID
