@@ -909,6 +909,8 @@ class FieldType(Base):
         server_default="entry",
     )  # entry, param, derived_entry
     mutable = Column(Boolean(), nullable=False, server_default="f")  # type: ignore
+    enum_values = Column(JSONB, nullable=False, server_default=text("'[]'"))
+    enum_restrict = Column(Boolean(), nullable=False, server_default="false")
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     __table_args__ = (
