@@ -43,6 +43,8 @@ class TileDAO:
         filters: Optional[str] = None,
         common_filter: Optional[str] = None,
         metric: Optional[str] = None,
+        column_context: Optional[str] = None,
+        grouping: Optional[str] = None,
         is_checkpoint: bool = False,
         checkpoint_or_active_id: Optional[str] = None,
     ) -> Tile:
@@ -70,6 +72,8 @@ class TileDAO:
             filters: Optional filters
             common_filter: Optional common filter
             metric: Optional metric data
+            column_context: Optional column context data
+            grouping: Optional grouping data
             is_checkpoint: Whether this is a checkpoint tile
 
         Returns:
@@ -111,6 +115,8 @@ class TileDAO:
             filters=filters,
             common_filter=common_filter,
             metric=metric,
+            column_context=column_context,
+            grouping=grouping,
             is_checkpoint=is_checkpoint,
             checkpoint_or_active_id=checkpoint_or_active_id,
         )
@@ -238,6 +244,8 @@ class TileDAO:
         filters: Optional[str] = None,
         common_filter: Optional[str] = None,
         metric: Optional[str] = None,
+        column_context: Optional[str] = None,
+        grouping: Optional[str] = None,
     ) -> Optional[Tile]:
         """
         Update tile by ID or by tab_id and name.
@@ -265,6 +273,8 @@ class TileDAO:
             filters: New filters
             common_filter: New common filter
             metric: New metric data
+            column_context: New column context data
+            grouping: New grouping data
 
         Returns:
             The updated tile if found, None otherwise
@@ -336,6 +346,10 @@ class TileDAO:
             tile.common_filter = common_filter
         if metric is not None:
             tile.metric = metric
+        if column_context is not None:
+            tile.column_context = column_context
+        if grouping is not None:
+            tile.grouping = grouping
         if is_checkpoint is not None and (id is not None or not is_checkpoint):
             # Only update is_checkpoint if:
             # 1. We're identifying by ID, or
@@ -444,6 +458,8 @@ class TileDAO:
                 filters=filters,
                 common_filter=common_filter,
                 metric=metric,
+                column_context=column_context,
+                grouping=grouping,
                 is_checkpoint=is_checkpoint,
             )
             tile_id = base_tile.id
@@ -452,12 +468,10 @@ class TileDAO:
             id=tile_id,
             tile_id=tile_id,
             table_type=table_type,
-            column_context=column_context,
             page_number=page_number,
             column_order=column_order,
             hidden_columns=hidden_columns,
             sorting=sorting,
-            grouping=grouping,
             group_sorting=group_sorting,
             columns_pin_left=columns_pin_left,
             columns_pin_right=columns_pin_right,
@@ -521,31 +535,11 @@ class TileDAO:
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
         is_checkpoint: Optional[bool] = False,
-        position: Optional[dict] = None,
-        x_position: Optional[float] = None,
-        y_position: Optional[float] = None,
-        width: Optional[float] = None,
-        height: Optional[float] = None,
-        min_width: Optional[float] = None,
-        min_height: Optional[float] = None,
-        visible: Optional[bool] = None,
-        locked: Optional[bool] = None,
-        moved: Optional[bool] = None,
-        static: Optional[bool] = None,
-        context: Optional[str] = None,
-        table: Optional[str] = None,
-        auto_update: Optional[str] = None,
-        freeze: Optional[str] = None,
-        filters: Optional[str] = None,
-        common_filter: Optional[str] = None,
-        metric: Optional[str] = None,
         table_type: Optional[str] = None,
-        column_context: Optional[str] = None,
         page_number: Optional[str] = None,
         column_order: Optional[str] = None,
         hidden_columns: Optional[str] = None,
         sorting: Optional[str] = None,
-        grouping: Optional[str] = None,
         group_sorting: Optional[str] = None,
         columns_pin_left: Optional[str] = None,
         columns_pin_right: Optional[str] = None,
@@ -567,60 +561,9 @@ class TileDAO:
         if table_tile is None:
             return None
 
-        # Process position data
-        position_fields = {}
-        if position:
-            position_fields = self._position_from_dict(position)
-        else:
-            # Handle individual position fields
-            if x_position is not None:
-                position_fields["x_position"] = x_position
-            if y_position is not None:
-                position_fields["y_position"] = y_position
-            if width is not None:
-                position_fields["width"] = width
-            if height is not None:
-                position_fields["height"] = height
-
-        # Apply position fields
-        for field, value in position_fields.items():
-            setattr(table_tile, field, value)
-
-        # Update the base tile fields
-        if name is not None and id is not None:  # Only update name if identifying by ID
-            table_tile.name = name
-        if min_width is not None:
-            table_tile.min_width = min_width
-        if min_height is not None:
-            table_tile.min_height = min_height
-        if visible is not None:
-            table_tile.visible = visible
-        if locked is not None:
-            table_tile.locked = locked
-        if moved is not None:
-            table_tile.moved = moved
-        if static is not None:
-            table_tile.static = static
-        if context is not None:
-            table_tile.context = context
-        if table is not None:
-            table_tile.table = table
-        if auto_update is not None:
-            table_tile.auto_update = auto_update
-        if freeze is not None:
-            table_tile.freeze = freeze
-        if filters is not None:
-            table_tile.filters = filters
-        if common_filter is not None:
-            table_tile.common_filter = common_filter
-        if metric is not None:
-            table_tile.metric = metric
-
         # Update specialized fields
         if table_type is not None:
             table_tile.table_type = table_type
-        if column_context is not None:
-            table_tile.column_context = column_context
         if page_number is not None:
             table_tile.page_number = page_number
         if column_order is not None:
@@ -629,8 +572,6 @@ class TileDAO:
             table_tile.hidden_columns = hidden_columns
         if sorting is not None:
             table_tile.sorting = sorting
-        if grouping is not None:
-            table_tile.grouping = grouping
         if group_sorting is not None:
             table_tile.group_sorting = group_sorting
         if columns_pin_left is not None:
@@ -639,12 +580,6 @@ class TileDAO:
             table_tile.columns_pin_right = columns_pin_right
         if selected is not None:
             table_tile.selected = selected
-
-        if is_checkpoint is not None and (id is not None or not is_checkpoint):
-            # Only update is_checkpoint if:
-            # 1. We're identifying by ID, or
-            # 2. We're identifying by name and we're setting is_checkpoint to False
-            table_tile.is_checkpoint = is_checkpoint
 
         self.session.commit()
         return table_tile
@@ -671,6 +606,8 @@ class TileDAO:
         filters: Optional[str] = None,
         common_filter: Optional[str] = None,
         metric: Optional[str] = None,
+        column_context: Optional[str] = None,
+        grouping: Optional[str] = None,
         plot_type: Optional[str] = None,
         plot_scale_x: Optional[str] = None,
         plot_scale_y: Optional[str] = None,
@@ -707,6 +644,8 @@ class TileDAO:
                 filters=filters,
                 common_filter=common_filter,
                 metric=metric,
+                column_context=column_context,
+                grouping=grouping,
                 is_checkpoint=is_checkpoint,
             )
             tile_id = base_tile.id
@@ -772,6 +711,8 @@ class TileDAO:
         filters: Optional[str] = None,
         common_filter: Optional[str] = None,
         metric: Optional[str] = None,
+        column_context: Optional[str] = None,
+        grouping: Optional[str] = None,
         plot_type: Optional[str] = None,
         plot_scale_x: Optional[str] = None,
         plot_scale_y: Optional[str] = None,
@@ -847,6 +788,10 @@ class TileDAO:
             plot_tile.common_filter = common_filter
         if metric is not None:
             plot_tile.metric = metric
+        if column_context is not None:
+            plot_tile.column_context = column_context
+        if grouping is not None:
+            plot_tile.grouping = grouping
 
         # Update specialized fields
         if plot_type is not None:
@@ -901,6 +846,8 @@ class TileDAO:
         filters: Optional[str] = None,
         common_filter: Optional[str] = None,
         metric: Optional[str] = None,
+        column_context: Optional[str] = None,
+        grouping: Optional[str] = None,
         content: str = "",
         file_path: Optional[str] = None,
         file_type: Optional[str] = None,
@@ -930,6 +877,8 @@ class TileDAO:
                 filters=filters,
                 common_filter=common_filter,
                 metric=metric,
+                column_context=column_context,
+                grouping=grouping,
                 is_checkpoint=is_checkpoint,
             )
             tile_id = base_tile.id
@@ -988,6 +937,8 @@ class TileDAO:
         filters: Optional[str] = None,
         common_filter: Optional[str] = None,
         metric: Optional[str] = None,
+        column_context: Optional[str] = None,
+        grouping: Optional[str] = None,
         content: Optional[str] = None,
         file_path: Optional[str] = None,
         file_type: Optional[str] = None,
@@ -1056,6 +1007,10 @@ class TileDAO:
             editor_tile.common_filter = common_filter
         if metric is not None:
             editor_tile.metric = metric
+        if column_context is not None:
+            editor_tile.column_context = column_context
+        if grouping is not None:
+            editor_tile.grouping = grouping
 
         # Update specialized fields
         if content is not None:
@@ -1096,6 +1051,8 @@ class TileDAO:
         filters: Optional[str] = None,
         common_filter: Optional[str] = None,
         metric: Optional[str] = None,
+        column_context: Optional[str] = None,
+        grouping: Optional[str] = None,
         base_index: Optional[str] = None,
         is_checkpoint: bool = False,
     ) -> ViewTile:
@@ -1123,6 +1080,8 @@ class TileDAO:
                 filters=filters,
                 common_filter=common_filter,
                 metric=metric,
+                column_context=column_context,
+                grouping=grouping,
                 is_checkpoint=is_checkpoint,
             )
             tile_id = base_tile.id
@@ -1161,24 +1120,6 @@ class TileDAO:
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
         is_checkpoint: Optional[bool] = False,
-        position: Optional[dict] = None,
-        x_position: Optional[float] = None,
-        y_position: Optional[float] = None,
-        width: Optional[float] = None,
-        height: Optional[float] = None,
-        min_width: Optional[float] = None,
-        min_height: Optional[float] = None,
-        visible: Optional[bool] = None,
-        locked: Optional[bool] = None,
-        moved: Optional[bool] = None,
-        static: Optional[bool] = None,
-        context: Optional[str] = None,
-        table: Optional[str] = None,
-        auto_update: Optional[str] = None,
-        freeze: Optional[str] = None,
-        filters: Optional[str] = None,
-        common_filter: Optional[str] = None,
-        metric: Optional[str] = None,
         base_index: Optional[str] = None,
     ) -> Optional[ViewTile]:
         """
@@ -1197,64 +1138,9 @@ class TileDAO:
         if view_tile is None:
             return None
 
-        # Process position data
-        position_fields = {}
-        if position:
-            position_fields = self._position_from_dict(position)
-        else:
-            # Handle individual position fields
-            if x_position is not None:
-                position_fields["x_position"] = x_position
-            if y_position is not None:
-                position_fields["y_position"] = y_position
-            if width is not None:
-                position_fields["width"] = width
-            if height is not None:
-                position_fields["height"] = height
-
-        # Apply position fields
-        for field, value in position_fields.items():
-            setattr(view_tile, field, value)
-
-        # Update the base tile fields
-        if name is not None and id is not None:  # Only update name if identifying by ID
-            view_tile.name = name
-        if min_width is not None:
-            view_tile.min_width = min_width
-        if min_height is not None:
-            view_tile.min_height = min_height
-        if visible is not None:
-            view_tile.visible = visible
-        if locked is not None:
-            view_tile.locked = locked
-        if moved is not None:
-            view_tile.moved = moved
-        if static is not None:
-            view_tile.static = static
-        if context is not None:
-            view_tile.context = context
-        if table is not None:
-            view_tile.table = table
-        if auto_update is not None:
-            view_tile.auto_update = auto_update
-        if freeze is not None:
-            view_tile.freeze = freeze
-        if filters is not None:
-            view_tile.filters = filters
-        if common_filter is not None:
-            view_tile.common_filter = common_filter
-        if metric is not None:
-            view_tile.metric = metric
-
         # Update specialized fields
         if base_index is not None:
             view_tile.base_index = base_index
-
-        if is_checkpoint is not None and (id is not None or not is_checkpoint):
-            # Only update is_checkpoint if:
-            # 1. We're identifying by ID, or
-            # 2. We're identifying by name and we're setting is_checkpoint to False
-            view_tile.is_checkpoint = is_checkpoint
 
         self.session.commit()
         return view_tile
@@ -1311,12 +1197,10 @@ class TileDAO:
                     if hasattr(table_tile, field):
                         if field in (
                             "table_type",
-                            "column_context",
                             "page_number",
                             "column_order",
                             "hidden_columns",
                             "sorting",
-                            "grouping",
                             "group_sorting",
                             "columns_pin_left",
                             "columns_pin_right",
@@ -1382,6 +1266,8 @@ class TileDAO:
             "filters",
             "common_filter",
             "metric",
+            "column_context",
+            "grouping",
         ]
 
         for field in allowed_fields:
@@ -1449,12 +1335,10 @@ class TileDAO:
                         and field
                         in (
                             "table_type",
-                            "column_context",
                             "page_number",
                             "column_order",
                             "hidden_columns",
                             "sorting",
-                            "grouping",
                             "group_sorting",
                             "columns_pin_left",
                             "columns_pin_right",
@@ -1610,6 +1494,8 @@ class TileDAO:
                 metric=source_tile.metric,
                 min_width=source_tile.min_width,
                 min_height=source_tile.min_height,
+                column_context=source_tile.column_context,
+                grouping=source_tile.grouping,
                 is_checkpoint=True,
                 **position_data,
             )
@@ -1642,6 +1528,8 @@ class TileDAO:
                 metric=source_tile.metric,
                 min_width=source_tile.min_width,
                 min_height=source_tile.min_height,
+                column_context=source_tile.column_context,
+                grouping=source_tile.grouping,
                 is_checkpoint=True,
                 checkpoint_or_active_id=source_tile.id,
                 **position_data,
@@ -1980,6 +1868,8 @@ class TileDAO:
                                 "filters": tile.filters,
                                 "common_filter": tile.common_filter,
                                 "metric": tile.metric,
+                                "column_context": tile.column_context,
+                                "grouping": tile.grouping,
                                 "is_checkpoint": tile.is_checkpoint,
                                 "checkpoint_or_active_id": None,  # Will be updated if needed
                                 "created_at": datetime.now(timezone.utc),
@@ -2011,6 +1901,8 @@ class TileDAO:
                             filters=source_tile.filters,
                             common_filter=source_tile.common_filter,
                             metric=source_tile.metric,
+                            column_context=source_tile.column_context,
+                            grouping=source_tile.grouping,
                             is_checkpoint=source_tile.is_checkpoint,
                         )
 
@@ -2058,12 +1950,10 @@ class TileDAO:
                             {
                                 "id": existing_table_tile.id,
                                 "table_type": tt.table_type,
-                                "column_context": tt.column_context,
                                 "page_number": tt.page_number,
                                 "column_order": tt.column_order,
                                 "hidden_columns": tt.hidden_columns,
                                 "sorting": tt.sorting,
-                                "grouping": tt.grouping,
                                 "group_sorting": tt.group_sorting,
                                 "columns_pin_left": tt.columns_pin_left,
                                 "columns_pin_right": tt.columns_pin_right,
@@ -2077,12 +1967,10 @@ class TileDAO:
                                 "id": new_tile_id,  # Same ID as the base tile
                                 "tile_id": new_tile_id,
                                 "table_type": tt.table_type,
-                                "column_context": tt.column_context,
                                 "page_number": tt.page_number,
                                 "column_order": tt.column_order,
                                 "hidden_columns": tt.hidden_columns,
                                 "sorting": tt.sorting,
-                                "grouping": tt.grouping,
                                 "group_sorting": tt.group_sorting,
                                 "columns_pin_left": tt.columns_pin_left,
                                 "columns_pin_right": tt.columns_pin_right,

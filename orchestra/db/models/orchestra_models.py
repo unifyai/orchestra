@@ -1113,6 +1113,8 @@ class Tile(Base):
     filters = Column(String(), nullable=True)
     common_filter = Column(String(), nullable=True)
     metric = Column(String(), nullable=True)
+    column_context = Column(String(), nullable=True)
+    grouping = Column(String(), nullable=True)
 
     # Flag to indicate if this is a checkpoint (manual save) or auto-save
     is_checkpoint = Column(Boolean(), nullable=False, server_default="f")
@@ -1179,12 +1181,10 @@ class TableTile(Base):
 
     # Table-specific properties
     table_type = Column(String(), nullable=True)
-    column_context = Column(String(), nullable=True)
     page_number = Column(String(), nullable=True)
     column_order = Column(String(), nullable=True)
     hidden_columns = Column(String(), nullable=True)
     sorting = Column(String(), nullable=True)
-    grouping = Column(String(), nullable=True)
     group_sorting = Column(String(), nullable=True)
     columns_pin_left = Column(String(), nullable=True)
     columns_pin_right = Column(String(), nullable=True)

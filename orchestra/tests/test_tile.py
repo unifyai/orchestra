@@ -102,6 +102,8 @@ async def _create_test_tile(
     filters=None,
     common_filter=None,
     metric=None,
+    column_context=None,
+    grouping=None,
     table_tile_data=None,
     plot_tile_data=None,
     view_tile_data=None,
@@ -131,6 +133,8 @@ async def _create_test_tile(
         filters: Filters data
         common_filter: Common filter data
         metric: Metric data
+        column_context: Column context data
+        grouping: Grouping data
         table_tile_data: Specialized data for table tiles
         plot_tile_data: Specialized data for plot tiles
         view_tile_data: Specialized data for view tiles
@@ -159,6 +163,8 @@ async def _create_test_tile(
         "filters": filters,
         "common_filter": common_filter,
         "metric": metric,
+        "column_context": column_context,
+        "grouping": grouping,
     }
 
     # Remove None values to avoid sending empty fields
@@ -187,12 +193,10 @@ async def _create_test_table_tile(
     tab_id,
     name=f"{TEST_TILE}-table",
     table_type=None,
-    column_context=None,
     page_number=None,
     column_order=None,
     hidden_columns=None,
     sorting=None,
-    grouping=None,
     group_sorting=None,
     columns_pin_left=None,
     columns_pin_right=None,
@@ -206,12 +210,10 @@ async def _create_test_table_tile(
         tab_id: ID of the tab to create the tile in
         name: Name of the tile
         table_type: Type of table
-        column_context: Column context data
         page_number: Page number
         column_order: Column order data
         hidden_columns: Hidden columns data
         sorting: Sorting data
-        grouping: Grouping data
         group_sorting: Group sorting data
         columns_pin_left: Columns pinned to left
         columns_pin_right: Columns pinned to right
@@ -221,12 +223,10 @@ async def _create_test_table_tile(
 
     table_tile_data = {
         "table_type": table_type,
-        "column_context": column_context,
         "page_number": page_number,
         "column_order": column_order,
         "hidden_columns": hidden_columns,
         "sorting": sorting,
-        "grouping": grouping,
         "group_sorting": group_sorting,
         "columns_pin_left": columns_pin_left,
         "columns_pin_right": columns_pin_right,
@@ -692,7 +692,7 @@ async def test_create_different_tile_types(client: AsyncClient):
         client,
         tab_id,
         table_type="basic",
-        column_context="context1",
+        selected="123,456",
         page_number="1",
     )
     assert table_response.status_code == 201
@@ -700,7 +700,7 @@ async def test_create_different_tile_types(client: AsyncClient):
     assert table_data["type"] == "Table"
     assert "table_tile" in table_data
     assert table_data["table_tile"]["table_type"] == "basic"
-    assert table_data["table_tile"]["column_context"] == "context1"
+    assert table_data["table_tile"]["selected"] == "123,456"
     assert table_data["table_tile"]["page_number"] == "1"
 
     # Create a plot tile
@@ -1154,7 +1154,7 @@ async def test_update_specialized_tile_data(client: AsyncClient):
         tab_id,
         name="specialized-table",
         table_type="basic",
-        column_context="initial_context",
+        selected="Entries/id_123456,Entries/id_123457",
     )
     table_tile_id = table_tile_response.json()["id"]
 
@@ -1162,7 +1162,7 @@ async def test_update_specialized_tile_data(client: AsyncClient):
     update_data = {
         "table_tile": {
             "table_type": "advanced",
-            "column_context": "updated_context",
+            "selected": "Entries/id_123458,Entries/id_123459",
             "sorting": "column1:asc",
         },
     }
@@ -1172,7 +1172,9 @@ async def test_update_specialized_tile_data(client: AsyncClient):
     # Verify the update worked
     updated_data = response.json()
     assert updated_data["table_tile"]["table_type"] == "advanced"
-    assert updated_data["table_tile"]["column_context"] == "updated_context"
+    assert (
+        updated_data["table_tile"]["selected"] == "Entries/id_123458,Entries/id_123459"
+    )
     assert updated_data["table_tile"]["sorting"] == "column1:asc"
 
     # Create a plot tile
@@ -1243,6 +1245,7 @@ async def test_patch_specialized_tile_endpoint(client: AsyncClient):
 
     # Create tiles of each type
     table_tile = await _create_test_table_tile(client, tab_id, name="spec-table-tile")
+    print(table_tile.json())
     table_id = table_tile.json()["id"]
 
     plot_tile = await _create_test_plot_tile(client, tab_id, name="spec-plot-tile")
@@ -1261,7 +1264,7 @@ async def test_patch_specialized_tile_endpoint(client: AsyncClient):
     # Test patch for table tile
     table_patch = {
         "table_type": "specialized-type",
-        "column_context": "updated-context",
+        "selected": "Entries/id_123460,Entries/id_123461",
         "sorting": "field:desc",
     }
     table_response = await _patch_specialized_tile(
@@ -1273,7 +1276,7 @@ async def test_patch_specialized_tile_endpoint(client: AsyncClient):
     assert table_response.status_code == 200
     table_data = table_response.json()
     assert table_data["table_tile"]["table_type"] == "specialized-type"
-    assert table_data["table_tile"]["column_context"] == "updated-context"
+    assert table_data["table_tile"]["selected"] == "Entries/id_123460,Entries/id_123461"
     assert table_data["table_tile"]["sorting"] == "field:desc"
 
     # Test patch for plot tile
