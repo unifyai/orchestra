@@ -315,3 +315,187 @@ async def test_update_logs_filter_missing_project_or_context(client: AsyncClient
         "When passing a filter dict in `logs`, you must supply `project`."
         in response.json()["detail"]
     )
+
+
+@pytest.mark.anyio
+async def test_update_logs_nested_array(client: AsyncClient):
+    """Test updating a specific element in an array using nested path syntax."""
+    project_name = "nested-array-project"
+    _ = await _create_project(client, project_name)
+
+    # Create a log with an array
+    log_entries = {
+        "my_list": ["item1", "item2", "item3"],
+        "explicit_types": {
+            "my_list": {"type": "list", "mutable": True},
+        },
+    }
+
+    response = await _create_log(client, project_name, entries=log_entries)
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Update a specific element in the array
+    update_entries = {
+        "my_list[1]": "updated-item2",
+    }
+
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "entries": update_entries,
+            "project": project_name,
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs updated successfully!"
+
+    # Verify only the specified element was updated
+    response = await _get_log(client, project_name, log_id)
+    assert response.status_code == 200, response.json()
+    updated_list = response.json()["logs"][0]["entries"]["my_list"]
+    assert updated_list == ["item1", "updated-item2", "item3"]
+
+
+@pytest.mark.anyio
+async def test_update_logs_nested_object(client: AsyncClient):
+    """Test updating a nested field in an object using dot notation."""
+    project_name = "nested-object-project"
+    _ = await _create_project(client, project_name)
+
+    # Create a log with a nested object
+    log_entries = {
+        "my_dict": {
+            "name": "test",
+            "sub": {
+                "value": 10,
+                "flag": True,
+            },
+        },
+        "explicit_types": {
+            "my_dict": {"type": "dict", "mutable": True},
+        },
+    }
+
+    response = await _create_log(client, project_name, entries=log_entries)
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Update a nested field using dot notation
+    update_entries = {
+        "my_dict.sub.value": 42,
+    }
+
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "entries": update_entries,
+            "project": project_name,
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs updated successfully!"
+
+    # Verify only the specified field was updated
+    response = await _get_log(client, project_name, log_id)
+    assert response.status_code == 200, response.json()
+    updated_dict = response.json()["logs"][0]["entries"]["my_dict"]
+    assert updated_dict["name"] == "test"  # Unchanged
+    assert updated_dict["sub"]["value"] == 42  # Updated
+    assert updated_dict["sub"]["flag"] is True  # Unchanged
+
+
+@pytest.mark.anyio
+async def test_update_logs_nested_mixed_notation(client: AsyncClient):
+    """Test updating using mixed dot and bracket notation."""
+    project_name = "nested-mixed-notation-project"
+    _ = await _create_project(client, project_name)
+
+    # Create a log with a complex nested structure
+    log_entries = {
+        "complex": {
+            "items": [
+                {"id": 1, "name": "first"},
+                {"id": 2, "name": "second"},
+                {"id": 3, "name": "third"},
+            ],
+        },
+        "explicit_types": {
+            "complex": {"type": "dict", "mutable": True},
+        },
+    }
+
+    response = await _create_log(client, project_name, entries=log_entries)
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Update using mixed dot and bracket notation
+    update_entries = {
+        "complex.items[1].name": "UPDATED-SECOND",
+    }
+
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "entries": update_entries,
+            "project": project_name,
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs updated successfully!"
+
+    # Verify only the specified field was updated
+    response = await _get_log(client, project_name, log_id)
+    assert response.status_code == 200, response.json()
+    updated_items = response.json()["logs"][0]["entries"]["complex"]["items"]
+    assert updated_items[0]["name"] == "first"  # Unchanged
+    assert updated_items[1]["name"] == "UPDATED-SECOND"  # Updated
+    assert updated_items[2]["name"] == "third"  # Unchanged
+    assert updated_items[1]["id"] == 2  # Unchanged
+
+
+@pytest.mark.anyio
+async def test_update_logs_invalid_nested_path(client: AsyncClient):
+    """Test that using an invalid path returns a 400 error."""
+    project_name = "invalid-path-project"
+    _ = await _create_project(client, project_name)
+
+    # Create a log with an array
+    log_entries = {
+        "my_list": ["item1", "item2", "item3"],
+        "explicit_types": {
+            "my_list": {"type": "list", "mutable": True},
+        },
+    }
+
+    response = await _create_log(client, project_name, entries=log_entries)
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Try to update with an invalid array index
+    update_entries = {
+        "my_list[100]": "this-should-fail",
+    }
+
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "entries": update_entries,
+            "project": project_name,
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+
+    # Should fail with a 400 error
+    assert response.status_code == 400, response.json()
