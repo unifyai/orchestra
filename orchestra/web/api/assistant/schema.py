@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Generic, Optional, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl
 from pydantic.generics import GenericModel
 
 T = TypeVar("T")
@@ -183,5 +183,42 @@ class AssistantUpdate(BaseModel):
                 "about": "Award-winning mathematician specializing in algorithm development",
                 "phone": "+1-555-987-6543",
                 "email": "ada.lovelace@newdomain.com",
+            },
+        }
+
+
+class RecordingCreate(BaseModel):
+    recording_raw: str = Field(
+        ...,
+        description="Base64-encoded audio payload",
+        example="UklGRiSAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQyAAAAA...",
+    )
+    content_type: Optional[str] = Field(
+        None,
+        description="Content type of the audio file",
+        example="audio/wav",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "recording_raw": "UklGRiSAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQyAAAAA...",
+                "content_type": "audio/wav",
+            },
+        }
+
+
+class RecordingInfo(BaseModel):
+    id: int
+    url: HttpUrl
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+        schema_extra = {
+            "example": {
+                "id": 123,
+                "url": "https://storage.example.com/recordings/call_123.wav",
+                "created_at": "2025-05-08T14:30:00Z",
             },
         }
