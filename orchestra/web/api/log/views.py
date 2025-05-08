@@ -575,6 +575,55 @@ def create_from_logs(
                 detail=f"Failed to create static entries with key='{body.key}'. Error: {e}",
             )
     else:
+        # Check for Python fallback embed operation
+        if body.equation.strip().startswith("embed"):
+            # Extract alias and field to embed
+            placeholders = _extract_placeholders(body.equation)
+            new_derived_logs: List[DerivedLog] = []
+            now_ts = datetime.now(timezone.utc)
+            for ph in placeholders:
+                alias, field_name = ph.split(":", 1)
+                for event_id in resolved_ids.get(alias, []):
+                    # Fetch the base log value for the field
+                    base_log = (
+                        session.query(Log)
+                        .filter(Log.log_event_id == event_id, Log.key == field_name)
+                        .first()
+                    )
+                    if base_log is None or base_log.value is None:
+                        continue
+                    # Compute embedding (using module lookup so test monkeypatch works)
+                    from .utils.vector_utils import embed as vector_embed
+
+                    embedding = vector_embed(base_log.value)
+                    dl = DerivedLog(
+                        log_event_id=event_id,
+                        key=body.key,
+                        equation=body.equation,
+                        referenced_logs={field_name: event_id},
+                        value=embedding,
+                        inferred_type="list",
+                        created_at=now_ts,
+                        updated_at=now_ts,
+                    )
+                    new_derived_logs.append(dl)
+            # Save embeddings
+            session.add_all(new_derived_logs)
+            session.commit()
+            new_ids = [dl.id for dl in new_derived_logs]
+            # Update field type for derived entry
+            if new_derived_logs:
+                field_type_dao.create_field_type_if_absent(
+                    project_id=project_obj.id,
+                    field_name=body.key,
+                    value=new_derived_logs[-1].value,
+                    field_category="derived_entry",
+                    context_id=context_id,
+                )
+            return {
+                "info": f"Created {len(new_ids)} derived logs with key='{body.key}'.",
+                "derived_log_ids": new_ids,
+            }
         # Original derived log creation logic
         created_derived_ids = []
         try:
