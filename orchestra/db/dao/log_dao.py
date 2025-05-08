@@ -10,7 +10,6 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.bucket_service import BucketService
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
@@ -24,6 +23,7 @@ from orchestra.db.models.orchestra_models import (
     LogHistory,
     ParamVersion,
 )
+from orchestra.services.bucket_service import BucketService
 
 
 class OverwriteError(Exception):
