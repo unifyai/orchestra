@@ -1031,6 +1031,11 @@ class Assistant(Base):
     email = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    recordings = relationship(
+        "CallRecording",
+        back_populates="assistant",
+        cascade="all, delete-orphan",
+    )
 
 
 class Tab(Base):
@@ -1268,3 +1273,21 @@ class EditorTile(Base):
 
     # Relationships
     tile = relationship("Tile", back_populates="editor_tile")
+
+
+class CallRecording(Base):
+    """Model class for the assistant call recordings table."""
+
+    __tablename__ = "assistant_call_recording"
+
+    id = Column(Integer, primary_key=True)
+    agent_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id"),
+        nullable=False,
+        index=True,
+    )
+    filename = Column(String, nullable=False)
+    url = Column(String, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    assistant = relationship("Assistant", back_populates="recordings")
